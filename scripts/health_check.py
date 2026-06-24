@@ -58,6 +58,7 @@ def check_imports(result):
         "core.database",
         "scripts.static_sanity",
         "scripts.ui_contract_check",
+        "scripts.sanitize_public_reports",
         "scripts.web_console_http_smoke",
     ]
     for module in required:
@@ -100,6 +101,7 @@ def check_files(result):
         "scripts/reply_style_miner.py",
         "scripts/run_acceptance_scenarios.py",
         "scripts/run_unit_tests.py",
+        "scripts/sanitize_public_reports.py",
         "scripts/sla_monitor.py",
         "scripts/static_sanity.py",
         "scripts/ui_contract_check.py",
@@ -138,6 +140,7 @@ def check_files(result):
         "tools/reports/run_reply_style_miner.bat",
         "tools/operations/run_backup.bat",
         "tools/operations/run_cleanup_retention.bat",
+        "tools/operations/run_sanitize_public_reports.bat",
         "tools/operations/run_audit_log.bat",
         "tools/operations/run_handoff_queue.bat",
         "tools/agents/generate_agent_tasks.bat",
@@ -217,6 +220,7 @@ def check_text_encoding(result):
         "scripts/reply_style_miner.py",
         "scripts/run_acceptance_scenarios.py",
         "scripts/run_unit_tests.py",
+        "scripts/sanitize_public_reports.py",
         "scripts/sla_monitor.py",
         "scripts/static_sanity.py",
         "scripts/ui_contract_check.py",
