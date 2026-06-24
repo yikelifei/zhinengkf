@@ -66,18 +66,24 @@ def run_project_command(command: str, env: dict[str, str]) -> int:
 
 
 def load_config() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"Missing module config: {CONFIG_PATH}")
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return {"modules": []}
+    if not isinstance(data, dict):
+        return {"modules": []}
     if not isinstance(data.get("modules"), list):
-        raise ValueError("config/project_modules.yaml must contain a modules list")
+        return {"modules": []}
+    data["modules"] = [module for module in data["modules"] if isinstance(module, dict)]
     return data
 
 
 def modules_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for module in data["modules"]:
+        if not isinstance(module, dict):
+            continue
         module_id = module.get("id")
         if not module_id:
             raise ValueError("Every module must have an id")
