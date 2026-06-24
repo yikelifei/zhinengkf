@@ -68,8 +68,16 @@ signal.signal(signal.SIGTERM, _signal_handler)
 def load_config(path="config/settings.yaml"):
     path = resource_path(path)
     info(f"[Config] Loading settings: {path}")
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return _load_yaml_dict(path)
+
+
+def _load_yaml_dict(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 class SmartBot:
@@ -84,10 +92,8 @@ class SmartBot:
         prompts_path = resource_path("config/prompts.yaml")
         info(f"[Config] Loading keywords: {keywords_path}")
         info(f"[Config] Loading prompts: {prompts_path}")
-        with open(keywords_path, encoding="utf-8") as f:
-            self.keywords_config = yaml.safe_load(f)
-        with open(prompts_path, encoding="utf-8") as f:
-            self.prompts_config = yaml.safe_load(f)
+        self.keywords_config = _load_yaml_dict(keywords_path)
+        self.prompts_config = _load_yaml_dict(prompts_path)
 
         # Anti-spam config
         self.max_daily_replies = self.settings.get("wechat", {}).get(
