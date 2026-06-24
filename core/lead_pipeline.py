@@ -32,9 +32,14 @@ def load_pipeline(path="config/lead_pipeline.yaml") -> dict:
         return {"stages": [], "rules": dict(DEFAULT_RULES)}
     with open(pipeline_file, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    data.setdefault("stages", [])
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(data.get("stages"), list):
+        data["stages"] = []
+    data["stages"] = [stage for stage in data["stages"] if isinstance(stage, dict)]
     rules = dict(DEFAULT_RULES)
-    rules.update(data.get("rules") or {})
+    if isinstance(data.get("rules"), dict):
+        rules.update(data.get("rules") or {})
     data["rules"] = rules
     data["stages"] = sorted(data["stages"], key=lambda item: item.get("order", 999))
     return data
@@ -50,9 +55,13 @@ def save_pipeline(data: dict, path="config/lead_pipeline.yaml") -> Path:
         backup_file = backup_dir / f"{pipeline_file.stem}_{stamp}.yaml"
         backup_file.write_text(pipeline_file.read_text(encoding="utf-8"), encoding="utf-8")
 
-    stages = list((data or {}).get("stages") or [])
+    source = data if isinstance(data, dict) else {}
+    raw_stages = source.get("stages") or []
+    stages = list(raw_stages) if isinstance(raw_stages, list) else []
     rules = dict(DEFAULT_RULES)
-    rules.update((data or {}).get("rules") or {})
+    raw_rules = source.get("rules") or {}
+    if isinstance(raw_rules, dict):
+        rules.update(raw_rules)
     normalized = {"stages": stages, "rules": rules}
     issues = validate_pipeline(normalized)
     if issues:
@@ -64,11 +73,15 @@ def save_pipeline(data: dict, path="config/lead_pipeline.yaml") -> Path:
 
 def validate_pipeline(data: dict) -> list[str]:
     issues = []
-    stages = data.get("stages") or []
+    data = data if isinstance(data, dict) else {}
+    stages = data.get("stages") if isinstance(data.get("stages"), list) else []
     seen = set()
     if not stages:
         issues.append("至少需要一个线索阶段")
     for stage in stages:
+        if not isinstance(stage, dict):
+            issues.append("阶段配置必须是对象")
+            continue
         stage_id = str(stage.get("id", "")).strip()
         if not stage_id:
             issues.append("阶段 id 不能为空")
@@ -78,7 +91,7 @@ def validate_pipeline(data: dict) -> list[str]:
         seen.add(stage_id)
         if not str(stage.get("label", "")).strip():
             issues.append(f"阶段 {stage_id} 缺少 label")
-    rules = data.get("rules") or {}
+    rules = data.get("rules") if isinstance(data.get("rules"), dict) else {}
     for key in (
         "high_intent_score",
         "medium_intent_score",
