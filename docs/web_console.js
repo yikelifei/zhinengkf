@@ -34,6 +34,13 @@
     badge.innerHTML = `<i class="dot ${warn ? "warn" : ""}"></i>${text}`;
   }
 
+  function setButtonBusy(button, busy) {
+    if (!button) return;
+    button.classList.toggle("is-loading", busy);
+    button.toggleAttribute("disabled", busy);
+    button.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
   function setSidebarStatus(status, readiness) {
     const el = document.querySelector(".sidebar-status");
     if (!el || !status) return;
@@ -95,11 +102,14 @@
     const text = button.textContent.trim();
     if (text.includes("立即备份")) {
       event.preventDefault();
+      setButtonBusy(button, true);
       try {
         await createBackup();
         await refreshLiveStatus();
       } catch (err) {
         toast(err.message);
+      } finally {
+        setButtonBusy(button, false);
       }
       return;
     }
@@ -109,10 +119,13 @@
     if (!reportType) return;
 
     event.preventDefault();
+    setButtonBusy(button, true);
     try {
       await generateReport(reportType);
     } catch (err) {
       toast(err.message);
+    } finally {
+      setButtonBusy(button, false);
     }
   });
 

@@ -50,7 +50,9 @@ BORDER = "#d2d2d7"
 TEXT = "#1d1d1f"
 MUTED = "#6e6e73"
 ACCENT = "#0071e3"
+ACCENT_HOVER = "#005bb5"
 ACCENT_2 = "#5856d6"
+ACCENT_2_HOVER = "#4745c4"
 ACCENT_TINT = "#eef6ff"
 DANGER = "#ff3b30"
 DANGER_TEXT = "#d70015"
@@ -66,6 +68,8 @@ SECONDARY_HOVER = "#dcdce3"
 SELECT_BG = "#007aff"
 SUCCESS_TEXT = "#1f7a3a"
 LOG_BG = "#1d1d1f"
+INPUT_FOCUS = "#8fc7ff"
+PANEL_HAIRLINE = "#ececf0"
 
 
 def app_root():
@@ -155,6 +159,11 @@ class SmartBotConsole(tk.Tk):
         self.chat_status_var = tk.StringVar(value="会话未加载")
         self.crm_status_var = tk.StringVar(value="线索未加载")
 
+        self.nav_rows = []
+        self.active_nav_row = None
+        self.main_canvas = None
+        self.main_content = None
+
         self._setup_style()
         self._build_ui()
         self._polish_static_controls()
@@ -181,6 +190,32 @@ class SmartBotConsole(tk.Tk):
         style.configure("Sub.TLabel", foreground=MUTED, background=BG, font=("Microsoft YaHei UI", 10))
         style.configure("Accent.TButton", font=("Microsoft YaHei UI", 10, "bold"), padding=(18, 10))
         style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(14, 8))
+        style.map(
+            "TButton",
+            background=[("active", SECONDARY_HOVER), ("pressed", SECONDARY_HOVER)],
+            foreground=[("active", TEXT), ("pressed", TEXT)],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=PANEL,
+            foreground=TEXT,
+            font=("Microsoft YaHei UI", 10),
+            padding=(6, 4),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", PANEL)],
+            foreground=[("active", TEXT)],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=FIELD_BG,
+            foreground=TEXT,
+            bordercolor=BORDER,
+            lightcolor=BORDER,
+            darkcolor=BORDER,
+            padding=(8, 6),
+        )
         style.configure(
             "TCombobox",
             fieldbackground=FIELD_BG,
@@ -199,6 +234,8 @@ class SmartBotConsole(tk.Tk):
             selectforeground=[("readonly", TEXT)],
             bordercolor=[("focus", ACCENT)],
         )
+        style.configure("Treeview", background=FIELD_BG, fieldbackground=FIELD_BG, foreground=TEXT, bordercolor=BORDER, rowheight=30)
+        style.map("Treeview", background=[("selected", SELECT_BG)], foreground=[("selected", "#ffffff")])
         style.configure(
             "Vertical.TScrollbar",
             background=FIELD_SOFT,
@@ -206,6 +243,7 @@ class SmartBotConsole(tk.Tk):
             bordercolor=BG,
             arrowcolor=MUTED,
             relief="flat",
+            arrowsize=0,
         )
 
     def _build_ui(self):
@@ -236,10 +274,17 @@ class SmartBotConsole(tk.Tk):
 
         nav_items = [("总览", "●"), ("后台引擎", "◆"), ("运行日志", "▣"), ("配置", "◈")]
         for text, icon in nav_items:
-            row = tk.Frame(sidebar, bg=SIDEBAR_ACTIVE if text == "总览" else SIDEBAR)
+            is_active = text == "总览"
+            row_bg = SIDEBAR_ACTIVE if is_active else SIDEBAR
+            row = tk.Frame(sidebar, bg=row_bg, takefocus=1, highlightbackground=row_bg, highlightcolor=INPUT_FOCUS, highlightthickness=1)
             row.pack(fill="x", padx=14, pady=(18 if text == "总览" else 6, 0), ipady=8)
-            tk.Label(row, text=icon, bg=row["bg"], fg=ACCENT if text == "总览" else MUTED, font=("Microsoft YaHei UI", 12)).pack(side="left", padx=(10, 10))
-            tk.Label(row, text=text, bg=row["bg"], fg=TEXT, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+            icon_label = tk.Label(row, text=icon, bg=row_bg, fg=ACCENT if is_active else MUTED, font=("Microsoft YaHei UI", 12))
+            icon_label.pack(side="left", padx=(10, 10))
+            text_label = tk.Label(row, text=text, bg=row_bg, fg=TEXT, font=("Microsoft YaHei UI", 10, "bold"))
+            text_label.pack(side="left")
+            row.nav_icon = icon_label
+            row.nav_label = text_label
+            self.nav_rows.append(row)
 
         tk.Label(sidebar, text="后端隐藏运行\n界面负责控制和监控", justify="left", bg=SIDEBAR, fg=MUTED, font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=24, pady=(72, 0))
 
@@ -248,9 +293,11 @@ class SmartBotConsole(tk.Tk):
         main_scrollbar = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
         main_scrollbar.grid(row=0, column=2, sticky="ns")
         main_canvas.configure(yscrollcommand=main_scrollbar.set)
+        self.main_canvas = main_canvas
 
         main = tk.Frame(main_canvas, bg=BG)
         main_window = main_canvas.create_window((0, 0), window=main, anchor="nw")
+        self.main_content = main
 
         def _sync_scroll(_event=None):
             main_canvas.configure(scrollregion=main_canvas.bbox("all"))
@@ -258,6 +305,7 @@ class SmartBotConsole(tk.Tk):
 
         main.bind("<Configure>", _sync_scroll)
         main_canvas.bind("<Configure>", _sync_scroll)
+        main_canvas.bind_all("<MouseWheel>", self._on_main_mousewheel)
 
         main.columnconfigure(0, weight=1)
         main.rowconfigure(7, weight=1)
@@ -449,25 +497,133 @@ class SmartBotConsole(tk.Tk):
         self.log_text.tag_config("ERROR", foreground="#ff6961")
         self.log_text.tag_config("WARNING", foreground="#ffd60a")
         self.log_text.tag_config("INFO", foreground="#64d2ff")
+        self._bind_sidebar_navigation([header, takeover_panel, log_panel, api_panel])
 
     def _polish_static_controls(self):
         def walk(widget):
             if isinstance(widget, tk.Button):
-                widget.configure(relief="flat", bd=0, highlightthickness=0, cursor="hand2")
+                self._apply_button_chrome(widget)
             elif isinstance(widget, tk.Checkbutton):
-                widget.configure(relief="flat", highlightthickness=0, cursor="hand2")
+                widget.configure(
+                    relief="flat",
+                    highlightthickness=0,
+                    cursor="hand2",
+                    activebackground=widget.cget("bg"),
+                    activeforeground=TEXT,
+                )
+            elif isinstance(widget, ttk.Combobox):
+                widget.configure(cursor="hand2")
             elif isinstance(widget, (tk.Entry, tk.Text, tk.Listbox)):
-                widget.configure(relief="flat", bd=0)
+                widget.configure(
+                    relief="flat",
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=BORDER,
+                    highlightcolor=INPUT_FOCUS,
+                    selectbackground=SELECT_BG,
+                    selectforeground="#ffffff",
+                )
             for child in widget.winfo_children():
                 walk(child)
 
         walk(self)
 
+    def _apply_button_chrome(self, widget):
+        base_bg = widget.cget("bg")
+        base_fg = widget.cget("fg")
+        if base_bg == ACCENT:
+            hover_bg = ACCENT_HOVER
+        elif base_bg == ACCENT_2:
+            hover_bg = ACCENT_2_HOVER
+        elif base_bg == DANGER_TINT:
+            hover_bg = DANGER_TINT_HOVER
+        else:
+            hover_bg = SECONDARY_HOVER if base_bg == SECONDARY else "#ffffff"
+
+        widget.configure(
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+            activebackground=hover_bg,
+            activeforeground=base_fg,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        widget.bind("<Enter>", lambda _event, w=widget, bg=hover_bg: w.configure(bg=bg))
+        widget.bind("<Leave>", lambda _event, w=widget, bg=base_bg: w.configure(bg=bg))
+
+    def _bind_sidebar_navigation(self, targets):
+        for row, target in zip(self.nav_rows, targets):
+            handler = lambda _event=None, widget=target, nav_row=row: self._scroll_to_section(widget, nav_row)
+            self._bind_click_tree(row, handler)
+            row.bind("<Return>", handler)
+            row.bind("<space>", handler)
+        if self.nav_rows:
+            self._set_active_nav_row(self.nav_rows[0])
+
+    def _bind_click_tree(self, widget, handler):
+        widget.configure(cursor="hand2")
+        widget.bind("<Button-1>", handler)
+        for child in widget.winfo_children():
+            self._bind_click_tree(child, handler)
+
+    def _set_active_nav_row(self, active_row):
+        self.active_nav_row = active_row
+        for row in self.nav_rows:
+            active = row == active_row
+            bg = SIDEBAR_ACTIVE if active else SIDEBAR
+            row.configure(bg=bg, highlightbackground=INPUT_FOCUS if active else bg)
+            for child in row.winfo_children():
+                child.configure(bg=bg)
+            if hasattr(row, "nav_icon"):
+                row.nav_icon.configure(fg=ACCENT if active else MUTED)
+            if hasattr(row, "nav_label"):
+                row.nav_label.configure(fg=TEXT)
+
+    def _on_main_mousewheel(self, event):
+        focus = self.focus_get()
+        if isinstance(focus, (tk.Text, tk.Listbox)):
+            return
+        if not self.main_canvas:
+            return
+        delta = -1 if event.delta > 0 else 1
+        self.main_canvas.yview_scroll(delta * 3, "units")
+
+    def _scroll_to_section(self, widget, nav_row=None):
+        if not self.main_canvas or not self.main_content:
+            return
+        if nav_row is not None:
+            self._set_active_nav_row(nav_row)
+        self.update_idletasks()
+        bbox = self.main_canvas.bbox("all")
+        if not bbox:
+            return
+        total_height = max(1, bbox[3] - self.main_canvas.winfo_height())
+        target_y = max(0, widget.winfo_y() - 16)
+        self.main_canvas.yview_moveto(min(1, target_y / total_height))
+        self._flash_panel(widget)
+
+    def _flash_panel(self, widget):
+        try:
+            old = widget.cget("highlightbackground")
+            widget.configure(highlightbackground=ACCENT)
+            self.after(650, lambda: widget.configure(highlightbackground=old))
+        except tk.TclError:
+            return
+
     def _card(self, parent, col, title, value_var, color):
         frame = tk.Frame(parent, bg=PANEL_2, highlightbackground=BORDER, highlightthickness=1)
         frame.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 10, 0))
-        tk.Label(frame, text=title, bg=PANEL_2, fg=MUTED, font=("Microsoft YaHei UI", 9, "bold")).pack(anchor="w", padx=16, pady=(14, 4))
-        tk.Label(frame, textvariable=value_var, bg=PANEL_2, fg=color, font=("Microsoft YaHei UI", 17, "bold")).pack(anchor="w", padx=16, pady=(0, 16))
+        frame.columnconfigure(0, weight=1)
+        tk.Frame(frame, bg=color, height=3).grid(row=0, column=0, columnspan=2, sticky="ew")
+        tk.Label(frame, text=title, bg=PANEL_2, fg=MUTED, font=("Microsoft YaHei UI", 9, "bold")).grid(row=1, column=0, sticky="w", padx=16, pady=(14, 4))
+        tk.Label(frame, textvariable=value_var, bg=PANEL_2, fg=color, font=("Microsoft YaHei UI", 17, "bold")).grid(row=2, column=0, sticky="w", padx=16, pady=(0, 16))
+        deco = tk.Canvas(frame, width=72, height=44, bg=PANEL_2, highlightthickness=0)
+        deco.grid(row=1, column=1, rowspan=2, sticky="e", padx=(4, 14), pady=(10, 12))
+        for y in (13, 22, 31):
+            deco.create_line(8, y, 64, y, fill=PANEL_HAIRLINE, width=2, capstyle="round")
+        deco.create_line(10, 31, 25, 24, 36, 27, 50, 15, 64, 18, fill=color, width=3, capstyle="round", joinstyle="round")
+        deco.create_oval(59, 13, 67, 21, fill=color, outline=color)
 
     def _api_field(self, parent, row, col, label, variable, show=None, columnspan=1):
         wrapper = tk.Frame(parent, bg=PANEL)

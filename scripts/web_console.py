@@ -369,7 +369,7 @@ def api_status(db):
     return {
         "ok": True,
         "primary_provider": primary,
-        "primary_model": providers.get(primary, {}).get("model", "-"),
+        "primary_model": display_config_value(providers.get(primary, {}).get("model", "-")),
         "providers_enabled": sum(1 for item in providers.values() if item.get("enabled")),
         "backend": backend_status(),
         "skills": len(load_skills().get("skills", [])),
@@ -485,6 +485,18 @@ def mask_secret(value):
     if len(value) <= 8:
         return "********"
     return value[:4] + "..." + value[-4:]
+
+
+def display_config_value(value, fallback="按环境变量配置"):
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    if text.startswith("${") and text.endswith("}"):
+        key = text[2:-1].split(":", 1)[0]
+        return os.environ.get(key) or fallback
+    if "${" in text:
+        return fallback
+    return text
 
 
 def start_backend():

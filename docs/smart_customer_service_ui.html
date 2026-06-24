@@ -1502,6 +1502,17 @@
       .composer .btn {
         width: 100%;
       }
+
+      .panel-head:has(.btn[data-icon-only="true"]) {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .panel-head:has(.btn[data-icon-only="true"]) .btn[data-icon-only="true"] {
+        align-self: center;
+        margin-left: auto;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1570,11 +1581,11 @@
     .content > .workspace,
     .content > .metrics,
     .content > .page-head {
-      animation: softEnter .22s ease both;
+      animation: softEnter .14s ease-out both;
     }
 
     @keyframes softEnter {
-      from { opacity: 0; transform: translateY(5px); }
+      from { opacity: .92; transform: translateY(2px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
@@ -2438,6 +2449,13 @@
       background-position: right 12px center;
       background-size: 14px 14px;
       padding-right: 38px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .settings-grid .field textarea {
+      min-height: 108px;
     }
 
     .search input::placeholder,
@@ -2576,6 +2594,11 @@
       font-weight: 650;
     }
 
+    .metric strong {
+      display: block;
+      line-height: 1.22;
+    }
+
     .metric small {
       color: #1f7a3a;
       font-weight: 600;
@@ -2683,10 +2706,11 @@
     }
 
     .msg {
-      border-radius: 8px;
+      border-radius: 18px;
       border-color: transparent;
       background: #e9e9eb;
       color: var(--text);
+      line-height: 1.52;
       box-shadow: 0 1px 1px rgba(0, 0, 0, .04);
     }
 
@@ -2694,12 +2718,18 @@
       background: var(--brand);
       border-color: var(--brand);
       color: #ffffff;
+      border-bottom-right-radius: 6px;
+    }
+
+    .msg:not(.agent):not(.meta) {
+      border-bottom-left-radius: 6px;
     }
 
     .msg.meta {
       background: rgba(255, 255, 255, .76);
       border-color: var(--line);
       color: var(--muted-strong);
+      border-radius: 12px;
     }
 
     .composer {
@@ -2807,6 +2837,12 @@
       transform: translateY(-50%);
     }
 
+    .composer .btn {
+      min-width: 88px;
+      justify-content: center;
+      white-space: nowrap;
+    }
+
     .command-palette {
       background: rgba(0, 0, 0, .18);
       backdrop-filter: blur(18px);
@@ -2839,7 +2875,7 @@
     }
 
     .command-item::after {
-      content: "Return";
+      content: "\21b5";
       color: #8e8e93;
       font-size: 11px;
       font-weight: 650;
@@ -2967,6 +3003,243 @@
       overflow-wrap: anywhere;
     }
 
+    /* Micro restoration pass: generated SF-style details for missed surfaces. */
+    button,
+    .btn,
+    .nav button,
+    .settings-tab,
+    .command-item,
+    .provider,
+    .conversation {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .metric > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .metric::after {
+      right: 16px;
+      bottom: 16px;
+      width: 58px;
+      height: 44px;
+      border-radius: 0;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='58' height='44' viewBox='0 0 58 44' fill='none'%3E%3Cpath d='M4 32.5h50M8 23.5h42M12 14.5h34' stroke='%230071e3' stroke-opacity='.24' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M9 33c7-11 13-7 18-15 5-7 10-11 23-10' stroke='%230071e3' stroke-opacity='.34' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='50' cy='8' r='3.4' fill='%230071e3' fill-opacity='.34'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      opacity: 1;
+      z-index: 0;
+    }
+
+    .metric:nth-child(2)::after,
+    .metric:nth-child(3)::after,
+    .metric:nth-child(4)::after {
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='58' height='44' viewBox='0 0 58 44' fill='none'%3E%3Cpath d='M4 32.5h50M8 23.5h42M12 14.5h34' stroke='%230071e3' stroke-opacity='.22' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M9 33c7-11 13-7 18-15 5-7 10-11 23-10' stroke='%230071e3' stroke-opacity='.32' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='50' cy='8' r='3.4' fill='%230071e3' fill-opacity='.32'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+
+    .empty-state {
+      position: relative;
+      isolation: isolate;
+      overflow: clip;
+      padding: 30px clamp(18px, 3vw, 34px);
+      gap: 12px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .8), rgba(255, 255, 255, .48)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='120' viewBox='0 0 180 120' fill='none'%3E%3Cpath d='M22 86h135M37 64h105M52 42h75' stroke='%23000000' stroke-opacity='.055' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M48 88c15-20 25-11 38-27 12-15 25-23 52-19' stroke='%230071e3' stroke-opacity='.12' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+          right bottom / min(42vw, 220px) auto no-repeat,
+        var(--panel-soft);
+    }
+
+    .empty-state::before {
+      content: "";
+      width: 58px;
+      height: 58px;
+      border-radius: 8px;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34' fill='none'%3E%3Cpath d='M8 9.5h18M8 16.5h18M8 23.5h10' stroke='%230071e3' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='M22.5 23.5l3 3 5-7' stroke='%2334c759' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+          center / 34px 34px no-repeat,
+        linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(245, 245, 247, .9));
+      border: 1px solid rgba(0, 0, 0, .1);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .9), 0 10px 24px rgba(0, 0, 0, .07);
+    }
+
+    .empty-state strong {
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .empty-state span {
+      max-width: 680px;
+      line-height: 1.65;
+    }
+
+    .settings-grid .top-actions {
+      align-items: center;
+      gap: 8px;
+      padding-top: 2px;
+    }
+
+    .settings-tab {
+      min-height: var(--control-height-compact);
+    }
+
+    .settings-grid .top-actions .btn:not(:has(svg))::before {
+      content: "";
+      width: 15px;
+      height: 15px;
+      flex: 0 0 auto;
+      background: currentColor;
+      opacity: .72;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18' fill='none'%3E%3Cpath d='M9 2.75v12.5M2.75 9h12.5' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18' fill='none'%3E%3Cpath d='M9 2.75v12.5M2.75 9h12.5' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+
+    .settings-grid .top-actions .btn.primary:not(:has(svg))::before {
+      opacity: .9;
+    }
+
+    .btn.is-loading {
+      position: relative;
+      pointer-events: none;
+      color: transparent !important;
+    }
+
+    .btn.is-loading .icon {
+      opacity: 0;
+    }
+
+    .btn.is-loading::after {
+      content: "";
+      position: absolute;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, .92);
+      border-right-color: transparent;
+      animation: controlSpin .72s linear infinite;
+    }
+
+    .btn:not(.primary).is-loading::after {
+      border-color: var(--brand);
+      border-right-color: transparent;
+    }
+
+    @keyframes controlSpin {
+      to { transform: rotate(360deg); }
+    }
+
+    .command-box {
+      max-height: min(720px, calc(100vh - 120px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .command-list {
+      overflow: auto;
+    }
+
+    .drawer {
+      visibility: hidden;
+      pointer-events: none;
+      background: rgba(251, 251, 253, .98);
+    }
+
+    .drawer.open {
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    .btn[data-icon]::before {
+      content: "";
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      background: currentColor;
+      opacity: .84;
+      -webkit-mask: var(--button-icon) center / contain no-repeat;
+      mask: var(--button-icon) center / contain no-repeat;
+    }
+
+    .btn.primary[data-icon]::before {
+      opacity: .96;
+    }
+
+    .btn[data-icon-only="true"] {
+      width: 40px;
+      min-width: 40px;
+      flex: 0 0 40px;
+      padding-inline: 0;
+      gap: 0;
+    }
+
+    .btn[data-icon="plus"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M9 2.8v12.4M2.8 9h12.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="check"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M3.2 9.3l3.6 3.6 8-8' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="download"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M9 2.5v8.2M5.4 7.5 9 11.1l3.6-3.6M3 14.7h12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="upload"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M9 15.5V7.3M5.4 10.5 9 6.9l3.6 3.6M3 3.3h12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="search"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M8 13.2a5.2 5.2 0 1 1 0-10.4 5.2 5.2 0 0 1 0 10.4Zm4-1.2 3.2 3.2' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="sync"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M14.7 6.2A6 6 0 0 0 4 4.8L2.7 6.1M3.3 11.8A6 6 0 0 0 14 13.2l1.3-1.3M3 3.2v3h3M15 14.8v-3h-3' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="bolt"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M10.5 1.8 4 10.2h4l-.6 6 6.6-8.5H10l.5-5.9Z' fill='black'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="sliders"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M3 5h12M3 13h12M6.2 3.4v3.2M11.8 11.4v3.2' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="close"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='m4.2 4.2 9.6 9.6M13.8 4.2l-9.6 9.6' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E");
+    }
+
+    .btn[data-icon="doc"] {
+      --button-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M5 2.5h5.2L14 6.3v9.2H5z' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'/%3E%3Cpath d='M10 2.8V6.5h3.7M7.2 9.5h3.6M7.2 12.2h3.6' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E");
+    }
+
+    .provider[role="button"],
+    .conversation[role="button"] {
+      outline: 0;
+    }
+
+    .provider[role="button"]:focus-visible,
+    .conversation[role="button"]:focus-visible {
+      border-color: rgba(0, 113, 227, .58);
+      box-shadow: var(--focus-ring), var(--shadow-soft);
+    }
+
+    .nav button {
+      position: relative;
+    }
+
+    .nav button:hover {
+      background: rgba(0, 0, 0, .048);
+    }
+
+    .nav button.active {
+      background: rgba(0, 113, 227, .1);
+      color: var(--text);
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
     @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
       .topbar,
       .sidebar,
@@ -2999,20 +3272,45 @@
         height: auto;
         border-right: 0;
         border-bottom: 1px solid var(--line);
+        padding: 14px 16px 10px;
+        gap: 10px;
       }
 
       .brand {
-        padding-bottom: 12px;
+        padding: 0 0 10px;
       }
 
       .nav {
         display: flex;
         overflow-x: auto;
-        padding-bottom: 2px;
+        gap: 8px;
+        padding: 0 0 4px;
+        scroll-snap-type: x proximity;
       }
 
       .nav button {
         flex: 0 0 auto;
+        width: auto;
+        min-width: max-content;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, .58);
+        box-shadow: inset 0 1px rgba(255, 255, 255, .78);
+        scroll-snap-align: start;
+      }
+
+      .nav button.active,
+      .nav button:hover {
+        background: rgba(255, 255, 255, .92);
+        border-color: rgba(0, 113, 227, .28);
+      }
+
+      .nav button.active {
+        box-shadow: inset 0 -3px 0 var(--brand), inset 0 1px rgba(255, 255, 255, .86);
+      }
+
+      .sidebar-status {
+        display: none;
       }
 
       .topbar {
@@ -3051,6 +3349,26 @@
       .status-row {
         justify-content: flex-start;
       }
+
+      .settings-grid,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .composer .btn {
+        width: 100%;
+      }
+
+      .panel-head:has(.btn[data-icon-only="true"]) {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .panel-head:has(.btn[data-icon-only="true"]) .btn[data-icon-only="true"] {
+        align-self: center;
+        margin-left: auto;
+      }
     }
 
     @media (max-width: 560px) {
@@ -3083,12 +3401,14 @@
       }
 
       .topbar .top-actions .btn.primary {
-        flex: 1 0 100%;
+        flex: 1 1 132px;
+        min-width: 132px;
+        width: auto;
       }
 
       .topbar .top-actions .health {
-        flex: 1 1 170px;
-        min-width: 156px;
+        flex: 1 1 132px;
+        min-width: 132px;
         justify-content: center;
       }
 
@@ -3121,8 +3441,108 @@
         width: 100%;
       }
 
-      .btn.primary {
+      .content .btn.primary,
+      .panel .btn.primary {
         width: 100%;
+      }
+
+      .content .btn[data-icon-only="true"],
+      .panel .btn[data-icon-only="true"],
+      .panel-head .btn[data-icon-only="true"] {
+        width: 40px;
+        min-width: 40px;
+        flex: 0 0 40px;
+        align-self: flex-start;
+      }
+
+      .panel-head:has(.btn[data-icon-only="true"]) {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .panel-head:has(.btn[data-icon-only="true"]) .btn[data-icon-only="true"] {
+        align-self: center;
+        margin-left: auto;
+      }
+
+      .settings-grid .field textarea {
+        min-height: 128px;
+      }
+
+      .settings-grid .field select {
+        font-size: 13px;
+      }
+
+      .drawer {
+        width: 100vw;
+        max-width: none;
+        border-left: 0;
+        background: #fbfbfd;
+      }
+
+      .drawer-head {
+        min-height: 58px;
+        height: auto;
+        gap: 12px;
+        padding: 12px 14px;
+      }
+
+      .drawer-head strong {
+        min-width: 0;
+        flex: 1 1 auto;
+        white-space: nowrap;
+      }
+
+      .drawer-head .btn {
+        width: auto;
+        min-width: 72px;
+        flex: 0 0 auto;
+        justify-content: center;
+      }
+
+      .drawer-body {
+        padding: 14px 12px calc(18px + env(safe-area-inset-bottom));
+      }
+
+      .toast {
+        right: 12px;
+        left: 12px;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        text-align: center;
+      }
+
+      .command-palette {
+        align-items: flex-end;
+        padding: 0;
+      }
+
+      .command-box {
+        width: 100vw;
+        max-height: min(76vh, 520px);
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        border-radius: 8px 8px 0 0;
+      }
+
+      .command-box input {
+        height: 56px;
+      }
+
+      .command-item {
+        min-height: 62px;
+      }
+
+      .empty-state {
+        padding: 24px 14px;
+        background-size: 180px auto;
+      }
+
+      .empty-state::before {
+        width: 52px;
+        height: 52px;
+        background-size: 30px 30px, auto;
       }
     }
 
@@ -3562,9 +3982,9 @@
                   <div class="field full">
                     <label>接口用途</label>
                     <select>
-                      <option>主客服回复 + RAG 问答 + 话术改写</option>
-                      <option>仅用于人工建议，不自动发送</option>
-                      <option>仅用于复杂问题兜底</option>
+                      <option>主客服回复 + RAG</option>
+                      <option>人工建议模式</option>
+                      <option>复杂问题兜底</option>
                     </select>
                   </div>
                   <div class="field full">
@@ -3623,7 +4043,7 @@
     const workspaceHtml = document.querySelector(".workspace")?.outerHTML || "";
     const settingsHtml = document.getElementById("system-settings")?.outerHTML || "";
     const skillsPanel = Array.from(document.querySelectorAll(".panel")).find((panel) =>
-      panel.textContent.includes("Skills")
+      panel.querySelector(".panel-title")?.textContent.trim() === "客服 Skills 中心"
     );
     const skillsHtml = skillsPanel?.outerHTML || "";
 
@@ -3802,12 +4222,42 @@
     function renderRisk() {
       return `
         ${pageHead("风控质检", "管控敏感问题、错误回复、投诉、退款、发票和付款异常，降低商业风险。", '<span class="pill"><i class="dot warn"></i>7 条待审核</span><span class="pill">自动拦截 31 次</span>')}
+        <section class="metrics">
+          <article class="metric"><span>待人工审核</span><strong>7</strong><small>售后、投诉、退款和付款异常会话</small></article>
+          <article class="metric"><span>自动拦截</span><strong>31</strong><small>今日阻止未确认报价和敏感承诺</small></article>
+          <article class="metric"><span>SLA 风险</span><strong>4</strong><small>15 分钟内需要主管或客服接管</small></article>
+          <article class="metric"><span>修正率</span><strong>18%</strong><small>报价话术需要进入复盘清单</small></article>
+        </section>
         <section class="panel">
           <div class="panel-head"><div class="panel-title">质检规则</div><button class="btn primary">新增规则</button></div>
           <div class="panel-body rule-grid">
             <div class="rule"><strong>敏感问题转人工</strong><span>投诉、差评、退款、发票、付款异常、法律相关问题不自动承诺。</span></div>
             <div class="rule"><strong>价格承诺限制</strong><span>AI 只能给价格区间，最终报价必须由人工核算确认。</span></div>
             <div class="rule"><strong>回复审计</strong><span>记录命中 skill、知识条目、模型、置信度和人工修改记录。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">风险会话队列</div><button class="btn">查看待审记录</button></div>
+          <div class="panel-body task-list">
+            <div class="task"><div><strong>售后客户要求退款并索要发票</strong><span>命中退款、发票、付款异常三类规则，已暂停自动发送并提醒主管接管。</span></div><span class="tag risk">紧急</span></div>
+            <div class="task"><div><strong>客户询问最低价承诺</strong><span>系统只返回价格区间与确认流程，禁止直接承诺最终成交价。</span></div><span class="tag hot">待核价</span></div>
+            <div class="task"><div><strong>投诉关键词连续出现</strong><span>客户提到差评、曝光和平台投诉，建议客服先致歉并创建工单留痕。</span></div><span class="tag risk">转人工</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">AI 评测与复盘</div><button class="btn">导出质检样本</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>事实一致性</strong><span>抽检模型回复是否引用了真实知识条目，避免把未确认交期、材质、价格说成确定结论。</span></div>
+            <div class="rule"><strong>人工修正率</strong><span>聚合客服改写最多的句子，定位话术、知识库或模型路由中的薄弱环节。</span></div>
+            <div class="rule"><strong>SLA 达成率</strong><span>按高意向、投诉、售后和付款异常分组统计响应时长，自动生成负责人提醒。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">人工协作与工单</div><button class="btn primary">创建工单</button></div>
+          <div class="panel-body audit-list">
+            <div class="audit-row"><div><strong>主管接管</strong><span>风险会话进入人工模式后锁定自动发送，只保留 AI 建议草稿。</span></div><span class="tag ai">已启用</span></div>
+            <div class="audit-row"><div><strong>交接摘要</strong><span>自动整理客户诉求、订单背景、已承诺内容、待确认事项和下一步动作。</span></div><span class="tag">实时生成</span></div>
+            <div class="audit-row"><div><strong>复盘闭环</strong><span>工单关闭后沉淀为质检样本，进入提示词、知识库和 skill 路由的优化清单。</span></div><span class="tag hot">待复盘</span></div>
           </div>
         </section>
       `;
@@ -3893,7 +4343,7 @@
             <div class="field"><label>默认模型</label><input data-api-field="model" value="gpt-4o-mini" /></div>
             <div class="field"><label>Temperature</label><input value="0.4" /></div>
             <div class="field"><label>最大输出 Tokens</label><input value="800" /></div>
-            <div class="field full"><label>接口用途</label><select><option>主客服回复 + RAG 问答 + 话术改写</option><option>仅用于人工建议，不自动发送</option><option>仅用于复杂问题兜底</option></select></div>
+            <div class="field full"><label>接口用途</label><select><option>主客服回复 + RAG</option><option>人工建议模式</option><option>复杂问题兜底</option></select></div>
             <div class="field full"><label>请求头 / 额外参数 JSON</label><textarea>{"Authorization":"Bearer \${API_KEY}","Content-Type":"application/json"}</textarea></div>
           </div>
         </div>
@@ -3984,9 +4434,97 @@
       }
     }
 
+    function syncNavigationState(page) {
+      navButtons.forEach((button) => {
+        const active = button.dataset.page === page;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-current", active ? "page" : "false");
+      });
+    }
+
+    function hydrateSettingsA11y(root = document) {
+      const settingsPanel = root.querySelector?.("#system-settings");
+      if (!settingsPanel) return;
+      const tablist = settingsPanel.querySelector(".settings-tabs");
+      const tabs = Array.from(settingsPanel.querySelectorAll(".settings-tab"));
+      const grid = settingsPanel.querySelector(".settings-grid");
+      const hasActiveTab = tabs.some((item) => item.classList.contains("active"));
+      if (tablist) tablist.setAttribute("role", "tablist");
+      if (grid) {
+        if (!grid.id) grid.id = "settings-panel";
+        grid.setAttribute("role", "tabpanel");
+      }
+      tabs.forEach((item, index) => {
+        const active = item.classList.contains("active") || (!hasActiveTab && index === 0);
+        item.classList.toggle("active", active);
+        item.setAttribute("type", "button");
+        item.setAttribute("role", "tab");
+        item.setAttribute("aria-selected", active ? "true" : "false");
+        item.setAttribute("tabindex", active ? "0" : "-1");
+        if (grid) item.setAttribute("aria-controls", grid.id);
+      });
+    }
+
+    const buttonIconRules = [
+      { icon: "plus", test: (text) => /新建|新增|创建|导入/.test(text) },
+      { icon: "check", test: (text) => /保存|设为默认|恢复/.test(text) },
+      { icon: "download", test: (text) => /导出|备份/.test(text) },
+      { icon: "sync", test: (text) => /同步|测试|刷新/.test(text) },
+      { icon: "upload", test: (text) => /发布/.test(text) },
+      { icon: "search", test: (text) => /查看|缺口|评测|日志/.test(text) },
+      { icon: "bolt", test: (text) => /处理|最高优先级/.test(text) },
+      { icon: "doc", test: (text) => /生成|报告|复盘/.test(text) },
+      { icon: "sliders", test: (text) => /配置|模板|Webhook/.test(text) },
+      { icon: "close", test: (text) => /关闭/.test(text) }
+    ];
+
+    function hydrateButtonIcons(root = document) {
+      root.querySelectorAll?.(".btn").forEach((button) => {
+        if (!button.hasAttribute("type")) button.setAttribute("type", "button");
+        const text = button.textContent.trim();
+        const hasInlineIcon = Boolean(button.querySelector("svg"));
+        if (hasInlineIcon && !text) {
+          button.dataset.iconOnly = "true";
+          if (!button.hasAttribute("aria-label")) {
+            const panelTitle = button.closest(".panel-head")?.querySelector(".panel-title")?.textContent?.trim();
+            const title = button.getAttribute("title");
+            button.setAttribute("aria-label", title || (panelTitle ? `${panelTitle}操作` : "工具按钮"));
+          }
+          return;
+        }
+        if (hasInlineIcon) return;
+        const match = buttonIconRules.find((rule) => rule.test(text));
+        if (match) button.dataset.icon = match.icon;
+      });
+    }
+
+    function hydrateInteractiveCards(root = document) {
+      root.querySelectorAll?.(".provider").forEach((provider) => {
+        provider.setAttribute("role", "button");
+        provider.setAttribute("tabindex", "0");
+        provider.setAttribute("aria-pressed", provider.classList.contains("active") ? "true" : "false");
+        const name = provider.querySelector("strong")?.textContent?.trim();
+        if (name) provider.setAttribute("aria-label", `选择 ${name}`);
+      });
+      root.querySelectorAll?.(".conversation").forEach((conversation) => {
+        conversation.setAttribute("role", "button");
+        conversation.setAttribute("tabindex", "0");
+        conversation.setAttribute("aria-pressed", conversation.classList.contains("active") ? "true" : "false");
+        const name = conversation.querySelector(".conv-name")?.textContent?.trim();
+        if (name) conversation.setAttribute("aria-label", `打开 ${name} 的会话`);
+      });
+    }
+
+    function hydrateChrome(root = document) {
+      hydrateSettingsA11y(root);
+      hydrateButtonIcons(root);
+      hydrateInteractiveCards(root);
+    }
+
     function setActivePage(page) {
-      navButtons.forEach((button) => button.classList.toggle("active", button.dataset.page === page));
+      syncNavigationState(page);
       content.innerHTML = pages[page]();
+      hydrateChrome(document);
       localStorage.setItem("smartKefuActivePage", page);
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -4037,8 +4575,11 @@
 
       const provider = event.target.closest(".provider");
       if (provider) {
-        provider.parentElement.querySelectorAll(".provider").forEach((item) => item.classList.remove("active"));
-        provider.classList.add("active");
+        provider.parentElement.querySelectorAll(".provider").forEach((item) => {
+          const active = item === provider;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-pressed", active ? "true" : "false");
+        });
         const providerName = provider.querySelector("strong")?.textContent || "供应商";
         const title = provider.closest(".settings-grid")?.querySelector(".insight h3");
         if (title && title.textContent.includes("当前编辑")) title.textContent = `当前编辑：${providerName}`;
@@ -4048,6 +4589,17 @@
         if (modelInput && provider.dataset.model) modelInput.value = provider.dataset.model;
         if (baseUrlInput && provider.dataset.baseUrl) baseUrlInput.value = provider.dataset.baseUrl;
         showToast(`已选择 ${providerName}`);
+      }
+
+      const conversation = event.target.closest(".conversation");
+      if (conversation) {
+        conversation.parentElement.querySelectorAll(".conversation").forEach((item) => {
+          const active = item === conversation;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        const customerName = conversation.querySelector(".conv-name")?.textContent || "客户";
+        showToast(`已打开 ${customerName} 的会话`);
       }
 
       const actionButton = event.target.closest(".btn");
@@ -4081,8 +4633,12 @@
       if (!tab) return;
       const settingsPanel = tab.closest("#system-settings");
       if (!settingsPanel) return;
-      settingsPanel.querySelectorAll(".settings-tab").forEach((item) => item.classList.remove("active"));
-      tab.classList.add("active");
+      settingsPanel.querySelectorAll(".settings-tab").forEach((item) => {
+        const active = item === tab;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-selected", active ? "true" : "false");
+        item.setAttribute("tabindex", active ? "0" : "-1");
+      });
       const grid = settingsPanel.querySelector(".settings-grid");
       const summary = settingsPanel.querySelector(".settings-summary");
       const name = tab.textContent.trim();
@@ -4090,9 +4646,31 @@
       summary.textContent = name === "API 接口"
         ? "API 接口设置属于系统设置的子配置，用于统一管理 GeekNow、OpenAI、DeepSeek 等模型供应商。"
         : `${name}属于系统设置的子配置，和 API 调用配置分开管理。`;
+      hydrateChrome(settingsPanel);
     });
 
     document.addEventListener("keydown", (event) => {
+      const interactiveCard = event.target.closest?.(".provider, .conversation");
+      if (interactiveCard && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        interactiveCard.click();
+        return;
+      }
+      const activeSettingsTab = event.target.closest?.(".settings-tab");
+      if (activeSettingsTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        const tabs = Array.from(activeSettingsTab.closest(".settings-tabs")?.querySelectorAll(".settings-tab") || []);
+        const currentIndex = tabs.indexOf(activeSettingsTab);
+        if (tabs.length && currentIndex >= 0) {
+          event.preventDefault();
+          let nextIndex = currentIndex;
+          if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+          if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+          if (event.key === "Home") nextIndex = 0;
+          if (event.key === "End") nextIndex = tabs.length - 1;
+          tabs[nextIndex].focus();
+          tabs[nextIndex].click();
+        }
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         openCommands();
@@ -4104,7 +4682,7 @@
     });
 
     const initialPage = localStorage.getItem("smartKefuActivePage");
-    if (initialPage && pages[initialPage]) setActivePage(initialPage);
+    setActivePage(initialPage && pages[initialPage] ? initialPage : "overview");
   </script>
   <script src="/docs/web_console.js"></script>
 </body>
