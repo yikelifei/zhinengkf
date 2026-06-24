@@ -1,0 +1,4063 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>智能客服商业控制台 UI 原型</title>
+  <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231d1d1f"/><path d="M18 41c4 4 9 6 14 6 8 0 14-5 14-12S40 23 32 23c-5 0-9 2-12 5" fill="none" stroke="%23fff" stroke-width="5" stroke-linecap="round"/><path d="M20 23h24" stroke="%230071e3" stroke-width="5" stroke-linecap="round"/></svg>' />
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --panel-soft: #f9fafb;
+      --text: #17202a;
+      --muted: #667085;
+      --line: #d9e0e8;
+      --brand: #0071e3;
+      --brand-dark: #005bb5;
+      --blue: #2563eb;
+      --amber: #b7791f;
+      --red: #c2410c;
+      --green: #15803d;
+      --violet: #5856d6;
+      --radius: 8px;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "PingFang SC", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #f2f2f7;
+      color: var(--text);
+      padding: 22px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 8px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: #1d1d1f;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: #ffffff;
+    }
+
+    .brand strong { display: block; font-size: 16px; }
+    .brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .nav { display: grid; gap: 6px; }
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: var(--muted-strong);
+      width: 100%;
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .nav button.active, .nav button:hover {
+      color: var(--text);
+      background: rgba(0, 0, 0, .055);
+    }
+
+    .icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .sidebar-status {
+      margin-top: auto;
+      background: rgba(255,255,255,0.62);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+
+    .topbar {
+      height: 68px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 28px;
+      position: sticky;
+      top: 0;
+      z-index: 3;
+    }
+
+    .search {
+      width: min(560px, 44vw);
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      color: var(--muted);
+    }
+
+    .search input {
+      border: 0;
+      outline: 0;
+      background: transparent;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .role-select {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: var(--text);
+      padding: 0 10px;
+      min-width: 128px;
+    }
+
+    .health {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 38px;
+      border: 1px solid rgba(52, 199, 89, .32);
+      background: #f0fdf4;
+      color: #1f7a3a;
+      border-radius: 8px;
+      padding: 0 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      height: 38px;
+      min-width: 38px;
+      padding: 0 12px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn.primary { background: var(--brand); border-color: var(--brand); color: white; }
+    .btn.primary:hover { background: var(--brand-dark); }
+    .content {
+      padding: 24px 28px 34px;
+      display: grid;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 { margin: 0; font-size: 24px; line-height: 1.2; }
+    .sub { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .status-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      background: var(--panel);
+      color: var(--muted);
+    }
+
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .dot.warn { background: var(--amber); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(160px, 1fr));
+      gap: 14px;
+    }
+
+    .metric, .panel, .conversation, .skill-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      padding: 16px;
+      min-height: 112px;
+      display: grid;
+      align-content: space-between;
+    }
+
+    .metric label { color: var(--muted); font-size: 12px; }
+    .metric strong { font-size: 26px; margin-top: 8px; display: block; }
+    .metric small { color: var(--green); font-size: 12px; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(260px, 330px) minmax(460px, 1fr) minmax(280px, 360px);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel { overflow: hidden; }
+    .panel-head {
+      min-height: 54px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 16px;
+    }
+
+    .panel-title { font-weight: 700; }
+    .panel-body { padding: 14px; }
+    .queue { display: grid; gap: 10px; }
+    .conversation {
+      box-shadow: none;
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+      cursor: pointer;
+    }
+
+    .conversation.active { border-color: var(--brand); background: rgba(0, 113, 227, .09); }
+    .conv-top { display: flex; justify-content: space-between; gap: 10px; }
+    .conv-name { font-weight: 700; }
+    .time { color: var(--muted); font-size: 12px; }
+    .summary { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tag {
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: var(--muted-strong);
+      background: var(--panel-soft);
+    }
+
+    .tag.hot { background: rgba(255, 159, 10, .13); color: #a15c00; }
+    .tag.ai { background: rgba(52, 199, 89, .12); color: #1f7a3a; }
+    .tag.risk { background: rgba(255, 59, 48, .1); color: #d70015; }
+    .chat {
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .customer-profile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: rgba(0, 113, 227, .1);
+      color: var(--brand);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+
+    .chat-feed {
+      background: #f5f5f7;
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .msg {
+      max-width: 76%;
+      border-radius: 8px;
+      padding: 11px 13px;
+      font-size: 14px;
+      line-height: 1.6;
+      border: 1px solid var(--line);
+      background: white;
+    }
+
+    .msg.user { justify-self: start; }
+    .msg.agent {
+      justify-self: end;
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #ffffff;
+    }
+
+    .msg.meta {
+      justify-self: center;
+      background: rgba(255, 255, 255, .76);
+      border-color: var(--line);
+      color: var(--muted-strong);
+      max-width: 92%;
+      font-size: 12px;
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      background: white;
+    }
+
+    .composer textarea {
+      resize: none;
+      height: 54px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      outline: none;
+    }
+
+    .insight-stack { display: grid; gap: 14px; }
+    .insight {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--panel-soft);
+    }
+
+    .insight h3 { margin: 0 0 8px; font-size: 14px; }
+    .insight p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .score {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: #e8e8ed;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+
+    .score i { display: block; height: 100%; width: 82%; background: var(--green); }
+    .skills {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 14px;
+    }
+
+    .skill-card {
+      box-shadow: none;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      min-height: 160px;
+    }
+
+    .skill-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .skill-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--blue);
+    }
+
+    .skill-card:nth-child(2) .skill-icon { background: var(--green); }
+    .skill-card:nth-child(3) .skill-icon { background: var(--amber); }
+    .skill-card:nth-child(4) .skill-icon { background: var(--violet); }
+    .skill-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .rule-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+    }
+
+    .rule {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: white;
+      min-height: 132px;
+    }
+
+    .rule strong { display: block; margin-bottom: 8px; }
+    .rule span { display: block; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .provider-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .provider {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .provider.active {
+      border-color: var(--brand);
+      background: rgba(0, 113, 227, .09);
+    }
+
+    .provider-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: rgba(0, 113, 227, .1);
+      color: #064b8d;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .provider strong { display: block; font-size: 14px; }
+    .provider span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field.full { grid-column: 1 / -1; }
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .field input, .field select {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 0 10px;
+      color: var(--text);
+      outline: none;
+      min-width: 0;
+    }
+
+    .field textarea {
+      min-height: 72px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--text);
+      outline: none;
+    }
+
+    .api-note {
+      border-left: 3px solid var(--brand);
+      background: rgba(0, 113, 227, .09);
+      color: #1f7a3a;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .stage-flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .stage {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+      min-height: 96px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .stage.active {
+      border-color: var(--brand);
+      background: rgba(0, 113, 227, .09);
+    }
+
+    .stage strong { font-size: 14px; }
+    .stage span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .wizard-steps {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 8px;
+    }
+
+    .wizard-step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      display: grid;
+      gap: 6px;
+    }
+
+    .wizard-step strong { color: var(--text); font-size: 13px; }
+
+    .audit-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .audit-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+    }
+
+    .audit-row strong { display: block; font-size: 14px; }
+    .audit-row span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 12px;
+    }
+
+    .profile-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+    }
+
+    .profile-item label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .profile-item strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .channel-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .channel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .channel strong { font-size: 14px; }
+    .channel span { color: var(--muted); font-size: 12px; }
+
+    .task-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .task {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 12px;
+    }
+
+    .task strong { display: block; font-size: 14px; }
+    .task span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .command-palette {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0, 0, 0, 0.18);
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 92px;
+    }
+
+    .command-palette.open { display: flex; }
+    .command-box {
+      width: min(680px, calc(100vw - 28px));
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
+      overflow: hidden;
+    }
+
+    .command-box input {
+      width: 100%;
+      height: 52px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      outline: 0;
+      padding: 0 16px;
+      font-size: 15px;
+    }
+
+    .command-list { display: grid; padding: 8px; gap: 6px; }
+    .command-item {
+      border: 0;
+      background: white;
+      text-align: left;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: grid;
+      gap: 3px;
+      cursor: pointer;
+    }
+
+    .command-item:hover { background: var(--panel-soft); }
+    .command-item strong { font-size: 14px; }
+    .command-item span { color: var(--muted); font-size: 12px; }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      z-index: 25;
+      width: min(420px, 100vw);
+      height: 100vh;
+      background: white;
+      border-left: 1px solid var(--line);
+      box-shadow: -16px 0 40px rgba(0, 0, 0, 0.16);
+      transform: translateX(100%);
+      transition: transform .18s ease;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .drawer.open { transform: translateX(0); }
+
+    .drawer-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 24;
+      background: rgba(0, 0, 0, .16);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .drawer-scrim.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .drawer-head {
+      height: 58px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+    }
+
+    .drawer-body { padding: 14px; overflow: auto; }
+    .empty-state {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 22px;
+      text-align: center;
+      color: var(--muted);
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+    }
+
+    .empty-state strong { color: var(--text); }
+
+    .schema-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      font-size: 13px;
+    }
+
+    .schema-table th, .schema-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .schema-table th {
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .schema-table tr:last-child td { border-bottom: 0; }
+
+    .settings-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 12px 14px 0;
+      background: var(--panel);
+    }
+
+    .settings-tab {
+      height: 34px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .settings-tab.active {
+      background: rgba(0, 113, 227, .09);
+      color: var(--brand-dark);
+      border-color: var(--brand);
+      font-weight: 700;
+    }
+
+    .settings-summary {
+      padding: 12px 14px 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 20;
+      background: rgba(29, 29, 31, .9);
+      color: white;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Refined commercial UI system: calm, artful, and optimized for daily use. */
+    :root {
+      --bg: #f5f5f7;
+      --panel: #ffffff;
+      --panel-soft: #f5f5f7;
+      --surface-warm: #fbfbfd;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --line: rgba(0, 0, 0, .1);
+      --line-strong: rgba(0, 0, 0, .16);
+      --brand: #0071e3;
+      --brand-dark: #005bb5;
+      --blue: #0071e3;
+      --amber: #ff9f0a;
+      --red: #ff3b30;
+      --green: #34c759;
+      --violet: #5856d6;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 18px 50px rgba(0, 0, 0, .08);
+      --shadow-soft: 0 1px 2px rgba(0, 0, 0, .04), 0 10px 28px rgba(0, 0, 0, .055);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection {
+      background: rgba(0, 122, 255, .22);
+      color: var(--text);
+    }
+
+    .app {
+      grid-template-columns: clamp(236px, 17vw, 276px) minmax(0, 1fr);
+      background:
+        linear-gradient(90deg, rgba(0, 113, 227, 0.045), transparent 34%),
+        var(--bg);
+    }
+
+    .sidebar {
+      background: rgba(242, 242, 247, .82);
+      border-right: 1px solid var(--line);
+      padding: 24px 17px;
+      gap: 26px;
+    }
+
+    .brand {
+      padding: 2px 8px 20px;
+      border-bottom-color: rgba(255,255,255,0.14);
+    }
+
+    .mark {
+      width: 40px;
+      height: 40px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: #1d1d1f;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 10px 24px rgba(0,0,0,0.18);
+    }
+
+    .brand strong {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .brand span {
+      color: var(--muted);
+    }
+
+    .nav {
+      gap: 7px;
+    }
+
+    .nav button {
+      min-height: 45px;
+      padding: 0 12px;
+      color: var(--muted-strong);
+      transition: background .16s ease, color .16s ease, transform .16s ease;
+    }
+
+    .nav button:hover {
+      transform: none;
+    }
+
+    .nav button.active {
+      background: rgba(0, 0, 0, .055);
+      box-shadow: none;
+    }
+
+    .sidebar-status {
+      background: rgba(255,255,255,0.62);
+      border-color: var(--line);
+      color: var(--muted);
+      line-height: 1.75;
+    }
+
+    .main {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.68), rgba(255,255,255,0) 180px),
+        transparent;
+    }
+
+    .topbar {
+      height: 72px;
+      background: rgba(255,255,255,0.88);
+      backdrop-filter: blur(10px);
+      border-bottom-color: rgba(0, 0, 0, .1);
+      padding: 0 clamp(22px, 2.5vw, 38px);
+    }
+
+    .search {
+      width: min(620px, 46vw);
+      height: 40px;
+      background: #fbfbfd;
+      border-color: var(--line);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+
+    .search:focus-within {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.14);
+    }
+
+    .role-select, .health, .btn, .field input, .field select, .field textarea, .composer textarea {
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease, transform .16s ease;
+    }
+
+    .btn:hover {
+      border-color: var(--line-strong);
+      background: var(--surface-warm);
+      transform: translateY(-1px);
+    }
+
+    .btn.primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      box-shadow: 0 10px 20px rgba(0, 113, 227, 0.2);
+    }
+
+    .btn.primary:hover {
+      background: var(--brand-dark);
+      border-color: var(--brand-dark);
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible {
+      outline: 0;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16);
+    }
+
+    .content {
+      width: 100%;
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 30px clamp(22px, 2.6vw, 42px) 44px;
+      gap: 22px;
+    }
+
+    .page-head {
+      align-items: flex-start;
+      padding-bottom: 2px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 850;
+      color: var(--text);
+    }
+
+    .sub {
+      max-width: 780px;
+      margin-top: 8px;
+      font-size: 13.5px;
+      line-height: 1.7;
+    }
+
+    .pill {
+      background: rgba(255,255,255,0.78);
+      border-color: var(--line);
+      color: #6e6e73;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 16px;
+    }
+
+    .metric, .panel, .conversation, .skill-card {
+      border-color: rgba(0, 0, 0, .1);
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      position: relative;
+      min-height: 118px;
+      padding: 18px;
+      overflow: hidden;
+      background: linear-gradient(180deg, #ffffff, #fbfbfd);
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 3px;
+      background: var(--brand);
+      opacity: .78;
+    }
+
+    .metric label {
+      font-weight: 700;
+    }
+
+    .metric strong {
+      font-size: 30px;
+      letter-spacing: 0;
+    }
+
+    .workspace {
+      grid-template-columns: clamp(286px, 22vw, 350px) minmax(520px, 1fr) clamp(300px, 23vw, 380px);
+      gap: 18px;
+    }
+
+    .panel {
+      background: rgba(255,255,255,0.96);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      min-height: 60px;
+      padding: 0 18px;
+      background: linear-gradient(180deg, #ffffff, #fbfbfd);
+    }
+
+    .panel-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: #1d1d1f;
+    }
+
+    .panel-body {
+      padding: 16px;
+      overflow-x: auto;
+    }
+
+    .conversation,
+    .skill-card,
+    .rule,
+    .insight,
+    .provider,
+    .stage,
+    .wizard-step,
+    .audit-row,
+    .profile-item,
+    .channel,
+    .task {
+      border-color: rgba(0, 0, 0, .1);
+    }
+
+    .conversation:hover,
+    .provider:hover,
+    .skill-card:hover {
+      border-color: var(--brand);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .conversation.active,
+    .provider.active,
+    .stage.active {
+      background: rgba(0, 113, 227, .09);
+      border-color: var(--brand);
+    }
+
+    .chat {
+      min-height: 600px;
+    }
+
+    .customer-profile {
+      min-height: 70px;
+      background: #ffffff;
+    }
+
+    .avatar {
+      background: rgba(0, 113, 227, .1);
+      color: #0066cc;
+    }
+
+    .chat-feed {
+      background: #f5f5f7;
+      padding: 20px;
+    }
+
+    .msg {
+      border-color: rgba(0, 0, 0, .1);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.045);
+    }
+
+    .msg.agent {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #ffffff;
+    }
+
+    .composer {
+      padding: 14px;
+      background: #ffffff;
+    }
+
+    .composer textarea {
+      height: 58px;
+      background: #fbfbfd;
+    }
+
+    .insight {
+      background: #f5f5f7;
+      padding: 14px;
+    }
+
+    .insight h3 {
+      font-size: 14.5px;
+      font-weight: 800;
+    }
+
+    .rule {
+      min-height: 136px;
+      background: #ffffff;
+      padding: 15px;
+    }
+
+    .rule strong,
+    .task strong,
+    .audit-row strong,
+    .profile-item strong {
+      color: #1d1d1f;
+    }
+
+    .tag {
+      background: var(--panel-soft);
+      color: #515154;
+      font-weight: 700;
+    }
+
+    .tag.hot { background: rgba(255, 159, 10, .13); color: #a15c00; }
+    .tag.ai { background: rgba(52, 199, 89, .12); color: #1f7a3a; }
+    .tag.risk { background: rgba(255, 59, 48, .1); color: #d70015; }
+
+    .settings-grid {
+      grid-template-columns: minmax(330px, 430px) minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .provider {
+      min-height: 64px;
+    }
+
+    .provider-logo,
+    .skill-icon {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.42);
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      background: #fbfbfd;
+    }
+
+    .api-note {
+      background: rgba(0, 113, 227, .08);
+      color: #064b8d;
+      border-left-color: var(--brand);
+    }
+
+    .schema-table {
+      border-color: rgba(0, 0, 0, .1);
+    }
+
+    .schema-table th {
+      background: #f5f5f7;
+    }
+
+    .command-box,
+    .drawer {
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.2);
+    }
+
+    /* Executive polish: stronger proportions, better scanning, refined states. */
+    :root {
+      --accent-sky: #0071e3;
+      --accent-gold: #a76d16;
+      --accent-rose: #b9462b;
+      --accent-indigo: #5d5b9f;
+      --focus-ring: 0 0 0 3px rgba(0, 113, 227, 0.16);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.45) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.32), transparent 68%);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.24) transparent;
+    }
+
+    .sidebar::-webkit-scrollbar,
+    .panel-body::-webkit-scrollbar,
+    .drawer-body::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb,
+    .panel-body::-webkit-scrollbar-thumb,
+    .drawer-body::-webkit-scrollbar-thumb {
+      background: rgba(60, 60, 67, .26);
+      border-radius: 999px;
+    }
+
+    .top-actions,
+    .status-row {
+      min-width: 0;
+    }
+
+    .top-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .health {
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .content > * {
+      min-width: 0;
+    }
+
+    .metric:nth-child(1)::before { background: var(--brand); }
+    .metric:nth-child(2)::before { background: var(--accent-sky); }
+    .metric:nth-child(3)::before { background: var(--accent-gold); }
+    .metric:nth-child(4)::before { background: var(--accent-rose); }
+
+    .metric small {
+      color: #6e6e73;
+      font-weight: 650;
+    }
+
+    .panel {
+      position: relative;
+    }
+
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 1px;
+      background: rgba(255,255,255,0.92);
+      pointer-events: none;
+    }
+
+    .panel-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .panel-title::before {
+      content: "";
+      width: 4px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--brand);
+      box-shadow: 0 0 0 3px rgba(0, 113, 227, .1);
+    }
+
+    .panel:nth-of-type(3n) .panel-title::before { background: var(--accent-sky); box-shadow: 0 0 0 3px rgba(0, 113, 227, .1); }
+    .panel:nth-of-type(4n) .panel-title::before { background: var(--amber); box-shadow: 0 0 0 3px rgba(255, 159, 10, .12); }
+
+    .rule-grid {
+      grid-template-columns: repeat(3, minmax(220px, 1fr));
+    }
+
+    .skills {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .stage-flow,
+    .wizard-steps,
+    .channel-grid {
+      grid-template-columns: repeat(6, minmax(148px, 1fr));
+    }
+
+    .profile-grid {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .rule,
+    .insight,
+    .task,
+    .audit-row,
+    .profile-item,
+    .channel,
+    .stage,
+    .wizard-step {
+      box-shadow: 0 1px 0 rgba(255,255,255,.88);
+    }
+
+    .rule:hover,
+    .task:hover,
+    .audit-row:hover,
+    .profile-item:hover,
+    .channel:hover,
+    .stage:hover {
+      border-color: var(--line-strong);
+      background: #fbfbfd;
+    }
+
+    .msg.user {
+      border-left: 3px solid var(--accent-sky);
+    }
+
+    .msg.agent {
+      border-right: 3px solid var(--brand);
+    }
+
+    .msg.meta {
+      background: rgba(88, 86, 214, .08);
+      border-color: rgba(88, 86, 214, .2);
+      color: #515154;
+    }
+
+    .composer {
+      align-items: end;
+    }
+
+    .schema-table {
+      min-width: 760px;
+    }
+
+    .schema-table tbody tr {
+      transition: background .14s ease;
+    }
+
+    .schema-table tbody tr:hover {
+      background: #fbfbfd;
+    }
+
+    .settings-tabs {
+      gap: 9px;
+    }
+
+    .settings-tab:hover {
+      border-color: var(--line-strong);
+      color: #1d1d1f;
+    }
+
+    .command-item:hover {
+      background: rgba(0, 113, 227, .08);
+    }
+
+    .drawer {
+      background: rgba(255,255,255,0.98);
+    }
+
+    .toast {
+      background: rgba(29, 29, 31, .9);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    @media (min-width: 1600px) {
+      .content {
+        max-width: 1640px;
+      }
+
+      .workspace {
+        grid-template-columns: 360px minmax(620px, 1fr) 390px;
+      }
+    }
+
+    @media (max-width: 1380px) {
+      .workspace {
+        grid-template-columns: minmax(280px, 340px) minmax(480px, 1fr);
+      }
+
+      .workspace > .panel:last-child {
+        grid-column: 1 / -1;
+      }
+
+      .rule-grid {
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .workspace { grid-template-columns: 300px 1fr; }
+      .workspace > .panel:last-child { grid-column: 1 / -1; }
+      .skills { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+      .metrics { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+    }
+
+    @media (max-width: 820px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .nav { grid-template-columns: repeat(2, 1fr); }
+      .topbar { align-items: stretch; height: auto; padding: 14px; flex-direction: column; }
+      .search { width: 100%; }
+      .content { padding: 18px 14px 28px; }
+      .page-head { align-items: start; flex-direction: column; }
+      .workspace, .rule-grid, .skills, .metrics, .settings-grid, .form-grid, .stage-flow, .wizard-steps, .profile-grid, .channel-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .msg { max-width: 94%; }
+    }
+
+    @media (max-width: 560px) {
+      .brand {
+        padding-bottom: 14px;
+      }
+
+      .nav {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .btn,
+      .role-select,
+      .health {
+        width: 100%;
+      }
+
+      .composer {
+        grid-template-columns: 1fr;
+      }
+
+      .composer .btn {
+        width: 100%;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+      }
+    }
+
+    /* Final design-system pass: hierarchy, accessibility, density, and polish. */
+    .sidebar .nav {
+      position: relative;
+    }
+
+    .sidebar .nav::before {
+      content: "工作区";
+      color: rgba(220, 232, 229, .48);
+      font-size: 11px;
+      font-weight: 800;
+      padding: 0 10px 3px;
+    }
+
+    .nav button .icon {
+      opacity: .86;
+      transition: opacity .16s ease, transform .16s ease;
+    }
+
+    .nav button:hover .icon,
+    .nav button.active .icon {
+      opacity: 1;
+      transform: scale(1.04);
+    }
+
+    .topbar::after {
+      content: "";
+      position: absolute;
+      left: clamp(22px, 2.5vw, 38px);
+      right: clamp(22px, 2.5vw, 38px);
+      bottom: -1px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(0, 113, 227, .28), transparent);
+      pointer-events: none;
+    }
+
+    .search input::placeholder {
+      color: #8e8e93;
+    }
+
+    .btn {
+      font-weight: 720;
+    }
+
+    .btn:not(.primary):active,
+    .btn.primary:active {
+      transform: translateY(0);
+      box-shadow: none;
+    }
+
+    .panel-head .btn,
+    .top-actions .btn {
+      height: 36px;
+    }
+
+    .content > .panel,
+    .content > .workspace,
+    .content > .metrics,
+    .content > .page-head {
+      animation: softEnter .22s ease both;
+    }
+
+    @keyframes softEnter {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .metric {
+      isolation: isolate;
+    }
+
+    .metric::after {
+      content: "";
+      position: absolute;
+      right: -24px;
+      bottom: -30px;
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: rgba(0, 113, 227, .045);
+      z-index: -1;
+    }
+
+    .metric:nth-child(2)::after { background: rgba(88, 86, 214, .06); }
+    .metric:nth-child(3)::after { background: rgba(255, 159, 10, .07); }
+    .metric:nth-child(4)::after { background: rgba(185, 70, 43, .055); }
+
+    .panel-body > .rule-grid,
+    .panel-body > .profile-grid,
+    .panel-body > .stage-flow,
+    .panel-body > .wizard-steps,
+    .panel-body > .channel-grid {
+      min-width: 0;
+    }
+
+    .conversation,
+    .provider,
+    .task,
+    .audit-row {
+      position: relative;
+    }
+
+    .conversation::before,
+    .provider::before,
+    .task::before,
+    .audit-row::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 12px;
+      bottom: 12px;
+      width: 3px;
+      border-radius: 0 999px 999px 0;
+      background: transparent;
+      transition: background .16s ease;
+    }
+
+    .conversation.active::before,
+    .provider.active::before,
+    .task:hover::before,
+    .audit-row:hover::before {
+      background: var(--brand);
+    }
+
+    .skill-card {
+      background: linear-gradient(180deg, #ffffff, #fbfbfd);
+    }
+
+    .skill-card strong {
+      font-size: 15px;
+      color: #1d1d1f;
+    }
+
+    .skill-card p,
+    .rule span,
+    .profile-item strong,
+    .stage span,
+    .channel span {
+      overflow-wrap: anywhere;
+    }
+
+    .schema-table th:first-child,
+    .schema-table td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: inherit;
+    }
+
+    .schema-table th:first-child {
+      background: #f5f5f7;
+      z-index: 2;
+    }
+
+    .tag,
+    .pill {
+      line-height: 1.2;
+    }
+
+    .empty-state {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,.34)),
+        var(--panel-soft);
+    }
+
+    .command-palette {
+      backdrop-filter: blur(8px);
+    }
+
+    .command-box input:focus {
+      box-shadow: inset 0 -1px 0 var(--brand);
+    }
+
+    .drawer-head {
+      background: linear-gradient(180deg, #ffffff, #fbfbfd);
+    }
+
+    @media (max-width: 1180px) {
+      .topbar {
+        position: static;
+      }
+    }
+
+    @media (max-width: 820px) {
+      body::before {
+        background-size: 22px 22px;
+      }
+
+      .sidebar {
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid rgba(255,255,255,.08);
+      }
+
+      .sidebar-status {
+        display: none;
+      }
+
+      .status-row {
+        justify-content: flex-start;
+      }
+
+      .panel-head {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 16px;
+      }
+
+      .panel-head .top-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .metrics {
+        gap: 12px;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .btn,
+      .panel,
+      .metric,
+      .conversation,
+      .skill-card,
+      .rule,
+      .provider {
+        border: 1px solid ButtonText;
+      }
+    }
+
+    @media print {
+      .sidebar,
+      .topbar,
+      .command-palette,
+      .drawer,
+      .toast {
+        display: none !important;
+      }
+
+      .app,
+      .main,
+      .content {
+        display: block;
+        max-width: none;
+        padding: 0;
+        background: white;
+      }
+
+      .panel,
+      .metric {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+    }
+
+    /* Finish pass: mature product ergonomics without decorative noise. */
+    html {
+      color-scheme: light;
+      scroll-padding-top: 88px;
+    }
+
+    body,
+    input,
+    textarea,
+    select,
+    button {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric::after {
+      right: 18px;
+      top: 20px;
+      bottom: auto;
+      width: min(110px, 38%);
+      height: 1px;
+      border-radius: 0;
+      background: linear-gradient(90deg, transparent, rgba(0, 113, 227, .3));
+      z-index: 0;
+    }
+
+    .metric:nth-child(2)::after { background: linear-gradient(90deg, transparent, rgba(88, 86, 214, .28)); }
+    .metric:nth-child(3)::after { background: linear-gradient(90deg, transparent, rgba(255, 159, 10, .28)); }
+    .metric:nth-child(4)::after { background: linear-gradient(90deg, transparent, rgba(185, 70, 43, .32)); }
+
+    .metric > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .panel,
+    .metric,
+    .conversation,
+    .skill-card,
+    .rule,
+    .insight,
+    .provider,
+    .task,
+    .audit-row,
+    .profile-item,
+    .channel,
+    .stage,
+    .wizard-step {
+      outline: 1px solid rgba(255,255,255,.52);
+      outline-offset: -2px;
+    }
+
+    .workspace > .panel,
+    .settings-grid > *,
+    .insight-stack > *,
+    .panel-body > * {
+      min-width: 0;
+    }
+
+    .panel:has(.chat) {
+      overflow: clip;
+    }
+
+    .panel:has(.chat) .panel-body {
+      padding: 0;
+    }
+
+    .panel:has(.chat) .chat {
+      border-radius: 0;
+    }
+
+    .queue,
+    .provider-list,
+    .task-list,
+    .audit-list,
+    .insight-stack {
+      align-content: start;
+    }
+
+    .conversation,
+    .provider,
+    .task,
+    .audit-row {
+      min-height: 58px;
+    }
+
+    .conversation:focus-within,
+    .provider:focus-within,
+    .task:focus-within,
+    .audit-row:focus-within,
+    .skill-card:focus-within,
+    .rule:focus-within {
+      border-color: var(--brand);
+      box-shadow: var(--focus-ring);
+    }
+
+    .tag::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .62;
+      vertical-align: 1px;
+    }
+
+    .tag:empty::before {
+      display: none;
+    }
+
+    .pill .dot {
+      flex: 0 0 auto;
+    }
+
+    .schema-table th,
+    .schema-table td {
+      max-width: 360px;
+      overflow-wrap: anywhere;
+    }
+
+    .schema-table td {
+      color: #515154;
+    }
+
+    .field input:hover,
+    .field select:hover,
+    .field textarea:hover,
+    .composer textarea:hover,
+    .role-select:hover {
+      border-color: var(--line-strong);
+    }
+
+    .field input::placeholder,
+    .field textarea::placeholder {
+      color: #8e8e93;
+    }
+
+    .empty-state .btn {
+      margin-top: 2px;
+    }
+
+    .drawer-body .task + .task,
+    .audit-list .audit-row + .audit-row,
+    .task-list .task + .task {
+      margin-top: 0;
+    }
+
+    @supports not selector(:has(*)) {
+      .panel .chat {
+        margin: -16px;
+      }
+    }
+
+    @media (hover: none) {
+      .btn:hover,
+      .conversation:hover,
+      .provider:hover,
+      .skill-card:hover,
+      .rule:hover,
+      .task:hover,
+      .audit-row:hover,
+      .profile-item:hover,
+      .channel:hover,
+      .stage:hover {
+        transform: none;
+      }
+    }
+
+    @media (max-width: 1024px) {
+      .content {
+        max-width: 980px;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 420px) {
+      .content {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      h1 {
+        font-size: 22px;
+      }
+
+      .metric strong {
+        font-size: 24px;
+      }
+
+      .panel-body {
+        padding: 13px;
+      }
+    }
+
+    /* Perfected UI pass: fixed type scale, stronger rhythm, production controls. */
+    :root {
+      --type-title: 28px;
+      --type-section: 15px;
+      --type-body: 14px;
+      --type-caption: 12px;
+      --control-height: 38px;
+      --control-height-compact: 36px;
+    }
+
+    .topbar,
+    .sidebar,
+    .drawer,
+    .command-palette,
+    .toast {
+      isolation: isolate;
+    }
+
+    .topbar {
+      z-index: 10;
+    }
+
+    .sidebar {
+      z-index: 11;
+    }
+
+    h1 {
+      font-size: var(--type-title);
+      letter-spacing: 0;
+    }
+
+    .panel-title,
+    .conv-name,
+    .rule strong,
+    .task strong,
+    .audit-row strong,
+    .profile-item strong {
+      letter-spacing: 0;
+    }
+
+    .sub,
+    .summary,
+    .rule span,
+    .insight p,
+    .skill-card p,
+    .profile-item label,
+    .channel span,
+    .stage span {
+      line-height: 1.65;
+    }
+
+    .metric strong {
+      font-size: 30px;
+      line-height: 1.08;
+    }
+
+    .metric label,
+    .field label,
+    .time,
+    .tag,
+    .pill,
+    .provider span,
+    .task span,
+    .audit-row span {
+      font-size: var(--type-caption);
+    }
+
+    .btn,
+    .role-select,
+    .health,
+    .field input,
+    .field select {
+      min-height: var(--control-height);
+    }
+
+    .panel-head .btn,
+    .top-actions .btn,
+    .settings-tab {
+      min-height: var(--control-height-compact);
+    }
+
+    .btn,
+    .settings-tab,
+    .nav button,
+    .command-item,
+    .conversation,
+    .provider {
+      user-select: none;
+    }
+
+    .panel:focus-within,
+    .metric:focus-within {
+      border-color: rgba(0, 113, 227, .42);
+      box-shadow: var(--shadow), var(--focus-ring);
+    }
+
+    .panel:hover {
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.095);
+    }
+
+    .panel:has(.chat):hover {
+      box-shadow: var(--shadow);
+    }
+
+    .top-actions .btn.primary {
+      order: -1;
+    }
+
+    .status-row .pill {
+      flex-shrink: 0;
+    }
+
+    .settings-tabs {
+      border-bottom: 1px solid rgba(0, 0, 0, .1);
+      padding-bottom: 12px;
+    }
+
+    .settings-summary {
+      padding-top: 14px;
+    }
+
+    .provider-list,
+    .queue {
+      max-height: min(780px, calc(100vh - 190px));
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .chat-feed {
+      max-height: min(680px, calc(100vh - 250px));
+      overflow: auto;
+    }
+
+    .composer textarea:focus {
+      min-height: 76px;
+    }
+
+    .schema-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    .schema-table th:first-child {
+      z-index: 3;
+    }
+
+    .drawer {
+      max-width: 420px;
+    }
+
+    @media (max-width: 1180px) {
+      h1 {
+        font-size: 26px;
+      }
+
+      .metric strong {
+        font-size: 28px;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .provider-list,
+      .queue,
+      .chat-feed {
+        max-height: none;
+      }
+
+      .panel:hover {
+        box-shadow: var(--shadow);
+      }
+    }
+
+    @media (max-width: 420px) {
+      .metric,
+      .panel-body,
+      .rule,
+      .insight,
+      .task,
+      .audit-row,
+      .profile-item,
+      .channel,
+      .stage {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+    }
+
+    /* Apple restoration pass: system surfaces, glass chrome, iOS-like controls. */
+    :root {
+      color-scheme: light;
+      --bg: #f5f5f7;
+      --panel: rgba(255, 255, 255, .86);
+      --panel-solid: #ffffff;
+      --panel-soft: #f5f5f7;
+      --surface-warm: #fbfbfd;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --muted-strong: #515154;
+      --line: rgba(0, 0, 0, .1);
+      --line-strong: rgba(0, 0, 0, .16);
+      --brand: #0071e3;
+      --brand-dark: #005bb5;
+      --blue: #0071e3;
+      --amber: #ff9f0a;
+      --red: #ff3b30;
+      --green: #34c759;
+      --violet: #5856d6;
+      --radius: 8px;
+      --focus-ring: 0 0 0 4px rgba(0, 113, 227, .16);
+      --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 18px 50px rgba(0, 0, 0, .08);
+      --shadow-soft: 0 1px 2px rgba(0, 0, 0, .04), 0 10px 28px rgba(0, 0, 0, .055);
+      --sidebar-width: 260px;
+      --control-height: 40px;
+      --control-height-compact: 36px;
+      --type-title: 30px;
+    }
+
+    html {
+      background: var(--bg);
+    }
+
+    body {
+      position: relative;
+      min-width: 320px;
+      background:
+        linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 42%, #eef3f8 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", Arial, sans-serif;
+    }
+
+    body.command-open,
+    body.drawer-open {
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(120deg, rgba(255, 255, 255, .8), rgba(255, 255, 255, 0) 38%),
+        linear-gradient(90deg, rgba(0, 113, 227, .055), rgba(88, 86, 214, .035) 44%, rgba(52, 199, 89, .035));
+      opacity: .88;
+    }
+
+    ::selection {
+      background: rgba(0, 122, 255, .22);
+      color: var(--text);
+    }
+
+    .app {
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      background: transparent;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      background: rgba(242, 242, 247, .82);
+      color: var(--text);
+      border-right: 1px solid var(--line);
+      box-shadow: inset -1px 0 rgba(255, 255, 255, .68);
+      backdrop-filter: blur(26px) saturate(180%);
+      -webkit-backdrop-filter: blur(26px) saturate(180%);
+    }
+
+    .brand {
+      border-bottom-color: var(--line);
+      padding: 6px 8px 18px;
+    }
+
+    .mark {
+      background: #1d1d1f;
+      color: #f5f5f7;
+      box-shadow: inset 0 1px rgba(255, 255, 255, .18), 0 8px 22px rgba(0, 0, 0, .16);
+    }
+
+    .mark svg {
+      width: 28px;
+      height: 28px;
+      display: block;
+    }
+
+    .brand strong,
+    .panel-title,
+    .conv-name,
+    .metric strong,
+    .rule strong,
+    .task strong,
+    .audit-row strong,
+    .profile-item strong,
+    .channel strong,
+    .stage strong,
+    .provider strong {
+      color: var(--text);
+    }
+
+    .brand span,
+    .sidebar-status,
+    .sub,
+    .summary,
+    .time,
+    .provider span,
+    .rule span,
+    .task span,
+    .audit-row span,
+    .profile-item label,
+    .channel span,
+    .stage span,
+    .skill-card p,
+    .insight p,
+    .field label,
+    .settings-summary {
+      color: var(--muted);
+    }
+
+    .nav {
+      gap: 4px;
+    }
+
+    .nav button {
+      color: var(--muted-strong);
+      min-height: 40px;
+      padding: 0 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      transition: background-color .16s ease, color .16s ease, transform .16s ease;
+    }
+
+    .nav button.active,
+    .nav button:hover {
+      color: var(--text);
+      background: rgba(0, 0, 0, .055);
+      box-shadow: none;
+      transform: none;
+    }
+
+    .nav button:active {
+      transform: scale(.985);
+    }
+
+    .nav .icon {
+      color: #7d7d83;
+      stroke-width: 1.9;
+    }
+
+    .nav button.active .icon {
+      color: var(--brand);
+    }
+
+    .sidebar-status {
+      background: rgba(255, 255, 255, .62);
+      border-color: var(--line);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .88);
+      line-height: 1.72;
+    }
+
+    .main {
+      background: transparent;
+    }
+
+    .topbar {
+      min-height: 70px;
+      height: auto;
+      background: rgba(251, 251, 253, .76);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 1px rgba(255, 255, 255, .9);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+    }
+
+    .window-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+      padding-right: 6px;
+    }
+
+    .window-controls i {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+    }
+
+    .window-controls i:nth-child(1) { background: #ff5f57; }
+    .window-controls i:nth-child(2) { background: #ffbd2e; }
+    .window-controls i:nth-child(3) { background: #28c840; }
+
+    .toolbar-title {
+      display: none;
+      color: var(--muted-strong);
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .search,
+    .role-select,
+    .field input,
+    .field select,
+    .field textarea,
+    .composer textarea,
+    .command-box input {
+      background: rgba(255, 255, 255, .94);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      box-shadow: inset 0 1px 1px rgba(0, 0, 0, .025);
+    }
+
+    .search {
+      height: 40px;
+      max-width: 620px;
+    }
+
+    .keycap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 24px;
+      padding: 0 7px;
+      border-radius: 7px;
+      border: 1px solid rgba(0, 0, 0, .1);
+      background: rgba(245, 245, 247, .92);
+      color: #6e6e73;
+      font-size: 12px;
+      font-weight: 650;
+      box-shadow: inset 0 1px rgba(255, 255, 255, .9), 0 1px 1px rgba(0, 0, 0, .04);
+    }
+
+    * {
+      scrollbar-color: rgba(60, 60, 67, .28) transparent;
+      scrollbar-width: thin;
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(60, 60, 67, .26);
+      background-clip: content-box;
+      border: 3px solid transparent;
+      border-radius: 999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(60, 60, 67, .38);
+      background-clip: content-box;
+    }
+
+    .role-select,
+    .field select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      background-size: 14px 14px;
+      padding-right: 38px;
+    }
+
+    .search input::placeholder,
+    .composer textarea::placeholder {
+      color: #8e8e93;
+    }
+
+    .search:focus-within,
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus,
+    .composer textarea:focus,
+    .command-box input:focus {
+      border-color: rgba(0, 113, 227, .58);
+      box-shadow: var(--focus-ring), inset 0 1px 1px rgba(0, 0, 0, .025);
+    }
+
+    .btn,
+    .settings-tab,
+    .role-select,
+    .health {
+      min-height: var(--control-height);
+      border-radius: 8px;
+      border-color: var(--line);
+      font-weight: 600;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, .86);
+      color: var(--text);
+      box-shadow: 0 1px 1px rgba(0, 0, 0, .03);
+      transition: background-color .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+
+    .btn:hover {
+      background: #ffffff;
+      border-color: rgba(0, 0, 0, .18);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .btn:active {
+      transform: scale(.98);
+    }
+
+    .btn.primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #ffffff;
+      box-shadow: 0 8px 22px rgba(0, 113, 227, .24);
+    }
+
+    .btn.primary:hover {
+      background: var(--brand-dark);
+      border-color: var(--brand-dark);
+    }
+
+    .btn:focus-visible,
+    .nav button:focus-visible,
+    .settings-tab:focus-visible,
+    .command-item:focus-visible,
+    .role-select:focus-visible {
+      outline: 0;
+      box-shadow: var(--focus-ring);
+    }
+
+    .health {
+      background: rgba(52, 199, 89, .1);
+      border-color: rgba(52, 199, 89, .32);
+      color: #1f7a3a;
+      padding-inline: 12px;
+    }
+
+    .dot {
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(52, 199, 89, .13);
+    }
+
+    .dot.warn {
+      background: var(--amber);
+      box-shadow: 0 0 0 3px rgba(255, 159, 10, .15);
+    }
+
+    .content {
+      width: 100%;
+      max-width: 1460px;
+      margin-inline: auto;
+      padding: 28px 32px 40px;
+    }
+
+    h1 {
+      color: var(--text);
+      font-weight: 760;
+      line-height: 1.12;
+    }
+
+    .page-head {
+      align-items: flex-start;
+    }
+
+    .status-row {
+      align-items: center;
+    }
+
+    .metric,
+    .panel,
+    .conversation,
+    .skill-card,
+    .rule,
+    .provider,
+    .insight,
+    .stage,
+    .wizard-step,
+    .audit-row,
+    .profile-item,
+    .channel,
+    .task,
+    .schema-table,
+    .command-box,
+    .drawer {
+      background: var(--panel);
+      border-color: var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(18px) saturate(160%);
+      -webkit-backdrop-filter: blur(18px) saturate(160%);
+    }
+
+    .metric {
+      min-height: 118px;
+      padding: 18px;
+      background: rgba(255, 255, 255, .9);
+    }
+
+    .metric label {
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    .metric small {
+      color: #1f7a3a;
+      font-weight: 600;
+    }
+
+    .panel {
+      overflow: clip;
+    }
+
+    .panel:hover {
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      min-height: 58px;
+      border-bottom-color: var(--line);
+      background: rgba(255, 255, 255, .5);
+    }
+
+    .panel-body {
+      background: rgba(255, 255, 255, .22);
+    }
+
+    .skill-card,
+    .rule,
+    .provider,
+    .insight,
+    .stage,
+    .wizard-step,
+    .audit-row,
+    .profile-item,
+    .channel,
+    .task {
+      background: rgba(255, 255, 255, .72);
+    }
+
+    .pill,
+    .tag {
+      border: 1px solid var(--line);
+      background: rgba(245, 245, 247, .9);
+      color: var(--muted-strong);
+      font-weight: 650;
+    }
+
+    .tag.ai {
+      background: rgba(52, 199, 89, .12);
+      border-color: rgba(52, 199, 89, .28);
+      color: #1f7a3a;
+    }
+
+    .tag.hot {
+      background: rgba(255, 159, 10, .13);
+      border-color: rgba(255, 159, 10, .3);
+      color: #a15c00;
+    }
+
+    .tag.risk {
+      background: rgba(255, 59, 48, .1);
+      border-color: rgba(255, 59, 48, .28);
+      color: #d70015;
+    }
+
+    .panel-title::before {
+      background: var(--brand) !important;
+      box-shadow: 0 0 0 3px rgba(0, 113, 227, .1) !important;
+    }
+
+    .conversation {
+      background: rgba(255, 255, 255, .72);
+      box-shadow: none;
+      transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
+    }
+
+    .conversation:hover {
+      background: rgba(255, 255, 255, .95);
+      transform: translateY(-1px);
+    }
+
+    .conversation.active,
+    .provider.active,
+    .stage.active,
+    .settings-tab.active {
+      background: rgba(0, 113, 227, .09);
+      border-color: rgba(0, 113, 227, .42);
+      color: var(--brand);
+    }
+
+    .avatar,
+    .provider-logo,
+    .skill-icon {
+      border-radius: 8px;
+      background: rgba(0, 113, 227, .1);
+      color: var(--brand);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .9);
+    }
+
+    .skill-card:nth-child(2) .skill-icon { background: rgba(52, 199, 89, .13); color: #1f7a3a; }
+    .skill-card:nth-child(3) .skill-icon { background: rgba(255, 159, 10, .14); color: #a15c00; }
+    .skill-card:nth-child(4) .skill-icon { background: rgba(88, 86, 214, .12); color: var(--violet); }
+
+    .chat-feed {
+      background:
+        linear-gradient(180deg, rgba(248, 248, 250, .92), rgba(245, 245, 247, .92));
+      gap: 14px;
+    }
+
+    .msg {
+      border-radius: 8px;
+      border-color: transparent;
+      background: #e9e9eb;
+      color: var(--text);
+      box-shadow: 0 1px 1px rgba(0, 0, 0, .04);
+    }
+
+    .msg.agent {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #ffffff;
+    }
+
+    .msg.meta {
+      background: rgba(255, 255, 255, .76);
+      border-color: var(--line);
+      color: var(--muted-strong);
+    }
+
+    .composer {
+      background: rgba(255, 255, 255, .82);
+      border-top-color: var(--line);
+    }
+
+    .settings-tabs {
+      background: rgba(255, 255, 255, .58);
+      border-bottom-color: var(--line);
+      gap: 6px;
+    }
+
+    .settings-tab {
+      background: rgba(245, 245, 247, .9);
+      color: var(--muted-strong);
+      padding-inline: 14px;
+    }
+
+    .api-note {
+      border-left: 0;
+      background: rgba(0, 113, 227, .08);
+      border: 1px solid rgba(0, 113, 227, .16);
+      color: #064b8d;
+    }
+
+    .schema-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: clip;
+    }
+
+    .schema-table th {
+      background: rgba(245, 245, 247, .96);
+      color: var(--muted-strong);
+    }
+
+    .schema-table th:first-child {
+      background: rgba(245, 245, 247, .96);
+    }
+
+    .schema-table td {
+      color: var(--muted-strong);
+    }
+
+    .schema-table tbody tr:hover {
+      background: rgba(0, 113, 227, .045);
+    }
+
+    .field input::placeholder,
+    .field textarea::placeholder,
+    .command-box input::placeholder {
+      color: #8e8e93;
+    }
+
+    .settings-tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, .92);
+    }
+
+    .command-palette {
+      background: rgba(0, 0, 0, .18);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .command-box {
+      background: rgba(255, 255, 255, .9);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .2);
+    }
+
+    .command-list {
+      padding: 10px;
+      gap: 4px;
+    }
+
+    .command-item {
+      background: transparent;
+      border-radius: 8px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-rows: auto auto;
+      align-items: center;
+      column-gap: 14px;
+      padding: 11px 12px;
+    }
+
+    .command-item:hover {
+      background: rgba(0, 113, 227, .08);
+    }
+
+    .command-item::after {
+      content: "Return";
+      color: #8e8e93;
+      font-size: 11px;
+      font-weight: 650;
+      border: 1px solid rgba(0, 0, 0, .1);
+      border-radius: 7px;
+      padding: 3px 7px;
+      background: rgba(245, 245, 247, .88);
+      grid-column: 2;
+      grid-row: 1 / span 2;
+      justify-self: end;
+      align-self: center;
+      white-space: nowrap;
+    }
+
+    .command-item strong {
+      grid-column: 1;
+      grid-row: 1;
+      min-width: 0;
+    }
+
+    .command-item span {
+      grid-column: 1;
+      grid-row: 2;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .drawer {
+      width: min(420px, 100vw);
+      background: rgba(251, 251, 253, .9);
+      border-left-color: var(--line);
+      box-shadow: -22px 0 70px rgba(0, 0, 0, .16);
+    }
+
+    .drawer-head {
+      border-bottom-color: var(--line);
+      background: rgba(255, 255, 255, .68);
+    }
+
+    .toast {
+      background: rgba(29, 29, 31, .9);
+      color: #ffffff;
+      border-radius: 8px;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, .2);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .empty-state {
+      background: rgba(255, 255, 255, .6);
+      border-color: var(--line-strong);
+      border-radius: 8px;
+    }
+
+    .top-actions,
+    .status-row,
+    .tags {
+      min-width: 0;
+    }
+
+    .main,
+    .content,
+    .panel,
+    .panel-body,
+    .workspace,
+    .settings-grid,
+    .insight-stack,
+    .rule-grid,
+    .stage-flow,
+    .wizard-steps,
+    .profile-grid,
+    .channel-grid,
+    .skills,
+    .form-grid {
+      min-width: 0;
+    }
+
+    .workspace {
+      grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(220px, 300px);
+    }
+
+    .settings-grid {
+      grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+    }
+
+    .rule-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .skills {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .stage-flow,
+    .wizard-steps,
+    .channel-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .profile-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .form-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .sidebar .nav::before {
+      content: none;
+      display: none;
+    }
+
+    .btn,
+    .pill,
+    .tag,
+    .health,
+    .role-select,
+    .panel-title,
+    .conv-name,
+    .provider strong,
+    .task strong,
+    .rule strong {
+      overflow-wrap: anywhere;
+    }
+
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .topbar,
+      .sidebar,
+      .metric,
+      .panel,
+      .drawer,
+      .command-box {
+        background: #ffffff;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      :root {
+        --sidebar-width: 236px;
+      }
+
+      .content {
+        padding-inline: 24px;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar {
+        position: static;
+        width: 100%;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        padding-bottom: 12px;
+      }
+
+      .nav {
+        display: flex;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .nav button {
+        flex: 0 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        padding: 12px 16px;
+      }
+
+      .window-controls {
+        display: none;
+      }
+
+      .search {
+        width: 100%;
+      }
+
+      .keycap {
+        display: none;
+      }
+
+      .topbar .top-actions {
+        width: 100%;
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .content {
+        padding: 20px 16px 28px;
+      }
+
+      .page-head {
+        display: grid;
+      }
+
+      .status-row {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 560px) {
+      :root {
+        --type-title: 24px;
+      }
+
+      .metrics,
+      .skills,
+      .rule-grid,
+      .stage-flow,
+      .wizard-steps,
+      .profile-grid,
+      .channel-grid,
+      .settings-grid,
+      .workspace,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .composer {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar .top-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        overflow: visible;
+      }
+
+      .topbar .top-actions .btn.primary {
+        flex: 1 0 100%;
+      }
+
+      .topbar .top-actions .health {
+        flex: 1 1 170px;
+        min-width: 156px;
+        justify-content: center;
+      }
+
+      .topbar .top-actions .role-select {
+        flex: 1 1 132px;
+        min-width: 126px;
+        justify-content: center;
+      }
+
+      .topbar .top-actions .btn:not(.primary) {
+        flex: 0 0 40px;
+        width: 40px;
+        padding-inline: 0;
+      }
+
+      .topbar .top-actions .btn[title="通知"] {
+        width: auto;
+        min-width: 40px;
+        padding-inline: 8px;
+      }
+
+      .content .top-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        width: 100%;
+        overflow: visible;
+      }
+
+      .content .top-actions .btn {
+        width: 100%;
+      }
+
+      .btn.primary {
+        width: 100%;
+      }
+    }
+
+    @media (min-width: 1280px) {
+      .toolbar-title {
+        display: inline-flex;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64" role="img">
+            <rect x="10" y="10" width="44" height="44" rx="12" fill="#1d1d1f"/>
+            <path d="M20 39c4.4 4.7 9.2 7 14.4 7 7.6 0 13.6-4.8 13.6-11.4C48 28.1 42 24 34.8 24c-5 0-9.4 2.1-13.2 6.1" fill="none" stroke="#fff" stroke-width="5.2" stroke-linecap="round"/>
+            <path d="M20 23h24" stroke="#0071e3" stroke-width="5.2" stroke-linecap="round"/>
+            <circle cx="45" cy="21" r="3.5" fill="#34c759"/>
+          </svg>
+        </div>
+        <div>
+          <strong>智服增长台</strong>
+          <span>微信私域智能客服</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="active" data-page="overview"><svg class="icon" viewBox="0 0 24 24"><path d="M3 13h8V3H3z"/><path d="M13 21h8V3h-8z"/><path d="M3 21h8v-6H3z"/></svg>总览工作台</button>
+        <button data-page="chat"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>会话接管</button>
+        <button data-page="skills"><svg class="icon" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.6 4.2L18.5 21 12 16.8 5.5 21l2.1-7.8L2 9h7z"/></svg>客服 Skills</button>
+        <button data-page="knowledge"><svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>知识库</button>
+        <button data-page="crm"><svg class="icon" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>线索 CRM</button>
+        <button data-page="analytics"><svg class="icon" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 16l4-4 3 3 5-7"/></svg>转化分析</button>
+        <button data-page="risk"><svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>风控质检</button>
+        <button data-page="settings"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h.1a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5h.1a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1z"/></svg>系统设置</button>
+      </nav>
+
+      <div class="sidebar-status">
+        当前模型：DeepSeek 商业客服<br />
+        微信连接：在线<br />
+        自动回复：已开启<br />
+        人工兜底：3 分钟未解决转接
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <span class="window-controls" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="toolbar-title">智服增长台</span>
+        <label class="search">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="globalSearch" placeholder="搜索客户、会话、话术、技能或知识条目" />
+          <span class="keycap" aria-hidden="true">⌘K</span>
+        </label>
+        <div class="top-actions">
+          <span class="health" id="healthBadge"><i class="dot"></i>全通道正常 · API 428ms</span>
+          <select class="role-select" aria-label="角色视角">
+            <option>老板视角</option>
+            <option>客服主管</option>
+            <option>一线客服</option>
+            <option>运营配置</option>
+          </select>
+          <button class="btn" title="快捷命令" data-action="commands"><svg class="icon" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></button>
+          <button class="btn" title="通知" data-action="notifications"><svg class="icon" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="noticeCount">3</span></button>
+          <button class="btn" title="导出报表"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></button>
+          <button class="btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>新建 Skill</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="page-head">
+          <div>
+            <h1>智能客服运营工作台</h1>
+            <p class="sub">围绕“秒回、获客、转化、沉淀知识、扩展 skills”设计，适合后期商业化落地。</p>
+          </div>
+          <div class="status-row">
+            <span class="pill"><i class="dot"></i>Bot 正常服务</span>
+            <span class="pill"><i class="dot warn"></i>7 条需人工确认</span>
+            <span class="pill">今日 09:00 自动日报</span>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <div class="metric"><label>今日新增咨询</label><strong>186</strong><small>较昨日 +18.4%</small></div>
+          <div class="metric"><label>意向客户识别</label><strong>43</strong><small>高意向 12 个</small></div>
+          <div class="metric"><label>自动解决率</label><strong>72%</strong><small>报价/起订/交期最高频</small></div>
+          <div class="metric"><label>平均响应时间</label><strong>2.8s</strong><small>微信私域在线</small></div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">按角色进入工作</div>
+            <span class="pill">减少信息堆叠</span>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>老板</strong><span>看新增咨询、线索转化、成交阶段、API 成本和异常风险。</span></div>
+            <div class="rule"><strong>客服主管</strong><span>看 SLA、人工接管、质检问题、话术修正和团队效率。</span></div>
+            <div class="rule"><strong>一线客服</strong><span>只看优先会话、客户画像、AI 建议、工单和下一步提醒。</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">多渠道健康矩阵</div>
+            <button class="btn">查看通道日志</button>
+          </div>
+          <div class="panel-body channel-grid">
+            <div class="channel"><strong>微信私域</strong><span>在线 · 132 条咨询</span><span class="tag ai">主通道</span></div>
+            <div class="channel"><strong>企业微信</strong><span>待接入 · 可做员工协作</span><span class="tag">待配</span></div>
+            <div class="channel"><strong>网页客服</strong><span>在线 · 24 条咨询</span><span class="tag ai">在线</span></div>
+            <div class="channel"><strong>小红书</strong><span>手动导入 · 高意向来源</span><span class="tag hot">重点</span></div>
+            <div class="channel"><strong>抖音私信</strong><span>待接入 · 需风控策略</span><span class="tag">待配</span></div>
+            <div class="channel"><strong>电话/邮件</strong><span>工单化处理 · SLA 跟踪</span><span class="tag">工单</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">今日运营待办</div>
+            <button class="btn primary">处理最高优先级</button>
+          </div>
+          <div class="panel-body task-list">
+            <div class="task"><div><strong>7 条高意向线索超过 15 分钟未跟进</strong><span>建议立即分配给销售或客服主管。</span></div><span class="tag risk">SLA</span></div>
+            <div class="task"><div><strong>报价类问题人工修正率升高</strong><span>近 24 小时 18% 回复被人工改写，建议检查价格知识库。</span></div><span class="tag hot">质检</span></div>
+            <div class="task"><div><strong>GeekNow API 今日调用接近预算阈值</strong><span>已使用 78%，达到 90% 后自动切换低成本模型。</span></div><span class="tag">成本</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">上线检查清单</div>
+            <span class="pill">商业交付前必看</span>
+          </div>
+          <div class="panel-body task-list">
+            <div class="task"><div><strong>核心知识库已覆盖 80% 高频问题</strong><span>价格、起订量、交期、定制内容、物流、售后必须先配置。</span></div><span class="tag ai">通过</span></div>
+            <div class="task"><div><strong>高风险场景已转人工</strong><span>投诉、退款、发票、付款异常、法律问题不能自动承诺。</span></div><span class="tag ai">通过</span></div>
+            <div class="task"><div><strong>真实问题评测集仍需补充</strong><span>建议至少准备 100 条历史客户问题，评测每个 skill 的准确率。</span></div><span class="tag hot">待做</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">异常与降级预案</div>
+            <span class="pill">真实运营必须可见</span>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>模型接口失败</strong><span>自动切换备用模型；仍失败时只生成草稿，禁止自动发送。</span></div>
+            <div class="rule"><strong>微信通道离线</strong><span>通知管理员重新登录 PC 微信，并暂停自动回复避免误判。</span></div>
+            <div class="rule"><strong>知识库冲突</strong><span>同一问题出现不同价格或交期时，标记冲突并转人工确认。</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">开发落地清单</div>
+            <span class="pill">从原型到真实系统</span>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>数据层</strong><span>conversations、messages、leads、skills、knowledge_items、api_providers、audit_logs。</span></div>
+            <div class="rule"><strong>服务层</strong><span>微信监听、意图识别、RAG 检索、模型路由、风控质检、工单和 CRM 流转。</span></div>
+            <div class="rule"><strong>界面层</strong><span>先落地会话接管、系统设置 API、知识库编辑、线索 CRM 四个高价值页面。</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">验收标准</div>
+            <span class="pill">做到这些才算可商用</span>
+          </div>
+          <div class="panel-body task-list">
+            <div class="task"><div><strong>自动回复可控</strong><span>每条自动回复都有 skill、知识来源、模型、置信度和人工兜底路径。</span></div><span class="tag ai">必须</span></div>
+            <div class="task"><div><strong>线索不丢失</strong><span>高意向客户必须进入 CRM，并有阶段、负责人、下一步提醒和超时通知。</span></div><span class="tag ai">必须</span></div>
+            <div class="task"><div><strong>接口可运维</strong><span>API 可测试、可切换、可降级、可看成本、可审计、可回滚。</span></div><span class="tag ai">必须</span></div>
+            <div class="task"><div><strong>知识可持续优化</strong><span>未命中问题、人工改写、成交/流失原因能回流知识库和评测集。</span></div><span class="tag hot">关键</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">借鉴主流智能客服的增强能力</div>
+            <span class="pill">已合并到你的商业版路线</span>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>多渠道统一收件箱</strong><span>微信、企微、网页、抖音、小红书、电话和邮件统一排队，避免客户分散在多个工具里。</span></div>
+            <div class="rule"><strong>工单 + SLA</strong><span>复杂问题自动生成工单，按客户等级、截止时间和风险等级分派给人工。</span></div>
+            <div class="rule"><strong>AI 辅助人工</strong><span>人工接管时提供知识推荐、话术改写、会话总结、下一步动作和一键建线索。</span></div>
+            <div class="rule"><strong>知识库自动运营</strong><span>从高频问题、人工改写和未命中问题里发现知识缺口，提醒补充知识。</span></div>
+            <div class="rule"><strong>多语言和翻译</strong><span>预留中英等多语言客服能力，后期可服务跨境电商或海外客户。</span></div>
+            <div class="rule"><strong>开放集成</strong><span>预留 CRM、ERP、表格、MCP/插件和外部 API 工具接口，让 skills 能真正执行业务动作。</span></div>
+          </div>
+        </section>
+
+        <div class="workspace">
+          <section class="panel">
+            <div class="panel-head">
+              <div class="panel-title">优先会话队列</div>
+              <button class="btn" title="筛选"><svg class="icon" viewBox="0 0 24 24"><path d="M22 3H2l8 9.5V20l4 2v-9.5z"/></svg></button>
+            </div>
+            <div class="panel-body queue">
+              <article class="conversation active">
+                <div class="conv-top"><span class="conv-name">杭州某科技公司</span><span class="time">刚刚</span></div>
+                <div class="summary">想做 500 份中秋礼盒，问是否能加 LOGO 和祝福卡。</div>
+                <div class="tags"><span class="tag hot">高意向</span><span class="tag ai">AI 可回复</span></div>
+              </article>
+              <article class="conversation">
+                <div class="conv-top"><span class="conv-name">王总</span><span class="time">3 分钟</span></div>
+                <div class="summary">问 100 份端午礼盒价格，预算 30 元以内。</div>
+                <div class="tags"><span class="tag hot">报价</span><span class="tag">待留资</span></div>
+              </article>
+              <article class="conversation">
+                <div class="conv-top"><span class="conv-name">小红书线索 0831</span><span class="time">8 分钟</span></div>
+                <div class="summary">连续发送图片，需要推荐相似案例和生产周期。</div>
+                <div class="tags"><span class="tag">案例推荐</span><span class="tag">图片需求</span></div>
+              </article>
+              <article class="conversation">
+                <div class="conv-top"><span class="conv-name">售后客户</span><span class="time">12 分钟</span></div>
+                <div class="summary">提到发票和付款异常，系统已触发人工兜底。</div>
+                <div class="tags"><span class="tag risk">需人工</span><span class="tag">风控</span></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel chat">
+            <div class="customer-profile">
+              <div class="avatar">杭</div>
+              <div>
+                <strong>杭州某科技公司</strong>
+                <div class="sub">来源：小红书私信加微 · 阶段：方案确认 · 预算：待确认</div>
+              </div>
+            </div>
+            <div class="chat-feed">
+              <div class="msg user">你好，我们公司中秋想做 500 份月饼礼盒，可以加公司 LOGO 吗？</div>
+              <div class="msg meta">系统识别：定制内容 + 大批量 + 节日场景，建议引导留资并确认预算。</div>
+              <div class="msg agent">可以的，500 份适合做企业定制。我们支持 LOGO、贺卡、腰封、吊牌和祝福语定制。方便说下预算范围、使用日期和收货城市吗？我可以先帮您匹配 2-3 个方向。</div>
+              <div class="msg user">预算大概 50 左右，9 月 20 日前要到杭州。</div>
+              <div class="msg agent">收到。按 50 元左右预算和 500 份数量，可以优先看商务简约款和国潮款。9 月 20 日前到杭州需要尽快确认设计稿，我先为您整理方案，稍后人工同事会核算准确报价。</div>
+            </div>
+            <div class="composer">
+              <textarea>输入人工补充，或点击右侧 AI 建议一键发送...</textarea>
+              <button class="btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>发送</button>
+            </div>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-head">
+              <div class="panel-title">AI 决策面板</div>
+              <span class="pill">置信度 86%</span>
+            </div>
+            <div class="panel-body insight-stack">
+              <div class="insight">
+                <h3>线索评分</h3>
+                <div class="score"><i></i></div>
+                <p>数量 500 份、明确预算、明确交期，建议标记为 A 类线索。</p>
+              </div>
+              <div class="insight">
+                <h3>命中 Skills</h3>
+                <p>报价初筛、定制工艺、交期判断、线索留资、人机转接。</p>
+              </div>
+              <div class="insight">
+                <h3>下一步动作</h3>
+                <p>收集公司名、联系人、手机号；推送中秋 50 元档方案；触发设计师跟进提醒。</p>
+              </div>
+              <button class="btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>采纳建议</button>
+            </div>
+          </aside>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">客服 Skills 中心</div>
+            <button class="btn"><svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>管理排序</button>
+          </div>
+          <div class="panel-body skills">
+            <article class="skill-card">
+              <div class="skill-head"><div class="skill-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/></svg></div><span class="tag ai">启用</span></div>
+              <strong>报价初筛 Skill</strong>
+              <p>根据数量、预算、工艺、物流粗判价格区间，避免客服反复问。</p>
+            </article>
+            <article class="skill-card">
+              <div class="skill-head"><div class="skill-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></div><span class="tag ai">启用</span></div>
+              <strong>知识库问答 Skill</strong>
+              <p>对接产品、案例、交期、物流、售后知识，支持引用来源。</p>
+            </article>
+            <article class="skill-card">
+              <div class="skill-head"><div class="skill-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div><span class="tag hot">核心</span></div>
+              <strong>线索转化 Skill</strong>
+              <p>识别高意向客户，自动追问预算、数量、日期、城市和联系方式。</p>
+            </article>
+            <article class="skill-card">
+              <div class="skill-head"><div class="skill-icon"><svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><span class="tag risk">兜底</span></div>
+              <strong>风控质检 Skill</strong>
+              <p>识别投诉、发票、退款、敏感词和超范围问题，自动转人工。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">商业化落地规则</div>
+            <span class="pill">可配置 · 可审计 · 可扩展</span>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>先规则，后 AI</strong><span>价格、起订量、交期、人工转接等确定性问题优先走标准话术，减少模型幻觉。</span></div>
+            <div class="rule"><strong>每条回复可追溯</strong><span>展示命中知识、置信度、路由原因和是否由人工改写，便于后期质检。</span></div>
+            <div class="rule"><strong>Skills 插拔式扩展</strong><span>每个 skill 都有触发条件、输入字段、输出动作和失败兜底，后期可持续添加行业能力。</span></div>
+          </div>
+        </section>
+
+        <section class="panel" id="system-settings">
+          <div class="panel-head">
+            <div class="panel-title">系统设置</div>
+            <span class="pill">主流接口 + GeekNow · 可热切换</span>
+          </div>
+          <div class="settings-tabs" aria-label="系统设置分类">
+            <button class="settings-tab active">API 接口</button>
+            <button class="settings-tab">微信连接</button>
+            <button class="settings-tab">模型路由</button>
+            <button class="settings-tab">提示词</button>
+            <button class="settings-tab">安全阈值</button>
+            <button class="settings-tab">人员权限</button>
+            <button class="settings-tab">开放集成</button>
+            <button class="settings-tab">备份恢复</button>
+            <button class="settings-tab">隐私合规</button>
+          </div>
+          <div class="settings-summary">
+            API 接口设置属于系统设置的子配置，用于统一管理 GeekNow、OpenAI、DeepSeek 等模型供应商。
+          </div>
+          <div class="panel-body settings-grid">
+            <div class="provider-list">
+              <article class="provider active">
+                <div class="provider-logo">GK</div>
+                <div><strong>GeekNow API</strong><span>你的专属接口，建议设为默认主模型</span></div>
+                <span class="tag ai">默认</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">OA</div>
+                <div><strong>OpenAI</strong><span>GPT 系列，适合作为高质量兜底模型</span></div>
+                <span class="tag">备用</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">DS</div>
+                <div><strong>DeepSeek</strong><span>性价比高，适合大量客服回复</span></div>
+                <span class="tag ai">启用</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">QW</div>
+                <div><strong>通义千问 / 阿里云 DashScope</strong><span>国内部署友好，适合企业客户</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">ZP</div>
+                <div><strong>智谱 GLM</strong><span>中文客服、知识库问答备用通道</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">KS</div>
+                <div><strong>Kimi / Moonshot</strong><span>长上下文资料分析和话术整理</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">BD</div>
+                <div><strong>百度千帆 / 文心</strong><span>企业云账号可选接入</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">TX</div>
+                <div><strong>腾讯混元</strong><span>企业微信生态可选接入</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">DB</div>
+                <div><strong>火山方舟 / 豆包</strong><span>国内低延迟回复通道</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">SF</div>
+                <div><strong>硅基流动 / SiliconFlow</strong><span>开源模型聚合接口</span></div>
+                <span class="tag">待配</span>
+              </article>
+              <article class="provider">
+                <div class="provider-logo">LC</div>
+                <div><strong>Ollama / 本地模型</strong><span>离线测试、私有化部署备用</span></div>
+                <span class="tag">本地</span>
+              </article>
+            </div>
+
+            <div class="insight-stack">
+              <div class="insight">
+                <h3>当前编辑：GeekNow API</h3>
+                <div class="form-grid">
+                  <div class="field">
+                    <label>供应商</label>
+                    <select>
+                      <option>GeekNow</option>
+                      <option>OpenAI</option>
+                      <option>DeepSeek</option>
+                      <option>通义千问 DashScope</option>
+                      <option>智谱 GLM</option>
+                      <option>Kimi / Moonshot</option>
+                      <option>百度千帆</option>
+                      <option>腾讯混元</option>
+                      <option>火山方舟 / 豆包</option>
+                      <option>硅基流动</option>
+                      <option>Ollama / 本地模型</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>启用状态</label>
+                    <select>
+                      <option>启用并设为默认</option>
+                      <option>启用为备用</option>
+                      <option>暂停</option>
+                    </select>
+                  </div>
+                  <div class="field full">
+                    <label>Base URL</label>
+                    <input value="https://api.geeknow.ai/v1" />
+                  </div>
+                  <div class="field">
+                    <label>API Key</label>
+                    <input value="sk-geeknow-••••••••••••••••" />
+                  </div>
+                  <div class="field">
+                    <label>默认模型</label>
+                    <input value="gpt-4o-mini" />
+                  </div>
+                  <div class="field">
+                    <label>温度 Temperature</label>
+                    <input value="0.4" />
+                  </div>
+                  <div class="field">
+                    <label>最大输出 Tokens</label>
+                    <input value="800" />
+                  </div>
+                  <div class="field full">
+                    <label>接口用途</label>
+                    <select>
+                      <option>主客服回复 + RAG 问答 + 话术改写</option>
+                      <option>仅用于人工建议，不自动发送</option>
+                      <option>仅用于复杂问题兜底</option>
+                    </select>
+                  </div>
+                  <div class="field full">
+                    <label>请求头 / 额外参数 JSON</label>
+                    <textarea>{"Authorization":"Bearer ${API_KEY}","Content-Type":"application/json"}</textarea>
+                  </div>
+                </div>
+              </div>
+              <div class="api-note">
+                API Key 必须加密保存；界面只显示掩码。建议支持“测试连接”“保存配置”“设为默认”“切换备用模型”，并把每次调用的供应商、模型、耗时、错误码记录到日志，方便商业化运维。
+              </div>
+              <div class="rule-grid">
+                <div class="rule"><strong>主备路由</strong><span>GeekNow 可作为默认主模型，DeepSeek/OpenAI 作为备用，接口失败自动切换。</span></div>
+                <div class="rule"><strong>按 Skill 指定模型</strong><span>报价和风控走低温度模型，话术优化和案例推荐可使用更强模型。</span></div>
+                <div class="rule"><strong>成本与限流</strong><span>记录 token、调用次数和失败率，超过预算或频率阈值时自动降级。</span></div>
+              </div>
+              <div class="top-actions">
+                <button class="btn"><svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v7h-7"/></svg>测试连接</button>
+                <button class="btn"><svg class="icon" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存配置</button>
+                <button class="btn primary"><svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>设为默认接口</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <div class="command-palette" id="commandPalette" aria-hidden="true">
+    <div class="command-box" role="dialog" aria-label="快捷命令">
+      <input id="commandInput" placeholder="输入命令：打开 API 设置、创建 Skill、查看高意向线索..." />
+      <div class="command-list">
+        <button class="command-item" data-command-page="settings"><strong>打开系统设置</strong><span>配置 API、微信连接、模型路由、隐私合规</span></button>
+        <button class="command-item" data-command-page="skills"><strong>创建客服 Skill</strong><span>进入 Skill 向导和灰度发布</span></button>
+        <button class="command-item" data-command-page="crm"><strong>查看高意向线索</strong><span>进入 CRM 阶段流转和跟进任务</span></button>
+        <button class="command-item" data-command-page="analytics"><strong>查看转化分析</strong><span>分析话术、模型成本和 SLA 达成率</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-scrim" id="drawerScrim" aria-hidden="true"></div>
+  <aside class="drawer" id="notificationDrawer" aria-hidden="true">
+    <div class="drawer-head">
+      <strong>通知中心</strong>
+      <button class="btn" data-action="close-drawer">关闭</button>
+    </div>
+    <div class="drawer-body task-list">
+      <div class="task"><div><strong>SLA 即将超时</strong><span>杭州某科技公司 8 分钟后超过高意向跟进时限。</span></div><span class="tag risk">紧急</span></div>
+      <div class="task"><div><strong>API 成本预警</strong><span>GeekNow 今日预算已使用 78%。</span></div><span class="tag hot">成本</span></div>
+      <div class="task"><div><strong>知识库缺口</strong><span>客户连续询问“礼盒环保材质”，当前知识库未覆盖。</span></div><span class="tag">待补充</span></div>
+    </div>
+  </aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const content = document.querySelector(".content");
+    const navButtons = Array.from(document.querySelectorAll(".nav button[data-page]"));
+    const overviewHtml = content.innerHTML;
+    const workspaceHtml = document.querySelector(".workspace")?.outerHTML || "";
+    const settingsHtml = document.getElementById("system-settings")?.outerHTML || "";
+    const skillsPanel = Array.from(document.querySelectorAll(".panel")).find((panel) =>
+      panel.textContent.includes("Skills")
+    );
+    const skillsHtml = skillsPanel?.outerHTML || "";
+
+    function pageHead(title, desc, badges = "") {
+      return `
+        <div class="page-head">
+          <div>
+            <h1>${title}</h1>
+            <p class="sub">${desc}</p>
+          </div>
+          <div class="status-row">${badges}</div>
+        </div>
+      `;
+    }
+
+    function renderKnowledge() {
+      return `
+        ${pageHead("知识库", "维护客服自动回复的业务依据，支持产品、报价、交期、物流、售后和案例知识。", '<span class="pill"><i class="dot"></i>8 个知识分类</span><span class="pill">本周更新 23 条</span>')}
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">知识条目管理</div>
+            <button class="btn primary">新增知识</button>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>价格与报价</strong><span>价格区间、影响报价因素、人工核价边界、不可承诺内容。</span></div>
+            <div class="rule"><strong>起订量与样品</strong><span>常规起订量、小批量试单、样品费用和适用条件。</span></div>
+            <div class="rule"><strong>交期与物流</strong><span>确认设计稿后的生产周期、加急规则、城市与运费核算。</span></div>
+            <div class="rule"><strong>定制内容</strong><span>LOGO、贺卡、腰封、吊牌、丝带、祝福语和包装结构。</span></div>
+            <div class="rule"><strong>案例素材</strong><span>端午、中秋、春节、企业伴手礼、商务简约和国潮方向。</span></div>
+            <div class="rule"><strong>售后边界</strong><span>发票、付款异常、退款、投诉等问题直接触发人工介入。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">知识库自动优化</div>
+            <button class="btn">查看缺口</button>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>未命中问题</strong><span>自动收集 AI 没答好、低置信度和人工接管的问题，生成待补充知识。</span></div>
+            <div class="rule"><strong>人工改写沉淀</strong><span>客服改过的优秀回复可以一键转成标准话术或知识条目。</span></div>
+            <div class="rule"><strong>知识健康分</strong><span>统计命中率、过期知识、冲突答案和被投诉回复，帮助持续优化。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">空状态与导入引导</div>
+            <span class="pill">新客户首次部署</span>
+          </div>
+          <div class="panel-body">
+            <div class="empty-state">
+              <strong>还没有上传产品案例和报价规则时</strong>
+              <span>系统应引导用户导入 Excel、粘贴常见问答、上传案例图片，避免空白页面让用户不知道下一步。</span>
+              <button class="btn primary">导入知识库模板</button>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderCrm() {
+      return `
+        ${pageHead("线索 CRM", "把聊天里的公司、联系人、电话、预算、数量、日期沉淀成可跟进的销售线索。", '<span class="pill"><i class="dot warn"></i>12 个 A 类线索</span><span class="pill">今日待跟进 18 个</span>')}
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">销售阶段流转</div>
+            <button class="btn">配置阶段</button>
+          </div>
+          <div class="panel-body stage-flow">
+            <div class="stage active"><strong>新线索</strong><span>自动识别来源、客户需求和初始意向。</span><span class="tag hot">32</span></div>
+            <div class="stage"><strong>已留资</strong><span>公司名、联系人、电话、预算、数量已补齐。</span><span class="tag">18</span></div>
+            <div class="stage"><strong>已报价</strong><span>人工核价后发送价格区间或正式报价单。</span><span class="tag">11</span></div>
+            <div class="stage"><strong>方案确认</strong><span>客户确认款式、定制项、设计稿和交期。</span><span class="tag ai">7</span></div>
+            <div class="stage"><strong>打样/生产</strong><span>进入设计打样、生产排期和发货跟踪。</span><span class="tag">4</span></div>
+            <div class="stage"><strong>成交/流失</strong><span>沉淀成交原因、流失原因和复购提醒。</span><span class="tag">23</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">高意向客户列表</div>
+            <button class="btn primary">创建跟进任务</button>
+          </div>
+          <div class="panel-body">
+            <div class="rule-grid">
+              <div class="rule"><strong>杭州某科技公司</strong><span>500 份中秋礼盒，预算 50 元，9 月 20 日前到杭州。状态：方案确认。</span></div>
+              <div class="rule"><strong>王总</strong><span>100 份端午礼盒，预算 30 元内。状态：待补充公司名和电话。</span></div>
+              <div class="rule"><strong>小红书线索 0831</strong><span>需要相似案例和生产周期。状态：待推送案例图。</span></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">成交与流失复盘</div>
+            <button class="btn">生成复盘报告</button>
+          </div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>成交原因</strong><span>响应快、案例匹配、报价清晰、交期可承诺、人工跟进及时。</span></div>
+            <div class="rule"><strong>流失原因</strong><span>预算过低、交期太急、未及时留资、案例不匹配、竞品价格更低。</span></div>
+            <div class="rule"><strong>反哺 AI</strong><span>把成交/流失原因回写到知识库和 skill 评测集，持续优化转化策略。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">线索字段字典</div>
+            <span class="pill">开发数据库用</span>
+          </div>
+          <div class="panel-body">
+            <table class="schema-table">
+              <thead><tr><th>字段</th><th>含义</th><th>来源</th><th>用途</th></tr></thead>
+              <tbody>
+                <tr><td>company_name</td><td>公司名称</td><td>客户主动提供 / AI 抽取</td><td>CRM 去重、报价单、后续跟进</td></tr>
+                <tr><td>contact_name</td><td>联系人</td><td>客户留资</td><td>销售跟进和工单负责人确认</td></tr>
+                <tr><td>phone_or_wechat</td><td>手机号或微信号</td><td>客户留资</td><td>高意向线索必须字段，日志中需脱敏</td></tr>
+                <tr><td>quantity</td><td>预计数量</td><td>AI 抽取 / 人工补录</td><td>报价、起订量判断、生产排期</td></tr>
+                <tr><td>budget</td><td>预算区间</td><td>AI 抽取 / 人工补录</td><td>方案推荐和转化分析</td></tr>
+                <tr><td>due_date</td><td>使用日期</td><td>AI 抽取 / 人工补录</td><td>交期判断、SLA 优先级</td></tr>
+                <tr><td>stage</td><td>销售阶段</td><td>系统流转</td><td>新线索、已留资、已报价、方案确认、生产、成交/流失</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderAnalytics() {
+      return `
+        ${pageHead("转化分析", "按来源、话术、skill、客服人员和模型供应商分析成交贡献与成本。", '<span class="pill">自动解决率 72%</span><span class="pill">线索转化率 18.6%</span>')}
+        <div class="metrics">
+          <div class="metric"><label>小红书来源线索</label><strong>96</strong><small>成交贡献最高</small></div>
+          <div class="metric"><label>报价 Skill 采纳率</label><strong>81%</strong><small>人工改写率 9%</small></div>
+          <div class="metric"><label>平均获客成本</label><strong>¥3.2</strong><small>按 API 调用估算</small></div>
+          <div class="metric"><label>人工接管率</label><strong>14%</strong><small>风险问题自动转接</small></div>
+        </div>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">运营分析维度</div><button class="btn">导出报表</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>来源分析</strong><span>小红书、微信私域、老客户转介绍、广告投放。</span></div>
+            <div class="rule"><strong>话术分析</strong><span>比较不同报价话术、留资话术、案例推荐话术的转化率。</span></div>
+            <div class="rule"><strong>模型成本</strong><span>按 GeekNow、DeepSeek、OpenAI 等接口统计 token、耗时和失败率。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">客服质检与 AI 评测</div><button class="btn">查看评测集</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>回复准确率</strong><span>用真实问题评测各模型和 skills，避免上线后才发现回答不稳定。</span></div>
+            <div class="rule"><strong>人工修正率</strong><span>统计哪些话术最常被客服改写，反向优化提示词和知识库。</span></div>
+            <div class="rule"><strong>SLA 达成率</strong><span>追踪高意向客户、投诉客户和售后客户是否在承诺时间内处理。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">话术 A/B 实验</div><div class="top-actions"><button class="btn">导出话术样本</button><button class="btn primary">新建实验</button></div></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>报价留资话术 A</strong><span>先解释价格影响因素，再追问数量、预算、城市。转化率 18.6%。</span></div>
+            <div class="rule"><strong>报价留资话术 B</strong><span>先给 2 个价格档位，再引导留资核价。转化率 21.4%。</span></div>
+            <div class="rule"><strong>自动胜出规则</strong><span>样本量超过 200 且转化提升超过 10% 后，建议替换默认话术。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">关键事件埋点</div><span class="pill">后续分析必须采集</span></div>
+          <div class="panel-body">
+            <table class="schema-table">
+              <thead><tr><th>事件</th><th>触发时机</th><th>核心属性</th><th>用于分析</th></tr></thead>
+              <tbody>
+                <tr><td>message_received</td><td>收到客户消息</td><td>channel、contact_id、intent</td><td>渠道量、意图分布</td></tr>
+                <tr><td>ai_reply_generated</td><td>AI 生成回复</td><td>provider、model、skill_id、confidence、tokens</td><td>模型成本、准确率</td></tr>
+                <tr><td>human_takeover</td><td>人工接管</td><td>reason、sla_level、operator_id</td><td>风险、SLA、客服效率</td></tr>
+                <tr><td>lead_created</td><td>创建线索</td><td>source、score、stage、budget、quantity</td><td>获客质量、销售转化</td></tr>
+                <tr><td>deal_stage_changed</td><td>销售阶段变化</td><td>from_stage、to_stage、owner_id</td><td>漏斗转化、卡点分析</td></tr>
+                <tr><td>knowledge_gap_found</td><td>知识未命中</td><td>question、topic、frequency</td><td>知识库优化</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderRisk() {
+      return `
+        ${pageHead("风控质检", "管控敏感问题、错误回复、投诉、退款、发票和付款异常，降低商业风险。", '<span class="pill"><i class="dot warn"></i>7 条待审核</span><span class="pill">自动拦截 31 次</span>')}
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">质检规则</div><button class="btn primary">新增规则</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>敏感问题转人工</strong><span>投诉、差评、退款、发票、付款异常、法律相关问题不自动承诺。</span></div>
+            <div class="rule"><strong>价格承诺限制</strong><span>AI 只能给价格区间，最终报价必须由人工核算确认。</span></div>
+            <div class="rule"><strong>回复审计</strong><span>记录命中 skill、知识条目、模型、置信度和人工修改记录。</span></div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderChat() {
+      return `
+        ${pageHead("会话接管", "客服可查看 AI 判断依据，一键采纳建议或人工改写后发送。", '<span class="pill"><i class="dot"></i>微信在线</span><span class="pill"><i class="dot warn"></i>4 条需人工</span>')}
+        ${workspaceHtml}
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">客户画像与成交上下文</div><button class="btn">同步 CRM</button></div>
+          <div class="panel-body profile-grid">
+            <div class="profile-item"><label>客户价值</label><strong>A 类线索 · 预计 500 份 · 预算 50 元档</strong></div>
+            <div class="profile-item"><label>历史沟通</label><strong>来自小红书，已咨询 2 次，偏好商务简约和国潮风格。</strong></div>
+            <div class="profile-item"><label>历史订单</label><strong>暂无订单，建议优先推送样品和相似案例建立信任。</strong></div>
+            <div class="profile-item"><label>负责人</label><strong>销售：李静 · 设计：待分配 · SLA：15 分钟内跟进</strong></div>
+            <div class="profile-item"><label>相似成功案例</label><strong>杭州软件园 600 份中秋礼盒，52 元档，7 天交付。</strong></div>
+            <div class="profile-item"><label>下一步提醒</label><strong>确认公司名、联系人、手机号，并发送 2 套 50 元档方案。</strong></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">人工协作与工单</div><button class="btn primary">创建工单</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>SLA 倒计时</strong><span>高意向客户 15 分钟内必须跟进，投诉和付款异常立即转主管。</span></div>
+            <div class="rule"><strong>会话总结</strong><span>AI 自动总结客户需求、预算、数量、交期和下一步动作，交接不丢信息。</span></div>
+            <div class="rule"><strong>协作防冲突</strong><span>同一客户被人工接管时锁定自动发送，避免 AI 和人工同时回复。</span></div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderSkills() {
+      return `
+        ${pageHead("客服 Skills", "后期新增技能都在这里配置触发条件、输入字段、输出动作和失败兜底。", '<span class="pill"><i class="dot"></i>4 个已启用</span><span class="pill">2 个待测试</span>')}
+        ${skillsHtml}
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">创建 Skill 向导</div><button class="btn primary">创建 Skill</button></div>
+          <div class="panel-body wizard-steps">
+            <div class="wizard-step"><strong>1. 触发条件</strong><span>关键词、意图、客户阶段、上下文状态。</span></div>
+            <div class="wizard-step"><strong>2. 必填字段</strong><span>数量、预算、日期、城市、联系方式。</span></div>
+            <div class="wizard-step"><strong>3. 知识来源</strong><span>选择知识库分类、案例素材或外部数据。</span></div>
+            <div class="wizard-step"><strong>4. 模型选择</strong><span>按 skill 指定 GeekNow、DeepSeek 或备用模型。</span></div>
+            <div class="wizard-step"><strong>5. 输出动作</strong><span>回复、打标签、建线索、建工单、转人工。</span></div>
+            <div class="wizard-step"><strong>6. 上线测试</strong><span>用样例问题评测准确率和人工修正率。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">Skill 配置模板</div><button class="btn">保存模板</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>触发条件</strong><span>关键词、意图、客户阶段、上下文状态、置信度阈值。</span></div>
+            <div class="rule"><strong>输入字段</strong><span>数量、预算、城市、日期、产品方向、联系方式。</span></div>
+            <div class="rule"><strong>输出动作</strong><span>回复话术、打标签、创建线索、转人工、提醒跟进。</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div class="panel-title">Skill 灰度发布</div><button class="btn primary">发布到灰度</button></div>
+          <div class="panel-body rule-grid">
+            <div class="rule"><strong>测试环境</strong><span>先用历史会话回放，验证准确率、拒答率、人工修正率。</span></div>
+            <div class="rule"><strong>灰度范围</strong><span>先对 10% 低风险客户启用，仅给人工建议，不自动发送。</span></div>
+            <div class="rule"><strong>上线门槛</strong><span>准确率超过 90%、投诉为 0、人工采纳率超过 70% 后全量启用。</span></div>
+          </div>
+        </section>
+      `;
+    }
+
+    const apiSettingsGrid = `
+      <div class="provider-list">
+        <article class="provider active" data-model="gpt-4o-mini" data-base-url="https://api.geeknow.ai/v1"><div class="provider-logo">GK</div><div><strong>GeekNow API</strong><span>你的专属接口，OpenAI 兼容聊天接口</span></div><span class="tag ai">默认</span></article>
+        <article class="provider" data-model="gpt-4.1-mini" data-base-url="https://api.openai.com/v1"><div class="provider-logo">OA</div><div><strong>OpenAI</strong><span>GPT 系列，适合作为高质量兜底模型</span></div><span class="tag">备用</span></article>
+        <article class="provider" data-model="deepseek-chat" data-base-url="https://api.deepseek.com/v1"><div class="provider-logo">DS</div><div><strong>DeepSeek</strong><span>性价比高，适合大量客服回复</span></div><span class="tag ai">启用</span></article>
+        <article class="provider" data-model="qwen-plus" data-base-url="https://dashscope.aliyuncs.com/compatible-mode/v1"><div class="provider-logo">QW</div><div><strong>通义千问 / 阿里云 DashScope</strong><span>国内部署友好，适合企业客户</span></div><span class="tag">待配</span></article>
+        <article class="provider" data-model="glm-4" data-base-url="https://open.bigmodel.cn/api/paas/v4"><div class="provider-logo">ZP</div><div><strong>智谱 GLM</strong><span>中文客服、知识库问答备用通道</span></div><span class="tag">待配</span></article>
+        <article class="provider" data-model="moonshot-v1-8k" data-base-url="https://api.moonshot.cn/v1"><div class="provider-logo">KS</div><div><strong>Kimi / Moonshot</strong><span>长上下文资料分析和话术整理</span></div><span class="tag">待配</span></article>
+      </div>
+      <div class="insight-stack">
+        <div class="insight">
+          <h3>当前编辑：GeekNow API</h3>
+          <div class="form-grid">
+            <div class="field"><label>供应商</label><select><option>GeekNow</option><option>OpenAI</option><option>DeepSeek</option><option>通义千问 DashScope</option><option>智谱 GLM</option><option>Kimi / Moonshot</option></select></div>
+            <div class="field"><label>启用状态</label><select><option>启用并设为默认</option><option>启用为备用</option><option>暂停</option></select></div>
+            <div class="field full"><label>Base URL</label><input data-api-field="baseUrl" value="https://api.geeknow.ai/v1" /></div>
+            <div class="field"><label>API Key</label><input value="sk-geeknow-••••••••••••••••" /></div>
+            <div class="field"><label>默认模型</label><input data-api-field="model" value="gpt-4o-mini" /></div>
+            <div class="field"><label>Temperature</label><input value="0.4" /></div>
+            <div class="field"><label>最大输出 Tokens</label><input value="800" /></div>
+            <div class="field full"><label>接口用途</label><select><option>主客服回复 + RAG 问答 + 话术改写</option><option>仅用于人工建议，不自动发送</option><option>仅用于复杂问题兜底</option></select></div>
+            <div class="field full"><label>请求头 / 额外参数 JSON</label><textarea>{"Authorization":"Bearer \${API_KEY}","Content-Type":"application/json"}</textarea></div>
+          </div>
+        </div>
+        <div class="api-note">API 调用只在系统设置的 API 接口页签中配置。API Key 必须加密保存，界面只显示掩码。</div>
+        <div class="insight">
+          <h3>成本预算与降级</h3>
+          <div class="form-grid">
+            <div class="field"><label>每日 API 预算</label><input value="300 元" /></div>
+            <div class="field"><label>预算预警阈值</label><input value="80%" /></div>
+            <div class="field"><label>自动降级阈值</label><input value="90%" /></div>
+            <div class="field"><label>降级策略</label><select><option>切换 DeepSeek 备用模型</option><option>仅给人工建议</option><option>暂停低价值客户自动回复</option></select></div>
+          </div>
+        </div>
+        <div class="insight">
+          <h3>连接状态与审计</h3>
+          <div class="audit-list">
+            <div class="audit-row"><div><strong>最近测试结果</strong><span>GeekNow API 连接成功，模型 gpt-4o-mini 响应 428ms。</span></div><span class="tag ai">正常</span></div>
+            <div class="audit-row"><div><strong>最后修改</strong><span>管理员 · 今天 14:32 · 调整 Temperature 为 0.4。</span></div><span class="tag">可追溯</span></div>
+            <div class="audit-row"><div><strong>配置版本</strong><span>当前 v12，保留最近 10 个版本，异常时可一键回滚。</span></div><span class="tag hot">可回滚</span></div>
+          </div>
+        </div>
+        <div class="top-actions"><button class="btn">测试连接</button><button class="btn">保存配置</button><button class="btn primary">设为默认接口</button></div>
+      </div>
+    `;
+
+    const settingsTabContent = {
+      "API 接口": apiSettingsGrid,
+      "微信连接": `<div class="insight-stack"><div class="insight"><h3>微信连接设置</h3><div class="form-grid"><div class="field"><label>连接方式</label><select><option>wxauto PC 微信</option><option>企业微信 API</option></select></div><div class="field"><label>轮询间隔</label><input value="3 秒" /></div><div class="field"><label>防刷屏间隔</label><input value="60 秒" /></div><div class="field"><label>自动回复</label><select><option>开启</option><option>暂停</option></select></div></div></div><div class="api-note">这里只配置微信通道，不放模型 API Key。</div></div>`,
+      "模型路由": `<div class="insight-stack"><div class="insight"><h3>模型路由策略</h3><div class="rule-grid"><div class="rule"><strong>主模型</strong><span>GeekNow API，负责主要客服回复。</span></div><div class="rule"><strong>备用模型</strong><span>DeepSeek / OpenAI，接口失败时自动切换。</span></div><div class="rule"><strong>按 Skill 路由</strong><span>报价、风控、案例推荐可分别指定模型。</span></div></div></div></div>`,
+      "提示词": `<div class="insight-stack"><div class="insight"><h3>系统提示词</h3><div class="field full"><label>客服人设与边界</label><textarea>你是企业礼盒定制客服，只回答礼盒定制相关问题。价格只能给区间，最终报价必须人工确认。</textarea></div></div></div>`,
+      "安全阈值": `<div class="insight-stack"><div class="insight"><h3>安全阈值</h3><div class="form-grid"><div class="field"><label>低置信度转人工</label><input value="0.55" /></div><div class="field"><label>单客户每日自动回复上限</label><input value="30" /></div><div class="field"><label>投诉关键词</label><input value="投诉, 退款, 差评, 发票" /></div><div class="field"><label>失败率降级阈值</label><input value="10%" /></div></div></div></div>`,
+      "人员权限": `<div class="insight-stack"><div class="insight"><h3>人员权限</h3><div class="rule-grid"><div class="rule"><strong>管理员</strong><span>可修改 API、模型路由、知识库和人员权限。</span></div><div class="rule"><strong>客服主管</strong><span>可质检会话、调整话术、接管高风险客户。</span></div><div class="rule"><strong>普通客服</strong><span>可接管会话、编辑客户线索，不可查看完整 API Key。</span></div></div></div></div>`,
+      "开放集成": `<div class="insight-stack"><div class="insight"><h3>开放集成</h3><div class="rule-grid"><div class="rule"><strong>CRM / 表格</strong><span>线索自动同步到企业 CRM、飞书表格、钉钉表格或本地 CSV。</span></div><div class="rule"><strong>ERP / 订单</strong><span>成交后同步订单、生产状态、发货单号和售后记录。</span></div><div class="rule"><strong>MCP / 外部工具</strong><span>后期 skills 可调用报价、查库存、生成方案、发送素材等工具。</span></div></div></div><div class="top-actions"><button class="btn primary">新增集成</button><button class="btn">测试 Webhook</button></div></div>`,
+      "备份恢复": `<div class="insight-stack"><div class="insight"><h3>备份恢复</h3><div class="audit-list"><div class="audit-row"><div><strong>配置备份</strong><span>API、提示词、skills、知识库每日 02:00 自动备份。</span></div><span class="tag ai">正常</span></div><div class="audit-row"><div><strong>数据备份</strong><span>会话、线索、工单、质检日志保留 180 天。</span></div><span class="tag">已开启</span></div><div class="audit-row"><div><strong>灾难恢复</strong><span>最近可恢复点：今天 02:00，可一键回滚配置。</span></div><span class="tag hot">可恢复</span></div></div></div><div class="top-actions"><button class="btn">立即备份</button><button class="btn primary">恢复到选中版本</button></div></div>`,
+      "隐私合规": `<div class="insight-stack"><div class="insight"><h3>隐私合规</h3><div class="rule-grid"><div class="rule"><strong>敏感信息脱敏</strong><span>手机号、地址、联系人姓名在日志和训练数据中默认脱敏。</span></div><div class="rule"><strong>数据留存周期</strong><span>会话和线索按业务需要设置保留期限，过期自动归档或删除。</span></div><div class="rule"><strong>训练授权</strong><span>客户真实聊天数据进入评测集前需要管理员确认，不直接用于外部训练。</span></div></div></div><div class="api-note">商业部署时建议明确数据边界：哪些数据只存在本地，哪些允许发给模型接口，哪些必须人工确认后才可用于评测。</div></div>`
+    };
+
+    const pages = {
+      overview: () => overviewHtml,
+      chat: renderChat,
+      skills: renderSkills,
+      knowledge: renderKnowledge,
+      crm: renderCrm,
+      analytics: renderAnalytics,
+      risk: renderRisk,
+      settings: () => settingsHtml
+    };
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    function refreshHealthBadge(message = "全通道正常 · API 428ms") {
+      const badge = document.getElementById("healthBadge");
+      if (badge) badge.innerHTML = `<i class="dot"></i>${message}`;
+    }
+
+    function openCommands() {
+      const palette = document.getElementById("commandPalette");
+      document.body.classList.add("command-open");
+      palette.classList.add("open");
+      palette.setAttribute("aria-hidden", "false");
+      setTimeout(() => document.getElementById("commandInput")?.focus(), 0);
+    }
+
+    function closeCommands() {
+      const palette = document.getElementById("commandPalette");
+      document.body.classList.remove("command-open");
+      palette.classList.remove("open");
+      palette.setAttribute("aria-hidden", "true");
+    }
+
+    function toggleDrawer(open) {
+      const drawer = document.getElementById("notificationDrawer");
+      const scrim = document.getElementById("drawerScrim");
+      document.body.classList.toggle("drawer-open", open);
+      drawer.classList.toggle("open", open);
+      scrim?.classList.toggle("open", open);
+      drawer.setAttribute("aria-hidden", open ? "false" : "true");
+      scrim?.setAttribute("aria-hidden", open ? "false" : "true");
+      if (open) {
+        const count = document.getElementById("noticeCount");
+        if (count) count.textContent = "0";
+      }
+    }
+
+    function setActivePage(page) {
+      navButtons.forEach((button) => button.classList.toggle("active", button.dataset.page === page));
+      content.innerHTML = pages[page]();
+      localStorage.setItem("smartKefuActivePage", page);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    navButtons.forEach((button) => {
+      button.addEventListener("click", () => setActivePage(button.dataset.page));
+    });
+
+    const searchRoutes = [
+      { keys: ["api", "接口", "模型", "geeknow", "openai", "deepseek"], page: "settings", label: "系统设置 > API 接口" },
+      { keys: ["skill", "技能", "话术", "灰度"], page: "skills", label: "客服 Skills" },
+      { keys: ["客户", "会话", "接管", "聊天"], page: "chat", label: "会话接管" },
+      { keys: ["知识", "问答", "案例", "报价"], page: "knowledge", label: "知识库" },
+      { keys: ["线索", "crm", "成交", "流失"], page: "crm", label: "线索 CRM" },
+      { keys: ["分析", "转化", "ab", "a/b", "成本"], page: "analytics", label: "转化分析" },
+      { keys: ["风控", "质检", "投诉", "退款"], page: "risk", label: "风控质检" }
+    ];
+
+    document.getElementById("globalSearch")?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      const query = event.currentTarget.value.trim().toLowerCase();
+      const route = searchRoutes.find((item) => item.keys.some((key) => query.includes(key.toLowerCase())));
+      if (!route) {
+        showToast("未找到匹配页面，可试试：API、线索、知识库、Skill");
+        return;
+      }
+      setActivePage(route.page);
+      showToast(`已打开 ${route.label}`);
+    });
+
+    document.querySelector(".role-select")?.addEventListener("change", (event) => {
+      const rolePage = {
+        "老板视角": "overview",
+        "客服主管": "analytics",
+        "一线客服": "chat",
+        "运营配置": "settings"
+      }[event.target.value] || "overview";
+      setActivePage(rolePage);
+      showToast(`已切换到${event.target.value}`);
+    });
+
+    document.addEventListener("click", (event) => {
+      const newSkillButton = event.target.closest(".btn.primary");
+      if (newSkillButton && newSkillButton.textContent.includes("新建 Skill")) {
+        setActivePage("skills");
+        showToast("已打开客服 Skills 配置页");
+      }
+
+      const provider = event.target.closest(".provider");
+      if (provider) {
+        provider.parentElement.querySelectorAll(".provider").forEach((item) => item.classList.remove("active"));
+        provider.classList.add("active");
+        const providerName = provider.querySelector("strong")?.textContent || "供应商";
+        const title = provider.closest(".settings-grid")?.querySelector(".insight h3");
+        if (title && title.textContent.includes("当前编辑")) title.textContent = `当前编辑：${providerName}`;
+        const settingsGrid = provider.closest(".settings-grid");
+        const modelInput = settingsGrid?.querySelector("[data-api-field='model']");
+        const baseUrlInput = settingsGrid?.querySelector("[data-api-field='baseUrl']");
+        if (modelInput && provider.dataset.model) modelInput.value = provider.dataset.model;
+        if (baseUrlInput && provider.dataset.baseUrl) baseUrlInput.value = provider.dataset.baseUrl;
+        showToast(`已选择 ${providerName}`);
+      }
+
+      const actionButton = event.target.closest(".btn");
+      if (actionButton) {
+        const text = actionButton.textContent.trim();
+        if (actionButton.dataset.action === "commands") openCommands();
+        if (actionButton.dataset.action === "notifications") toggleDrawer(true);
+        if (actionButton.dataset.action === "close-drawer") toggleDrawer(false);
+        if (text.includes("测试连接")) showToast("连接测试已触发：将校验 Base URL、API Key 和模型名称");
+        if (text.includes("测试连接")) refreshHealthBadge("连接测试成功 · API 392ms");
+        if (text.includes("保存配置")) showToast("配置已保存到系统设置草稿");
+        if (text.includes("设为默认接口")) {
+          showToast("已将当前供应商设为默认 API 接口");
+          refreshHealthBadge("默认接口已更新 · API 392ms");
+        }
+        if (text.includes("导出")) showToast("已生成导出任务");
+        if (text.includes("新增") || text.includes("创建")) showToast("已打开新增配置面板");
+      }
+
+      const commandItem = event.target.closest(".command-item");
+      if (commandItem) {
+        closeCommands();
+        setActivePage(commandItem.dataset.commandPage);
+        showToast(commandItem.querySelector("strong")?.textContent || "已执行命令");
+      }
+
+      if (event.target.id === "commandPalette") closeCommands();
+      if (event.target.id === "drawerScrim") toggleDrawer(false);
+
+      const tab = event.target.closest(".settings-tab");
+      if (!tab) return;
+      const settingsPanel = tab.closest("#system-settings");
+      if (!settingsPanel) return;
+      settingsPanel.querySelectorAll(".settings-tab").forEach((item) => item.classList.remove("active"));
+      tab.classList.add("active");
+      const grid = settingsPanel.querySelector(".settings-grid");
+      const summary = settingsPanel.querySelector(".settings-summary");
+      const name = tab.textContent.trim();
+      grid.innerHTML = settingsTabContent[name] || apiSettingsGrid;
+      summary.textContent = name === "API 接口"
+        ? "API 接口设置属于系统设置的子配置，用于统一管理 GeekNow、OpenAI、DeepSeek 等模型供应商。"
+        : `${name}属于系统设置的子配置，和 API 调用配置分开管理。`;
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openCommands();
+      }
+      if (event.key === "Escape") {
+        closeCommands();
+        toggleDrawer(false);
+      }
+    });
+
+    const initialPage = localStorage.getItem("smartKefuActivePage");
+    if (initialPage && pages[initialPage]) setActivePage(initialPage);
+  </script>
+  <script src="/docs/web_console.js"></script>
+</body>
+</html>

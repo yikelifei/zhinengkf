@@ -1,0 +1,63 @@
+wechat:
+  poll_interval: 3
+  anti_flood_seconds: 60
+  max_daily_replies: 30
+  whitelist: []
+  blacklist: []
+ai_engine:
+  enabled: true
+  primary: geeknow
+  prompt_key: commercial_customer_service_skill
+  fallback_chain:
+  - custom_api_1
+  - deepseek
+  - openai
+  - zhipu
+  timeout_seconds: 15
+  max_retries: 2
+  providers:
+    geeknow:
+      enabled: true
+      api_key: ${GEEKNOW_API_KEY}
+      base_url: ${GEEKNOW_BASE_URL}
+      model: ${GEEKNOW_MODEL}
+      request_format: openai
+      temperature: 0.4
+      max_tokens: 800
+    openai:
+      enabled: false
+      api_key: ${OPENAI_API_KEY}
+      base_url: ${OPENAI_BASE_URL}
+      model: ${OPENAI_MODEL}
+      temperature: 0.7
+      max_tokens: 300
+    zhipu:
+      enabled: true
+      api_key: ${ZHIPU_API_KEY}
+      base_url: ${ZHIPU_BASE_URL}
+      model: ${ZHIPU_MODEL}
+      temperature: 0.7
+      max_tokens: 300
+    deepseek:
+      enabled: false
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: ${DEEPSEEK_BASE_URL}
+      model: ${DEEPSEEK_MODEL}
+      temperature: 0.7
+      max_tokens: 300
+    custom_api_1:
+      enabled: true
+      api_key: ${CUSTOM_API_KEY}
+      base_url: ${CUSTOM_API_BASE}
+      model: ${CUSTOM_API_MODEL}
+      request_format: openai
+      temperature: 0.7
+      max_tokens: 300
+    custom_api_2:
+      enabled: false
+      api_key: ${DEEPSEEK_API_KEY:-}
+      base_url: https://api.example2.com/v1
+      model: gpt-4o-mini
+      request_format: openai
+      temperature: 0.7
+      max_tokens: 300

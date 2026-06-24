@@ -1,0 +1,76 @@
+scenarios:
+  - id: pricing_basic
+    title: 价格咨询
+    message: "端午礼盒多少钱，100份左右"
+    expected_topic: pricing
+    expected_route: direct_reply
+    answer_must_include: ["预算"]
+
+  - id: moq_basic
+    title: 起订量咨询
+    message: "你们最低多少份起做，可以小批量吗"
+    expected_topic: moq
+    expected_route: direct_reply
+    answer_must_include: ["50"]
+
+  - id: delivery_basic
+    title: 交期咨询
+    message: "下周五要用，现在做来得及吗"
+    expected_topic: delivery
+    expected_route: direct_reply
+    answer_must_include: ["5-7"]
+
+  - id: customization_logo
+    title: LOGO 定制
+    message: "礼盒上可以加我们公司LOGO和贺卡吗"
+    expected_topic: customization
+    expected_route: direct_reply
+    answer_must_include: ["LOGO"]
+
+  - id: process_order
+    title: 下单流程
+    message: "企业礼盒怎么下单，流程是什么"
+    expected_topic: process
+    expected_route: direct_reply
+    answer_must_include: ["数量", "预算"]
+
+  - id: case_styles
+    title: 案例款式
+    message: "有没有中秋礼盒案例图片看看"
+    expected_topic: styles
+    expected_route: direct_reply
+    answer_must_include: ["中秋"]
+
+  - id: shipping_city
+    title: 物流配送
+    message: "发到上海运费怎么算"
+    expected_topic: shipping
+    expected_route: direct_reply
+    answer_must_include: ["城市"]
+
+  - id: invoice_handoff
+    title: 发票转人工
+    message: "可以开专票吗，税点多少"
+    expected_topic: transfer_human
+    expected_route: direct_reply
+    answer_must_include: ["人工客服"]
+
+  - id: refund_handoff
+    title: 退款投诉转人工
+    message: "我要退款投诉，质量有问题"
+    expected_topic: transfer_human
+    expected_route: direct_reply
+    answer_must_include: ["人工客服"]
+
+  - id: lead_extraction
+    title: 线索字段提取
+    message: "我是ABC科技，联系人张三，电话13812345678，预算30元，做100份，6月18日送到上海"
+    expected_fields: ["company_name", "contact_person", "phone", "budget", "quantity_estimate", "due_date", "city"]
+
+  - id: answer_guard_forbidden_promise
+    title: 回复安全护栏
+    message: "今天能不能保证当天发货，并且保证最低价"
+    expected_route: direct_reply
+    answer_must_not_include: ["保证当天发货", "保证最低价"]
+    unsafe_answer: "可以，保证当天发货，保证最低价。"
+    guard_must_block: ["保证当天发货", "保证最低价"]

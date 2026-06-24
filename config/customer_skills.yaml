@@ -1,0 +1,76 @@
+skills:
+  - id: pricing
+    title: 报价核算
+    enabled: true
+    route: direct_reply
+    keywords: ["价格", "多少钱", "报价", "费用", "预算", "单价"]
+    answer: "礼盒价格需要结合数量、预算、材质、定制内容和交期核算。"
+    followup: "您方便说下预计数量、预算区间和使用日期吗？"
+
+  - id: moq
+    title: 起订量判断
+    enabled: true
+    route: direct_reply
+    keywords: ["起订", "起做", "最低", "最少", "多少份", "小批量"]
+    answer: "常规建议 50 份起做，100 份以上价格和工艺选择会更灵活。"
+    followup: "您预计做多少份、什么时候使用？"
+
+  - id: delivery
+    title: 交期评估
+    enabled: true
+    route: direct_reply
+    keywords: ["交期", "多久", "几天", "发货", "加急", "来得及"]
+    answer: "常规交期一般是确认方案和设计稿后 5-7 个工作日。"
+    followup: "您计划哪天使用、预计做多少份？"
+
+  - id: customization
+    title: 定制方案
+    enabled: true
+    route: direct_reply
+    keywords: ["定制", "logo", "LOGO", "贺卡", "腰封", "吊牌", "设计"]
+    answer: "LOGO、贺卡、腰封、吊牌、丝带和祝福语都可以定制，具体要结合预算和数量确认。"
+    followup: "您需要加哪些定制项？"
+
+  - id: styles
+    title: 案例推荐
+    enabled: true
+    route: direct_reply
+    keywords: ["案例", "款式", "图片", "照片", "效果图", "推荐"]
+    answer: "可以按端午、中秋、春节、企业伴手礼、商务高端款等方向推荐。"
+    followup: "您想看哪个节日或用途的案例？"
+
+  - id: quote_qualification
+    title: 报价前置收集
+    enabled: true
+    route: ask_clarifying
+    keywords: ["我要做", "想做", "需要礼盒", "企业礼品", "伴手礼", "下单"]
+    answer: "可以，我先帮您整理需求。"
+    followup: "请发一下用途、数量、预算、城市和使用日期，方便人工客服核价。"
+
+  - id: invoice
+    title: 发票税点
+    enabled: true
+    route: transfer_human
+    keywords: ["发票", "开票", "税点", "普票", "专票"]
+    answer: "发票类型、税点和合同主体需要人工确认，已为您转接人工客服。"
+
+  - id: after_sales
+    title: 售后处理
+    enabled: true
+    route: transfer_human
+    keywords: ["售后", "破损", "漏发", "少发", "质量问题", "退款", "退货", "投诉", "差评"]
+    answer: "售后问题需要人工核实订单信息，已为您转接人工客服处理。"
+
+  - id: payment_risk
+    title: 付款异常
+    enabled: true
+    route: transfer_human
+    keywords: ["付款", "转账", "收款", "定金", "尾款", "不到账", "付款异常"]
+    answer: "付款和收款问题需要人工核实，已为您转接人工客服。"
+
+  - id: image_design
+    title: 图片设计需求
+    enabled: true
+    route: transfer_human
+    keywords: ["设计图", "效果图", "出图", "海报", "主图", "生成图片"]
+    answer: "图片和设计类需求需要人工设计确认，已为您转接人工客服。"

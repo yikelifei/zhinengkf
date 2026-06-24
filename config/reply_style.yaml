@@ -1,0 +1,15 @@
+# 自动回复话术风格配置。
+# 这里先放可运营调整的边界；具体业务话术由 core/reply_style.py 统一生成。
+
+reply_style:
+  max_chars: 170
+  principles:
+    - 先给客户能用的判断，再追一个最关键问题。
+    - 客户已经给过的信息不要重复追问。
+    - 不使用机器人、自称系统、模板化客套或夸大承诺。
+    - 报价只给区间，精确价格必须引导人工核算。
+    - 投诉、退款、售后、发票、付款异常直接转人工。
+  manual_sources:
+    - manual
+    - manual_takeover
+    - web_manual

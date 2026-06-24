@@ -1,0 +1,55 @@
+# 产品图册展示配置
+
+product_categories:
+  duanwu_2026:
+    name: "端午节礼盒"
+    description: "竹编国风粽子礼盒"
+    price_range: "¥15-45/份"
+    min_order: 50
+    images:
+      - "assets/sample_images/duanwu_1.jpg"
+      - "assets/sample_images/duanwu_2.jpg"
+    features:
+      - "竹编手感盒，可重复使用"
+      - "内含手工粽子6枚+咸鸭蛋+雄黄酒"
+      - "支持企业LOGO烫金"
+    custom_options:
+      - card
+      - waistband
+      - tag
+      - ribbon
+      - insert_booklet
+
+  zhongqiu_2026:
+    name: "中秋节礼盒"
+    description: "国潮风月饼礼盒"
+    price_range: "¥25-68/份"
+    min_order: 100
+    images:
+      - "assets/sample_images/zhongqiu_1.jpg"
+    features:
+      - "精装纸质/木质/铁盒可选"
+      - "冰皮月饼+传统月饼组合"
+      - "支持定制腰封和贺卡"
+    custom_options:
+      - card
+      - waistband
+      - tag
+      - ribbon
+
+  chunjie_2027:
+    name: "春节年货礼包"
+    description: "红色喜庆系列"
+    price_range: "¥20-50/份"
+    min_order: 100
+    images:
+      - "assets/sample_images/chunjie_1.jpg"
+    features:
+      - "中国红配色，大气喜庆"
+      - "坚果+干果+糖果组合"
+      - "支持烫金LOGO"
+    custom_options:
+      - card
+      - waistband
+      - tag
+      - ribbon

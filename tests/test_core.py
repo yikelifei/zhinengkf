@@ -1,0 +1,335 @@
+""" Tests must not depend on WeChat, AI APIs, or SQLite.
+All tests are pure-function unit tests with mocked dependencies. """
+
+from core.intent_classifier import IntentClassifier
+from core.rule_engine import RuleEngine
+from core.template_renderer import render
+from core.conversation import ConversationManager
+from scripts.main import SmartBot
+
+
+class MockDB:
+    """Minimal DB mock that tracks calls."""
+
+    def __init__(self):
+        self.sessions = {}
+        self.calls = []
+        self.stage_map = {}
+
+    def create_or_get_session(self, friend_name):
+        if friend_name not in self.sessions:
+            sid = f"sess_{friend_name}"
+            self.sessions[friend_name] = sid
+        return self.sessions[friend_name]
+
+    def save_message(self, session_id, direction, content, source="rule", intent=None):
+        self.calls.append(("save_message", session_id, direction, content, source, intent))
+
+    def update_conversation_stage(self, session_id, stage):
+        self.stage_map[session_id] = stage
+        self.calls.append(("update_stage", session_id, stage))
+
+    def execute(self, sql, params=()):
+        """Return mock row for stage queries."""
+        sid = params[0] if params else None
+        stage = self.stage_map.get(sid, "new")
+
+        class Row(dict):
+            pass
+
+        r = Row()
+        if "stage FROM conversations" in sql:
+            r["stage"] = stage
+        elif "session_id FROM conversations WHERE friend_name" in sql:
+            # Already handled by create_or_get_session
+            return None
+        return r
+
+    def log_event(self, event_type, detail=""):
+        self.calls.append(("log_event", event_type, detail))
+
+    def save_lead(self, session_id, info):
+        self.calls.append(("save_lead", session_id, info))
+
+
+# ── TestIntentClassifier ──────────────────────────────────────────
+
+
+def test_classify_price():
+    kw = {"price": {"keywords": ["价格", "多少钱"], "priority": 95}}
+    clf = IntentClassifier(kw)
+    result = clf.classify("这个多少钱？")
+    assert result["intent"] == "price"
+    assert "多少钱" in result["matched_keywords"]
+    assert result["confidence"] == "medium"
+
+
+def test_classify_multiple_matches_high_confidence():
+    kw = {
+        "price": {"keywords": ["价格", "多少钱"], "priority": 95},
+        "min_order": {"keywords": ["最少", "起订量"], "priority": 90},
+    }
+    clf = IntentClassifier(kw)
+    result = clf.classify("起订量和价格分别是多少")
+    assert result["intent"] == "price"  # higher priority wins
+    assert "价格" in result["matched_keywords"]  # price keywords matched
+    assert result["confidence"] == "medium"  # only 1 keyword matched within price intent
+
+
+def test_classify_unmatched_is_vague():
+    kw = {"price": {"keywords": ["价格"], "priority": 95}}
+    clf = IntentClassifier(kw)
+    result = clf.classify("今天天气真好")
+    assert result["intent"] == "vague"
+    assert result["matched_keywords"] == []
+    assert result["confidence"] == "low"
+
+
+def test_classify_transfer_human():
+    kw = {
+        "transfer_human": {
+            "keywords": ["找人工", "转人工"],
+            "priority": 99,
+            "action": "alert_human",
+        }
+    }
+    clf = IntentClassifier(kw)
+    result = clf.classify("太复杂了，我要找人工客服")
+    assert result["intent"] == "transfer_human"
+    assert result["action"] == "alert_human"
+
+
+# ── TestRuleEngine ────────────────────────────────────────────────
+
+
+def test_rule_engine_match():
+    kw = {
+        "price": {
+            "keywords": ["价格", "多少钱"],
+            "priority": 95,
+            "reply_template": "我们的价格是{{price_range}}",
+        }
+    }
+    engine = RuleEngine(kw)
+    intent, template = engine.match("你们价格多少？")
+    assert intent == "price"
+    assert "价格是" in template
+
+
+def test_rule_engine_no_match():
+    kw = {"price": {"keywords": ["价格"], "priority": 95}}
+    engine = RuleEngine(kw)
+    intent, template = engine.match("随便聊聊")
+    assert intent is None
+    assert template is None
+
+
+def test_rule_engine_prioritization():
+    kw = {
+        "low_pri": {
+            "keywords": ["便宜"],
+            "priority": 10,
+            "reply_template": "low",
+        },
+        "high_pri": {
+            "keywords": ["便宜", "划算"],
+            "priority": 90,
+            "reply_template": "high",
+        },
+    }
+    engine = RuleEngine(kw)
+    intent, _ = engine.match("这个真划算")
+    assert intent == "high_pri"
+
+
+# ── TestTemplateRenderer ──────────────────────────────────────────
+
+
+def test_render_basic():
+    t = "你好 {{name}}，你的订单是 {{order_id}}"
+    ctx = {"name": "张三", "order_id": "ORD-1234"}
+    assert render(t, ctx) == "你好 张三，你的订单是 ORD-1234"
+
+
+def test_render_missing_var():
+    t = "{{name}} 您好，{{greeting}}"
+    ctx = {"name": "李四"}
+    result = render(t, ctx)
+    assert "李四" in result
+    assert "{{greeting}}" in result
+
+
+def test_render_empty_context():
+    t = "Hello world"
+    assert render(t, {}) == "Hello world"
+
+
+# ── TestConversationManager ──────────────────────────────────────
+
+
+def test_add_message_updates_cache():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("Alice")
+    mgr.add_message(sid, "inbound", "你好")
+    # Should have saved to DB AND updated context
+    assert len(db.calls) >= 2  # save_message + update_stage (or combined)
+    ctx = mgr.get_ai_context(sid)
+    assert len(ctx) == 1
+    assert ctx[0]["role"] == "user"
+    assert ctx[0]["content"] == "你好"
+
+
+def test_advance_stage():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("Bob")
+    mgr.advance_stage(sid, "info_collected")
+    assert db.stage_map[sid] == "info_collected"
+
+
+def test_extract_phone():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    info = mgr.extract_contact_info("我的电话是13812345678")
+    assert info["phone"] == "13812345678"
+
+
+def test_extract_company():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    info = mgr.extract_contact_info("我是ABC科技有限公司的采购")
+    assert info["company_name"] == "ABC科技有限" or "ABC科技" in info.get(
+        "company_name", ""
+    )
+
+
+def test_extract_festival():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    info = mgr.extract_contact_info("想做一批端午粽子礼盒")
+    assert info.get("festival") == "端午"
+
+
+def test_context_trimming():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("Tester")
+    # Add more messages than MAX_AI_CONTEXT_ROUNDS * 2
+    for i in range(20):
+        mgr.add_to_context(sid, "user", f"msg {i}")
+        mgr.add_to_context(sid, "assistant", f"resp {i}")
+    ctx = mgr.get_ai_context(sid)
+    max_rounds = ConversationManager.MAX_AI_CONTEXT_ROUNDS * 2
+    assert len(ctx) <= max_rounds
+
+
+def test_clear_context():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("ClearTest")
+    mgr.add_to_context(sid, "user", "hello")
+    assert len(mgr.get_ai_context(sid)) == 1
+    mgr.clear_context(sid)
+    assert len(mgr.get_ai_context(sid)) == 0
+
+
+# ── Test _is_worthy_of_reply ──────────────────────────────────────
+
+
+def _get_bot():
+    """Create a bot instance without WeChat (skips connection)."""
+    class PartialBot(SmartBot):
+        def __init__(self):
+            # Skip parent init — don't load configs or connect
+            self._initialized = True
+
+        def run(self):
+            pass  # no-op
+    bot = PartialBot()
+    return bot
+
+
+def test_reply_worthy_business_keywords():
+    bot = _get_bot()
+    assert bot._is_worthy_of_reply("最低订多少") is True
+    assert bot._is_worthy_of_reply("中秋礼盒怎么买") is True
+    assert bot._is_worthy_of_reply("交期多久") is True
+    assert bot._is_worthy_of_reply("推荐一下你们的产品") is True
+
+
+def test_reply_ignored_short_greetings():
+    bot = _get_bot()
+    assert bot._is_worthy_of_reply("你好") is False
+    assert bot._is_worthy_of_reply("您好") is False
+    assert bot._is_worthy_of_reply("嗨") is False
+    assert bot._is_worthy_of_reply("在吗") is False
+    assert bot._is_worthy_of_reply("嗯") is False
+    assert bot._is_worthy_of_reply("好") is False
+
+
+def test_reply_ignored_non_chinese_short():
+    bot = _get_bot()
+    assert bot._is_worthy_of_reply("abc") is False
+    assert bot._is_worthy_of_reply("ok") is False
+    assert bot._is_worthy_of_reply("asdfghjkl") is False
+
+
+def test_reply_ignored_emoji_only():
+    bot = _get_bot()
+    assert bot._is_worthy_of_reply("😀😃😄") is False
+    assert bot._is_worthy_of_reply("[图片]") is False
+
+
+def test_reply_long_chinese_sentence():
+    bot = _get_bot()
+    assert bot._is_worthy_of_reply(
+        "请问你们端午节有哪些款式的粽子礼盒可以定制呢"
+    ) is True
+
+
+# ── Run all tests ────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import traceback
+
+    tests = [
+        ("test_classify_price", test_classify_price),
+        ("test_classify_multiple", test_classify_multiple_matches_high_confidence),
+        ("test_classify_vague", test_classify_unmatched_is_vague),
+        ("test_classify_transfer", test_classify_transfer_human),
+        ("test_rule_engine_match", test_rule_engine_match),
+        ("test_rule_engine_no_match", test_rule_engine_no_match),
+        ("test_rule_engine_priority", test_rule_engine_prioritization),
+        ("test_render_basic", test_render_basic),
+        ("test_render_missing", test_render_missing_var),
+        ("test_render_empty", test_render_empty_context),
+        ("test_add_message", test_add_message_updates_cache),
+        ("test_advance_stage", test_advance_stage),
+        ("test_extract_phone", test_extract_phone),
+        ("test_extract_company", test_extract_company),
+        ("test_extract_festival", test_extract_festival),
+        ("test_context_trim", test_context_trimming),
+        ("test_clear_context", test_clear_context),
+        ("test_worthy_keywords", test_reply_worthy_business_keywords),
+        ("test_worthy_greetings", test_reply_ignored_short_greetings),
+        ("test_worthy_non_cn", test_reply_ignored_non_chinese_short),
+        ("test_worthy_emoji", test_reply_ignored_emoji_only),
+        ("test_worthy_chinese", test_reply_long_chinese_sentence),
+    ]
+
+    passed = 0
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"[OK]   {name}")
+            passed += 1
+        except Exception as e:
+            print(f"[FAIL] {name}: {e}")
+            traceback.print_exc()
+            failed += 1
+
+    print(f"\n{passed} passed, {failed} failed out of {len(tests)} tests.")
+    if failed:
+        exit(1)

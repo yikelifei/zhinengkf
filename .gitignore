@@ -1,0 +1,45 @@
+# Secrets (never commit real keys)
+.env
+
+# Local assistant/editor state
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+.venv/
+venv/
+.codex_deps/
+.codex_deps_wheels/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data / Logs
+data/*.db
+data/*.db-*
+logs/
+*.log
+backups/
+exports/
+reports/
+
+# Build artifacts
+installer/*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WeChat-related temp
+@AutomationLog.txt

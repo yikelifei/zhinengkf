@@ -1,0 +1,17 @@
+# WeChat automation (UIA-based, no wxauto dependency)
+pywinauto>=0.6.8
+pywin32>=311
+
+# AI SDKs
+openai>=1.0.0
+zhipuai>=2.0.0
+
+# Config & HTTP
+pyyaml>=6.0
+requests>=2.31.0
+
+# Logging & UX
+colorama>=0.4.6
+
+# Optional: environment variable loading (.env files)
+python-dotenv>=1.0.0
