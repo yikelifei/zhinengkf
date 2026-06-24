@@ -134,6 +134,24 @@ def test_parse_int_param_rejects_invalid_or_out_of_range_values():
             raise AssertionError(f"parse_int_param accepted {value!r}")
 
 
+def test_generate_report_file_rejects_invalid_numeric_bounds():
+    invalid_bodies = [
+        {"type": "quality", "limit": 0},
+        {"type": "quality", "limit": 1001},
+        {"type": "operation", "days": 0},
+        {"type": "reply_style", "days": 3651},
+        {"type": "audit", "limit": "abc"},
+    ]
+
+    for body in invalid_bodies:
+        try:
+            generate_report_file(body)
+        except ValueError as exc:
+            assert "limit" in str(exc) or "days" in str(exc)
+        else:
+            raise AssertionError(f"generate_report_file accepted body={body!r}")
+
+
 def test_send_manual_reply_saves_message_and_locks_even_if_seen_marker_fails(tmp_path):
     db = Database(str(tmp_path / "kefu.db"))
     session_id = db.create_or_get_session("客户A")

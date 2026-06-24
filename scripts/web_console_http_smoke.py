@@ -176,6 +176,16 @@ def run() -> list[str]:
             assert status == 400, f"/api/messages without session_id should be 400, got {status}"
             assert error.get("ok") is False
 
+            for bad_path in (
+                "/api/leads?limit=-1",
+                "/api/reports/quality?days=0&limit=10",
+                "/api/reports/files?limit=999999",
+            ):
+                status, error = _json(base_url, "GET", bad_path)
+                assert status == 400, f"{bad_path} should reject invalid numeric input, got {status}"
+                assert error.get("ok") is False
+                _assert_no_private_paths(error)
+
             status, before_backend = _json(base_url, "GET", "/api/backend/status")
             assert status == 200, f"backend status status {status}"
             backend_started_by_smoke = False
