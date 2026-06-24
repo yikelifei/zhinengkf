@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.database import Database  # noqa: E402
+from scripts.report_params import argparse_days, argparse_limit, report_days, report_limit  # noqa: E402
 
 
 PATTERNS = [
@@ -39,6 +40,8 @@ LEAD_FIELDS = [
 
 
 def build_privacy_audit(days: int = 30, limit: int = 300) -> dict:
+    days = report_days(days, default=30)
+    limit = report_limit(limit, default=300)
     db = Database(str(ROOT / "data" / "kefu.db"))
     messages = _load_messages(db, days=days, limit=limit)
     leads = db.list_leads(limit=limit)
@@ -173,13 +176,15 @@ def mask_sensitive(value: str) -> str:
 
 
 def _load_messages(db: Database, days: int, limit: int) -> list[dict]:
+    days = report_days(days, default=30)
+    limit = report_limit(limit, default=300)
     rows = db.execute(
         """SELECT session_id, direction, content, source, intent, created_at
            FROM messages
            WHERE created_at >= datetime('now', ?)
            ORDER BY id DESC
            LIMIT ?""",
-        (f"-{max(1, int(days))} days", max(1, int(limit))),
+        (f"-{days} days", limit),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -204,8 +209,8 @@ def _md(value) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export Smart Kefu privacy audit report.")
-    parser.add_argument("--days", type=int, default=30)
-    parser.add_argument("--limit", type=int, default=300)
+    parser.add_argument("--days", type=argparse_days, default=30)
+    parser.add_argument("--limit", type=argparse_limit, default=300)
     args = parser.parse_args()
     print(export_privacy_audit(days=args.days, limit=args.limit))
     return 0

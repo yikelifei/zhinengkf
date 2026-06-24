@@ -20,9 +20,11 @@ if str(ROOT) not in sys.path:
 from core.database import Database  # noqa: E402
 from core.high_value import evaluate_lead, format_money  # noqa: E402
 from core.lead_pipeline import pipeline_rules, stage_label  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 def build_high_value_leads(limit: int = 200, include_all: bool = False) -> dict:
+    limit = report_limit(limit, default=200)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rules = pipeline_rules()
     rows = []
@@ -116,7 +118,7 @@ def _md(value) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Export high-value lead shortlist.")
-    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--limit", type=argparse_limit, default=200)
     parser.add_argument("--include-all", action="store_true", help="include non-high-value leads for comparison")
     args = parser.parse_args(argv)
     print(export_high_value_leads(limit=args.limit, include_all=args.include_all))

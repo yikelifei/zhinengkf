@@ -3,6 +3,7 @@ from scripts.web_console import (
     ROOT,
     file_summary,
     generate_report_file,
+    body_id,
     public_audit_events,
     parse_int_param,
     redact_provider_config,
@@ -150,6 +151,23 @@ def test_generate_report_file_rejects_invalid_numeric_bounds():
             assert "limit" in str(exc) or "days" in str(exc)
         else:
             raise AssertionError(f"generate_report_file accepted body={body!r}")
+
+
+def test_body_id_accepts_positive_id_and_removes_it_from_payload():
+    body = {"id": "42", "stage": "quoted"}
+
+    assert body_id(body) == 42
+    assert body == {"stage": "quoted"}
+
+
+def test_body_id_rejects_missing_invalid_or_non_positive_ids():
+    for body in ({}, {"id": ""}, {"id": "abc"}, {"id": 0}, {"id": -1}):
+        try:
+            body_id(dict(body))
+        except ValueError as exc:
+            assert "id" in str(exc)
+        else:
+            raise AssertionError(f"body_id accepted body={body!r}")
 
 
 def test_send_manual_reply_saves_message_and_locks_even_if_seen_marker_fails(tmp_path):

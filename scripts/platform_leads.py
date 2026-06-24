@@ -23,6 +23,7 @@ from core.platform_leads import (  # noqa: E402
     build_platform_report,
     render_platform_report,
 )
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 def export_platform_leads_report(
@@ -32,6 +33,7 @@ def export_platform_leads_report(
     include_samples_when_empty: bool = True,
 ) -> Path:
     """Write the platform lead capture report and return its path."""
+    limit = report_limit(limit, default=200)
     store = PlatformLeadStore(Path(data_path) if data_path else DEFAULT_DATA_PATH)
     report = build_platform_report(
         store,
@@ -59,7 +61,7 @@ def main(argv=None) -> int:
         help="platform lead JSON data path",
     )
     parser.add_argument("--output", help="output Markdown path")
-    parser.add_argument("--limit", type=int, default=200, help="maximum leads to show")
+    parser.add_argument("--limit", type=argparse_limit, default=200, help="maximum leads to show")
     parser.add_argument(
         "--no-samples",
         action="store_true",

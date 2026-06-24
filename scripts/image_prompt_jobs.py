@@ -23,6 +23,7 @@ from core.image_prompt_jobs import (  # noqa: E402
     create_image_prompt_job,
     looks_like_image_request,
 )
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 SAMPLE_REQUIREMENT = (
@@ -37,6 +38,7 @@ def build_image_prompt_jobs(
     include_all: bool = False,
     include_sample: bool = True,
 ) -> dict:
+    limit = report_limit(limit, default=100)
     db = Database(str(ROOT / "data" / "kefu.db"))
     jobs = []
     scanned = 0
@@ -207,7 +209,7 @@ def md(value) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Export local image prompt jobs.")
     parser.add_argument("--output", help="output Markdown path")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=argparse_limit, default=100)
     parser.add_argument("--include-all", action="store_true", help="include leads even when image intent is weak")
     parser.add_argument("--no-sample", action="store_true", help="do not include a sample prompt when the queue is empty")
     args = parser.parse_args(argv)

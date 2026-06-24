@@ -329,7 +329,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self._db().log_event("knowledge_update", f"knowledge saved: {document.get('id', '')}")
                 return self._send_json({"ok": True, "document": document})
             if path == "/api/leads/update":
-                lead_id = int(body.pop("id"))
+                lead_id = body_id(body)
                 changed = self._db().update_lead(lead_id, body)
                 if changed:
                     self._db().log_event("lead_update", f"lead updated: #{lead_id}")
@@ -529,6 +529,10 @@ def body_limit(body: dict, default: int) -> int:
 
 def body_days(body: dict, default: int) -> int:
     return parse_int_param(body.get("days"), "days", default, max_value=MAX_REPORT_DAYS)
+
+
+def body_id(body: dict, name: str = "id") -> int:
+    return parse_int_param(body.pop(name, None), name, 0, min_value=1, max_value=2_147_483_647)
 
 
 def generate_report_file(body):

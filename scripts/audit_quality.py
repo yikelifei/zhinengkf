@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.knowledge_config import match_knowledge  # noqa: E402
+from scripts.report_params import argparse_days, argparse_limit, report_days, report_limit  # noqa: E402
 
 
 def _normalize_question(text):
@@ -28,6 +29,8 @@ def _normalize_question(text):
 
 
 def build_quality_audit(days=7, limit=200) -> dict:
+    days = report_days(days, default=7)
+    limit = report_limit(limit, default=200)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rows = db.execute(
         """SELECT session_id, direction, content, source, intent, created_at
@@ -149,8 +152,8 @@ def export_quality_audit(output=None, days=7, limit=200) -> Path:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Export Smart Kefu quality audit")
     parser.add_argument("--output", help="output Markdown path")
-    parser.add_argument("--days", type=int, default=7, help="audit period in days")
-    parser.add_argument("--limit", type=int, default=200, help="maximum messages to audit")
+    parser.add_argument("--days", type=argparse_days, default=7, help="audit period in days")
+    parser.add_argument("--limit", type=argparse_limit, default=200, help="maximum messages to audit")
     args = parser.parse_args(argv)
 
     output = export_quality_audit(args.output, days=args.days, limit=args.limit)

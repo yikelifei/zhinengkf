@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.database import Database  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 def _parse_time(value) -> datetime | None:
@@ -53,6 +54,7 @@ def _status_label(status: str, lock: dict | None) -> str:
 def build_handoff_queue(limit: int = 50) -> list[dict]:
     """Return sessions that need human attention or are manually locked."""
 
+    limit = report_limit(limit, default=50)
     db = Database(str(ROOT / "data" / "kefu.db"))
     now = datetime.now()
     items: list[dict] = []
@@ -99,7 +101,7 @@ def build_handoff_queue(limit: int = 50) -> list[dict]:
             -item["lead_score"],
         )
     )
-    return items[: max(1, int(limit))]
+    return items[:limit]
 
 
 def priority_label(status: str, wait_minutes: int, lead_score: int) -> str:
@@ -160,7 +162,7 @@ def _md(value) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export manual handoff queue.")
-    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--limit", type=argparse_limit, default=50)
     args = parser.parse_args()
     path = export_handoff_queue(limit=args.limit)
     print(path)

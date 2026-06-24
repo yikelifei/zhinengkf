@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.lead_pipeline import pipeline_rules, stage_label  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 FIELD_LABELS = {
@@ -31,6 +32,7 @@ FIELD_LABELS = {
 
 
 def build_quote_readiness(limit: int = 100) -> dict:
+    limit = report_limit(limit, default=100)
     db = Database(str(ROOT / "data" / "kefu.db"))
     leads = db.list_leads(limit=limit)
     required = pipeline_rules().get("required_fields") or [
@@ -131,7 +133,7 @@ def _md(value) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export quote readiness checklist.")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=argparse_limit, default=100)
     args = parser.parse_args()
     print(export_quote_readiness(limit=args.limit))
     return 0

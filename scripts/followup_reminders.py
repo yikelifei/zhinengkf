@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.lead_pipeline import default_next_action, pipeline_rules, stage_label  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 def _value(lead, key):
@@ -26,6 +27,7 @@ def _value(lead, key):
 
 
 def build_followup_tasks(limit=50) -> list[dict]:
+    limit = report_limit(limit, default=50)
     db = Database(str(ROOT / "data" / "kefu.db"))
     leads = db.get_followup_leads(limit=limit)
     rules = pipeline_rules()
@@ -130,7 +132,7 @@ def export_followup_tasks(output=None, limit=50) -> Path:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Export Smart Kefu follow-up tasks")
     parser.add_argument("--output", help="output Markdown path")
-    parser.add_argument("--limit", type=int, default=50, help="maximum tasks to export")
+    parser.add_argument("--limit", type=argparse_limit, default=50, help="maximum tasks to export")
     args = parser.parse_args(argv)
 
     output = export_followup_tasks(args.output, limit=args.limit)

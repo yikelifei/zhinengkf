@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.database import Database  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 EXPORT_FIELDS = [
@@ -48,6 +49,7 @@ EXPORT_FIELDS = [
 
 
 def export_leads(output=None, limit=1000) -> Path:
+    limit = report_limit(limit, default=1000)
     output_dir = ROOT / "exports"
     output_dir.mkdir(exist_ok=True)
     if output is None:
@@ -68,7 +70,7 @@ def export_leads(output=None, limit=1000) -> Path:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Export Smart Kefu leads to CSV")
     parser.add_argument("--output", help="output CSV path")
-    parser.add_argument("--limit", type=int, default=1000, help="maximum leads to export")
+    parser.add_argument("--limit", type=argparse_limit, default=1000, help="maximum leads to export")
     args = parser.parse_args(argv)
 
     output = export_leads(args.output, args.limit)

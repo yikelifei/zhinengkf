@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from scripts.handoff_queue import build_handoff_queue  # noqa: E402
+from scripts.report_params import argparse_days, report_days  # noqa: E402
 
 
 SLA_TARGETS = {
@@ -42,13 +43,14 @@ def _parse_time(value) -> datetime | None:
 
 
 def build_sla_report(days: int = 7) -> dict:
+    days = report_days(days, default=7)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rows = db.execute(
         """SELECT id, session_id, direction, content, source, intent, created_at
            FROM messages
            WHERE created_at >= datetime('now', ?)
            ORDER BY session_id, id""",
-        (f"-{max(1, int(days))} days",),
+        (f"-{days} days",),
     ).fetchall()
 
     sessions: dict[str, list[dict]] = {}
@@ -205,7 +207,7 @@ def _md(value) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export Smart Kefu SLA monitor report.")
-    parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--days", type=argparse_days, default=7)
     args = parser.parse_args()
     path = export_sla_report(days=args.days)
     print(path)

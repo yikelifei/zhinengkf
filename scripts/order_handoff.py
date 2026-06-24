@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.lead_pipeline import stage_label  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 ORDER_STAGES = {"quotation_given", "design_discussion", "sample_sent", "ready_to_order", "ordered"}
@@ -38,6 +39,7 @@ FIELD_LABELS = {
 
 
 def build_order_handoff(limit: int = 100) -> dict:
+    limit = report_limit(limit, default=100)
     db = Database(str(ROOT / "data" / "kefu.db"))
     leads = db.list_leads(limit=limit)
     items = []
@@ -129,7 +131,7 @@ def _md(value) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export order handoff checklist.")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=argparse_limit, default=100)
     args = parser.parse_args()
     print(export_order_handoff(limit=args.limit))
     return 0

@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.redaction import redact_internal_paths  # noqa: E402
+from scripts.report_params import argparse_limit, report_limit  # noqa: E402
 
 
 def format_audit_detail(value) -> str:
@@ -28,6 +29,7 @@ def format_audit_detail(value) -> str:
 
 
 def build_audit_log_report(limit=200) -> str:
+    limit = report_limit(limit, default=200)
     db = Database(str(ROOT / "data" / "kefu.db"))
     events = db.get_audit_events(limit=limit)
     counter = Counter(event.get("event_type") or "unknown" for event in events)
@@ -89,7 +91,7 @@ def export_audit_log(output=None, limit=200) -> Path:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Export Smart Kefu audit log report")
     parser.add_argument("--output", help="output Markdown path")
-    parser.add_argument("--limit", type=int, default=200, help="maximum audit events to export")
+    parser.add_argument("--limit", type=argparse_limit, default=200, help="maximum audit events to export")
     args = parser.parse_args(argv)
 
     output = export_audit_log(args.output, limit=args.limit)

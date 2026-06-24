@@ -23,12 +23,13 @@ if str(ROOT) not in sys.path:
 
 from core.customer_agent import CustomerSupportAgent  # noqa: E402
 from core.database import Database  # noqa: E402
+from scripts.report_params import argparse_days, argparse_limit, report_days, report_limit  # noqa: E402
 
 
 def build_reply_style_samples(days: int = 90, limit: int = 300) -> dict:
     """Build paired samples: latest customer message -> human reply."""
-    days = max(1, int(days))
-    limit = max(1, int(limit))
+    days = report_days(days, default=90)
+    limit = report_limit(limit, default=300)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rows = db.execute(
         """SELECT id, session_id, direction, content, source, intent, created_at
@@ -237,8 +238,8 @@ def _md(value) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Export human reply style samples.")
-    parser.add_argument("--days", type=int, default=90)
-    parser.add_argument("--limit", type=int, default=300)
+    parser.add_argument("--days", type=argparse_days, default=90)
+    parser.add_argument("--limit", type=argparse_limit, default=300)
     parser.add_argument("--output")
     args = parser.parse_args(argv)
     print(export_reply_style_samples(days=args.days, limit=args.limit, output=args.output))

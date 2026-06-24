@@ -20,9 +20,12 @@ if str(ROOT) not in sys.path:
 
 from core.database import Database  # noqa: E402
 from core.knowledge_config import match_knowledge  # noqa: E402
+from scripts.report_params import argparse_days, argparse_limit, report_days, report_limit  # noqa: E402
 
 
 def build_improvement_backlog(days: int = 7, limit: int = 200) -> dict:
+    days = report_days(days, default=7)
+    limit = report_limit(limit, default=200)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rows = db.execute(
         """SELECT session_id, direction, content, source, intent, created_at
@@ -30,7 +33,7 @@ def build_improvement_backlog(days: int = 7, limit: int = 200) -> dict:
            WHERE created_at >= datetime('now', ?)
            ORDER BY id DESC
            LIMIT ?""",
-        (f"-{max(1, int(days))} days", max(1, int(limit))),
+        (f"-{days} days", limit),
     ).fetchall()
     messages = [dict(row) for row in rows]
     inbound = [m for m in messages if m.get("direction") == "inbound"]
@@ -158,8 +161,8 @@ def _priority_rank(value: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export Smart Kefu improvement backlog.")
-    parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--days", type=argparse_days, default=7)
+    parser.add_argument("--limit", type=argparse_limit, default=200)
     args = parser.parse_args()
     print(export_improvement_backlog(days=args.days, limit=args.limit))
     return 0
