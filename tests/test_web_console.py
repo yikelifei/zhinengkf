@@ -2,7 +2,9 @@ from scripts.web_console import (
     ConsoleHandler,
     ROOT,
     file_summary,
+    generate_report_file,
     public_audit_events,
+    parse_int_param,
     redact_provider_config,
     redact_settings_for_response,
     report_response,
@@ -113,6 +115,23 @@ def test_public_audit_events_redact_local_paths():
     assert result[0]["event_type"] == "report_generate"
     assert "C:\\Users\\" not in result[0]["detail"]
     assert "zhinengkefu" not in result[0]["detail"]
+
+
+def test_parse_int_param_uses_default_and_accepts_bounds():
+    assert parse_int_param(None, "limit", 20) == 20
+    assert parse_int_param("", "limit", 20) == 20
+    assert parse_int_param("1", "limit", 20, min_value=1, max_value=10) == 1
+    assert parse_int_param("10", "limit", 20, min_value=1, max_value=10) == 10
+
+
+def test_parse_int_param_rejects_invalid_or_out_of_range_values():
+    for value in ("abc", "1.5", 0, -1, 11):
+        try:
+            parse_int_param(value, "limit", 20, min_value=1, max_value=10)
+        except ValueError as exc:
+            assert "limit" in str(exc)
+        else:
+            raise AssertionError(f"parse_int_param accepted {value!r}")
 
 
 def test_send_manual_reply_saves_message_and_locks_even_if_seen_marker_fails(tmp_path):

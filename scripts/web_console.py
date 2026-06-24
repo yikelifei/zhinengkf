@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DEPS = ROOT / ".codex_deps"
 BACKEND_PID_FILE = ROOT / ".smart_bot_backend.pid"
 PUBLIC_STATIC_DIRS = {"docs", "reports", "assets"}
+MAX_QUERY_LIMIT = 500
+MAX_REPORT_LIMIT = 1000
+MAX_REPORT_DAYS = 3650
 if LOCAL_DEPS.exists():
     sys.path.insert(0, str(LOCAL_DEPS))
 if str(ROOT) not in sys.path:
@@ -202,47 +205,47 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 message = (query.get("q") or [""])[0]
                 return self._send_json({"matches": match_knowledge(message)})
             if path == "/api/leads":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 return self._send_json({"leads": self._db().list_leads(limit=limit)})
             if path == "/api/followups":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 return self._send_json({"leads": self._db().get_followup_leads(limit=limit)})
             if path == "/api/followup-tasks":
-                limit = int((query.get("limit") or [50])[0])
+                limit = query_int(query, "limit", 50)
                 return self._send_json({"tasks": build_followup_tasks(limit=limit)})
             if path == "/api/high-value-leads":
-                limit = int((query.get("limit") or [200])[0])
+                limit = query_int(query, "limit", 200)
                 include_all = (query.get("include_all") or ["false"])[0].lower() in {"1", "true", "yes"}
                 return self._send_json(build_high_value_leads(limit=limit, include_all=include_all))
             if path == "/api/handoff-queue":
-                limit = int((query.get("limit") or [50])[0])
+                limit = query_int(query, "limit", 50)
                 return self._send_json({"items": build_handoff_queue(limit=limit)})
             if path == "/api/sla":
-                days = int((query.get("days") or [7])[0])
+                days = query_days(query, 7)
                 return self._send_json(build_sla_report(days=days))
             if path == "/api/answer-guard":
                 return self._send_json(build_answer_guard_audit())
             if path == "/api/business-hours":
                 return self._send_json(build_business_hours_audit())
             if path == "/api/improvement-backlog":
-                days = int((query.get("days") or [7])[0])
-                limit = int((query.get("limit") or [200])[0])
+                days = query_days(query, 7)
+                limit = query_int(query, "limit", 200)
                 return self._send_json(build_improvement_backlog(days=days, limit=limit))
             if path == "/api/quote-readiness":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 return self._send_json(build_quote_readiness(limit=limit))
             if path == "/api/order-handoff":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 return self._send_json(build_order_handoff(limit=limit))
             if path == "/api/privacy-audit":
-                days = int((query.get("days") or [30])[0])
-                limit = int((query.get("limit") or [300])[0])
+                days = query_days(query, 30)
+                limit = query_int(query, "limit", 300)
                 return self._send_json(build_privacy_audit(days=days, limit=limit))
             if path == "/api/reports":
-                limit = int((query.get("limit") or [30])[0])
+                limit = query_int(query, "limit", 30)
                 return self._send_json({"files": list_report_files(limit=limit)})
             if path == "/api/reports/summary":
-                days = int((query.get("days") or [7])[0])
+                days = query_days(query, 7)
                 db = self._db()
                 return self._send_json(
                     {
@@ -253,24 +256,24 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     }
                 )
             if path == "/api/reports/quality":
-                days = int((query.get("days") or [7])[0])
-                limit = int((query.get("limit") or [200])[0])
+                days = query_days(query, 7)
+                limit = query_int(query, "limit", 200)
                 return self._send_json(build_quality_audit(days=days, limit=limit))
             if path == "/api/reports/readiness":
                 return self._send_json(build_readiness_report())
             if path == "/api/reports/acceptance":
                 return self._send_json({"markdown": build_acceptance_pack()})
             if path == "/api/reports/files":
-                limit = int((query.get("limit") or [30])[0])
+                limit = query_int(query, "limit", 30)
                 return self._send_json({"files": list_report_files(limit=limit)})
             if path == "/api/backups":
-                limit = int((query.get("limit") or [20])[0])
+                limit = query_int(query, "limit", 20)
                 return self._send_json({"files": list_backup_files(limit=limit)})
             if path == "/api/audit":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 return self._send_json({"events": public_audit_events(self._db().get_audit_events(limit=limit))})
             if path == "/api/conversations":
-                limit = int((query.get("limit") or [100])[0])
+                limit = query_int(query, "limit", 100)
                 db = self._db()
                 rows = db.list_conversations(limit=limit)
                 for row in rows:
@@ -499,6 +502,35 @@ def api_channels():
     return {"active": sorted(active), "channels": rows}
 
 
+def parse_int_param(value, name: str, default: int, *, min_value: int = 1, max_value: int = MAX_QUERY_LIMIT) -> int:
+    if value is None or value == "":
+        number = default
+    else:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} 必须是整数")
+    if number < min_value or number > max_value:
+        raise ValueError(f"{name} 必须在 {min_value} 到 {max_value} 之间")
+    return number
+
+
+def query_int(query: dict, name: str, default: int, *, min_value: int = 1, max_value: int = MAX_QUERY_LIMIT) -> int:
+    return parse_int_param((query.get(name) or [None])[0], name, default, min_value=min_value, max_value=max_value)
+
+
+def query_days(query: dict, default: int) -> int:
+    return query_int(query, "days", default, max_value=MAX_REPORT_DAYS)
+
+
+def body_limit(body: dict, default: int) -> int:
+    return parse_int_param(body.get("limit"), "limit", default, max_value=MAX_REPORT_LIMIT)
+
+
+def body_days(body: dict, default: int) -> int:
+    return parse_int_param(body.get("days"), "days", default, max_value=MAX_REPORT_DAYS)
+
+
 def generate_report_file(body):
     report_type = body.get("type", "")
     if report_type == "readiness":
@@ -508,25 +540,25 @@ def generate_report_file(body):
         path = export_acceptance_pack()
         label = "商业交付验收包"
     elif report_type == "operation":
-        path = export_report(days=int(body.get("days", 7)), limit=int(body.get("limit", 20)))
+        path = export_report(days=body_days(body, 7), limit=body_limit(body, 20))
         label = "运营报告"
     elif report_type == "quality":
-        path = export_quality_audit(days=int(body.get("days", 7)), limit=int(body.get("limit", 200)))
+        path = export_quality_audit(days=body_days(body, 7), limit=body_limit(body, 200))
         label = "质检报告"
     elif report_type == "followups":
-        path = export_followup_tasks(limit=int(body.get("limit", 50)))
+        path = export_followup_tasks(limit=body_limit(body, 50))
         label = "跟进任务"
     elif report_type == "high_value_leads":
         path = export_high_value_leads(
-            limit=int(body.get("limit", 200)),
+            limit=body_limit(body, 200),
             include_all=bool(body.get("include_all", False)),
         )
         label = "高价值客户筛选清单"
     elif report_type == "handoff":
-        path = export_handoff_queue(limit=int(body.get("limit", 50)))
+        path = export_handoff_queue(limit=body_limit(body, 50))
         label = "人工接管队列"
     elif report_type == "sla":
-        path = export_sla_report(days=int(body.get("days", 7)))
+        path = export_sla_report(days=body_days(body, 7))
         label = "SLA 监控报告"
     elif report_type == "answer_guard":
         path = export_answer_guard_audit()
@@ -535,22 +567,22 @@ def generate_report_file(body):
         path = export_business_hours_audit()
         label = "非工作时间兜底审计报告"
     elif report_type == "improvement_backlog":
-        path = export_improvement_backlog(days=int(body.get("days", 7)), limit=int(body.get("limit", 200)))
+        path = export_improvement_backlog(days=body_days(body, 7), limit=body_limit(body, 200))
         label = "智能客服优化待办"
     elif report_type == "quote_readiness":
-        path = export_quote_readiness(limit=int(body.get("limit", 100)))
+        path = export_quote_readiness(limit=body_limit(body, 100))
         label = "报价准备清单"
     elif report_type == "reply_style":
-        path = export_reply_style_samples(days=int(body.get("days", 90)), limit=int(body.get("limit", 300)))
+        path = export_reply_style_samples(days=body_days(body, 90), limit=body_limit(body, 300))
         label = "真人客服风格样本报告"
     elif report_type == "order_handoff":
-        path = export_order_handoff(limit=int(body.get("limit", 100)))
+        path = export_order_handoff(limit=body_limit(body, 100))
         label = "订单交付清单"
     elif report_type == "privacy_audit":
-        path = export_privacy_audit(days=int(body.get("days", 30)), limit=int(body.get("limit", 300)))
+        path = export_privacy_audit(days=body_days(body, 30), limit=body_limit(body, 300))
         label = "隐私合规审计报告"
     elif report_type == "audit":
-        path = export_audit_log(limit=int(body.get("limit", 200)))
+        path = export_audit_log(limit=body_limit(body, 200))
         label = "操作审计报告"
     elif report_type == "scenarios":
         path = export_acceptance_scenarios()
@@ -590,6 +622,7 @@ def file_summary(path: Path, folder_name: str, *, expose_url: bool = True) -> di
 
 
 def list_report_files(limit=30) -> list[dict]:
+    limit = parse_int_param(limit, "limit", 30)
     reports_dir = ROOT / "reports"
     if not reports_dir.exists():
         return []
@@ -599,6 +632,7 @@ def list_report_files(limit=30) -> list[dict]:
 
 
 def list_backup_files(limit=20) -> list[dict]:
+    limit = parse_int_param(limit, "limit", 20)
     return [file_summary(path, "backups", expose_url=False) for path in list_backups()[:limit]]
 
 
