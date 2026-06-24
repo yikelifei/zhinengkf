@@ -33,6 +33,43 @@ def test_add_lead_normalizes_and_persists(tmp_path):
     assert reloaded[0]["need"] == "300 gift boxes"
 
 
+def test_store_treats_malformed_json_shape_as_empty(tmp_path):
+    path = tmp_path / "platform_leads.json"
+    path.write_text('["broken"]', encoding="utf-8")
+
+    assert PlatformLeadStore(path).list_leads() == []
+
+
+def test_store_skips_malformed_leads_and_bad_version(tmp_path):
+    path = tmp_path / "platform_leads.json"
+    path.write_text(
+        """
+{
+  "version": "bad",
+  "leads": [
+    "broken",
+    {"platform": "douyin", "nickname": ""},
+    {"platform": "douyin", "nickname": "user_ok"}
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    leads = PlatformLeadStore(path).list_leads()
+
+    assert [lead["nickname"] for lead in leads] == ["user_ok"]
+
+
+def test_store_save_does_not_split_malformed_leads_string(tmp_path):
+    path = tmp_path / "platform_leads.json"
+    store = PlatformLeadStore(path)
+
+    store._save({"leads": "broken"})
+
+    assert PlatformLeadStore(path).list_leads() == []
+
+
 def test_bind_wechat_updates_status_and_stats(tmp_path):
     store = PlatformLeadStore(tmp_path / "platform_leads.json")
     lead = store.add_lead(platform="xiaohongshu", nickname="user_b")

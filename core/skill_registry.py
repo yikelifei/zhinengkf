@@ -17,9 +17,14 @@ class SkillRegistry:
                 data = yaml.safe_load(f) or {}
         except FileNotFoundError:
             return []
+        if not isinstance(data, dict):
+            return []
+        skills = data.get("skills") or []
+        if not isinstance(skills, list):
+            return []
         return [
-            skill for skill in data.get("skills", [])
-            if skill.get("enabled", True)
+            skill for skill in skills
+            if isinstance(skill, dict) and skill.get("enabled", True)
         ]
 
     def match_topic(self, text):
@@ -27,7 +32,7 @@ class SkillRegistry:
         best_score = 0
         for skill in self.skills:
             score = 0
-            for keyword in skill.get("keywords", []):
+            for keyword in self._keywords_for(skill):
                 if keyword and keyword in text:
                     score += 1
             if score > best_score:
@@ -39,8 +44,8 @@ class SkillRegistry:
         skill = self.get(topic)
         if not skill:
             return ""
-        answer = skill.get("answer", "").strip()
-        followup = skill.get("followup", "").strip()
+        answer = str(skill.get("answer") or "").strip()
+        followup = str(skill.get("followup") or "").strip()
         if answer and followup and followup not in answer:
             return f"{answer}{followup}"
         return answer
@@ -54,3 +59,11 @@ class SkillRegistry:
             if skill.get("id") == topic:
                 return skill
         return None
+
+    def _keywords_for(self, skill):
+        keywords = skill.get("keywords") or []
+        if isinstance(keywords, str):
+            return [item.strip() for item in keywords.split(",") if item.strip()]
+        if not isinstance(keywords, list):
+            return []
+        return [str(item).strip() for item in keywords if str(item).strip()]

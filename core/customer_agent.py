@@ -36,9 +36,19 @@ class CustomerSupportAgent:
 
     def __init__(self, knowledge_path="config/customer_knowledge.yaml"):
         self.knowledge_path = resource_path(knowledge_path)
-        with open(self.knowledge_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        self.documents = data.get("documents", [])
+        try:
+            with open(self.knowledge_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        documents = data.get("documents") or []
+        self.documents = (
+            [doc for doc in documents if isinstance(doc, dict)]
+            if isinstance(documents, list)
+            else []
+        )
         self.skill_registry = SkillRegistry()
         self.answer_guard = AnswerGuard()
         self.reply_style = ReplyStyleCoach()
@@ -196,10 +206,16 @@ class CustomerSupportAgent:
         results = []
         for doc in self.documents:
             score = 0
-            for kw in doc.get("keywords", []):
+            keywords = doc.get("keywords") or []
+            if isinstance(keywords, str):
+                keywords = [item.strip() for item in keywords.split(",") if item.strip()]
+            elif not isinstance(keywords, list):
+                keywords = []
+            for kw in keywords:
+                kw = str(kw).strip()
                 if kw and kw in text:
                     score += 2
-            title = doc.get("title", "")
+            title = str(doc.get("title") or "")
             if title and title in text:
                 score += 1
             if doc.get("route") == "transfer_human" and score > 0:
@@ -231,6 +247,7 @@ class CustomerSupportAgent:
         }
 
     def _direct_answer(self, topic, base_answer, customer_message="", history=None):
+        base_answer = str(base_answer or "")
         skill_answer = self.skill_registry.answer_for(topic)
         if skill_answer:
             base_answer = skill_answer
@@ -258,4 +275,4 @@ class CustomerSupportAgent:
         return text[:max_len].rstrip("，、；; ") + "。"
 
     def _normalize(self, text):
-        return re.sub(r"\s+", " ", (text or "").strip())
+        return re.sub(r"\s+", " ", str(text or "").strip())

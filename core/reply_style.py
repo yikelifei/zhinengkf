@@ -34,7 +34,12 @@ class ReplyStyleCoach:
     def __init__(self, config_path: str = "config/reply_style.yaml"):
         self.config_path = resource_path(config_path)
         self.config = self._load_config()
-        self.max_chars = int(self.config.get("max_chars", self.DEFAULT_MAX_CHARS))
+        try:
+            self.max_chars = int(self.config.get("max_chars", self.DEFAULT_MAX_CHARS))
+        except (TypeError, ValueError):
+            self.max_chars = self.DEFAULT_MAX_CHARS
+        if self.max_chars <= 0:
+            self.max_chars = self.DEFAULT_MAX_CHARS
 
     def polish(self, topic: str, base_answer: str, customer_message: str = "", history=None) -> str:
         base_answer = self._clean(base_answer)
@@ -223,12 +228,15 @@ class ReplyStyleCoach:
         return "、".join(fields[:-1]) + "和" + fields[-1]
 
     def _clean(self, text: str) -> str:
-        return re.sub(r"\s+", " ", (text or "").strip())
+        return re.sub(r"\s+", " ", str(text or "").strip())
 
     def _load_config(self) -> dict:
         try:
             with open(self.config_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            return data.get("reply_style", data)
+            if not isinstance(data, dict):
+                return {}
+            config = data.get("reply_style", data)
+            return config if isinstance(config, dict) else {}
         except FileNotFoundError:
             return {}

@@ -1,3 +1,5 @@
+import yaml
+
 from core.conversation import ConversationManager
 from core.customer_agent import CustomerSupportAgent
 
@@ -67,6 +69,63 @@ def test_agent_quote_qualification_asks_clarifying_question():
     assert decision.route == "direct_reply"
     assert decision.topic == "quote_qualification"
     assert "数量" in decision.answer
+
+
+def test_agent_tolerates_malformed_knowledge_root(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text("- broken\n", encoding="utf-8")
+
+    agent = CustomerSupportAgent(knowledge_path=str(path))
+    decision = agent.analyze("\u7aef\u5348\u793c\u76d2\u591a\u5c11\u94b1")
+
+    assert agent.documents == []
+    assert decision.route == "direct_reply"
+    assert decision.topic == "pricing"
+
+
+def test_agent_tolerates_missing_knowledge_file(tmp_path):
+    path = tmp_path / "missing_customer_knowledge.yaml"
+
+    agent = CustomerSupportAgent(knowledge_path=str(path))
+    decision = agent.analyze("\u7aef\u5348\u793c\u76d2\u591a\u5c11\u94b1")
+
+    assert agent.documents == []
+    assert decision.route == "direct_reply"
+    assert decision.topic == "pricing"
+
+
+def test_agent_skips_malformed_knowledge_documents(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "documents": [
+                    "broken",
+                    {
+                        "id": "bad_keywords",
+                        "title": "\u574f\u5173\u952e\u8bcd",
+                        "keywords": 123,
+                        "answer": "bad",
+                    },
+                    {
+                        "id": "delivery",
+                        "title": "\u4ea4\u671f",
+                        "keywords": "\u53d1\u8d27,\u591a\u4e45",
+                        "answer": 456,
+                    },
+                ]
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    agent = CustomerSupportAgent(knowledge_path=str(path))
+    docs = agent._retrieve("\u591a\u4e45\u53d1\u8d27")
+    decision = agent.analyze("\u591a\u4e45\u53d1\u8d27")
+
+    assert [item["doc"]["id"] for item in docs] == ["delivery"]
+    assert decision.route == "direct_reply"
 
 
 def test_extract_lead_info_for_crm():

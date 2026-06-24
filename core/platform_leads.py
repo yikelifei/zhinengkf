@@ -209,17 +209,32 @@ class PlatformLeadStore:
         if not raw:
             return {"version": DATA_VERSION, "leads": []}
         data = json.loads(raw) or {}
+        if not isinstance(data, dict):
+            data = {}
         leads = data.get("leads") or []
         if not isinstance(leads, list):
-            raise ValueError(f"invalid platform lead store: {self.path}")
+            leads = []
+        normalized_leads = []
+        for item in leads:
+            if not isinstance(item, dict):
+                continue
+            try:
+                normalized_leads.append(normalize_lead(item, now=_now(), preserve_id=True))
+            except ValueError:
+                continue
+        try:
+            version = int(data.get("version") or DATA_VERSION)
+        except (TypeError, ValueError):
+            version = DATA_VERSION
         return {
-            "version": int(data.get("version") or DATA_VERSION),
-            "leads": [normalize_lead(item, now=_now(), preserve_id=True) for item in leads],
+            "version": version,
+            "leads": normalized_leads,
         }
 
     def _save(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"version": DATA_VERSION, "leads": data.get("leads") or []}
+        leads = data.get("leads") if isinstance(data, dict) else []
+        payload = {"version": DATA_VERSION, "leads": list(leads) if isinstance(leads, list) else []}
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{self.path.name}.",
             suffix=".tmp",
