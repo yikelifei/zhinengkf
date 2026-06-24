@@ -25,12 +25,13 @@ INCLUDE_PATHS = [
     "data/kefu.db",
 ]
 ALLOWED_RESTORE_PATHS = set(INCLUDE_PATHS)
+MAX_BACKUP_LABEL_LENGTH = 32
 
 
 def create_backup(label="manual") -> Path:
     BACKUP_DIR.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_label = "".join(ch for ch in label if ch.isalnum() or ch in ("-", "_")) or "manual"
+    safe_label = sanitize_backup_label(label)
     backup_path = BACKUP_DIR / f"smart_kefu_{stamp}_{safe_label}.zip"
 
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -40,6 +41,12 @@ def create_backup(label="manual") -> Path:
                 zf.write(path, rel)
 
     return backup_path
+
+
+def sanitize_backup_label(label="manual") -> str:
+    safe_label = "".join(ch for ch in str(label or "") if ch.isalnum() or ch in ("-", "_"))
+    safe_label = safe_label[:MAX_BACKUP_LABEL_LENGTH].strip("_-")
+    return safe_label or "manual"
 
 
 def list_backups() -> list[Path]:

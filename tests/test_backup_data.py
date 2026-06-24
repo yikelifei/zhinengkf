@@ -1,12 +1,27 @@
 import zipfile
 
-from scripts.backup_data import restore_backup
+from scripts.backup_data import sanitize_backup_label, restore_backup
 
 
 def write_zip(path, entries):
     with zipfile.ZipFile(path, "w") as zf:
         for name, content in entries.items():
             zf.writestr(name, content)
+
+
+def test_sanitize_backup_label_limits_filename_length():
+    label = "web-" + ("x" * 200)
+
+    result = sanitize_backup_label(label)
+
+    assert result.startswith("web-")
+    assert len(result) <= 32
+
+
+def test_sanitize_backup_label_removes_unsafe_characters_and_falls_back():
+    assert sanitize_backup_label("web ../ : * ? ok") == "webok"
+    assert sanitize_backup_label("../") == "manual"
+    assert sanitize_backup_label("") == "manual"
 
 
 def test_restore_backup_rejects_path_traversal(tmp_path):

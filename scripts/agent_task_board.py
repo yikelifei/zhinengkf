@@ -51,7 +51,7 @@ def prompt_for(module: dict[str, Any]) -> str:
 
 ## 工作目录
 
-`C:\\Users\\27808\\Desktop\\zhinengkefu`
+仓库根目录。先确认当前目录包含 `config/`、`core/`、`scripts/`、`tests/`。
 
 ## 总约束
 
