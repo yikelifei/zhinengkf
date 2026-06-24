@@ -5,6 +5,8 @@ import re
 import sys
 import time
 
+import yaml
+
 from .logger import info, warning
 from .paths import resource_path
 
@@ -15,6 +17,24 @@ def get_resource_path(relative_path: str) -> str:
 
 class AIError(Exception):
     pass
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_yaml_dict(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 # ========== Base class: all AI backends implement this interface ==========
@@ -120,19 +140,21 @@ class GenericHTTPService(AIBackend):
     def __init__(self, config: dict):
         import requests
         self.http = requests
-        self.base_url = config["base_url"].rstrip("/")
-        self.api_key = config.get("api_key", "")
+        self.base_url = str(config.get("base_url") or "").rstrip("/")
+        self.api_key = str(config.get("api_key") or "")
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}" if self.api_key else "",
         }
-        self.request_format = config.get("request_format", "openai")
+        self.request_format = str(config.get("request_format") or "openai")
         self.custom_template = config.get("custom_request_template", {})
-        self.timeout = config.get("timeout_seconds", 15)
-        self.model = config.get("model", "gpt-4o-mini")
+        if not isinstance(self.custom_template, dict):
+            self.custom_template = {}
+        self.timeout = _safe_int(config.get("timeout_seconds"), 15)
+        self.model = str(config.get("model") or "gpt-4o-mini")
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 300)
-        self.api_endpoint = config.get("api_endpoint", "/chat/completions")
+        self.api_endpoint = str(config.get("api_endpoint") or "/chat/completions")
 
     def _build_request_body(self, messages):
         body = {
@@ -168,19 +190,25 @@ BACKEND_REGISTRY = {
 # ========== 璺敱鍣細閫夊紩鎿?+ 鑷姩闄嶇骇 ==========
 class AIServiceRouter:
     def __init__(self, config: dict):
-        self.config = config
+        self.config = config if isinstance(config, dict) else {"enabled": False}
         self.providers = {}
         self.primary = None
         self.fallback_chain = []
-        self.disabled = not config.get("enabled", True)
-        self.timeout = config.get("timeout_seconds", 15)
-        self.max_retries = config.get("max_retries", 2)
+        self.disabled = not self.config.get("enabled", True)
+        self.timeout = _safe_int(self.config.get("timeout_seconds"), 15)
+        self.max_retries = max(0, _safe_int(self.config.get("max_retries"), 2))
 
         self._init_providers()
 
     def _init_providers(self):
         providers_config = self.config.get("providers", {})
+        if not isinstance(providers_config, dict):
+            providers_config = {}
         for name, provider_cfg in providers_config.items():
+            name = str(name or "").strip()
+            if not name or not isinstance(provider_cfg, dict):
+                warning(f"[AI] Invalid provider config for '{name or 'unknown'}', skipping.")
+                continue
             if not provider_cfg.get("enabled", False):
                 continue
 
@@ -216,14 +244,20 @@ class AIServiceRouter:
             except Exception as e:
                 warning(f"[AI] Failed to initialize engine {name}: {e}")
 
-        self.primary = self.config.get("primary")
-        self.fallback_chain = self.config.get("fallback_chain", [])
+        primary = self.config.get("primary")
+        self.primary = str(primary).strip() if primary else None
+        fallback_chain = self.config.get("fallback_chain", [])
+        self.fallback_chain = (
+            [str(item).strip() for item in fallback_chain if str(item).strip()]
+            if isinstance(fallback_chain, list)
+            else []
+        )
 
     def chat(self, messages: list[dict]) -> str:
         if self.disabled or not self.providers:
             raise AIError("所有 AI 引擎均未启用或未配置")
 
-        attempt_order = [self.primary] + self.fallback_chain
+        attempt_order = ([self.primary] if self.primary else []) + self.fallback_chain
         attempt_order = [e for e in attempt_order if e in self.providers]
 
         if not attempt_order:
@@ -274,19 +308,24 @@ class AIService:
     REQUEST_SUMMARY_MAX_CHARS = 1200
 
     def __init__(self, settings_path="config/settings.yaml", prompts_path="config/prompts.yaml"):
-        import yaml
         settings_path = get_resource_path(settings_path)
         prompts_path = get_resource_path(prompts_path)
         info(f"[Config] AI settings: {settings_path}")
         info(f"[Config] AI prompts: {prompts_path}")
-        with open(settings_path, encoding="utf-8") as f:
-            self.settings = yaml.safe_load(f)
-        with open(prompts_path, encoding="utf-8") as f:
-            self.prompts = yaml.safe_load(f)
+        self.settings = _load_yaml_dict(settings_path)
+        self.prompts = _load_yaml_dict(prompts_path)
 
-        self.router = AIServiceRouter(self.settings["ai_engine"])
-        self.prompt_key = self.settings.get("ai_engine", {}).get("prompt_key", "meiyi_system")
-        self.system_prompt = self.prompts.get(self.prompt_key, self.prompts.get("meiyi_system", ""))
+        ai_config = (
+            self.settings.get("ai_engine")
+            if isinstance(self.settings.get("ai_engine"), dict)
+            else {}
+        )
+        self.router = AIServiceRouter(ai_config if ai_config else {"enabled": False})
+        self.prompt_key = str(ai_config.get("prompt_key") or "meiyi_system")
+        system_prompt = self.prompts.get(self.prompt_key)
+        if not isinstance(system_prompt, str):
+            system_prompt = self.prompts.get("meiyi_system", "")
+        self.system_prompt = system_prompt if isinstance(system_prompt, str) else ""
         info(f"[AI] Using prompt skill: {self.prompt_key}")
 
     def generate_reply(
@@ -347,7 +386,9 @@ class AIService:
         prepared = []
         message_limit = 300 if force else self.MAX_SINGLE_HISTORY_MESSAGE_CHARS
         for message in history or []:
-            role = message.get("role", "")
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "")).strip()
             if role not in {"system", "user", "assistant"}:
                 continue
             content = self._compact_text(
@@ -411,12 +452,16 @@ class AIService:
 
     def _messages_chars(self, messages):
         return sum(
-            len(message.get("role", "")) + len(message.get("content", ""))
+            len(str(message.get("role", ""))) + len(str(message.get("content", "")))
             for message in messages
+            if isinstance(message, dict)
         )
 
     def _compact_text(self, text, limit):
-        value = re.sub(r"\s+", " ", (text or "").strip())
+        limit = max(0, _safe_int(limit, 0))
+        value = re.sub(r"\s+", " ", str(text or "").strip())
+        if not limit:
+            return ""
         if len(value) <= limit:
             return value
         head = max(1, limit // 2 - 2)
@@ -424,7 +469,7 @@ class AIService:
         return f"{value[:head]} ... {value[-tail:]}"
 
     def _is_context_capacity_error(self, message):
-        text = (message or "").lower()
+        text = str(message or "").lower()
         markers = (
             "context",
             "token",
@@ -439,7 +484,7 @@ class AIService:
         return any(marker in text for marker in markers)
 
     def _clean_reply(self, reply: str) -> str:
-        text = (reply or "").split("<think>")[0]
+        text = str(reply or "").split("<think>")[0]
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r"<think>.*", "", text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r"<[^>]+>", "", text).strip()
