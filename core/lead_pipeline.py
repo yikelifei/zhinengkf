@@ -14,6 +14,9 @@ from .paths import resource_path
 DEFAULT_RULES = {
     "high_intent_score": 80,
     "medium_intent_score": 50,
+    "high_value_min_score": 80,
+    "high_value_min_deal_value": 10000,
+    "high_value_excluded_stages": ["lost", "closed_lost"],
     "stale_days": 2,
     "required_fields": ["phone_or_wechat", "quantity_estimate", "budget", "due_date", "city"],
 }
@@ -76,7 +79,13 @@ def validate_pipeline(data: dict) -> list[str]:
         if not str(stage.get("label", "")).strip():
             issues.append(f"阶段 {stage_id} 缺少 label")
     rules = data.get("rules") or {}
-    for key in ("high_intent_score", "medium_intent_score", "stale_days"):
+    for key in (
+        "high_intent_score",
+        "medium_intent_score",
+        "high_value_min_score",
+        "high_value_min_deal_value",
+        "stale_days",
+    ):
         try:
             value = int(rules.get(key, DEFAULT_RULES[key]))
             if value < 0:

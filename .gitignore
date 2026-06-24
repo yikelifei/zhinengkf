@@ -6,6 +6,7 @@
 
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.egg-info/
 dist/
@@ -33,6 +34,11 @@ logs/
 backups/
 exports/
 reports/
+!tools/reports/
+tools/reports/*
+!tools/reports/run_high_value_leads.bat
+!tools/reports/run_platform_leads.bat
+!tools/reports/run_image_prompt_jobs.bat
 
 # Build artifacts
 installer/*.zip

@@ -1,0 +1,289 @@
+version: 1
+updated_at: "2026-06-24"
+description: "智能客服项目模块分类、运行命令和验收标准。"
+
+modules:
+  - id: "01_wechat_core"
+    category: "channel"
+    title: "微信主客服闭环"
+    status: "running"
+    purpose: "保持微信作为主要成交和客服承接阵地，稳定收消息、生成回复、发送回复、记录会话。"
+    doc: "docs/projects/01_wechat_core.md"
+    inputs:
+      - "微信 PC 客户端消息"
+      - "config/settings.yaml"
+      - "config/customer_knowledge.yaml"
+    outputs:
+      - "data/kefu.db"
+      - "logs/bot.log"
+      - "客户会话和线索记录"
+    run_commands:
+      - "tools\\quality\\run_smoke_tests.bat"
+    check_commands:
+      - "tools\\quality\\run_tests.bat"
+      - "tools\\_run_python_task.bat scripts\\run_unit_tests.py tests\\test_core.py"
+    acceptance:
+      - "常见问题能自动回复。"
+      - "投诉、退款、复杂报价能转人工。"
+      - "不重复刷屏，不乱承诺价格和交期。"
+    next_steps:
+      - "继续修复真实微信运行中的边界问题。"
+      - "保持每次修改后运行 smoke 检查。"
+
+  - id: "02_platform_lead_capture"
+    category: "lead_acquisition"
+    title: "抖音/小红书平台线索承接"
+    status: "partial"
+    purpose: "把抖音、小红书来的客户作为获客线索记录下来，最终引导到微信成交。"
+    doc: "docs/projects/02_platform_lead_capture.md"
+    inputs:
+      - "平台来源"
+      - "客户昵称"
+      - "来源笔记/视频/评论"
+      - "客户需求"
+    outputs:
+      - "平台线索池"
+      - "微信来源绑定"
+      - "来源转化报表"
+    run_commands:
+      - "tools\\reports\\run_platform_leads.bat"
+    check_commands:
+      - "tools\\_run_python_task.bat scripts\\run_unit_tests.py tests\\test_platform_leads.py"
+    acceptance:
+      - "可以手动录入抖音/小红书线索。"
+      - "客户加微信后能绑定来源。"
+      - "能统计不同平台带来的高价值客户。"
+    next_steps:
+      - "新增平台线索数据结构。"
+      - "新增 Web 控制台录入和筛选界面。"
+
+  - id: "03_knowledge_learning"
+    category: "knowledge"
+    title: "知识库与真人话术学习"
+    status: "partial"
+    purpose: "从真实微信聊天记录中提取 FAQ、客户异议和高转化真人话术，人工审核后进入知识库。"
+    doc: "docs/projects/03_knowledge_learning.md"
+    inputs:
+      - "微信聊天记录"
+      - "人工客服回复"
+      - "现有知识库"
+    outputs:
+      - "FAQ 候选"
+      - "真人话术样本"
+      - "客户异议库"
+      - "知识库更新建议"
+    run_commands:
+      - "tools\\reports\\run_reply_style_miner.bat"
+    check_commands:
+      - "tools\\quality\\run_answer_guard_audit.bat"
+      - "tools\\quality\\run_quality_audit.bat"
+    acceptance:
+      - "聊天记录不能直接污染知识库。"
+      - "新知识必须人工审核后入库。"
+      - "能产出可复用真人话术样本。"
+    next_steps:
+      - "新增聊天记录导入器。"
+      - "新增知识候选审核界面。"
+
+  - id: "04_smart_reply_engine"
+    category: "reply"
+    title: "智能回复与安全护栏"
+    status: "running"
+    purpose: "用规则、知识库、AI 和安全护栏生成自然、可靠、可控的客服回复。"
+    doc: "docs/projects/04_smart_reply_engine.md"
+    inputs:
+      - "客户消息"
+      - "会话上下文"
+      - "知识库"
+      - "客户资料"
+    outputs:
+      - "建议回复"
+      - "人工接管原因"
+      - "回复来源和意图"
+    run_commands:
+      - "tools\\_run_python_task.bat scripts\\run_unit_tests.py tests\\test_core.py"
+    check_commands:
+      - "tools\\quality\\run_answer_guard_audit.bat"
+      - "tools\\quality\\run_business_hours_audit.bat"
+    acceptance:
+      - "回复不暴露 AI。"
+      - "不编造价格、交期和售后承诺。"
+      - "支持多话术随机表达。"
+    next_steps:
+      - "把回复质量样本接入控制台复盘。"
+      - "继续补充危险承诺拦截规则。"
+
+  - id: "05_high_value_leads"
+    category: "crm"
+    title: "高价值客户筛选"
+    status: "running"
+    purpose: "根据数量、预算、交期、企业采购、联系方式等信息筛出值得人工优先跟进的客户。"
+    doc: "docs/projects/05_high_value_leads.md"
+    inputs:
+      - "客户线索"
+      - "会话阶段"
+      - "报价字段"
+    outputs:
+      - "高价值客户清单"
+      - "优先级分数"
+      - "推荐下一步动作"
+    run_commands:
+      - "tools\\reports\\run_high_value_leads.bat"
+    check_commands:
+      - "tools\\_run_python_task.bat scripts\\run_unit_tests.py tests\\test_high_value.py"
+    acceptance:
+      - "能输出高价值客户清单。"
+      - "能解释筛选原因。"
+      - "能指出缺失字段和下一步动作。"
+    next_steps:
+      - "加入来源平台权重。"
+      - "加入是否愿意加微信作为评分因子。"
+
+  - id: "06_quote_and_followup"
+    category: "sales_ops"
+    title: "报价准备和跟进任务"
+    status: "running"
+    purpose: "检查报价必填字段是否齐全，并生成今日跟进任务。"
+    doc: "docs/projects/06_quote_and_followup.md"
+    inputs:
+      - "客户线索"
+      - "报价必填字段"
+      - "最近对话时间"
+    outputs:
+      - "报价准备清单"
+      - "跟进任务"
+      - "订单交接清单"
+    run_commands:
+      - "tools\\reports\\run_quote_readiness.bat"
+      - "tools\\reports\\run_followup_tasks.bat"
+      - "tools\\reports\\run_order_handoff.bat"
+    check_commands:
+      - "tools\\quality\\run_sla_monitor.bat"
+      - "tools\\operations\\run_handoff_queue.bat"
+    acceptance:
+      - "能告诉人工还缺哪些字段。"
+      - "能生成今日应跟进客户。"
+      - "能区分报价准备和订单交接。"
+    next_steps:
+      - "把报价字段补齐动作接入控制台。"
+      - "增加报价单生成接口。"
+
+  - id: "07_image_prompt_jobs"
+    category: "image_delivery"
+    title: "出图提示词和任务队列"
+    status: "partial"
+    purpose: "从客户需求中提取出图提示词，调用出图软件生成图片，修改交给人工处理。"
+    doc: "docs/projects/07_image_prompt_jobs.md"
+    inputs:
+      - "客户需求"
+      - "礼盒品类"
+      - "设计风格"
+      - "Logo 和文案要求"
+    outputs:
+      - "出图提示词"
+      - "出图任务"
+      - "修改意见"
+      - "案例沉淀"
+    run_commands:
+      - "tools\\reports\\run_image_prompt_jobs.bat"
+    check_commands:
+      - "tools\\_run_python_task.bat scripts\\run_unit_tests.py tests\\test_image_prompt_jobs.py"
+    acceptance:
+      - "能把客户需求结构化。"
+      - "能生成出图软件可用提示词。"
+      - "改图意见进入人工队列。"
+    next_steps:
+      - "新增 image_prompt_extractor。"
+      - "新增 image_jobs 表和 API。"
+
+  - id: "08_open_api"
+    category: "integration"
+    title: "本地 API 和外部软件集成"
+    status: "partial"
+    purpose: "为 Web 控制台、出图软件和后续平台服务提供稳定 API。"
+    doc: "docs/projects/08_open_api.md"
+    inputs:
+      - "HTTP 请求"
+      - "API Key"
+      - "业务参数"
+    outputs:
+      - "JSON 响应"
+      - "审计日志"
+      - "报表文件"
+    run_commands:
+      - "tools\\quality\\run_web_console_smoke.bat"
+    check_commands:
+      - "tools\\quality\\run_health_check.bat"
+      - "tools\\quality\\run_web_console_smoke.bat"
+    acceptance:
+      - "核心 API 能返回稳定 JSON。"
+      - "接口异常不导致服务崩溃。"
+      - "后续必须加鉴权、限流和日志。"
+    next_steps:
+      - "新增 API Key 鉴权。"
+      - "新增出图任务 API。"
+
+  - id: "09_console_workspace"
+    category: "console"
+    title: "统一工作台和运营控制台"
+    status: "partial"
+    purpose: "把线索、会话、高价值客户、人工接管、报表和系统状态集中到一个终端。"
+    doc: "docs/projects/09_console_workspace.md"
+    inputs:
+      - "数据库"
+      - "报表"
+      - "渠道状态"
+      - "后台服务状态"
+    outputs:
+      - "今日工作台"
+      - "报表下载"
+      - "人工接管队列"
+      - "系统状态"
+    run_commands:
+      - "tools\\quality\\run_web_console_smoke.bat"
+    check_commands:
+      - "node --check docs\\web_console.js"
+      - "tools\\quality\\run_ui_contract_check.bat"
+      - "tools\\quality\\run_web_console_http_smoke.bat"
+      - "tools\\quality\\run_web_console_smoke.bat"
+    acceptance:
+      - "Web 控制台接口正常。"
+      - "核心报表可以生成。"
+      - "渠道状态可查看。"
+    next_steps:
+      - "新增平台线索录入界面。"
+      - "新增出图任务队列界面。"
+
+  - id: "10_quality_release"
+    category: "quality"
+    title: "测试、验收、备份和上线"
+    status: "running"
+    purpose: "让项目可以自测、自查、备份、验收，减少人工逐个找 bug。"
+    doc: "docs/projects/10_quality_release.md"
+    inputs:
+      - "项目代码"
+      - "配置文件"
+      - "数据库"
+    outputs:
+      - "测试结果"
+      - "验收报告"
+      - "备份包"
+      - "上线检查报告"
+    run_commands:
+      - "tools\\quality\\run_tests.bat"
+      - "tools\\quality\\run_web_console_smoke.bat"
+      - "tools\\quality\\run_launch_readiness.bat"
+    check_commands:
+      - "tools\\quality\\run_tests.bat"
+      - "tools\\quality\\run_static_sanity.bat"
+      - "tools\\quality\\run_ui_contract_check.bat"
+      - "tools\\quality\\run_web_console_http_smoke.bat"
+      - "tools\\quality\\run_acceptance_scenarios.bat"
+      - "tools\\operations\\run_backup.bat"
+    acceptance:
+      - "核心 smoke 测试通过。"
+      - "Web 控制台 smoke 通过。"
+      - "上线检查能生成报告。"
+    next_steps:
+      - "把每次关键修改后的检查固定成一键命令。"
+      - "增加更多真实场景回归测试。"

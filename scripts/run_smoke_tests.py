@@ -82,6 +82,7 @@ def test_config_helpers():
     from core.knowledge_config import match_knowledge
     from core.lead_pipeline import load_pipeline, save_pipeline, validate_pipeline
     from core.skill_config import load_skills
+    from scripts.static_sanity import run as run_static_sanity
 
     matches = match_knowledge("这个礼盒多少钱")
     assert_true(matches, "knowledge matching should return at least one item")
@@ -99,6 +100,7 @@ def test_config_helpers():
 
     profile = load_profile()
     assert_true(not validate_profile(profile), "customer profile should be valid")
+    assert_true(not run_static_sanity(), "static sanity checks should pass")
 
 
 def test_backup_and_export_helpers():

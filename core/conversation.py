@@ -6,6 +6,13 @@ import re
 
 class ConversationManager:
     MAX_AI_CONTEXT_ROUNDS = 6
+    MAX_AI_CONTEXT_MESSAGES = MAX_AI_CONTEXT_ROUNDS * 2
+    RECENT_CONTEXT_MESSAGES = 6
+    MAX_CONTEXT_CHARS = 3600
+    SUMMARY_MAX_CHARS = 1200
+    SUMMARY_MESSAGE_CHARS = 180
+    MAX_SINGLE_MESSAGE_CHARS = 900
+    SUMMARY_PREFIX = "自动上下文压缩摘要："
     STAGES = [
         "new", "info_collected", "quotation_given",
         "design_discussion", "sample_sent",
@@ -15,6 +22,7 @@ class ConversationManager:
     def __init__(self, db):
         self.db = db
         self.context_cache = {}
+        self.context_summaries = {}
 
     def add_message(self, session_id, direction, content):
         """Save a message and keep the in-memory AI context in sync."""
@@ -31,15 +39,121 @@ class ConversationManager:
             "role": role,
             "content": content,
         })
-        max_rounds = self.MAX_AI_CONTEXT_ROUNDS * 2
-        if len(self.context_cache[session_id]) > max_rounds:
-            self.context_cache[session_id] = self.context_cache[session_id][-max_rounds:]
+        self._compress_context_if_needed(session_id)
 
-    def get_ai_context(self, session_id):
-        return self.context_cache.get(session_id, [])
+    def get_ai_context(self, session_id, exclude_latest_user_message=None):
+        messages = list(self.context_cache.get(session_id, []))
+        excluded_message = None
+        if exclude_latest_user_message is not None:
+            excluded_message = self._compact_text(
+                exclude_latest_user_message,
+                self.MAX_SINGLE_MESSAGE_CHARS,
+            )
+        if (
+            excluded_message is not None
+            and messages
+            and messages[-1].get("role") == "user"
+            and messages[-1].get("content") in {exclude_latest_user_message, excluded_message}
+        ):
+            messages = messages[:-1]
+
+        summary = self.context_summaries.get(session_id)
+        if summary:
+            return [{
+                "role": "system",
+                "content": f"{self.SUMMARY_PREFIX}\n{summary}",
+            }] + messages
+        return messages
 
     def clear_context(self, session_id):
         self.context_cache.pop(session_id, None)
+        self.context_summaries.pop(session_id, None)
+
+    def _compress_context_if_needed(self, session_id):
+        messages = self.context_cache.get(session_id, [])
+        if not messages:
+            return
+
+        self.context_cache[session_id] = [
+            self._trim_message(message) for message in messages
+        ]
+        messages = self.context_cache[session_id]
+
+        while (
+            len(messages) > self.MAX_AI_CONTEXT_MESSAGES
+            or (
+                self.context_summaries.get(session_id)
+                and len(messages) > self.RECENT_CONTEXT_MESSAGES
+            )
+            or self._context_chars(session_id) > self.MAX_CONTEXT_CHARS
+        ):
+            keep_count = min(self.RECENT_CONTEXT_MESSAGES, max(2, len(messages) - 1))
+            old_messages = messages[:-keep_count]
+            if not old_messages:
+                break
+
+            self.context_summaries[session_id] = self._merge_summary(
+                self.context_summaries.get(session_id, ""),
+                old_messages,
+            )
+            self.context_cache[session_id] = messages[-keep_count:]
+            messages = self.context_cache[session_id]
+
+            if self._context_chars(session_id) <= self.MAX_CONTEXT_CHARS:
+                break
+
+            if len(messages) <= 2:
+                break
+
+    def _context_chars(self, session_id):
+        total = len(self.context_summaries.get(session_id, ""))
+        for message in self.context_cache.get(session_id, []):
+            total += len(message.get("role", "")) + len(message.get("content", ""))
+        return total
+
+    def _merge_summary(self, existing, messages):
+        lines = []
+        if existing:
+            lines.extend(line for line in existing.splitlines() if line.strip())
+        for message in messages:
+            role = "客户" if message.get("role") == "user" else "客服"
+            content = self._compact_text(
+                message.get("content", ""),
+                self.SUMMARY_MESSAGE_CHARS,
+            )
+            if content:
+                lines.append(f"{role}: {content}")
+
+        merged = "\n".join(lines)
+        if len(merged) <= self.SUMMARY_MAX_CHARS:
+            return merged
+
+        kept = []
+        total = len("更早内容已压缩。")
+        for line in reversed(merged.splitlines()):
+            size = len(line) + 1
+            if kept and total + size > self.SUMMARY_MAX_CHARS:
+                break
+            kept.append(line)
+            total += size
+        return "更早内容已压缩。\n" + "\n".join(reversed(kept))
+
+    def _trim_message(self, message):
+        return {
+            "role": message.get("role", "user"),
+            "content": self._compact_text(
+                message.get("content", ""),
+                self.MAX_SINGLE_MESSAGE_CHARS,
+            ),
+        }
+
+    def _compact_text(self, text, limit):
+        value = re.sub(r"\s+", " ", (text or "").strip())
+        if len(value) <= limit:
+            return value
+        head = max(1, limit // 2 - 2)
+        tail = max(1, limit - head - 5)
+        return f"{value[:head]} ... {value[-tail:]}"
 
     def advance_stage(self, session_id, stage):
         if stage in self.STAGES:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """ 智能客服主程序 — 启动入口 """
 
@@ -38,7 +38,7 @@ import signal
 import yaml
 
 from core.logger import setup_logger, log as log_msg, info, warning, error
-from core.wechat import ChatListener
+from core.channel_registry import create_channel_hub
 from core.database import Database
 from core.intent_classifier import IntentClassifier
 from core.rule_engine import RuleEngine
@@ -104,12 +104,12 @@ class SmartBot:
         self.customer_agent = CustomerSupportAgent()
         self.conv_manager = ConversationManager(self.db)
 
-        # Connect to WeChat (with retry)
+        # Connect message channels (WeChat by default, extensible to other platforms)
         self.listener = None
-        self._connect_wechat_with_retry()
+        self._connect_channels_with_retry()
 
         if not self.listener:
-            logger.error("Cannot connect to WeChat, exiting.")
+            logger.error("Cannot connect to any message channel, exiting.")
             sys.exit(1)
 
         # Restore seen-cache from DB
@@ -118,30 +118,25 @@ class SmartBot:
         info("[OK] Initialization complete.\n")
         self._show_status()
 
-    def _connect_wechat_with_retry(self, max_retries=5):
-        """Connect to WeChat with exponential backoff retry."""
+    def _connect_channels_with_retry(self, max_retries=5):
+        """Connect configured message channels with exponential backoff retry."""
         for attempt in range(1, max_retries + 1):
             try:
-                info(f"[WeChat] Attempt {attempt}/{max_retries}...")
-                self.listener = ChatListener(
-                    poll_interval=self.settings["wechat"]["poll_interval"],
-                    anti_flood_seconds=self.settings["wechat"][
-                        "anti_flood_seconds"
-                    ],
-                )
+                info(f"[Channel] Attempt {attempt}/{max_retries}...")
+                self.listener = create_channel_hub(self.settings)
                 return
             except RuntimeError as e:
                 msg = str(e)
                 if "未找到微信" in msg or "No WeChat 4.x window found" in msg:
-                    error(f"[WeChat] {msg}")
+                    error(f"[Channel] {msg}")
                     return
                 wait = min(attempt * 3, 15)
                 warning(
-                    f"[WeChat] Failed: {e}. Retrying in {wait}s..."
+                    f"[Channel] Failed: {e}. Retrying in {wait}s..."
                 )
                 time.sleep(wait)
 
-        error("[WeChat] All connection attempts failed.")
+        error("[Channel] All connection attempts failed.")
 
     def _restore_seen_cache(self):
         """Restore message dedup cache from last run."""
@@ -211,44 +206,6 @@ class SmartBot:
         if cut > 40:
             return text[:cut].strip() + "\u3002"
         return text[:max_len].rstrip("\uff0c,\u3001\uff1b; ") + "\u3002"
-
-        sentences = re.findall(r'[^。！？!?]+[。！？!?]?', text)
-        selected = ''
-        for sentence in sentences:
-            candidate = (selected + sentence).strip()
-            if selected and len(candidate) > max_len:
-                break
-            selected = candidate
-
-        if selected and selected[-1] in '。！？!?':
-            return selected
-
-        cut = max(text.rfind(p, 0, max_len) for p in '。！？!?；;')
-        if cut > 40:
-            return text[:cut + 1].strip()
-
-        cut = max(text.rfind(p, 0, max_len) for p in '，,、 ')
-        if cut > 40:
-            return (text[:cut].strip() + '。')
-
-        return text[:max_len].rstrip('，,、；; ') + '。'
-
-        paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
-        if paragraphs:
-            text = paragraphs[0]
-
-        import re
-        sentence_parts = re.split(r'([。！？!?])', text)
-        if len(sentence_parts) >= 2:
-            text = ''.join(sentence_parts[:2]).strip()
-        elif len(text) > 120:
-            text = text[:117].rstrip() + '...'
-
-        # Avoid sending very long single reply
-        if len(text) > 120:
-            text = text[:117].rstrip() + '...'
-
-        return text
 
     def _reply_key(self, text):
         return " ".join((text or "").split()).strip()
@@ -453,64 +410,6 @@ class SmartBot:
 
         return chinese_chars >= 2
 
-        """判断消息是否值得回复（避免对每条消息都回复）。"""
-        chinese_chars = sum(1 for c in content if '一' <= c <= '鿿')
-        non_chinese = len(content) - chinese_chars
-
-        # Skip very short non-Chinese messages
-        if chinese_chars == 0 and 5 < len(content.strip()) < 30:
-            return False
-
-        # Skip one-character / meaningless messages
-        if len(content.strip()) < 2:
-            return False
-
-        # Skip common greetings / small talk
-        stripped = content.strip()
-        greetings = {
-            '你好', '您好', '嗨', '哈喽', '在吗', '在的',
-            'hello', 'hi', 'hey',
-        }
-        cleaned = stripped.lower().replace('！', '').replace('!', '')
-        if cleaned in greetings:
-            return False
-
-        # Emoji-only messages
-        emoji_only = all(
-            ('\U0001F600' <= c <= '\U0001FAFF') or
-            ('\U00002702' <= c <= '\U00002B55') or
-            c.isspace() or
-            c in ('[图片]', '[表情]', '[文件]', '[链接]')
-            for c in stripped
-        )
-        if emoji_only and len(stripped) <= 10:
-            return False
-
-        # Business-related keywords → worth replying
-        business_keywords = [
-            '价格', '多少钱', '报价', '贵不贵', '费用', '预算',
-            '怎么买', '怎么订购', '怎么下单', '购买', '下单', '订购',
-            '定制流程', '定制方式', '怎么做', '步骤',
-            '起订量', '最少', '批量', '低订量', '最低', '起定量',
-            '贺卡', '腰封', '吊牌', '丝带',
-            '多久', '交期', '什么时候要', '急要', '加急', '急单',
-            '材料', '材质', '质量', '做工',
-            '样品', '案例', '实拍', '效果图', '照片',
-            '推荐', '介绍', '有没有', '咨询', '想了解',
-            '运费', '发货', '售后', '配送', '包邮',
-            '中秋礼盒', '端午礼盒', '春节礼包', '年货',
-            '合作', '想', '需要', '了解',
-        ]
-        for kw in business_keywords:
-            if kw in content:
-                return True
-
-        # Longer Chinese sentences are likely real questions
-        if len(stripped) >= 8 and chinese_chars >= 3:
-            return True
-
-        return False
-
     def handle_message(self, msg):
         sender = msg["sender"]
         content = msg["content"]
@@ -568,8 +467,12 @@ class SmartBot:
             self.db.log_event("manual_takeover_skip", f"{sender}: {content}")
             return
 
-        # Retrieve conversation history (updated with this message)
-        history = self.conv_manager.get_ai_context(session_id)[-6:]
+        # Retrieve compacted history; current inbound is appended separately
+        # when the AI request is built.
+        history = self.conv_manager.get_ai_context(
+            session_id,
+            exclude_latest_user_message=content,
+        )
 
         agent_decision = self.customer_agent.analyze(content, history)
         if agent_decision.route == "ignore":
@@ -786,7 +689,7 @@ class SmartBot:
                 if now - last_health_check > health_check_every:
                     last_health_check = now
                     if not self.listener.is_connected():
-                        warning("[Main] WeChat connection lost.")
+                        warning("[Main] Message channel connection lost.")
                         self.listener.reconnect()
                     self._cleanup_stale_logs()
 

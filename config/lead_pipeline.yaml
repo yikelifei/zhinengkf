@@ -50,6 +50,11 @@ stages:
 rules:
   high_intent_score: 80
   medium_intent_score: 50
+  high_value_min_score: 80
+  high_value_min_deal_value: 10000
+  high_value_excluded_stages:
+  - lost
+  - closed_lost
   stale_days: 2
   required_fields:
   - phone_or_wechat

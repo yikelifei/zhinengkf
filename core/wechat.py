@@ -1,13 +1,27 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """ WeChat 4.x automation via pywinauto — robust UIA-based controller """
 
 import ctypes
 import hashlib
 import re
 import time
-from win32gui import EnumWindows, GetClassName, GetWindowText, IsWindowVisible
+
+try:
+    from win32gui import EnumWindows, GetClassName, GetWindowText, IsWindowVisible
+    WIN32GUI_IMPORT_ERROR = None
+except ImportError as exc:
+    EnumWindows = GetClassName = GetWindowText = IsWindowVisible = None
+    WIN32GUI_IMPORT_ERROR = exc
 
 from .logger import warning, info
+
+
+def _raise_missing_win32gui():
+    if WIN32GUI_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            'Missing dependency: pip install pywinauto pywin32\nError: %s'
+            % WIN32GUI_IMPORT_ERROR
+        )
 
 
 class ChatListener:
@@ -27,6 +41,7 @@ class ChatListener:
 
     def _connect_wechat(self):
         try:
+            _raise_missing_win32gui()
             user32 = ctypes.windll.user32
             hwnds = []
 
@@ -269,6 +284,8 @@ class ChatListener:
 
     def _find_chat_windows(self):
         """Return visible detached WeChat chat windows keyed by title."""
+        if WIN32GUI_IMPORT_ERROR is not None:
+            return []
         windows = []
 
         def enum_cb(hwnd, results):
@@ -755,6 +772,8 @@ class ChatListener:
 
     def _send_via_api(self, target_text, _who):
         """Fallback send via SendMessageW to WeChat main window."""
+        if WIN32GUI_IMPORT_ERROR is not None:
+            return False
         try:
             import win32con
             user32 = ctypes.windll.user32

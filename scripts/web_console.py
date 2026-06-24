@@ -3,6 +3,7 @@
 """Local web console that connects the HTML UI to real project data."""
 
 import json
+import mimetypes
 import os
 import subprocess
 import sys
@@ -10,12 +11,13 @@ import time
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DEPS = ROOT / ".codex_deps"
 BACKEND_PID_FILE = ROOT / ".smart_bot_backend.pid"
+PUBLIC_STATIC_DIRS = {"docs", "reports", "assets"}
 if LOCAL_DEPS.exists():
     sys.path.insert(0, str(LOCAL_DEPS))
 if str(ROOT) not in sys.path:
@@ -33,6 +35,8 @@ from core.api_config import (  # noqa: E402
 from core.customer_agent import CustomerSupportAgent  # noqa: E402
 from core.customer_profile import load_profile, save_profile, validate_profile  # noqa: E402
 from core.database import Database  # noqa: E402
+from core.channel_registry import list_supported_channels  # noqa: E402
+from core.redaction import redact_internal_paths  # noqa: E402
 from core.knowledge_config import (  # noqa: E402
     delete_document,
     load_knowledge,
@@ -59,6 +63,8 @@ from scripts.generate_acceptance_pack import build_acceptance_pack  # noqa: E402
 from scripts.generate_acceptance_pack import export_acceptance_pack  # noqa: E402
 from scripts.handoff_queue import build_handoff_queue  # noqa: E402
 from scripts.handoff_queue import export_handoff_queue  # noqa: E402
+from scripts.high_value_leads import build_high_value_leads  # noqa: E402
+from scripts.high_value_leads import export_high_value_leads  # noqa: E402
 from scripts.improvement_backlog import build_improvement_backlog  # noqa: E402
 from scripts.improvement_backlog import export_improvement_backlog  # noqa: E402
 from scripts.order_handoff import build_order_handoff  # noqa: E402
@@ -89,7 +95,54 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path in {"/", "/console", "/console/"}:
             self.path = "/docs/smart_customer_service_ui.html"
+        else:
+            target = self._allowed_static_target(parsed.path)
+            if target is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+            if target.parent == (ROOT / "reports").resolve():
+                return self._send_public_report(target)
+            self.path = parsed.path
         return super().do_GET()
+
+    @staticmethod
+    def _allowed_static_target(path):
+        decoded = unquote(path or "").replace("\\", "/")
+        parts = [part for part in decoded.split("/") if part]
+        if not parts or parts[0] not in PUBLIC_STATIC_DIRS:
+            return None
+        if any(part in {".", ".."} or part.startswith(".") for part in parts):
+            return None
+
+        base = (ROOT / parts[0]).resolve()
+        target = ROOT.joinpath(*parts).resolve()
+        if target == base or base not in target.parents:
+            return None
+        if not target.is_file():
+            return None
+        if parts[0] == "reports":
+            if len(parts) != 2 or target.suffix.lower() not in {".md", ".csv", ".json"}:
+                return None
+        return target
+
+    @staticmethod
+    def _is_allowed_static_path(path):
+        return ConsoleHandler._allowed_static_target(path) is not None
+
+    def _send_public_report(self, target: Path):
+        try:
+            text = target.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        payload = redact_internal_paths(text, project_root=ROOT).encode("utf-8")
+        content_type = mimetypes.guess_type(str(target))[0] or "text/plain"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -131,6 +184,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         try:
             if path == "/api/status":
                 return self._send_json(api_status(self._db()))
+            if path == "/api/channels":
+                return self._send_json(api_channels())
             if path == "/api/providers":
                 return self._send_json(api_providers())
             if path == "/api/profile":
@@ -155,6 +210,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if path == "/api/followup-tasks":
                 limit = int((query.get("limit") or [50])[0])
                 return self._send_json({"tasks": build_followup_tasks(limit=limit)})
+            if path == "/api/high-value-leads":
+                limit = int((query.get("limit") or [200])[0])
+                include_all = (query.get("include_all") or ["false"])[0].lower() in {"1", "true", "yes"}
+                return self._send_json(build_high_value_leads(limit=limit, include_all=include_all))
             if path == "/api/handoff-queue":
                 limit = int((query.get("limit") or [50])[0])
                 return self._send_json({"items": build_handoff_queue(limit=limit)})
@@ -179,6 +238,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 days = int((query.get("days") or [30])[0])
                 limit = int((query.get("limit") or [300])[0])
                 return self._send_json(build_privacy_audit(days=days, limit=limit))
+            if path == "/api/reports":
+                limit = int((query.get("limit") or [30])[0])
+                return self._send_json({"files": list_report_files(limit=limit)})
             if path == "/api/reports/summary":
                 days = int((query.get("days") or [7])[0])
                 db = self._db()
@@ -206,7 +268,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return self._send_json({"files": list_backup_files(limit=limit)})
             if path == "/api/audit":
                 limit = int((query.get("limit") or [100])[0])
-                return self._send_json({"events": self._db().get_audit_events(limit=limit)})
+                return self._send_json({"events": public_audit_events(self._db().get_audit_events(limit=limit))})
             if path == "/api/conversations":
                 limit = int((query.get("limit") or [100])[0])
                 db = self._db()
@@ -229,6 +291,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if path == "/api/backend/status":
                 return self._send_json(backend_status())
             self._send_error_json("Unknown API endpoint", HTTPStatus.NOT_FOUND)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._send_error_json(exc, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._send_error_json(exc, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -239,7 +303,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 provider_name = body.pop("name")
                 settings = update_provider(provider_name, **body)
                 self._db().log_event("config_update", f"API provider saved: {provider_name}")
-                return self._send_json({"ok": True, "settings": settings})
+                return self._send_json({"ok": True, "settings": redact_settings_for_response(settings)})
             if path == "/api/providers/test":
                 ok, message = test_openai_compatible_provider(body)
                 return self._send_json({"ok": ok, "message": message})
@@ -311,12 +375,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return self._send_json(send_manual_reply(self._db(), body))
             if path == "/api/reports/generate":
                 result = generate_report_file(body)
-                self._db().log_event("report_generate", f"{result['label']}: {result['path']}")
-                return self._send_json(result)
+                self._db().log_event("report_generate", f"{result['label']}: {Path(result['path']).name}")
+                return self._send_json(report_response(result))
             if path == "/api/backups/create":
                 backup = create_backup(body.get("label", "web"))
-                self._db().log_event("backup_create", str(backup))
-                return self._send_json({"ok": True, "file": file_summary(backup, "backups")})
+                self._db().log_event("backup_create", backup.name)
+                return self._send_json({"ok": True, "file": file_summary(backup, "backups", expose_url=False)})
             if path == "/api/maintenance/cleanup":
                 result = cleanup_retention(
                     retention=body.get("retention") or None,
@@ -336,6 +400,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if path == "/api/backend/stop":
                 return self._send_json(stop_backend())
             self._send_error_json("Unknown API endpoint", HTTPStatus.NOT_FOUND)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._send_error_json(exc, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._send_error_json(exc, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -354,6 +420,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     self._db().log_event("knowledge_delete", f"knowledge deleted: {doc_id}")
                 return self._send_json({"ok": ok})
             self._send_error_json("Unknown API endpoint", HTTPStatus.NOT_FOUND)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._send_error_json(exc, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._send_error_json(exc, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -389,15 +457,54 @@ def api_providers():
     items = []
     for name in names:
         provider = ensure_provider(settings, name)
-        item = dict(provider)
+        item = redact_provider_config(provider)
         item["name"] = name
         item["label"] = provider_display_name(name)
         item["is_primary"] = name == primary
         item["issues"] = validate_provider_config(provider)
-        if item.get("api_key"):
-            item["api_key_masked"] = mask_secret(str(item["api_key"]))
         items.append(item)
     return {"primary": primary, "providers": items}
+
+
+def redact_provider_config(provider: dict) -> dict:
+    item = dict(provider or {})
+    api_key = str(item.get("api_key") or "")
+    if api_key:
+        item["api_key_masked"] = mask_secret(api_key)
+    item["api_key"] = ""
+    return item
+
+
+def redact_settings_for_response(settings: dict) -> dict:
+    safe = dict(settings or {})
+    ai_engine = dict(safe.get("ai_engine") or {})
+    providers = ai_engine.get("providers") or {}
+    ai_engine["providers"] = {
+        name: redact_provider_config(provider)
+        for name, provider in providers.items()
+    }
+    safe["ai_engine"] = ai_engine
+    return safe
+
+
+def api_channels():
+    settings = load_settings()
+    channel_settings = settings.get("channels", {})
+    active = set(channel_settings.get("active") or ["wechat"])
+    adapters = channel_settings.get("adapters") or {}
+    rows = []
+    for item in list_supported_channels():
+        channel_id = item["channel_id"]
+        config = adapters.get(channel_id, {})
+        rows.append(
+            {
+                **item,
+                "enabled": channel_id in active and config.get("enabled", True),
+                "configured": bool(config),
+                "config_type": config.get("type", item["adapter_type"]),
+            }
+        )
+    return {"active": sorted(active), "channels": rows}
 
 
 def generate_report_file(body):
@@ -417,6 +524,12 @@ def generate_report_file(body):
     elif report_type == "followups":
         path = export_followup_tasks(limit=int(body.get("limit", 50)))
         label = "跟进任务"
+    elif report_type == "high_value_leads":
+        path = export_high_value_leads(
+            limit=int(body.get("limit", 200)),
+            include_all=bool(body.get("include_all", False)),
+        )
+        label = "高价值客户筛选清单"
     elif report_type == "handoff":
         path = export_handoff_queue(limit=int(body.get("limit", 50)))
         label = "人工接管队列"
@@ -455,15 +568,33 @@ def generate_report_file(body):
     return {"ok": True, "type": report_type, "label": label, "path": str(path)}
 
 
-def file_summary(path: Path, folder_name: str) -> dict:
-    stat = path.stat()
+def report_response(result: dict) -> dict:
+    path = Path(result["path"])
     return {
+        "ok": True,
+        "type": result.get("type", ""),
+        "label": result.get("label", ""),
+        "file": file_summary(path, "reports"),
+    }
+
+
+def public_audit_events(events: list[dict]) -> list[dict]:
+    return [
+        {**event, "detail": redact_internal_paths(event.get("detail", ""), project_root=ROOT)}
+        for event in events
+    ]
+
+
+def file_summary(path: Path, folder_name: str, *, expose_url: bool = True) -> dict:
+    stat = path.stat()
+    summary = {
         "name": path.name,
-        "path": str(path),
-        "url": f"/{folder_name}/{path.name}",
         "size": stat.st_size,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
     }
+    if expose_url:
+        summary["url"] = f"/{folder_name}/{path.name}"
+    return summary
 
 
 def list_report_files(limit=30) -> list[dict]:
@@ -476,7 +607,7 @@ def list_report_files(limit=30) -> list[dict]:
 
 
 def list_backup_files(limit=20) -> list[dict]:
-    return [file_summary(path, "backups") for path in list_backups()[:limit]]
+    return [file_summary(path, "backups", expose_url=False) for path in list_backups()[:limit]]
 
 
 def mask_secret(value):

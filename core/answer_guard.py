@@ -36,8 +36,9 @@ class AnswerGuard:
         (r"最终\s*报价", "参考报价"),
         (r"绝对\s*没问题", "需要先确认数量、工艺和排期"),
         (r"一定\s*可以", "需要先确认具体需求后判断"),
-        (r"包\s*退款", "售后问题会由人工客服核实后处理"),
-        (r"包\s*赔", "售后问题会由人工客服核实后处理"),
+        (r"包\s*退款\s*包\s*赔|包\s*退\s*包\s*赔", "会由人工客服核实后处理"),
+        (r"包\s*退款", "会由人工客服核实后处理"),
+        (r"包\s*赔", "会由人工客服核实后处理"),
     )
 
     def __init__(self, profile: dict | None = None):
@@ -54,6 +55,7 @@ class AnswerGuard:
         for pattern, replacement in self.REPLACEMENTS:
             if re.search(pattern, text, flags=re.I):
                 text = re.sub(pattern, replacement, text, flags=re.I)
+        text = self._dedupe_safe_after_sales_copy(text)
 
         compact = re.sub(r"\s+", "", text)
         for phrase in self.forbidden_phrases:
@@ -105,3 +107,10 @@ class AnswerGuard:
         if disclaimer in text:
             return text
         return text.rstrip("。；;，, ") + "。" + disclaimer
+
+    def _dedupe_safe_after_sales_copy(self, text: str) -> str:
+        safe_copy = "会由人工客服核实后处理"
+        duplicate = f"{safe_copy}{safe_copy}"
+        while duplicate in text:
+            text = text.replace(duplicate, safe_copy)
+        return text

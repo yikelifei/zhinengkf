@@ -1,0 +1,136 @@
+from scripts.web_console import (
+    ConsoleHandler,
+    ROOT,
+    file_summary,
+    public_audit_events,
+    redact_provider_config,
+    redact_settings_for_response,
+    report_response,
+)
+
+
+def test_provider_response_never_exposes_raw_api_key():
+    result = redact_provider_config(
+        {
+            "enabled": True,
+            "api_key": "sk-live-secret-1234567890",
+            "base_url": "https://example.com/v1",
+            "model": "demo-model",
+        }
+    )
+
+    assert result["api_key"] == ""
+    assert result["api_key_masked"] == "sk-l...7890"
+    assert "sk-live-secret-1234567890" not in str(result)
+
+
+def test_settings_response_redacts_nested_provider_keys():
+    settings = {
+        "ai_engine": {
+            "primary": "geeknow",
+            "providers": {
+                "geeknow": {"api_key": "sk-secret-geeknow-0000", "model": "m1"},
+                "backup": {"api_key": "${BACKUP_API_KEY}", "model": "m2"},
+            },
+        }
+    }
+
+    result = redact_settings_for_response(settings)
+
+    providers = result["ai_engine"]["providers"]
+    assert providers["geeknow"]["api_key"] == ""
+    assert providers["backup"]["api_key"] == ""
+    assert providers["geeknow"]["api_key_masked"] == "sk-s...0000"
+    assert providers["backup"]["api_key_masked"] == "${BACKUP_API_KEY}"
+    assert "sk-secret-geeknow-0000" not in str(result)
+
+
+def test_file_summary_does_not_expose_local_path(tmp_path):
+    report = tmp_path / "quality.md"
+    report.write_text("ok", encoding="utf-8")
+
+    result = file_summary(report, "reports")
+
+    assert result == {
+        "name": "quality.md",
+        "url": "/reports/quality.md",
+        "size": 2,
+        "updated_at": result["updated_at"],
+    }
+    assert "path" not in result
+    assert str(tmp_path) not in str(result)
+
+
+def test_backup_summary_does_not_expose_download_url(tmp_path):
+    backup = tmp_path / "smart_kefu_20260101_000000_web.zip"
+    backup.write_bytes(b"zip")
+
+    result = file_summary(backup, "backups", expose_url=False)
+
+    assert result["name"] == "smart_kefu_20260101_000000_web.zip"
+    assert result["size"] == 3
+    assert "url" not in result
+    assert "path" not in result
+    assert str(tmp_path) not in str(result)
+
+
+def test_report_http_response_uses_public_file_contract(tmp_path):
+    report = tmp_path / "quality.md"
+    report.write_text("ok", encoding="utf-8")
+
+    result = report_response(
+        {
+            "ok": True,
+            "type": "quality",
+            "label": "质检报告",
+            "path": str(report),
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["label"] == "质检报告"
+    assert result["file"]["url"] == "/reports/quality.md"
+    assert "path" not in result
+    assert str(tmp_path) not in str(result)
+
+
+def test_public_audit_events_redact_local_paths():
+    events = [
+        {
+            "id": 1,
+            "event_type": "report_generate",
+            "detail": r"质检报告: C:\Users\27808\Desktop\zhinengkefu\reports\quality.md",
+            "created_at": "2026-01-01 10:00:00",
+        }
+    ]
+
+    result = public_audit_events(events)
+
+    assert result[0]["event_type"] == "report_generate"
+    assert "C:\\Users\\" not in result[0]["detail"]
+    assert "zhinengkefu" not in result[0]["detail"]
+
+
+def test_static_file_whitelist_blocks_private_project_files():
+    reports_dir = ROOT / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    report = reports_dir / "_web_console_static_contract_test.md"
+    archive = reports_dir / "_web_console_static_contract_test.zip"
+    report.write_text("ok", encoding="utf-8")
+    archive.write_bytes(b"zip")
+    assert ConsoleHandler._is_allowed_static_path("/docs/web_console.js") is True
+    try:
+        assert ConsoleHandler._is_allowed_static_path("/config/settings.yaml") is False
+        assert ConsoleHandler._is_allowed_static_path("/data/kefu.db") is False
+        assert ConsoleHandler._is_allowed_static_path("/scripts/web_console.py") is False
+        assert ConsoleHandler._is_allowed_static_path("/backups/smart_kefu_sensitive.zip") is False
+        assert ConsoleHandler._is_allowed_static_path("/exports/leads.csv") is False
+        assert ConsoleHandler._is_allowed_static_path("/reports/_web_console_static_contract_test.md") is True
+        assert ConsoleHandler._is_allowed_static_path("/reports/_web_console_static_contract_test.zip") is False
+        assert ConsoleHandler._is_allowed_static_path("/reports/archive/old.md") is False
+        assert ConsoleHandler._is_allowed_static_path("/.git/config") is False
+        assert ConsoleHandler._is_allowed_static_path("/docs/../config/settings.yaml") is False
+        assert ConsoleHandler._is_allowed_static_path("/docs/%2E%2E/config/settings.yaml") is False
+    finally:
+        report.unlink(missing_ok=True)
+        archive.unlink(missing_ok=True)

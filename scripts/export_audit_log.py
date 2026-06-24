@@ -19,6 +19,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.database import Database  # noqa: E402
+from core.redaction import redact_internal_paths  # noqa: E402
+
+
+def format_audit_detail(value) -> str:
+    detail = redact_internal_paths(value, project_root=ROOT).replace("|", "/")
+    return detail or "-"
 
 
 def build_audit_log_report(limit=200) -> str:
@@ -50,7 +56,7 @@ def build_audit_log_report(limit=200) -> str:
             lines.append(
                 f"| {event.get('created_at', '-')} | "
                 f"{event.get('event_type', '-')} | "
-                f"{str(event.get('detail') or '-').replace('|', '/')} |"
+                f"{format_audit_detail(event.get('detail'))} |"
             )
     else:
         lines.append("- 暂无操作记录")

@@ -23,7 +23,10 @@ if not defined WECHAT_RUNNING (
 )
 
 if exist "dist\smart_bot\smart_bot.exe" goto packaged
-if exist ".venv\Scripts\python.exe" goto venv
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" -V >nul 2>nul
+    if %errorlevel%==0 goto venv
+)
 where python >nul 2>nul
 if %errorlevel%==0 goto system_python
 

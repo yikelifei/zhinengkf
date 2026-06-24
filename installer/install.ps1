@@ -45,14 +45,27 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 try {
     Log "Extracting $ZipPath -> $InstallDir (entry-by-entry, overwrite=true)"
     $zipPathResolved = (Resolve-Path $ZipPath).ProviderPath
+    $installRoot = [System.IO.Path]::GetFullPath($InstallDir)
+    if (-not $installRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $installRoot = $installRoot + [System.IO.Path]::DirectorySeparatorChar
+    }
     $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPathResolved)
     foreach ($entry in $zip.Entries) {
         $dest = Join-Path $InstallDir $entry.FullName
+        $destFull = [System.IO.Path]::GetFullPath($dest)
+        if (-not $destFull.StartsWith($installRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Log "WARNING: Skipping unsafe zip entry: $($entry.FullName)"
+            continue
+        }
+        if ([string]::IsNullOrEmpty($entry.Name)) {
+            if (-not (Test-Path $destFull)) { New-Item -Path $destFull -ItemType Directory -Force | Out-Null }
+            continue
+        }
         $destDir = Split-Path $dest -Parent
         if (-not (Test-Path $destDir)) { New-Item -Path $destDir -ItemType Directory -Force | Out-Null }
         try {
             # ExtractToFile has overwrite parameter in newer frameworks
-            $entry.ExtractToFile($dest, $true)
+            $entry.ExtractToFile($destFull, $true)
             Log "Extracted: $($entry.FullName)"
         } catch {
             Log "ERROR: Failed to extract $($entry.FullName) - $_"
@@ -86,16 +99,6 @@ try {
 } catch {
     Log "WARNING: Shortcut creation failed - $_"
 }
-
-# create start menu shortcut
-$WshShell = New-Object -ComObject WScript.Shell
-$shortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Smart Bot.lnk"
-$target = Join-Path $InstallDir "smart_bot.exe"
-$shortcut = $WshShell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $target
-$shortcut.WorkingDirectory = $InstallDir
-$shortcut.IconLocation = $target
-$shortcut.Save()
 
 if (-not $Quiet) { Write-Output "Installed to $InstallDir and shortcut created." }
 # also write final status to install log

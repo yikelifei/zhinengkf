@@ -141,7 +141,9 @@ def cleanup_retention(retention=None, apply=False, output=None) -> dict:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Clean old Smart Kefu runtime artifacts")
-    parser.add_argument("--apply", action="store_true", help="delete files; default is dry-run only")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="delete matched files")
+    mode.add_argument("--dry-run", action="store_true", help="preview only; this is the default")
     parser.add_argument("--logs-days", type=int, default=DEFAULT_RETENTION["logs"])
     parser.add_argument("--reports-days", type=int, default=DEFAULT_RETENTION["reports"])
     parser.add_argument("--exports-days", type=int, default=DEFAULT_RETENTION["exports"])

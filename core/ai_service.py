@@ -266,6 +266,13 @@ class AIServiceRouter:
 
 # ========== 闂ㄩ潰绫伙細瀵瑰缁熶竴鍏ュ彛 ==========
 class AIService:
+    MAX_HISTORY_MESSAGES = 12
+    RECENT_HISTORY_MESSAGES = 6
+    MAX_HISTORY_CHARS = 3600
+    MAX_RETRIEVED_CONTEXT_CHARS = 2500
+    MAX_SINGLE_HISTORY_MESSAGE_CHARS = 900
+    REQUEST_SUMMARY_MAX_CHARS = 1200
+
     def __init__(self, settings_path="config/settings.yaml", prompts_path="config/prompts.yaml"):
         import yaml
         settings_path = get_resource_path(settings_path)
@@ -298,6 +305,10 @@ class AIService:
 
         system_prompt = self.system_prompt
         if retrieved_context:
+            retrieved_context = self._compact_text(
+                retrieved_context,
+                self.MAX_RETRIEVED_CONTEXT_CHARS,
+            )
             system_prompt = (
                 f"{system_prompt}\n\n"
                 "可用业务知识如下。回答必须优先依据这些知识，不确定时引导客户补充信息或转人工：\n"
@@ -306,10 +317,20 @@ class AIService:
 
         messages = [{"role": "system", "content": system_prompt}]
         if history:
-            messages.extend(history[-6:])
+            messages.extend(self._prepare_history(history))
         messages.append({"role": "user", "content": user_message})
 
-        reply = self.router.chat(messages)
+        try:
+            reply = self.router.chat(messages)
+        except AIError as exc:
+            if history and self._is_context_capacity_error(str(exc)):
+                warning("[AI] Context capacity error; retrying with compressed history.")
+                retry_messages = [{"role": "system", "content": system_prompt}]
+                retry_messages.extend(self._prepare_history(history, force=True))
+                retry_messages.append({"role": "user", "content": user_message})
+                reply = self.router.chat(retry_messages)
+            else:
+                raise
         reply = self._clean_reply(reply)
         if not reply:
             raise AIError("AI returned empty reply after cleanup")
@@ -321,6 +342,101 @@ class AIService:
             reply = self._truncate_reply(reply, 200)
 
         return reply, "normal"
+
+    def _prepare_history(self, history, force=False):
+        prepared = []
+        message_limit = 300 if force else self.MAX_SINGLE_HISTORY_MESSAGE_CHARS
+        for message in history or []:
+            role = message.get("role", "")
+            if role not in {"system", "user", "assistant"}:
+                continue
+            content = self._compact_text(
+                message.get("content", ""),
+                message_limit,
+            )
+            if content:
+                prepared.append({"role": role, "content": content})
+
+        if not prepared:
+            return []
+
+        max_chars = self.MAX_HISTORY_CHARS // 2 if force else self.MAX_HISTORY_CHARS
+        max_recent = 2 if force else self.RECENT_HISTORY_MESSAGES
+        if (
+            not force
+            and len(prepared) <= self.MAX_HISTORY_MESSAGES
+            and self._messages_chars(prepared) <= max_chars
+        ):
+            return prepared
+
+        recent = prepared[-max_recent:]
+        older = prepared[:-max_recent]
+        summary = self._summarize_history_for_request(older)
+        result = []
+        if summary:
+            result.append({"role": "system", "content": summary})
+        result.extend(recent)
+        return result
+
+    def _summarize_history_for_request(self, history):
+        if not history:
+            return ""
+        labels = {
+            "system": "Context",
+            "user": "Customer",
+            "assistant": "Support",
+        }
+        lines = []
+        for message in history:
+            content = self._compact_text(message.get("content", ""), 180)
+            if content:
+                lines.append(f"{labels.get(message.get('role'), 'Message')}: {content}")
+
+        summary = "\n".join(lines)
+        if len(summary) <= self.REQUEST_SUMMARY_MAX_CHARS:
+            return "Compressed previous conversation:\n" + summary
+
+        kept = []
+        total = len("Compressed previous conversation; older details omitted.")
+        for line in reversed(summary.splitlines()):
+            size = len(line) + 1
+            if kept and total + size > self.REQUEST_SUMMARY_MAX_CHARS:
+                break
+            kept.append(line)
+            total += size
+        return (
+            "Compressed previous conversation; older details omitted.\n"
+            + "\n".join(reversed(kept))
+        )
+
+    def _messages_chars(self, messages):
+        return sum(
+            len(message.get("role", "")) + len(message.get("content", ""))
+            for message in messages
+        )
+
+    def _compact_text(self, text, limit):
+        value = re.sub(r"\s+", " ", (text or "").strip())
+        if len(value) <= limit:
+            return value
+        head = max(1, limit // 2 - 2)
+        tail = max(1, limit - head - 5)
+        return f"{value[:head]} ... {value[-tail:]}"
+
+    def _is_context_capacity_error(self, message):
+        text = (message or "").lower()
+        markers = (
+            "context",
+            "token",
+            "tokens",
+            "maximum context",
+            "context_length_exceeded",
+            "cache",
+            "kv cache",
+            "prompt is too long",
+            "too many",
+        )
+        return any(marker in text for marker in markers)
 
     def _clean_reply(self, reply: str) -> str:
         text = (reply or "").split("<think>")[0]

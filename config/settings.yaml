@@ -4,6 +4,30 @@ wechat:
   max_daily_replies: 30
   whitelist: []
   blacklist: []
+channels:
+  active:
+  - wechat
+  adapters:
+    wechat:
+      enabled: true
+      type: wechat_pc
+      poll_interval: 3
+      anti_flood_seconds: 60
+    xiaohongshu:
+      enabled: false
+      type: official_or_aggregator_api
+    pinduoduo:
+      enabled: false
+      type: official_or_aggregator_api
+    taobao:
+      enabled: false
+      type: official_or_aggregator_api
+    douyin:
+      enabled: false
+      type: official_or_aggregator_api
+    kuaishou:
+      enabled: false
+      type: official_or_aggregator_api
 ai_engine:
   enabled: true
   primary: geeknow

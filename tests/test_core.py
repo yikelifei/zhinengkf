@@ -1,10 +1,23 @@
 """ Tests must not depend on WeChat, AI APIs, or SQLite.
 All tests are pure-function unit tests with mocked dependencies. """
 
+import sys
+import types
+
+
+if "win32gui" not in sys.modules:
+    win32gui = types.ModuleType("win32gui")
+    win32gui.EnumWindows = lambda callback, result: None
+    win32gui.GetClassName = lambda hwnd: ""
+    win32gui.GetWindowText = lambda hwnd: ""
+    win32gui.IsWindowVisible = lambda hwnd: False
+    sys.modules["win32gui"] = win32gui
+
 from core.intent_classifier import IntentClassifier
 from core.rule_engine import RuleEngine
 from core.template_renderer import render
 from core.conversation import ConversationManager
+from core.ai_service import AIService
 from scripts.main import SmartBot
 
 
@@ -164,6 +177,75 @@ def test_render_empty_context():
     assert render(t, {}) == "Hello world"
 
 
+def test_render_reply_variants():
+    t = "方案一：{{name}}[or]方案二：{{name}}"
+    ctx = {"name": "Alice"}
+    assert render(t, ctx, chooser=lambda variants: variants[1]) == "方案二：Alice"
+
+
+def test_render_random_marker_removed_or_replaced():
+    result = render("可以的[~]", {})
+    assert "[~]" not in result
+    assert result.startswith("可以的")
+
+
+class FakeChannelAdapter:
+    def __init__(self, channel_id, display_name, messages=None):
+        self.channel_id = channel_id
+        self.display_name = display_name
+        self.messages = messages or []
+        self.sent = []
+
+    def get_new_messages(self):
+        return list(self.messages)
+
+    def send(self, text, who):
+        self.sent.append((who, text))
+        return True
+
+    def send_image(self, image_path, who):
+        self.sent.append((who, image_path))
+        return True
+
+    def is_connected(self):
+        return True
+
+    def reconnect(self):
+        return True
+
+
+def test_channel_hub_normalizes_platform_fields():
+    from core.channel_registry import ChannelHub
+
+    hub = ChannelHub(
+        [
+            FakeChannelAdapter(
+                "xiaohongshu",
+                "小红书",
+                [{"sender": "客户A", "content": "想定制礼盒"}],
+            )
+        ]
+    )
+    msg = hub.get_new_messages()[0]
+    assert msg["platform"] == "xiaohongshu"
+    assert msg["channel_name"] == "小红书"
+    assert msg["sender"] == "客户A"
+
+
+def test_channel_hub_routes_reply_to_source_channel():
+    from core.channel_registry import ChannelHub
+
+    xhs = FakeChannelAdapter(
+        "xiaohongshu",
+        "小红书",
+        [{"sender": "同名客户", "content": "要报价"}],
+    )
+    hub = ChannelHub([xhs, FakeChannelAdapter("douyin", "抖音")])
+    hub.get_new_messages()
+    assert hub.send("好的，我先了解下数量", "同名客户") is True
+    assert xhs.sent == [("同名客户", "好的，我先了解下数量")]
+
+
 # ── TestConversationManager ──────────────────────────────────────
 
 
@@ -222,6 +304,47 @@ def test_context_trimming():
     ctx = mgr.get_ai_context(sid)
     max_rounds = ConversationManager.MAX_AI_CONTEXT_ROUNDS * 2
     assert len(ctx) <= max_rounds
+
+
+def test_context_auto_compression_adds_summary():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("Compress")
+    for i in range(18):
+        mgr.add_to_context(sid, "user", f"old question {i} " + "x" * 120)
+        mgr.add_to_context(sid, "assistant", f"old answer {i} " + "y" * 120)
+
+    ctx = mgr.get_ai_context(sid)
+
+    assert ctx[0]["role"] == "system"
+    assert "自动上下文压缩摘要" in ctx[0]["content"]
+    assert len(ctx) <= ConversationManager.RECENT_CONTEXT_MESSAGES + 1
+
+
+def test_get_ai_context_can_exclude_current_user_message():
+    db = MockDB()
+    mgr = ConversationManager(db)
+    sid = db.create_or_get_session("Current")
+    mgr.add_to_context(sid, "assistant", "previous answer")
+    mgr.add_to_context(sid, "user", "current question")
+
+    ctx = mgr.get_ai_context(sid, exclude_latest_user_message="current question")
+
+    assert [message["content"] for message in ctx] == ["previous answer"]
+
+
+def test_ai_service_prepares_long_history_with_summary():
+    service = object.__new__(AIService)
+    history = []
+    for i in range(10):
+        history.append({"role": "user", "content": f"question {i} " + "x" * 500})
+        history.append({"role": "assistant", "content": f"answer {i} " + "y" * 500})
+
+    prepared = service._prepare_history(history)
+
+    assert prepared[0]["role"] == "system"
+    assert "Compressed previous conversation" in prepared[0]["content"]
+    assert len(prepared) <= AIService.RECENT_HISTORY_MESSAGES + 1
 
 
 def test_clear_context():
@@ -304,12 +427,19 @@ if __name__ == "__main__":
         ("test_render_basic", test_render_basic),
         ("test_render_missing", test_render_missing_var),
         ("test_render_empty", test_render_empty_context),
+        ("test_render_variants", test_render_reply_variants),
+        ("test_render_random_marker", test_render_random_marker_removed_or_replaced),
+        ("test_channel_hub_fields", test_channel_hub_normalizes_platform_fields),
+        ("test_channel_hub_routes", test_channel_hub_routes_reply_to_source_channel),
         ("test_add_message", test_add_message_updates_cache),
         ("test_advance_stage", test_advance_stage),
         ("test_extract_phone", test_extract_phone),
         ("test_extract_company", test_extract_company),
         ("test_extract_festival", test_extract_festival),
         ("test_context_trim", test_context_trimming),
+        ("test_context_auto_compression", test_context_auto_compression_adds_summary),
+        ("test_context_exclude_current", test_get_ai_context_can_exclude_current_user_message),
+        ("test_ai_history_summary", test_ai_service_prepares_long_history_with_summary),
         ("test_clear_context", test_clear_context),
         ("test_worthy_keywords", test_reply_worthy_business_keywords),
         ("test_worthy_greetings", test_reply_ignored_short_greetings),

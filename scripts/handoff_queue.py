@@ -86,7 +86,7 @@ def build_handoff_queue(limit: int = 50) -> list[dict]:
                 "lead_score": lead_score,
                 "next_action": row.get("next_action") or "",
                 "latest_inbound": _latest_inbound(db, session_id),
-                "locked_until": lock.get("locked_until") if lock else "",
+                "locked_until": lock.get("manual_lock_until") if lock else "",
                 "priority": priority_label(status, wait_minutes, lead_score),
             }
         )

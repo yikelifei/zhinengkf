@@ -8,7 +8,12 @@ a = Analysis(
     [str(ROOT / 'scripts' / 'ui_app.py')],
     pathex=[str(ROOT), str(ROOT / 'scripts'), str(ROOT / 'core')],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(ROOT / 'config'), 'config'),
+        (str(ROOT / 'assets'), 'assets'),
+        (str(ROOT / 'data'), 'data'),
+        (str(ROOT / 'docs'), 'docs'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
