@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,55 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "project_modules.yaml"
 INDEX_PATH = ROOT / "docs" / "PROJECT_MODULES_INDEX.md"
+SHELL_META_CHARS = set("&|;<>()\r\n")
+
+
+def _project_relative_path(raw: str) -> Path:
+    path = Path(raw)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Command path must stay inside the project: {raw}")
+    return path
+
+
+def parse_project_command(command: str) -> list[str]:
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("Command must be a non-empty string")
+    if any(char in command for char in SHELL_META_CHARS):
+        raise ValueError(f"Unsupported shell syntax in command: {command}")
+
+    parts = shlex.split(command, posix=False)
+    if not parts:
+        raise ValueError("Command must contain an executable")
+
+    executable = parts[0]
+    executable_lower = executable.lower()
+    if executable_lower == "node":
+        if len(parts) != 3 or parts[1] != "--check":
+            raise ValueError(f"Unsupported node command: {command}")
+        script = _project_relative_path(parts[2])
+        if script.suffix.lower() != ".js" or script.parts[0] != "docs":
+            raise ValueError(f"Node check must target a docs JavaScript file: {command}")
+        if not (ROOT / script).exists():
+            raise ValueError(f"Command target does not exist: {script}")
+        return parts
+
+    batch_path = _project_relative_path(executable)
+    if batch_path.suffix.lower() != ".bat" or batch_path.parts[0] != "tools":
+        raise ValueError(f"Unsupported project command: {command}")
+    if not (ROOT / batch_path).exists():
+        raise ValueError(f"Command target does not exist: {batch_path}")
+    for arg in parts[1:]:
+        _project_relative_path(arg)
+    return parts
+
+
+def run_project_command(command: str, env: dict[str, str]) -> int:
+    parts = parse_project_command(command)
+    if parts[0].lower().endswith(".bat"):
+        cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *parts]
+    else:
+        cmd = parts
+    return subprocess.run(cmd, cwd=ROOT, env=env).returncode
 
 
 def load_config() -> dict[str, Any]:
@@ -99,10 +149,14 @@ def run_commands(module: dict[str, Any], key: str) -> int:
 
     for command in commands:
         print(f"\n>>> {command}")
-        completed = subprocess.run(command, cwd=ROOT, env=env, shell=True)
-        if completed.returncode != 0:
+        try:
+            returncode = run_project_command(command, env)
+        except ValueError as exc:
+            print(f"Invalid project command: {exc}")
+            return 2
+        if returncode != 0:
             print(f"命令失败: {command}")
-            return completed.returncode
+            return returncode
     return 0
 
 

@@ -90,20 +90,63 @@ CONFIG_DIR = ROOT / "config"
 LOCK_FILE = ROOT / ".smart_bot_console.lock"
 
 
+def parse_positive_pid(value):
+    try:
+        pid = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def read_lock_pid(path=LOCK_FILE):
+    try:
+        if not path.exists():
+            return None
+        return parse_positive_pid(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+
+def parse_temperature(value, default=0.4):
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        temperature = float(text)
+    except (TypeError, ValueError):
+        raise ValueError("Temperature 必须是 0 到 2 之间的数字")
+    if not 0 <= temperature <= 2:
+        raise ValueError("Temperature 必须在 0 到 2 之间")
+    return temperature
+
+
+def parse_max_tokens(value, default=800):
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        max_tokens = int(text)
+    except (TypeError, ValueError):
+        raise ValueError("Max Tokens 必须是大于 0 的整数")
+    if max_tokens <= 0:
+        raise ValueError("Max Tokens 必须大于 0")
+    return max_tokens
+
+
 def ensure_single_instance():
     try:
-        if LOCK_FILE.exists():
-            old_pid = LOCK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
-            if old_pid:
-                result = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", f"Get-Process -Id {old_pid} -ErrorAction SilentlyContinue"],
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                if result.returncode == 0:
-                    messagebox.showinfo("已在运行", "智能客服控制台已经打开。")
-                    return False
+        old_pid = read_lock_pid()
+        if old_pid:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"Get-Process -Id {old_pid} -ErrorAction SilentlyContinue"],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            if result.returncode == 0:
+                messagebox.showinfo("已在运行", "智能客服控制台已经打开。")
+                return False
         LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
         return True
     except Exception:
@@ -670,8 +713,8 @@ class SmartBotConsole(tk.Tk):
             "api_key": self.api_key_var.get().strip(),
             "base_url": self.base_url_var.get().strip(),
             "model": self.model_var.get().strip(),
-            "temperature": float(self.temperature_var.get().strip() or 0.4),
-            "max_tokens": int(self.max_tokens_var.get().strip() or 800),
+            "temperature": parse_temperature(self.temperature_var.get()),
+            "max_tokens": parse_max_tokens(self.max_tokens_var.get()),
         }
 
     def save_api_provider(self):
