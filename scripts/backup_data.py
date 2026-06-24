@@ -24,6 +24,7 @@ INCLUDE_PATHS = [
     "config/customer_profile.yaml",
     "data/kefu.db",
 ]
+ALLOWED_RESTORE_PATHS = set(INCLUDE_PATHS)
 
 
 def create_backup(label="manual") -> Path:
@@ -53,18 +54,37 @@ def inspect_backup(path: Path) -> list[str]:
 
 
 def restore_backup(path: Path, *, apply=False) -> list[str]:
-    restored = []
     with zipfile.ZipFile(path, "r") as zf:
-        for name in zf.namelist():
+        members = [_validate_backup_member(info.filename) for info in zf.infolist()]
+
+        restored = []
+        for info, name in zip(zf.infolist(), members):
+            if name is None:
+                continue
             target = (ROOT / name).resolve()
             if ROOT.resolve() not in target.parents and target != ROOT.resolve():
                 raise ValueError(f"unsafe backup path: {name}")
             restored.append(name)
             if apply:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(name) as source, open(target, "wb") as dest:
+                with zf.open(info) as source, open(target, "wb") as dest:
                     shutil.copyfileobj(source, dest)
     return restored
+
+
+def _validate_backup_member(name: str) -> str | None:
+    raw = str(name or "").replace("\\", "/")
+    if not raw or raw.endswith("/"):
+        return None
+    if raw.startswith("/"):
+        raise ValueError(f"unsafe backup path: {name}")
+    parts = [part for part in raw.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        raise ValueError(f"unsafe backup path: {name}")
+    normalized = "/".join(parts)
+    if normalized not in ALLOWED_RESTORE_PATHS:
+        raise ValueError(f"unexpected backup path: {name}")
+    return normalized
 
 
 def main(argv=None):
