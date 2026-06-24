@@ -31,7 +31,10 @@
   function setHealth(text, warn = false) {
     const badge = document.getElementById("healthBadge");
     if (!badge) return;
-    badge.innerHTML = `<i class="dot ${warn ? "warn" : ""}"></i>${text}`;
+    badge.textContent = "";
+    const dot = document.createElement("i");
+    dot.className = warn ? "dot warn" : "dot";
+    badge.append(dot, document.createTextNode(text));
   }
 
   function setButtonBusy(button, busy) {
@@ -46,13 +49,18 @@
     if (!el || !status) return;
     const backendText = status.backend?.running ? "运行中" : "未启动";
     const readinessText = readiness?.passed ? "可试运行" : "待处理";
-    el.innerHTML = [
+    const lines = [
       `当前模型：${status.primary_provider || "-"} / ${status.primary_model || "-"}`,
       `微信后台：${backendText}`,
       `自动回复：${status.backend?.running ? "已开启" : "待启动"}`,
       `上线检查：${readinessText}`,
       `待人工：${status.needs_human || 0} 条`
-    ].join("<br />");
+    ];
+    el.textContent = "";
+    lines.forEach((line, index) => {
+      if (index) el.append(document.createElement("br"));
+      el.append(document.createTextNode(line));
+    });
   }
 
   async function refreshLiveStatus() {

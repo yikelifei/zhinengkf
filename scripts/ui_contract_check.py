@@ -58,6 +58,32 @@ def frontend_report_types() -> set[str]:
     return types
 
 
+def function_body(text: str, name: str) -> str:
+    marker = f"function {name}"
+    start = text.find(marker)
+    if start < 0:
+        return ""
+    next_function = text.find("\n  function ", start + len(marker))
+    if next_function < 0:
+        return text[start:]
+    return text[start:next_function]
+
+
+def frontend_security_issues() -> list[str]:
+    issues: list[str] = []
+    script = ROOT / "docs" / "web_console.js"
+    if not script.exists():
+        return issues
+    text = _read(script)
+    for name in ("setHealth", "setSidebarStatus"):
+        body = function_body(text, name)
+        if not body:
+            issues.append(f"missing UI renderer: {name}")
+        elif ".innerHTML" in body:
+            issues.append(f"{name} must render dynamic status text with text nodes, not innerHTML")
+    return issues
+
+
 def run() -> list[str]:
     issues: list[str] = []
     backend_paths = backend_api_paths()
@@ -76,6 +102,7 @@ def run() -> list[str]:
         issues.append("no frontend API paths found")
     if not backend_paths:
         issues.append("no backend API paths found")
+    issues.extend(frontend_security_issues())
 
     return issues
 
