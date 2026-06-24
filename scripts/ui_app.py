@@ -25,6 +25,8 @@ from core.api_config import (
     PROVIDER_PRESETS,
     ensure_provider,
     load_settings,
+    parse_max_tokens,
+    parse_temperature,
     provider_display_name,
     test_openai_compatible_provider,
     update_provider,
@@ -105,32 +107,6 @@ def read_lock_pid(path=LOCK_FILE):
         return parse_positive_pid(path.read_text(encoding="utf-8", errors="ignore"))
     except Exception:
         return None
-
-
-def parse_temperature(value, default=0.4):
-    text = str(value or "").strip()
-    if not text:
-        return default
-    try:
-        temperature = float(text)
-    except (TypeError, ValueError):
-        raise ValueError("Temperature 必须是 0 到 2 之间的数字")
-    if not 0 <= temperature <= 2:
-        raise ValueError("Temperature 必须在 0 到 2 之间")
-    return temperature
-
-
-def parse_max_tokens(value, default=800):
-    text = str(value or "").strip()
-    if not text:
-        return default
-    try:
-        max_tokens = int(text)
-    except (TypeError, ValueError):
-        raise ValueError("Max Tokens 必须是大于 0 的整数")
-    if max_tokens <= 0:
-        raise ValueError("Max Tokens 必须大于 0")
-    return max_tokens
 
 
 def ensure_single_instance():

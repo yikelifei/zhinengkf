@@ -38,7 +38,7 @@ import signal
 import yaml
 
 from core.logger import setup_logger, log as log_msg, info, warning, error
-from core.channel_registry import create_channel_hub
+from core.channel_registry import create_channel_hub, positive_int_setting
 from core.database import Database
 from core.intent_classifier import IntentClassifier
 from core.rule_engine import RuleEngine
@@ -669,7 +669,13 @@ class SmartBot:
 
         self._cleanup_stale_logs()
 
-        poll_interval = self.settings["wechat"]["poll_interval"]
+        poll_interval = positive_int_setting(
+            (self.settings.get("wechat") or {}).get("poll_interval", 3),
+            "wechat.poll_interval",
+            3,
+            min_value=1,
+            max_value=300,
+        )
         # Do a health check every N polls
         health_check_every = max(poll_interval, 10)
         last_health_check = 0

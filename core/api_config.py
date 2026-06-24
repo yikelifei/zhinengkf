@@ -84,6 +84,32 @@ def _looks_unset(value) -> bool:
     )
 
 
+def parse_temperature(value, default=0.4) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        temperature = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Temperature must be a number between 0 and 2") from exc
+    if not 0 <= temperature <= 2:
+        raise ValueError("Temperature must be between 0 and 2")
+    return temperature
+
+
+def parse_max_tokens(value, default=800) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        max_tokens = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Max Tokens must be a positive integer") from exc
+    if max_tokens <= 0:
+        raise ValueError("Max Tokens must be greater than 0")
+    return max_tokens
+
+
 def load_settings(path="config/settings.yaml") -> dict:
     load_env_file()
     settings_file = _settings_path(path)
@@ -183,8 +209,8 @@ def update_provider(
             "base_url": base_url.rstrip("/"),
             "model": model,
             "request_format": provider.get("request_format", "openai"),
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
+            "temperature": parse_temperature(temperature),
+            "max_tokens": parse_max_tokens(max_tokens),
         }
     )
     if set_primary:

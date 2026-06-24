@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE_CONFIG = ROOT / "config" / "project_modules.yaml"
 TASK_DIR = ROOT / "docs" / "agent_tasks"
 TASK_INDEX = TASK_DIR / "AGENT_TASK_INDEX.md"
+SAFE_MODULE_ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+
+def safe_module_id(value: str) -> str:
+    module_id = str(value or "").strip()
+    if not module_id or any(char not in SAFE_MODULE_ID_CHARS for char in module_id):
+        raise ValueError(f"Unsafe module id: {value}")
+    return module_id
+
+
+def task_path_for(module_id: str) -> Path:
+    return TASK_DIR / f"{safe_module_id(module_id)}.md"
 
 
 def load_modules() -> list[dict[str, Any]]:
@@ -128,8 +140,8 @@ def generate() -> None:
         "| --- | --- | --- | --- |",
     ]
     for module in modules:
-        module_id = module["id"]
-        task_path = TASK_DIR / f"{module_id}.md"
+        module_id = safe_module_id(module["id"])
+        task_path = task_path_for(module_id)
         task_path.write_text(prompt_for(module), encoding="utf-8", newline="\n")
         index.append(
             f"| {module.get('title', module_id)} | `{module.get('category', '-')}` "
@@ -150,7 +162,8 @@ def list_tasks() -> None:
 
 
 def show_task(module_id: str) -> None:
-    path = TASK_DIR / f"{module_id}.md"
+    module = find_module(module_id)
+    path = task_path_for(module["id"])
     if not path.exists():
         generate()
     sys.stdout.write(path.read_text(encoding="utf-8"))

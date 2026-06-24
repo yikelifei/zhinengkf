@@ -66,6 +66,28 @@ SUPPORTED_CHANNELS: dict[str, ChannelSpec] = {
 }
 
 
+def positive_int_setting(
+    value: Any,
+    name: str,
+    default: int,
+    *,
+    min_value: int = 1,
+    max_value: int = 3600,
+) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        warning(f"[Channel] Invalid {name}: {value!r}; using default {default}.")
+        return default
+    if number < min_value or number > max_value:
+        warning(
+            f"[Channel] Out-of-range {name}: {number}; "
+            f"using default {default}."
+        )
+        return default
+    return number
+
+
 class ChannelHub:
     """Route messages from multiple channel adapters through one bot core."""
 
@@ -229,15 +251,25 @@ def _build_adapter(
 ) -> ChannelAdapter:
     if channel_id == "wechat":
         legacy_wechat = settings.get("wechat", {})
+        poll_interval = positive_int_setting(
+            config.get("poll_interval", legacy_wechat.get("poll_interval", 3)),
+            "wechat.poll_interval",
+            3,
+            min_value=1,
+            max_value=300,
+        )
+        anti_flood_seconds = positive_int_setting(
+            config.get(
+                "anti_flood_seconds",
+                legacy_wechat.get("anti_flood_seconds", 60),
+            ),
+            "wechat.anti_flood_seconds",
+            60,
+            min_value=1,
+            max_value=86400,
+        )
         return WeChatPcAdapter(
-            poll_interval=int(
-                config.get("poll_interval", legacy_wechat.get("poll_interval", 3))
-            ),
-            anti_flood_seconds=int(
-                config.get(
-                    "anti_flood_seconds",
-                    legacy_wechat.get("anti_flood_seconds", 60),
-                )
-            ),
+            poll_interval=poll_interval,
+            anti_flood_seconds=anti_flood_seconds,
         )
     return DisabledChannelAdapter(spec, reason="adapter not implemented")
