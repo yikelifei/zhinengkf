@@ -176,12 +176,26 @@ def run() -> list[str]:
             assert status == 400, f"/api/messages without session_id should be 400, got {status}"
             assert error.get("ok") is False
 
-            status, started = _json(base_url, "POST", "/api/backend/start", FRONTEND_POST_PATHS["/api/backend/start"])
-            assert status == 200, f"backend start status {status}"
-            assert started.get("ok") is True
-            status, stopped = _json(base_url, "POST", "/api/backend/stop", FRONTEND_POST_PATHS["/api/backend/stop"])
-            assert status == 200, f"backend stop status {status}"
-            assert stopped.get("ok") is True
+            status, before_backend = _json(base_url, "GET", "/api/backend/status")
+            assert status == 200, f"backend status status {status}"
+            backend_started_by_smoke = False
+            try:
+                status, started = _json(base_url, "POST", "/api/backend/start", FRONTEND_POST_PATHS["/api/backend/start"])
+                assert status == 200, f"backend start status {status}"
+                assert started.get("ok") is True
+                backend_started_by_smoke = not before_backend.get("running", False)
+                if backend_started_by_smoke:
+                    status, after_start = _json(base_url, "GET", "/api/backend/status")
+                    assert status == 200, f"backend status after start status {status}"
+                    assert after_start.get("running") is True, "backend did not report running after start"
+            finally:
+                if backend_started_by_smoke:
+                    status, stopped = _json(base_url, "POST", "/api/backend/stop", FRONTEND_POST_PATHS["/api/backend/stop"])
+                    assert status == 200, f"backend stop status {status}"
+                    assert stopped.get("ok") is True
+                    status, after_stop = _json(base_url, "GET", "/api/backend/status")
+                    assert status == 200, f"backend status after stop status {status}"
+                    assert after_stop.get("running") is False, "backend still reported running after stop"
         except AssertionError as exc:
             issues.append(str(exc))
     finally:
