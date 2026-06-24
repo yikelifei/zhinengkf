@@ -25,9 +25,17 @@ from core.customer_agent import CustomerSupportAgent  # noqa: E402
 
 
 def load_scenarios(path="config/acceptance_scenarios.yaml") -> list[dict]:
-    with open(ROOT / path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return data.get("scenarios", [])
+    try:
+        with open(ROOT / path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    scenarios = data.get("scenarios") or []
+    if not isinstance(scenarios, list):
+        return []
+    return [scenario for scenario in scenarios if isinstance(scenario, dict)]
 
 
 def run_scenarios(path="config/acceptance_scenarios.yaml") -> dict:

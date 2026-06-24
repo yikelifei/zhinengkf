@@ -27,12 +27,17 @@ def task_path_for(module_id: str) -> Path:
 
 
 def load_modules() -> list[dict[str, Any]]:
-    with MODULE_CONFIG.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with MODULE_CONFIG.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return []
+    if not isinstance(data, dict):
+        return []
     modules = data.get("modules")
     if not isinstance(modules, list):
-        raise ValueError("config/project_modules.yaml must contain a modules list")
-    return modules
+        return []
+    return [module for module in modules if isinstance(module, dict)]
 
 
 def find_module(module_id: str) -> dict[str, Any]:

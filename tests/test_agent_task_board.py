@@ -81,3 +81,31 @@ def test_generate_rejects_unsafe_configured_module_id(tmp_path):
         assert not (tmp_path / "escape.md").exists()
     finally:
         _restore_task_fixture(original)
+
+
+def test_load_modules_treats_malformed_config_as_empty(tmp_path):
+    original = _install_task_fixture(tmp_path, [_minimal_module()])
+    try:
+        agent_task_board.MODULE_CONFIG.write_text("modules: [broken\n", encoding="utf-8")
+        assert agent_task_board.load_modules() == []
+
+        agent_task_board.MODULE_CONFIG.write_text("- broken\n", encoding="utf-8")
+        assert agent_task_board.load_modules() == []
+
+        agent_task_board.MODULE_CONFIG.write_text(
+            yaml.safe_dump({"modules": "broken"}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        assert agent_task_board.load_modules() == []
+    finally:
+        _restore_task_fixture(original)
+
+
+def test_load_modules_skips_malformed_module_entries(tmp_path):
+    original = _install_task_fixture(tmp_path, ["broken", _minimal_module("safe_module")])
+    try:
+        modules = agent_task_board.load_modules()
+    finally:
+        _restore_task_fixture(original)
+
+    assert [module["id"] for module in modules] == ["safe_module"]
