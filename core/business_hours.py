@@ -48,12 +48,10 @@ def business_hours_status(now: datetime | None = None, profile: dict | None = No
 
 def parse_working_hours(value: str) -> list[tuple[time, time]]:
     ranges: list[tuple[time, time]] = []
-    for part in re.split(r"[,，;；、\s]+", str(value or "")):
-        if not part or "-" not in part:
-            continue
-        start_text, end_text = [item.strip() for item in part.split("-", 1)]
-        start = _parse_clock(start_text)
-        end = _parse_clock(end_text)
+    pattern = r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})"
+    for match in re.finditer(pattern, str(value or "")):
+        start = _parse_clock(match.group(1))
+        end = _parse_clock(match.group(2))
         if start and end:
             ranges.append((start, end))
     return ranges
