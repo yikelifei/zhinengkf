@@ -68,3 +68,32 @@ def test_save_profile_creates_backup(tmp_path):
     profile = load_profile(str(path))
     assert profile["business"]["company_name"] == "新公司"
     assert (path.parent / "backups").exists()
+
+
+def test_load_profile_treats_malformed_shapes_as_empty(tmp_path):
+    path = tmp_path / "customer_profile.yaml"
+
+    path.write_text("- broken\n", encoding="utf-8")
+    assert load_profile(str(path)) == {"business": {}, "sales": {}, "brand": {}}
+
+    path.write_text("business: [broken\n", encoding="utf-8")
+    assert load_profile(str(path)) == {"business": {}, "sales": {}, "brand": {}}
+
+    path.write_text(
+        yaml.safe_dump(
+            {"business": "bad", "sales": ["bad"], "brand": 123},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    assert load_profile(str(path)) == {"business": {}, "sales": {}, "brand": {}}
+
+
+def test_save_and_validate_profile_normalize_dirty_sections(tmp_path):
+    path = tmp_path / "customer_profile.yaml"
+
+    save_profile({"business": "bad", "sales": ["bad"], "brand": 123}, str(path))
+    profile = load_profile(str(path))
+
+    assert profile == {"business": {}, "sales": {}, "brand": {}}
+    assert validate_profile(["bad"])

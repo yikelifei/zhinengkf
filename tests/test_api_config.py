@@ -7,6 +7,7 @@ from core.api_config import (
     parse_temperature,
     save_settings,
     update_provider,
+    test_openai_compatible_provider as check_openai_compatible_provider,
     validate_provider_config,
 )
 
@@ -43,6 +44,30 @@ def test_save_settings_creates_missing_parent_directories(tmp_path):
     assert yaml.safe_load(settings_path.read_text(encoding="utf-8"))["ai_engine"]["enabled"] is True
 
 
+def test_load_settings_treats_malformed_yaml_as_empty(tmp_path):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("ai_engine: [broken\n", encoding="utf-8")
+
+    assert load_settings(path=str(settings_path)) == {}
+
+
+def test_load_settings_treats_malformed_root_as_empty(tmp_path):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("- broken\n", encoding="utf-8")
+
+    assert load_settings(path=str(settings_path)) == {}
+
+
+def test_ensure_provider_recovers_malformed_ai_engine_and_provider():
+    settings = {"ai_engine": {"providers": {"geeknow": "broken"}}}
+
+    provider = ensure_provider(settings, "geeknow")
+
+    assert settings["ai_engine"]["providers"]["geeknow"] is provider
+    assert provider["base_url"] == "https://api.geeknow.ai/v1"
+    assert provider["enabled"] is False
+
+
 def test_update_provider_sets_primary(tmp_path):
     settings_path = tmp_path / "settings.yaml"
     settings_path.write_text(
@@ -66,6 +91,30 @@ def test_update_provider_sets_primary(tmp_path):
     assert settings["ai_engine"]["primary"] == "geeknow"
     assert "geeknow" not in settings["ai_engine"]["fallback_chain"]
     assert settings["ai_engine"]["providers"]["geeknow"]["enabled"] is True
+
+
+def test_update_provider_recovers_malformed_settings_shape(tmp_path):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(
+        yaml.safe_dump({"ai_engine": "broken"}, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    settings = update_provider(
+        "geeknow",
+        enabled=True,
+        api_key="sk-test",
+        base_url="https://api.geeknow.ai/v1/",
+        model="gpt-4o-mini",
+        temperature=0.4,
+        max_tokens=800,
+        set_primary=True,
+        path=str(settings_path),
+    )
+
+    assert settings["ai_engine"]["primary"] == "geeknow"
+    assert settings["ai_engine"]["fallback_chain"] == []
+    assert settings["ai_engine"]["providers"]["geeknow"]["base_url"] == "https://api.geeknow.ai/v1"
 
 
 def test_update_provider_rejects_invalid_numeric_values(tmp_path):
@@ -127,6 +176,22 @@ def test_validate_provider_config_reports_missing_fields():
     assert any("型" in issue or "model" in issue.lower() for issue in issues)
     assert "Temperature must be between 0 and 2" in issues
     assert "Max Tokens must be greater than 0" in issues
+
+
+def test_validate_provider_config_treats_non_dict_as_missing_provider():
+    issues = validate_provider_config("broken")
+
+    assert "供应商未启用" in issues
+    assert any("API Key" in issue for issue in issues)
+    assert any("Base URL" in issue for issue in issues)
+    assert any("型" in issue or "model" in issue.lower() for issue in issues)
+
+
+def test_test_provider_rejects_invalid_config_before_network_dependency():
+    ok, message = check_openai_compatible_provider("broken", timeout=1)
+
+    assert ok is False
+    assert "API Key" in message
 
 
 def test_validate_provider_config_accepts_geeknow_env(monkeypatch):

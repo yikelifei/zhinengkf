@@ -52,6 +52,7 @@ class ConversationManager:
         if (
             excluded_message is not None
             and messages
+            and isinstance(messages[-1], dict)
             and messages[-1].get("role") == "user"
             and messages[-1].get("content") in {exclude_latest_user_message, excluded_message}
         ):
@@ -75,7 +76,7 @@ class ConversationManager:
             return
 
         self.context_cache[session_id] = [
-            self._trim_message(message) for message in messages
+            self._trim_message(message) for message in messages if isinstance(message, dict)
         ]
         messages = self.context_cache[session_id]
 
@@ -108,7 +109,8 @@ class ConversationManager:
     def _context_chars(self, session_id):
         total = len(self.context_summaries.get(session_id, ""))
         for message in self.context_cache.get(session_id, []):
-            total += len(message.get("role", "")) + len(message.get("content", ""))
+            if isinstance(message, dict):
+                total += len(str(message.get("role", ""))) + len(str(message.get("content", "")))
         return total
 
     def _merge_summary(self, existing, messages):
@@ -116,6 +118,8 @@ class ConversationManager:
         if existing:
             lines.extend(line for line in existing.splitlines() if line.strip())
         for message in messages:
+            if not isinstance(message, dict):
+                continue
             role = "客户" if message.get("role") == "user" else "客服"
             content = self._compact_text(
                 message.get("content", ""),
@@ -140,7 +144,7 @@ class ConversationManager:
 
     def _trim_message(self, message):
         return {
-            "role": message.get("role", "user"),
+            "role": str(message.get("role") or "user").strip() or "user",
             "content": self._compact_text(
                 message.get("content", ""),
                 self.MAX_SINGLE_MESSAGE_CHARS,
@@ -148,7 +152,7 @@ class ConversationManager:
         }
 
     def _compact_text(self, text, limit):
-        value = re.sub(r"\s+", " ", (text or "").strip())
+        value = re.sub(r"\s+", " ", str(text or "").strip())
         if len(value) <= limit:
             return value
         head = max(1, limit // 2 - 2)

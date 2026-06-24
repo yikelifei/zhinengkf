@@ -17,12 +17,12 @@ def load_profile(path="config/customer_profile.yaml") -> dict:
     profile_file = _profile_path(path)
     if not profile_file.exists():
         return {"business": {}, "sales": {}, "brand": {}}
-    with open(profile_file, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    data.setdefault("business", {})
-    data.setdefault("sales", {})
-    data.setdefault("brand", {})
-    return data
+    try:
+        with open(profile_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError:
+        data = {}
+    return _normalize_profile(data)
 
 
 def save_profile(profile: dict, path="config/customer_profile.yaml") -> Path:
@@ -35,11 +35,7 @@ def save_profile(profile: dict, path="config/customer_profile.yaml") -> Path:
         backup_file = backup_dir / f"{profile_file.stem}_{stamp}.yaml"
         backup_file.write_text(profile_file.read_text(encoding="utf-8"), encoding="utf-8")
 
-    data = {
-        "business": dict((profile or {}).get("business") or {}),
-        "sales": dict((profile or {}).get("sales") or {}),
-        "brand": dict((profile or {}).get("brand") or {}),
-    }
+    data = _normalize_profile(profile)
     with open(profile_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     return profile_file
@@ -47,6 +43,7 @@ def save_profile(profile: dict, path="config/customer_profile.yaml") -> Path:
 
 def validate_profile(profile: dict) -> list[str]:
     issues = []
+    profile = _normalize_profile(profile)
     business = profile.get("business") or {}
     if not str(business.get("company_name", "")).strip():
         issues.append("company_name 不能为空")
@@ -69,3 +66,12 @@ def business_summary(path="config/customer_profile.yaml") -> str:
         f"客服名：{business.get('assistant_name', '小礼')}，"
         f"业务范围：{scope or '礼盒定制'}。"
     )
+
+
+def _normalize_profile(profile) -> dict:
+    source = profile if isinstance(profile, dict) else {}
+    return {
+        "business": dict(source.get("business") if isinstance(source.get("business"), dict) else {}),
+        "sales": dict(source.get("sales") if isinstance(source.get("sales"), dict) else {}),
+        "brand": dict(source.get("brand") if isinstance(source.get("brand"), dict) else {}),
+    }

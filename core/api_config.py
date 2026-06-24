@@ -113,11 +113,16 @@ def parse_max_tokens(value, default=800) -> int:
 def load_settings(path="config/settings.yaml") -> dict:
     load_env_file()
     settings_file = _settings_path(path)
-    with open(settings_file, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        with open(settings_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def save_settings(settings: dict, path="config/settings.yaml") -> Path:
+    settings = settings if isinstance(settings, dict) else {}
     settings_file = _settings_path(path)
     backup_dir = settings_file.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -133,10 +138,18 @@ def save_settings(settings: dict, path="config/settings.yaml") -> Path:
 
 
 def ensure_provider(settings: dict, provider_name: str) -> dict:
-    settings.setdefault("ai_engine", {})
-    settings["ai_engine"].setdefault("providers", {})
-    providers = settings["ai_engine"]["providers"]
-    if provider_name not in providers:
+    if not isinstance(settings, dict):
+        settings = {}
+    ai_engine = settings.get("ai_engine")
+    if not isinstance(ai_engine, dict):
+        ai_engine = {}
+        settings["ai_engine"] = ai_engine
+    providers = ai_engine.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        ai_engine["providers"] = providers
+    provider = providers.get(provider_name)
+    if not isinstance(provider, dict):
         preset = deepcopy(PROVIDER_PRESETS.get(provider_name, PROVIDER_PRESETS["geeknow"]))
         providers[provider_name] = {
             "enabled": False,
@@ -155,6 +168,8 @@ def provider_display_name(provider_name: str) -> str:
 
 
 def validate_provider_config(provider: dict) -> list[str]:
+    if not isinstance(provider, dict):
+        provider = {}
     issues = []
     api_key = _expand_env(provider.get("api_key", ""))
     base_url = _expand_env(provider.get("base_url", ""))
@@ -202,7 +217,7 @@ def update_provider(
         {
             "enabled": enabled,
             "api_key": api_key,
-            "base_url": base_url.rstrip("/"),
+            "base_url": str(base_url or "").rstrip("/"),
             "model": model,
             "request_format": provider.get("request_format", "openai"),
             "temperature": parse_temperature(temperature),
@@ -210,16 +225,21 @@ def update_provider(
         }
     )
     if set_primary:
-        settings.setdefault("ai_engine", {})["primary"] = provider_name
-        fallback = settings["ai_engine"].setdefault("fallback_chain", [])
-        settings["ai_engine"]["fallback_chain"] = [p for p in fallback if p != provider_name]
+        ai_engine = settings.setdefault("ai_engine", {})
+        if not isinstance(ai_engine, dict):
+            ai_engine = {}
+            settings["ai_engine"] = ai_engine
+        ai_engine["primary"] = provider_name
+        fallback = ai_engine.get("fallback_chain") or []
+        if not isinstance(fallback, list):
+            fallback = []
+        ai_engine["fallback_chain"] = [p for p in fallback if p != provider_name]
     save_settings(settings, path)
     return settings
 
 
 def test_openai_compatible_provider(provider: dict, timeout=15) -> tuple[bool, str]:
-    import requests
-
+    provider = provider if isinstance(provider, dict) else {}
     issues = [
         issue
         for issue in validate_provider_config({**provider, "enabled": True})
@@ -237,6 +257,8 @@ def test_openai_compatible_provider(provider: dict, timeout=15) -> tuple[bool, s
         return False, "Base URL 未配置"
     if not model:
         return False, "模型名称未配置"
+
+    import requests
 
     url = f"{base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
