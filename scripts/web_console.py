@@ -359,18 +359,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 )
             if path == "/api/chat/lock":
                 db = self._db()
-                until = db.lock_conversation(
-                    body.get("session_id", ""),
-                    minutes=int(body.get("minutes", 10)),
-                    reason=body.get("reason", "manual_takeover"),
-                )
-                db.log_event("manual_lock", f"{body.get('session_id', '')}: locked until {until}")
-                return self._send_json({"ok": True, "locked_until": until})
+                return self._send_json(lock_manual_conversation(db, body))
             if path == "/api/chat/unlock":
                 db = self._db()
-                db.clear_conversation_lock(body.get("session_id", ""))
-                db.log_event("manual_unlock", body.get("session_id", ""))
-                return self._send_json({"ok": True})
+                return self._send_json(unlock_manual_conversation(db, body))
             if path == "/api/chat/send":
                 return self._send_json(send_manual_reply(self._db(), body))
             if path == "/api/reports/generate":
@@ -751,7 +743,10 @@ def send_manual_reply(db, body):
     if not ok:
         raise RuntimeError("微信发送失败，请确认微信已登录并停留在聊天主界面。")
     if hasattr(listener, "mark_outgoing_seen"):
-        listener.mark_outgoing_seen(friend_name, text)
+        try:
+            listener.mark_outgoing_seen(friend_name, text)
+        except Exception:
+            pass
     db.save_message(
         session_id,
         direction="outbound",
@@ -766,6 +761,42 @@ def send_manual_reply(db, body):
         "message": f"已发送给 {friend_name}，并锁定自动回复 10 分钟。",
         "locked_until": locked_until,
     }
+
+
+def require_conversation(db, session_id: str) -> dict:
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        raise ValueError("session_id is required")
+    row = db.execute(
+        "SELECT session_id, friend_name FROM conversations WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError("未找到会话")
+    return dict(row)
+
+
+def parse_lock_minutes(value) -> int:
+    minutes = 10 if value is None or value == "" else int(value)
+    if minutes < 1 or minutes > 1440:
+        raise ValueError("锁定时长必须在 1 到 1440 分钟之间")
+    return minutes
+
+
+def lock_manual_conversation(db, body):
+    session = require_conversation(db, body.get("session_id", ""))
+    minutes = parse_lock_minutes(body.get("minutes", 10))
+    reason = body.get("reason", "manual_takeover")
+    until = db.lock_conversation(session["session_id"], minutes=minutes, reason=reason)
+    db.log_event("manual_lock", f"{session['session_id']}: locked until {until}")
+    return {"ok": True, "locked_until": until}
+
+
+def unlock_manual_conversation(db, body):
+    session = require_conversation(db, body.get("session_id", ""))
+    db.clear_conversation_lock(session["session_id"])
+    db.log_event("manual_unlock", session["session_id"])
+    return {"ok": True}
 
 
 def main():

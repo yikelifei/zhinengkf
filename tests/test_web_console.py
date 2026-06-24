@@ -6,7 +6,11 @@ from scripts.web_console import (
     redact_provider_config,
     redact_settings_for_response,
     report_response,
+    send_manual_reply,
+    lock_manual_conversation,
+    unlock_manual_conversation,
 )
+from core.database import Database
 
 
 def test_provider_response_never_exposes_raw_api_key():
@@ -109,6 +113,85 @@ def test_public_audit_events_redact_local_paths():
     assert result[0]["event_type"] == "report_generate"
     assert "C:\\Users\\" not in result[0]["detail"]
     assert "zhinengkefu" not in result[0]["detail"]
+
+
+def test_send_manual_reply_saves_message_and_locks_even_if_seen_marker_fails(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    session_id = db.create_or_get_session("客户A")
+
+    import core.wechat as wechat
+
+    original = wechat.ChatListener
+    sent = []
+
+    class FakeListener:
+        def send(self, text, who):
+            sent.append((who, text))
+            return True
+
+        def mark_outgoing_seen(self, friend_name, text):
+            raise RuntimeError("cache unavailable")
+
+    wechat.ChatListener = FakeListener
+    try:
+        result = send_manual_reply(db, {"session_id": session_id, "text": "您好，报价稍后发您。"})
+    finally:
+        wechat.ChatListener = original
+
+    assert result["ok"] is True
+    assert sent == [("客户A", "您好，报价稍后发您。")]
+    messages = db.get_session_messages(session_id)
+    assert messages[-1]["direction"] == "outbound"
+    assert messages[-1]["source"] == "manual"
+    assert db.get_conversation_lock(session_id)["manual_lock_reason"] == "manual_send"
+
+
+def test_send_manual_reply_rejects_missing_session_without_wechat(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+
+    try:
+        send_manual_reply(db, {"session_id": "missing", "text": "hello"})
+    except ValueError as exc:
+        assert "未找到会话" in str(exc)
+    else:
+        raise AssertionError("send_manual_reply accepted missing session")
+
+
+def test_manual_lock_requires_existing_session(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+
+    try:
+        lock_manual_conversation(db, {"session_id": "missing", "minutes": 10})
+    except ValueError as exc:
+        assert "未找到会话" in str(exc)
+    else:
+        raise AssertionError("lock_manual_conversation accepted missing session")
+
+
+def test_manual_lock_rejects_invalid_minutes(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    session_id = db.create_or_get_session("客户B")
+
+    for minutes in (0, -1, 1441):
+        try:
+            lock_manual_conversation(db, {"session_id": session_id, "minutes": minutes})
+        except ValueError as exc:
+            assert "锁定时长" in str(exc)
+        else:
+            raise AssertionError(f"lock_manual_conversation accepted minutes={minutes}")
+
+
+def test_manual_lock_and_unlock_update_database(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    session_id = db.create_or_get_session("客户C")
+
+    locked = lock_manual_conversation(db, {"session_id": session_id, "minutes": 5, "reason": "test"})
+    assert locked["ok"] is True
+    assert db.get_conversation_lock(session_id)["manual_lock_reason"] == "test"
+
+    unlocked = unlock_manual_conversation(db, {"session_id": session_id})
+    assert unlocked["ok"] is True
+    assert db.get_conversation_lock(session_id) is None
 
 
 def test_static_file_whitelist_blocks_private_project_files():
