@@ -20,7 +20,10 @@ def load_skills(path=SKILLS_PATH):
         return {"skills": []}
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    data.setdefault("skills", [])
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(data.get("skills"), list):
+        data["skills"] = []
     return data
 
 
@@ -33,8 +36,10 @@ def save_skills(data, path=SKILLS_PATH):
         backup = backup_dir / f"{path.stem}_{stamp}{path.suffix}"
         backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
+    skills = data.get("skills") if isinstance(data, dict) else []
+    normalized = {"skills": list(skills) if isinstance(skills, list) else []}
     with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(normalized, f, allow_unicode=True, sort_keys=False)
 
 
 def normalize_keywords(value):

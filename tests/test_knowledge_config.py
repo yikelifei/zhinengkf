@@ -42,6 +42,21 @@ def test_save_knowledge_creates_missing_parent_directories(tmp_path):
     assert load_knowledge(path=str(path))["documents"] == []
 
 
+def test_load_knowledge_treats_malformed_documents_as_empty(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text("documents: broken\n", encoding="utf-8")
+
+    assert load_knowledge(path=str(path))["documents"] == []
+
+
+def test_save_knowledge_does_not_split_malformed_documents_string(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+
+    save_knowledge({"documents": "broken"}, path=str(path))
+
+    assert load_knowledge(path=str(path))["documents"] == []
+
+
 def test_delete_document_creates_change(tmp_path):
     path = tmp_path / "customer_knowledge.yaml"
     path.write_text(

@@ -85,7 +85,7 @@ def _looks_unset(value) -> bool:
 
 
 def parse_temperature(value, default=0.4) -> float:
-    text = str(value or "").strip()
+    text = "" if value is None else str(value).strip()
     if not text:
         return default
     try:
@@ -98,7 +98,7 @@ def parse_temperature(value, default=0.4) -> float:
 
 
 def parse_max_tokens(value, default=800) -> int:
-    text = str(value or "").strip()
+    text = "" if value is None else str(value).strip()
     if not text:
         return default
     try:
@@ -174,17 +174,13 @@ def validate_provider_config(provider: dict) -> list[str]:
     if _looks_unset(model):
         issues.append("模型名称未配置或环境变量未生效")
     try:
-        temperature = float(provider.get("temperature", 0.4))
-        if not 0 <= temperature <= 2:
-            issues.append("Temperature 应在 0 到 2 之间")
-    except Exception:
-        issues.append("Temperature 必须是数字")
+        parse_temperature(provider.get("temperature", 0.4))
+    except ValueError as exc:
+        issues.append(str(exc))
     try:
-        max_tokens = int(provider.get("max_tokens", 800))
-        if max_tokens <= 0:
-            issues.append("Max Tokens 必须大于 0")
-    except Exception:
-        issues.append("Max Tokens 必须是整数")
+        parse_max_tokens(provider.get("max_tokens", 800))
+    except ValueError as exc:
+        issues.append(str(exc))
     return issues
 
 

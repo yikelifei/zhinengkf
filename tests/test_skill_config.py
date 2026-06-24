@@ -59,3 +59,18 @@ def test_save_skills_backup_stays_next_to_custom_path(tmp_path):
     backups = list((path.parent / "backups").glob("customer_skills_*.yaml"))
     assert backups
     assert all(item.parent == path.parent / "backups" for item in backups)
+
+
+def test_load_skills_treats_malformed_skills_as_empty(tmp_path):
+    path = tmp_path / "customer_skills.yaml"
+    path.write_text("skills: broken\n", encoding="utf-8")
+
+    assert load_skills(path)["skills"] == []
+
+
+def test_save_skills_does_not_split_malformed_skills_string(tmp_path):
+    path = tmp_path / "customer_skills.yaml"
+
+    save_skills({"skills": "broken"}, path)
+
+    assert load_skills(path)["skills"] == []
