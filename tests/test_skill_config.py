@@ -1,6 +1,6 @@
 import yaml
 
-from core.skill_config import delete_skill, load_skills, upsert_skill
+from core.skill_config import delete_skill, load_skills, save_skills, upsert_skill
 
 
 def test_upsert_and_delete_skill(tmp_path):
@@ -47,3 +47,15 @@ def test_invalid_skill_route(tmp_path):
         assert "route" in str(exc)
     else:
         raise AssertionError("invalid route should fail")
+
+
+def test_save_skills_backup_stays_next_to_custom_path(tmp_path):
+    path = tmp_path / "nested" / "customer_skills.yaml"
+    path.parent.mkdir()
+    path.write_text(yaml.safe_dump({"skills": []}, allow_unicode=True), encoding="utf-8")
+
+    save_skills({"skills": [{"id": "a", "title": "A", "keywords": ["a"], "answer": "A", "route": "direct_reply"}]}, path)
+
+    backups = list((path.parent / "backups").glob("customer_skills_*.yaml"))
+    assert backups
+    assert all(item.parent == path.parent / "backups" for item in backups)

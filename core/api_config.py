@@ -94,12 +94,13 @@ def load_settings(path="config/settings.yaml") -> dict:
 def save_settings(settings: dict, path="config/settings.yaml") -> Path:
     settings_file = _settings_path(path)
     backup_dir = settings_file.parent / "backups"
-    backup_dir.mkdir(exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
     if settings_file.exists():
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_file = backup_dir / f"{settings_file.stem}_{stamp}.yaml"
         backup_file.write_text(settings_file.read_text(encoding="utf-8"), encoding="utf-8")
 
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
     with open(settings_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(settings, f, allow_unicode=True, sort_keys=False)
     return settings_file

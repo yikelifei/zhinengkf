@@ -11,7 +11,6 @@ from .paths import resource_path
 
 
 SKILLS_PATH = Path(resource_path("config/customer_skills.yaml"))
-BACKUP_DIR = Path(resource_path("config/backups"))
 VALID_ROUTES = {"direct_reply", "ask_clarifying", "transfer_human"}
 
 
@@ -28,9 +27,10 @@ def load_skills(path=SKILLS_PATH):
 def save_skills(data, path=SKILLS_PATH):
     path = Path(path)
     if path.exists():
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_dir = path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = BACKUP_DIR / f"{path.stem}_{stamp}{path.suffix}"
+        backup = backup_dir / f"{path.stem}_{stamp}{path.suffix}"
         backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:

@@ -31,6 +31,16 @@ def test_save_settings_creates_backup(tmp_path):
     assert yaml.safe_load(settings_path.read_text(encoding="utf-8"))["ai_engine"]["enabled"] is False
 
 
+def test_save_settings_creates_missing_parent_directories(tmp_path):
+    settings_path = tmp_path / "tenant_a" / "config" / "settings.yaml"
+
+    save_settings({"ai_engine": {"enabled": True}}, path=str(settings_path))
+
+    assert settings_path.exists()
+    assert (settings_path.parent / "backups").exists()
+    assert yaml.safe_load(settings_path.read_text(encoding="utf-8"))["ai_engine"]["enabled"] is True
+
+
 def test_update_provider_sets_primary(tmp_path):
     settings_path = tmp_path / "settings.yaml"
     settings_path.write_text(

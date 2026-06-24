@@ -27,12 +27,13 @@ def load_knowledge(path="config/customer_knowledge.yaml") -> dict:
 def save_knowledge(data: dict, path="config/customer_knowledge.yaml") -> Path:
     knowledge_file = _knowledge_path(path)
     backup_dir = knowledge_file.parent / "backups"
-    backup_dir.mkdir(exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
     if knowledge_file.exists():
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_file = backup_dir / f"{knowledge_file.stem}_{stamp}.yaml"
         backup_file.write_text(knowledge_file.read_text(encoding="utf-8"), encoding="utf-8")
 
+    knowledge_file.parent.mkdir(parents=True, exist_ok=True)
     data = {"documents": list(data.get("documents", []))}
     with open(knowledge_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)

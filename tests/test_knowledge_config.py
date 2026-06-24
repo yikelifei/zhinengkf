@@ -32,6 +32,16 @@ def test_upsert_document_and_match(tmp_path):
     assert matches[0]["score"] >= 2
 
 
+def test_save_knowledge_creates_missing_parent_directories(tmp_path):
+    path = tmp_path / "tenant_a" / "config" / "customer_knowledge.yaml"
+
+    save_knowledge({"documents": []}, path=str(path))
+
+    assert path.exists()
+    assert (path.parent / "backups").exists()
+    assert load_knowledge(path=str(path))["documents"] == []
+
+
 def test_delete_document_creates_change(tmp_path):
     path = tmp_path / "customer_knowledge.yaml"
     path.write_text(

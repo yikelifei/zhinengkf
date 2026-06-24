@@ -26,6 +26,8 @@ DEFAULT_RETENTION = {
     "exports": 90,
     "backups": 180,
 }
+MIN_RETENTION_DAYS = 1
+MAX_RETENTION_DAYS = 3650
 
 
 def _safe_files(folder: Path) -> list[Path]:
@@ -45,6 +47,7 @@ def _safe_files(folder: Path) -> list[Path]:
 
 def build_cleanup_plan(retention=None, now=None) -> dict:
     retention = {**DEFAULT_RETENTION, **(retention or {})}
+    retention = validate_retention(retention)
     now = now or datetime.now()
     items = []
     for folder_name, days in retention.items():
@@ -71,6 +74,22 @@ def build_cleanup_plan(retention=None, now=None) -> dict:
         "total_files": len(items),
         "total_bytes": sum(item["size"] for item in items),
     }
+
+
+def validate_retention(retention: dict) -> dict:
+    normalized = {}
+    for folder_name, days in retention.items():
+        try:
+            value = int(days)
+        except (TypeError, ValueError):
+            raise ValueError(f"{folder_name} 留存天数必须是整数") from None
+        if value < MIN_RETENTION_DAYS or value > MAX_RETENTION_DAYS:
+            raise ValueError(
+                f"{folder_name} 留存天数必须在 "
+                f"{MIN_RETENTION_DAYS} 到 {MAX_RETENTION_DAYS} 天之间"
+            )
+        normalized[folder_name] = value
+    return normalized
 
 
 def render_markdown(plan: dict, applied=False) -> str:
@@ -157,7 +176,11 @@ def main(argv=None):
         "exports": args.exports_days,
         "backups": args.backups_days,
     }
-    result = cleanup_retention(retention=retention, apply=args.apply, output=args.output)
+    try:
+        result = cleanup_retention(retention=retention, apply=args.apply, output=args.output)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     print(f"Cleanup report: {result['report_path']}")
     print(f"Matched files: {result['plan']['total_files']}")
     if args.apply:

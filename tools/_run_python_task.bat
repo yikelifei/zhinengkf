@@ -25,7 +25,7 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 echo ERROR: No Python runtime found.
-pause
+if "%SMART_KEFU_PAUSE%"=="1" pause
 exit /b 1
 
 :run
@@ -33,5 +33,5 @@ exit /b 1
 set "RC=%errorlevel%"
 echo.
 echo Command exited with code %RC%.
-if not "%SMART_KEFU_NO_PAUSE%"=="1" pause
+if "%SMART_KEFU_PAUSE%"=="1" pause
 exit /b %RC%
