@@ -220,7 +220,7 @@ def _next_actions(samples: list[dict]) -> list[str]:
 
 def _mask_sensitive(value) -> str:
     text = _normalize(value)
-    text = re.sub(r"(?<!\d)(1[3-9]\d{2})\d{4}(\d{4})(?!\d)", r"\1****\2", text)
+    text = re.sub(r"(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)", r"\1****\2", text)
     text = re.sub(
         r"((?:微信号|微信ID|wechat|vx|VX)[:：\s]*)([A-Za-z][\w\-]{2,19})",
         lambda m: m.group(1) + _mask_token(m.group(2)),

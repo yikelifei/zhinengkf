@@ -1,3 +1,5 @@
+from io import BytesIO
+
 from scripts.web_console import (
     ConsoleHandler,
     ROOT,
@@ -14,6 +16,28 @@ from scripts.web_console import (
     unlock_manual_conversation,
 )
 from core.database import Database
+
+
+def make_handler_for_json_body(raw: bytes):
+    handler = ConsoleHandler.__new__(ConsoleHandler)
+    handler.headers = {"Content-Length": str(len(raw))}
+    handler.rfile = BytesIO(raw)
+    return handler
+
+
+def test_json_body_rejects_invalid_json_and_non_object_payloads():
+    for raw in (b"{broken", b"[1, 2]", b'"text"'):
+        try:
+            make_handler_for_json_body(raw)._json_body()
+        except ValueError as exc:
+            assert "JSON" in str(exc) or "json" in str(exc)
+        else:
+            raise AssertionError(f"_json_body accepted raw={raw!r}")
+
+
+def test_json_body_accepts_empty_and_object_payloads():
+    assert make_handler_for_json_body(b"")._json_body() == {}
+    assert make_handler_for_json_body(b'{"name":"geeknow"}')._json_body() == {"name": "geeknow"}
 
 
 def test_provider_response_never_exposes_raw_api_key():

@@ -166,7 +166,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not length:
             return {}
         raw = self.rfile.read(length).decode("utf-8")
-        return json.loads(raw or "{}")
+        try:
+            body = json.loads(raw or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid JSON body") from exc
+        if not isinstance(body, dict):
+            raise ValueError("JSON body must be an object")
+        return body
 
     def _send_json(self, data, status=HTTPStatus.OK):
         payload = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
