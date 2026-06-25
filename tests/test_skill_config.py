@@ -67,6 +67,15 @@ def test_load_skills_treats_malformed_skills_as_empty(tmp_path):
 
     assert load_skills(path)["skills"] == []
 
+    path.write_text(
+        yaml.safe_dump(
+            {"skills": ["broken", {"id": "ok", "title": "OK"}]},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    assert load_skills(path)["skills"] == [{"id": "ok", "title": "OK"}]
+
 
 def test_save_skills_does_not_split_malformed_skills_string(tmp_path):
     path = tmp_path / "customer_skills.yaml"
@@ -74,3 +83,7 @@ def test_save_skills_does_not_split_malformed_skills_string(tmp_path):
     save_skills({"skills": "broken"}, path)
 
     assert load_skills(path)["skills"] == []
+
+    save_skills({"skills": ["broken", {"id": "ok"}]}, path)
+
+    assert load_skills(path)["skills"] == [{"id": "ok"}]

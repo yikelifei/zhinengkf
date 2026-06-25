@@ -70,8 +70,28 @@ def business_summary(path="config/customer_profile.yaml") -> str:
 
 def _normalize_profile(profile) -> dict:
     source = profile if isinstance(profile, dict) else {}
+    business = dict(source.get("business") if isinstance(source.get("business"), dict) else {})
+    sales = dict(source.get("sales") if isinstance(source.get("sales"), dict) else {})
+    brand = dict(source.get("brand") if isinstance(source.get("brand"), dict) else {})
+    if "service_scope" in business:
+        business["service_scope"] = _string_list(business.get("service_scope"))
+    if "quote_required_fields" in sales:
+        sales["quote_required_fields"] = _string_list(sales.get("quote_required_fields"))
+    if "forbidden_promises" in brand:
+        brand["forbidden_promises"] = _string_list(brand.get("forbidden_promises"))
     return {
-        "business": dict(source.get("business") if isinstance(source.get("business"), dict) else {}),
-        "sales": dict(source.get("sales") if isinstance(source.get("sales"), dict) else {}),
-        "brand": dict(source.get("brand") if isinstance(source.get("brand"), dict) else {}),
+        "business": business,
+        "sales": sales,
+        "brand": brand,
     }
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]

@@ -22,8 +22,11 @@ def load_skills(path=SKILLS_PATH):
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         data = {}
-    if not isinstance(data.get("skills"), list):
+    skills = data.get("skills")
+    if not isinstance(skills, list):
         data["skills"] = []
+    else:
+        data["skills"] = [skill for skill in skills if isinstance(skill, dict)]
     return data
 
 
@@ -37,7 +40,9 @@ def save_skills(data, path=SKILLS_PATH):
         backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     skills = data.get("skills") if isinstance(data, dict) else []
-    normalized = {"skills": list(skills) if isinstance(skills, list) else []}
+    normalized = {
+        "skills": [skill for skill in skills if isinstance(skill, dict)] if isinstance(skills, list) else []
+    }
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(normalized, f, allow_unicode=True, sort_keys=False)
 

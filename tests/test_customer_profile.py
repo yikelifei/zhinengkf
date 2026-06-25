@@ -97,3 +97,29 @@ def test_save_and_validate_profile_normalize_dirty_sections(tmp_path):
 
     assert profile == {"business": {}, "sales": {}, "brand": {}}
     assert validate_profile(["bad"])
+
+
+def test_profile_normalizes_list_like_fields_without_character_splitting(tmp_path):
+    path = tmp_path / "customer_profile.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "business": {
+                    "company_name": "ACME",
+                    "assistant_name": "Alice",
+                    "service_scope": "gift boxes",
+                },
+                "sales": {"quote_required_fields": ["quantity", "", 123]},
+                "brand": {"forbidden_promises": "guaranteed lowest price"},
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    profile = load_profile(str(path))
+
+    assert profile["business"]["service_scope"] == ["gift boxes"]
+    assert profile["sales"]["quote_required_fields"] == ["quantity", "123"]
+    assert profile["brand"]["forbidden_promises"] == ["guaranteed lowest price"]
+    assert validate_profile(profile) == []
