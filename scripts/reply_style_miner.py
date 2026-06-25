@@ -161,14 +161,22 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def _manual_sources() -> set[str]:
-    path = ROOT / "config" / "reply_style.yaml"
+def _manual_sources(path: str | Path | None = None) -> set[str]:
+    path = Path(path) if path else ROOT / "config" / "reply_style.yaml"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        values = data.get("reply_style", {}).get("manual_sources", [])
-    except FileNotFoundError:
+    except (FileNotFoundError, yaml.YAMLError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    reply_style = data.get("reply_style")
+    if not isinstance(reply_style, dict):
+        reply_style = {}
+    values = reply_style.get("manual_sources", [])
+    if not isinstance(values, list):
         values = []
-    return set(values or ["manual"])
+    sources = {str(value).strip() for value in values if str(value).strip()}
+    return sources or {"manual"}
 
 
 def _classify_topic(agent: CustomerSupportAgent, text: str) -> str:
