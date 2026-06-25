@@ -97,11 +97,11 @@ def build_sla_report(days: int = 7) -> dict:
     handoff_items = build_handoff_queue(limit=100)
     overdue_handoff = [
         item for item in handoff_items
-        if int(item.get("wait_minutes") or 0) >= SLA_TARGETS["handoff_minutes"]
+        if _safe_int(item.get("wait_minutes")) >= SLA_TARGETS["handoff_minutes"]
     ]
     overdue_pending = [
         item for item in pending_sessions
-        if int(item.get("wait_minutes") or 0) >= SLA_TARGETS["pending_reply_minutes"]
+        if _safe_int(item.get("wait_minutes")) >= SLA_TARGETS["pending_reply_minutes"]
     ]
     target = SLA_TARGETS["first_response_minutes"]
     within_target = [item for item in response_minutes if item <= target]
@@ -203,6 +203,13 @@ def export_sla_report(days: int = 7) -> Path:
 
 def _md(value) -> str:
     return str(value or "").replace("|", "｜").replace("\n", " ")
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(default if value in (None, "") else value)
+    except Exception:
+        return default
 
 
 def main() -> int:

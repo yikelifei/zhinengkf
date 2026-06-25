@@ -30,14 +30,18 @@ FIELD_LABELS = {
     "city": "收货城市",
 }
 
+DEFAULT_REQUIRED_FIELDS = [
+    "phone_or_wechat", "quantity_estimate", "budget", "due_date", "city",
+]
+
 
 def build_quote_readiness(limit: int = 100) -> dict:
     limit = report_limit(limit, default=100)
     db = Database(str(ROOT / "data" / "kefu.db"))
     leads = db.list_leads(limit=limit)
-    required = pipeline_rules().get("required_fields") or [
-        "phone_or_wechat", "quantity_estimate", "budget", "due_date", "city",
-    ]
+    rules = pipeline_rules()
+    rules = rules if isinstance(rules, dict) else {}
+    required = _field_list(rules.get("required_fields"), DEFAULT_REQUIRED_FIELDS)
     items = []
     ready_count = 0
     for lead in leads:
@@ -52,7 +56,7 @@ def build_quote_readiness(limit: int = 100) -> dict:
                 "customer": lead.get("company_name") or lead.get("contact_person") or lead.get("session_id"),
                 "stage": lead.get("stage") or "new_inquiry",
                 "stage_label": stage_label(lead.get("stage") or "new_inquiry"),
-                "lead_score": int(lead.get("lead_score") or 0),
+                "lead_score": _safe_int(lead.get("lead_score")),
                 "ready": ready,
                 "missing_fields": missing,
                 "missing_labels": [FIELD_LABELS.get(item, item) for item in missing],
@@ -118,6 +122,20 @@ def _missing_fields(lead: dict, required: list[str]) -> list[str]:
         elif not lead.get(field):
             missing.append(field)
     return missing
+
+
+def _field_list(value, default: list[str]) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return list(default)
+    fields = [str(item) for item in value if item]
+    return fields or list(default)
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(default if value in (None, "") else value)
+    except Exception:
+        return default
 
 
 def _suggest_question(missing: list[str]) -> str:

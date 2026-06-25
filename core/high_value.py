@@ -33,16 +33,19 @@ ADVANCED_HIGH_VALUE_STAGES = {
     "closed_won",
 }
 
+DEFAULT_REQUIRED_FIELDS = [
+    "phone_or_wechat", "quantity_estimate", "budget", "due_date", "city",
+]
+DEFAULT_EXCLUDED_STAGES = ["lost", "closed_lost"]
+
 
 def evaluate_lead(lead: dict, rules: dict | None = None) -> dict:
     """Return a high-value assessment for one lead."""
-    rules = rules or {}
-    min_score = int(rules.get("high_value_min_score", rules.get("high_intent_score", 80)))
-    min_deal_value = int(rules.get("high_value_min_deal_value", 10000))
-    excluded_stages = set(rules.get("high_value_excluded_stages") or ["lost", "closed_lost"])
-    required_fields = rules.get("required_fields") or [
-        "phone_or_wechat", "quantity_estimate", "budget", "due_date", "city",
-    ]
+    rules = rules if isinstance(rules, dict) else {}
+    min_score = _to_int(rules.get("high_value_min_score", rules.get("high_intent_score", 80)), 80)
+    min_deal_value = _to_int(rules.get("high_value_min_deal_value", 10000), 10000)
+    excluded_stages = set(_field_list(rules.get("high_value_excluded_stages"), DEFAULT_EXCLUDED_STAGES))
+    required_fields = _field_list(rules.get("required_fields"), DEFAULT_REQUIRED_FIELDS)
 
     stage = lead.get("stage") or "new_inquiry"
     lead_score = _to_int(lead.get("lead_score"))
@@ -212,8 +215,15 @@ def _priority_score(
     return min(100, score)
 
 
-def _to_int(value) -> int:
+def _field_list(value, default: list[str]) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return list(default)
+    fields = [str(item) for item in value if item]
+    return fields or list(default)
+
+
+def _to_int(value, default: int = 0) -> int:
     try:
-        return int(value or 0)
+        return int(default if value in (None, "") else value)
     except Exception:
-        return 0
+        return default

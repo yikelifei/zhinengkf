@@ -6,6 +6,40 @@ from core.high_value import (
 )
 
 
+def test_evaluate_lead_tolerates_dirty_rule_values():
+    assessment = evaluate_lead(
+        {
+            "stage": "new_inquiry",
+            "lead_score": "bad",
+        },
+        {
+            "high_value_min_score": "bad",
+            "high_value_min_deal_value": "bad",
+            "high_value_excluded_stages": "lost",
+            "required_fields": "bad",
+        },
+    )
+
+    assert assessment["is_high_value"] is False
+    assert assessment["lead_score"] == 0
+    assert "phone_or_wechat" in assessment["missing_fields"]
+    assert "quantity_estimate" in assessment["missing_fields"]
+
+
+def test_evaluate_lead_falls_back_to_default_threshold_when_rule_is_dirty():
+    assessment = evaluate_lead(
+        {
+            "stage": "new_inquiry",
+            "lead_score": 80,
+            "phone": "13812345678",
+        },
+        {"high_value_min_score": "bad", "required_fields": "bad"},
+    )
+
+    assert assessment["is_high_value"] is True
+    assert assessment["lead_score"] == 80
+
+
 def test_estimates_deal_value_from_quantity_and_unit_budget():
     value, source = estimate_deal_value(
         {
@@ -47,6 +81,27 @@ def test_high_score_lead_is_high_value_without_full_fields():
 
     assert assessment["is_high_value"] is True
     assert "quantity_estimate" in assessment["missing_fields"]
+
+
+def test_high_value_rules_tolerate_malformed_values():
+    assessment = evaluate_lead(
+        {
+            "lead_score": "bad",
+            "stage": "quotation_given",
+            "phone": "13800138000",
+            "budget": "12000",
+        },
+        {
+            "high_value_min_score": "bad",
+            "high_value_min_deal_value": "bad",
+            "high_value_excluded_stages": "lost",
+            "required_fields": "phone_or_wechat",
+        },
+    )
+
+    assert assessment["lead_score"] == 0
+    assert assessment["is_high_value"] is True
+    assert "phone_or_wechat" not in assessment["missing_fields"]
 
 
 def test_excluded_stage_is_not_high_value():
