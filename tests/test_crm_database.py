@@ -119,6 +119,24 @@ def test_list_conversations_and_session_messages(tmp_path):
     assert lead["lead_score"] == 70
 
 
+def test_database_query_limits_fall_back_for_dirty_values(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    session_id = db.create_or_get_session("客户A")
+    db.save_message(session_id, "inbound", "hello", source="user")
+    db.save_message(session_id, "outbound", "ok", source="rule")
+    db.save_lead(session_id, {"company_name": "客户A公司", "lead_score": 70})
+    db.log_event("config_update", "updated")
+
+    assert len(db.list_conversations(limit=-1)) == 1
+    assert len(db.list_conversations(limit="bad")) == 1
+    assert len(db.get_session_messages(session_id, limit=0)) == 2
+    assert len(db.list_leads(limit="bad")) == 1
+    assert len(db.get_followup_leads(limit=-5)) == 1
+    assert db.query_pending_leads(days="bad")
+    assert db.get_daily_metrics(days=0)
+    assert len(db.get_audit_events(limit="bad")) == 1
+
+
 def test_conversation_manual_lock_lifecycle(tmp_path):
     db = Database(str(tmp_path / "kefu.db"))
     session_id = db.create_or_get_session("客户B")

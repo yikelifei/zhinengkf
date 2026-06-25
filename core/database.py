@@ -193,6 +193,7 @@ class Database:
         return history
 
     def list_conversations(self, limit=100):
+        limit = _safe_positive_int(limit, default=100, max_value=1000)
         rows = self.execute(
             """SELECT c.*, l.company_name, l.contact_person, l.phone, l.stage AS lead_stage,
                       l.lead_score, l.next_action
@@ -211,6 +212,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_session_messages(self, session_id, limit=50):
+        limit = _safe_positive_int(limit, default=50, max_value=500)
         rows = self.execute(
             """SELECT direction, content, source, intent, created_at
                FROM messages
@@ -369,6 +371,7 @@ class Database:
         self.commit()
 
     def list_leads(self, limit=100):
+        limit = _safe_positive_int(limit, default=100, max_value=5000)
         rows = self.execute(
             """SELECT * FROM leads
                ORDER BY COALESCE(updated_at, created_at) DESC
@@ -400,6 +403,7 @@ class Database:
 
     def query_pending_leads(self, days=7):
         """查询待跟进的线索（最近N天未成交）"""
+        days = _safe_positive_int(days, default=7, max_value=3650)
         rows = self.execute(
             """SELECT * FROM leads
                WHERE stage IN ('new_inquiry')
@@ -409,6 +413,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_followup_leads(self, limit=100):
+        limit = _safe_positive_int(limit, default=100, max_value=1000)
         rows = self.execute(
             """SELECT * FROM leads
                WHERE COALESCE(stage, 'new_inquiry') NOT IN
@@ -426,6 +431,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_daily_metrics(self, days=7):
+        days = _safe_positive_int(days, default=7, max_value=3650)
         rows = self.execute(
             """SELECT
                  date(created_at) AS day,
@@ -483,6 +489,7 @@ class Database:
         self.commit()
 
     def get_audit_events(self, limit=100):
+        limit = _safe_positive_int(limit, default=100, max_value=1000)
         rows = self.execute(
             """SELECT id, event_type, detail, created_at
                FROM audit_log
@@ -491,3 +498,13 @@ class Database:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def _safe_positive_int(value, default: int, max_value: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed <= 0:
+        return default
+    return min(parsed, max_value)
