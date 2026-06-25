@@ -109,6 +109,13 @@ def read_lock_pid(path=LOCK_FILE):
         return None
 
 
+def _settings_ai_engine(settings) -> dict:
+    if not isinstance(settings, dict):
+        return {}
+    ai_engine = settings.get("ai_engine")
+    return ai_engine if isinstance(ai_engine, dict) else {}
+
+
 def ensure_single_instance():
     try:
         old_pid = read_lock_pid()
@@ -143,7 +150,7 @@ class SmartBotConsole(tk.Tk):
         self.mode_var = tk.StringVar(value="后台引擎")
         self.last_log_size = 0
         self.settings = load_settings()
-        self.provider_var = tk.StringVar(value=self.settings.get("ai_engine", {}).get("primary", "custom_api_1"))
+        self.provider_var = tk.StringVar(value=_settings_ai_engine(self.settings).get("primary", "custom_api_1"))
         self.api_enabled_var = tk.BooleanVar(value=True)
         self.api_primary_var = tk.BooleanVar(value=True)
         self.api_key_var = tk.StringVar()
@@ -671,7 +678,7 @@ class SmartBotConsole(tk.Tk):
             provider_name = self.provider_var.get()
             provider = ensure_provider(self.settings, provider_name)
             self.api_enabled_var.set(bool(provider.get("enabled", False)))
-            self.api_primary_var.set(provider_name == self.settings.get("ai_engine", {}).get("primary"))
+            self.api_primary_var.set(provider_name == _settings_ai_engine(self.settings).get("primary"))
             self.api_key_var.set(provider.get("api_key", ""))
             self.base_url_var.set(provider.get("base_url", ""))
             self.model_var.set(provider.get("model", ""))

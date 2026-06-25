@@ -1,5 +1,6 @@
 from io import BytesIO
 
+import scripts.web_console as web_console
 from scripts.web_console import (
     ConsoleHandler,
     ROOT,
@@ -26,11 +27,11 @@ def make_handler_for_json_body(raw: bytes):
 
 
 def test_json_body_rejects_invalid_json_and_non_object_payloads():
-    for raw in (b"{broken", b"[1, 2]", b'"text"'):
+    for raw in (b"{broken", b"[1, 2]", b'"text"', b"\xff"):
         try:
             make_handler_for_json_body(raw)._json_body()
         except ValueError as exc:
-            assert "JSON" in str(exc) or "json" in str(exc)
+            assert "JSON" in str(exc) or "json" in str(exc) or "UTF-8" in str(exc)
         else:
             raise AssertionError(f"_json_body accepted raw={raw!r}")
 
@@ -74,6 +75,50 @@ def test_settings_response_redacts_nested_provider_keys():
     assert providers["geeknow"]["api_key_masked"] == "sk-s...0000"
     assert providers["backup"]["api_key_masked"] == "${BACKUP_API_KEY}"
     assert "sk-secret-geeknow-0000" not in str(result)
+
+
+def test_settings_response_tolerates_malformed_settings_shapes():
+    assert redact_settings_for_response("broken") == {"ai_engine": {"providers": {}}}
+
+    result = redact_settings_for_response(
+        {
+            "ai_engine": {
+                "providers": {
+                    "broken": "not a provider dict",
+                    "ok": {"api_key": "sk-secret-123456", "model": "demo"},
+                }
+            }
+        }
+    )
+
+    assert result["ai_engine"]["providers"]["broken"] == {"api_key": ""}
+    assert result["ai_engine"]["providers"]["ok"]["api_key"] == ""
+    assert "sk-secret-123456" not in str(result)
+
+
+def test_web_console_api_helpers_tolerate_malformed_settings_shapes(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    original = web_console.load_settings
+    try:
+        web_console.load_settings = lambda: {"ai_engine": "broken", "channels": "broken"}
+        status = web_console.api_status(db)
+        channels = web_console.api_channels()
+
+        web_console.load_settings = lambda: {
+            "ai_engine": {"primary": "geeknow", "providers": "broken"},
+            "channels": {"active": "wechat", "adapters": "broken"},
+        }
+        providers = web_console.api_providers()
+        fallback_channels = web_console.api_channels()
+    finally:
+        web_console.load_settings = original
+
+    assert status["ok"] is True
+    assert status["primary_model"] == "-"
+    assert status["providers_enabled"] == 0
+    assert channels["active"] == ["wechat"]
+    assert providers["providers"]
+    assert fallback_channels["active"] == ["wechat"]
 
 
 def test_file_summary_does_not_expose_local_path(tmp_path):

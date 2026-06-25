@@ -1,4 +1,5 @@
 from scripts.ui_app import (
+    _settings_ai_engine,
     parse_max_tokens,
     parse_positive_pid,
     parse_temperature,
@@ -24,6 +25,12 @@ def test_read_lock_pid_ignores_missing_or_malformed_lock_files(tmp_path):
 
     missing.write_text("9012", encoding="utf-8")
     assert read_lock_pid(missing) == 9012
+
+
+def test_settings_ai_engine_treats_malformed_shapes_as_empty():
+    assert _settings_ai_engine("broken") == {}
+    assert _settings_ai_engine({"ai_engine": "broken"}) == {}
+    assert _settings_ai_engine({"ai_engine": {"primary": "geeknow"}}) == {"primary": "geeknow"}
 
 
 def test_parse_provider_numeric_fields_use_defaults_and_bounds():

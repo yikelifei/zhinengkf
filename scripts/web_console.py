@@ -165,7 +165,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if not length:
             return {}
-        raw = self.rfile.read(length).decode("utf-8")
+        try:
+            raw = self.rfile.read(length).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("request body must be UTF-8") from exc
         try:
             body = json.loads(raw or "{}")
         except json.JSONDecodeError as exc:
@@ -427,10 +430,16 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self._send_error_json(exc, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def api_status(db):
     settings = load_settings()
-    providers = settings.get("ai_engine", {}).get("providers", {})
-    primary = settings.get("ai_engine", {}).get("primary", "-")
+    ai_engine = _dict_or_empty(_dict_or_empty(settings).get("ai_engine"))
+    providers = _dict_or_empty(ai_engine.get("providers"))
+    primary = ai_engine.get("primary") or "-"
+    primary_config = _dict_or_empty(providers.get(primary))
     conversations = db.list_conversations(limit=500)
     leads = db.list_leads(limit=500)
     needs_human = sum(1 for item in conversations if item.get("status") == "needs_human")
@@ -438,8 +447,8 @@ def api_status(db):
     return {
         "ok": True,
         "primary_provider": primary,
-        "primary_model": display_config_value(providers.get(primary, {}).get("model", "-")),
-        "providers_enabled": sum(1 for item in providers.values() if item.get("enabled")),
+        "primary_model": display_config_value(primary_config.get("model", "-")),
+        "providers_enabled": sum(1 for item in providers.values() if isinstance(item, dict) and item.get("enabled")),
         "backend": backend_status(),
         "skills": len(load_skills().get("skills", [])),
         "knowledge": len(load_knowledge().get("documents", [])),
@@ -452,8 +461,10 @@ def api_status(db):
 
 def api_providers():
     settings = load_settings()
-    providers = settings.get("ai_engine", {}).get("providers", {})
-    primary = settings.get("ai_engine", {}).get("primary")
+    settings = _dict_or_empty(settings)
+    ai_engine = _dict_or_empty(settings.get("ai_engine"))
+    providers = _dict_or_empty(ai_engine.get("providers"))
+    primary = ai_engine.get("primary")
     names = list(PROVIDER_PRESETS.keys()) + [name for name in providers if name not in PROVIDER_PRESETS]
     items = []
     for name in names:
@@ -468,7 +479,7 @@ def api_providers():
 
 
 def redact_provider_config(provider: dict) -> dict:
-    item = dict(provider or {})
+    item = dict(provider) if isinstance(provider, dict) else {}
     api_key = str(item.get("api_key") or "")
     if api_key:
         item["api_key_masked"] = mask_secret(api_key)
@@ -477,9 +488,9 @@ def redact_provider_config(provider: dict) -> dict:
 
 
 def redact_settings_for_response(settings: dict) -> dict:
-    safe = dict(settings or {})
-    ai_engine = dict(safe.get("ai_engine") or {})
-    providers = ai_engine.get("providers") or {}
+    safe = dict(settings) if isinstance(settings, dict) else {}
+    ai_engine = dict(safe.get("ai_engine")) if isinstance(safe.get("ai_engine"), dict) else {}
+    providers = _dict_or_empty(ai_engine.get("providers"))
     ai_engine["providers"] = {
         name: redact_provider_config(provider)
         for name, provider in providers.items()
@@ -490,13 +501,18 @@ def redact_settings_for_response(settings: dict) -> dict:
 
 def api_channels():
     settings = load_settings()
-    channel_settings = settings.get("channels", {})
-    active = set(channel_settings.get("active") or ["wechat"])
-    adapters = channel_settings.get("adapters") or {}
+    channel_settings = _dict_or_empty(_dict_or_empty(settings).get("channels"))
+    active_values = channel_settings.get("active")
+    if not isinstance(active_values, (list, tuple, set)):
+        active_values = ["wechat"]
+    active = {str(item).strip() for item in active_values if str(item).strip()}
+    if not active:
+        active = {"wechat"}
+    adapters = _dict_or_empty(channel_settings.get("adapters"))
     rows = []
     for item in list_supported_channels():
         channel_id = item["channel_id"]
-        config = adapters.get(channel_id, {})
+        config = _dict_or_empty(adapters.get(channel_id))
         rows.append(
             {
                 **item,
