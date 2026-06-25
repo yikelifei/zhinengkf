@@ -39,7 +39,7 @@ class CustomerSupportAgent:
         try:
             with open(self.knowledge_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-        except FileNotFoundError:
+        except (FileNotFoundError, yaml.YAMLError):
             data = {}
         if not isinstance(data, dict):
             data = {}

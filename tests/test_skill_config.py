@@ -77,6 +77,13 @@ def test_load_skills_treats_malformed_skills_as_empty(tmp_path):
     assert load_skills(path)["skills"] == [{"id": "ok", "title": "OK"}]
 
 
+def test_load_skills_treats_invalid_yaml_as_empty(tmp_path):
+    path = tmp_path / "customer_skills.yaml"
+    path.write_text("skills: [broken\n", encoding="utf-8")
+
+    assert load_skills(path)["skills"] == []
+
+
 def test_save_skills_does_not_split_malformed_skills_string(tmp_path):
     path = tmp_path / "customer_skills.yaml"
 

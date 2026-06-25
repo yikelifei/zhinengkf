@@ -18,12 +18,17 @@ def _knowledge_path(path="config/customer_knowledge.yaml") -> Path:
 
 def load_knowledge(path="config/customer_knowledge.yaml") -> dict:
     knowledge_file = _knowledge_path(path)
-    with open(knowledge_file, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(knowledge_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        data = {}
     if not isinstance(data, dict):
         data = {}
     if not isinstance(data.get("documents"), list):
         data["documents"] = []
+    else:
+        data["documents"] = [doc for doc in data["documents"] if isinstance(doc, dict)]
     return data
 
 
@@ -38,7 +43,11 @@ def save_knowledge(data: dict, path="config/customer_knowledge.yaml") -> Path:
 
     knowledge_file.parent.mkdir(parents=True, exist_ok=True)
     documents = (data or {}).get("documents") if isinstance(data, dict) else []
-    data = {"documents": list(documents) if isinstance(documents, list) else []}
+    data = {
+        "documents": [doc for doc in documents if isinstance(doc, dict)]
+        if isinstance(documents, list)
+        else []
+    }
     with open(knowledge_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     return knowledge_file

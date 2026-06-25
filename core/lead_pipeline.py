@@ -30,8 +30,11 @@ def load_pipeline(path="config/lead_pipeline.yaml") -> dict:
     pipeline_file = _pipeline_path(path)
     if not pipeline_file.exists():
         return {"stages": [], "rules": dict(DEFAULT_RULES)}
-    with open(pipeline_file, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(pipeline_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError:
+        data = {}
     if not isinstance(data, dict):
         data = {}
     if not isinstance(data.get("stages"), list):

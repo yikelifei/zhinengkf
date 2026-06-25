@@ -210,7 +210,10 @@ class PlatformLeadStore:
         raw = self.path.read_text(encoding="utf-8").strip()
         if not raw:
             return {"version": DATA_VERSION, "leads": []}
-        data = json.loads(raw) or {}
+        try:
+            data = json.loads(raw) or {}
+        except json.JSONDecodeError:
+            data = {}
         if not isinstance(data, dict):
             data = {}
         leads = data.get("leads") or []

@@ -94,6 +94,18 @@ def test_agent_tolerates_missing_knowledge_file(tmp_path):
     assert decision.topic == "pricing"
 
 
+def test_agent_tolerates_invalid_knowledge_yaml(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text("documents: [broken\n", encoding="utf-8")
+
+    agent = CustomerSupportAgent(knowledge_path=str(path))
+    decision = agent.analyze("\u7aef\u5348\u793c\u76d2\u591a\u5c11\u94b1")
+
+    assert agent.documents == []
+    assert decision.route == "direct_reply"
+    assert decision.topic == "pricing"
+
+
 def test_agent_skips_malformed_knowledge_documents(tmp_path):
     path = tmp_path / "customer_knowledge.yaml"
     path.write_text(

@@ -238,5 +238,5 @@ class ReplyStyleCoach:
                 return {}
             config = data.get("reply_style", data)
             return config if isinstance(config, dict) else {}
-        except FileNotFoundError:
+        except (FileNotFoundError, yaml.YAMLError):
             return {}

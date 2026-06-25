@@ -98,6 +98,18 @@ def test_classify_unmatched_is_vague():
     assert result["confidence"] == "low"
 
 
+def test_classify_skips_malformed_keyword_rules():
+    kw = {
+        "broken": "bad",
+        "empty": {"keywords": {"bad": "shape"}, "priority": 99},
+        "price": {"keywords": "price", "priority": 10},
+    }
+    clf = IntentClassifier(kw)
+    result = clf.classify("need price")
+    assert result["intent"] == "price"
+    assert result["matched_keywords"] == ["price"]
+
+
 def test_classify_transfer_human():
     kw = {
         "transfer_human": {
@@ -135,6 +147,18 @@ def test_rule_engine_no_match():
     intent, template = engine.match("随便聊聊")
     assert intent is None
     assert template is None
+
+
+def test_rule_engine_skips_malformed_keyword_rules():
+    kw = {
+        "broken": "bad",
+        "empty": {"keywords": {"bad": "shape"}, "priority": 99},
+        "price": {"keywords": "price", "priority": 10, "reply_template": "ok"},
+    }
+    engine = RuleEngine(kw)
+    intent, template = engine.match("need price")
+    assert intent == "price"
+    assert template == "ok"
 
 
 def test_rule_engine_prioritization():
@@ -420,9 +444,11 @@ if __name__ == "__main__":
         ("test_classify_price", test_classify_price),
         ("test_classify_multiple", test_classify_multiple_matches_high_confidence),
         ("test_classify_vague", test_classify_unmatched_is_vague),
+        ("test_classify_malformed_rules", test_classify_skips_malformed_keyword_rules),
         ("test_classify_transfer", test_classify_transfer_human),
         ("test_rule_engine_match", test_rule_engine_match),
         ("test_rule_engine_no_match", test_rule_engine_no_match),
+        ("test_rule_engine_malformed_rules", test_rule_engine_skips_malformed_keyword_rules),
         ("test_rule_engine_priority", test_rule_engine_prioritization),
         ("test_render_basic", test_render_basic),
         ("test_render_missing", test_render_missing_var),

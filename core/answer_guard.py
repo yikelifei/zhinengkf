@@ -43,8 +43,9 @@ class AnswerGuard:
 
     def __init__(self, profile: dict | None = None):
         self.profile = profile if profile is not None else load_profile()
-        brand = self.profile.get("brand") or {}
-        configured = [str(item).strip() for item in brand.get("forbidden_promises", []) if str(item).strip()]
+        source = self.profile if isinstance(self.profile, dict) else {}
+        brand = source.get("brand") if isinstance(source.get("brand"), dict) else {}
+        configured = _string_list(brand.get("forbidden_promises"))
         self.forbidden_phrases = configured or list(self.DEFAULT_FORBIDDEN)
 
     def sanitize(self, answer: str) -> GuardResult:
@@ -114,3 +115,14 @@ class AnswerGuard:
         while duplicate in text:
             text = text.replace(duplicate, safe_copy)
         return text
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]

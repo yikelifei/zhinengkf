@@ -40,6 +40,13 @@ def test_store_treats_malformed_json_shape_as_empty(tmp_path):
     assert PlatformLeadStore(path).list_leads() == []
 
 
+def test_store_treats_invalid_json_as_empty(tmp_path):
+    path = tmp_path / "platform_leads.json"
+    path.write_text('{"leads": [', encoding="utf-8")
+
+    assert PlatformLeadStore(path).list_leads() == []
+
+
 def test_store_skips_malformed_leads_and_bad_version(tmp_path):
     path = tmp_path / "platform_leads.json"
     path.write_text(

@@ -18,8 +18,11 @@ def load_skills(path=SKILLS_PATH):
     path = Path(path)
     if not path.exists():
         return {"skills": []}
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError:
+        data = {}
     if not isinstance(data, dict):
         data = {}
     skills = data.get("skills")

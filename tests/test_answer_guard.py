@@ -1,6 +1,15 @@
 from core.answer_guard import AnswerGuard
 
 
+def test_answer_guard_tolerates_malformed_profile_shapes():
+    assert AnswerGuard(profile="bad").forbidden_phrases
+    assert AnswerGuard(profile={"brand": "bad"}).forbidden_phrases
+
+    guard = AnswerGuard(profile={"brand": {"forbidden_promises": "never promise"}})
+
+    assert guard.forbidden_phrases == ["never promise"]
+
+
 def test_after_sales_refund_and_compensation_copy_is_not_duplicated():
     result = AnswerGuard(profile={"brand": {}}).sanitize("售后问题我们包退款包赔。")
 

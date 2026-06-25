@@ -17,6 +17,15 @@ def test_reply_style_uses_defaults_for_malformed_config_root(tmp_path):
     )
 
 
+def test_reply_style_uses_defaults_for_invalid_yaml(tmp_path):
+    path = tmp_path / "reply_style.yaml"
+    path.write_text("reply_style: [broken\n", encoding="utf-8")
+
+    coach = ReplyStyleCoach(str(path))
+
+    assert coach.max_chars == coach.DEFAULT_MAX_CHARS
+
+
 def test_reply_style_uses_defaults_for_invalid_max_chars(tmp_path):
     path = tmp_path / "reply_style.yaml"
     path.write_text(

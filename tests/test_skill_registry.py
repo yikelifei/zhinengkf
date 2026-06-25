@@ -12,6 +12,15 @@ def test_skill_registry_treats_malformed_root_as_empty(tmp_path):
     assert registry.skills == []
 
 
+def test_skill_registry_treats_invalid_yaml_as_empty(tmp_path):
+    path = tmp_path / "customer_skills.yaml"
+    path.write_text("skills: [broken\n", encoding="utf-8")
+
+    registry = SkillRegistry(str(path))
+
+    assert registry.skills == []
+
+
 def test_skill_registry_skips_malformed_entries_and_handles_dirty_fields(tmp_path):
     path = tmp_path / "customer_skills.yaml"
     path.write_text(

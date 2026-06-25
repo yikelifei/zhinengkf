@@ -49,12 +49,42 @@ def test_load_knowledge_treats_malformed_documents_as_empty(tmp_path):
     assert load_knowledge(path=str(path))["documents"] == []
 
 
+def test_load_knowledge_treats_invalid_yaml_as_empty(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text("documents: [broken\n", encoding="utf-8")
+
+    assert load_knowledge(path=str(path))["documents"] == []
+
+
+def test_load_knowledge_filters_non_document_entries(tmp_path):
+    path = tmp_path / "customer_knowledge.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "documents": [
+                    "broken",
+                    {"id": "ok", "title": "Alpha", "keywords": ["alpha"], "answer": "OK"},
+                ]
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    assert [doc["id"] for doc in load_knowledge(path=str(path))["documents"]] == ["ok"]
+    assert match_knowledge("alpha", path=str(path))[0]["id"] == "ok"
+
+
 def test_save_knowledge_does_not_split_malformed_documents_string(tmp_path):
     path = tmp_path / "customer_knowledge.yaml"
 
     save_knowledge({"documents": "broken"}, path=str(path))
 
     assert load_knowledge(path=str(path))["documents"] == []
+
+    save_knowledge({"documents": ["broken", {"id": "ok"}]}, path=str(path))
+
+    assert load_knowledge(path=str(path))["documents"] == [{"id": "ok"}]
 
 
 def test_delete_document_creates_change(tmp_path):

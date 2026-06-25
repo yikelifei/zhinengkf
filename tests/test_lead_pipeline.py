@@ -45,6 +45,16 @@ def test_load_pipeline_treats_malformed_stages_and_rules_as_defaults(tmp_path):
     assert pipeline["rules"]["high_intent_score"] == 80
 
 
+def test_load_pipeline_treats_invalid_yaml_as_defaults(tmp_path):
+    path = tmp_path / "lead_pipeline.yaml"
+    path.write_text("stages: [broken\n", encoding="utf-8")
+
+    pipeline = load_pipeline(str(path))
+
+    assert pipeline["stages"] == []
+    assert pipeline["rules"]["high_intent_score"] == 80
+
+
 def test_validate_pipeline_rejects_bad_config():
     issues = validate_pipeline(
         {
