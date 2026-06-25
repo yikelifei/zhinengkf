@@ -70,6 +70,15 @@ def test_store_save_does_not_split_malformed_leads_string(tmp_path):
     assert PlatformLeadStore(path).list_leads() == []
 
 
+def test_store_list_leads_tolerates_dirty_limit(tmp_path):
+    store = PlatformLeadStore(tmp_path / "platform_leads.json")
+    store.add_lead(platform="douyin", nickname="user_a")
+    store.add_lead(platform="wechat", nickname="user_b")
+
+    assert len(store.list_leads(limit="bad")) == 2
+    assert store.list_leads(limit=-1) == []
+
+
 def test_bind_wechat_updates_status_and_stats(tmp_path):
     store = PlatformLeadStore(tmp_path / "platform_leads.json")
     lead = store.add_lead(platform="xiaohongshu", nickname="user_b")

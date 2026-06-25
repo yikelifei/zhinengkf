@@ -136,7 +136,9 @@ class PlatformLeadStore:
             reverse=True,
         )
         if limit is not None:
-            leads = leads[: max(0, int(limit))]
+            parsed_limit = safe_limit(limit)
+            if parsed_limit is not None:
+                leads = leads[:parsed_limit]
         return deepcopy(leads)
 
     def get_lead(self, lead_id: str) -> dict | None:
@@ -490,6 +492,13 @@ def to_int(value) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def safe_limit(value) -> int | None:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def md(value) -> str:
