@@ -27,6 +27,7 @@ def build_high_value_leads(limit: int = 200, include_all: bool = False) -> dict:
     limit = report_limit(limit, default=200)
     db = Database(str(ROOT / "data" / "kefu.db"))
     rules = pipeline_rules()
+    rules = rules if isinstance(rules, dict) else {}
     rows = []
     for lead in db.list_leads(limit=limit):
         assessment = evaluate_lead(lead, rules)
@@ -62,14 +63,17 @@ def export_high_value_leads(limit: int = 200, include_all: bool = False) -> Path
 
 
 def render_markdown(report: dict) -> str:
-    rules = report.get("rules") or {}
+    rules = report.get("rules")
+    rules = rules if isinstance(rules, dict) else {}
+    min_score = _safe_int(rules.get("high_value_min_score", rules.get("high_intent_score", 80)), 80)
+    min_deal_value = _safe_float(rules.get("high_value_min_deal_value"), 10000)
     lines = [
         "# 高价值客户筛选清单",
         "",
         f"- 生成时间：{report['generated_at']}",
         f"- 高价值客户数：{report['high_value']}",
-        f"- 意向分阈值：{rules.get('high_value_min_score', rules.get('high_intent_score', 80))}",
-        f"- 预计金额阈值：{format_money(float(rules.get('high_value_min_deal_value', 10000)))}",
+        f"- 意向分阈值：{min_score}",
+        f"- 预计金额阈值：{format_money(min_deal_value)}",
         "",
         "|客户|阶段|优先级|意向分|预计金额|联系方式|数量|预算|日期|城市|筛选原因|建议动作|",
         "|---|---|---:|---:|---:|---|---|---|---|---|---|---|",
@@ -114,6 +118,20 @@ def _item(lead: dict, assessment: dict) -> dict:
 
 def _md(value) -> str:
     return str(value or "").replace("|", "｜").replace("\n", " ")
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(default if value in (None, "") else value)
+    except Exception:
+        return default
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(default if value in (None, "") else value)
+    except Exception:
+        return default
 
 
 def main(argv=None) -> int:

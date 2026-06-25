@@ -1,4 +1,12 @@
-from scripts import followup_reminders, handoff_queue, order_handoff, quote_readiness, sla_monitor
+from scripts import (
+    export_report,
+    followup_reminders,
+    handoff_queue,
+    high_value_leads,
+    order_handoff,
+    quote_readiness,
+    sla_monitor,
+)
 
 
 class FollowupDB:
@@ -89,6 +97,44 @@ class SlaDB:
         return EmptyCursor()
 
 
+class ReportDB:
+    def __init__(self, path):
+        self.path = path
+
+    def get_lead_metrics(self):
+        return {
+            "total": "bad",
+            "high_intent": "bad",
+            "won": "bad",
+            "lost": "bad",
+            "avg_score": "bad",
+        }
+
+    def get_stage_metrics(self):
+        return ["bad"]
+
+    def get_daily_metrics(self, days):
+        return [
+            "bad",
+            {
+                "day": "2026-06-25",
+                "inbound_messages": "bad",
+                "outbound_messages": "bad",
+                "active_sessions": "bad",
+            }
+        ]
+
+    def get_followup_leads(self, limit):
+        return [
+            "bad",
+            {
+                "session_id": "s1",
+                "company_name": "Dirty report",
+                "lead_score": "bad",
+            }
+        ]
+
+
 def test_followup_tasks_treat_dirty_scores_as_zero():
     original = followup_reminders.Database
     try:
@@ -156,3 +202,33 @@ def test_sla_monitor_treats_dirty_handoff_wait_minutes_as_zero():
 
     assert report["handoff_sessions"] == 1
     assert report["overdue_handoff_sessions"] == 0
+
+
+def test_high_value_markdown_treats_dirty_rules_as_safe_defaults():
+    markdown = high_value_leads.render_markdown(
+        {
+            "generated_at": "2026-06-25 08:00:00",
+            "high_value": 0,
+            "rules": {
+                "high_value_min_score": "bad",
+                "high_value_min_deal_value": "bad",
+            },
+            "items": [],
+        }
+    )
+
+    assert "80" in markdown
+    assert "1万元" in markdown
+
+
+def test_export_report_treats_dirty_scores_and_metrics_as_zero():
+    original = export_report.Database
+    try:
+        export_report.Database = ReportDB
+        markdown = export_report.build_report(days=7, limit=10)
+    finally:
+        export_report.Database = original
+
+    assert "Dirty report" in markdown
+    assert "| 2026-06-25 | 0 | 0 | 0 |" in markdown
+    assert "| Dirty report |" in markdown

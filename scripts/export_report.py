@@ -28,14 +28,35 @@ def _fmt(value):
     return str(value)
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(default if value in (None, "") else value)
+    except Exception:
+        return default
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(default if value in (None, "") else value)
+    except Exception:
+        return default
+
+
+def _dict_rows(value) -> list[dict]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def build_report(days=7, limit=20) -> str:
     days = report_days(days, default=7)
     limit = report_limit(limit, default=20)
     db = Database(str(ROOT / "data" / "kefu.db"))
     lead_metrics = db.get_lead_metrics()
-    stage_metrics = db.get_stage_metrics()
-    daily_metrics = db.get_daily_metrics(days=days)
-    followups = db.get_followup_leads(limit=limit)
+    lead_metrics = lead_metrics if isinstance(lead_metrics, dict) else {}
+    stage_metrics = _dict_rows(db.get_stage_metrics())
+    daily_metrics = _dict_rows(db.get_daily_metrics(days=days))
+    followups = _dict_rows(db.get_followup_leads(limit=limit))
 
     lines = [
         "# 智能客服运营报告",
@@ -45,11 +66,11 @@ def build_report(days=7, limit=20) -> str:
         "",
         "## 线索总览",
         "",
-        f"- 线索总数：{int(lead_metrics.get('total') or 0)}",
-        f"- 高意向线索：{int(lead_metrics.get('high_intent') or 0)}",
-        f"- 已成交：{int(lead_metrics.get('won') or 0)}",
-        f"- 已流失：{int(lead_metrics.get('lost') or 0)}",
-        f"- 平均意向分：{round(float(lead_metrics.get('avg_score') or 0), 1)}",
+        f"- 线索总数：{_safe_int(lead_metrics.get('total'))}",
+        f"- 高意向线索：{_safe_int(lead_metrics.get('high_intent'))}",
+        f"- 已成交：{_safe_int(lead_metrics.get('won'))}",
+        f"- 已流失：{_safe_int(lead_metrics.get('lost'))}",
+        f"- 平均意向分：{round(_safe_float(lead_metrics.get('avg_score')), 1)}",
         "",
         "## 阶段分布",
         "",
@@ -69,9 +90,9 @@ def build_report(days=7, limit=20) -> str:
         for row in daily_metrics:
             lines.append(
                 f"| {_fmt(row.get('day'))} | "
-                f"{int(row.get('inbound_messages') or 0)} | "
-                f"{int(row.get('outbound_messages') or 0)} | "
-                f"{int(row.get('active_sessions') or 0)} |"
+                f"{_safe_int(row.get('inbound_messages'))} | "
+                f"{_safe_int(row.get('outbound_messages'))} | "
+                f"{_safe_int(row.get('active_sessions'))} |"
             )
     else:
         lines.append("- 暂无消息数据")
@@ -89,7 +110,7 @@ def build_report(days=7, limit=20) -> str:
                 f"{_fmt(lead.get('budget'))} | "
                 f"{_fmt(lead.get('due_date'))} | "
                 f"{_fmt(lead.get('city'))} | "
-                f"{int(lead.get('lead_score') or 0)} | "
+                f"{_safe_int(lead.get('lead_score'))} | "
                 f"{_fmt(lead.get('next_action'))} |"
             )
     else:
