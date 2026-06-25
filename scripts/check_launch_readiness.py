@@ -51,6 +51,10 @@ def _count(items: list[dict], severity: str) -> int:
     return sum(1 for item in items if item["severity"] == severity)
 
 
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def _check_files(items: list[dict]) -> None:
     for rel in REQUIRED_FILES:
         if not (ROOT / rel).exists():
@@ -79,14 +83,32 @@ def _check_profile(items: list[dict]) -> None:
 
 def _check_ai(items: list[dict]) -> None:
     settings = load_settings()
-    ai_engine = settings.get("ai_engine") or {}
-    providers = ai_engine.get("providers") or {}
-    enabled = {name: cfg for name, cfg in providers.items() if cfg.get("enabled", False)}
+    ai_engine = _dict_or_empty(_dict_or_empty(settings).get("ai_engine"))
+    if not ai_engine:
+        items.append(_item("blocker", "AI 配置", "ai_engine 配置缺失或格式错误", "修正 config/settings.yaml 的 ai_engine 配置"))
+        return
+    providers = ai_engine.get("providers")
+    if not isinstance(providers, dict):
+        items.append(_item("blocker", "AI 配置", "providers 配置缺失或格式错误", "修正 config/settings.yaml 的 ai_engine.providers"))
+        return
+
+    primary = ai_engine.get("primary")
+    for name, cfg in providers.items():
+        if not isinstance(cfg, dict):
+            severity = "blocker" if name == primary else "warning"
+            items.append(
+                _item(
+                    severity,
+                    "AI 配置",
+                    f"供应商 {name} 配置格式错误",
+                    "将供应商配置修正为包含 enabled/api_key/base_url/model 的对象",
+                )
+            )
+    enabled = {name: cfg for name, cfg in providers.items() if isinstance(cfg, dict) and cfg.get("enabled", False)}
     if ai_engine.get("enabled", True) and not enabled:
         items.append(_item("blocker", "AI 配置", "未启用任何 AI 供应商", "至少启用一个可用供应商，或明确关闭 AI 兜底"))
         return
 
-    primary = ai_engine.get("primary")
     if primary and primary not in providers:
         items.append(_item("blocker", "AI 配置", f"主供应商 {primary} 不存在", "修正 config/settings.yaml 的 ai_engine.primary"))
     if primary in providers and not providers[primary].get("enabled", False):

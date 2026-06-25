@@ -37,6 +37,43 @@ class CheckResult:
         print(f"[FAIL] {message}")
 
 
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def check_ai_settings(result, settings, validate_provider_config):
+    ai_engine = _dict_or_empty(_dict_or_empty(settings).get("ai_engine"))
+    if not ai_engine:
+        result.fail("ai_engine config is missing or malformed")
+        return
+    providers = ai_engine.get("providers")
+    if not isinstance(providers, dict):
+        result.fail("ai_engine.providers config is missing or malformed")
+        return
+
+    malformed = [name for name, cfg in providers.items() if not isinstance(cfg, dict)]
+    for name in malformed:
+        result.fail(f"provider {name} config is malformed")
+
+    enabled = {
+        name: cfg
+        for name, cfg in providers.items()
+        if isinstance(cfg, dict) and cfg.get("enabled", False)
+    }
+    if not enabled:
+        result.warn("no AI provider is enabled; rule and knowledge replies still work")
+        return
+
+    result.ok(f"enabled AI providers: {', '.join(enabled)}")
+    primary = ai_engine.get("primary")
+    if primary not in providers:
+        result.warn(f"primary provider '{primary}' is not configured")
+    for name, cfg in enabled.items():
+        issues = validate_provider_config(cfg)
+        if issues:
+            result.warn(f"provider {name}: {'；'.join(issues)}")
+
+
 def check_imports(result):
     required = [
         "yaml",
@@ -263,24 +300,7 @@ def check_yaml_and_business_rules(result):
     try:
         settings = load_settings()
         result.ok("settings.yaml loads")
-        ai_engine = settings.get("ai_engine", {})
-        providers = ai_engine.get("providers", {})
-        enabled = {
-            name: cfg
-            for name, cfg in providers.items()
-            if cfg.get("enabled", False)
-        }
-        if not enabled:
-            result.warn("no AI provider is enabled; rule and knowledge replies still work")
-        else:
-            result.ok(f"enabled AI providers: {', '.join(enabled)}")
-            primary = ai_engine.get("primary")
-            if primary not in providers:
-                result.warn(f"primary provider '{primary}' is not configured")
-            for name, cfg in enabled.items():
-                issues = validate_provider_config(cfg)
-                if issues:
-                    result.warn(f"provider {name}: {'；'.join(issues)}")
+        check_ai_settings(result, settings, validate_provider_config)
     except Exception as exc:
         result.fail(f"settings.yaml failed to load: {exc}")
 

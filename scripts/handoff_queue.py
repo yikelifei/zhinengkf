@@ -41,6 +41,13 @@ def _latest_inbound(db: Database, session_id: str) -> str:
     return ""
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def _status_label(status: str, lock: dict | None) -> str:
     if lock:
         return "人工锁定"
@@ -71,7 +78,7 @@ def build_handoff_queue(limit: int = 50) -> list[dict]:
         if lock:
             reason = lock.get("manual_lock_reason") or ""
         reason = reason or row.get("manual_lock_reason") or ("客户要求人工/风险转接" if status == "needs_human" else "人工接管")
-        lead_score = int(row.get("lead_score") or 0)
+        lead_score = _safe_int(row.get("lead_score"))
 
         items.append(
             {

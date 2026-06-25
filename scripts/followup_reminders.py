@@ -26,15 +26,22 @@ def _value(lead, key):
     return lead.get(key) or "-"
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_followup_tasks(limit=50) -> list[dict]:
     limit = report_limit(limit, default=50)
     db = Database(str(ROOT / "data" / "kefu.db"))
     leads = db.get_followup_leads(limit=limit)
     rules = pipeline_rules()
-    high_intent_score = int(rules.get("high_intent_score", 80))
+    high_intent_score = _safe_int(rules.get("high_intent_score"), 80)
     tasks = []
     for lead in leads:
-        score = int(lead.get("lead_score") or 0)
+        score = _safe_int(lead.get("lead_score"))
         stage = lead.get("stage") or "new_inquiry"
         reasons = []
         if score >= high_intent_score:
@@ -84,7 +91,7 @@ def _suggest_next_action(lead, reasons):
     if missing:
         return "补充" + "、".join(missing) + "后再报价。"
     rules = pipeline_rules()
-    if int(lead.get("lead_score") or 0) >= int(rules.get("high_intent_score", 80)):
+    if _safe_int(lead.get("lead_score")) >= _safe_int(rules.get("high_intent_score"), 80):
         return "优先人工跟进，确认方案并推动报价。"
     return default_next_action(lead.get("stage") or "new_inquiry") or "确认客户需求是否继续推进。"
 

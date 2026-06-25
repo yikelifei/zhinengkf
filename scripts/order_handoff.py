@@ -38,6 +38,13 @@ FIELD_LABELS = {
 }
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_order_handoff(limit: int = 100) -> dict:
     limit = report_limit(limit, default=100)
     db = Database(str(ROOT / "data" / "kefu.db"))
@@ -45,7 +52,7 @@ def build_order_handoff(limit: int = 100) -> dict:
     items = []
     for lead in leads:
         stage = lead.get("stage") or "new_inquiry"
-        score = int(lead.get("lead_score") or 0)
+        score = _safe_int(lead.get("lead_score"))
         if stage not in ORDER_STAGES and score < 80:
             continue
         required = REQUIRED_FIELDS.get(stage, ["deal_value", "delivery_address"])
