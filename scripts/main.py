@@ -80,6 +80,24 @@ def _load_yaml_dict(path):
     return data if isinstance(data, dict) else {}
 
 
+def _settings_section(settings, key):
+    if not isinstance(settings, dict):
+        return {}
+    value = settings.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 class SmartBot:
     def __init__(self):
         info("=" * 50)
@@ -96,8 +114,13 @@ class SmartBot:
         self.prompts_config = _load_yaml_dict(prompts_path)
 
         # Anti-spam config
-        self.max_daily_replies = self.settings.get("wechat", {}).get(
-            "max_daily_replies", 30
+        wechat_settings = _settings_section(self.settings, "wechat")
+        self.max_daily_replies = positive_int_setting(
+            wechat_settings.get("max_daily_replies", 30),
+            "wechat.max_daily_replies",
+            30,
+            min_value=1,
+            max_value=10000,
         )
         self.daily_reply_start = time.strftime("%Y-%m-%d")
         self.recent_reply_cache = {}
@@ -434,8 +457,9 @@ class SmartBot:
             return
 
         # Whitelist / blacklist filtering
-        whitelist = self.settings.get("wechat", {}).get("whitelist", [])
-        blacklist = self.settings.get("wechat", {}).get("blacklist", [])
+        wechat_settings = _settings_section(self.settings, "wechat")
+        whitelist = _string_list(wechat_settings.get("whitelist"))
+        blacklist = _string_list(wechat_settings.get("blacklist"))
 
         if whitelist and sender not in whitelist:
             log_msg(f"[忽略] {sender} (不在白名单)", "yellow")
@@ -675,8 +699,9 @@ class SmartBot:
 
         self._cleanup_stale_logs()
 
+        wechat_settings = _settings_section(self.settings, "wechat")
         poll_interval = positive_int_setting(
-            (self.settings.get("wechat") or {}).get("poll_interval", 3),
+            wechat_settings.get("poll_interval", 3),
             "wechat.poll_interval",
             3,
             min_value=1,

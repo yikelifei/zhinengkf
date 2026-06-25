@@ -51,16 +51,16 @@ def run_scenarios(path="config/acceptance_scenarios.yaml") -> dict:
             issues.append(f"route expected {scenario['expected_route']}, got {decision.route}")
         if scenario.get("expected_topic") and decision.topic != scenario["expected_topic"]:
             issues.append(f"topic expected {scenario['expected_topic']}, got {decision.topic}")
-        for keyword in scenario.get("answer_must_include", []):
+        for keyword in _string_list(scenario.get("answer_must_include")):
             if keyword not in decision.answer:
                 issues.append(f"answer missing keyword: {keyword}")
-        for field in scenario.get("expected_fields", []):
+        for field in _string_list(scenario.get("expected_fields")):
             if not extracted.get(field):
                 issues.append(f"missing extracted field: {field}")
-        for phrase in scenario.get("answer_must_not_include", []):
+        for phrase in _string_list(scenario.get("answer_must_not_include")):
             if phrase in decision.answer:
                 issues.append(f"answer contains forbidden phrase: {phrase}")
-        for phrase in scenario.get("guard_must_block", []):
+        for phrase in _string_list(scenario.get("guard_must_block")):
             guarded = guard.sanitize(scenario.get("unsafe_answer", ""))
             if phrase in guarded.answer or not guarded.changed:
                 issues.append(f"guard did not block forbidden phrase: {phrase}")
@@ -87,6 +87,17 @@ def run_scenarios(path="config/acceptance_scenarios.yaml") -> dict:
         "pass_rate": round(passed / len(results), 4) if results else 0,
         "results": results,
     }
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def render_markdown(report: dict) -> str:

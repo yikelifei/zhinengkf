@@ -202,9 +202,10 @@ class ChannelHub:
 
 
 def create_channel_hub(settings: dict[str, Any]) -> ChannelHub:
-    channel_settings = settings.get("channels") or {}
-    active = channel_settings.get("active") or ["wechat"]
-    adapters_config = channel_settings.get("adapters") or {}
+    settings = _dict_or_empty(settings)
+    channel_settings = _dict_or_empty(settings.get("channels"))
+    active = _string_list(channel_settings.get("active"), default=["wechat"])
+    adapters_config = _dict_or_empty(channel_settings.get("adapters"))
 
     adapters: list[ChannelAdapter] = []
     for channel_id in active:
@@ -212,7 +213,7 @@ def create_channel_hub(settings: dict[str, Any]) -> ChannelHub:
         if not spec:
             warning(f"[Channel] Unsupported channel skipped: {channel_id}")
             continue
-        config = adapters_config.get(channel_id, {})
+        config = _dict_or_empty(adapters_config.get(channel_id))
         if config.get("enabled") is False:
             continue
         if channel_id != "wechat":
@@ -250,7 +251,7 @@ def _build_adapter(
     spec: ChannelSpec,
 ) -> ChannelAdapter:
     if channel_id == "wechat":
-        legacy_wechat = settings.get("wechat", {})
+        legacy_wechat = _dict_or_empty(settings.get("wechat"))
         poll_interval = positive_int_setting(
             config.get("poll_interval", legacy_wechat.get("poll_interval", 3)),
             "wechat.poll_interval",
@@ -273,3 +274,19 @@ def _build_adapter(
             anti_flood_seconds=anti_flood_seconds,
         )
     return DisabledChannelAdapter(spec, reason="adapter not implemented")
+
+
+def _dict_or_empty(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value, default: list[str]) -> list[str]:
+    if value is None:
+        return list(default)
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else list(default)
+    if not isinstance(value, (list, tuple, set)):
+        return list(default)
+    items = [str(item).strip() for item in value if str(item).strip()]
+    return items or list(default)
