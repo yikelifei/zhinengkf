@@ -3,13 +3,16 @@
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .logger import warning
 
 
 class Database:
     def __init__(self, db_path="data/kefu.db"):
-        self.db_path = db_path
+        self.db_path = str(db_path)
+        if self.db_path != ":memory:":
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = None
         self._init_db()
 
@@ -375,6 +378,8 @@ class Database:
         return [dict(r) for r in rows]
 
     def update_lead(self, lead_id, fields):
+        if not isinstance(fields, dict):
+            return False
         allowed = {
             "company_name", "contact_person", "phone", "wechat_id", "festival",
             "product_category", "quantity_estimate", "notes", "stage",
@@ -389,9 +394,9 @@ class Database:
         updates["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sets = ", ".join(f"{key}=?" for key in updates)
         params = list(updates.values()) + [lead_id]
-        self.execute(f"UPDATE leads SET {sets} WHERE id=?", params)
+        cursor = self.execute(f"UPDATE leads SET {sets} WHERE id=?", params)
         self.commit()
-        return True
+        return cursor.rowcount > 0
 
     def query_pending_leads(self, days=7):
         """查询待跟进的线索（最近N天未成交）"""

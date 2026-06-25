@@ -1,6 +1,16 @@
 from core.database import Database
 
 
+def test_database_creates_missing_parent_directory(tmp_path):
+    db_path = tmp_path / "nested" / "data" / "kefu.db"
+
+    db = Database(str(db_path))
+    session_id = db.create_or_get_session("客户A")
+
+    assert db_path.exists()
+    assert session_id
+
+
 def test_save_lead_preserves_existing_stage(tmp_path):
     db = Database(str(tmp_path / "kefu.db"))
     session_id = "sess_1"
@@ -49,6 +59,19 @@ def test_update_lead_stage_and_next_action(tmp_path):
     assert updated["stage"] == "info_collected"
     assert updated["owner"] == "王芳"
     assert updated["next_action"] == "明天报价"
+
+
+def test_update_lead_reports_missing_or_invalid_update_as_false(tmp_path):
+    db = Database(str(tmp_path / "kefu.db"))
+    db.save_lead("sess_missing_update", {"company_name": "测试公司"})
+    lead = db.list_leads()[0]
+
+    assert db.update_lead(99999, {"stage": "info_collected"}) is False
+    assert db.update_lead(lead["id"], {"unsupported": "value"}) is False
+    assert db.update_lead(lead["id"], "broken") is False
+
+    unchanged = db.list_leads()[0]
+    assert unchanged["stage"] == "new_inquiry"
 
 
 def test_update_lead_commercial_fields(tmp_path):

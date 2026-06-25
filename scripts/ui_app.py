@@ -942,7 +942,7 @@ class SmartBotConsole(tk.Tk):
             messagebox.showinfo("请选择线索", "请先选择一条线索。")
             return
         try:
-            self.db.update_lead(
+            changed = self.db.update_lead(
                 self.crm_selected_id,
                 {
                     "stage": self.crm_stage_var.get(),
@@ -950,6 +950,11 @@ class SmartBotConsole(tk.Tk):
                     "next_action": self.crm_next_action_var.get().strip(),
                 },
             )
+            if not changed:
+                self.crm_status_var.set("线索不存在或未更新")
+                messagebox.showwarning("保存未生效", "该线索不存在或没有可保存的有效字段。")
+                self.load_crm_leads()
+                return
             self.load_crm_leads()
             self.crm_status_var.set("线索阶段已保存")
             self.append_log(f"[UI] Lead updated: #{self.crm_selected_id}")
