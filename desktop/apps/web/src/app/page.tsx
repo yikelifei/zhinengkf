@@ -1620,17 +1620,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           disabled={Boolean(busy) || Boolean(orderFollowupBlockReason(order, type))}
           title={orderFollowupButtonTitle(order, type)}
         >
-          {type === "delivery" ? <MessageCircle size={16} /> : <Send size={16} />}
+          {type === "delivery" ? <MessageCircle size={16} aria-hidden="true" /> : <Send size={16} aria-hidden="true" />}
           {orderFollowupButtonLabel(order, type)}
         </button>
         {task ? (
           <button type="button" className="ghost" onClick={() => showOrderFollowupMessage(order, type)} disabled={Boolean(busy)} title={`查看本次${orderFollowupStageLabel(type)}话术`}>
-            <MessageCircle size={16} />话术
+            <MessageCircle size={16} aria-hidden="true" />话术
           </button>
         ) : null}
         {canCancelOrderFollowupTask(order, type) ? (
           <button type="button" className="ghost danger" onClick={() => cancelOrderFollowup(order, type)} disabled={Boolean(busy)} title={`取消尚未发送的${orderFollowupStageLabel(type)}任务`}>
-            <X size={16} />取消{type === "delivery" ? "交期" : "生产"}
+            <X size={16} aria-hidden="true" />取消{type === "delivery" ? "交期" : "生产"}
           </button>
         ) : null}
       </>
@@ -2414,7 +2414,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               title={item.label}
               type="button"
             >
-              <Icon size={20} />
+              <Icon size={20} aria-hidden="true" />
             </button>
           );
         })}
@@ -2444,13 +2444,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </div>
             <div className="toolbar-group">{renderConversationSelect()}</div>
             <div className="toolbar-group">
-              <button type="button" className="ghost" onClick={checkDesignPlatform} disabled={Boolean(busy)}><RefreshCw size={16} />检测设计平台</button>
-              <button type="button" className="ghost" onClick={load} disabled={Boolean(busy)}><RefreshCw size={16} />刷新</button>
+              <button type="button" className="ghost" onClick={checkDesignPlatform} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />检测设计平台</button>
+              <button type="button" className="ghost" onClick={load} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />刷新</button>
             </div>
             <div className="toolbar-group">
-              <button type="button" className="ghost" onClick={createDemo} disabled={Boolean(busy)}><Boxes size={16} />新建演示任务</button>
-              <button type="button" className="ghost" onClick={preflightActiveJob} disabled={!activeJob || Boolean(busy)}><ShieldCheck size={16} />出图预检</button>
-              <button type="button" className="primary" onClick={submitActiveJob} disabled={!activeJob || Boolean(busy)}><Send size={16} />提交出图</button>
+              <button type="button" className="ghost" onClick={createDemo} disabled={Boolean(busy)}><Boxes size={16} aria-hidden="true" />新建演示任务</button>
+              <button type="button" className="ghost" onClick={preflightActiveJob} disabled={!activeJob || Boolean(busy)}><ShieldCheck size={16} aria-hidden="true" />出图预检</button>
+              <button type="button" className="primary" onClick={submitActiveJob} disabled={!activeJob || Boolean(busy)}><Send size={16} aria-hidden="true" />提交出图</button>
             </div>
           </div>
         </header>
@@ -2459,7 +2459,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </div>
         {platformReadiness && !platformReadiness.canSubmitFormalGeneration ? (
           <div className="readiness-banner warning">
-            <ShieldAlert size={17} />
+            <ShieldAlert size={17} aria-hidden="true" />
             <strong>真实出图暂不可提交</strong>
             <span>{platformReadiness.nextSteps[0] || "设计平台登录态或设备激活还没有通过。"}</span>
             <small>
@@ -2556,10 +2556,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </label>
             <div className="config-actions">
               <button type="button" className="primary" onClick={saveDesignPlatformConfig} disabled={Boolean(busy)}>
-                <Save size={16} />保存配置
+                <Save size={16} aria-hidden="true" />保存配置
               </button>
               <button type="button" className="ghost danger" onClick={clearDesignPlatformCredentials} disabled={Boolean(busy)}>
-                <Ban size={16} />清空凭证
+                <Ban size={16} aria-hidden="true" />清空凭证
               </button>
             </div>
           </div>
@@ -2574,7 +2574,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             title="跳转到设计中心"
             type="button"
           >
-            <ImageIcon size={18} />
+            <ImageIcon size={18} aria-hidden="true" />
             <span>设计</span>
             <strong>{pendingCount}</strong>
           </button>
@@ -2586,7 +2586,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             title="跳转到商品库"
             type="button"
           >
-            <Store size={18} />
+            <Store size={18} aria-hidden="true" />
             <span>商品</span>
             <strong>{visibleSkus.length}</strong>
           </button>
@@ -2598,7 +2598,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             title="跳转到训练中心"
             type="button"
           >
-            <Brain size={18} />
+            <Brain size={18} aria-hidden="true" />
             <span>训练</span>
             <strong>{trainingSamples.length}</strong>
           </button>
@@ -2610,7 +2610,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             title="跳转到发送安全队列"
             type="button"
           >
-            <ShieldCheck size={18} />
+            <ShieldCheck size={18} aria-hidden="true" />
             <span>发送</span>
             <strong>{blockedSendCount}</strong>
           </button>
@@ -2622,19 +2622,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             title="跳转到报价/订单草稿"
             type="button"
           >
-            <ReceiptText size={18} />
+            <ReceiptText size={18} aria-hidden="true" />
             <span>报价</span>
             <strong>{quotes.length}</strong>
           </button>
         </nav>
 
         <section className="metrics">
-          <Metric icon={<ImageIcon size={22} />} label="待处理设计" value={pendingCount} tone="red" />
-          <Metric icon={<ShieldAlert size={22} />} label="高价值人工" value={highValueCount} tone="amber" />
-          <Metric icon={<Boxes size={22} />} label="SKU总数" value={skus.length} tone="blue" />
-          <Metric icon={<PackageSearch size={22} />} label="低库存提醒" value={stockWarning} tone="green" />
-          <Metric icon={<AlertTriangle size={22} />} label="商品资料问题" value={catalogAudit?.issueCount || 0} tone="amber" />
-          <Metric icon={<Bell size={22} />} label="未读提醒" value={unreadNoticeCount} tone="red" />
+          <Metric icon={<ImageIcon size={22} aria-hidden="true" />} label="待处理设计" value={pendingCount} tone="red" />
+          <Metric icon={<ShieldAlert size={22} aria-hidden="true" />} label="高价值人工" value={highValueCount} tone="amber" />
+          <Metric icon={<Boxes size={22} aria-hidden="true" />} label="SKU总数" value={skus.length} tone="blue" />
+          <Metric icon={<PackageSearch size={22} aria-hidden="true" />} label="低库存提醒" value={stockWarning} tone="green" />
+          <Metric icon={<AlertTriangle size={22} aria-hidden="true" />} label="商品资料问题" value={catalogAudit?.issueCount || 0} tone="amber" />
+          <Metric icon={<Bell size={22} aria-hidden="true" />} label="未读提醒" value={unreadNoticeCount} tone="red" />
         </section>
 
         <section className="asset-grid">
@@ -2646,10 +2646,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="asset-actions">
                 <button type="button" className="ghost" onClick={createLogoAsset} disabled={Boolean(busy)}>
-                  <ImageIcon size={16} />演示Logo
+                  <ImageIcon size={16} aria-hidden="true" />演示Logo
                 </button>
                 <label className="ghost file-button">
-                  <FileUp size={16} />上传素材
+                  <FileUp size={16} aria-hidden="true" />上传素材
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf"
@@ -2661,7 +2661,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   />
                 </label>
                 <button type="button" className="primary" onClick={attachAssetsToActiveJob} disabled={!activeJob || !selectedAssetIds.length || Boolean(busy)}>
-                  <Layers size={16} />绑定当前任务
+                  <Layers size={16} aria-hidden="true" />绑定当前任务
                 </button>
               </div>
             </div>
@@ -2676,7 +2676,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     disabled={Boolean(busy)}
                     type="button"
                   >
-                    <span>{asset.mimeType?.startsWith("image/") ? <ImageIcon size={18} /> : <FileUp size={18} />}</span>
+                    <span>{asset.mimeType?.startsWith("image/") ? <ImageIcon size={18} aria-hidden="true" /> : <FileUp size={18} aria-hidden="true" />}</span>
                     <div>
                       <strong>{asset.fileName}</strong>
                       <small>{asset.role || "reference"} · {Math.ceil(Number(asset.sizeBytes || 0) / 1024)} KB</small>
@@ -2739,10 +2739,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         disabled={Boolean(busy)}
                         type="button"
                       >
-                        {image.downloadUrl ? <img src={image.downloadUrl} alt={`${image.position}号候选图`} /> : <ImageIcon size={24} />}
+                        {image.downloadUrl ? <img src={image.downloadUrl} alt={`${image.position}号候选图`} /> : <ImageIcon size={24} aria-hidden="true" />}
                         <span>{image.position}号图</span>
                         {image.fingerprint ? <small>指纹 {image.fingerprint.slice(0, 6)}</small> : null}
-                        {image.selected ? <Check size={16} /> : null}
+                        {image.selected ? <Check size={16} aria-hidden="true" /> : null}
                       </button>
                     ))
                   ) : (
@@ -2762,7 +2762,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       placeholder="例如：我选第2张 / 就这个 / 要3号图"
                     />
                     <button type="button" className="primary" onClick={selectFromCustomerText} disabled={!activeJob.images?.length || Boolean(busy)}>
-                      <ReceiptText size={16} />识别并报价
+                      <ReceiptText size={16} aria-hidden="true" />识别并报价
                     </button>
                   </div>
                 </div>
@@ -2847,7 +2847,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           />
                         </label>
                         <button type="button" className="ghost" onClick={saveActiveQuoteEdit} disabled={Boolean(busy)}>
-                          <ReceiptText size={16} />保存调整
+                          <ReceiptText size={16} aria-hidden="true" />保存调整
                         </button>
                       </div>
                       <div className="quote-preview">
@@ -2881,7 +2881,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           </div>
                           <div className="quote-actions compact">
                           <button type="button" className="ghost" onClick={() => focusOrderDraft(activeOrderDraft)} disabled={Boolean(busy)}>
-                            <ReceiptText size={16} />进入订单处理
+                            <ReceiptText size={16} aria-hidden="true" />进入订单处理
                           </button>
                           <button type="button"
                             className="ghost"
@@ -2889,34 +2889,34 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             disabled={Boolean(busy) || activeOrderDraft.status === "cancelled" || hasActiveOrderConfirmationTask(activeOrderDraft)}
                             title={orderConfirmationButtonTitle(activeOrderDraft)}
                           >
-                            <Send size={16} />{orderConfirmationButtonLabel(activeOrderDraft)}
+                            <Send size={16} aria-hidden="true" />{orderConfirmationButtonLabel(activeOrderDraft)}
                           </button>
                           {activeOrderDraft.confirmationSendTask ? (
                             <button type="button" className="ghost" onClick={() => showOrderConfirmationMessage(activeOrderDraft)} disabled={Boolean(busy)} title="查看本次订单确认话术">
-                              <MessageCircle size={16} />查看话术
+                              <MessageCircle size={16} aria-hidden="true" />查看话术
                             </button>
                           ) : null}
                           {canCancelOrderConfirmationTask(activeOrderDraft) ? (
                             <button type="button" className="ghost danger" onClick={() => cancelOrderConfirmation(activeOrderDraft)} disabled={Boolean(busy)} title="取消尚未发送的订单确认任务">
-                              <X size={16} />取消确认
+                              <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                            <CreditCard size={16} />订单定金
+                            <CreditCard size={16} aria-hidden="true" />订单定金
                           </button>
                             <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { paymentStatus: "paid", status: "confirmed" })} disabled={Boolean(busy)}>
-                              <Check size={16} />订单已付
+                              <Check size={16} aria-hidden="true" />订单已付
                             </button>
                             <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { status: "processing" })} disabled={Boolean(busy)}>
-                              <PackageSearch size={16} />生产中
+                              <PackageSearch size={16} aria-hidden="true" />生产中
                             </button>
                             {renderOrderFollowupControls(activeOrderDraft, "production")}
                             {renderOrderFollowupControls(activeOrderDraft, "delivery")}
                             <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { status: "fulfilled" })} disabled={Boolean(busy)}>
-                              <ShieldCheck size={16} />完成
+                              <ShieldCheck size={16} aria-hidden="true" />完成
                             </button>
                             <button type="button" className="ghost danger" onClick={() => updateOrderDraftStatus(activeOrderDraft, { status: "cancelled" })} disabled={Boolean(busy)}>
-                              <Ban size={16} />取消
+                              <Ban size={16} aria-hidden="true" />取消
                             </button>
                           </div>
                         </>
@@ -2933,19 +2933,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           disabled={Boolean(busy) || Boolean(activeQuoteSendRisk)}
                           title={activeQuoteSendRisk || "发送报价"}
                         >
-                          <Send size={16} />发送报价
+                          <Send size={16} aria-hidden="true" />发送报价
                         </button>
                         <button type="button" className="ghost" onClick={() => updateQuoteDraft(activeQuote, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                          <CreditCard size={16} />定金
+                          <CreditCard size={16} aria-hidden="true" />定金
                         </button>
                         <button type="button" className="ghost" onClick={() => createOrderDraft(activeQuote)} disabled={Boolean(busy)} title="按当前报价生成或更新订单草稿">
-                          <ClipboardList size={16} />{activeOrderDraft ? "更新订单" : "生成订单"}
+                          <ClipboardList size={16} aria-hidden="true" />{activeOrderDraft ? "更新订单" : "生成订单"}
                         </button>
                         <button type="button" className="primary" onClick={() => markPaidAndCreateOrder(activeQuote)} disabled={Boolean(busy)}>
-                          <Check size={16} />已付成单
+                          <Check size={16} aria-hidden="true" />已付成单
                         </button>
                         <button type="button" className="ghost danger" onClick={() => updateQuoteDraft(activeQuote, { status: "manual_review", owner: "人工客服" })} disabled={Boolean(busy)}>
-                          <ShieldAlert size={16} />人工跟进
+                          <ShieldAlert size={16} aria-hidden="true" />人工跟进
                         </button>
                       </div>
                     </>
@@ -2953,22 +2953,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <div className="active-quote-empty">
                       <span>{activeSelectedImage ? "已选图，可以生成报价草稿。" : "先识别客户选图，再生成报价。"}</span>
                       <button type="button" className="ghost" onClick={quoteActiveJob} disabled={!activeSelectedImage || Boolean(busy)}>
-                        <ClipboardList size={16} />生成报价
+                        <ClipboardList size={16} aria-hidden="true" />生成报价
                       </button>
                     </div>
                   )}
                 </div>
                 <div className="action-row">
-                  <button type="button" className="ghost" onClick={selectFirstImage} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} />客户选第1张</button>
-                  <button type="button" className="ghost" onClick={selectByReference} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} />引用图片选图</button>
-                  <button type="button" className="ghost" onClick={selectByScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} />截图匹配</button>
-                  <button type="button" className="ghost danger" onClick={selectByUnclearScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ShieldAlert size={16} />截图不确定</button>
-                  <button type="button" className="ghost" onClick={pollActiveJob} disabled={!activeJob.externalJobId || Boolean(busy)}><RefreshCw size={16} />轮询结果</button>
-                  <button type="button" className="ghost" onClick={retryActiveJob} disabled={!["failed", "timeout"].includes(activeJob.status) || Boolean(busy)}><RefreshCw size={16} />重试</button>
-                  <button type="button" className="primary" onClick={quickConfirmActiveJob} disabled={!activeJob.images?.length || Boolean(busy)}><Check size={16} />快速确认</button>
-                  <button type="button" className="ghost" onClick={quoteActiveJob} disabled={Boolean(busy)}><ClipboardList size={16} />生成报价</button>
-                  <button type="button" className="ghost danger" onClick={cancelActiveJob} disabled={["sent", "customer_selected", "quote_created", "cancelled"].includes(activeJob.status) || Boolean(busy)}><Ban size={16} />取消</button>
-                  <button type="button" className="ghost danger" onClick={manualReviewActiveJob} disabled={Boolean(busy)}><ShieldAlert size={16} />转人工</button>
+                  <button type="button" className="ghost" onClick={selectFirstImage} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} aria-hidden="true" />客户选第1张</button>
+                  <button type="button" className="ghost" onClick={selectByReference} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} aria-hidden="true" />引用图片选图</button>
+                  <button type="button" className="ghost" onClick={selectByScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} aria-hidden="true" />截图匹配</button>
+                  <button type="button" className="ghost danger" onClick={selectByUnclearScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />截图不确定</button>
+                  <button type="button" className="ghost" onClick={pollActiveJob} disabled={!activeJob.externalJobId || Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />轮询结果</button>
+                  <button type="button" className="ghost" onClick={retryActiveJob} disabled={!["failed", "timeout"].includes(activeJob.status) || Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />重试</button>
+                  <button type="button" className="primary" onClick={quickConfirmActiveJob} disabled={!activeJob.images?.length || Boolean(busy)}><Check size={16} aria-hidden="true" />快速确认</button>
+                  <button type="button" className="ghost" onClick={quoteActiveJob} disabled={Boolean(busy)}><ClipboardList size={16} aria-hidden="true" />生成报价</button>
+                  <button type="button" className="ghost danger" onClick={cancelActiveJob} disabled={["sent", "customer_selected", "quote_created", "cancelled"].includes(activeJob.status) || Boolean(busy)}><Ban size={16} aria-hidden="true" />取消</button>
+                  <button type="button" className="ghost danger" onClick={manualReviewActiveJob} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />转人工</button>
                 </div>
                 <div className="revision-box">
                   <div className="revision-summary">
@@ -2986,7 +2986,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   />
                   <div className="action-row">
                     <button type="button" className="primary" onClick={requestRevisionForActiveJob} disabled={!activeJob.images?.length || Boolean(busy)}>
-                      <RefreshCw size={16} />提交改图
+                      <RefreshCw size={16} aria-hidden="true" />提交改图
                     </button>
                     {activeJob.revisionPolicy?.reason ? <small>{activeJob.revisionPolicy.reason}</small> : null}
                   </div>
@@ -3018,7 +3018,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="panel-actions">
                 <button type="button" className="ghost compact-button" onClick={pollAllActiveDesignResults} disabled={Boolean(busy)}>
-                  <RefreshCw size={14} />批量轮询结果
+                  <RefreshCw size={14} aria-hidden="true" />批量轮询结果
                 </button>
               </div>
             </div>
@@ -3101,10 +3101,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
                 <div className="sku-repair-actions">
                   <button type="button" className="ghost compact-button" onClick={() => setSkuIssueFilter("problem")} disabled={!skuRepairQueue.length}>
-                    <AlertTriangle size={14} />只看关键问题
+                    <AlertTriangle size={14} aria-hidden="true" />只看关键问题
                   </button>
                   <button type="button" className="ghost compact-button" onClick={() => setSkuIssueFilter("missing_image")} disabled={!skuRepairQueue.length}>
-                    <ImageIcon size={14} />只看图片问题
+                    <ImageIcon size={14} aria-hidden="true" />只看图片问题
                   </button>
                 </div>
               </div>
@@ -3123,14 +3123,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         ))}
                       </div>
                       <button type="button" className="primary compact-button" onClick={() => repairSku(item)} disabled={Boolean(busy)}>
-                        <Pencil size={14} />补齐
+                        <Pencil size={14} aria-hidden="true" />补齐
                       </button>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="sku-repair-empty">
-                  <Check size={16} />
+                  <Check size={16} aria-hidden="true" />
                   <span>当前商品资料没有发现待补齐项，可以继续用于搭配和出图。</span>
                 </div>
               )}
@@ -3142,7 +3142,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <span>定位到主图或具体多角度图</span>
                     </div>
                     <button type="button" className="ghost compact-button" onClick={exportSkuImageProblems} disabled={Boolean(busy)}>
-                      <Download size={14} />导出清单
+                      <Download size={14} aria-hidden="true" />导出清单
                     </button>
                   </div>
                   {skuImageProblems.slice(0, 5).map((problem, index) => (
@@ -3155,10 +3155,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <small>{problem.path || "未填写图片路径"}</small>
                       <div className="sku-image-problem-actions">
                         <button type="button" className="ghost compact-button" onClick={() => editSkuImageProblem(problem)} disabled={Boolean(busy)}>
-                          <Pencil size={14} />编辑图片
+                          <Pencil size={14} aria-hidden="true" />编辑图片
                         </button>
                         <button type="button" className="ghost danger compact-button" onClick={() => stageSkuImageProblemFix(problem)} disabled={Boolean(busy)}>
-                          <X size={14} />移除路径
+                          <X size={14} aria-hidden="true" />移除路径
                         </button>
                       </div>
                     </div>
@@ -3177,15 +3177,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 />
                 显示下架商品
               </label>
-              <button type="button" className="ghost compact-button" onClick={selectVisibleSkus} disabled={!visibleSkus.length || Boolean(busy)}><Check size={14} />选择当前列表</button>
-              <button type="button" className="ghost compact-button" onClick={() => setSelectedSkuCodes([])} disabled={!selectedSkuCodes.length || Boolean(busy)}><RefreshCw size={14} />清空选择</button>
-              <button type="button" className="ghost compact-button" onClick={prepareDemoDesignMaterials} disabled={Boolean(busy)}><ImageIcon size={14} />准备演示出图材料</button>
+              <button type="button" className="ghost compact-button" onClick={selectVisibleSkus} disabled={!visibleSkus.length || Boolean(busy)}><Check size={14} aria-hidden="true" />选择当前列表</button>
+              <button type="button" className="ghost compact-button" onClick={() => setSelectedSkuCodes([])} disabled={!selectedSkuCodes.length || Boolean(busy)}><RefreshCw size={14} aria-hidden="true" />清空选择</button>
+              <button type="button" className="ghost compact-button" onClick={prepareDemoDesignMaterials} disabled={Boolean(busy)}><ImageIcon size={14} aria-hidden="true" />准备演示出图材料</button>
               <input aria-label="批量库存" value={skuBatchStock} onChange={(event) => setSkuBatchStock(event.target.value)} placeholder="批量库存" inputMode="numeric" />
               <input aria-label="批量售价" value={skuBatchSalePrice} onChange={(event) => setSkuBatchSalePrice(event.target.value)} placeholder="批量售价" inputMode="decimal" />
               <input aria-label="批量供应商" value={skuBatchSupplier} onChange={(event) => setSkuBatchSupplier(event.target.value)} placeholder="批量供应商" />
-              <button type="button" className="primary compact-button" onClick={batchUpdateSelectedSkus} disabled={!selectedSkuCodes.length || Boolean(busy)}><Check size={14} />批量修改</button>
-              <button type="button" className="ghost danger compact-button" onClick={() => batchSetSkuActive(false)} disabled={!selectedSkuCodes.length || Boolean(busy)}><Ban size={14} />批量下架</button>
-              <button type="button" className="ghost compact-button" onClick={() => batchSetSkuActive(true)} disabled={!selectedSkuCodes.length || Boolean(busy)}><RefreshCw size={14} />批量恢复</button>
+              <button type="button" className="primary compact-button" onClick={batchUpdateSelectedSkus} disabled={!selectedSkuCodes.length || Boolean(busy)}><Check size={14} aria-hidden="true" />批量修改</button>
+              <button type="button" className="ghost danger compact-button" onClick={() => batchSetSkuActive(false)} disabled={!selectedSkuCodes.length || Boolean(busy)}><Ban size={14} aria-hidden="true" />批量下架</button>
+              <button type="button" className="ghost compact-button" onClick={() => batchSetSkuActive(true)} disabled={!selectedSkuCodes.length || Boolean(busy)}><RefreshCw size={14} aria-hidden="true" />批量恢复</button>
               <span>已选 {selectedSkuCodes.length}</span>
             </div>
             <div className="sku-table" role="table" aria-label="商品库 SKU 列表">
@@ -3222,7 +3222,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </label>
                     </div>
                     <div className="sku-thumb" role="cell">
-                      {imageUrl ? <img src={imageUrl} alt={sku.name} loading="lazy" /> : <PackageSearch size={18} />}
+                      {imageUrl ? <img src={imageUrl} alt={sku.name} loading="lazy" /> : <PackageSearch size={18} aria-hidden="true" />}
                     </div>
                     <strong role="cell">
                       {sku.name}
@@ -3233,11 +3233,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <span role="cell">{sku.supplier || "缺供应商"} · 交期 {sku.leadTimeDays || "-"} 天</span>
                     <span role="cell">{sku.mainImagePath ? "有主图" : "缺主图"} · {(sku.sceneTags || []).slice(0, 2).join("、") || "缺场景"}</span>
                     <span className="sku-action-cell" role="cell">
-                      <button type="button" className="ghost compact-button" onClick={() => editSku(sku)} disabled={Boolean(busy)}><ClipboardList size={14} />编辑</button>
+                      <button type="button" className="ghost compact-button" onClick={() => editSku(sku)} disabled={Boolean(busy)}><ClipboardList size={14} aria-hidden="true" />编辑</button>
                       {sku.isActive === false ? (
-                        <button type="button" className="ghost compact-button" onClick={() => updateSkuActive(sku, true)} disabled={Boolean(busy)}><RefreshCw size={14} />恢复</button>
+                        <button type="button" className="ghost compact-button" onClick={() => updateSkuActive(sku, true)} disabled={Boolean(busy)}><RefreshCw size={14} aria-hidden="true" />恢复</button>
                       ) : (
-                        <button type="button" className="ghost danger compact-button" onClick={() => updateSkuActive(sku, false)} disabled={Boolean(busy)}><Ban size={14} />下架</button>
+                        <button type="button" className="ghost danger compact-button" onClick={() => updateSkuActive(sku, false)} disabled={Boolean(busy)}><Ban size={14} aria-hidden="true" />下架</button>
                       )}
                     </span>
                     <span
@@ -3342,7 +3342,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="sku-image-tools">
                 <label className="file-button">
-                  <ImageIcon size={16} />上传主图
+                  <ImageIcon size={16} aria-hidden="true" />上传主图
                   <input
                     type="file"
                     accept="image/*"
@@ -3353,7 +3353,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   />
                 </label>
                 <label className="file-button">
-                  <FileUp size={16} />上传多角度图
+                  <FileUp size={16} aria-hidden="true" />上传多角度图
                   <input
                     type="file"
                     accept="image/*"
@@ -3375,10 +3375,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </label>
               <div className="catalog-actions">
                 <button type="button" className="primary" onClick={saveSkuForm} disabled={Boolean(busy)}>
-                  <Check size={16} />保存商品
+                  <Check size={16} aria-hidden="true" />保存商品
                 </button>
                 <button type="button" className="ghost" onClick={resetSkuForm} disabled={Boolean(busy)}>
-                  <RefreshCw size={16} />清空表单
+                  <RefreshCw size={16} aria-hidden="true" />清空表单
                 </button>
               </div>
             </div>
@@ -3391,14 +3391,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <span>生成完成、失败、超时、高价值转人工</span>
               </div>
               <div className="notice-actions">
-                <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}><Bot size={16} />后台跑一轮</button>
-                <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} />低价值自动处理</button>
-                <button type="button" className="ghost danger" onClick={handoffHighValueJobs} disabled={Boolean(busy)}><ShieldAlert size={16} />高价值转人工</button>
-                <button type="button" className="ghost" onClick={autoSubmitDrafts} disabled={Boolean(busy)}><Send size={16} />自动提交草稿</button>
-                <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}><AlertTriangle size={16} />超时演示</button>
-                <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}><Ban size={16} />失败演示</button>
-                <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} />扫描超时</button>
-                <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy)}><Bell size={16} />全部已读</button>
+                <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}><Bot size={16} aria-hidden="true" />后台跑一轮</button>
+                <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />低价值自动处理</button>
+                <button type="button" className="ghost danger" onClick={handoffHighValueJobs} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />高价值转人工</button>
+                <button type="button" className="ghost" onClick={autoSubmitDrafts} disabled={Boolean(busy)}><Send size={16} aria-hidden="true" />自动提交草稿</button>
+                <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}><AlertTriangle size={16} aria-hidden="true" />超时演示</button>
+                <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}><Ban size={16} aria-hidden="true" />失败演示</button>
+                <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />扫描超时</button>
+                <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy)}><Bell size={16} aria-hidden="true" />全部已读</button>
               </div>
             </div>
             {lowValueAutomationIssues.length ? (
@@ -3426,7 +3426,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                       <small>{issue.action}</small>
                       <button className="ghost compact-button" onClick={() => handleLowValueAutomationIssue(issue)} disabled={Boolean(busy)} type="button">
-                        <Search size={14} />定位处理
+                        <Search size={14} aria-hidden="true" />定位处理
                       </button>
                     </div>
                   ))}
@@ -3463,7 +3463,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><PackageSearch size={17} aria-hidden="true" />商品导入与搭配</h2>
                 <span>下载标准模板，或从 Excel 复制表格/粘贴 CSV，导入后参与预算搭配</span>
               </div>
-              <Layers size={20} />
+              <Layers size={20} aria-hidden="true" />
             </div>
             <div className="catalog-tools">
               <textarea
@@ -3477,10 +3477,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               />
               <div className="catalog-actions">
                 <button type="button" className="primary" onClick={previewSkuImport} disabled={Boolean(busy)}>
-                  <FileUp size={16} />预览导入
+                  <FileUp size={16} aria-hidden="true" />预览导入
                 </button>
                 <label className="ghost file-button">
-                  <FileUp size={16} />选择文件预览
+                  <FileUp size={16} aria-hidden="true" />选择文件预览
                   <input
                     type="file"
                     accept=".xlsx,.csv,.tsv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/tab-separated-values,text/plain"
@@ -3491,13 +3491,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   />
                 </label>
                 <button type="button" className="ghost" onClick={downloadSkuTemplate} disabled={Boolean(busy)}>
-                  <Download size={16} />下载标准模板
+                  <Download size={16} aria-hidden="true" />下载标准模板
                 </button>
                 <button type="button" className="ghost" onClick={confirmImportSkus} disabled={Boolean(busy) || !skuImportPreview?.rows.length}>
-                  <Check size={16} />确认入库
+                  <Check size={16} aria-hidden="true" />确认入库
                 </button>
                 <button type="button" className="ghost" onClick={recommendGiftBundle} disabled={Boolean(busy)}>
-                  <PackageSearch size={16} />按180元推荐组合
+                  <PackageSearch size={16} aria-hidden="true" />按180元推荐组合
                 </button>
                 <span>当前 SKU {skus.length} 个</span>
               </div>
@@ -3638,7 +3638,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><Bot size={17} aria-hidden="true" />Agent 中心</h2>
                 <span>不同场景由不同智能体和 Skill 处理</span>
               </div>
-              <Bot size={20} />
+              <Bot size={20} aria-hidden="true" />
             </div>
             <div className="agent-list">
               {agents.map((agent) => (
@@ -3664,7 +3664,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><Brain size={17} aria-hidden="true" />训练中心</h2>
                 <span>导入聊天记录，沉淀高情商客服样本</span>
               </div>
-              <Brain size={20} />
+              <Brain size={20} aria-hidden="true" />
             </div>
             <div className="training-panel">
               <textarea
@@ -3675,11 +3675,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               />
               <div className="training-actions">
                 <button type="button" className="primary" onClick={importChat} disabled={Boolean(busy)}>
-                  <FileUp size={16} />导入训练
+                  <FileUp size={16} aria-hidden="true" />导入训练
                 </button>
                 <span>已导入 {chatImports.length} 批，训练样本 {trainingSamples.length} 条</span>
                 <button type="button" className="ghost" onClick={compileTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
-                  <Brain size={16} />应用已选 Skill
+                  <Brain size={16} aria-hidden="true" />应用已选 Skill
                 </button>
               </div>
               <div className="training-overview">
@@ -3900,13 +3900,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           </label>
                           <div className="sample-actions">
                             <button type="button" className="ghost" onClick={() => saveTrainingSampleEdit(sample, "review")} disabled={Boolean(busy)}>
-                              <Save size={14} />保存待复核
+                              <Save size={14} aria-hidden="true" />保存待复核
                             </button>
                             <button type="button" className="primary" onClick={() => saveTrainingSampleEdit(sample, "ready")} disabled={Boolean(busy)}>
-                              <Check size={14} />保存并确认
+                              <Check size={14} aria-hidden="true" />保存并确认
                             </button>
                             <button type="button" className="ghost" onClick={cancelSampleEdit} disabled={Boolean(busy)}>
-                              <X size={14} />取消
+                              <X size={14} aria-hidden="true" />取消
                             </button>
                           </div>
                         </div>
@@ -3914,21 +3914,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <div className="sample-actions">
                         {editingSampleId !== sample.id ? (
                           <button type="button" className="ghost" onClick={() => startSampleEdit(sample)} disabled={Boolean(busy)}>
-                            <Pencil size={14} />编辑
+                            <Pencil size={14} aria-hidden="true" />编辑
                           </button>
                         ) : null}
                         {sample.status !== "ready" ? (
                           <button type="button" className="ghost" onClick={() => updateTrainingSampleStatus(sample, "ready")} disabled={Boolean(busy)}>
-                            <Check size={14} />确认训练
+                            <Check size={14} aria-hidden="true" />确认训练
                           </button>
                         ) : (
                           <button type="button" className="ghost" onClick={() => updateTrainingSampleStatus(sample, "review")} disabled={Boolean(busy)}>
-                            <ShieldAlert size={14} />退回复核
+                            <ShieldAlert size={14} aria-hidden="true" />退回复核
                           </button>
                         )}
                         {sample.status !== "rejected" ? (
                           <button type="button" className="ghost danger" onClick={() => updateTrainingSampleStatus(sample, "rejected")} disabled={Boolean(busy)}>
-                            <Ban size={14} />禁用
+                            <Ban size={14} aria-hidden="true" />禁用
                           </button>
                         ) : null}
                       </div>
@@ -3950,14 +3950,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><LockKeyhole size={17} aria-hidden="true" />多账号控制</h2>
                 <span>每个微信账号独立排队，避免焦点混乱</span>
               </div>
-              <LockKeyhole size={20} />
+              <LockKeyhole size={20} aria-hidden="true" />
             </div>
             <div className="window-actions">
               <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
-                <Search size={15} />采集当前窗口
+                <Search size={15} aria-hidden="true" />采集当前窗口
               </button>
               <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
-                <RefreshCw size={15} />扫描真实窗口快照
+                <RefreshCw size={15} aria-hidden="true" />扫描真实窗口快照
               </button>
             </div>
             <div className="bridge-summary">
@@ -4010,20 +4010,20 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           onClick={() => toggleConversationManualLock(conversation, !conversation.manualLocked)}
                           disabled={Boolean(busy)}
                         >
-                          <LockKeyhole size={14} />
+                          <LockKeyhole size={14} aria-hidden="true" />
                           {conversation.manualLocked ? "解除" : "接管"} · {conversation.title}
                         </button>
                       ))}
                     </div>
                     <div className="window-actions">
                       <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "correct")} disabled={Boolean(busy)}>
-                        <ShieldCheck size={15} />正确窗口
+                        <ShieldCheck size={15} aria-hidden="true" />正确窗口
                       </button>
                       <button type="button" className="ghost danger" onClick={() => captureDemoWindow(account, "wrong_chat")} disabled={Boolean(busy)}>
-                        <AlertTriangle size={15} />错聊窗口
+                        <AlertTriangle size={15} aria-hidden="true" />错聊窗口
                       </button>
                       <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "offline")} disabled={Boolean(busy)}>
-                        <Ban size={15} />离线窗口
+                        <Ban size={15} aria-hidden="true" />离线窗口
                       </button>
                     </div>
                   </div>
@@ -4038,7 +4038,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><ShieldCheck size={17} aria-hidden="true" />发送安全队列</h2>
                 <span>账号、聊天对象、最近消息三重校验</span>
               </div>
-              <ShieldCheck size={20} />
+              <ShieldCheck size={20} aria-hidden="true" />
             </div>
             <div className="send-panel">
               <div className={`adapter-banner ${sendAdapter?.realSend ? "live" : "dry"}`}>
@@ -4063,13 +4063,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="send-actions">
                 <button type="button" className="primary" onClick={createSendTask} disabled={Boolean(busy)}>
-                  <Send size={16} />创建演示发送
+                  <Send size={16} aria-hidden="true" />创建演示发送
                 </button>
                 <button type="button" className="ghost" onClick={scanSendOps} disabled={Boolean(busy)}>
-                  <AlertTriangle size={16} />扫描异常
+                  <AlertTriangle size={16} aria-hidden="true" />扫描异常
                 </button>
                 <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
-                  <ShieldCheck size={16} />安全处理队列
+                  <ShieldCheck size={16} aria-hidden="true" />安全处理队列
                 </button>
                 <span>{sendTasks.length} 个任务，{blockedSendCount} 个已拦截，{sendAttempts.length} 次尝试，{failedAttemptCount} 次异常</span>
               </div>
@@ -4095,28 +4095,28 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <BridgeOutboxPreview entry={bridgeEntry} attempt={task.latestAttempt || task.attempts?.[0]} />
                         <div className="send-task-actions">
                           <button type="button" className="ghost danger" onClick={() => validateWrong(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <AlertTriangle size={16} />错误窗口校验
+                            <AlertTriangle size={16} aria-hidden="true" />错误窗口校验
                           </button>
                           <button type="button" className="ghost" onClick={() => validateCorrect(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <ShieldCheck size={16} />正确窗口校验
+                            <ShieldCheck size={16} aria-hidden="true" />正确窗口校验
                           </button>
                           <button type="button" className="ghost" onClick={() => validateCurrentWindow(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <LockKeyhole size={16} />当前快照校验
+                            <LockKeyhole size={16} aria-hidden="true" />当前快照校验
                           </button>
                           <button type="button" className="primary" onClick={() => executeActiveSend(task)} disabled={sendDisabled}>
-                            <Send size={16} />执行当前适配器
+                            <Send size={16} aria-hidden="true" />执行当前适配器
                           </button>
                           <button type="button" className="primary" onClick={() => executeDryRun(task)} disabled={sendDisabled}>
-                            <Send size={16} />执行干跑发送
+                            <Send size={16} aria-hidden="true" />执行干跑发送
                           </button>
                           {["blocked", "failed", "cancelled", "dry_run"].includes(task.status) ? (
                             <button type="button" className="ghost" onClick={() => requeueTask(task)} disabled={Boolean(busy) || taskConversationLocked}>
-                              <RefreshCw size={16} />重新排队
+                              <RefreshCw size={16} aria-hidden="true" />重新排队
                             </button>
                           ) : null}
                           {task.status !== "sent" && task.status !== "cancelled" ? (
                             <button type="button" className="ghost danger" onClick={() => cancelTask(task)} disabled={Boolean(busy)}>
-                              <Ban size={16} />取消任务
+                              <Ban size={16} aria-hidden="true" />取消任务
                             </button>
                           ) : null}
                         </div>
@@ -4138,13 +4138,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><Route size={17} aria-hidden="true" />路由决策中心</h2>
                 <span>识别场景、价值等级、处理方式和缺失信息</span>
               </div>
-              <Route size={20} />
+              <Route size={20} aria-hidden="true" />
             </div>
             <div className="routing-panel">
               <div className="routing-actions">
                 {renderConversationSelect()}
                 <button type="button" className="ghost" onClick={processRouteInbound} disabled={Boolean(busy)}>
-                  <MessageCircle size={16} />处理客户消息
+                  <MessageCircle size={16} aria-hidden="true" />处理客户消息
                 </button>
               </div>
               <textarea
@@ -4155,7 +4155,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               />
               <div className="routing-actions">
                 <button type="button" className="primary" onClick={evaluateCustomerRoute} disabled={Boolean(busy)}>
-                  <Route size={16} />判断谁来处理
+                  <Route size={16} aria-hidden="true" />判断谁来处理
                 </button>
                 <span>已评估 {routeEvaluations.length} 次</span>
               </div>
@@ -4176,13 +4176,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><ShieldAlert size={17} aria-hidden="true" />人工审核中心</h2>
                 <span>高价值客户、失败任务、超时任务和待审核报价统一处理</span>
               </div>
-              <ShieldCheck size={20} />
+              <ShieldCheck size={20} aria-hidden="true" />
             </div>
             <div className="review-panel">
               <div className="review-summary">
-                <Metric icon={<ShieldAlert size={20} />} label="待审设计" value={reviewCenter.designJobs.length} tone="amber" />
-                <Metric icon={<ReceiptText size={20} />} label="待审报价" value={reviewCenter.quoteDrafts.length} tone="blue" />
-                <Metric icon={<Check size={20} />} label="审核记录" value={reviewCenter.logs.length} tone="green" />
+                <Metric icon={<ShieldAlert size={20} aria-hidden="true" />} label="待审设计" value={reviewCenter.designJobs.length} tone="amber" />
+                <Metric icon={<ReceiptText size={20} aria-hidden="true" />} label="待审报价" value={reviewCenter.quoteDrafts.length} tone="blue" />
+                <Metric icon={<Check size={20} aria-hidden="true" />} label="审核记录" value={reviewCenter.logs.length} tone="green" />
               </div>
               <div className="review-columns">
                 <div className="review-list">
@@ -4203,16 +4203,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </div>
                         <div className="review-actions">
                           <button type="button" className="ghost" onClick={() => reviewJob(job, "approve_images")} disabled={Boolean(busy)}>
-                            <Check size={16} />通过
+                            <Check size={16} aria-hidden="true" />通过
                           </button>
                           <button type="button" className="primary" onClick={() => reviewJob(job, "approve_send")} disabled={!job.images?.length || Boolean(busy)}>
-                            <Send size={16} />批准发送
+                            <Send size={16} aria-hidden="true" />批准发送
                           </button>
                           <button type="button" className="ghost" onClick={() => reviewJob(job, "request_revision")} disabled={Boolean(busy)}>
-                            <RefreshCw size={16} />要求改图
+                            <RefreshCw size={16} aria-hidden="true" />要求改图
                           </button>
                           <button type="button" className="ghost danger" onClick={() => reviewJob(job, "reject")} disabled={Boolean(busy)}>
-                            <Ban size={16} />驳回
+                            <Ban size={16} aria-hidden="true" />驳回
                           </button>
                         </div>
                       </div>
@@ -4235,13 +4235,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </div>
                         <div className="review-actions">
                           <button type="button" className="primary" onClick={() => reviewQuoteDraft(quote, "approve_quote")} disabled={Boolean(busy)}>
-                            <Check size={16} />通过并入队
+                            <Check size={16} aria-hidden="true" />通过并入队
                           </button>
                           <button type="button" className="ghost" onClick={() => reviewQuoteDraft(quote, "request_followup")} disabled={Boolean(busy)}>
-                            <ShieldAlert size={16} />继续跟进
+                            <ShieldAlert size={16} aria-hidden="true" />继续跟进
                           </button>
                           <button type="button" className="ghost danger" onClick={() => reviewQuoteDraft(quote, "reject_quote")} disabled={Boolean(busy)}>
-                            <Ban size={16} />驳回报价
+                            <Ban size={16} aria-hidden="true" />驳回报价
                           </button>
                         </div>
                       </div>
@@ -4269,18 +4269,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><ReceiptText size={17} aria-hidden="true" />报价/订单草稿</h2>
                 <span>客户选图后生成报价，跟进付款和成交状态</span>
               </div>
-              <ReceiptText size={20} />
+              <ReceiptText size={20} aria-hidden="true" />
             </div>
             <div className="quote-panel">
               <div className="quote-summary">
-                <Metric icon={<ReceiptText size={20} />} label="报价草稿" value={quotes.length} tone="blue" />
-                <Metric icon={<CreditCard size={20} />} label="已付款" value={quotes.filter((quote) => quote.paymentStatus === "paid").length} tone="green" />
-                <Metric icon={<ClipboardList size={20} />} label="订单草稿" value={orderDrafts.length} tone="blue" />
-                <Metric icon={<CircleDollarSign size={20} />} label="待人工审核" value={quotes.filter((quote) => quote.status === "manual_review").length} tone="amber" />
+                <Metric icon={<ReceiptText size={20} aria-hidden="true" />} label="报价草稿" value={quotes.length} tone="blue" />
+                <Metric icon={<CreditCard size={20} aria-hidden="true" />} label="已付款" value={quotes.filter((quote) => quote.paymentStatus === "paid").length} tone="green" />
+                <Metric icon={<ClipboardList size={20} aria-hidden="true" />} label="订单草稿" value={orderDrafts.length} tone="blue" />
+                <Metric icon={<CircleDollarSign size={20} aria-hidden="true" />} label="待人工审核" value={quotes.filter((quote) => quote.status === "manual_review").length} tone="amber" />
               </div>
               <div className="quote-filter-bar">
                 <label className="search-field quote-search">
-                  <Search size={16} />
+                  <Search size={16} aria-hidden="true" />
                   <input
                     aria-label="搜索客户、场景、报价、订单"
                     value={quoteCenterSearch}
@@ -4332,24 +4332,24 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                       <div className="quote-actions">
                         <button type="button" className="ghost" onClick={() => queueQuoteDraft(quote)} disabled={Boolean(busy) || Boolean(sendRisk)} title={sendRisk || "发送报价"}>
-                          <Send size={16} />发送报价
+                          <Send size={16} aria-hidden="true" />发送报价
                         </button>
                         <button type="button" className="ghost" onClick={() => updateQuoteDraft(quote, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                          <CreditCard size={16} />定金
+                          <CreditCard size={16} aria-hidden="true" />定金
                         </button>
                         {orderDraft ? (
                           <button type="button" className="ghost" onClick={() => focusOrderDraft(orderDraft)} disabled={Boolean(busy)} title="只显示这条报价和对应订单">
-                            <ReceiptText size={16} />定位订单
+                            <ReceiptText size={16} aria-hidden="true" />定位订单
                           </button>
                         ) : null}
                         <button type="button" className="ghost" onClick={() => createOrderDraft(quote)} disabled={Boolean(busy)} title="按当前报价生成或更新订单草稿">
-                          <ClipboardList size={16} />{orderDraft ? "更新订单" : "生成订单"}
+                          <ClipboardList size={16} aria-hidden="true" />{orderDraft ? "更新订单" : "生成订单"}
                         </button>
                         <button type="button" className="primary" onClick={() => markPaidAndCreateOrder(quote)} disabled={Boolean(busy)}>
-                          <Check size={16} />已付成单
+                          <Check size={16} aria-hidden="true" />已付成单
                         </button>
                         <button type="button" className="ghost danger" onClick={() => updateQuoteDraft(quote, { status: "manual_review", owner: "人工客服" })} disabled={Boolean(busy)}>
-                          <ShieldAlert size={16} />人工跟进
+                          <ShieldAlert size={16} aria-hidden="true" />人工跟进
                         </button>
                       </div>
                     </div>
@@ -4399,7 +4399,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </div>
                         <div className="quote-actions compact">
                           <button type="button" className="ghost" onClick={() => focusOrderDraft(order)} disabled={Boolean(busy)} title="只显示这条订单和对应报价">
-                            <ReceiptText size={16} />查看报价
+                            <ReceiptText size={16} aria-hidden="true" />查看报价
                           </button>
                           <button type="button"
                             className="ghost"
@@ -4407,34 +4407,34 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             disabled={Boolean(busy) || order.status === "cancelled" || hasActiveOrderConfirmationTask(order)}
                             title={orderConfirmationButtonTitle(order)}
                           >
-                            <Send size={16} />{orderConfirmationButtonLabel(order)}
+                            <Send size={16} aria-hidden="true" />{orderConfirmationButtonLabel(order)}
                           </button>
                           {order.confirmationSendTask ? (
                             <button type="button" className="ghost" onClick={() => showOrderConfirmationMessage(order)} disabled={Boolean(busy)} title="查看本次订单确认话术">
-                              <MessageCircle size={16} />话术
+                              <MessageCircle size={16} aria-hidden="true" />话术
                             </button>
                           ) : null}
                           {canCancelOrderConfirmationTask(order) ? (
                             <button type="button" className="ghost danger" onClick={() => cancelOrderConfirmation(order)} disabled={Boolean(busy)} title="取消尚未发送的订单确认任务">
-                              <X size={16} />取消确认
+                              <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                            <CreditCard size={16} />定金
+                            <CreditCard size={16} aria-hidden="true" />定金
                           </button>
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { paymentStatus: "paid", status: "confirmed" })} disabled={Boolean(busy)}>
-                            <Check size={16} />已付
+                            <Check size={16} aria-hidden="true" />已付
                           </button>
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { status: "processing" })} disabled={Boolean(busy)}>
-                            <PackageSearch size={16} />生产中
+                            <PackageSearch size={16} aria-hidden="true" />生产中
                           </button>
                           {renderOrderFollowupControls(order, "production")}
                           {renderOrderFollowupControls(order, "delivery")}
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { status: "fulfilled" })} disabled={Boolean(busy)}>
-                            <ShieldCheck size={16} />完成
+                            <ShieldCheck size={16} aria-hidden="true" />完成
                           </button>
                           <button type="button" className="ghost danger" onClick={() => updateOrderDraftStatus(order, { status: "cancelled" })} disabled={Boolean(busy)}>
-                            <Ban size={16} />取消
+                            <Ban size={16} aria-hidden="true" />取消
                           </button>
                         </div>
                       </div>
@@ -4516,7 +4516,7 @@ function PreflightPanel({
           </span>
         </div>
         <button type="button" className="ghost compact-button" onClick={onPreflight} disabled={disabled}>
-          <ShieldCheck size={15} />预检
+          <ShieldCheck size={15} aria-hidden="true" />预检
         </button>
       </div>
       <div className="preflight-metrics">
@@ -5298,7 +5298,7 @@ function RouteResult({
           <div className="route-evidence-tags">
             {correctionAgents.slice(0, 6).map((agent) => (
               <button type="button" className="ghost compact-button" key={agent.key} onClick={() => onCorrect(route, agent)}>
-                <Route size={14} />改为 {agent.name}
+                <Route size={14} aria-hidden="true" />改为 {agent.name}
               </button>
             ))}
           </div>
@@ -5543,7 +5543,7 @@ function SelectedImageThumb({
   const title = image ? `${label}：第 ${image.position || "-"} 张` : `${label}：未选图`;
   return (
     <div className={`selected-image-thumb ${image?.downloadUrl ? "" : "empty"}`} title={title} aria-label={title}>
-      {image?.downloadUrl ? <img src={image.downloadUrl} alt={title} /> : <ImageIcon size={18} />}
+      {image?.downloadUrl ? <img src={image.downloadUrl} alt={title} /> : <ImageIcon size={18} aria-hidden="true" />}
       {image?.position ? <span>{image.position}</span> : null}
     </div>
   );
