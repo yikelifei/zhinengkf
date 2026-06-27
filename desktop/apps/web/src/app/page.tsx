@@ -2422,7 +2422,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
       <section className="workspace">
         <header className="topbar">
-          <div>
+          <span className="window-controls" aria-hidden="true">
+            <span className="close" />
+            <span className="minimize" />
+            <span className="zoom" />
+          </span>
+          <div className="top-title">
             <h1>智能体客服工作台</h1>
             <p>微信客户设计需求、礼盒搭配、效果图审核和报价草稿</p>
           </div>
@@ -2455,7 +2460,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           </div>
         </header>
         <div className="status-line" data-busy={busy ? "true" : "false"} role="status" aria-live="polite">
-          {busy ? `${busy}处理中` : message}
+          <span className="status-text">{busy ? `${busy}处理中` : message}</span>
         </div>
         {platformReadiness && !platformReadiness.canSubmitFormalGeneration ? (
           <div className="readiness-banner warning">
@@ -2490,7 +2495,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <div className="config-form-grid">
             <div className="field-control field-control-inline">
               <span>适配器</span>
-              <div className="segmented-control" role="group" aria-label="设计平台适配器">
+              <div className="segmented-control adapter-segment" role="group" aria-label="设计平台适配器">
                 {[
                   { value: "art_image_local" as const, label: "真实平台" },
                   { value: "standard_v1" as const, label: "标准接口" },

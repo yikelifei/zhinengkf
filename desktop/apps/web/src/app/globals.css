@@ -68,6 +68,8 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
   background:
     url("/liquid-glass-aura.svg") center top / cover fixed no-repeat,
     linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(245, 245, 247, 0.9)),
@@ -363,18 +365,6 @@ h3 {
   -webkit-backdrop-filter: blur(28px) saturate(1.55);
 }
 
-.topbar::before {
-  content: "";
-  position: absolute;
-  left: 24px;
-  top: 14px;
-  width: 11px;
-  height: 11px;
-  border-radius: 999px;
-  background: #ff5f57;
-  box-shadow: 18px 0 0 #ffbd2e, 36px 0 0 #28c840;
-}
-
 .topbar::after {
   content: "";
   position: absolute;
@@ -388,8 +378,98 @@ h3 {
   transform: translateX(-50%);
 }
 
-.topbar > div:first-child {
+.top-title {
   padding-top: 10px;
+}
+
+.window-controls {
+  position: absolute;
+  left: 24px;
+  top: calc(13px + env(safe-area-inset-top));
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 14px;
+}
+
+.window-controls span {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.window-controls .close {
+  background: linear-gradient(180deg, #ff6b63, #ff5f57);
+}
+
+.window-controls .minimize {
+  background: linear-gradient(180deg, #ffd166, #ffbd2e);
+}
+
+.window-controls .zoom {
+  background: linear-gradient(180deg, #36d85c, #28c840);
+}
+
+.window-controls span::before,
+.window-controls span::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: rgba(84, 28, 24, 0.58);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 140ms ease;
+}
+
+.window-controls .close::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.window-controls .close::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.window-controls .minimize::before {
+  background: rgba(106, 68, 0, 0.62);
+}
+
+.window-controls .minimize::after {
+  display: none;
+}
+
+.window-controls .zoom::before,
+.window-controls .zoom::after {
+  width: 5px;
+  height: 5px;
+  border-radius: 1.5px;
+  background: transparent;
+  border: 1.4px solid rgba(24, 82, 32, 0.62);
+}
+
+.window-controls .zoom::before {
+  clip-path: polygon(0 0, 100% 0, 100% 45%, 45% 45%, 45% 100%, 0 100%);
+}
+
+.window-controls .zoom::after {
+  clip-path: polygon(55% 0, 100% 0, 100% 100%, 0 100%, 0 55%, 55% 55%);
+}
+
+.topbar:hover .window-controls span::before,
+.topbar:hover .window-controls span::after,
+.window-controls:focus-within span::before,
+.window-controls:focus-within span::after {
+  opacity: 1;
 }
 
 .topbar h1,
@@ -549,6 +629,7 @@ h3 {
 .toolbar-group {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   padding: 4px;
@@ -564,7 +645,7 @@ h3 {
   background: rgba(247, 247, 249, 0.64);
 }
 
-.topbar > div:first-child {
+.top-title {
   min-width: 230px;
 }
 
@@ -681,6 +762,7 @@ textarea:focus-visible {
 }
 
 .toolbar-group .platform-pill {
+  max-width: 100%;
   border-color: transparent;
   background: transparent;
 }
@@ -713,7 +795,8 @@ textarea:focus-visible {
 .status-line {
   position: relative;
   min-height: 38px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   margin: 14px 24px 0;
   padding: 0 14px;
@@ -731,11 +814,20 @@ textarea:focus-visible {
   content: "";
   width: 8px;
   height: 8px;
-  flex: 0 0 auto;
   margin-right: 9px;
   border-radius: 999px;
   background: var(--blue);
   box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.11);
+}
+
+.status-text {
+  display: block;
+  min-width: 0;
+  max-width: calc(100vw - 72px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  line-break: anywhere;
 }
 
 .status-line[data-busy="true"] {
@@ -2587,6 +2679,13 @@ input[type="checkbox"]:disabled {
 
 .segmented-control.wide {
   grid-auto-columns: minmax(72px, 1fr);
+}
+
+.adapter-segment {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
 }
 
 .sku-type-picker {
@@ -5846,6 +5945,13 @@ input[type="checkbox"]:disabled {
       rgba(30, 30, 32, 0.76);
   }
 
+  .window-controls span {
+    border-color: rgba(0, 0, 0, 0.3);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      0 1px 3px rgba(0, 0, 0, 0.36);
+  }
+
   .system-footer span {
     border-color: rgba(235, 235, 245, 0.1);
     background: rgba(58, 58, 60, 0.54);
@@ -6725,6 +6831,23 @@ input[type="checkbox"]:disabled {
 @media (max-width: 760px) {
   .shell {
     grid-template-columns: 1fr;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .workspace,
+  .topbar,
+  .top-actions,
+  .status-line,
+  .design-platform-config {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .workspace {
+    overflow-x: hidden;
   }
 
   .workspace::before,
@@ -6767,11 +6890,11 @@ input[type="checkbox"]:disabled {
   }
 
   .rail button::after,
-  .topbar::before {
+  .window-controls {
     display: none;
   }
 
-  .topbar > div:first-child {
+  .top-title {
     padding-top: 0;
   }
 
@@ -6796,13 +6919,20 @@ input[type="checkbox"]:disabled {
     width: 100%;
   }
 
-  .topbar > div:first-child {
+  .top-title {
     min-width: 0;
   }
 
   .toolbar-group,
   .toolbar-group.status-group {
     width: 100%;
+    justify-content: flex-start;
+  }
+
+  .toolbar-group.status-group .platform-pill {
+    width: 100%;
+    flex: 1 1 100%;
+    min-width: 0;
     justify-content: flex-start;
   }
 
@@ -6839,7 +6969,20 @@ input[type="checkbox"]:disabled {
   }
 
   .status-line {
+    align-items: flex-start;
+    min-height: auto;
     margin: 12px;
+    padding: 9px 10px;
+    font-size: 11.5px;
+  }
+
+  .status-line::before {
+    margin-top: 4px;
+    margin-right: 7px;
+  }
+
+  .status-text {
+    max-width: calc(100vw - 58px);
   }
 
   .design-platform-config {
