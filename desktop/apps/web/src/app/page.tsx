@@ -4477,7 +4477,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <i className={`footer-dot ${manualReviewJobCount ? "warning" : "online"}`} aria-hidden="true" />
             {reviewStateText}
           </span>
-          <strong>{busy ? `${busy}处理中` : "本地工作台已就绪"}</strong>
+          <strong className={busy ? "busy" : undefined}>{busy ? `${busy}处理中` : "本地工作台已就绪"}</strong>
         </footer>
       </section>
     </main>
