@@ -1,0 +1,25 @@
+"use strict";
+
+module.exports = {
+  ...require("./budget"),
+  ...require("./agentReplyDraft"),
+  ...require("./agentRouter"),
+  ...require("./bundleMatcher"),
+  ...require("./chatTraining"),
+  ...require("./designWorkflow"),
+  ...require("./designAutoSubmit"),
+  ...require("./inboundWorkflow"),
+  ...require("./humanHandoff"),
+  ...require("./identityBinding"),
+  ...require("./lowValueAutomation"),
+  ...require("./orderDraft"),
+  ...require("./orderFollowupMessage"),
+  ...require("./selectionMatcher"),
+  ...require("./quoteMessage"),
+  ...require("./quoteAcceptance"),
+  ...require("./sendGuard"),
+  ...require("./skillCompiler"),
+  ...require("./skuImport"),
+  ...require("./skuCatalogAudit"),
+  ...require("./wechatWindow"),
+};

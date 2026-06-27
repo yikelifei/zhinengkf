@@ -43,6 +43,17 @@ tools/reports/*
 
 # Build artifacts
 installer/*.zip
+desktop/node_modules/
+desktop/.next/
+desktop/out/
+desktop/dist/
+desktop/apps/**/.next/
+desktop/apps/**/dist/
+desktop/storage/
+desktop/.runtime/
+desktop/uploads/
+desktop/generated/
+desktop/*.tsbuildinfo
 
 # OS
 .DS_Store

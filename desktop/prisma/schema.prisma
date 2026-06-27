@@ -1,0 +1,549 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SkuType {
+  gift_box
+  item
+  accessory
+}
+
+enum ConversationChannel {
+  wechat
+  xiaohongshu
+  douyin
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+  system
+}
+
+enum DesignJobStatus {
+  draft
+  submitted
+  generating
+  completed
+  quick_confirm
+  manual_review
+  sent
+  customer_selected
+  quote_created
+  failed
+  timeout
+  cancelled
+}
+
+enum QuoteStatus {
+  draft
+  auto_sent
+  send_queued
+  manual_review
+  sent
+  accepted
+  rejected
+  cancelled
+}
+
+enum PaymentStatus {
+  unpaid
+  deposit_paid
+  paid
+  refunded
+}
+
+enum SendTaskStatus {
+  queued
+  sending
+  dry_run
+  sent
+  failed
+  blocked
+  cancelled
+}
+
+enum SendAttemptStatus {
+  started
+  dry_run
+  sent
+  failed
+  blocked
+}
+
+model WechatAccount {
+  id              String          @id @default(cuid())
+  displayName     String
+  alias           String?
+  windowHandle    String?
+  processId       Int?
+  isActive        Boolean         @default(true)
+  lastSeenAt      DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  conversations   Conversation[]
+  designJobs      DesignJob[]
+  sendTasks       WechatSendTask[]
+  orderDrafts     OrderDraft[]
+  windowSnapshots WechatWindowSnapshot[]
+}
+
+model Customer {
+  id            String         @id @default(cuid())
+  name          String
+  wechatId      String?
+  phone         String?
+  tags          Json?
+  notes         String?
+  source        String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  conversations Conversation[]
+  designJobs    DesignJob[]
+  quoteDrafts   QuoteDraft[]
+  orderDrafts   OrderDraft[]
+}
+
+model Conversation {
+  id              String              @id @default(cuid())
+  channel         ConversationChannel @default(wechat)
+  externalChatId  String?
+  title           String
+  customerId      String
+  wechatAccountId String?
+  lastMessageAt   DateTime?
+  manualLocked    Boolean             @default(false)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  customer        Customer            @relation(fields: [customerId], references: [id])
+  wechatAccount   WechatAccount?      @relation(fields: [wechatAccountId], references: [id])
+  messages        Message[]
+  designJobs      DesignJob[]
+  sendTasks       WechatSendTask[]
+  orderDrafts     OrderDraft[]
+
+  @@index([customerId])
+  @@index([wechatAccountId])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  direction      MessageDirection
+  text           String?
+  attachments    Json?
+  externalId     String?
+  createdAt      DateTime         @default(now())
+  conversation   Conversation     @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+model Sku {
+  id                  String   @id @default(cuid())
+  skuCode             String   @unique
+  name                String
+  type                SkuType
+  category            String?
+  sceneTags           Json?
+  costPrice           Decimal  @db.Decimal(12, 2)
+  salePrice           Decimal  @db.Decimal(12, 2)
+  profitRate          Decimal? @db.Decimal(8, 4)
+  stock               Int      @default(0)
+  dimensions          Json?
+  weightGram          Int?
+  material            String?
+  supplier            String?
+  leadTimeDays        Int?
+  mainImagePath       String?
+  angleImages         Json?
+  matchingRules       Json?
+  replacementSkuCodes Json?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model DesignAsset {
+  id             String    @id @default(cuid())
+  ownerType      String
+  ownerId        String
+  fileName       String
+  mimeType       String
+  localPath      String
+  sizeBytes      Int?
+  source         String
+  createdAt      DateTime  @default(now())
+  designJobs     DesignJob[] @relation("DesignJobAssets")
+}
+
+model DesignJob {
+  id                 String          @id @default(cuid())
+  requestId          String          @unique
+  externalJobId      String?
+  status             DesignJobStatus @default(draft)
+  designType         String          @default("bundle_render")
+  renderStyle        String          @default("真实产品摆拍")
+  outputCount        Int             @default(6)
+  budget             Json
+  bundle             Json
+  requirements       Json
+  customerText       String?
+  scene              String?
+  isHighValue        Boolean         @default(false)
+  manualQcRequired   Boolean         @default(true)
+  retryCount         Int             @default(0)
+  revisionCount      Int             @default(0)
+  revisionPolicy     Json?
+  errorMessage       String?
+  waitMessageSentAt  DateTime?
+  submittedAt        DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  customerId         String
+  conversationId     String
+  wechatAccountId    String?
+  orderId            String?
+  customer           Customer        @relation(fields: [customerId], references: [id])
+  conversation       Conversation    @relation(fields: [conversationId], references: [id])
+  wechatAccount      WechatAccount?  @relation(fields: [wechatAccountId], references: [id])
+  assets             DesignAsset[]   @relation("DesignJobAssets")
+  images             DesignImageCandidate[]
+  revisions          DesignRevision[]
+  quoteDrafts        QuoteDraft[]
+  orderDrafts        OrderDraft[]
+  sendTasks          WechatSendTask[]
+
+  @@index([status, createdAt])
+  @@index([customerId])
+  @@index([conversationId])
+}
+
+model DesignImageCandidate {
+  id             String     @id @default(cuid())
+  imageId        String
+  designJobId    String
+  position        Int
+  downloadUrl     String?
+  localPath       String?
+  width           Int?
+  height          Int?
+  fingerprint     String?
+  selected        Boolean    @default(false)
+  customerFeedback String?
+  createdAt       DateTime   @default(now())
+  designJob       DesignJob  @relation(fields: [designJobId], references: [id])
+  revisionRequests DesignRevision[]
+  quoteDrafts     QuoteDraft[]
+  orderDrafts     OrderDraft[]
+
+  @@unique([designJobId, imageId])
+  @@index([designJobId, position])
+}
+
+model DesignRevision {
+  id                   String                @id @default(cuid())
+  designJobId          String
+  selectedImageId      String?
+  revisionNumber       Int
+  instruction          String                @db.Text
+  sourceText           String?               @db.Text
+  policyAction         String
+  status               String                @default("requested")
+  chargeRequired       Boolean               @default(false)
+  manualReviewRequired Boolean               @default(false)
+  externalJobId        String?
+  resultImageIds       Json?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  designJob            DesignJob             @relation(fields: [designJobId], references: [id])
+  selectedImage        DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
+
+  @@index([designJobId, createdAt])
+  @@index([status, createdAt])
+}
+
+model QuoteDraft {
+  id              String                @id @default(cuid())
+  designJobId     String
+  customerId      String
+  selectedImageId String?
+  quantity        Int
+  unitPrice       Decimal               @db.Decimal(12, 2)
+  totalPrice      Decimal               @db.Decimal(12, 2)
+  totalCost       Decimal               @db.Decimal(12, 2)
+  profit          Decimal               @db.Decimal(12, 2)
+  status          QuoteStatus           @default(draft)
+  paymentStatus   PaymentStatus         @default(unpaid)
+  sendTaskId      String?
+  customerNotes   String?
+  owner           String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  designJob       DesignJob             @relation(fields: [designJobId], references: [id])
+  customer        Customer              @relation(fields: [customerId], references: [id])
+  selectedImage   DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
+  orderDraft      OrderDraft?
+
+  @@index([status, createdAt])
+  @@index([sendTaskId])
+}
+
+model OrderDraft {
+  id                    String                @id @default(cuid())
+  quoteDraftId          String                @unique
+  designJobId           String
+  customerId            String
+  conversationId        String
+  wechatAccountId       String
+  selectedImageId       String?
+  quantity              Int
+  unitPrice             Decimal               @db.Decimal(12, 2)
+  totalPrice            Decimal               @db.Decimal(12, 2)
+  totalCost             Decimal               @db.Decimal(12, 2)
+  profit                Decimal               @db.Decimal(12, 2)
+  status                String                @default("draft")
+  paymentStatus         PaymentStatus         @default(unpaid)
+  bundleSnapshot        Json?
+  selectedImageSnapshot Json?
+  customerNotes         String?
+  owner                 String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  quoteDraft            QuoteDraft            @relation(fields: [quoteDraftId], references: [id])
+  designJob             DesignJob             @relation(fields: [designJobId], references: [id])
+  customer              Customer              @relation(fields: [customerId], references: [id])
+  conversation          Conversation          @relation(fields: [conversationId], references: [id])
+  wechatAccount         WechatAccount         @relation(fields: [wechatAccountId], references: [id])
+  selectedImage         DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([customerId, createdAt])
+  @@index([designJobId])
+}
+
+model WechatSendTask {
+  id              String         @id @default(cuid())
+  status          SendTaskStatus @default(queued)
+  wechatAccountId String
+  conversationId  String
+  designJobId     String?
+  quoteDraftId    String?
+  payload          Json
+  guardSnapshot    Json?
+  errorMessage     String?
+  queuedAt         DateTime       @default(now())
+  sentAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  wechatAccount    WechatAccount  @relation(fields: [wechatAccountId], references: [id])
+  conversation     Conversation   @relation(fields: [conversationId], references: [id])
+  designJob        DesignJob?     @relation(fields: [designJobId], references: [id])
+  attempts         WechatSendAttempt[]
+
+  @@index([wechatAccountId, status])
+  @@index([conversationId])
+  @@index([quoteDraftId])
+}
+
+model WechatSendAttempt {
+  id               String            @id @default(cuid())
+  sendTaskId       String
+  adapter          String
+  status           SendAttemptStatus @default(started)
+  guardStatus      String?
+  windowSnapshotId String?
+  payloadSummary   Json?
+  errorMessage     String?
+  metadata         Json?
+  startedAt        DateTime          @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  sendTask         WechatSendTask    @relation(fields: [sendTaskId], references: [id])
+
+  @@index([sendTaskId, startedAt])
+  @@index([status, startedAt])
+}
+
+model WechatWindowSnapshot {
+  id                 String         @id @default(cuid())
+  source             String
+  isOnline           Boolean        @default(true)
+  wechatAccountId    String?
+  accountDisplayName String?
+  windowHandle       String?
+  processId          Int?
+  chatTitle          String?
+  activeChatTitle    String?
+  externalChatId     String?
+  recentCustomerId   String?
+  recentMessageText  String?
+  confidence         Decimal?       @db.Decimal(4, 3)
+  diagnostic         Json?
+  raw                Json?
+  capturedAt         DateTime       @default(now())
+  createdAt          DateTime       @default(now())
+  wechatAccount      WechatAccount? @relation(fields: [wechatAccountId], references: [id])
+
+  @@index([wechatAccountId, capturedAt])
+  @@index([isOnline, capturedAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  level     String
+  title     String
+  body      String?
+  target    Json?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model ReviewLog {
+  id           String   @id @default(cuid())
+  targetType   String
+  targetId     String
+  decision     String
+  reviewer     String
+  note         String?
+  beforeStatus String?
+  afterStatus  String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([targetType, targetId])
+  @@index([decision, createdAt])
+}
+
+model CustomerServiceAgent {
+  id              String           @id @default(cuid())
+  key             String           @unique
+  name            String
+  scene           String
+  description     String?
+  valueLevel      String?
+  enabled         Boolean          @default(true)
+  sortOrder       Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  skills          AgentSkill[]
+  chatImports     ChatImport[]
+  trainingSamples TrainingSample[]
+  knowledgeEntries KnowledgeEntry[]
+  routeEvaluations RouteEvaluation[]
+}
+
+model AgentSkill {
+  id          String               @id @default(cuid())
+  agentId     String
+  name        String
+  description String?
+  enabled     Boolean              @default(true)
+  version     Int                  @default(1)
+  sourceType  String?
+  sourceSampleIds Json?
+  sampleCount Int                  @default(0)
+  confidence  Int                  @default(0)
+  lastCompiledAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  agent       CustomerServiceAgent @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
+}
+
+model ChatImport {
+  id           String                @id @default(cuid())
+  name         String
+  source       String
+  channel      String
+  agentId      String?
+  rawText      String                @db.Text
+  messageCount Int                   @default(0)
+  pairCount    Int                   @default(0)
+  warnings     Json?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  agent        CustomerServiceAgent? @relation(fields: [agentId], references: [id])
+  samples      TrainingSample[]
+
+  @@index([agentId])
+  @@index([createdAt])
+}
+
+model TrainingSample {
+  id              String                @id @default(cuid())
+  importId        String?
+  agentId         String?
+  agentKey        String
+  scene           String
+  customerText    String                @db.Text
+  idealReply      String                @db.Text
+  score           Int                   @default(0)
+  status          String                @default("review")
+  skillHints      Json?
+  sourceLineStart Int?
+  sourceLineEnd   Int?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  import          ChatImport?           @relation(fields: [importId], references: [id])
+  agent           CustomerServiceAgent? @relation(fields: [agentId], references: [id])
+  knowledgeEntries KnowledgeEntry[]
+
+  @@index([agentId, status])
+  @@index([scene])
+  @@index([createdAt])
+}
+
+model KnowledgeEntry {
+  id             String                @id @default(cuid())
+  agentId        String?
+  trainingSampleId String?
+  sourceType     String
+  sourceId       String?
+  title          String
+  content        String                @db.Text
+  tags           Json?
+  qualityScore   Int?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  agent          CustomerServiceAgent? @relation(fields: [agentId], references: [id])
+  trainingSample TrainingSample?       @relation(fields: [trainingSampleId], references: [id])
+
+  @@index([agentId])
+  @@index([sourceType, sourceId])
+}
+
+model RouteEvaluation {
+  id             String                @id @default(cuid())
+  channel        String
+  text           String                @db.Text
+  customerId     String?
+  conversationId String?
+  agentId        String?
+  agentKey       String
+  scene          String
+  action         String
+  confidence     Int
+  isHighValue    Boolean               @default(false)
+  budget         Json?
+  missingFields  Json?
+  riskFlags      Json?
+  suggestedReply String?               @db.Text
+  appliedSkills  Json?
+  knowledgeMatches Json?
+  replyDraft     Json?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  agent          CustomerServiceAgent? @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, createdAt])
+  @@index([action, createdAt])
+  @@index([scene])
+}

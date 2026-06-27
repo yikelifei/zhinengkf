@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1200" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="blue" cx="32%" cy="24%" r="46%">
+      <stop offset="0" stop-color="#0A84FF" stop-opacity="0.18"/>
+      <stop offset="0.54" stop-color="#0A84FF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#0A84FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="green" cx="76%" cy="22%" r="40%">
+      <stop offset="0" stop-color="#34C759" stop-opacity="0.12"/>
+      <stop offset="0.58" stop-color="#34C759" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#34C759" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="amber" cx="64%" cy="78%" r="44%">
+      <stop offset="0" stop-color="#FFCC00" stop-opacity="0.11"/>
+      <stop offset="0.56" stop-color="#FFCC00" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFCC00" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheet" x1="160" x2="1480" y1="88" y2="1090" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="0.52" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.18"/>
+    </linearGradient>
+    <filter id="soft">
+      <feGaussianBlur stdDeviation="54"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1200" fill="none"/>
+  <g filter="url(#soft)">
+    <path d="M112 222c118-136 354-112 510-36 118 58 208 54 344 20 178-44 348 44 432 180 68 110 56 250-30 350-126 146-350 118-516 84-128-26-210 2-332 72-174 100-394 58-484-106-86-156-40-432 76-564z" fill="url(#blue)"/>
+    <path d="M804 62c202-52 448 6 570 162 118 152 98 392-42 504-136 108-352 78-506 42-152-36-300-10-392 78-96 92-230 98-304 0-96-128-32-352 108-454 156-114 344-274 566-332z" fill="url(#green)"/>
+    <path d="M386 744c98-132 320-168 492-120 116 32 198 92 348 68 158-26 302 72 304 212 2 152-168 234-330 238-196 4-316-92-484-88-182 4-394 86-516-38-92-94-18-206 186-272z" fill="url(#amber)"/>
+  </g>
+  <path d="M158 226c242-68 356 38 556 48 250 12 388-122 720-14M120 842c202 76 386-8 590-10 274-2 428 104 776 10" fill="none" stroke="url(#sheet)" stroke-width="2"/>
+</svg>
