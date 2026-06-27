@@ -2641,7 +2641,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="asset-center">
             <div className="panel-head">
               <div>
-                <h2>客户素材</h2>
+                <h2><FileUp size={17} aria-hidden="true" />客户素材</h2>
                 <span>Logo、参考图、产品图先进入素材库，再绑定到设计任务</span>
               </div>
               <div className="asset-actions">
@@ -2695,7 +2695,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel conversation-panel" id="conversation-center">
             <div className="panel-head">
               <div>
-                <h2>聊天侧栏</h2>
+                <h2><MessageCircle size={17} aria-hidden="true" />聊天侧栏</h2>
                 <span>{activeJob?.conversation?.title || "未选择会话"}</span>
               </div>
               {activeJob?.isHighValue ? <strong className="tag danger">高价值</strong> : <strong className="tag">低预算快审</strong>}
@@ -3013,7 +3013,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel design-center" id="design-center">
             <div className="panel-head">
               <div>
-                <h2>设计中心</h2>
+                <h2><Layers size={17} aria-hidden="true" />设计中心</h2>
                 <span>待提交、出图中、待确认、失败和超时任务</span>
               </div>
               <div className="panel-actions">
@@ -3049,7 +3049,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="sku-library">
             <div className="panel-head">
               <div>
-                <h2>商品库</h2>
+                <h2><Store size={17} aria-hidden="true" />商品库</h2>
                 <span>礼盒、内搭物品、配件、供应商、图片和交期</span>
               </div>
             </div>
@@ -3387,7 +3387,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="notice-center">
             <div className="panel-head">
               <div>
-                <h2>提醒</h2>
+                <h2><Bell size={17} aria-hidden="true" />提醒</h2>
                 <span>生成完成、失败、超时、高价值转人工</span>
               </div>
               <div className="notice-actions">
@@ -3460,7 +3460,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="catalog-center">
             <div className="panel-head">
               <div>
-                <h2>商品导入与搭配</h2>
+                <h2><PackageSearch size={17} aria-hidden="true" />商品导入与搭配</h2>
                 <span>下载标准模板，或从 Excel 复制表格/粘贴 CSV，导入后参与预算搭配</span>
               </div>
               <Layers size={20} />
@@ -3635,7 +3635,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="agent-center">
             <div className="panel-head">
               <div>
-                <h2>Agent 中心</h2>
+                <h2><Bot size={17} aria-hidden="true" />Agent 中心</h2>
                 <span>不同场景由不同智能体和 Skill 处理</span>
               </div>
               <Bot size={20} />
@@ -3661,7 +3661,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="training-center">
             <div className="panel-head">
               <div>
-                <h2>训练中心</h2>
+                <h2><Brain size={17} aria-hidden="true" />训练中心</h2>
                 <span>导入聊天记录，沉淀高情商客服样本</span>
               </div>
               <Brain size={20} />
@@ -3947,7 +3947,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="account-center">
             <div className="panel-head">
               <div>
-                <h2>多账号控制</h2>
+                <h2><LockKeyhole size={17} aria-hidden="true" />多账号控制</h2>
                 <span>每个微信账号独立排队，避免焦点混乱</span>
               </div>
               <LockKeyhole size={20} />
@@ -4035,7 +4035,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="send-center">
             <div className="panel-head">
               <div>
-                <h2>发送安全队列</h2>
+                <h2><ShieldCheck size={17} aria-hidden="true" />发送安全队列</h2>
                 <span>账号、聊天对象、最近消息三重校验</span>
               </div>
               <ShieldCheck size={20} />
@@ -4135,7 +4135,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="routing-center">
             <div className="panel-head">
               <div>
-                <h2>路由决策中心</h2>
+                <h2><Route size={17} aria-hidden="true" />路由决策中心</h2>
                 <span>识别场景、价值等级、处理方式和缺失信息</span>
               </div>
               <Route size={20} />
@@ -4173,7 +4173,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel" id="review-center">
             <div className="panel-head">
               <div>
-                <h2>人工审核中心</h2>
+                <h2><ShieldAlert size={17} aria-hidden="true" />人工审核中心</h2>
                 <span>高价值客户、失败任务、超时任务和待审核报价统一处理</span>
               </div>
               <ShieldCheck size={20} />
@@ -4266,7 +4266,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <section className="panel">
             <div className="panel-head">
               <div>
-                <h2>报价/订单草稿</h2>
+                <h2><ReceiptText size={17} aria-hidden="true" />报价/订单草稿</h2>
                 <span>客户选图后生成报价，跟进付款和成交状态</span>
               </div>
               <ReceiptText size={20} />
@@ -4453,18 +4453,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
         <footer className="system-footer" aria-label="系统状态栏">
           <span>
+            <ImageIcon size={14} aria-hidden="true" />
             <i className={`footer-dot ${platformHealth?.ok ? "online" : "offline"}`} />
             {platformStateText}
           </span>
           <span>
+            <Bot size={14} aria-hidden="true" />
             <i className={`footer-dot ${automationStatus?.active ? "online" : "warning"}`} />
             {automationStateText}
           </span>
           <span>
+            <Send size={14} aria-hidden="true" />
             <i className={`footer-dot ${pendingSendTaskCount ? "warning" : "online"}`} />
             {queueStateText}
           </span>
           <span>
+            <ShieldAlert size={14} aria-hidden="true" />
             <i className={`footer-dot ${manualReviewJobCount ? "warning" : "online"}`} />
             {reviewStateText}
           </span>
