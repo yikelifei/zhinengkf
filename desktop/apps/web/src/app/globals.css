@@ -1393,6 +1393,18 @@ textarea:focus-visible {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48));
 }
 
+.panel-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.panel-head > div:first-child > span {
+  display: block;
+  margin: 0;
+  max-width: 100%;
+}
+
 .panel-head::after {
   content: "";
   position: absolute;
