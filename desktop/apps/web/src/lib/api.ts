@@ -1451,6 +1451,24 @@ export async function scanDesignTimeouts(): Promise<{ scanned: number; timedOut:
   return postJson<{ scanned: number; timedOut: number; jobs: DesignJob[] }>("/design-jobs/scan-timeouts");
 }
 
+export type DesignActivePollResult = {
+  scanned: number;
+  completed: DesignJob[];
+  failed: DesignJob[];
+  generating: DesignJob[];
+  cancelled: DesignJob[];
+  errors: Array<{
+    designJobId?: string;
+    requestId?: string;
+    externalJobId?: string;
+    errorMessage: string;
+  }>;
+};
+
+export async function pollActiveDesignResults(): Promise<DesignActivePollResult> {
+  return postJson<DesignActivePollResult>("/design-jobs/poll-active-results");
+}
+
 export type DesignAutoSubmitResult = {
   scanned: number;
   submitted: DesignJob[];

@@ -894,7 +894,14 @@ textarea:focus-visible {
   align-items: end;
 }
 
-.config-form-grid .primary {
+.config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.config-actions .primary,
+.config-actions .ghost {
   width: max-content;
   white-space: nowrap;
 }
@@ -1227,7 +1234,8 @@ textarea:focus-visible {
 }
 
 .panel-head .asset-actions,
-.panel-head .notice-actions {
+.panel-head .notice-actions,
+.panel-head .panel-actions {
   justify-content: flex-end;
   padding: 4px;
   border: 1px solid rgba(60, 60, 67, 0.1);
@@ -1238,7 +1246,9 @@ textarea:focus-visible {
 .panel-head .asset-actions .primary,
 .panel-head .asset-actions .ghost,
 .panel-head .notice-actions .primary,
-.panel-head .notice-actions .ghost {
+.panel-head .notice-actions .ghost,
+.panel-head .panel-actions .primary,
+.panel-head .panel-actions .ghost {
   min-height: 30px;
   padding: 0 9px;
   box-shadow: none;
@@ -6653,7 +6663,8 @@ input[type="checkbox"]:disabled {
   }
 
   .panel-head .asset-actions,
-  .panel-head .notice-actions {
+  .panel-head .notice-actions,
+  .panel-head .panel-actions {
     width: 100%;
     justify-content: flex-start;
   }

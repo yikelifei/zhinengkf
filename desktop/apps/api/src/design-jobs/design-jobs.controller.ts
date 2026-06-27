@@ -21,6 +21,11 @@ export class DesignJobsController {
     return this.designJobs.scanTimeouts();
   }
 
+  @Post("poll-active-results")
+  pollActiveResults() {
+    return this.designJobs.pollActiveResults();
+  }
+
   @Post("auto-submit-drafts")
   autoSubmitDrafts() {
     return this.designJobs.scanAutoSubmitDrafts();

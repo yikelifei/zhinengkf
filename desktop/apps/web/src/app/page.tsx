@@ -113,6 +113,7 @@ import {
   preflightDesignJob,
   previewSkuImportFile,
   previewSkuImportText,
+  pollActiveDesignResults,
   pollDesignJob,
   processInboundMessage,
   processSafeSendQueue,
@@ -873,6 +874,25 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  async function clearDesignPlatformCredentials() {
+    let summary = "";
+    await runAction(
+      "清空设计平台凭证",
+      async () => {
+        const result = await updateDesignPlatformConfig({
+          accessToken: "",
+          cookie: "",
+          deviceId: "",
+        });
+        setPlatformConfig(result.config);
+        setPlatformConfigForm(designPlatformConfigSummaryToForm(result.config));
+        if (result.readiness) setPlatformReadiness(result.readiness);
+        summary = "设计平台 Token、Cookie 和设备 ID 已清空。";
+      },
+      () => setMessage(summary || "设计平台凭证已清空。"),
+    );
+  }
+
   async function scanTimeouts() {
     await runAction("扫描出图超时", async () => {
       const result = await scanDesignTimeouts();
@@ -1106,6 +1126,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       const result = await pollDesignJob(activeJob.id);
       setMessage(`设计平台状态：${result.remoteStatus}`);
     });
+  }
+
+  async function pollAllActiveDesignResults() {
+    let summary = "";
+    await runAction(
+      "批量轮询设计结果",
+      async () => {
+        const result = await pollActiveDesignResults();
+        summary = `轮询 ${result.scanned} 个出图中任务：完成 ${result.completed.length} 个，失败 ${result.failed.length} 个，仍在生成 ${result.generating.length} 个，取消 ${result.cancelled.length} 个，错误 ${result.errors.length} 个。`;
+      },
+      () => {
+        load();
+        setMessage(summary || "已批量轮询设计结果。");
+      },
+    );
   }
 
   async function retryActiveJob() {
@@ -2519,9 +2554,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 placeholder={platformConfig?.deviceIdSuffix ? `留空保持当前 · ${platformConfig.deviceIdSuffix}` : "留空保持当前设备"}
               />
             </label>
-            <button type="button" className="primary" onClick={saveDesignPlatformConfig} disabled={Boolean(busy)}>
-              <Save size={16} />保存配置
-            </button>
+            <div className="config-actions">
+              <button type="button" className="primary" onClick={saveDesignPlatformConfig} disabled={Boolean(busy)}>
+                <Save size={16} />保存配置
+              </button>
+              <button type="button" className="ghost danger" onClick={clearDesignPlatformCredentials} disabled={Boolean(busy)}>
+                <Ban size={16} />清空凭证
+              </button>
+            </div>
           </div>
         </section>
 
@@ -2975,6 +3015,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <div>
                 <h2>设计中心</h2>
                 <span>待提交、出图中、待确认、失败和超时任务</span>
+              </div>
+              <div className="panel-actions">
+                <button type="button" className="ghost compact-button" onClick={pollAllActiveDesignResults} disabled={Boolean(busy)}>
+                  <RefreshCw size={14} />批量轮询结果
+                </button>
               </div>
             </div>
             <div className="job-list">
