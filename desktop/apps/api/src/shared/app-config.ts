@@ -13,8 +13,14 @@ function booleanEnv(name: string, fallback: boolean): boolean {
   return !["0", "false", "no", "off"].includes(String(raw).toLowerCase());
 }
 
+const defaultDesignPlatformAdapter = "art_image_local";
+const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3000";
+const designPlatformRuntimeConfigPath = path.resolve(
+  process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || "./.runtime/design-platform-config.json",
+);
+
 function readRuntimeConfig(): Record<string, unknown> {
-  const configPath = path.resolve(process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || "./.runtime/design-platform-config.json");
+  const configPath = designPlatformRuntimeConfigPath;
   try {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   } catch {
@@ -22,32 +28,45 @@ function readRuntimeConfig(): Record<string, unknown> {
   }
 }
 
-function stringConfig(envName: string, runtimeKey: string, fallback: string): string {
+function stringConfig(envName: string, runtimeKey: string, fallback: string, config = runtimeConfig): string {
   const envValue = process.env[envName];
   if (envValue !== undefined && envValue !== "") return envValue;
-  const runtimeValue = runtimeConfig[runtimeKey];
+  const runtimeValue = config[runtimeKey];
   if (typeof runtimeValue === "string" && runtimeValue.trim()) return runtimeValue;
   return fallback;
 }
 
-const runtimeConfig = readRuntimeConfig();
-const designPlatformAdapter = stringConfig("DESIGN_PLATFORM_ADAPTER", "designPlatformAdapter", "standard_v1");
-const designPlatformBaseUrl = stringConfig(
-  "DESIGN_PLATFORM_BASE_URL",
-  "designPlatformBaseUrl",
-  designPlatformAdapter === "art_image_local" ? "http://127.0.0.1:3000" : "http://127.0.0.1:3700",
-);
+let runtimeConfig = readRuntimeConfig();
+
+function resolveDesignPlatformRuntime(config = runtimeConfig) {
+  const adapter = stringConfig("DESIGN_PLATFORM_ADAPTER", "designPlatformAdapter", defaultDesignPlatformAdapter, config);
+  const baseUrl = stringConfig(
+    "DESIGN_PLATFORM_BASE_URL",
+    "designPlatformBaseUrl",
+    adapter === "art_image_local" ? defaultDesignPlatformBaseUrl : "http://127.0.0.1:3700",
+    config,
+  );
+  return {
+    adapter,
+    baseUrl,
+    accessToken: stringConfig("DESIGN_PLATFORM_ACCESS_TOKEN", "designPlatformAccessToken", "", config),
+    cookie: stringConfig("DESIGN_PLATFORM_COOKIE", "designPlatformCookie", "", config),
+    deviceId: stringConfig("DESIGN_PLATFORM_DEVICE_ID", "designPlatformDeviceId", "", config),
+  };
+}
+
+const designPlatformRuntime = resolveDesignPlatformRuntime();
 
 export const appConfig = {
   apiPort: numberEnv("API_PORT", 3200),
   useLocalStore: process.env.USE_LOCAL_STORE !== "false",
   localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || "./storage"),
-  designPlatformAdapter,
-  designPlatformBaseUrl,
+  designPlatformAdapter: designPlatformRuntime.adapter,
+  designPlatformBaseUrl: designPlatformRuntime.baseUrl,
   designPlatformApiKey: process.env.DESIGN_PLATFORM_API_KEY || "",
-  designPlatformAccessToken: stringConfig("DESIGN_PLATFORM_ACCESS_TOKEN", "designPlatformAccessToken", ""),
-  designPlatformCookie: process.env.DESIGN_PLATFORM_COOKIE || "",
-  designPlatformDeviceId: stringConfig("DESIGN_PLATFORM_DEVICE_ID", "designPlatformDeviceId", ""),
+  designPlatformAccessToken: designPlatformRuntime.accessToken,
+  designPlatformCookie: designPlatformRuntime.cookie,
+  designPlatformDeviceId: designPlatformRuntime.deviceId,
   designPlatformTimeoutMs: numberEnv("DESIGN_PLATFORM_TIMEOUT_MS", 30 * 60 * 1000),
   designPlatformImageSize: process.env.DESIGN_PLATFORM_IMAGE_SIZE || "1024x1024",
   designPlatformImageRatio: process.env.DESIGN_PLATFORM_IMAGE_RATIO || "1:1",
@@ -75,3 +94,64 @@ export const appConfig = {
   lowValueAutomationProcessSendQueue: booleanEnv("LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE", true),
   lowValueAutomationSendQueueLimit: numberEnv("LOW_VALUE_AUTOMATION_SEND_QUEUE_LIMIT", 10),
 };
+
+export type DesignPlatformRuntimeConfigPatch = {
+  adapter?: string;
+  baseUrl?: string;
+  accessToken?: string;
+  cookie?: string;
+  deviceId?: string;
+};
+
+export function updateDesignPlatformRuntimeConfig(patch: DesignPlatformRuntimeConfigPatch) {
+  const existing = readRuntimeConfig();
+  const next = { ...existing };
+
+  if (patch.adapter !== undefined) {
+    const adapter = String(patch.adapter || "").trim();
+    if (adapter !== "art_image_local" && adapter !== "standard_v1") {
+      throw new Error("design platform adapter must be art_image_local or standard_v1");
+    }
+    next.designPlatformAdapter = adapter;
+  }
+  if (patch.baseUrl !== undefined) setRuntimeString(next, "designPlatformBaseUrl", patch.baseUrl);
+  if (patch.accessToken !== undefined) setRuntimeString(next, "designPlatformAccessToken", patch.accessToken);
+  if (patch.cookie !== undefined) setRuntimeString(next, "designPlatformCookie", patch.cookie);
+  if (patch.deviceId !== undefined) setRuntimeString(next, "designPlatformDeviceId", patch.deviceId);
+
+  fs.mkdirSync(path.dirname(designPlatformRuntimeConfigPath), { recursive: true });
+  fs.writeFileSync(designPlatformRuntimeConfigPath, JSON.stringify(next, null, 2), "utf8");
+  runtimeConfig = next;
+  refreshDesignPlatformAppConfig();
+  return getDesignPlatformRuntimeConfigSummary();
+}
+
+export function refreshDesignPlatformAppConfig() {
+  runtimeConfig = readRuntimeConfig();
+  const resolved = resolveDesignPlatformRuntime(runtimeConfig);
+  appConfig.designPlatformAdapter = resolved.adapter;
+  appConfig.designPlatformBaseUrl = resolved.baseUrl;
+  appConfig.designPlatformAccessToken = resolved.accessToken;
+  appConfig.designPlatformCookie = resolved.cookie;
+  appConfig.designPlatformDeviceId = resolved.deviceId;
+  return getDesignPlatformRuntimeConfigSummary();
+}
+
+export function getDesignPlatformRuntimeConfigSummary() {
+  return {
+    adapter: appConfig.designPlatformAdapter,
+    baseUrl: appConfig.designPlatformBaseUrl,
+    hasApiKey: Boolean(appConfig.designPlatformApiKey),
+    hasAccessToken: Boolean(appConfig.designPlatformAccessToken),
+    hasCookie: Boolean(appConfig.designPlatformCookie),
+    hasDeviceId: Boolean(appConfig.designPlatformDeviceId),
+    deviceIdSuffix: appConfig.designPlatformDeviceId ? appConfig.designPlatformDeviceId.slice(-6) : "",
+    runtimeConfigPath: designPlatformRuntimeConfigPath,
+  };
+}
+
+function setRuntimeString(target: Record<string, unknown>, key: string, value: string) {
+  const text = String(value || "").trim();
+  if (text) target[key] = text;
+  else delete target[key];
+}

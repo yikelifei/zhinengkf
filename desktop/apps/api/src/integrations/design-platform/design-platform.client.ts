@@ -67,22 +67,22 @@ export class DesignPlatformClient {
   private readonly artImageJobs = new Map<string, ArtImageLocalJob>();
 
   constructor() {
-    const headers: Record<string, string> = {};
-    const authToken = appConfig.designPlatformAccessToken || appConfig.designPlatformApiKey;
-    if (authToken) {
-      headers.Authorization = `Bearer ${authToken}`;
-    }
-    if (appConfig.designPlatformCookie) {
-      headers.Cookie = appConfig.designPlatformCookie;
-    }
-    if (appConfig.designPlatformDeviceId) {
-      headers["x-art-device-id"] = appConfig.designPlatformDeviceId;
-    }
-
     this.http = axios.create({
       baseURL: appConfig.designPlatformBaseUrl,
       timeout: appConfig.designPlatformTimeoutMs,
-      headers,
+    });
+    this.http.interceptors.request.use((config) => {
+      config.baseURL = appConfig.designPlatformBaseUrl;
+      config.timeout = appConfig.designPlatformTimeoutMs;
+      const headers = config.headers as Record<string, string>;
+      const authToken = appConfig.designPlatformAccessToken || appConfig.designPlatformApiKey;
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      else delete headers.Authorization;
+      if (appConfig.designPlatformCookie) headers.Cookie = appConfig.designPlatformCookie;
+      else delete headers.Cookie;
+      if (appConfig.designPlatformDeviceId) headers["x-art-device-id"] = appConfig.designPlatformDeviceId;
+      else delete headers["x-art-device-id"];
+      return config;
     });
   }
 

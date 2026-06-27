@@ -66,6 +66,7 @@ import {
   DesignAsset,
   DesignJob,
   DesignPlatformHealth,
+  DesignPlatformConfigSummary,
   DesignPlatformReadiness,
   DesignJobPreflightResult,
   downloadSkuImportTemplate,
@@ -79,6 +80,7 @@ import {
   getChatImports,
   getDesignJobs,
   getDesignPlatformHealth,
+  getDesignPlatformConfig,
   getDesignPlatformReadiness,
   getAssets,
   getNotifications,
@@ -158,6 +160,7 @@ import {
   TrainingSample,
   TrainingOverview,
   updateOrderDraft,
+  updateDesignPlatformConfig,
   updateQuote,
   upsertSku,
   uploadAsset,
@@ -273,6 +276,14 @@ type SkuForm = {
   matchingRules: string;
 };
 
+type DesignPlatformConfigForm = {
+  adapter: "art_image_local" | "standard_v1";
+  baseUrl: string;
+  accessToken: string;
+  cookie: string;
+  deviceId: string;
+};
+
 type TrainingSampleEdit = {
   agentKey: string;
   scene: string;
@@ -307,6 +318,38 @@ const emptySkuForm: SkuForm = {
   replacementSkuCodes: "",
   matchingRules: "",
 };
+
+const emptyDesignPlatformConfigForm: DesignPlatformConfigForm = {
+  adapter: "art_image_local",
+  baseUrl: "http://127.0.0.1:3000",
+  accessToken: "",
+  cookie: "",
+  deviceId: "",
+};
+
+function designPlatformConfigSummaryToForm(
+  config: DesignPlatformConfigSummary,
+  current: DesignPlatformConfigForm = emptyDesignPlatformConfigForm,
+): DesignPlatformConfigForm {
+  const adapter = config.adapter === "standard_v1" ? "standard_v1" : "art_image_local";
+  return {
+    adapter,
+    baseUrl: config.baseUrl || (adapter === "art_image_local" ? "http://127.0.0.1:3000" : "http://127.0.0.1:3700"),
+    accessToken: current.accessToken,
+    cookie: current.cookie,
+    deviceId: current.deviceId,
+  };
+}
+
+function buildDesignPlatformConfigPayload(form: DesignPlatformConfigForm) {
+  return {
+    adapter: form.adapter,
+    baseUrl: form.baseUrl.trim() || undefined,
+    accessToken: form.accessToken.trim() || undefined,
+    cookie: form.cookie.trim() || undefined,
+    deviceId: form.deviceId.trim() || undefined,
+  };
+}
 
 function sampleToEdit(sample: TrainingSample): TrainingSampleEdit {
   return {
@@ -467,6 +510,8 @@ export default function HomePage() {
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [platformHealth, setPlatformHealth] = useState<DesignPlatformHealth | null>(null);
   const [platformReadiness, setPlatformReadiness] = useState<DesignPlatformReadiness | null>(null);
+  const [platformConfig, setPlatformConfig] = useState<DesignPlatformConfigSummary | null>(null);
+  const [platformConfigForm, setPlatformConfigForm] = useState<DesignPlatformConfigForm>(emptyDesignPlatformConfigForm);
   const [preflightResult, setPreflightResult] = useState<DesignJobPreflightResult | null>(null);
   const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null);
   const [activeId, setActiveId] = useState<string>("");
@@ -534,7 +579,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function load() {
-    const [jobRows, skuRows, auditRows, skuLogRows, agentRows, importRows, sampleRows, overviewRows, suggestionRows, accountRows, conversationRows, sendRows, attemptRows, adapterInfo, bridgeRows, bridgeStatusRows, windowRows, windowObserverRows, routeRows, quoteRows, orderRows, noticeRows, reviewRows, health, readiness, automation] = await Promise.all([
+    const [jobRows, skuRows, auditRows, skuLogRows, agentRows, importRows, sampleRows, overviewRows, suggestionRows, accountRows, conversationRows, sendRows, attemptRows, adapterInfo, bridgeRows, bridgeStatusRows, windowRows, windowObserverRows, routeRows, quoteRows, orderRows, noticeRows, reviewRows, health, readiness, configResult, automation] = await Promise.all([
       getDesignJobs(),
       getSkus(includeInactiveSkus),
       getSkuCatalogAudit(),
@@ -591,6 +636,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         nextSteps: [error instanceof Error ? error.message : "设计平台正式出图就绪检查失败"],
         config: { hasApiKey: false, hasAccessToken: false, hasCookie: false, hasDeviceId: false },
       })),
+      getDesignPlatformConfig().catch(() => ({
+        ok: false,
+        config: {
+          adapter: "unknown",
+          baseUrl: "",
+          hasApiKey: false,
+          hasAccessToken: false,
+          hasCookie: false,
+          hasDeviceId: false,
+        },
+      })),
       getAutomationStatus(),
     ]);
     setJobs(jobRows);
@@ -632,6 +688,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     setSelectedSkuCodes((current) => current.filter((skuCode) => skuRows.some((sku) => sku.skuCode === skuCode)));
     setPlatformHealth(health);
     setPlatformReadiness(readiness);
+    setPlatformConfig(configResult.config);
+    setPlatformConfigForm((current) => designPlatformConfigSummaryToForm(configResult.config, current));
     setAutomationStatus(automation);
     setActiveId((current) => current || jobRows[0]?.id || "");
     setActiveConversationId((current) =>
@@ -775,16 +833,43 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       "检测设计平台",
       async () => {
-        const [health, readiness] = await Promise.all([getDesignPlatformHealth(), getDesignPlatformReadiness()]);
+        const [health, readiness, configResult] = await Promise.all([
+          getDesignPlatformHealth(),
+          getDesignPlatformReadiness(),
+          getDesignPlatformConfig(),
+        ]);
         const adapterLabel = designPlatformAdapterLabel(health.adapter);
         setPlatformHealth(health);
         setPlatformReadiness(readiness);
+        setPlatformConfig(configResult.config);
+        setPlatformConfigForm((current) => designPlatformConfigSummaryToForm(configResult.config, current));
         summary = readiness.canSubmitFormalGeneration
           ? `设计平台可正式出图：${adapterLabel}，${health.baseUrl}，延迟 ${health.latencyMs}ms。`
           : readiness.nextSteps[0] ||
             (health.ok ? "设计平台在线，但正式出图就绪检查未通过。请查看顶部就绪提示。" : `设计平台离线：${health.errorMessage || "未知错误"}`);
       },
       () => setMessage(summary || "设计平台检查完成。"),
+    );
+  }
+
+  async function saveDesignPlatformConfig() {
+    const baseUrl = platformConfigForm.baseUrl.trim();
+    if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
+      setMessage("设计平台 Base URL 需要以 http:// 或 https:// 开头。");
+      return;
+    }
+
+    let summary = "";
+    await runAction(
+      "保存设计平台配置",
+      async () => {
+        const result = await updateDesignPlatformConfig(buildDesignPlatformConfigPayload(platformConfigForm));
+        setPlatformConfig(result.config);
+        setPlatformConfigForm(designPlatformConfigSummaryToForm(result.config));
+        if (result.readiness) setPlatformReadiness(result.readiness);
+        summary = `设计平台配置已保存：${designPlatformAdapterLabel(result.config.adapter)}，${result.config.baseUrl || "未设置地址"}。`;
+      },
+      () => setMessage(summary || "设计平台配置已保存。"),
     );
   }
 
@@ -2348,6 +2433,97 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </small>
           </div>
         ) : null}
+
+        <section className="design-platform-config" aria-label="设计平台运行配置">
+          <div className="config-summary">
+            <div>
+              <strong>设计平台运行配置</strong>
+              <span>{platformConfig?.runtimeConfigPath || "运行时配置未加载"}</span>
+            </div>
+            <div className="config-status-grid" role="list" aria-label="设计平台凭证状态">
+              <span role="listitem" className={platformConfig?.hasAccessToken ? "ready" : ""}>
+                Token {platformConfig?.hasAccessToken ? "已配置" : "未配置"}
+              </span>
+              <span role="listitem" className={platformConfig?.hasCookie ? "ready" : ""}>
+                Cookie {platformConfig?.hasCookie ? "已配置" : "未配置"}
+              </span>
+              <span role="listitem" className={platformConfig?.hasDeviceId ? "ready" : ""}>
+                设备 {platformConfig?.hasDeviceId ? `已绑定${platformConfig.deviceIdSuffix ? ` · ${platformConfig.deviceIdSuffix}` : ""}` : "未绑定"}
+              </span>
+            </div>
+          </div>
+          <div className="config-form-grid">
+            <div className="field-control field-control-inline">
+              <span>适配器</span>
+              <div className="segmented-control" role="group" aria-label="设计平台适配器">
+                {[
+                  { value: "art_image_local" as const, label: "真实平台" },
+                  { value: "standard_v1" as const, label: "标准接口" },
+                ].map((option) => (
+                  <button
+                    aria-pressed={platformConfigForm.adapter === option.value}
+                    className={platformConfigForm.adapter === option.value ? "selected" : ""}
+                    disabled={Boolean(busy)}
+                    key={option.value}
+                    onClick={() =>
+                      setPlatformConfigForm((current) => ({
+                        ...current,
+                        adapter: option.value,
+                        baseUrl:
+                          current.baseUrl ||
+                          (option.value === "art_image_local" ? "http://127.0.0.1:3000" : "http://127.0.0.1:3700"),
+                      }))
+                    }
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="field-control">
+              <span>Base URL</span>
+              <input
+                autoComplete="off"
+                value={platformConfigForm.baseUrl}
+                onChange={(event) => setPlatformConfigForm({ ...platformConfigForm, baseUrl: event.target.value })}
+                placeholder="http://127.0.0.1:3000"
+              />
+            </label>
+            <label className="field-control">
+              <span>Access Token</span>
+              <input
+                autoComplete="off"
+                type="password"
+                value={platformConfigForm.accessToken}
+                onChange={(event) => setPlatformConfigForm({ ...platformConfigForm, accessToken: event.target.value })}
+                placeholder="留空保持当前 Token"
+              />
+            </label>
+            <label className="field-control">
+              <span>Cookie</span>
+              <input
+                autoComplete="off"
+                type="password"
+                value={platformConfigForm.cookie}
+                onChange={(event) => setPlatformConfigForm({ ...platformConfigForm, cookie: event.target.value })}
+                placeholder="留空保持当前 Cookie"
+              />
+            </label>
+            <label className="field-control">
+              <span>设备 ID</span>
+              <input
+                autoComplete="off"
+                value={platformConfigForm.deviceId}
+                onChange={(event) => setPlatformConfigForm({ ...platformConfigForm, deviceId: event.target.value })}
+                placeholder={platformConfig?.deviceIdSuffix ? `留空保持当前 · ${platformConfig.deviceIdSuffix}` : "留空保持当前设备"}
+              />
+            </label>
+            <button type="button" className="primary" onClick={saveDesignPlatformConfig} disabled={Boolean(busy)}>
+              <Save size={16} />保存配置
+            </button>
+          </div>
+        </section>
 
         <nav className="dock-strip" aria-label="工作台状态概览">
           <button

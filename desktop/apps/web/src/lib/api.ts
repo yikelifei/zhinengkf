@@ -894,6 +894,23 @@ export type DesignPlatformReadiness = {
   data?: Record<string, unknown>;
 };
 
+export type DesignPlatformConfigSummary = {
+  adapter: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+  hasAccessToken: boolean;
+  hasCookie: boolean;
+  hasDeviceId: boolean;
+  deviceIdSuffix?: string;
+  runtimeConfigPath?: string;
+};
+
+export type DesignPlatformConfigResponse = {
+  ok: boolean;
+  config: DesignPlatformConfigSummary;
+  readiness?: DesignPlatformReadiness;
+};
+
 export type DesignJobPreflightResult = {
   ok: boolean;
   adapter: string;
@@ -1608,6 +1625,22 @@ export async function getDesignPlatformReadiness(): Promise<DesignPlatformReadin
   const response = await fetch(`${API_BASE}/integrations/design-platform/readiness`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
+}
+
+export async function getDesignPlatformConfig(): Promise<DesignPlatformConfigResponse> {
+  const response = await fetch(`${API_BASE}/integrations/design-platform/config`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
+}
+
+export async function updateDesignPlatformConfig(payload: {
+  adapter?: string;
+  baseUrl?: string;
+  accessToken?: string;
+  cookie?: string;
+  deviceId?: string;
+}): Promise<DesignPlatformConfigResponse> {
+  return postJson<DesignPlatformConfigResponse>("/integrations/design-platform/config", payload);
 }
 
 export async function submitDesignJob(id: string): Promise<DesignJob> {

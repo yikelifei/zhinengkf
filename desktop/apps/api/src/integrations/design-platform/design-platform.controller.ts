@@ -1,6 +1,10 @@
-import { Body, Controller, Get, Headers, Post, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Headers, Post, UnauthorizedException } from "@nestjs/common";
 import { DesignJobsService } from "../../design-jobs/design-jobs.service";
-import { appConfig } from "../../shared/app-config";
+import {
+  appConfig,
+  getDesignPlatformRuntimeConfigSummary,
+  updateDesignPlatformRuntimeConfig,
+} from "../../shared/app-config";
 import { rules } from "../../shared/rules";
 import { DesignPlatformClient } from "./design-platform.client";
 import { DesignPlatformCallbackPayload } from "./design-platform.types";
@@ -139,6 +143,34 @@ export class DesignPlatformController {
     };
   }
 
+  @Get("config")
+  config() {
+    return {
+      ok: true,
+      config: getDesignPlatformRuntimeConfigSummary(),
+    };
+  }
+
+  @Post("config")
+  async updateConfig(@Body() payload: Record<string, unknown>) {
+    try {
+      const config = updateDesignPlatformRuntimeConfig({
+        adapter: stringOrUndefined(payload.adapter),
+        baseUrl: stringOrUndefined(payload.baseUrl),
+        accessToken: stringOrUndefined(payload.accessToken),
+        cookie: stringOrUndefined(payload.cookie),
+        deviceId: stringOrUndefined(payload.deviceId),
+      });
+      return {
+        ok: true,
+        config,
+        readiness: await this.readiness(),
+      };
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "invalid design platform config");
+    }
+  }
+
   @Post("callback")
   async callback(
     @Headers("authorization") authorization: string | undefined,
@@ -168,4 +200,8 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringOrUndefined(value: unknown) {
+  return typeof value === "string" ? value : undefined;
 }
