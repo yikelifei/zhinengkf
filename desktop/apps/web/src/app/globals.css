@@ -1563,11 +1563,45 @@ textarea:focus-visible {
 .skill-row span,
 .guard-checks span,
 .quote-preview-warnings span,
+.sample-status,
+.sample-quality,
 .revision-item em {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   border-radius: 999px;
   padding: 4px 8px;
   font-size: 12px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.tag::before,
+.active-quote-head em::before,
+.agent-title span::before,
+.account-card span::before,
+.send-task-head span::before,
+.attempt-summary span::before,
+.review-log-list span::before,
+.quote-tags span::before,
+.route-tags span::before,
+.route-evidence-tags span::before,
+.bundle-items span::before,
+.catalog-issues span::before,
+.skill-row span::before,
+.guard-checks span::before,
+.quote-preview-warnings span::before,
+.sample-status::before,
+.sample-quality::before,
+.revision-item em::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.72;
 }
 
 .tag {
@@ -5167,8 +5201,23 @@ input[type="checkbox"]:disabled {
 }
 
 .review-list h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0 0 10px;
   font-size: 14px;
+}
+
+.review-list h3 svg {
+  width: 22px;
+  height: 22px;
+  padding: 4px;
+  border: 1px solid rgba(0, 122, 255, 0.14);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(232, 242, 255, 0.72)),
+    var(--blue-soft);
+  color: var(--blue);
 }
 
 .review-card {
@@ -5762,7 +5811,8 @@ input[type="checkbox"]:disabled {
       rgba(44, 44, 46, 0.76);
   }
 
-  .panel h2 svg {
+  .panel h2 svg,
+  .review-list h3 svg {
     border-color: rgba(10, 132, 255, 0.24);
     background:
       linear-gradient(180deg, rgba(58, 58, 60, 0.82), rgba(10, 132, 255, 0.16)),

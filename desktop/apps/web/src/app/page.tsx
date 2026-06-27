@@ -4186,7 +4186,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="review-columns">
                 <div className="review-list">
-                  <h3>设计审核</h3>
+                  <h3><ShieldCheck size={16} aria-hidden="true" />设计审核</h3>
                   {reviewCenter.designJobs.length ? (
                     reviewCenter.designJobs.slice(0, 5).map((job) => {
                       const totalImages = job.images?.length || 0;
@@ -4223,7 +4223,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   )}
                 </div>
                 <div className="review-list">
-                  <h3>报价审核</h3>
+                  <h3><ReceiptText size={16} aria-hidden="true" />报价审核</h3>
                   {reviewCenter.quoteDrafts.length ? (
                     reviewCenter.quoteDrafts.slice(0, 5).map((quote) => (
                       <div className="review-card quote" key={quote.id}>
@@ -4454,22 +4454,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         <footer className="system-footer" aria-label="系统状态栏">
           <span>
             <ImageIcon size={14} aria-hidden="true" />
-            <i className={`footer-dot ${platformHealth?.ok ? "online" : "offline"}`} />
+            <i className={`footer-dot ${platformHealth?.ok ? "online" : "offline"}`} aria-hidden="true" />
             {platformStateText}
           </span>
           <span>
             <Bot size={14} aria-hidden="true" />
-            <i className={`footer-dot ${automationStatus?.active ? "online" : "warning"}`} />
+            <i className={`footer-dot ${automationStatus?.active ? "online" : "warning"}`} aria-hidden="true" />
             {automationStateText}
           </span>
           <span>
             <Send size={14} aria-hidden="true" />
-            <i className={`footer-dot ${pendingSendTaskCount ? "warning" : "online"}`} />
+            <i className={`footer-dot ${pendingSendTaskCount ? "warning" : "online"}`} aria-hidden="true" />
             {queueStateText}
           </span>
           <span>
             <ShieldAlert size={14} aria-hidden="true" />
-            <i className={`footer-dot ${manualReviewJobCount ? "warning" : "online"}`} />
+            <i className={`footer-dot ${manualReviewJobCount ? "warning" : "online"}`} aria-hidden="true" />
             {reviewStateText}
           </span>
           <strong>{busy ? `${busy}处理中` : "本地工作台已就绪"}</strong>
@@ -4552,7 +4552,7 @@ function PreflightPanel({
 function Metric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: string }) {
   return (
     <div className={`metric ${tone}`}>
-      <span>{icon}</span>
+      <span aria-hidden="true">{icon}</span>
       <div>
         <small>{label}</small>
         <strong>{value}</strong>
