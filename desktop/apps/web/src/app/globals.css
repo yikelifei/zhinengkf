@@ -2096,6 +2096,12 @@ input[type="checkbox"]:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 8px;
   align-items: end;
+  padding: 8px;
+  border: 1px solid rgba(60, 60, 67, 0.09);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(247, 247, 249, 0.64)),
+    rgba(247, 247, 249, 0.54);
 }
 
 .quote-edit-grid label {
@@ -2109,8 +2115,22 @@ input[type="checkbox"]:disabled {
 }
 
 .quote-edit-grid span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-muted);
   font-size: 12px;
+  font-weight: 650;
+}
+
+.quote-edit-grid span::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.56;
 }
 
 .quote-preview {
@@ -4517,13 +4537,19 @@ input[type="checkbox"]:disabled {
   border: 1px solid rgba(0, 122, 255, 0.18);
   border-radius: var(--radius);
   padding: 10px;
-  background: rgba(0, 122, 255, 0.05);
+  background:
+    url("/panel-sheen.svg") right top / 260px 130px no-repeat,
+    rgba(0, 122, 255, 0.05);
 }
 
 .sample-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(60, 60, 67, 0.08);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.46);
 }
 
 .sample-edit-panel label {
@@ -4540,6 +4566,30 @@ input[type="checkbox"]:disabled {
   min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.sample-edit-panel label > span,
+.sample-agent-control > span,
+.quote-filter-bar label > span,
+.filter-control > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.sample-edit-panel label > span::before,
+.sample-agent-control > span::before,
+.quote-filter-bar label > span::before,
+.filter-control > span::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.56;
 }
 
 .sample-agent-segment {
@@ -5985,6 +6035,21 @@ input[type="checkbox"]:disabled {
     box-shadow:
       inset 0 1px 2px rgba(0, 0, 0, 0.34),
       inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .quote-edit-grid,
+  .sample-edit-grid {
+    border-color: rgba(235, 235, 245, 0.1);
+    background:
+      linear-gradient(180deg, rgba(58, 58, 60, 0.5), rgba(44, 44, 46, 0.62)),
+      rgba(44, 44, 46, 0.52);
+  }
+
+  .sample-edit-panel {
+    border-color: rgba(10, 132, 255, 0.24);
+    background:
+      url("/panel-sheen.svg") right top / 260px 130px no-repeat,
+      rgba(10, 132, 255, 0.1);
   }
 
   .conversation-picker {
