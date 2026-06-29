@@ -138,13 +138,9 @@ export class WechatSendAdapterService {
   }
 
   moveBridgeInboxFile(filePath: string, outcome: "processed" | "failed") {
-    const resolved = path.resolve(filePath);
-    const inboxRoot = path.resolve(appConfig.wechatBridgeInboxDir);
-    const relative = path.relative(inboxRoot, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("bridge inbox file is outside inbox directory");
-    }
-    if (!fs.existsSync(resolved)) return null;
+    const checked = resolveBridgeChildFile(filePath, appConfig.wechatBridgeInboxDir, "bridge inbox");
+    if (!checked) return null;
+    const { resolved, root: inboxRoot } = checked;
     const targetDir = path.join(inboxRoot, outcome);
     fs.mkdirSync(targetDir, { recursive: true });
     const targetPath = path.join(targetDir, `${Date.now()}-${path.basename(resolved)}`);
@@ -153,13 +149,9 @@ export class WechatSendAdapterService {
   }
 
   moveBridgeOutboxFile(filePath: string, outcome: "processed" | "failed" | "cancelled") {
-    const resolved = path.resolve(filePath);
-    const outboxRoot = path.resolve(appConfig.wechatBridgeOutboxDir);
-    const relative = path.relative(outboxRoot, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("bridge outbox file is outside outbox directory");
-    }
-    if (!fs.existsSync(resolved)) return null;
+    const checked = resolveBridgeChildFile(filePath, appConfig.wechatBridgeOutboxDir, "bridge outbox");
+    if (!checked) return null;
+    const { resolved, root: outboxRoot } = checked;
     const targetDir = path.join(outboxRoot, outcome);
     fs.mkdirSync(targetDir, { recursive: true });
     const targetPath = path.join(targetDir, `${Date.now()}-${path.basename(resolved)}`);
@@ -334,4 +326,24 @@ export class WechatSendAdapterService {
     if (name === "windows_bridge") return adapters.windows_bridge;
     return adapters.dry_run;
   }
+}
+
+function resolveBridgeChildFile(filePath: string, rootDir: string, label: string) {
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(rootDir);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || path.basename(resolved) !== relative) {
+    throw new Error(`${label} file is outside ${label.includes("outbox") ? "outbox" : "inbox"} directory`);
+  }
+  if (!fs.existsSync(resolved)) return null;
+  if (!fs.lstatSync(resolved).isFile()) {
+    throw new Error(`${label} file must be a regular file`);
+  }
+  const realRoot = fs.realpathSync(root);
+  const realResolved = fs.realpathSync(resolved);
+  const realRelative = path.relative(realRoot, realResolved);
+  if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new Error(`${label} file resolves outside ${label.includes("outbox") ? "outbox" : "inbox"} directory`);
+  }
+  return { resolved, root };
 }

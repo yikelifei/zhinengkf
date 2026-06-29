@@ -79,6 +79,92 @@ test("asks for clarification when only weak scene signal is detected", () => {
   assert.match(result.sceneClarification.question, /售前咨询/);
 });
 
+test("uses route correction memory for repeated scene routing", () => {
+  const result = evaluateAgentRoute(
+    {
+      text: "杯子破了怎么处理",
+    },
+    {
+      sceneMemory: [
+        {
+          id: "sample_after_sales_memory",
+          sourceType: "route_correction",
+          status: "ready",
+          score: 95,
+          agentKey: "after_sales",
+          scene: "售后安抚",
+          customerText: "杯子破了怎么处理",
+          sourceRouteId: "route_old",
+        },
+      ],
+    },
+  );
+
+  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.scene, "售后安抚");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.sceneDecision.reason, "route_correction_memory");
+  assert.equal(result.sceneMemory.applied, true);
+  assert.equal(result.sceneMemory.sampleId, "sample_after_sales_memory");
+  assert.equal(result.matchedKeywords.includes("route_correction_memory"), true);
+  assert.equal(result.sceneAudit.evidence.some((item) => item.includes("route correction memory")), true);
+});
+
+test("uses high quality chat import memory only when the match is strong", () => {
+  const result = evaluateAgentRoute(
+    {
+      text: "陶瓷杯裂了怎么办",
+    },
+    {
+      sceneMemory: [
+        {
+          id: "sample_chat_import_memory",
+          sourceType: "chat_import",
+          status: "ready",
+          score: 92,
+          agentKey: "after_sales",
+          scene: "售后安抚",
+          customerText: "陶瓷杯裂了怎么办",
+          importId: "import_1",
+          quality: { level: "pass", trainable: true },
+        },
+      ],
+    },
+  );
+
+  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.sceneMemory.applied, true);
+  assert.equal(result.sceneMemory.sourceType, "chat_import");
+  assert.equal(result.sceneMemory.importId, "import_1");
+  assert.equal(result.matchedKeywords.includes("chat_import_memory"), true);
+});
+
+test("does not use chat import memory before it is confirmed trainable", () => {
+  const result = evaluateAgentRoute(
+    {
+      text: "cup broken refund help",
+    },
+    {
+      sceneMemory: [
+        {
+          id: "sample_chat_import_review",
+          sourceType: "chat_import",
+          status: "review",
+          score: 95,
+          agentKey: "after_sales",
+          scene: "售后安抚",
+          customerText: "cup broken refund help",
+          quality: { level: "review", trainable: false, flags: ["manual_review_required"] },
+        },
+      ],
+    },
+  );
+
+  assert.equal(result.agentKey, "general");
+  assert.equal(result.sceneMemory, null);
+  assert.equal(result.matchedKeywords.includes("chat_import_memory"), false);
+});
+
 test("resolves customer clarification reply to after-sales scene", () => {
   const previous = evaluateAgentRoute({
     text: "订单破损要退款，还能改地址开发票吗",
@@ -178,4 +264,31 @@ test("routes sensitive after-sales complaint to manual review", () => {
   assert.equal(result.agentKey, "after_sales");
   assert.equal(result.action, "manual_review");
   assert.equal(result.riskFlags.length > 0, true);
+});
+
+test("explains clear scene audit for gift design routing", () => {
+  const result = evaluateAgentRoute({
+    text: "端午员工福利礼盒，每盒180元，做50份，想看真实摆拍效果图，logo已发",
+  });
+
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.sceneAudit.level, "pass");
+  assert.equal(result.sceneAudit.label, "场景清晰");
+  assert.match(result.sceneAudit.summary, /礼盒设计/);
+  assert.match(result.sceneAudit.nextStep, /智能体/);
+  assert.equal(result.sceneAudit.warnings.length, 0);
+});
+
+test("explains ambiguous scene audit before routing to manual review", () => {
+  const result = evaluateAgentRoute({
+    text: "订单破损要退款，还能改地址开发票吗",
+  });
+
+  assert.equal(result.sceneDecision.status, "ambiguous");
+  assert.equal(result.action, "manual_review");
+  assert.equal(result.sceneAudit.level, "manual");
+  assert.match(result.sceneAudit.summary, /同时像/);
+  assert.match(result.sceneAudit.nextStep, /场景确认/);
+  assert.equal(result.sceneAudit.warnings.some((warning) => warning.includes("避免把 A 场景当成 B 场景")), true);
 });

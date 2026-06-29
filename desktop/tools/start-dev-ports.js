@@ -10,12 +10,18 @@ const runtimeDir = path.join(desktopRoot, ".runtime");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
+const webStandaloneServer = path.join("apps", "web", ".next", "standalone", "apps", "web", "server.js");
+const webStandaloneServerPath = path.join(desktopRoot, webStandaloneServer);
 const args = new Set(process.argv.slice(2));
 const includeApi = !args.has("--no-api");
 const statusOnly = args.has("--status");
 const preflightOnly = args.has("--preflight");
+const keepAliveLauncher = args.has("--keep-alive");
 const requireFreePorts = args.has("--require-free-ports");
-const forceMockDesignMode = args.has("--mock-design");
+const requestedMockDesignMode = args.has("--mock-design");
+const forceMockDesignMode = requestedMockDesignMode;
+const requestedRealDesignMode = args.has("--real-design");
 const webPort = numberEnv("WEB_PORT", 3100);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
 const apiPort = numberEnv("API_PORT", 3200);
@@ -24,7 +30,10 @@ const existingDesignPlatformAdapter =
   typeof existingDesignPlatformConfig.designPlatformAdapter === "string" ? existingDesignPlatformConfig.designPlatformAdapter : "";
 const existingDesignPlatformBaseUrl =
   typeof existingDesignPlatformConfig.designPlatformBaseUrl === "string" ? existingDesignPlatformConfig.designPlatformBaseUrl : "";
-const designPlatformAdapter = forceMockDesignMode ? "standard_v1" : "art_image_local";
+const shouldReuseRealDesignMode =
+  !requestedMockDesignMode && !requestedRealDesignMode && existingDesignPlatformAdapter === "art_image_local";
+const designPlatformAdapter =
+  (requestedRealDesignMode || shouldReuseRealDesignMode) && !forceMockDesignMode ? "art_image_local" : "standard_v1";
 const realDesignMode = designPlatformAdapter === "art_image_local";
 const includeMockDesignPlatform =
   designPlatformAdapter === "standard_v1" &&
@@ -40,7 +49,7 @@ const services = [
     port: webPort,
     url: `http://127.0.0.1:${webPort}/`,
     command: process.execPath,
-    commandArgs: ["node_modules/next/dist/bin/next", "dev", "apps/web", "-p", String(webPort)],
+    commandArgs: [webStandaloneServer],
     enabled: true,
   },
   {
@@ -62,6 +71,7 @@ const services = [
     enabled: includeApi,
   },
 ];
+const managedChildren = [];
 
 main().catch((error) => {
   console.error(error?.stack || error);
@@ -71,7 +81,20 @@ main().catch((error) => {
 async function main() {
   fs.mkdirSync(logsDir, { recursive: true });
 
+  if (!statusOnly && !preflightOnly) {
+    assertRealDesignStartAllowed();
+    writeMockModeLockIfNeeded();
+  }
+
   if (!statusOnly) {
+    assertNoConflictingDesignLauncher();
+  }
+
+  if (!statusOnly && !preflightOnly && includeApi) {
+    await assertNoActiveApiModeConflict();
+  }
+
+  if (!statusOnly && !preflightOnly) {
     writeRuntimeDesignPlatformConfig();
   }
 
@@ -88,6 +111,7 @@ async function main() {
   assertRequiredCommands();
 
   const records = readPidFile();
+  await buildWebIfNeeded();
   await buildApiIfNeeded();
   for (const disabledService of services.filter((item) => !item.enabled)) {
     delete records[disabledService.name];
@@ -115,7 +139,30 @@ async function main() {
     const portOwners = getPortOwnerPids(service.port);
     if (portOwners.length) {
       console.log(`[wait] ${service.label} port ${service.port} is used by PID ${portOwners.join(", ")}. Checking health...`);
-      if (await waitForStableHealth(service.url, 30000)) {
+      if (service.name === "api" && (await isHealthy(service.url))) {
+        const integrationHealth = await getJson(integrationHealthUrl);
+        if (integrationHealth && !integrationMatchesCurrentConfig(integrationHealth)) {
+          records[service.name] = {
+            ...records[service.name],
+            name: service.name,
+            label: service.label,
+            port: service.port,
+            url: service.url,
+            status: "wrong_mode",
+            portOwnerPids: portOwners,
+            updatedAt: new Date().toISOString(),
+          };
+          writePidFile(records);
+          console.log(`[wrong-mode] ${service.label} port ${service.port} is used by PID ${portOwners.join(", ")} with the wrong design mode.`);
+          console.log(
+            `             current adapter=${integrationHealth.adapter || "unknown"} base=${integrationHealth.baseUrl || "unknown"}`,
+          );
+          console.log(`             expected adapter=${designPlatformAdapter} base=${designPlatformDefaults().DESIGN_PLATFORM_BASE_URL}`);
+          console.log("             Run npm.cmd run ports:stop, then start with the matching mode.");
+          continue;
+        }
+      }
+      if (await waitForStableServiceReady(service, serviceReadyTimeoutMs(service))) {
         const healthyPortOwners = getPortOwnerPids(service.port);
         records[service.name] = {
           ...records[service.name],
@@ -167,8 +214,47 @@ async function main() {
   console.log("[info] Local JSON data mode is enabled by default. Set USE_LOCAL_STORE=false for database mode later.");
 
   if (!allReady) {
-    process.exitCode = 1;
+    if (keepAliveLauncher) {
+      console.log("[keep-alive] Some services were not ready yet. Keeping launcher alive so managed services can recover.");
+    } else {
+      process.exitCode = 1;
+      return;
+    }
   }
+
+  if (keepAliveLauncher) {
+    console.log("[keep-alive] Port services are running. Use npm.cmd run ports:stop to stop them.");
+    await waitUntilStopped();
+  }
+}
+
+function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath) {
+  const stdout = fs.openSync(stdoutPath, "a");
+  const stderr = fs.openSync(stderrPath, "a");
+  const launchCommand = windowsServiceLaunchCommand(service);
+  const child = spawn(launchCommand.command, launchCommand.commandArgs, {
+    cwd: desktopRoot,
+    env: serviceEnv(),
+    detached: true,
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+  child.unref();
+  managedChildren.push(child);
+  child.once("exit", (code, signal) => {
+    fs.appendFileSync(
+      launcherLogPath,
+      `[${new Date().toISOString()}] ${service.name} exited code=${code ?? ""} signal=${signal ?? ""}\n`,
+      "utf8",
+    );
+    if (keepAliveLauncher) {
+      setTimeout(() => {
+        fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] restarting ${service.name}\n`, "utf8");
+        startManagedChild(service, stdoutPath, stderrPath, launcherLogPath);
+      }, 2000);
+    }
+  });
+  return child;
 }
 
 async function buildApiIfNeeded() {
@@ -184,7 +270,64 @@ async function buildApiIfNeeded() {
     return;
   }
   console.log("[build] Building API before startup...");
-  runPackageScript("build:api");
+  try {
+    runPackageScript("build:api");
+  } catch (error) {
+    console.log(`[warn] API build failed once: ${error instanceof Error ? error.message : String(error)}`);
+    console.log("[build] Waiting 2 seconds, then retrying API build...");
+    sleepMs(2000);
+    runPackageScript("build:api");
+  }
+}
+
+async function buildWebIfNeeded() {
+  const webService = services.find((service) => service.name === "web");
+  if (!webService?.enabled) return;
+  if (await isServiceReadyForCurrentConfig(webService)) {
+    console.log("[ok] Web workbench is already online, skip web rebuild.");
+    return;
+  }
+  const portOwners = getPortOwnerPids(webService.port);
+  if (portOwners.length) {
+    console.log(`[blocked] Web port ${webService.port} is used by PID ${portOwners.join(", ")}. Skip web rebuild.`);
+    return;
+  }
+  if (!webBuildIsStale()) return;
+
+  console.log("[build] Building web standalone assets before startup...");
+  try {
+    runPackageScript("build:web");
+  } catch (error) {
+    console.log(`[warn] Web build failed once: ${error instanceof Error ? error.message : String(error)}`);
+    console.log("[build] Waiting 2 seconds, then retrying web build...");
+    sleepMs(2000);
+    runPackageScript("build:web");
+  }
+}
+
+function webBuildIsStale() {
+  if (!fs.existsSync(webStandaloneServerPath)) return true;
+  const builtAt = fs.statSync(webStandaloneServerPath).mtimeMs;
+  return [
+    path.join(desktopRoot, "apps", "web", "src"),
+    path.join(desktopRoot, "apps", "web", "public"),
+    path.join(desktopRoot, "apps", "web", "next.config.js"),
+    path.join(desktopRoot, "package.json"),
+  ].some((item) => pathHasFileNewerThan(item, builtAt));
+}
+
+function pathHasFileNewerThan(itemPath, builtAt) {
+  if (!fs.existsSync(itemPath)) return false;
+  const stat = fs.statSync(itemPath);
+  if (stat.isFile()) return stat.mtimeMs > builtAt;
+  if (!stat.isDirectory()) return false;
+
+  for (const entry of fs.readdirSync(itemPath, { withFileTypes: true })) {
+    if (entry.name === ".next" || entry.name === "node_modules") continue;
+    const childPath = path.join(itemPath, entry.name);
+    if (pathHasFileNewerThan(childPath, builtAt)) return true;
+  }
+  return false;
 }
 
 function runPackageScript(scriptName) {
@@ -197,6 +340,16 @@ function runPackageScript(scriptName) {
   if (result.status !== 0) {
     throw new Error(`${scriptName} failed`);
   }
+}
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function waitUntilStopped() {
+  return new Promise(() => {
+    setInterval(() => undefined, 60_000);
+  });
 }
 
 function startService(service) {
@@ -220,17 +373,32 @@ function startService(service) {
 function startWindowsService(service) {
   const stdoutPath = path.join(logsDir, `${service.name}.out.log`);
   const stderrPath = path.join(logsDir, `${service.name}.err.log`);
+  const launcherLogPath = path.join(logsDir, `${service.name}.launcher.log`);
   const wrapperPath = path.join(runtimeDir, `run-${service.name}.cmd`);
   fs.rmSync(stdoutPath, { force: true });
   fs.rmSync(stderrPath, { force: true });
+  fs.rmSync(launcherLogPath, { force: true });
 
-  fs.writeFileSync(wrapperPath, buildWindowsServiceWrapper(service, stdoutPath, stderrPath), "utf8");
+  fs.writeFileSync(wrapperPath, buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLogPath), "utf8");
+  if (!fs.existsSync(wrapperPath)) {
+    throw new Error(`failed to create service wrapper for ${service.name}`);
+  }
 
+  fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] launching ${service.name}\n`, "utf8");
+  if (keepAliveLauncher) {
+    return startManagedChild(service, stdoutPath, stderrPath, launcherLogPath);
+  }
+
+  const envAssignments = Object.entries(serviceDefaultEnv())
+    .map(([key, value]) => `$env:${psEnvName(key)} = ${psQuote(value)}`)
+    .join("; ");
+  const launchCommand = windowsServiceLaunchCommand(service);
   const script =
-    '$process = Start-Process -FilePath "$env:ComSpec" ' +
-    `-ArgumentList @('/d','/c',${psQuote(`"${wrapperPath}"`)}) ` +
-    `-WorkingDirectory ${psQuote(desktopRoot)} ` +
-    "-WindowStyle Hidden -PassThru; " +
+    `${envAssignments}; ` +
+    `$process = Start-Process -FilePath ${psQuote(launchCommand.command)} ` +
+    `-ArgumentList ${psArray(launchCommand.commandArgs)} ` +
+    `-WorkingDirectory ${psQuote(desktopRoot)} -WindowStyle Hidden -RedirectStandardOutput ${psQuote(stdoutPath)} ` +
+    `-RedirectStandardError ${psQuote(stderrPath)} -PassThru; ` +
     "$process.Id";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
     cwd: desktopRoot,
@@ -242,19 +410,25 @@ function startWindowsService(service) {
     throw new Error(`failed to start ${service.name}: ${String(result.stderr || result.stdout || "unknown error").trim()}`);
   }
   const startedPid = Number(String(result.stdout || "").trim().split(/\s+/).pop());
-  return { pid: Number.isFinite(startedPid) ? startedPid : numberOrUndefined(getPortOwnerPids(service.port)[0]) };
+  return { pid: numberOrUndefined(getPortOwnerPids(service.port)[0]) || (Number.isFinite(startedPid) ? startedPid : undefined) };
 }
 
-function buildWindowsServiceWrapper(service, stdoutPath, stderrPath) {
+function buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLogPath) {
   const command = [cmdQuote(service.command), ...service.commandArgs.map(cmdQuote)].join(" ");
+  const runLine = `${command} >> ${cmdQuote(stdoutPath)} 2>> ${cmdQuote(stderrPath)}`;
   const lines = [
     "@echo off",
+    "setlocal",
     `cd /d ${cmdQuote(desktopRoot)}`,
     ...Object.entries(serviceDefaultEnv()).map(([key, value]) => cmdSetEnv(key, value)),
-    `echo [%date% %time%] starting ${service.name} >> ${cmdQuote(stdoutPath)}`,
-    `${command} >> ${cmdQuote(stdoutPath)} 2>> ${cmdQuote(stderrPath)}`,
+    `echo [%date% %time%] launching ${service.name} >> ${cmdQuote(launcherLogPath)}`,
+    runLine,
   ];
   return `${lines.join("\r\n")}\r\n`;
+}
+
+function windowsServiceLaunchCommand(service) {
+  return { command: service.command, commandArgs: service.commandArgs };
 }
 
 function cmdSetEnv(key, value) {
@@ -271,12 +445,13 @@ async function waitAndPrint(enabledServices, records) {
       continue;
     }
 
-    const ok = await waitForStableHealth(service.url, 30000);
+    const ok = await waitForStableServiceReady(service, serviceReadyTimeoutMs(service));
     const portOwners = getPortOwnerPids(service.port);
     records[service.name] = {
       ...records[service.name],
       status: ok ? "running" : "failed_or_slow",
       portOwnerPids: portOwners,
+      pid: numberOrUndefined(portOwners[0]) || records[service.name]?.pid,
       updatedAt: new Date().toISOString(),
     };
     writePidFile(records);
@@ -284,11 +459,15 @@ async function waitAndPrint(enabledServices, records) {
       console.log(`[ready] ${service.label}: ${service.url}`);
     } else {
       allReady = false;
-      console.log(`[warn] ${service.label} was not ready within 30 seconds.`);
+      console.log(`[warn] ${service.label} was not ready within ${Math.round(serviceReadyTimeoutMs(service) / 1000)} seconds.`);
       console.log(`       Check log: ${path.join(logsDir, `${service.name}.err.log`)}`);
     }
   }
   return allReady;
+}
+
+function serviceReadyTimeoutMs(service) {
+  return service.name === "api" ? 90000 : 30000;
 }
 
 async function printStatus() {
@@ -304,10 +483,14 @@ async function printStatus() {
   }
 
   for (const service of effectiveServices) {
-    const ok = await isHealthy(service.url);
+    const reachable = await isHealthy(service.url);
+    const configMismatch =
+      service.name === "api" && reachable && integrationHealth && !integrationMatchesCurrentConfig(integrationHealth);
+    const ok = reachable && !configMismatch;
     const portOwners = getPortOwnerPids(service.port);
     const portText = portOwners.length ? ` port=${service.port} pid=${portOwners.join(",")}` : "";
-    console.log(`${ok ? "[ready]" : "[down] "} ${service.label} ${service.url}${portText}`);
+    const statusLabel = ok ? "[ready]" : configMismatch ? "[wrong-mode]" : "[down] ";
+    console.log(`${statusLabel} ${service.label} ${service.url}${portText}`);
     records[service.name] = {
       ...records[service.name],
       name: service.name,
@@ -316,7 +499,7 @@ async function printStatus() {
       url: service.url,
       pid: records[service.name]?.pid || numberOrUndefined(portOwners[0]),
       portOwnerPids: portOwners,
-      status: ok ? "running" : "down",
+      status: ok ? "running" : configMismatch ? "wrong_mode" : "down",
       updatedAt: new Date().toISOString(),
     };
   }
@@ -401,6 +584,13 @@ async function isServiceReadyForCurrentConfig(service) {
   return integrationMatchesCurrentConfig(integrationHealth);
 }
 
+async function isApiIntegrationReadyForCurrentConfig() {
+  if (!(await isHealthy(`http://127.0.0.1:${apiPort}/api/health`))) return false;
+
+  const integrationHealth = await getJson(integrationHealthUrl);
+  return integrationMatchesCurrentConfig(integrationHealth);
+}
+
 function integrationMatchesCurrentConfig(integrationHealth) {
   if (!integrationHealth) return false;
   return (
@@ -424,6 +614,18 @@ async function waitForStableHealth(url, timeoutMs) {
     if (await isHealthy(url)) {
       await sleep(1000);
       if (await isHealthy(url)) return true;
+    }
+    await sleep(1000);
+  }
+  return false;
+}
+
+async function waitForStableServiceReady(service, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isServiceReadyForCurrentConfig(service)) {
+      await sleep(1000);
+      if (await isServiceReadyForCurrentConfig(service)) return true;
     }
     await sleep(1000);
   }
@@ -535,6 +737,84 @@ function writePidFile(records) {
   fs.writeFileSync(pidFile, `${JSON.stringify(records, null, 2)}\n`, "utf8");
 }
 
+function assertNoConflictingDesignLauncher() {
+  const conflictMode = realDesignMode ? "mock" : "real";
+  const conflicts = findConflictingDesignLaunchers(conflictMode);
+  if (!conflicts.length) return;
+
+  console.log(`[blocked] A ${conflictMode} design launcher is still running for this project.`);
+  for (const conflict of conflicts.slice(0, 5)) {
+    console.log(`          PID ${conflict.pid}: ${truncateText(conflict.commandLine, 140)}`);
+  }
+  console.log("          Run npm.cmd run ports:stop, then start with only one design mode.");
+  throw new Error(`Conflicting ${conflictMode} design launcher is still running.`);
+}
+
+async function assertNoActiveApiModeConflict() {
+  const portOwners = getPortOwnerPids(apiPort);
+  if (!portOwners.length) return;
+  if (!(await isHealthy(`http://127.0.0.1:${apiPort}/api/health`))) return;
+
+  const integrationHealth = await getJson(integrationHealthUrl);
+  if (!integrationHealth || integrationMatchesCurrentConfig(integrationHealth)) return;
+
+  console.log(`[blocked] NestJS API port ${apiPort} is already running with a different design mode.`);
+  console.log(
+    `          current adapter=${integrationHealth.adapter || "unknown"} base=${integrationHealth.baseUrl || "unknown"}`,
+  );
+  console.log(`          expected adapter=${designPlatformAdapter} base=${designPlatformDefaults().DESIGN_PLATFORM_BASE_URL}`);
+  console.log("          Runtime design platform config was not changed.");
+  console.log("          Run npm.cmd run ports:stop, then start with the matching mode.");
+  throw new Error("Active API design mode does not match requested startup mode.");
+}
+
+function findConflictingDesignLaunchers(mode) {
+  if (process.platform !== "win32") return [];
+
+  const launcherFile = mode === "real" ? "launch-real.cmd" : "launch-mock.cmd";
+  const modeArg = mode === "real" ? "--real-design" : "--mock-design";
+  const batFile = mode === "real" ? "run_desktop_real_design.bat" : "run_desktop.bat";
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$root = ${psQuote(normalizePathText(desktopRoot))}`,
+    "$selfPid = $PID",
+    "$items = Get-CimInstance Win32_Process | Where-Object {",
+    "  $_.ProcessId -ne $selfPid -and $_.CommandLine -and",
+    "  ($_.CommandLine -replace '\\\\','/').ToLowerInvariant().Contains($root) -and",
+    `  ((($_.CommandLine -like '*start-dev-ports.js*') -and ($_.CommandLine -like '*${modeArg}*')) -or`,
+    `    ($_.CommandLine -like '*${launcherFile}*') -or`,
+    `    ($_.CommandLine -like '*${batFile}*'))`,
+    "} | Select-Object -First 8 ProcessId,CommandLine",
+    "if ($items) { $items | ConvertTo-Json -Compress }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: desktopRoot,
+    env: windowsSafeEnv(process.env),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows
+      .map((item) => ({
+        pid: Number(item.ProcessId),
+        commandLine: String(item.CommandLine || ""),
+      }))
+      .filter((item) => Number.isFinite(item.pid) && item.commandLine);
+  } catch {
+    return [];
+  }
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
 function serviceEnv() {
   return {
     ...process.env,
@@ -559,6 +839,7 @@ function serviceDefaultEnv() {
   return {
     NEXT_TELEMETRY_DISABLED: "1",
     USE_LOCAL_STORE: process.env.USE_LOCAL_STORE || "true",
+    PORT: String(webPort),
     WEB_PORT: String(webPort),
     API_PORT: String(apiPort),
     MOCK_DESIGN_PLATFORM_PORT: String(mockPort),
@@ -609,6 +890,20 @@ function writeRuntimeDesignPlatformConfig() {
   );
 }
 
+function assertRealDesignStartAllowed() {
+  if (!requestedRealDesignMode) return;
+  if (!fs.existsSync(mockModeLockFile)) return;
+  throw new Error(
+    `Real design startup is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
+  );
+}
+
+function writeMockModeLockIfNeeded() {
+  if (requestedRealDesignMode) return;
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(mockModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+}
+
 function readRuntimeDesignPlatformConfig() {
   try {
     return JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
@@ -625,8 +920,20 @@ function psArray(values) {
   return `@(${values.map((value) => psQuote(value)).join(",")})`;
 }
 
+function psEnvName(value) {
+  return String(value).replace(/[^\w]/g, "");
+}
+
+function psCommandArg(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
 function cmdQuote(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function normalizePathText(value) {
+  return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
 function normalizeBaseUrl(value) {

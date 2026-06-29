@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="240" viewBox="0 0 360 240" fill="none">
+  <defs>
+    <linearGradient id="wire" x1="34" y1="52" x2="324" y2="178" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#007AFF" stop-opacity=".16"/>
+      <stop offset=".54" stop-color="#8E8E93" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#34C759" stop-opacity=".12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(214 118) rotate(90) scale(118 190)">
+      <stop stop-color="#0A84FF" stop-opacity=".08"/>
+      <stop offset=".72" stop-color="#FFFFFF" stop-opacity=".04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.2"/>
+    </filter>
+  </defs>
+  <rect width="360" height="240" rx="24" fill="url(#glow)"/>
+  <path d="M28 166C74 118 118 96 163 102C218 110 238 54 316 68" stroke="url(#wire)" stroke-width="1.5" stroke-linecap="round" filter="url(#soft)"/>
+  <path d="M50 88C96 115 132 151 183 145C229 139 258 172 326 154" stroke="#007AFF" stroke-opacity=".08" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M72 190H142M166 190H214M242 190H304" stroke="#1D1D1F" stroke-opacity=".08" stroke-linecap="round"/>
+  <g opacity=".48">
+    <circle cx="52" cy="160" r="3.5" fill="#FFFFFF" stroke="#007AFF" stroke-opacity=".22"/>
+    <circle cx="162" cy="102" r="4" fill="#FFFFFF" stroke="#007AFF" stroke-opacity=".2"/>
+    <circle cx="238" cy="58" r="3.5" fill="#FFFFFF" stroke="#34C759" stroke-opacity=".18"/>
+    <circle cx="318" cy="70" r="4.2" fill="#FFFFFF" stroke="#8E8E93" stroke-opacity=".18"/>
+    <circle cx="184" cy="145" r="3.6" fill="#FFFFFF" stroke="#8E8E93" stroke-opacity=".16"/>
+    <circle cx="326" cy="154" r="3.8" fill="#FFFFFF" stroke="#007AFF" stroke-opacity=".18"/>
+  </g>
+  <g opacity=".16">
+    <rect x="86" y="38" width="44" height="22" rx="7" stroke="#1D1D1F"/>
+    <rect x="214" y="104" width="56" height="24" rx="8" stroke="#1D1D1F"/>
+    <rect x="112" y="154" width="52" height="22" rx="7" stroke="#1D1D1F"/>
+  </g>
+</svg>

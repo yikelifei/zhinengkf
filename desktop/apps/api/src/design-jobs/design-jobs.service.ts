@@ -17,6 +17,7 @@ import { rules } from "../shared/rules";
 const {
   buildWaitingMessage,
   decideRevisionPolicy,
+  evaluateArtImageLocalHealthReadiness,
   evaluateDesignAutoSubmit,
   evaluateDesignPlatformActivationStatus,
   evaluateHighValueHandoff,
@@ -28,6 +29,7 @@ const {
   nextStatusAfterDesignCompleted,
   planCustomerImageSelection,
   shouldTimeout,
+  validateDesignAssetBinding,
   validateDesignCallbackBinding,
   validateDesignJobIdentity,
   validateDesignRequest,
@@ -640,6 +642,10 @@ export class DesignJobsService {
           detail: unsupported,
         });
       }
+      if (health && typeof health === "object") {
+        const artImageHealth = evaluateArtImageLocalHealthReadiness(health);
+        checks.push(...artImageHealth.checks);
+      }
 
       try {
         const auth = await this.designPlatform.getArtImageLocalAuthSession();
@@ -757,6 +763,16 @@ export class DesignJobsService {
     const uniqueAssetIds = [...new Set((assetIds || []).filter(Boolean))];
     if (!uniqueAssetIds.length) throw new Error("assetIds is required");
     if (appConfig.useLocalStore) return this.localStore.attachDesignAssetsToJob(id, uniqueAssetIds);
+    const [designJob, assets] = await Promise.all([
+      this.prisma.designJob.findUnique({ where: { id }, select: { id: true, requestId: true, customerId: true } }),
+      this.prisma.designAsset.findMany({ where: { id: { in: uniqueAssetIds } } }),
+    ]);
+    const binding = validateDesignAssetBinding({
+      designJob,
+      assets,
+      requestedAssetIds: uniqueAssetIds,
+    });
+    if (!binding.ok) throw new BadRequestException(`design asset binding invalid: ${binding.reason}`);
     return this.prisma.designJob.update({
       where: { id },
       data: {
@@ -1144,37 +1160,84 @@ export class DesignJobsService {
     if (!job.wechatAccountId) throw new Error("design job has no wechatAccountId");
     if (!job.conversationId) throw new Error("design job has no conversationId");
 
-    const images = [...((job.images || []) as DesignImageCandidateLike[])];
-    const imagePaths = images
-      .sort((a, b) => a.position - b.position)
-      .map((image) => image.localPath || image.downloadUrl || "")
-      .filter(Boolean);
-    if (!imagePaths.length) throw new BadRequestException("design job has no sendable images");
+    const images = [...((job.images || []) as DesignImageCandidateLike[])].sort((a, b) => a.position - b.position);
+    if (!images.length) throw new BadRequestException("design job has no sendable images");
+    const remoteOnlyImages = images.filter((image) => !image.localPath && image.downloadUrl);
+    const missingLocalImages = images.filter((image) => !image.localPath);
+    if (remoteOnlyImages.length) {
+      await this.notifications.create(
+        "warning",
+        "候选图未保存到本地",
+        `有 ${remoteOnlyImages.length} 张候选图只有远程链接，已阻止进入微信发送队列。`,
+        {
+          designJobId: job.id,
+          requestId: job.requestId,
+        },
+      );
+    }
+    if (missingLocalImages.length) {
+      throw new BadRequestException(
+        `design job has ${missingLocalImages.length} candidate images without local files; poll results again or retry generation before sending`,
+      );
+    }
+    const imagePaths = images.map((image) => image.localPath).filter(Boolean) as string[];
 
     if (options.releaseManualLock) {
+      assertManualReleaseReason(options.releaseReason, "design send manual release");
       await this.wechatDispatch.setConversationManualLock(job.conversationId, {
         locked: false,
         reviewer: options.reviewer || "人工客服",
-        reason: options.releaseReason || "manual_approve_send",
+        reason: options.releaseReason,
         note: "人工已审核通过发送，恢复该会话的发送队列。",
       });
     }
 
-    const sendTask = await this.wechatDispatch.enqueueDesignImages({
-      wechatAccountId: job.wechatAccountId,
-      conversationId: job.conversationId,
-      designJobId: job.id,
-      imagePaths,
-      textBeforeImages: "我先把几版礼盒效果图发您，您可以直接引用喜欢的那张告诉我。",
-      automation: {
-        source: "low_value_design_image_send",
-        valueLevel: "low",
-        queuedBy: "low_value_automation",
-      },
-    });
-    if (appConfig.useLocalStore) this.localStore.updateDesignJob(id, { status: "sent" });
-    else await this.prisma.designJob.update({ where: { id }, data: { status: "sent" } });
-    return sendTask;
+    try {
+      const sendTask = await this.wechatDispatch.enqueueDesignImages({
+        wechatAccountId: job.wechatAccountId,
+        conversationId: job.conversationId,
+        designJobId: job.id,
+        imagePaths,
+        textBeforeImages: "我先把几版礼盒效果图发您，您可以直接引用喜欢的那张告诉我。",
+        automation: {
+          source: "low_value_design_image_send",
+          valueLevel: "low",
+          queuedBy: "low_value_automation",
+        },
+      });
+      if (appConfig.useLocalStore) this.localStore.updateDesignJob(id, { status: "sent", sendTaskId: sendTask.id });
+      else await this.prisma.designJob.update({ where: { id }, data: { status: "sent", sendTaskId: sendTask.id } as any });
+      if (options.releaseManualLock) {
+        await this.createReviewLog({
+          targetType: "design_job",
+          targetId: job.id,
+          decision: options.releaseReason || "manual_approve_send",
+          reviewer: options.reviewer || "人工客服",
+          note: "人工审核通过并已创建微信发送任务。",
+          beforeStatus: job.status || "",
+          afterStatus: "sent",
+          metadata: {
+            source: "manual_release_design_send",
+            conversationId: job.conversationId,
+            wechatAccountId: job.wechatAccountId,
+            requestId: job.requestId,
+            sendTaskId: sendTask.id,
+            releaseReason: options.releaseReason,
+          },
+        });
+      }
+      return sendTask;
+    } catch (error) {
+      if (options.releaseManualLock) {
+        await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          locked: true,
+          reviewer: options.reviewer || "人工客服",
+          reason: "manual_approve_send_queue_failed",
+          note: `人工审核发送未能入队，已重新接管会话：${error instanceof Error ? error.message : "unknown error"}`,
+        });
+      }
+      throw error;
+    }
   }
 
   async selectImage(id: string, input: string | SelectDesignImagePayload) {
@@ -1761,4 +1824,11 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertManualReleaseReason(reason: unknown, context: string) {
+  const text = String(reason || "").trim();
+  if (!text || !text.startsWith("manual_")) {
+    throw new BadRequestException(`${context} requires an explicit manual release reason`);
+  }
 }

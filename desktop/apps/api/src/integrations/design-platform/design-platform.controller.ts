@@ -9,7 +9,7 @@ import { rules } from "../../shared/rules";
 import { DesignPlatformClient } from "./design-platform.client";
 import { DesignPlatformCallbackPayload } from "./design-platform.types";
 
-const { evaluateDesignPlatformActivationStatus } = rules;
+const { evaluateArtImageLocalHealthReadiness, evaluateDesignPlatformActivationStatus } = rules;
 
 @Controller("integrations/design-platform")
 export class DesignPlatformController {
@@ -73,6 +73,11 @@ export class DesignPlatformController {
     }
 
     if (appConfig.designPlatformAdapter === "art_image_local") {
+      if (healthData && typeof healthData === "object") {
+        const artImageHealth = evaluateArtImageLocalHealthReadiness(healthData);
+        checks.push(...artImageHealth.checks);
+      }
+
       try {
         const auth = await this.designPlatform.getArtImageLocalAuthSession();
         checks.push({
@@ -171,6 +176,62 @@ export class DesignPlatformController {
     }
   }
 
+  @Post("login")
+  async login(@Body() payload: Record<string, unknown>) {
+    const email = requiredString(payload.email, "email");
+    const password = requiredString(payload.password, "password");
+    const deviceId = requiredString(payload.deviceId || appConfig.designPlatformDeviceId, "deviceId");
+
+    try {
+      const login = await this.designPlatform.loginArtImageLocal({
+        email,
+        password,
+        deviceId,
+      });
+      const config = updateDesignPlatformRuntimeConfig({
+        adapter: "art_image_local",
+        accessToken: login.accessToken,
+        cookie: login.cookie || "",
+        deviceId: login.deviceId,
+      });
+      return {
+        ok: true,
+        config,
+        user: sanitizeLoginUser(login.user),
+        readiness: await this.readiness(),
+      };
+    } catch (error) {
+      throw new BadRequestException(publicLoginErrorMessage(error));
+    }
+  }
+
+  @Post("activation/redeem")
+  async redeemActivation(@Body() payload: Record<string, unknown>) {
+    const code = requiredString(payload.code, "activationCode");
+    const deviceId = requiredString(payload.deviceId || appConfig.designPlatformDeviceId, "deviceId");
+    const deviceLabel = stringOrUndefined(payload.deviceLabel) || "智能客服工作台";
+
+    try {
+      const activation = await this.designPlatform.redeemArtImageLocalActivation({
+        code,
+        deviceId,
+        deviceLabel,
+      });
+      const config = updateDesignPlatformRuntimeConfig({
+        adapter: "art_image_local",
+        deviceId,
+      });
+      return {
+        ok: true,
+        activation,
+        config,
+        readiness: await this.readiness(),
+      };
+    } catch (error) {
+      throw new BadRequestException(publicLoginErrorMessage(error));
+    }
+  }
+
   @Post("callback")
   async callback(
     @Headers("authorization") authorization: string | undefined,
@@ -204,4 +265,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringOrUndefined(value: unknown) {
   return typeof value === "string" ? value : undefined;
+}
+
+function requiredString(value: unknown, name: string) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new BadRequestException(`${name} is required`);
+  return text;
+}
+
+function sanitizeLoginUser(user: unknown) {
+  if (!isRecord(user)) return null;
+  return {
+    id: typeof user.id === "string" ? user.id : "",
+    email: typeof user.email === "string" ? user.email : "",
+  };
+}
+
+function publicLoginErrorMessage(error: unknown) {
+  if (!isRecord(error)) return error instanceof Error ? error.message : "design platform login failed";
+  const response = isRecord(error.response) ? error.response : null;
+  const data = response && isRecord(response.data) ? response.data : null;
+  const nestedError = data && isRecord(data.error) ? data.error : null;
+  return String(
+    nestedError?.message ||
+      data?.message ||
+      data?.code ||
+      (error instanceof Error ? error.message : "") ||
+      "design platform login failed",
+  );
 }

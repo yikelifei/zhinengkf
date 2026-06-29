@@ -11,8 +11,9 @@ const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const args = new Set(process.argv.slice(2));
 const forceMockDesignMode = args.has("--mock-design");
-const mockDesignMode = forceMockDesignMode;
-const realDesignMode = !mockDesignMode;
+const requestedRealDesignMode = args.has("--real-design");
+const realDesignMode = requestedRealDesignMode && !forceMockDesignMode;
+const mockDesignMode = !realDesignMode;
 
 const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
@@ -81,7 +82,7 @@ async function main() {
 
   printHeader("HTTP Health");
   for (const service of services) {
-    const result = await requestUrl(service.url);
+    const result = await requestUrlWithRetry(service.url, 5, 700);
     if (isExpectedStatus(result.statusCode, service.requiredStatus)) {
       console.log(`[ok] ${service.label}: HTTP ${result.statusCode} ${service.url}`);
       printHealthBody(service, result.body);
@@ -262,9 +263,20 @@ function requestUrl(url) {
 }
 
 async function getIntegrationHealth() {
-  const result = await requestUrl(integrationHealthUrl);
+  const result = await requestUrlWithRetry(integrationHealthUrl, 5, 700);
   if (!isExpectedStatus(result.statusCode, "2xx") || !result.body) return null;
   return tryParseJson(result.body);
+}
+
+async function requestUrlWithRetry(url, attempts, delayMs) {
+  let lastResult = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = await requestUrl(url);
+    lastResult = result;
+    if (result.statusCode || attempt === attempts) return result;
+    await sleep(delayMs);
+  }
+  return lastResult || { error: "not reachable" };
 }
 
 function isExpectedStatus(statusCode, rule) {
@@ -272,6 +284,10 @@ function isExpectedStatus(statusCode, rule) {
   if (rule === "2xx") return statusCode >= 200 && statusCode < 300;
   if (rule === "2xx/3xx") return statusCode >= 200 && statusCode < 400;
   return false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getPortOwners(port) {

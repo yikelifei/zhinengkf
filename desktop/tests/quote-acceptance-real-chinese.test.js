@@ -3,7 +3,12 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { detectQuoteAcceptanceIntent, planInboundQuoteAcceptance } = require("../packages/rules");
+const {
+  detectQuoteAcceptanceIntent,
+  planCustomerImageSelection,
+  planInboundQuoteAcceptance,
+  shouldDeferSelectionReviewToQuoteAcceptance,
+} = require("../packages/rules");
 
 const sentLowValueQuote = {
   id: "quote_real_chinese_1",
@@ -51,4 +56,37 @@ test("plans real Chinese paid low-value quote into order creation", () => {
   assert.equal(plan.action, "accept_quote_and_create_order");
   assert.equal(plan.quotePatch.status, "accepted");
   assert.equal(plan.quotePatch.paymentStatus, "deposit_paid");
+});
+
+test("lets quote confirmation continue when text-only selection is unclear", () => {
+  const candidates = [
+    { id: "candidate_1", imageId: "image_1" },
+    { id: "candidate_2", imageId: "image_2" },
+  ];
+  const unclearSelection = planCustomerImageSelection({
+    text: "可以，就按这个做",
+    candidates,
+  });
+
+  assert.equal(unclearSelection.action, "manual_selection_review");
+  assert.equal(
+    shouldDeferSelectionReviewToQuoteAcceptance({
+      text: "可以，就按这个做",
+      selectionPlan: unclearSelection,
+    }),
+    true,
+  );
+
+  const explicitSelection = planCustomerImageSelection({
+    text: "我选第2张",
+    candidates,
+  });
+  assert.equal(explicitSelection.ok, true);
+  assert.equal(
+    shouldDeferSelectionReviewToQuoteAcceptance({
+      text: "我选第2张",
+      selectionPlan: explicitSelection,
+    }),
+    false,
+  );
 });

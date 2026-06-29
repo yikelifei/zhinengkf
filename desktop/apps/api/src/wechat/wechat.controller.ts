@@ -183,6 +183,7 @@ export class WechatController {
       protocolVersion?: string;
       ackToken?: string;
       bridgeAckToken?: string;
+      taskId?: string;
       attemptId?: string;
       wechatAccountId?: string;
       conversationId?: string;

@@ -108,6 +108,49 @@ function validateDesignCallbackBinding({ payload, job }) {
   return summarize(checks, "design callback binding is valid");
 }
 
+function validateDesignAssetBinding({ designJob, assets, requestedAssetIds }) {
+  const requestedIds = [...new Set((Array.isArray(requestedAssetIds) ? requestedAssetIds : []).filter(Boolean).map(String))];
+  const assetRows = Array.isArray(assets) ? assets : [];
+  const assetById = new Map(assetRows.map((asset) => [String(asset?.id || ""), asset]));
+  const checks = [];
+
+  checks.push({
+    key: "designJobExists",
+    label: "design job exists for asset binding",
+    expected: "designJob",
+    actual: designJob?.id || designJob?.requestId || "",
+    passed: Boolean(designJob?.id || designJob?.requestId),
+  });
+
+  checks.push({
+    key: "assetIdsProvided",
+    label: "asset ids provided for binding",
+    expected: "assetIds",
+    actual: requestedIds.join(","),
+    passed: requestedIds.length > 0,
+  });
+
+  for (const assetId of requestedIds) {
+    const asset = assetById.get(assetId);
+    checks.push({
+      key: `assetExists:${assetId}`,
+      label: "design asset exists",
+      expected: assetId,
+      actual: asset?.id || "",
+      passed: Boolean(asset?.id),
+    });
+    checks.push({
+      key: `assetCustomerMatchesJob:${assetId}`,
+      label: "design asset customer matches design job",
+      expected: designJob?.customerId || "",
+      actual: asset?.ownerType === "customer" ? asset?.ownerId || "" : `${asset?.ownerType || ""}:${asset?.ownerId || ""}`,
+      passed: Boolean(asset?.ownerType === "customer" && asset?.ownerId && designJob?.customerId && asset.ownerId === designJob.customerId),
+    });
+  }
+
+  return summarize(checks, "design assets match design job customer");
+}
+
 function validateQuoteDraftIdentity({ quoteDraft, designJob, conversation, selectedImage }) {
   const checks = [];
 
@@ -393,6 +436,7 @@ function summarize(checks, successReason) {
 }
 
 module.exports = {
+  validateDesignAssetBinding,
   validateDesignCallbackBinding,
   validateDesignJobIdentity,
   validateInboundConversationBinding,

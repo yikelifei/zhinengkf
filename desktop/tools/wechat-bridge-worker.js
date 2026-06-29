@@ -6,7 +6,9 @@ const { setTimeout: delay } = require("node:timers/promises");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = path.join(desktopRoot, ".runtime");
+const defaultLocalStorageRoot = path.join(desktopRoot, "storage");
 const defaultApiBase = `http://127.0.0.1:${process.env.API_PORT || "3200"}/api`;
+const defaultOutboxDir = path.join(runtimeDir, "wechat-outbox");
 const defaultInboxDir = path.join(runtimeDir, "wechat-inbox");
 const defaultLockDir = path.join(runtimeDir, "wechat-bridge-locks");
 const defaultStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
@@ -70,7 +72,7 @@ async function runOnce(config = readConfig()) {
     }
 
     try {
-      processed.push(await processPendingEntry({ ...entry, outboxDir: outbox.outboxDir || "" }, config));
+      processed.push(await processPendingEntry({ ...entry, outboxDir: outbox.outboxDir || config.outboxDir }, config));
     } catch (error) {
       failed.push({
         taskId: entry.taskId,
@@ -87,7 +89,7 @@ async function runOnce(config = readConfig()) {
     processed,
     skipped,
     failed,
-    outboxDir: outbox.outboxDir || "",
+    outboxDir: outbox.outboxDir || config.outboxDir,
     mode: config.mode,
     ackTransport: config.ackTransport,
   };
@@ -179,8 +181,6 @@ function buildAckPayload(entry, mode, outboxPayload = {}) {
       mode,
       outboxFile: entry.fileName || "",
       payloadKind: entry.payloadKind || "",
-      accountDisplayName: entry.accountDisplayName || "",
-      conversationTitle: entry.conversationTitle || "",
     },
     sentAt: status === "sent" ? new Date().toISOString() : undefined,
   };
@@ -227,22 +227,31 @@ function loadAndValidateOutboxPayload(entry = {}) {
 
 function resolveOutboxFilePath(entry = {}) {
   const fileName = String(entry.fileName || "").trim();
-  const filePath = String(entry.filePath || "").trim();
+  const providedFilePath = String(entry.filePath || "").trim();
   if (!fileName) throw new Error("bridge outbox fileName is required");
-  if (!filePath) throw new Error("bridge outbox filePath is required");
-  if (path.basename(filePath) !== fileName) {
+  if (providedFilePath && path.basename(providedFilePath) !== fileName) {
     throw new Error("bridge outbox filePath basename must match fileName");
   }
 
-  const outboxDir = String(entry.outboxDir || "").trim() || path.dirname(filePath);
+  const outboxDir = String(entry.outboxDir || "").trim() || (providedFilePath ? path.dirname(providedFilePath) : "");
+  if (!outboxDir) throw new Error("bridge outbox directory is required");
   const outboxRoot = path.resolve(outboxDir);
-  const resolved = path.resolve(filePath);
+  const resolved = path.resolve(providedFilePath || path.join(outboxRoot, fileName));
   const relative = path.relative(outboxRoot, resolved);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || relative !== fileName) {
     throw new Error("bridge outbox file must be a direct child of outbox directory");
   }
   if (!fs.existsSync(resolved)) {
     throw new Error("bridge outbox file does not exist");
+  }
+  if (!fs.lstatSync(resolved).isFile()) {
+    throw new Error("bridge outbox file must be a regular file");
+  }
+  const realRoot = fs.realpathSync(outboxRoot);
+  const realResolved = fs.realpathSync(resolved);
+  const realRelative = path.relative(realRoot, realResolved);
+  if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new Error("bridge outbox file must resolve inside outbox directory");
   }
   return resolved;
 }
@@ -267,6 +276,7 @@ function validateOutboxPayload(entry = {}, payload = {}) {
   const constraints = sendPlan && typeof sendPlan.constraints === "object" && sendPlan.constraints ? sendPlan.constraints : {};
   const actions = Array.isArray(sendPlan.actions) ? sendPlan.actions : null;
   const actionCount = Number(sendPlan.actionCount);
+  const actionValidation = validateSendPlanActions(actions || []);
   const guardSnapshot = payload && typeof payload.guardSnapshot === "object" && payload.guardSnapshot ? payload.guardSnapshot : {};
   const context = payload && typeof payload.context === "object" && payload.context ? payload.context : {};
 
@@ -317,6 +327,10 @@ function validateOutboxPayload(entry = {}, payload = {}) {
       passed: Array.isArray(actions) && Number.isFinite(actionCount) && actionCount === actions.length,
     },
     {
+      key: "sendPlanActionDetails",
+      passed: actionValidation.ok,
+    },
+    {
       key: "sendPlanConstraints",
       passed:
         constraints.singleAccountLock === true &&
@@ -336,6 +350,53 @@ function validateOutboxPayload(entry = {}, payload = {}) {
     failedKeys,
     reason: failedKeys.length ? failedKeys.join(",") : "bridge outbox payload is valid",
   };
+}
+
+function validateSendPlanActions(actions = []) {
+  if (!Array.isArray(actions) || !actions.length) {
+    return { ok: false, reason: "send plan must include at least one action" };
+  }
+  for (const action of actions) {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
+      return { ok: false, reason: "send plan action must be an object" };
+    }
+    const type = String(action.type || "").trim();
+    if (type === "text") {
+      if (!String(action.text || "").trim()) return { ok: false, reason: "text action must include non-empty text" };
+      continue;
+    }
+    if (type === "image") {
+      const resolved = resolveLocalStorageFile(action.filePath);
+      if (!resolved) return { ok: false, reason: "image action must use an existing local storage file" };
+      continue;
+    }
+    return { ok: false, reason: `unsupported send action type: ${type || "empty"}` };
+  }
+  return { ok: true, reason: "send plan actions are valid" };
+}
+
+function resolveLocalStorageFile(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /^[a-z]+:\/\//i.test(raw)) return "";
+  const storageRoot = path.resolve(process.env.LOCAL_STORAGE_ROOT || defaultLocalStorageRoot);
+  const candidates = path.isAbsolute(raw)
+    ? [path.resolve(raw)]
+    : [path.resolve(desktopRoot, raw), path.resolve(storageRoot, raw)];
+  for (const resolved of candidates) {
+    const relative = path.relative(storageRoot, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    try {
+      if (!fs.lstatSync(resolved).isFile()) continue;
+      const realRoot = fs.realpathSync(storageRoot);
+      const realResolved = fs.realpathSync(resolved);
+      const realRelative = path.relative(realRoot, realResolved);
+      if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) continue;
+      return resolved;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return "";
 }
 
 function writeAckFile(inboxDir, ackPayload) {
@@ -454,6 +515,7 @@ async function postJson(url, body) {
 function readConfig() {
   return {
     apiBase: String(valueArg("--api-base") || process.env.BRIDGE_API_BASE || defaultApiBase).replace(/\/$/, ""),
+    outboxDir: path.resolve(valueArg("--outbox-dir") || process.env.WECHAT_BRIDGE_OUTBOX_DIR || defaultOutboxDir),
     inboxDir: path.resolve(valueArg("--inbox-dir") || process.env.WECHAT_BRIDGE_INBOX_DIR || defaultInboxDir),
     lockDir: path.resolve(valueArg("--lock-dir") || process.env.WECHAT_BRIDGE_LOCK_DIR || defaultLockDir),
     statusFile: path.resolve(valueArg("--status-file") || process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || defaultStatusFile),
@@ -523,6 +585,7 @@ Environment:
   BRIDGE_MODE=noop|simulate_sent|simulate_failed
   BRIDGE_ACK_TRANSPORT=file_scan|file|api
   WECHAT_BRIDGE_INBOX_DIR=.runtime/wechat-inbox
+  WECHAT_BRIDGE_OUTBOX_DIR=.runtime/wechat-outbox
   WECHAT_BRIDGE_LOCK_DIR=.runtime/wechat-bridge-locks
   WECHAT_BRIDGE_WORKER_STATUS_FILE=.runtime/wechat-bridge-worker-status.json
 

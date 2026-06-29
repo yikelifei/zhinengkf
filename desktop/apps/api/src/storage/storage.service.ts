@@ -113,7 +113,7 @@ function normalizeDownloadUrl(url: string): string {
   if (value.startsWith("/")) {
     return `${appConfig.designPlatformBaseUrl.replace(/\/+$/, "")}${value}`;
   }
-  return value;
+  throw new BadRequestException("downloadUrl must be http(s) or design-platform relative path");
 }
 
 function safeName(value: string): string {

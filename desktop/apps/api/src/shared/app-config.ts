@@ -13,8 +13,8 @@ function booleanEnv(name: string, fallback: boolean): boolean {
   return !["0", "false", "no", "off"].includes(String(raw).toLowerCase());
 }
 
-const defaultDesignPlatformAdapter = "art_image_local";
-const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3000";
+const defaultDesignPlatformAdapter = "standard_v1";
+const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3700";
 const designPlatformRuntimeConfigPath = path.resolve(
   process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || "./.runtime/design-platform-config.json",
 );
@@ -43,7 +43,7 @@ function resolveDesignPlatformRuntime(config = runtimeConfig) {
   const baseUrl = stringConfig(
     "DESIGN_PLATFORM_BASE_URL",
     "designPlatformBaseUrl",
-    adapter === "art_image_local" ? defaultDesignPlatformBaseUrl : "http://127.0.0.1:3700",
+    adapter === "art_image_local" ? "http://127.0.0.1:3000" : defaultDesignPlatformBaseUrl,
     config,
   );
   return {

@@ -96,6 +96,7 @@ function buildDemoWechatWindowSnapshot({ mode = "correct", account, conversation
 function findActiveConversation(snapshot, conversations = []) {
   return (
     conversations.find((conversation) => {
+      if (snapshot.wechatAccountId && conversation.wechatAccountId !== snapshot.wechatAccountId) return false;
       if (snapshot.externalChatId && conversation.externalChatId === snapshot.externalChatId) return true;
       if (snapshot.chatTitle && String(conversation.title || "").trim() === snapshot.chatTitle) return true;
       if (snapshot.recentCustomerId && conversation.customerId === snapshot.recentCustomerId) return true;

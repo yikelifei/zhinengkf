@@ -29,8 +29,10 @@ export class RoutingService {
   evaluate(payload: RouteEvaluatePayload) {
     if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
     const clarificationContext = payload.clarificationContext || this.findLatestSceneClarification(payload.conversationId);
+    const sceneMemory = this.listSceneMemorySamples();
     const result = evaluateAgentRoute({ ...payload, clarificationContext }, {
       highValueAmountCny: appConfig.highValueAmountCny,
+      sceneMemory,
     });
     const agent = this.localStore.getAgentByKey(result.agentKey);
     const skills = agent?.id ? this.localStore.listAgentSkills(agent.id) : [];
@@ -68,4 +70,24 @@ export class RoutingService {
   private findLatestSceneClarification(conversationId?: string) {
     return findPendingSceneClarificationContext(this.localStore.listRouteEvaluations(), conversationId);
   }
+
+  private listSceneMemorySamples() {
+    return this.localStore
+      .listTrainingSamples()
+      .filter((sample: any) => isSceneMemorySample(sample))
+      .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+      .slice(0, 200);
+  }
+}
+
+function isSceneMemorySample(sample: any) {
+  if (!sample?.agentKey || !sample?.customerText) return false;
+  if (String(sample.status || "ready") !== "ready") return false;
+  const sourceType = String(sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : ""));
+  if (sourceType === "route_correction") return Number(sample.score || 0) >= 70;
+  if (sourceType !== "chat_import") return false;
+  if (Number(sample.score || 0) < 85) return false;
+  if (sample.quality?.trainable === false) return false;
+  if (["review", "risk", "blocked"].includes(String(sample.quality?.level || ""))) return false;
+  return true;
 }

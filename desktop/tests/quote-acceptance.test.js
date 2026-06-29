@@ -63,6 +63,58 @@ test("plans paid low-value quote into paid order creation", () => {
   assert.equal(plan.quotePatch.paymentStatus, "deposit_paid");
 });
 
+test("updates existing order draft when customer later confirms payment", () => {
+  const plan = planInboundQuoteAcceptance({
+    text: "定金已经转账了，麻烦安排制作",
+    quote: { ...sentLowValueQuote, status: "accepted", paymentStatus: "unpaid" },
+    existingOrderDraft: {
+      id: "order_1",
+      status: "draft",
+      paymentStatus: "unpaid",
+      owner: "",
+    },
+  });
+
+  assert.equal(plan.ok, true);
+  assert.equal(plan.action, "update_existing_order_payment");
+  assert.equal(plan.reason, "customer_payment_confirmed_existing_order");
+  assert.equal(plan.orderDraftId, "order_1");
+  assert.equal(plan.orderPatch.status, "confirmed");
+  assert.equal(plan.orderPatch.paymentStatus, "deposit_paid");
+  assert.equal(plan.quotePatch.status, "accepted");
+  assert.equal(plan.quotePatch.paymentStatus, "deposit_paid");
+});
+
+test("does not downgrade or repeat already recorded existing order payment", () => {
+  const plan = planInboundQuoteAcceptance({
+    text: "定金已经转账了",
+    quote: { ...sentLowValueQuote, status: "accepted", paymentStatus: "paid" },
+    existingOrderDraft: {
+      id: "order_1",
+      status: "confirmed",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(plan.ok, false);
+  assert.equal(plan.reason, "order_payment_already_recorded");
+});
+
+test("does not create another order draft after existing order acceptance text", () => {
+  const plan = planInboundQuoteAcceptance({
+    text: "可以，就按这个做",
+    quote: { ...sentLowValueQuote, status: "accepted", paymentStatus: "unpaid" },
+    existingOrderDraft: {
+      id: "order_1",
+      status: "draft",
+      paymentStatus: "unpaid",
+    },
+  });
+
+  assert.equal(plan.ok, false);
+  assert.equal(plan.reason, "already_has_order_draft");
+});
+
 test("does not accept high-value quote automatically", () => {
   const plan = planInboundQuoteAcceptance({
     text: "可以，下单",

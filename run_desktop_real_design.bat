@@ -72,20 +72,11 @@ if errorlevel 1 (
   )
 )
 
-echo [build] Building API...
-call npm.cmd run build:api
-if errorlevel 1 (
-  echo [error] API build failed. Read the messages above.
-  pause
-  exit /b 1
-)
-
 echo.
-echo [start] Starting real-design desktop services in foreground mode...
-echo Keep this window open while using the app.
+echo [start] Starting real-design desktop services...
 echo Open workbench: http://127.0.0.1:3100/
 echo.
-call npm.cmd run dev:stack:real
+call npm.cmd run ports:launch:real
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime\logs.
   pause
@@ -93,6 +84,17 @@ if errorlevel 1 (
 )
 
 echo.
-echo [stopped] Desktop services have stopped.
+echo [check] Verifying real-design desktop startup...
+call npm.cmd run ports:doctor:real
+if errorlevel 1 (
+  echo [error] Desktop startup check failed. Make sure the real design platform is online, then try again.
+  pause
+  exit /b 1
+)
+
+echo.
+echo [ok] Desktop services are running in the background.
+echo Open: http://127.0.0.1:3100/
+echo To stop them later, run stop_desktop.bat.
 echo.
 pause

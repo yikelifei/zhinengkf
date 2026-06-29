@@ -259,6 +259,35 @@ test("blocks send task binding when account does not own conversation", () => {
   assert.equal(result.failedKeys.includes("wechatAccountOwnsConversation"), true);
 });
 
+test("blocks send task binding when payload identity points elsewhere", () => {
+  const result = validateSendTaskBinding({
+    task: {
+      id: "send-1",
+      wechatAccountId: "wechat-1",
+      conversationId: "conv-1",
+      designJobId: "design-1",
+      quoteDraftId: "quote-1",
+      payload: {
+        wechatAccountId: "wechat-2",
+        conversationId: "conv-2",
+        customerId: "customer-2",
+        designJobId: "design-2",
+        quoteDraftId: "quote-2",
+      },
+    },
+    conversation: boundConversation,
+    designJob: boundDesignJob,
+    quoteDraft: boundQuote,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("payloadWechatAccountMatchesTask"), true);
+  assert.equal(result.failedKeys.includes("payloadConversationMatchesTask"), true);
+  assert.equal(result.failedKeys.includes("payloadCustomerMatchesConversation"), true);
+  assert.equal(result.failedKeys.includes("payloadDesignJobMatchesTask"), true);
+  assert.equal(result.failedKeys.includes("payloadQuoteDraftMatchesTask"), true);
+});
+
 test("blocks send task binding when conversation is manually locked", () => {
   const result = validateSendTaskBinding({
     task: { id: "send-1", wechatAccountId: "wechat-1", conversationId: "conv-1" },
@@ -436,13 +465,30 @@ test("diagnoses a ready wechat window snapshot", () => {
   const snapshot = buildDemoWechatWindowSnapshot({
     mode: "correct",
     account,
-    conversation,
+    conversation: boundConversation,
   });
-  const result = diagnoseWechatWindowSnapshot({ snapshot, account, conversations: [conversation] });
+  const result = diagnoseWechatWindowSnapshot({ snapshot, account, conversations: [boundConversation] });
 
   assert.equal(result.ok, true);
   assert.equal(result.activeConversationId, "conv-1");
   assert.equal(result.riskLevel, "low");
+});
+
+test("diagnoses window snapshot without matching conversations across accounts", () => {
+  const snapshot = buildDemoWechatWindowSnapshot({
+    mode: "correct",
+    account,
+    conversation: { ...boundConversation, wechatAccountId: "wechat-2" },
+  });
+  const result = diagnoseWechatWindowSnapshot({
+    snapshot: { ...snapshot, wechatAccountId: "wechat-1" },
+    account,
+    conversations: [{ ...boundConversation, wechatAccountId: "wechat-2" }],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.activeConversationId, null);
+  assert.equal(result.failedKeys.includes("activeConversationKnown"), true);
 });
 
 test("diagnoses an offline wechat window snapshot as not ready", () => {

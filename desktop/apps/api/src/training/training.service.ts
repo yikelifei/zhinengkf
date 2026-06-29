@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
@@ -18,6 +18,9 @@ type ChatImportPayload = {
   source?: string;
   channel?: "wechat" | "xiaohongshu" | "douyin" | "manual";
   agentId?: string;
+  customerId?: string;
+  conversationId?: string;
+  wechatAccountId?: string;
   text: string;
 };
 
@@ -41,6 +44,16 @@ type ApplySkillSuggestionsPayload = {
   includeNeedsReview?: boolean;
 };
 
+type TrainingSampleQualityFilter = "safe" | "review" | "risk" | "blocked" | "anti_wrong_reply" | "trainable" | "not_trainable";
+
+type ListTrainingSamplesOptions = {
+  agentId?: string;
+  quality?: string;
+  status?: string;
+  sourceType?: string;
+  limit?: number;
+};
+
 @Injectable()
 export class TrainingService {
   constructor(
@@ -53,9 +66,19 @@ export class TrainingService {
     return this.localStore.listChatImports();
   }
 
-  listSamples(agentId?: string) {
+  listSamples(options: string | ListTrainingSamplesOptions = {}) {
     if (!appConfig.useLocalStore) throw new Error("training samples prisma mode is not implemented yet");
-    return this.localStore.listTrainingSamples(agentId);
+    const filters = typeof options === "string" ? { agentId: options } : options;
+    const quality = normalizeTrainingSampleQualityFilter(filters.quality);
+    const status = String(filters.status || "").trim();
+    const sourceType = String(filters.sourceType || "").trim();
+    const limit = clampTrainingSampleLimit(filters.limit);
+    let samples = this.localStore.listTrainingSamples(filters.agentId);
+
+    if (quality) samples = samples.filter((sample: any) => matchesTrainingSampleQuality(sample, quality));
+    if (status) samples = samples.filter((sample: any) => String(sample.status || "ready") === status);
+    if (sourceType) samples = samples.filter((sample: any) => trainingSampleSourceType(sample) === sourceType);
+    return limit ? samples.slice(0, limit) : samples;
   }
 
   getOverview(options: { agentId?: string; minScore?: number } = {}) {
@@ -141,6 +164,50 @@ function normalizeSuggestionKeySet(value?: string[]) {
       .map((item) => String(item || "").trim())
       .filter(Boolean),
   );
+}
+
+function normalizeTrainingSampleQualityFilter(value?: string): TrainingSampleQualityFilter | "" {
+  const quality = String(value || "").trim();
+  if (!quality || quality === "all") return "";
+  if (
+    quality === "safe" ||
+    quality === "review" ||
+    quality === "risk" ||
+    quality === "blocked" ||
+    quality === "anti_wrong_reply" ||
+    quality === "trainable" ||
+    quality === "not_trainable"
+  ) {
+    return quality;
+  }
+  throw new BadRequestException(
+    "quality must be one of safe, review, risk, blocked, anti_wrong_reply, trainable, not_trainable, all",
+  );
+}
+
+function matchesTrainingSampleQuality(sample: any, quality: TrainingSampleQualityFilter) {
+  const sampleQuality = sample?.quality || {};
+  const level = String(sampleQuality.level || "");
+  const flags = Array.isArray(sampleQuality.flags) ? sampleQuality.flags : [];
+  if (quality === "anti_wrong_reply") return flags.includes("anti_wrong_reply_only");
+  if (quality === "trainable") return sampleQuality.trainable === true;
+  if (quality === "not_trainable") return sampleQuality.trainable === false;
+  if (quality === "review") return level === "review" && !flags.includes("anti_wrong_reply_only");
+  return level === quality;
+}
+
+function trainingSampleSourceType(sample: any) {
+  const sourceType = String(sample?.sourceType || "").trim();
+  if (sourceType) return sourceType;
+  if (sample?.sourceRouteId) return "route_correction";
+  if (sample?.importId) return "chat_import";
+  return "";
+}
+
+function clampTrainingSampleLimit(value?: number) {
+  const limit = Math.floor(Number(value || 0));
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.min(limit, 500);
 }
 
 function skillSuggestionKey(suggestion: any) {

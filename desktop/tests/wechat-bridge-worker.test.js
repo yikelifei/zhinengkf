@@ -114,6 +114,9 @@ test("builds bridge sent ack payload with task and attempt identity", () => {
   assert.equal(ack.errorMessage, "");
   assert.equal(ack.metadata.source, "wechat-bridge-worker");
   assert.equal(ack.metadata.payloadKind, "quote");
+  assert.equal(Object.hasOwn(ack.metadata, "accountDisplayName"), false);
+  assert.equal(Object.hasOwn(ack.metadata, "conversationTitle"), false);
+  assert.doesNotMatch(JSON.stringify(ack.metadata), /微信客服1号|王总-端午礼盒/);
   assert.ok(ack.sentAt);
 });
 
@@ -205,6 +208,87 @@ test("rejects bridge outbox file body without ack token", () => {
   assert.equal(result.failedKeys.includes("ackToken"), true);
 });
 
+test("validates bridge outbox image actions against local storage files", () => {
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-storage-"));
+  const imagePath = path.join(storageRoot, "result.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const previousRoot = process.env.LOCAL_STORAGE_ROOT;
+  process.env.LOCAL_STORAGE_ROOT = storageRoot;
+  try {
+    const payload = validOutboxPayload({
+      sendPlan: {
+        ...validOutboxPayload().sendPlan,
+        kind: "design_images",
+        actions: [{ type: "image", filePath: imagePath }],
+      },
+      payload: { kind: "design_images", imagePaths: [imagePath] },
+    });
+
+    const result = validateOutboxPayload(validOutboxEntry(), payload);
+
+    assert.equal(result.ok, true);
+  } finally {
+    if (previousRoot === undefined) delete process.env.LOCAL_STORAGE_ROOT;
+    else process.env.LOCAL_STORAGE_ROOT = previousRoot;
+  }
+});
+
+test("validates bridge outbox image actions relative to custom local storage root", () => {
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-storage-"));
+  const imagePath = path.join(storageRoot, "relative-result.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const previousRoot = process.env.LOCAL_STORAGE_ROOT;
+  process.env.LOCAL_STORAGE_ROOT = storageRoot;
+  try {
+    const payload = validOutboxPayload({
+      sendPlan: {
+        ...validOutboxPayload().sendPlan,
+        kind: "design_images",
+        actions: [{ type: "image", filePath: "relative-result.png" }],
+      },
+      payload: { kind: "design_images", imagePaths: ["relative-result.png"] },
+    });
+
+    const result = validateOutboxPayload(validOutboxEntry(), payload);
+
+    assert.equal(result.ok, true);
+  } finally {
+    if (previousRoot === undefined) delete process.env.LOCAL_STORAGE_ROOT;
+    else process.env.LOCAL_STORAGE_ROOT = previousRoot;
+  }
+});
+
+test("rejects bridge outbox actions that are not local sendable content", () => {
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-storage-"));
+  const previousRoot = process.env.LOCAL_STORAGE_ROOT;
+  process.env.LOCAL_STORAGE_ROOT = storageRoot;
+  try {
+    const remoteImage = validOutboxPayload({
+      sendPlan: {
+        ...validOutboxPayload().sendPlan,
+        actions: [{ type: "image", filePath: "https://example.test/result.png" }],
+      },
+    });
+    const emptyText = validOutboxPayload({
+      sendPlan: {
+        ...validOutboxPayload().sendPlan,
+        actions: [{ type: "text", text: "   " }],
+      },
+    });
+
+    const remoteResult = validateOutboxPayload(validOutboxEntry(), remoteImage);
+    const emptyTextResult = validateOutboxPayload(validOutboxEntry(), emptyText);
+
+    assert.equal(remoteResult.ok, false);
+    assert.equal(remoteResult.failedKeys.includes("sendPlanActionDetails"), true);
+    assert.equal(emptyTextResult.ok, false);
+    assert.equal(emptyTextResult.failedKeys.includes("sendPlanActionDetails"), true);
+  } finally {
+    if (previousRoot === undefined) delete process.env.LOCAL_STORAGE_ROOT;
+    else process.env.LOCAL_STORAGE_ROOT = previousRoot;
+  }
+});
+
 test("loads bridge outbox payload only from the matching outbox file", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbox-"));
   const filePath = path.join(dir, "outbox.json");
@@ -217,6 +301,17 @@ test("loads bridge outbox payload only from the matching outbox file", () => {
   assert.equal(result.payload.taskId, "send_1");
 });
 
+test("loads bridge outbox payload from outbox directory without public file path", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbox-"));
+  const filePath = path.join(dir, "outbox.json");
+  fs.writeFileSync(filePath, `${JSON.stringify(validOutboxPayload(), null, 2)}\n`, "utf8");
+
+  const result = loadAndValidateOutboxPayload(validOutboxEntry({ outboxDir: dir }));
+
+  assert.equal(result.filePath, filePath);
+  assert.equal(result.validation.ok, true);
+});
+
 test("rejects bridge outbox payload paths outside the outbox directory", () => {
   const outboxDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbox-root-"));
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbox-outside-"));
@@ -227,6 +322,33 @@ test("rejects bridge outbox payload paths outside the outbox directory", () => {
     () => loadAndValidateOutboxPayload(validOutboxEntry({ filePath, outboxDir })),
     /direct child of outbox directory/,
   );
+});
+
+test("worker validates outbox and image files with regular-file realpath checks", () => {
+  const worker = fs.readFileSync(path.join(__dirname, "..", "tools", "wechat-bridge-worker.js"), "utf8");
+  const outboxPathSection = worker.slice(
+    worker.indexOf("function resolveOutboxFilePath"),
+    worker.indexOf("function readJsonFile"),
+  );
+  const storagePathSection = worker.slice(
+    worker.indexOf("function resolveLocalStorageFile"),
+    worker.indexOf("function writeAckFile"),
+  );
+
+  assert.match(outboxPathSection, /fs\.lstatSync\(resolved\)\.isFile\(\)/);
+  assert.match(outboxPathSection, /fs\.realpathSync\(outboxRoot\)/);
+  assert.match(outboxPathSection, /fs\.realpathSync\(resolved\)/);
+  assert.match(storagePathSection, /fs\.lstatSync\(resolved\)\.isFile\(\)/);
+  assert.match(storagePathSection, /fs\.realpathSync\(storageRoot\)/);
+  assert.match(storagePathSection, /fs\.realpathSync\(resolved\)/);
+});
+
+test("worker keeps a local outbox directory fallback instead of requiring public file paths", () => {
+  const worker = fs.readFileSync(path.join(__dirname, "..", "tools", "wechat-bridge-worker.js"), "utf8");
+
+  assert.match(worker, /const defaultOutboxDir = path\.join\(runtimeDir, "wechat-outbox"\)/);
+  assert.match(worker, /outboxDir:\s*path\.resolve\(valueArg\("--outbox-dir"\)/);
+  assert.match(worker, /outbox\.outboxDir \|\| config\.outboxDir/);
 });
 
 test("accepts bridge inbox scan only when current ack is processed", () => {

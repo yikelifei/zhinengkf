@@ -4,12 +4,16 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 
 const {
+  diagnoseWechatWindowSnapshot,
   evaluateTrainingSampleQuality,
   isSceneClarificationReply,
   isTrainingSampleReady,
   normalizeTrainingSampleStatus,
   trainingSampleReviewNote,
+  validateDesignAssetBinding,
   validateDesignJobIdentity,
+  validateInboundConversationBinding,
+  validateOrderDraftQuoteBinding,
   validateQuoteDraftIdentity,
   validateSendTaskBinding,
 } = require(path.join(process.cwd(), "packages", "rules"));
@@ -38,22 +42,13 @@ type StoreData = {
   trainingSamples: any[];
   knowledgeEntries: any[];
   routeEvaluations: any[];
+  automationRuns: any[];
 };
 
-function normalizeTrainingSampleStatusLegacy(status: string) {
-  const value = String(status || "").trim();
-  if (["ready", "review", "rejected"].includes(value)) return value;
-  throw new Error(`unsupported training sample status: ${status}`);
-}
-
-function trainingSampleReviewNoteLegacy(status: string) {
-  if (status === "ready") return "人工确认样本可进入 Skill 训练。";
-  if (status === "rejected") return "人工禁用样本，不参与 Skill 和知识匹配。";
-  return "人工标记样本待复核，暂不参与 Skill 和知识匹配。";
-}
-
-function isTrainingSampleReadyLegacy(sample: any) {
-  return !sample?.status || sample.status === "ready";
+function normalizePathKey(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return path.normalize(text).replace(/\\/g, "/").toLowerCase();
 }
 
 function localStoreCanonicalSkillName(name: string) {
@@ -83,6 +78,28 @@ export class LocalStoreService {
     return this.read().skus.filter((sku) => options.includeInactive || sku.isActive !== false);
   }
 
+  listAutomationRuns(limit = 10) {
+    const safeLimit = Math.max(1, Math.min(Number(limit || 10), 50));
+    return this.read()
+      .automationRuns
+      .filter(Boolean)
+      .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+      .slice(0, safeLimit);
+  }
+
+  saveAutomationRun(run: any, limit = 10) {
+    const data = this.read();
+    const safeLimit = Math.max(1, Math.min(Number(limit || 10), 50));
+    const key = automationRunKey(run);
+    const withoutDuplicate = data.automationRuns.filter((item) => automationRunKey(item) !== key);
+    data.automationRuns = [run, ...withoutDuplicate]
+      .filter(Boolean)
+      .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+      .slice(0, safeLimit);
+    this.write(data);
+    return run;
+  }
+
   listSkuChangeLogs(filter: { skuCode?: string; limit?: number } = {}) {
     const limit = Math.max(1, Math.min(Number(filter.limit || 30), 200));
     return this.read()
@@ -97,7 +114,7 @@ export class LocalStoreService {
     const now = new Date().toISOString();
     const index = data.skus.findIndex((sku) => sku.skuCode === payload.skuCode);
     const previous = index >= 0 ? data.skus[index] : null;
-    const record = {
+    const record: any = {
       id: index >= 0 ? data.skus[index].id : id("sku"),
       ...payload,
       stock: payload.stock || 0,
@@ -194,7 +211,7 @@ export class LocalStoreService {
   createDesignAsset(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const record = {
+    const record: any = {
       id: id("asset"),
       ownerType: payload.ownerType,
       ownerId: payload.ownerId,
@@ -215,10 +232,18 @@ export class LocalStoreService {
     const data = this.read();
     const index = data.designJobs.findIndex((item) => item.id === designJobId || item.requestId === designJobId);
     if (index < 0) throw new Error(`local design job not found: ${designJobId}`);
+    const requestedAssetIds = [...new Set((assetIds || []).filter(Boolean).map(String))];
+    const requestedAssets = data.designAssets.filter((asset) => requestedAssetIds.includes(asset.id));
+    const binding = validateDesignAssetBinding({
+      designJob: data.designJobs[index],
+      assets: requestedAssets,
+      requestedAssetIds,
+    });
+    if (!binding.ok) throw new Error(`design asset binding invalid: ${binding.reason}`);
     const existing = Array.isArray(data.designJobs[index].assetIds) ? data.designJobs[index].assetIds : [];
     data.designJobs[index] = {
       ...data.designJobs[index],
-      assetIds: [...new Set([...existing, ...assetIds])],
+      assetIds: [...new Set([...existing, ...requestedAssetIds])],
       updatedAt: new Date().toISOString(),
     };
     this.write(data);
@@ -325,17 +350,77 @@ export class LocalStoreService {
       .sort((a, b) => String(b.lastMessageAt || b.updatedAt).localeCompare(String(a.lastMessageAt || a.updatedAt)));
   }
 
-  updateConversation(id: string, patch: any) {
+  updateConversation(id: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.conversations.findIndex((conversation) => conversation.id === id);
     if (index < 0) throw new Error(`local conversation not found: ${id}`);
-    data.conversations[index] = {
-      ...data.conversations[index],
+    const current = data.conversations[index];
+    const next = {
+      ...current,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (
+      this.hasChangedField(current, patch, ["customerId", "wechatAccountId", "externalChatId"]) &&
+      !options.skipIdentityValidation
+    ) {
+      next.identityBinding = this.validateConversationIdentity(data, next, id);
+    }
+    data.conversations[index] = next;
     this.write(data);
     return this.hydrateConversation(data, data.conversations[index]);
+  }
+
+  private validateConversationIdentity(data: StoreData, conversation: any, currentId?: string) {
+    const customer = data.customers.find((item) => item.id === conversation.customerId) || null;
+    const wechatAccount = conversation.wechatAccountId
+      ? data.wechatAccounts.find((item) => item.id === conversation.wechatAccountId) || null
+      : null;
+    const duplicateExternalChat = conversation.externalChatId
+      ? data.conversations.find(
+          (item) =>
+            item.id !== currentId &&
+            item.wechatAccountId === conversation.wechatAccountId &&
+            item.externalChatId === conversation.externalChatId,
+        ) || null
+      : null;
+    const checks = [
+      {
+        key: "customerExists",
+        label: "conversation customer exists",
+        expected: conversation.customerId || "",
+        actual: customer?.id || "",
+        passed: Boolean(conversation.customerId && customer?.id === conversation.customerId),
+      },
+      {
+        key: "wechatAccountExists",
+        label: "conversation wechat account exists",
+        expected: conversation.wechatAccountId || "",
+        actual: wechatAccount?.id || "",
+        passed: !conversation.wechatAccountId || Boolean(wechatAccount?.id === conversation.wechatAccountId),
+      },
+      {
+        key: "externalChatUniqueInAccount",
+        label: "conversation external chat id is unique in account",
+        expected: conversation.externalChatId || "",
+        actual: duplicateExternalChat?.id || "",
+        passed: !duplicateExternalChat,
+      },
+    ];
+    const failed = checks.filter((item) => !item.passed);
+    if (failed.length) {
+      throw new Error(`conversation binding invalid: ${failed.map((item) => item.label).join("、")}`);
+    }
+    return {
+      ok: true,
+      status: "passed",
+      checks,
+      failedKeys: [],
+      reason: "conversation identity is valid",
+      customerId: customer?.id || null,
+      wechatAccountId: wechatAccount?.id || null,
+      externalChatId: conversation.externalChatId || null,
+    };
   }
 
   createMessage(payload: any) {
@@ -343,14 +428,34 @@ export class LocalStoreService {
     const now = new Date().toISOString();
     const conversationIndex = data.conversations.findIndex((conversation) => conversation.id === payload.conversationId);
     if (conversationIndex < 0) throw new Error(`local conversation not found: ${payload.conversationId}`);
-    const record = {
+    const conversation = data.conversations[conversationIndex];
+    const requestedWechatAccountId = payload.wechatAccountId || payload.metadata?.wechatAccountId;
+    const requestedCustomerId = payload.customerId || payload.metadata?.customerId;
+    const binding = validateInboundConversationBinding({
+      requestedWechatAccountId,
+      requestedConversationId: payload.conversationId,
+      conversation,
+    });
+    if (!binding.ok) throw new Error(`message conversation binding invalid: ${binding.reason}`);
+    if (requestedCustomerId && requestedCustomerId !== conversation.customerId) {
+      throw new Error("message customer binding invalid: requested customer does not match conversation");
+    }
+    const record: any = {
       id: id("msg"),
       conversationId: payload.conversationId,
+      customerId: conversation.customerId || null,
+      wechatAccountId: conversation.wechatAccountId || null,
       direction: payload.direction || "inbound",
       text: payload.text || "",
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       externalId: payload.externalId || null,
       metadata: payload.metadata || {},
+      identityBinding: {
+        status: "passed",
+        conversationId: conversation.id,
+        customerId: conversation.customerId || null,
+        wechatAccountId: conversation.wechatAccountId || null,
+      },
       createdAt: payload.createdAt || now,
     };
     data.messages.push(record);
@@ -366,6 +471,43 @@ export class LocalStoreService {
     };
   }
 
+  private validateOptionalConversationBinding(data: StoreData, payload: any, label: string) {
+    const requestedConversationId = payload.conversationId || null;
+    const requestedWechatAccountId = payload.wechatAccountId || null;
+    const requestedCustomerId = payload.customerId || null;
+    if (!requestedConversationId && !requestedWechatAccountId && !requestedCustomerId) {
+      return {
+        customerId: null,
+        conversationId: null,
+        wechatAccountId: null,
+        binding: null,
+      };
+    }
+    const conversation = requestedConversationId
+      ? data.conversations.find((item) => item.id === requestedConversationId) || null
+      : null;
+    const binding = validateInboundConversationBinding({
+      requestedWechatAccountId,
+      requestedConversationId,
+      conversation,
+    });
+    if (!binding.ok) throw new Error(`${label} conversation binding invalid: ${binding.reason}`);
+    if (requestedCustomerId && requestedCustomerId !== conversation?.customerId) {
+      throw new Error(`${label} customer binding invalid: requested customer does not match conversation`);
+    }
+    return {
+      customerId: conversation?.customerId || null,
+      conversationId: conversation?.id || null,
+      wechatAccountId: conversation?.wechatAccountId || null,
+      binding: {
+        ...binding,
+        customerId: conversation?.customerId || null,
+        conversationId: conversation?.id || null,
+        wechatAccountId: conversation?.wechatAccountId || null,
+      },
+    };
+  }
+
   listWechatWindowSnapshots(limit = 50) {
     const data = this.read();
     return data.wechatWindowSnapshots
@@ -377,7 +519,10 @@ export class LocalStoreService {
   createWechatWindowSnapshot(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const record = {
+    const account = payload.wechatAccountId
+      ? data.wechatAccounts.find((item) => item.id === payload.wechatAccountId) || null
+      : null;
+    const record: any = {
       id: id("window"),
       source: payload.source || "manual",
       isOnline: payload.isOnline !== false,
@@ -391,11 +536,17 @@ export class LocalStoreService {
       recentCustomerId: payload.recentCustomerId || "",
       recentMessageText: payload.recentMessageText || "",
       confidence: payload.confidence ?? 1,
-      diagnostic: payload.diagnostic || null,
       raw: payload.raw || null,
       capturedAt: payload.capturedAt || now,
       createdAt: now,
     };
+    record.diagnostic =
+      payload.diagnostic ||
+      diagnoseWechatWindowSnapshot({
+        snapshot: record,
+        account,
+        conversations: data.conversations,
+      });
     data.wechatWindowSnapshots.push(record);
     this.write(data);
     return this.hydrateWechatWindowSnapshot(data, record);
@@ -465,11 +616,22 @@ export class LocalStoreService {
     return this.hydrateDesignJob(data, job);
   }
 
-  updateDesignJob(id: string, patch: any) {
+  updateDesignJob(id: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.designJobs.findIndex((item) => item.id === id || item.requestId === id);
     if (index < 0) throw new Error(`local design job not found: ${id}`);
-    data.designJobs[index] = { ...data.designJobs[index], ...patch, updatedAt: new Date().toISOString() };
+    const current = data.designJobs[index];
+    const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+    if (this.hasChangedField(current, patch, ["conversationId", "customerId", "wechatAccountId"]) && !options.skipIdentityValidation) {
+      const identity = this.validateDesignJobIdentity(data, next);
+      next.customerId = next.customerId || identity.customerId;
+      next.wechatAccountId = next.wechatAccountId || identity.wechatAccountId;
+      next.identityBinding = {
+        ...identity,
+        revalidatedAt: next.updatedAt,
+      };
+    }
+    data.designJobs[index] = next;
     this.write(data);
     return this.hydrateDesignJob(data, data.designJobs[index]);
   }
@@ -495,18 +657,60 @@ export class LocalStoreService {
     };
   }
 
+  private validateDesignRevisionBinding(data: StoreData, revision: any) {
+    const designJob = data.designJobs.find((item) => item.id === revision.designJobId) || null;
+    const selectedImage = revision.selectedImageId
+      ? data.designImages.find(
+          (item) =>
+            item.designJobId === revision.designJobId &&
+            (item.id === revision.selectedImageId || item.imageId === revision.selectedImageId),
+        ) || null
+      : null;
+    const checks = [
+      {
+        key: "designJobExists",
+        label: "设计修改任务存在",
+        expected: revision.designJobId || "",
+        actual: designJob?.id || "",
+        passed: Boolean(designJob?.id && designJob.id === revision.designJobId),
+      },
+      {
+        key: "selectedImageBelongsToDesignJob",
+        label: "修改引用图片属于设计任务",
+        expected: revision.designJobId || "",
+        actual: selectedImage?.designJobId || "",
+        passed: !revision.selectedImageId || Boolean(selectedImage?.designJobId === revision.designJobId),
+      },
+    ];
+    const failed = checks.filter((item) => !item.passed);
+    if (failed.length) {
+      throw new Error(`design revision binding invalid: ${failed.map((item) => item.label).join("、")}`);
+    }
+    return {
+      ok: true,
+      status: "passed",
+      checks,
+      failedKeys: [],
+      reason: "设计修改绑定关系正确",
+      designJobId: revision.designJobId,
+      selectedImageId: revision.selectedImageId || null,
+    };
+  }
+
   upsertDesignImages(designJobId: string, images: any[]) {
     const data = this.read();
+    const job = data.designJobs.find((item) => item.id === designJobId);
+    if (!job) throw new Error(`local design job not found: ${designJobId}`);
     for (const image of images) {
       const index = data.designImages.findIndex(
         (item) => item.designJobId === designJobId && item.imageId === image.imageId,
       );
       const record = {
         id: index >= 0 ? data.designImages[index].id : id("image"),
-        designJobId,
         selected: false,
         createdAt: index >= 0 ? data.designImages[index].createdAt : new Date().toISOString(),
         ...image,
+        designJobId,
       };
       if (index >= 0) data.designImages[index] = record;
       else data.designImages.push(record);
@@ -517,6 +721,12 @@ export class LocalStoreService {
 
   selectDesignImage(designJobId: string, imageId: string, feedback: string) {
     const data = this.read();
+    const job = data.designJobs.find((item) => item.id === designJobId);
+    if (!job) throw new Error(`local design job not found: ${designJobId}`);
+    const selected = data.designImages.find(
+      (image) => image.designJobId === designJobId && (image.id === imageId || image.imageId === imageId),
+    );
+    if (!selected) throw new Error(`design image not found in design job: ${imageId}`);
     for (const image of data.designImages) {
       if (image.designJobId === designJobId) {
         image.selected = image.id === imageId || image.imageId === imageId;
@@ -536,7 +746,7 @@ export class LocalStoreService {
   createDesignRevision(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const record = {
+    const record: any = {
       id: id("revision"),
       designJobId: payload.designJobId,
       selectedImageId: payload.selectedImageId || null,
@@ -552,22 +762,28 @@ export class LocalStoreService {
       createdAt: now,
       updatedAt: now,
     };
+    record.identityBinding = this.validateDesignRevisionBinding(data, record);
     data.designRevisions.push(record);
     this.write(data);
     return record;
   }
 
-  updateDesignRevision(idOrExternalJobId: string, patch: any) {
+  updateDesignRevision(idOrExternalJobId: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.designRevisions.findIndex(
       (item) => item.id === idOrExternalJobId || item.externalJobId === idOrExternalJobId,
     );
     if (index < 0) throw new Error(`local design revision not found: ${idOrExternalJobId}`);
-    data.designRevisions[index] = {
-      ...data.designRevisions[index],
+    const current = data.designRevisions[index];
+    const next = {
+      ...current,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (this.hasChangedField(current, patch, ["designJobId", "selectedImageId"]) && !options.skipIdentityValidation) {
+      next.identityBinding = this.validateDesignRevisionBinding(data, next);
+    }
+    data.designRevisions[index] = next;
     this.write(data);
     return data.designRevisions[index];
   }
@@ -735,12 +951,23 @@ export class LocalStoreService {
     const data = this.read();
     const now = new Date().toISOString();
     const agent = data.agents.find((item) => item.key === result.agentKey) || data.agents.find((item) => item.key === "general");
+    const identity = this.validateOptionalConversationBinding(
+      data,
+      {
+        conversationId: payload.conversationId,
+        wechatAccountId: payload.wechatAccountId,
+        customerId: payload.conversationId ? payload.customerId : null,
+      },
+      "route evaluation",
+    );
     const record = {
       id: id("route"),
       channel: payload.channel || "wechat",
       text: payload.text || "",
-      customerId: payload.customerId || null,
-      conversationId: payload.conversationId || null,
+      customerId: identity.customerId || payload.customerId || null,
+      conversationId: identity.conversationId || payload.conversationId || null,
+      wechatAccountId: identity.wechatAccountId || payload.wechatAccountId || null,
+      identityBinding: identity.binding,
       agentId: agent?.id || null,
       agentKey: result.agentKey,
       scene: result.scene,
@@ -750,6 +977,8 @@ export class LocalStoreService {
       sceneDecision: result.sceneDecision || null,
       sceneClarification: result.sceneClarification || null,
       clarificationResolution: result.clarificationResolution || null,
+      sceneMemory: result.sceneMemory || null,
+      sceneAudit: result.sceneAudit || null,
       action: result.action,
       confidence: result.confidence,
       isHighValue: result.isHighValue,
@@ -810,6 +1039,15 @@ export class LocalStoreService {
         matchedKeywords: ["human_correction"],
         confidence: "human_reviewed",
       },
+      sceneMemory: null,
+      sceneAudit: {
+        level: "pass",
+        label: "人工已纠正",
+        summary: `已由人工纠正为「${scene}」。`,
+        nextStep: "后续同类消息会作为场景记忆参考。",
+        evidence: ["human_correction"],
+        warnings: [],
+      },
       action: nextAction,
       confidence: 100,
       missingFields: nextMissingFields,
@@ -835,6 +1073,10 @@ export class LocalStoreService {
       importId: null,
       agentId: agent.id,
       agentKey: agent.key,
+      customerId: before.customerId || null,
+      conversationId: before.conversationId || null,
+      wechatAccountId: before.wechatAccountId || null,
+      identityBinding: before.identityBinding || null,
       scene,
       customerText: before.text,
       idealReply: payload.idealReply || before.suggestedReply || `已人工确认该问题应由「${agent.name || agent.key}」处理。`,
@@ -856,6 +1098,10 @@ export class LocalStoreService {
       agentId: sample.agentId,
       sourceType: "route_correction",
       sourceId: sample.id,
+      customerId: before.customerId || null,
+      conversationId: before.conversationId || null,
+      wechatAccountId: before.wechatAccountId || null,
+      identityBinding: before.identityBinding || null,
       title: `场景纠正：${scene}：${String(sample.customerText || "").slice(0, 28)}`,
       content: `客户：${sample.customerText}\n正确场景：${scene}\n正确 Agent：${agent.name || agent.key}\n备注：${note}`,
       tags: [scene, agent.key, "场景纠正", ...sample.skillHints],
@@ -897,12 +1143,17 @@ export class LocalStoreService {
   createChatImport(payload: any, parsed: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const record = {
+    const identity = this.validateOptionalConversationBinding(data, payload, "chat import");
+    const record: any = {
       id: id("import"),
       name: payload.name || `聊天记录导入 ${new Date().toLocaleString("zh-CN")}`,
       source: payload.source || "manual_text",
       channel: payload.channel || "wechat",
       agentId: payload.agentId || null,
+      customerId: identity.customerId,
+      conversationId: identity.conversationId,
+      wechatAccountId: identity.wechatAccountId,
+      identityBinding: identity.binding,
       rawText: payload.text || "",
       messageCount: parsed.messageCount || 0,
       pairCount: parsed.pairCount || 0,
@@ -921,12 +1172,17 @@ export class LocalStoreService {
         importId: record.id,
         agentId: agent?.id || null,
         agentKey: agent?.key || pair.agentKey || "general",
+        customerId: identity.customerId,
+        conversationId: identity.conversationId,
+        wechatAccountId: identity.wechatAccountId,
+        identityBinding: identity.binding,
         scene: pair.scene || "未分类",
         customerText: pair.question,
         idealReply: pair.answer,
         score: pair.score,
         status: pair.score >= 70 ? "ready" : "review",
         skillHints: inferSkillHints(pair),
+        sourceType: "chat_import",
         sourceLineStart: pair.sourceLineStart,
         sourceLineEnd: pair.sourceLineEnd,
         createdAt: now,
@@ -938,6 +1194,10 @@ export class LocalStoreService {
         agentId: sample.agentId,
         sourceType: "chat_import",
         sourceId: sample.id,
+        customerId: identity.customerId,
+        conversationId: identity.conversationId,
+        wechatAccountId: identity.wechatAccountId,
+        identityBinding: identity.binding,
         title: `${sample.scene}：${sample.customerText.slice(0, 28)}`,
         content: `客户：${sample.customerText}\n客服：${sample.idealReply}`,
         tags: [sample.scene, sample.agentKey, ...sample.skillHints],
@@ -1004,11 +1264,26 @@ export class LocalStoreService {
     return task ? this.hydrateSendTask(data, task) : null;
   }
 
-  updateSendTask(id: string, patch: any) {
+  updateSendTask(id: string, patch: any, options: { skipBindingValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.sendTasks.findIndex((item) => item.id === id);
     if (index < 0) throw new Error(`local send task not found: ${id}`);
-    data.sendTasks[index] = { ...data.sendTasks[index], ...patch, updatedAt: new Date().toISOString() };
+    const current = data.sendTasks[index];
+    const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+    const bindingFields = ["wechatAccountId", "conversationId", "designJobId", "quoteDraftId", "payload"];
+    const bindingChanged = bindingFields.some((field) =>
+      Object.prototype.hasOwnProperty.call(patch, field) && patch[field] !== current[field],
+    );
+    if (bindingChanged && !options.skipBindingValidation) {
+      const binding = this.validateSendTaskBinding(data, next);
+      next.designJobId = next.designJobId || binding.designJobId;
+      next.guardSnapshot = {
+        ...(next.guardSnapshot && typeof next.guardSnapshot === "object" ? next.guardSnapshot : {}),
+        binding,
+        bindingRevalidatedAt: next.updatedAt,
+      };
+    }
+    data.sendTasks[index] = next;
     this.write(data);
     return this.hydrateSendTask(data, data.sendTasks[index]);
   }
@@ -1064,10 +1339,59 @@ export class LocalStoreService {
     if (!result.ok) {
       throw new Error(`send task binding invalid: ${result.reason}`);
     }
+    this.validateSendTaskImagePayload(data, { ...payload, designJobId });
     return {
       ...result,
       designJobId,
     };
+  }
+
+  private validateSendTaskImagePayload(data: StoreData, payload: any) {
+    const imagePaths: string[] = Array.isArray(payload.payload?.imagePaths)
+      ? payload.payload.imagePaths.filter(Boolean).map((item: any) => String(item))
+      : [];
+    if (!imagePaths.length) return;
+    if (!payload.designJobId) throw new Error("send task image binding invalid: designJobId is required for image payload");
+    const normalizedExpectedPaths = new Set(
+      data.designImages
+        .filter((image) => image.designJobId === payload.designJobId)
+        .map((image) => normalizePathKey(image.localPath))
+        .filter(Boolean),
+    );
+    const invalidPaths = imagePaths.filter((imagePath) => !normalizedExpectedPaths.has(normalizePathKey(imagePath)));
+    if (invalidPaths.length) {
+      throw new Error(`send task image binding invalid: image paths do not belong to design job`);
+    }
+  }
+
+  private validateStoredOrderDraftBinding(data: StoreData, orderDraft: any) {
+    const quoteDraft = data.quoteDrafts.find((item) => item.id === orderDraft.quoteDraftId) || null;
+    const designJob = orderDraft.designJobId
+      ? data.designJobs.find((item) => item.id === orderDraft.designJobId) || null
+      : quoteDraft?.designJobId
+        ? data.designJobs.find((item) => item.id === quoteDraft.designJobId) || null
+        : null;
+    const conversation = orderDraft.conversationId
+      ? data.conversations.find((item) => item.id === orderDraft.conversationId) || null
+      : designJob?.conversationId
+        ? data.conversations.find((item) => item.id === designJob.conversationId) || null
+        : null;
+    const selectedImage = orderDraft.selectedImageId
+      ? data.designImages.find((item) => item.id === orderDraft.selectedImageId || item.imageId === orderDraft.selectedImageId) || null
+      : quoteDraft?.selectedImageId
+        ? data.designImages.find((item) => item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId) || null
+        : null;
+    const result = validateOrderDraftQuoteBinding({
+      orderDraft,
+      quoteDraft,
+      designJob,
+      conversation,
+      selectedImage,
+    });
+    if (!result.ok) {
+      throw new Error(`order draft binding invalid: ${result.reason}`);
+    }
+    return result;
   }
 
   createSendAttempt(payload: any) {
@@ -1087,6 +1411,7 @@ export class LocalStoreService {
       completedAt: payload.completedAt || null,
       createdAt: now,
     };
+    this.validateSendAttemptBinding(data, record);
     data.sendAttempts.push(record);
     this.write(data);
     return this.hydrateSendAttempt(data, record);
@@ -1096,7 +1421,7 @@ export class LocalStoreService {
     const data = this.read();
     const index = data.sendAttempts.findIndex((item) => item.id === id);
     if (index < 0) throw new Error(`local send attempt not found: ${id}`);
-    data.sendAttempts[index] = {
+    const next = {
       ...data.sendAttempts[index],
       ...patch,
       metadata: {
@@ -1104,8 +1429,54 @@ export class LocalStoreService {
         ...(patch.metadata || {}),
       },
     };
+    this.validateSendAttemptBinding(data, next);
+    data.sendAttempts[index] = next;
     this.write(data);
     return this.hydrateSendAttempt(data, data.sendAttempts[index]);
+  }
+
+  private validateSendAttemptBinding(data: StoreData, attempt: any) {
+    const task = data.sendTasks.find((item) => item.id === attempt.sendTaskId) || null;
+    if (!task) throw new Error(`send attempt binding invalid: send task not found`);
+    const metadata = attempt.metadata && typeof attempt.metadata === "object" ? attempt.metadata : {};
+    const identityValues = [
+      ["wechatAccountId", attempt.wechatAccountId],
+      ["conversationId", attempt.conversationId],
+      ["designJobId", attempt.designJobId],
+      ["quoteDraftId", attempt.quoteDraftId],
+      ["metadata.sendTaskId", metadata.sendTaskId],
+      ["metadata.taskId", metadata.taskId],
+      ["metadata.wechatAccountId", metadata.wechatAccountId],
+      ["metadata.conversationId", metadata.conversationId],
+      ["metadata.designJobId", metadata.designJobId],
+      ["metadata.quoteDraftId", metadata.quoteDraftId],
+      ["metadata.target.wechatAccountId", metadata.target?.wechatAccountId],
+      ["metadata.target.conversationId", metadata.target?.conversationId],
+      ["metadata.sendPlan.target.wechatAccountId", metadata.sendPlan?.target?.wechatAccountId],
+      ["metadata.sendPlan.target.conversationId", metadata.sendPlan?.target?.conversationId],
+    ];
+    const expectedByField: Record<string, unknown> = {
+      sendTaskId: task.id,
+      taskId: task.id,
+      wechatAccountId: task.wechatAccountId,
+      conversationId: task.conversationId,
+      designJobId: task.designJobId,
+      quoteDraftId: task.quoteDraftId,
+    };
+    for (const [pathName, value] of identityValues) {
+      if (value === undefined || value === null || value === "") continue;
+      const field = String(pathName).split(".").pop() || "";
+      if (String(value) !== String(expectedByField[field] || "")) {
+        throw new Error(`send attempt binding invalid: ${pathName} does not match send task`);
+      }
+    }
+    if (attempt.windowSnapshotId) {
+      const snapshot = data.wechatWindowSnapshots.find((item) => item.id === attempt.windowSnapshotId) || null;
+      if (!snapshot) throw new Error(`send attempt binding invalid: window snapshot not found`);
+      if (snapshot.wechatAccountId && task.wechatAccountId && snapshot.wechatAccountId !== task.wechatAccountId) {
+        throw new Error(`send attempt binding invalid: window snapshot account does not match send task`);
+      }
+    }
   }
 
   getLatestSendAttempt(sendTaskId: string, filter: { adapter?: string; status?: string } = {}) {
@@ -1189,6 +1560,22 @@ export class LocalStoreService {
     return result;
   }
 
+  private validateStoredQuoteDraftIdentity(data: StoreData, quoteDraft: any) {
+    const designJob = data.designJobs.find((item) => item.id === quoteDraft.designJobId) || null;
+    const conversation = designJob?.conversationId
+      ? data.conversations.find((item) => item.id === designJob.conversationId) || null
+      : null;
+    const selectedImage = quoteDraft.selectedImageId
+      ? data.designImages.find((item) => item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId) || null
+      : null;
+    return this.validateQuoteDraftIdentity({
+      quoteDraft,
+      designJob,
+      conversation,
+      selectedImage,
+    });
+  }
+
   listQuoteDrafts() {
     const data = this.read();
     return data.quoteDrafts
@@ -1202,15 +1589,26 @@ export class LocalStoreService {
     return quote ? this.hydrateQuoteDraft(data, quote) : null;
   }
 
-  updateQuoteDraft(id: string, patch: any) {
+  private hasChangedField(current: Record<string, unknown>, patch: Record<string, unknown>, fields: string[]) {
+    return fields.some(
+      (field) => Object.prototype.hasOwnProperty.call(patch, field) && !sameValue(current?.[field], patch?.[field]),
+    );
+  }
+
+  updateQuoteDraft(id: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.quoteDrafts.findIndex((item) => item.id === id);
     if (index < 0) throw new Error(`local quote draft not found: ${id}`);
-    data.quoteDrafts[index] = {
-      ...data.quoteDrafts[index],
+    const current = data.quoteDrafts[index];
+    const next = {
+      ...current,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (this.hasChangedField(current, patch, ["designJobId", "customerId", "selectedImageId"]) && !options.skipIdentityValidation) {
+      next.identityBinding = this.validateStoredQuoteDraftIdentity(data, next);
+    }
+    data.quoteDrafts[index] = next;
     this.write(data);
     return this.hydrateQuoteDraft(data, data.quoteDrafts[index]);
   }
@@ -1241,21 +1639,37 @@ export class LocalStoreService {
       createdAt: index >= 0 ? data.orderDrafts[index].createdAt : now,
       updatedAt: now,
     };
+    record.identityBinding = this.validateStoredOrderDraftBinding(data, record);
     if (index >= 0) data.orderDrafts[index] = record;
     else data.orderDrafts.push(record);
     this.write(data);
     return this.hydrateOrderDraft(data, record);
   }
 
-  updateOrderDraft(id: string, patch: any) {
+  updateOrderDraft(id: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.orderDrafts.findIndex((item) => item.id === id);
     if (index < 0) throw new Error(`local order draft not found: ${id}`);
-    data.orderDrafts[index] = {
-      ...data.orderDrafts[index],
+    const current = data.orderDrafts[index];
+    const next = {
+      ...current,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (
+      this.hasChangedField(current, patch, [
+        "quoteDraftId",
+        "designJobId",
+        "customerId",
+        "conversationId",
+        "wechatAccountId",
+        "selectedImageId",
+      ]) &&
+      !options.skipIdentityValidation
+    ) {
+      next.identityBinding = this.validateStoredOrderDraftBinding(data, next);
+    }
+    data.orderDrafts[index] = next;
     this.write(data);
     return this.hydrateOrderDraft(data, data.orderDrafts[index]);
   }
@@ -1339,6 +1753,7 @@ export class LocalStoreService {
   private hydrateWechatWindowSnapshot(data: StoreData, snapshot: any) {
     const activeConversation =
       data.conversations.find((conversation) => {
+        if (snapshot.wechatAccountId && conversation.wechatAccountId !== snapshot.wechatAccountId) return false;
         if (snapshot.externalChatId && conversation.externalChatId === snapshot.externalChatId) return true;
         if (snapshot.chatTitle && String(conversation.title || "").trim() === String(snapshot.chatTitle || "").trim()) return true;
         if (snapshot.recentCustomerId && conversation.customerId === snapshot.recentCustomerId) return true;
@@ -1713,6 +2128,7 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "trainingSamples",
     "knowledgeEntries",
     "routeEvaluations",
+    "automationRuns",
   ];
   for (const key of keys) {
     if (!Array.isArray(normalized[key])) {
@@ -1847,7 +2263,12 @@ function seedData(): StoreData {
     trainingSamples: [],
     knowledgeEntries: [],
     routeEvaluations: [],
+    automationRuns: [],
   };
+}
+
+function automationRunKey(run: any) {
+  return [run?.startedAt || "", run?.trigger || "", run?.completedAt || "", run?.reason || ""].join("|");
 }
 
 function applyMultiAccountSeed(data: StoreData, now: string) {

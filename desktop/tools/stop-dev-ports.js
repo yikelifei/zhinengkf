@@ -7,6 +7,7 @@ const { spawnSync } = require("node:child_process");
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = path.join(desktopRoot, ".runtime");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
+const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const managedPorts = [
   numberEnv("WEB_PORT", 3100),
   numberEnv("API_PORT", 3200),
@@ -37,8 +38,17 @@ function main() {
     }
   }
 
+  stopManagedWrapperProcesses(stoppedPids, attemptedPids);
+  stopManagedLauncherProcesses(stoppedPids, attemptedPids);
+  stopManagedKeeperProcesses(stoppedPids, attemptedPids);
+  stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
+  sleep(500);
   stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids);
   waitForNoManagedPortOwners(8000);
+  stopManagedWrapperProcesses(stoppedPids, attemptedPids);
+  stopManagedLauncherProcesses(stoppedPids, attemptedPids);
+  stopManagedKeeperProcesses(stoppedPids, attemptedPids);
+  stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
 
   const remaining = listManagedPortOwners();
   if (remaining.length) {
@@ -51,7 +61,186 @@ function main() {
   }
 
   fs.rmSync(pidFile, { force: true });
+  fs.rmSync(mockModeLockFile, { force: true });
   console.log("Launcher records were cleaned.");
+}
+
+function stopManagedWrapperProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedWrapperPids()) {
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:wrapper] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function stopManagedLauncherProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedLauncherPids()) {
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:launcher] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function stopManagedKeeperProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedKeeperPids()) {
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:keeper] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function stopManagedDirectShellProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedDirectShellPids()) {
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:direct] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function findManagedWrapperPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRuntime = normalizePathText(runtimeDir);
+  const launcherPattern = /launch-(mock|real)\.cmd/;
+  const serviceWrapperPattern = /run-[^" ]+(-worker)?\.cmd/;
+  const directWrapperPattern =
+    /node (node_modules\/next\/dist\/bin\/next dev apps\/web -p \d+|dist\/apps\/api\/main\.js|tools\/mock-design-platform\.js).*\.runtime\/logs\/(web|api|mock)-direct\./;
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'cmd.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !result.stdout) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .filter((item) => {
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      const runtimeWrapper =
+        commandLine.includes(normalizedRuntime) &&
+        (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine));
+      return runtimeWrapper || directWrapperPattern.test(commandLine);
+    })
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function findManagedDirectShellPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$root = ${psQuote(normalizedRoot)}`,
+    "$selfPid = $PID",
+    "$items = Get-CimInstance Win32_Process -Filter \"name = 'powershell.exe'\" | Where-Object {",
+    "  $_.ProcessId -ne $selfPid -and $_.CommandLine -and",
+    "  ($cmd = ($_.CommandLine -replace '\\\\','/').ToLowerInvariant()) -and",
+    "  $cmd.Contains($root) -and",
+    "  (",
+    "    ($cmd.Contains('node_modules/next/dist/bin/next dev apps/web -p') -and $cmd.Contains('-noexit')) -or",
+    "    ($cmd.Contains('start-process') -and",
+    "      ($cmd.Contains('.runtime/logs/web-direct.') -or",
+    "       $cmd.Contains('.runtime/logs/api-direct.') -or",
+    "       $cmd.Contains('.runtime/logs/mock-direct.')))",
+    "  )",
+    "} | Select-Object ProcessId,CommandLine",
+    "if ($items) { $items | ConvertTo-Json -Compress }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function findManagedLauncherPids() {
+  if (process.platform !== "win32") return [];
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'cmd.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !result.stdout) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .filter((item) => {
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      return (
+        /node tools\/start-dev-ports\.js --(mock|real)-design/.test(commandLine) ||
+        /npm\.cmd"? run ports:start(:mock|:real)?/.test(commandLine) ||
+        /npm\.cmd"? run build:api/.test(commandLine)
+      );
+    })
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function findManagedKeeperPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$root = ${psQuote(normalizedRoot)}`,
+    "$selfPid = $PID",
+    "$items = Get-CimInstance Win32_Process -Filter \"name = 'powershell.exe'\" | Where-Object {",
+    "  $_.ProcessId -ne $selfPid -and $_.CommandLine -and",
+    "  ($cmd = ($_.CommandLine -replace '\\\\','/').ToLowerInvariant()) -and",
+    "  $cmd.Contains($root) -and",
+    "  $cmd.Contains('tools/start-dev-ports.js') -and",
+    "  ($cmd.Contains('--mock-design') -or $cmd.Contains('--real-design')) -and",
+    "  ($cmd.Contains('start-sleep -seconds 3600') -or $cmd.Contains('launcher-mock.log') -or $cmd.Contains('launcher-real.log'))",
+    "} | Select-Object ProcessId,CommandLine",
+    "if ($items) { $items | ConvertTo-Json -Compress }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
 }
 
 function stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids) {
@@ -75,6 +264,7 @@ function stopPid(pid) {
     const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { encoding: "utf8" });
     if (result.status !== 0) {
       const message = String(result.stderr || result.stdout || "unknown error").trim();
+      if (stopPidWithPowerShell(pid)) return true;
       console.log(`[warn] failed to stop pid=${pid}: ${message}`);
       return false;
     }
@@ -86,6 +276,21 @@ function stopPid(pid) {
   } catch {
     return false;
   }
+}
+
+function stopPidWithPowerShell(pid) {
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Stop-Process -Id ${Number(pid)} -Force -ErrorAction Stop`,
+    ],
+    { encoding: "utf8" },
+  );
+  return result.status === 0;
 }
 
 function shouldStopRecordedProcess(record) {
@@ -104,7 +309,21 @@ function isManagedProcess(pid) {
 function isManagedCommandLine(pid) {
   const commandLine = getCommandLine(pid).toLowerCase();
   if (!commandLine) return false;
-  return commandLine.includes(desktopRoot.toLowerCase());
+  const normalizedCommand = normalizePathText(commandLine);
+  const normalizedRoot = normalizePathText(desktopRoot);
+  if (normalizedCommand.includes(normalizedRoot)) return true;
+  if (/"?node(?:\.exe)?"?\s+server\.js\b/.test(normalizedCommand)) return true;
+  return [
+    "tools/mock-design-platform.js",
+    "dist/apps/api/main.js",
+    "apps/web/.next/standalone/apps/web/server.js",
+    "next/dist/server/lib/start-server.js",
+    "node_modules/next/dist/bin/next",
+  ].some((marker) => normalizedCommand.includes(marker));
+}
+
+function normalizePathText(value) {
+  return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
 function getCommandLine(pid) {

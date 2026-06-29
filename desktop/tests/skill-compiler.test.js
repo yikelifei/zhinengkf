@@ -188,9 +188,12 @@ test("labels training sample quality for review and anti-wrong-reply samples", (
   assert.equal(antiWrongReply.label, "防乱回复样本");
   assert.equal(antiWrongReply.trainable, true);
   assert.deepEqual(antiWrongReply.flags, ["scene_clarification_reply", "anti_wrong_reply_only"]);
+  assert.match(antiWrongReply.recommendedAction, /防乱回复/);
   assert.equal(normal.level, "safe");
+  assert.match(normal.recommendedAction, /Skill/);
   assert.equal(lowScore.level, "risk");
   assert.equal(lowScore.trainable, false);
+  assert.match(lowScore.recommendedAction, /重写/);
 });
 
 test("ignores low quality samples", () => {
@@ -289,6 +292,64 @@ test("summarizes rejected samples separately", () => {
   assert.equal(overview.readySamples, 0);
   assert.equal(overview.rejectedSamples, 1);
   assert.equal(overview.byAgent[0].rejectedCount, 1);
+});
+
+test("summarizes training sample quality buckets", () => {
+  const overview = summarizeTrainingSamples([
+    {
+      id: "sample_safe",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      customerText: "每盒200看效果图",
+      idealReply: "可以，我先按预算给您搭配礼盒，再整理几版真实摆拍效果图。",
+      score: 88,
+      status: "ready",
+      skillHints: ["预算澄清"],
+    },
+    {
+      id: "sample_guard",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      customerText: "推荐一下",
+      idealReply: "我先确认一下，您是想让我先处理「售前咨询/商品推荐」这个方向吗？如果是订单、售后、物流或设计图，也可以直接告诉我重点。",
+      score: 95,
+      status: "ready",
+      skillHints: ["防乱回复"],
+    },
+    {
+      id: "sample_low",
+      agentId: "agent_after_sales",
+      agentKey: "after_sales",
+      scene: "售后",
+      customerText: "坏了",
+      idealReply: "不知道",
+      score: 40,
+      status: "ready",
+      skillHints: ["售后方案"],
+    },
+    {
+      id: "sample_rejected",
+      agentId: "agent_after_sales",
+      agentKey: "after_sales",
+      scene: "售后",
+      customerText: "别训练",
+      idealReply: "已禁用",
+      score: 90,
+      status: "rejected",
+      skillHints: ["售后方案"],
+    },
+  ]);
+
+  assert.equal(overview.qualitySummary.safeSamples, 1);
+  assert.equal(overview.qualitySummary.reviewQualitySamples, 1);
+  assert.equal(overview.qualitySummary.riskSamples, 1);
+  assert.equal(overview.qualitySummary.blockedSamples, 1);
+  assert.equal(overview.qualitySummary.trainableSamples, 2);
+  assert.equal(overview.qualitySummary.antiWrongReplySamples, 1);
+  assert.equal(overview.qualitySummary.lowScoreSamples, 1);
+  assert.equal(overview.recommendations.some((text) => text.includes("防乱回复")), true);
 });
 
 test("normalizes training sample review status for local store", () => {

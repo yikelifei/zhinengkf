@@ -80,18 +80,20 @@ test("audits SKU catalog readiness for real sales usage", () => {
     {
       skuCode: "GOOD-1",
       name: "真实商品",
+      type: "item",
       salePrice: 100,
       costPrice: 60,
       stock: 20,
       sceneTags: ["员工福利"],
       mainImagePath: "good.jpg",
       supplier: "供应商A",
-      dimensions: { lengthCm: 10, widthCm: 8 },
+      dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
       weightGram: 300,
     },
     {
       skuCode: "BAD-1",
       name: "资料不完整商品",
+      type: "item",
       salePrice: 50,
       costPrice: 70,
       stock: 0,
@@ -116,6 +118,7 @@ test("audits SKU image paths that point to missing local files", () => {
     {
       skuCode: "MISSING-IMAGE-FILE",
       name: "主图路径失效商品",
+      type: "item",
       salePrice: 100,
       costPrice: 50,
       stock: 20,
@@ -123,7 +126,7 @@ test("audits SKU image paths that point to missing local files", () => {
       mainImagePath: "C:\\missing\\product.jpg",
       mainImageFileMissing: true,
       supplier: "供应商A",
-      dimensions: { lengthCm: 10, widthCm: 8 },
+      dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
       weightGram: 300,
     },
   ]);
@@ -139,6 +142,7 @@ test("audits SKU image references that are not usable product images", () => {
     {
       skuCode: "BAD-IMAGE-TYPE",
       name: "主图格式异常商品",
+      type: "item",
       salePrice: 100,
       costPrice: 50,
       stock: 20,
@@ -151,7 +155,7 @@ test("audits SKU image references that are not usable product images", () => {
         { index: 1, path: "C:\\missing\\angle.jpg", fileMissing: true },
       ],
       supplier: "供应商A",
-      dimensions: { lengthCm: 10, widthCm: 8 },
+      dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
       weightGram: 300,
     },
   ]);
@@ -194,11 +198,358 @@ test("detects real image bytes instead of trusting file names", () => {
   assert.equal(isLikelyImageBuffer(fakeJpeg), false);
 });
 
+test("audits duplicate SKU codes and names before automation uses products", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "DUP-1", name: "同款茶礼" },
+    { ...base, skuCode: "dup-1", name: "另一款茶礼" },
+    { ...base, skuCode: "UNIQUE-1", name: "同款茶礼" },
+  ]);
+
+  assert.equal(result.readyCount, 0);
+  assert.equal(result.duplicateSkuCodeCount, 2);
+  assert.equal(result.duplicateNameCount, 2);
+  assert.ok(result.issues.some((issue) => issue.code === "duplicate_sku_code" && issue.severity === "error"));
+  assert.ok(result.issues.some((issue) => issue.code === "duplicate_name" && issue.severity === "warning"));
+  assert.ok(result.repairQueue.some((item) => item.missingFields.some((field) => field.field === "skuCode")));
+});
+
+test("audits unsafe SKU codes before cross-module identity binding uses them", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-OK_01", name: "标准编号" },
+    { ...base, skuCode: " BOX-SPACE ", name: "首尾空格编号" },
+    { ...base, skuCode: "中文SKU", name: "中文编号" },
+    { ...base, skuCode: "BAD CODE", name: "中间空格编号" },
+  ]);
+
+  assert.equal(result.unsafeSkuCodeCount, 3);
+  assert.ok(result.issues.some((issue) => issue.code === "sku_code_whitespace" && issue.field === "skuCode"));
+  assert.ok(result.issues.some((issue) => issue.code === "unsafe_sku_code" && issue.skuCode === "中文SKU"));
+  assert.ok(result.issues.some((issue) => issue.code === "unsafe_sku_code" && issue.skuCode === "BAD CODE"));
+  assert.ok(!result.issues.some((issue) => issue.skuCode === "BOX-OK_01" && ["unsafe_sku_code", "sku_code_whitespace"].includes(issue.code)));
+});
+
+test("audits SKU types before bundle matching assigns product roles", () => {
+  const base = {
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "TYPE-OK", name: "类型正常", type: "gift_box" },
+    { ...base, skuCode: "TYPE-MISSING", name: "缺类型" },
+    { ...base, skuCode: "TYPE-BAD", name: "类型错误", type: "service" },
+  ]);
+
+  assert.equal(result.typeIssueCount, 2);
+  assert.ok(result.issues.some((issue) => issue.code === "missing_sku_type" && issue.severity === "error"));
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_sku_type" && issue.severity === "error"));
+  assert.ok(!result.issues.some((issue) => issue.skuCode === "TYPE-OK" && ["missing_sku_type", "invalid_sku_type"].includes(issue.code)));
+});
+
+test("audits catalog role structure required for bundle matching", () => {
+  const base = {
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const ready = auditSkuCatalog([
+    { ...base, skuCode: "BOX-READY", name: "可用礼盒", type: "gift_box" },
+    { ...base, skuCode: "ITEM-READY", name: "可用内搭", type: "item" },
+    { ...base, skuCode: "CARD-READY", name: "可用配件", type: "accessory" },
+  ]);
+  const missingBox = auditSkuCatalog([
+    { ...base, skuCode: "ITEM-ONLY", name: "只有内搭", type: "item" },
+  ]);
+  const missingItem = auditSkuCatalog([
+    { ...base, skuCode: "BOX-ONLY", name: "只有礼盒", type: "gift_box" },
+  ]);
+
+  assert.equal(ready.availableGiftBoxCount, 1);
+  assert.equal(ready.availableItemCount, 1);
+  assert.equal(ready.availableAccessoryCount, 1);
+  assert.equal(ready.catalogStructureIssueCount, 0);
+  assert.equal(missingBox.catalogStructureIssueCount, 1);
+  assert.equal(missingItem.catalogStructureIssueCount, 1);
+});
+
+test("summarizes available SKU category and scene coverage", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "TEA-A", name: "Tea A", category: "tea", sceneTags: ["employee_gift", "client_visit"] },
+    { ...base, skuCode: "TEA-B", name: "Tea B", category: "tea", sceneTags: ["employee_gift"] },
+    { ...base, skuCode: "CARD-A", name: "Card A", type: "accessory", category: "card", sceneTags: ["client_visit"] },
+    { ...base, skuCode: "OFFLINE", name: "Offline item", category: "ignored", sceneTags: ["ignored"], isActive: false },
+    { ...base, skuCode: "NO-STOCK", name: "No stock item", category: "ignored", sceneTags: ["ignored"], stock: 0 },
+  ]);
+  const emptyCoverage = auditSkuCatalog([
+    { ...base, skuCode: "NO-TAGS", name: "No tags item", sceneTags: [] },
+  ]);
+
+  assert.equal(result.availableSceneTagCount, 2);
+  assert.equal(result.availableCategoryCount, 2);
+  assert.equal(result.catalogCoverageIssueCount, 0);
+  assert.deepEqual(result.topSceneTags[0], { name: "client_visit", count: 2 });
+  assert.deepEqual(result.topCategories[0], { name: "tea", count: 2 });
+  assert.equal(emptyCoverage.catalogCoverageIssueCount, 2);
+});
+
+test("summarizes minimum budget needed for a basic gift bundle", () => {
+  const base = {
+    costPrice: 20,
+    stock: 20,
+    sceneTags: ["employee_gift"],
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const ready = auditSkuCatalog([
+    { ...base, skuCode: "BOX-LOW", name: "Box low", type: "gift_box", salePrice: 60 },
+    { ...base, skuCode: "BOX-HIGH", name: "Box high", type: "gift_box", salePrice: 120 },
+    { ...base, skuCode: "ITEM-LOW", name: "Item low", type: "item", salePrice: 35 },
+    { ...base, skuCode: "ITEM-NO-STOCK", name: "Item no stock", type: "item", salePrice: 10, stock: 0 },
+  ]);
+  const missingItem = auditSkuCatalog([
+    { ...base, skuCode: "BOX-ONLY", name: "Box only", type: "gift_box", salePrice: 60 },
+  ]);
+
+  assert.equal(ready.minGiftBoxPrice, 60);
+  assert.equal(ready.minItemPrice, 35);
+  assert.equal(ready.minBundleBudget, 95);
+  assert.equal(ready.availableGiftBoxStock, 40);
+  assert.equal(ready.availableItemStock, 20);
+  assert.equal(ready.basicBundleCapacity, 20);
+  assert.equal(ready.bundleCapacityBottleneck, "item");
+  assert.equal(ready.bundleCapacityBottleneckLabel, "内搭库存限制");
+  assert.deepEqual(ready.bundleCapacityChecks, [
+    { quantity: 50, enough: false, shortage: 30 },
+    { quantity: 100, enough: false, shortage: 80 },
+    { quantity: 200, enough: false, shortage: 180 },
+  ]);
+  assert.equal(ready.bundleCapacityRiskCount, 3);
+  assert.equal(ready.bundleReadinessIssueCount, 3);
+  assert.equal(missingItem.minBundleBudget, 0);
+  assert.equal(missingItem.basicBundleCapacity, 0);
+  assert.equal(missingItem.bundleCapacityBottleneck, "item");
+  assert.equal(missingItem.bundleReadinessIssueCount, 4);
+  assert.ok(missingItem.bundleReadinessWarnings.some((warning) => warning.includes("内搭")));
+});
+
+test("identifies which SKU role limits basic bundle capacity", () => {
+  const base = {
+    costPrice: 20,
+    sceneTags: ["employee_gift"],
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const giftBoxLimited = auditSkuCatalog([
+    { ...base, skuCode: "BOX-10", name: "Box 10", type: "gift_box", salePrice: 60, stock: 10 },
+    { ...base, skuCode: "ITEM-50", name: "Item 50", type: "item", salePrice: 35, stock: 50 },
+  ]);
+  const balanced = auditSkuCatalog([
+    { ...base, skuCode: "BOX-30", name: "Box 30", type: "gift_box", salePrice: 60, stock: 30 },
+    { ...base, skuCode: "ITEM-30", name: "Item 30", type: "item", salePrice: 35, stock: 30 },
+  ]);
+
+  assert.equal(giftBoxLimited.bundleCapacityBottleneck, "gift_box");
+  assert.equal(giftBoxLimited.bundleCapacityBottleneckLabel, "礼盒库存限制");
+  assert.equal(balanced.bundleCapacityBottleneck, "balanced");
+  assert.equal(balanced.bundleCapacityBottleneckLabel, "礼盒与内搭库存均衡");
+});
+
+test("allows custom bundle capacity checkpoints without changing audit rules", () => {
+  const base = {
+    costPrice: 20,
+    sceneTags: ["employee_gift"],
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-80", name: "Box 80", type: "gift_box", salePrice: 60, stock: 80 },
+    { ...base, skuCode: "ITEM-120", name: "Item 120", type: "item", salePrice: 35, stock: 120 },
+  ], { quantityCheckpoints: [30, 80, 150] });
+
+  assert.equal(result.basicBundleCapacity, 80);
+  assert.deepEqual(result.bundleCapacityChecks, [
+    { quantity: 30, enough: true, shortage: 0 },
+    { quantity: 80, enough: true, shortage: 0 },
+    { quantity: 150, enough: false, shortage: 70 },
+  ]);
+  assert.equal(result.bundleCapacityRiskCount, 1);
+});
+
+test("audits replacement SKU references before stock fallback uses them", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "TEA-A", name: "茶礼A", replacementSkuCodes: ["TEA-B", "MISSING-SKU"] },
+    { ...base, skuCode: "TEA-B", name: "茶礼B", replacementSkuCodes: ["TEA-B"] },
+  ]);
+
+  assert.equal(result.invalidReplacementCount, 2);
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_replacement_sku" && issue.field === "replacementSkuCodes"));
+  assert.ok(result.issues.some((issue) => issue.code === "self_replacement_sku" && issue.field === "replacementSkuCodes"));
+  assert.ok(result.repairQueue.some((item) => item.missingFields.some((field) => field.field === "replacementSkuCodes")));
+});
+
+test("audits matching rule SKU references before bundle matching uses them", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-A", name: "礼盒A", type: "gift_box", matchingRules: { mustWith: ["CARD-A", "MISSING-CARD"], cannotWith: "BOX-A" } },
+    { ...base, skuCode: "CARD-A", name: "贺卡A", type: "accessory" },
+  ]);
+
+  assert.equal(result.invalidMatchingRuleCount, 2);
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_matching_rule_sku" && issue.field === "matchingRules"));
+  assert.ok(result.issues.some((issue) => issue.code === "self_matching_rule_sku" && issue.field === "matchingRules"));
+  assert.ok(result.repairQueue.some((item) => item.missingFields.some((field) => field.field === "matchingRules")));
+});
+
+test("audits unrealistic lead time without requiring every SKU to have one", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "FAST-OK", name: "正常交期", leadTimeDays: 5 },
+    { ...base, skuCode: "BAD-LEAD", name: "错误交期", leadTimeDays: -1 },
+    { ...base, skuCode: "LONG-LEAD", name: "超长交期", leadTimeDays: 60 },
+    { ...base, skuCode: "EMPTY-LEAD", name: "未填交期" },
+  ]);
+
+  assert.equal(result.leadTimeIssueCount, 2);
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_lead_time" && issue.severity === "warning"));
+  assert.ok(result.issues.some((issue) => issue.code === "long_lead_time" && issue.severity === "info"));
+  assert.ok(!result.issues.some((issue) => issue.skuCode === "EMPTY-LEAD" && issue.field === "leadTimeDays"));
+});
+
+test("audits price and margin risks before automatic quoting uses SKUs", () => {
+  const base = {
+    type: "item",
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "NO-COST", name: "缺成本商品", salePrice: 100, costPrice: 0 },
+    { ...base, skuCode: "LOSS", name: "亏损商品", salePrice: 100, costPrice: 120 },
+    { ...base, skuCode: "LOW-MARGIN", name: "低毛利商品", salePrice: 100, costPrice: 90 },
+    { ...base, skuCode: "OK-MARGIN", name: "正常毛利商品", salePrice: 100, costPrice: 60 },
+  ]);
+
+  assert.equal(result.negativeMarginCount, 3);
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_cost_price" && issue.severity === "warning"));
+  assert.ok(result.issues.some((issue) => issue.code === "negative_margin" && issue.severity === "warning"));
+  assert.ok(result.issues.some((issue) => issue.code === "low_margin_rate" && issue.severity === "info"));
+  assert.ok(!result.issues.some((issue) => issue.skuCode === "OK-MARGIN" && ["invalid_cost_price", "negative_margin", "low_margin_rate"].includes(issue.code)));
+});
+
+test("audits product specifications needed for packing and design scale", () => {
+  const base = {
+    type: "item",
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    sceneTags: ["员工福利"],
+    mainImagePath: "good.jpg",
+    supplier: "供应商A",
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "NO-DIM", name: "缺尺寸", weightGram: 300 },
+    { ...base, skuCode: "PART-DIM", name: "尺寸不完整", dimensions: { lengthCm: 10, widthCm: 8 }, weightGram: 300 },
+    { ...base, skuCode: "BAD-DIM", name: "尺寸错误", dimensions: { lengthCm: 10, widthCm: 0, heightCm: 4 }, weightGram: 300 },
+    { ...base, skuCode: "BAD-WEIGHT", name: "重量错误", dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 }, weightGram: 0 },
+    { ...base, skuCode: "SPEC-OK", name: "规格正常", dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 }, weightGram: 300 },
+  ]);
+
+  assert.equal(result.specificationIssueCount, 4);
+  assert.ok(result.issues.some((issue) => issue.code === "missing_dimensions" && issue.field === "dimensions"));
+  assert.ok(result.issues.some((issue) => issue.code === "incomplete_dimensions" && issue.field === "dimensions"));
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_dimensions" && issue.severity === "warning"));
+  assert.ok(result.issues.some((issue) => issue.code === "invalid_weight" && issue.severity === "warning"));
+  assert.ok(!result.issues.some((issue) => issue.skuCode === "SPEC-OK" && ["missing_dimensions", "incomplete_dimensions", "invalid_dimensions", "missing_weight", "invalid_weight"].includes(issue.code)));
+});
+
 test("prioritizes blocking SKU repair work before low risk info", () => {
   const result = auditSkuCatalog([
     {
       skuCode: "INFO-1",
       name: "只缺尺寸重量",
+      type: "item",
       salePrice: 100,
       costPrice: 60,
       stock: 20,
@@ -209,6 +560,7 @@ test("prioritizes blocking SKU repair work before low risk info", () => {
     {
       skuCode: "BLOCK-1",
       name: "缺主图商品",
+      type: "item",
       salePrice: 100,
       costPrice: 60,
       stock: 20,

@@ -55,6 +55,18 @@ npm.cmd run ports:stop
 npm.cmd run data:reset
 ```
 
+Optional WeChat safe-send helpers:
+
+```bat
+cd desktop
+npm.cmd run ports:start:mock
+npm.cmd run wechat:safe:start
+npm.cmd run wechat:safe:status
+npm.cmd run wechat:safe:stop
+```
+
+`wechat:safe:start` is explicit on purpose. It starts the window observer and bridge worker only after the API is reachable. The bridge worker defaults to `BRIDGE_MODE=noop`, so it observes safe-send outbox tasks but does not mark messages as sent unless a real authorized bridge returns a validated ack.
+
 如果只想启动前端和模拟设计平台，不启动 API：
 
 ```bat
@@ -112,7 +124,8 @@ npm.cmd run data:reset
 8. 点击 `应用已选 Skill` 后，样本、知识条目和 Skill 会进入本地 JSON 数据，刷新后仍然保留。
 9. 后端接口也有安全闸门：不传 `includeNeedsReview=true` 时，只会真正应用高可信建议，低样本或低置信度建议会被返回为需复核，不直接写入 Skill。
 10. 场景不明确时生成的确认话术不会被提炼成“物流安抚、售后方案、设计需求确认”等业务 Skill，只会沉淀为 `防乱回复`；对应知识条目也不会参与普通回复参考，避免泛化话术污染客服回答。
-11. 训练样本会返回质量标签：`可训练`、`待人工复核`、`低分需复核`、`防乱回复样本`、`已禁用`。前端会直接显示原因，方便人工判断样本能不能进入业务 Skill。
+11. 训练样本会返回质量标签：`可训练`、`待人工复核`、`低分需复核`、`防乱回复样本`、`已禁用`。前端会直接显示原因和处理建议，方便人工判断样本能不能进入业务 Skill。
+12. 训练概览会汇总质量分布：可训练样本、不可训练样本、正常业务样本、防乱回复样本、风险样本和禁用样本。训练样本列表会把当前质量筛选传给后端，默认只加载前 12 条，人工需要继续复核时可逐批加载更多，避免样本多起来后前端卡顿或误筛。
 
 训练中心会显示一层训练概览，用来判断智能体是否真的在进化：
 
@@ -120,6 +133,7 @@ npm.cmd run data:reset
 - `可生成 Skill`：当前高分样本可提炼出的 Skill 建议数量。
 - `待复核`：低质量或不确定样本，需要人工确认后再进入训练。
 - `智能体覆盖`：每个 Agent 有多少训练样本、多少纠错样本、多少 Skill 建议。
+- `质量分布`：训练中心会显示可训练、正常业务、防乱回复、风险和禁用样本数量。
 - `Skill 进化预览`：在真正应用 Skill 前，先看到每条建议是新增还是更新、来自多少样本、适用哪些场景、参考了哪段客户/客服对话；可按 Agent 筛选，系统默认只勾选高可信建议，低样本或低置信度建议需要人工复核后再勾选应用。
 
 每条训练样本支持人工复核：
@@ -133,7 +147,7 @@ npm.cmd run data:reset
 
 - `GET /api/training/chat-imports`：查看导入批次。
 - `POST /api/training/chat-imports`：导入聊天记录。
-- `GET /api/training/samples`：查看训练样本。
+- `GET /api/training/samples`：查看训练样本，支持 `quality`、`status`、`sourceType`、`agentId`、`limit` 筛选；`quality` 可用 `all`、`safe`、`review`、`risk`、`blocked`、`anti_wrong_reply`、`trainable`、`not_trainable`，传错值会返回 400，避免误把全部样本当成筛选结果。
 - `GET /api/training/overview`：查看训练概览、纠错样本统计和 Agent 覆盖情况。
 - `POST /api/training/samples/:id/review`：复核训练样本，确认训练、退回复核或禁用。
   - 同一个接口也支持带上修正字段：`agentKey`、`scene`、`customerText`、`idealReply`、`score`、`skillHints`。
@@ -392,10 +406,13 @@ POST /api/wechat/bridge/inbox/scan
 - `bridge/outbox` 只返回仍处于 `sending`，且最新 `windows_bridge` attempt 仍是 `started` 的任务。
 - `bridge/status` 汇总 worker 最近一次运行状态、outbox 待处理数、inbox 待扫描回执数和账号锁状态。
 - 已完成、失败、取消或旧 outbox 文件会进入 `ignored`，不会被桥接程序误处理。
-- outbox 列表会返回 `preview` 摘要，展示目标微信账号、客户会话、动作数量、文字长度、图片数量、窗口快照和 outbox 文件名；列表不直接暴露完整原始 payload。
+- outbox 列表会返回 `preview` 摘要，展示目标微信账号 ID、客户会话 ID、动作数量、文字长度、图片数量、窗口快照和 outbox 文件名；列表不直接暴露完整原始 payload、逐条绝对 `filePath`、客户姓名、微信显示名、聊天标题、文字预览或本地图片文件名。
 - 新版 outbox 文件包含 `version: wechat_bridge_outbox_v1`、一次性 `ackToken`、`target` 和 `sendPlan`。真实桥接器应按 `sendPlan.actions` 顺序执行文字/图片动作，并继续校验 `target` 里的账号、会话和客户身份。
-- 桥接 worker 和后端 `bridge-ack` 在写入成功回执前都会校验 API pending 摘要和本地 outbox JSON 本体，确认文件路径、协议版本、账号、会话、动作数量、安全约束和发送守卫都匹配，不能只凭 `taskId` 或文件名伪造成功。
+- 桥接 worker 和后端 `bridge-ack` 在写入外部 `sent/failed` 回执前都会校验 API pending 摘要和本地 outbox JSON 本体，确认文件路径、真实普通文件、协议版本、`ackToken`、账号、会话、动作数量、动作内容、安全约束和发送守卫都匹配，不能只凭 `taskId` 或文件名伪造成功或失败。
+- 真实 bridge worker 应使用接口返回的 `outboxDir + fileName` 读取本地 JSON；公开列表不再依赖逐条 `filePath`。
+- `sendPlan.actions` 只允许非空文本动作和本地存储目录内真实存在的图片文件；远程 URL、空文本、缺失文件、符号链接或跳出本地存储目录的路径都不能回执为 `sent` 或外部 `failed`。
 - 桥接程序可以把回执 JSON 放到 `.runtime/wechat-inbox`，字段包括 `version: wechat_bridge_ack_v1`、`ackToken`、`taskId`、`attemptId`、`wechatAccountId`、`conversationId`、`outboxFileName`、`status`、`errorMessage`、`metadata`、`sentAt`。
+- 回执 `metadata` 只放桥接程序名、模式、worker id 这类运行信息，不放客户聊天标题、微信显示名、密钥、Cookie 或 Authorization；后端保存审计前会继续过滤常见敏感字段。
 - `bridge/inbox/scan` 会读取回执，复用同一套 `bridge-ack` 逻辑，并把回执文件归档到 `processed` 或 `failed` 子目录。
 - `bridge/status` 和 `bridge/inbox/scan` 只返回回执摘要，例如任务、attempt、状态、文件名和 `hasAckToken`，不会返回 `ackToken` 本体或原始回执 `data`。
 - 详细协议见 `docs/WECHAT_BRIDGE_PROTOCOL.md`。真实桥接程序必须按该协议接入，不能只凭 `taskId` 生成成功回执。
@@ -557,11 +574,13 @@ POST /api/assets/upload
 
 工作台商品库区域已经接入这些动作：可以勾选当前列表 SKU，批量修改库存/售价/供应商，也可以批量下架或恢复。单条 SKU 可以编辑、下架和恢复。商品表单支持上传本地图片，上传后会把本地素材路径写入主图或多角度图字段；导入区支持下载标准 Excel 模板、粘贴表格或选择文件先预览、看表头识别结果、错误行和缺图/低库存/利润异常，再确认入库。
 
-商品体检现在会返回 `repairQueue` 补齐队列。队列会把缺 SKU 编号、缺名称、售价无效、成本高于售价、缺主图、主图文件失效、缺供应商、缺场景、库存为 0、缺尺寸、缺重量等问题按优先级排序。工作台里的“商品资料补齐向导”会显示最需要处理的 SKU，点 `补齐` 会直接定位到该商品编辑表单，避免运营在大表里手动找问题。
+商品体检现在会返回 `repairQueue` 补齐队列。队列会把缺 SKU 编号、SKU 编号含首尾空格、SKU 编号含不建议字符、重复 SKU、重复商品名、缺商品类型、商品类型无效、替代 SKU 不存在、替代 SKU 指向自己、搭配规则引用不存在 SKU、搭配规则指向自己、交期无效、交期过长、缺名称、售价无效、成本价无效、成本高于售价、毛利率过低、缺主图、主图文件失效、缺供应商、缺场景、库存为 0、缺尺寸、尺寸不完整、尺寸无效、缺重量、重量无效等问题按优先级排序。工作台里的“商品资料补齐向导”会显示体检概览分布，概览数字可点击筛选对应商品，重复资料、类型异常、替代异常、搭配异常、交期异常、利润异常和规格异常也能单独筛出，点 `补齐` 会直接定位到该商品编辑表单，避免运营在大表里手动找问题。库结构体检会统计可用礼盒、可用内搭和可用配件；自动搭配至少需要 1 个有库存且可售的礼盒和 1 个有库存且可售的内搭，否则即使单个商品资料完整，也组不出礼盒方案。基础搭配体检会计算最低成套预算，也就是最低可用礼盒售价加最低可用内搭售价；同时会用可用礼盒库存总量和可用内搭库存总量取较小值，估算商品库当前最多能承接多少份基础组合，并标出当前瓶颈是礼盒库存、内搭库存、两边都缺，还是礼盒与内搭库存均衡。默认会检查 50、100、200 份三个数量档位，返回每档是否够以及缺口；这些档位只是体检提示，后端可通过 `quantityCheckpoints` 改成你的真实常用批量。如果客户单份预算低于最低成套预算，或者客户数量高于基础组合容量，系统就算有商品也很难自动组出真实组合，应转人工或补充更低价、更高库存 SKU。场景覆盖体检会统计有库存且可售商品覆盖了多少个场景标签和分类，并展示高频场景/分类；如果全部可用商品都没有场景标签或分类，系统会提示运营补资料，避免后续只能按价格硬凑商品。SKU 编号建议只用大写字母、数字、中横线、下划线和点号，避免库存、替代品、搭配规则、报价和出图任务匹配失败。商品类型只能是礼盒、内搭或配件，对应系统里的 `gift_box`、`item`、`accessory`，否则自动搭配会分错商品角色。交期未填第一期不强制拦截，但已填写的交期必须大于 0 天，超过 45 天会提醒人工确认。利润异常会覆盖成本价为 0 或负数、成本高于售价、毛利率低于 15% 三类情况，避免自动报价时利润失真。规格异常会覆盖长宽高缺失、长宽高不完整、尺寸为 0 或负数、重量为 0 或负数，避免礼盒包装、摆拍比例和物流估算不准。补齐队列支持导出 CSV，表里包含优先级、是否影响自动搭配/出图、待补字段、处理建议和原始问题，适合交给运营按优先级批量补资料；体检明细也支持导出 CSV，会把每个 SKU 的每条问题逐行列出，适合排查某个商品为什么没有通过体检。
 
 商品图片检查会覆盖主图和已填写的多角度图：本地图片路径不存在会提示重新上传，`.pdf`、`.txt` 等明显不是图片的路径会提示格式异常。本地图片还会读取文件头，避免把改名成 `.jpg` 的文本文件当成真实商品图。远程 `http/https` 图片不会做在线探测，避免因为网络波动误判；如果远程链接明确带有非图片后缀，也会在体检中提示。
 
 图片体检还会返回 `imageProblems` 清单，里面会标明 SKU、商品名、问题类型、图片字段、主图/多角度图、第几张多角度图和原始路径。工作台里的“图片问题清单”会直接展示这些信息，点击 `编辑图片` 会定位到对应商品表单；点击 `移除路径` 只会先修改当前表单，不会直接保存，运营确认后再点 `保存商品` 生效。图片问题支持导出 CSV，表里包含严重程度、处理建议和原始路径，适合交给运营按清单补拍、重传或确认删除失效路径。
+
+手动新增或编辑 SKU 时，商品表单会在保存前做一次资料检查：主图不能为空，`.pdf`、`.txt`、`.docx` 等明显不是图片的路径会被拦截，非图片 `data:` 内容也不能保存；成本高于售价、库存为 0、缺供应商、缺场景、缺尺寸、缺重量会作为提醒展示，方便运营保存前补齐。这个检查只做字段完整性和明显格式判断，不联网探测远程图片，也不替代后端体检里的本地文件存在性检查。
 
 SKU 新增、手动保存、批量导入、批量修改、下架和恢复都会写入变更日志。日志会记录变更来源、操作人、变更字段、变更前和变更后的值；本地 JSON 模式默认保留最近 1000 条。工作台商品库区域会显示最近变更，便于客服或运营发现“库存为什么变了”“价格是谁改的”“主图是否刚被替换”。
 

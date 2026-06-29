@@ -1,53 +1,86 @@
-# Windows 微信桥接协议
+# Windows WeChat Bridge Protocol
 
-本协议用于连接客服平台和后续独立的 Windows 微信发送程序。桥接程序只能读取 outbox 文件并写入 ack 回执；不能直接改数据库，也不能绕过客服平台的发送守卫。
+This protocol connects the customer-service platform to a separate local Windows WeChat bridge program.
 
-## 基本原则
+The bridge program may read outbox files and write acknowledgement files. It must not modify the database directly, skip platform-side send guards, or mark a task as sent without a validated acknowledgement.
 
-- 只处理客服平台 API 返回的 `pending` outbox。
-- 单个微信账号同一时间只允许一个发送任务持锁执行。
-- 发送前桥接程序必须再次确认微信账号、当前聊天对象、最近客户标识。
-- 发送成功回执必须带完整身份信息和协议版本。
-- 不确定是否发给正确客户时，必须写 `failed` 回执或不回执，不能写 `sent`。
+## Principles
+
+- Only process `pending` entries returned by `GET /api/wechat/bridge/outbox`.
+- Hold one local lock per WeChat account, so one account only handles one send task at a time.
+- Before sending, re-check the WeChat account, current chat target, and latest customer identifier.
+- A `sent` acknowledgement must include protocol version, task identity, account identity, conversation identity, outbox file identity, and the one-time `ackToken`.
+- An external `failed` acknowledgement must include the same identity and `ackToken` proof as `sent`.
+- Simplified failed acknowledgements are only allowed for platform-internal timeout handling.
 
 ## Outbox
 
-来源：
+Source:
 
 ```http
 GET /api/wechat/bridge/outbox
 ```
 
-桥接程序只处理 `pending` 数组。每条 `pending` 必须满足：
+The bridge program must only process `pending` entries. A pending entry must include:
 
-- `preview.protocolVersion` = `wechat_bridge_outbox_v1`
-- `taskId` 存在
-- `attemptId` 存在
-- `wechatAccountId` 存在
-- `conversationId` 存在
-- `fileName` 存在
-- `preview.outboxFileName` 与 `fileName` 一致
-- `preview.attemptId` 与 `attemptId` 一致
-- `preview.wechatAccountId` 与 `wechatAccountId` 一致
-- `preview.conversationId` 与 `conversationId` 一致
+- `preview.protocolVersion = wechat_bridge_outbox_v1`
+- `taskId`
+- `attemptId`
+- `wechatAccountId`
+- `conversationId`
+- `fileName`
+- `preview.outboxFileName` matching `fileName`
+- `preview.attemptId` matching `attemptId`
+- `preview.wechatAccountId` matching `wechatAccountId`
+- `preview.conversationId` matching `conversationId`
 
-任一条件不满足，桥接程序必须跳过或失败，不得生成成功回执。
+The outbox response includes `outboxDir` plus each entry `fileName`, so a local bridge worker can read the matching JSON file without exposing per-entry absolute `filePath`. The outbox list only exposes a sanitized `preview`. The raw payload, `ackToken`, message text, customer display name, WeChat display name, chat title, and local image file names are not returned by the status/list API.
 
-## Ack 回执
+## Outbox File Validation
 
-推荐写入 inbox 文件，然后调用扫描接口：
+Both the worker and backend must validate the API pending item and local outbox JSON file before accepting any external `sent` or `failed` acknowledgement.
+
+Required checks:
+
+- The outbox file basename equals `fileName`.
+- The outbox file is a direct child of `outboxDir`.
+- The outbox file must be a real regular file whose resolved path stays inside `outboxDir`; symlink-style escapes are rejected.
+- JSON root is an object.
+- `version = wechat_bridge_outbox_v1`.
+- `ackToken` is a 64-character hex token.
+- External `sent` and `failed` acknowledgements echo the same top-level `ackToken`.
+- `taskId`, `wechatAccountId`, and `conversationId` match the API pending item.
+- `target.wechatAccountId` and `target.conversationId` match the API pending item.
+- `sendPlan.target.wechatAccountId` and `sendPlan.target.conversationId` match the API pending item.
+- `sendPlan.actions` is non-empty, and `sendPlan.actionCount` equals its length.
+- `sendPlan.constraints.singleAccountLock`, `requireActiveWindowMatch`, `requireRecentCustomerMatch`, and `doNotMarkSentWithoutAck` are all `true`.
+- `guardSnapshot` or `context.guardStatus` shows the send guard passed.
+
+Valid send actions:
+
+- `text`: must include non-empty `text`.
+- `image`: must point to an existing local file under `LOCAL_STORAGE_ROOT` or the default `storage` directory.
+- Remote URLs, empty text, unsupported action types, missing files, symlinks, and paths outside local storage must not be acknowledged as sent or externally failed.
+
+## Acknowledgements
+
+Preferred transport:
 
 ```http
 POST /api/wechat/bridge/inbox/scan
 ```
 
-也可以直接调用：
+The bridge program writes ack JSON files into `.runtime/wechat-inbox`; the platform scans and archives them into `processed` or `failed`.
+
+Ack `metadata` is optional and should stay operational only, such as bridge implementation name, mode, and local worker id. Do not put `ackToken`, API keys, cookies, authorization headers, customer chat titles, or WeChat display names into `metadata`; the backend redacts common secret fields before persistence.
+
+Direct transport is also supported for bridge programs:
 
 ```http
 POST /api/wechat/send-tasks/:id/bridge-ack
 ```
 
-成功回执必须包含：
+Successful ack example:
 
 ```json
 {
@@ -67,38 +100,54 @@ POST /api/wechat/send-tasks/:id/bridge-ack
 }
 ```
 
-失败回执可以不带完整发送身份，用于超时或内部失败兜底：
+External failed ack example:
 
 ```json
 {
   "version": "wechat_bridge_ack_v1",
+  "ackToken": "64-character-token-from-outbox-file",
   "taskId": "send_xxx",
   "attemptId": "attempt_xxx",
+  "wechatAccountId": "wechat_demo_1",
+  "conversationId": "conversation_demo_1",
+  "outboxFileName": "1780000000000-send_xxx.json",
   "status": "failed",
-  "errorMessage": "当前微信窗口不是目标客户，已停止发送"
+  "errorMessage": "bridge stopped before sending"
 }
 ```
 
-## 平台端校验
+## Backend Checks
 
-客服平台收到 `sent` 回执后会校验：
+For external acknowledgements, the platform checks:
 
-- 发送任务仍处于 `sending`
-- attempt 属于该发送任务
-- attempt adapter 是 `windows_bridge`
-- attempt 仍为 `started`
-- ack 协议版本是 `wechat_bridge_ack_v1`
-- ack 微信账号匹配发送任务
-- ack 会话匹配发送任务
-- ack outbox 文件匹配 attempt 记录
+- Send task still has status `sending`.
+- Attempt belongs to the send task.
+- Attempt adapter is `windows_bridge`.
+- Attempt status is still `started`.
+- Ack protocol version is `wechat_bridge_ack_v1`.
+- Ack account matches the send task.
+- Ack conversation matches the send task.
+- Ack outbox file matches the pending attempt.
+- Ack token matches the local outbox file.
+- Local outbox body passes the validation rules above.
 
-校验失败时不会标记已发送，会进入失败处理或人工检查。
+If any check fails, the task is not marked `sent` or externally `failed`. The ack file is archived to `failed` and the task remains protected for manual handling.
 
-## Worker 默认模式
+## Worker Modes
 
-`tools/wechat-bridge-worker.js` 默认是 `noop`，只观察 outbox，不回写发送结果。
+`tools/wechat-bridge-worker.js` defaults to `noop`: it only reads pending outbox tasks and does not write send results.
 
-测试模式：
+To start the safe-send helper processes explicitly:
+
+```powershell
+npm.cmd run ports:start:mock
+npm.cmd run wechat:safe:start
+npm.cmd run wechat:safe:status
+```
+
+This starts the window observer and bridge worker after the API is reachable. It does not enable real sending by default because `BRIDGE_MODE` remains `noop`.
+
+Test modes:
 
 ```powershell
 $env:BRIDGE_MODE="simulate_sent"
@@ -106,25 +155,14 @@ $env:BRIDGE_ACK_TRANSPORT="file_scan"
 node tools/wechat-bridge-worker.js --once
 ```
 
-## Outbox file body validation
+Configuration:
 
-Bridge worker and backend `bridge-ack` must validate the API `pending` item and the local outbox JSON file body before any `sent` ack is accepted.
+- `BRIDGE_API_BASE`: default `http://127.0.0.1:3200/api`
+- `BRIDGE_MODE`: `noop`, `simulate_sent`, `simulate_failed`
+- `BRIDGE_ACK_TRANSPORT`: `file_scan`, `file`, `api`
+- `WECHAT_BRIDGE_INBOX_DIR`: default `.runtime/wechat-inbox`
+- `WECHAT_BRIDGE_LOCK_DIR`: default `.runtime/wechat-bridge-locks`
+- `WECHAT_BRIDGE_WORKER_STATUS_FILE`: default `.runtime/wechat-bridge-worker-status.json`
+- `BRIDGE_LIMIT`: max outbox tasks per run
 
-Required checks:
-- `filePath` basename must equal `fileName`.
-- `filePath` must be a direct child of `outboxDir`.
-- JSON root must be an object.
-- `version` must equal `wechat_bridge_outbox_v1`.
-- `ackToken` must be a 64-character hex token in the outbox file, and a `sent` ack must echo the same top-level `ackToken`.
-- `taskId`, `wechatAccountId`, and `conversationId` must match the API pending item.
-- `target.wechatAccountId` and `target.conversationId` must match the API pending item.
-- `sendPlan.target.wechatAccountId` and `sendPlan.target.conversationId` must match the API pending item.
-- `sendPlan.actions` must be a non-empty array, and `sendPlan.actionCount` must equal its length.
-- `sendPlan.constraints.singleAccountLock`, `requireActiveWindowMatch`, `requireRecentCustomerMatch`, and `doNotMarkSentWithoutAck` must all be `true`.
-- `guardSnapshot` or `context.guardStatus` must show the send guard passed.
-
-If any check fails, the bridge worker must not generate a `sent` ack.
-
-`GET /api/wechat/bridge/status` and `POST /api/wechat/bridge/inbox/scan` return sanitized ack summaries only. They may show `hasAckToken: true`, but must not return the token value or the raw ack `data` object.
-
-真实桥接程序接入前，不应在生产环境开启 `simulate_sent`。
+Do not enable `simulate_sent` in production. A real bridge must keep the current account lock, account identity, conversation identity, window snapshot, and ack-token validation flow intact.

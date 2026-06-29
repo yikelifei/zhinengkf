@@ -19,7 +19,7 @@ const SENSITIVE_PATTERNS = [
 
 function evaluateAgentRoute(input = {}, options = {}) {
   const text = String(input.text || "");
-  const classifiedScene = classifyScene(text);
+  const classifiedScene = applySceneMemory(classifyScene(text), text, options.sceneMemory || options.routeCorrectionSamples || []);
   const clarificationResolution = resolveSceneClarification(
     text,
     input.clarificationContext || options.clarificationContext,
@@ -39,6 +39,18 @@ function evaluateAgentRoute(input = {}, options = {}) {
   }
 
   const action = decideAction({ highValue, riskFlags, missing, agentKey: scene.agentKey, sceneDecision });
+  const sceneAudit = buildSceneAudit({
+    scene,
+    sceneDecision,
+    sceneClarification,
+    clarificationResolution,
+    sceneMemory: scene.sceneMemory || null,
+    budget,
+    highValue,
+    riskFlags,
+    missing,
+    action,
+  });
   return {
     text,
     channel: input.channel || "wechat",
@@ -50,6 +62,8 @@ function evaluateAgentRoute(input = {}, options = {}) {
     sceneDecision,
     sceneClarification,
     clarificationResolution,
+    sceneMemory: scene.sceneMemory || null,
+    sceneAudit,
     budget,
     isHighValue: highValue,
     riskFlags,
@@ -59,6 +73,184 @@ function evaluateAgentRoute(input = {}, options = {}) {
     confidence: calculateConfidence(scene, budget, missing, riskFlags),
     suggestedReply: buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }),
   };
+}
+
+function applySceneMemory(classifiedScene, text, sceneMemory = []) {
+  const matches = findSceneMemoryMatches(text, sceneMemory);
+  const best = matches[0] || null;
+  if (!best) return { ...classifiedScene, sceneMemory: null };
+
+  const currentScore = Number(classifiedScene.score || 0);
+  const sameAgent = classifiedScene.agentKey === best.agentKey;
+  const marker = sceneMemoryMarker(best.sourceType);
+  const shouldApply = shouldApplySceneMemory({ best, currentScore, sameAgent });
+
+  const memoryCandidate = {
+    scene: best.scene,
+    agentKey: best.agentKey,
+    score: Math.max(18, Math.round(best.score * (best.sourceType === "chat_import" ? 0.45 : 0.55))),
+    matchedKeywords: [marker],
+  };
+
+  const baseMemory = {
+    matched: true,
+    applied: shouldApply,
+    score: best.score,
+    sampleId: best.sampleId,
+    sourceType: best.sourceType,
+    sourceRouteId: best.sourceRouteId || null,
+    importId: best.importId || null,
+    agentKey: best.agentKey,
+    scene: best.scene,
+    reason: shouldApply ? (sameAgent ? `${best.sourceType}_memory_boost` : marker) : "current_scene_has_stronger_keywords",
+  };
+
+  if (!shouldApply) {
+    return {
+      ...classifiedScene,
+      sceneMemory: {
+        ...baseMemory,
+        originalAgentKey: classifiedScene.agentKey,
+        originalScene: classifiedScene.scene,
+      },
+    };
+  }
+
+  if (sameAgent) {
+    const boost = Math.max(6, Math.round(best.score / 8));
+    const boostedScore = Math.max(currentScore + boost, memoryCandidate.score);
+    const topScore = {
+      scene: classifiedScene.scene,
+      agentKey: classifiedScene.agentKey,
+      score: boostedScore,
+      matchedKeywords: [...new Set([...(classifiedScene.matchedKeywords || []), marker])],
+    };
+    const scores = [topScore, ...(classifiedScene.scores || []).filter((item) => item.agentKey !== classifiedScene.agentKey)].slice(0, 5);
+    return {
+      ...classifiedScene,
+      score: boostedScore,
+      matchedKeywords: topScore.matchedKeywords,
+      scores,
+      sceneMemory: baseMemory,
+    };
+  }
+
+  const scores = [
+    memoryCandidate,
+    ...(classifiedScene.scores || []).filter((item) => item.agentKey !== memoryCandidate.agentKey),
+  ].slice(0, 5);
+  return {
+    ...classifiedScene,
+    scene: best.scene,
+    agentKey: best.agentKey,
+    hits: Math.max(1, classifiedScene.hits || 0),
+    score: Math.max(memoryCandidate.score, currentScore),
+    matchedKeywords: [marker],
+    scores,
+    sceneMemory: {
+      ...baseMemory,
+      originalAgentKey: classifiedScene.agentKey,
+      originalScene: classifiedScene.scene,
+      originalScore: currentScore,
+    },
+  };
+}
+
+function findSceneMemoryMatches(text, sceneMemory = []) {
+  const content = normalizeSceneMemoryText(text);
+  if (!content) return [];
+  return (Array.isArray(sceneMemory) ? sceneMemory : [])
+    .map((sample) => scoreSceneMemorySample(content, sample))
+    .filter((match) => match && match.score >= 50)
+    .sort((a, b) => b.score - a.score || Number(b.sampleScore || 0) - Number(a.sampleScore || 0))
+    .slice(0, 5);
+}
+
+function scoreSceneMemorySample(content, sample = {}) {
+  const sourceType = sceneMemorySourceType(sample);
+  if (!sourceType) return null;
+  if (String(sample.status || "ready") !== "ready") return null;
+  if (!sample.agentKey) return null;
+  const sampleScore = Number(sample.score || 0);
+  if (sourceType === "route_correction" && sampleScore && sampleScore < 70) return null;
+  if (sourceType === "chat_import" && sampleScore < 85) return null;
+  if (sourceType === "chat_import" && sample.quality?.trainable === false) return null;
+  if (sourceType === "chat_import" && ["review", "risk", "blocked"].includes(String(sample.quality?.level || ""))) return null;
+  const sampleText = normalizeSceneMemoryText(sample.customerText || sample.question || sample.text);
+  if (!sampleText || sampleText.length < 4) return null;
+
+  let score = 0;
+  if (content === sampleText) {
+    score = 100;
+  } else if (content.includes(sampleText) || sampleText.includes(content)) {
+    const ratio = Math.min(content.length, sampleText.length) / Math.max(content.length, sampleText.length);
+    score = Math.round(78 + ratio * 18);
+  } else {
+    score = Math.round(sceneMemoryDiceScore(content, sampleText) * 100);
+  }
+  if (score < 50) return null;
+  return {
+    score,
+    sampleScore,
+    sampleId: sample.id || null,
+    sourceRouteId: sample.sourceRouteId || null,
+    importId: sample.importId || null,
+    sourceType,
+    agentKey: sample.agentKey,
+    scene: sample.scene || SCENE_META[sample.agentKey]?.scene || sample.agentKey,
+  };
+}
+
+function sceneMemorySourceType(sample = {}) {
+  const sourceType = String(sample.sourceType || "").trim();
+  if (sourceType === "route_correction") return "route_correction";
+  if (sourceType === "chat_import") return "chat_import";
+  if (sample.sourceRouteId) return "route_correction";
+  if (sample.importId) return "chat_import";
+  return "";
+}
+
+function sceneMemoryMarker(sourceType) {
+  return sourceType === "chat_import" ? "chat_import_memory" : "route_correction_memory";
+}
+
+function shouldApplySceneMemory({ best, currentScore, sameAgent }) {
+  if (best.sourceType === "chat_import") {
+    return best.score >= 98 || currentScore < 8 || (currentScore < 16 && best.score >= 88) || (sameAgent && best.score >= 70);
+  }
+  return best.score >= 92 || currentScore < 14 || (currentScore < 24 && best.score >= 74) || sameAgent;
+}
+
+function sceneMemoryDiceScore(left, right) {
+  const leftGrams = textNgrams(left);
+  const rightGrams = textNgrams(right);
+  if (!leftGrams.size || !rightGrams.size) return 0;
+  let overlap = 0;
+  for (const gram of leftGrams) {
+    if (rightGrams.has(gram)) overlap += 1;
+  }
+  return (2 * overlap) / (leftGrams.size + rightGrams.size);
+}
+
+function textNgrams(text, size = 2) {
+  const value = String(text || "");
+  const grams = new Set();
+  if (value.length <= size) {
+    if (value) grams.add(value);
+    return grams;
+  }
+  for (let index = 0; index <= value.length - size; index += 1) {
+    grams.add(value.slice(index, index + size));
+  }
+  return grams;
+}
+
+function normalizeSceneMemoryText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[\p{P}\p{S}]/gu, "")
+    .replace(/[锛屻€傦紒锛熴€?.!?;锛?锛?'鈥溾€濃€樷€橾]/g, "");
 }
 
 const SCENE_META = {
@@ -286,6 +478,23 @@ function sceneOptionLabel(agentKey, scene) {
 }
 
 function buildSceneDecision(scene) {
+  if (scene.sceneMemory?.applied) {
+    const topScene = {
+      scene: scene.scene,
+      agentKey: scene.agentKey,
+      score: scene.score || 0,
+      matchedKeywords: scene.matchedKeywords || [],
+    };
+    const secondaryScene = (scene.scores || []).find((item) => item.agentKey !== scene.agentKey) || null;
+    return {
+      status: "clear",
+      reason: scene.sceneMemory.reason || "route_correction_memory",
+      topScene,
+      secondaryScene,
+      scoreGap: Number(topScene.score || 0) - Number(secondaryScene?.score || 0),
+    };
+  }
+
   const positiveScores = (scene.scores || []).filter((item) => Number(item.score || 0) > 0);
   const top = positiveScores[0] || null;
   const second = positiveScores[1] || null;
@@ -431,6 +640,126 @@ function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFl
   return "收到，我先按您这个情况整理关键信息，再给您一个明确的下一步处理方式。";
 }
 
+function buildSceneAudit({
+  scene,
+  sceneDecision,
+  sceneClarification,
+  clarificationResolution,
+  sceneMemory,
+  budget,
+  highValue,
+  riskFlags,
+  missing,
+  action,
+}) {
+  const topScene = sceneDecision?.topScene || null;
+  const secondaryScene = sceneDecision?.secondaryScene || null;
+  const matchedKeywords = [...new Set([...(scene.matchedKeywords || []), ...(topScene?.matchedKeywords || [])])];
+  const evidence = [];
+  if (topScene) {
+    evidence.push(`第一候选：${topScene.scene}，分数 ${topScene.score}`);
+  }
+  if (secondaryScene) {
+    evidence.push(`第二候选：${secondaryScene.scene}，分数 ${secondaryScene.score}`);
+  }
+  if (matchedKeywords.length) {
+    evidence.push(`命中关键词：${matchedKeywords.slice(0, 8).join("、")}`);
+  }
+  if (sceneMemory?.matched) {
+    evidence.push(`route correction memory: ${sceneMemory.applied ? "applied" : "reference_only"} ${sceneMemory.score || 0}`);
+  }
+  if (budget?.perUnitAmount || budget?.totalAmount) {
+    const budgetParts = [];
+    if (budget.perUnitAmount) budgetParts.push(`单份 ${budget.perUnitAmount} 元`);
+    if (budget.totalAmount) budgetParts.push(`总额 ${budget.totalAmount} 元`);
+    if (budget.quantity) budgetParts.push(`数量 ${budget.quantity}`);
+    evidence.push(`预算信息：${budgetParts.join("，")}`);
+  }
+
+  const missingFields = [...new Set(missing || [])];
+  const warnings = [];
+  if (highValue) warnings.push("达到高价值客户线，不能自动推进。");
+  if (riskFlags.length) warnings.push(`敏感风险：${riskFlags.join("、")}`);
+  if (missingFields.length) warnings.push(`缺少信息：${missingFields.map(fieldLabel).join("、")}`);
+  if (sceneClarification?.question) warnings.push("需要先问清场景，避免把 A 场景当成 B 场景回复。");
+
+  if (sceneMemory?.matched && !sceneMemory.applied) {
+    warnings.push("route correction memory was used as reference only; current stronger scene was kept.");
+  }
+
+  const label = sceneAuditLabel(sceneDecision, action);
+  const summary = sceneAuditSummary({
+    scene,
+    sceneDecision,
+    clarificationResolution,
+    matchedKeywords,
+    action,
+  });
+  const nextStep = sceneAuditNextStep({
+    scene,
+    sceneClarification,
+    missingFields,
+    highValue,
+    riskFlags,
+    action,
+  });
+
+  return {
+    level: sceneAuditLevel(sceneDecision, action, warnings),
+    label,
+    summary,
+    nextStep,
+    evidence,
+    warnings,
+  };
+}
+
+function sceneAuditLevel(sceneDecision, action, warnings) {
+  if (action === "manual_review") return "manual";
+  if (sceneDecision?.status === "ambiguous" || sceneDecision?.status === "weak") return "review";
+  if (warnings.length) return "review";
+  return "pass";
+}
+
+function sceneAuditLabel(sceneDecision, action) {
+  if (action === "manual_review") return "人工优先";
+  if (sceneDecision?.status === "ambiguous") return "多场景接近";
+  if (sceneDecision?.status === "weak") return "场景待确认";
+  if (sceneDecision?.status === "unmatched") return "未识别场景";
+  return "场景清晰";
+}
+
+function sceneAuditSummary({ scene, sceneDecision, clarificationResolution, matchedKeywords, action }) {
+  if (clarificationResolution) {
+    return `客户已澄清为「${clarificationResolution.label || clarificationResolution.scene || scene.scene}」，本轮按该场景继续处理。`;
+  }
+  if (sceneDecision?.status === "ambiguous") {
+    const top = sceneDecision.topScene?.scene || "第一候选";
+    const second = sceneDecision.secondaryScene?.scene || "第二候选";
+    return `这句话同时像「${top}」和「${second}」，分差 ${sceneDecision.scoreGap}，系统不会直接乱回。`;
+  }
+  if (sceneDecision?.status === "weak") {
+    return `只命中较弱场景信号，暂判为「${scene.scene}」，需要先向客户确认重点。`;
+  }
+  if (sceneDecision?.status === "unmatched") {
+    return "没有命中明确场景关键词，需要人工或追问客户当前要处理的重点。";
+  }
+  const keywords = matchedKeywords.length ? `，主要依据：${matchedKeywords.slice(0, 5).join("、")}` : "";
+  const actionText = action === "auto_agent" ? "可以交给对应智能体处理" : "需要先补齐信息";
+  return `已判断为「${scene.scene}」${keywords}，${actionText}。`;
+}
+
+function sceneAuditNextStep({ scene, sceneClarification, missingFields, highValue, riskFlags, action }) {
+  if (highValue) return "转人工审核预算、客户价值、图片和报价，再决定是否发送。";
+  if (riskFlags.length) return "转人工处理投诉、售后争议或敏感风险，避免自动话术激化问题。";
+  if (sceneClarification?.question) return `先发送场景确认问题：${sceneClarification.question}`;
+  if (action === "collect_info" && missingFields.length) {
+    return `先补齐 ${missingFields.map(fieldLabel).join("、")}，补齐后再让 ${sceneOptionLabel(scene.agentKey, scene.scene)} 智能体继续。`;
+  }
+  if (action === "auto_agent") return `进入 ${sceneOptionLabel(scene.agentKey, scene.scene)} 智能体，使用匹配到的 Skill 和知识回复。`;
+  return "保持人工确认，处理完后可把正确场景沉淀为训练样本。";
+}
+
 function fieldLabel(field) {
   const labels = {
     budget: "预算",
@@ -453,6 +782,7 @@ module.exports = {
   buildSceneClarification,
   findPendingSceneClarificationContext,
   resolveSceneClarification,
+  buildSceneAudit,
   shouldParseBudgetForRoute,
   detectMissingFields,
   detectRiskFlags,

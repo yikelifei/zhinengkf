@@ -135,6 +135,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "blocked",
       label: "已禁用",
       reason: "人工已禁用，不参与 Skill 和知识匹配。",
+      recommendedAction: "保持禁用；如果是误禁用，先退回复核并补齐标准回复后再确认训练。",
       trainable: false,
       flags: ["rejected"],
     };
@@ -144,6 +145,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "review",
       label: "待人工复核",
       reason: "样本已退回复核，复核前不参与 Skill 和知识匹配。",
+      recommendedAction: "人工检查场景、客户问题、标准回复和 Skill 提示，确认没有跑偏后再放回训练。",
       trainable: false,
       flags: ["manual_review_required"],
     };
@@ -153,6 +155,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "review",
       label: "防乱回复样本",
       reason: "这是场景确认话术，只训练防乱回复，不参与业务 Skill 和普通知识匹配。",
+      recommendedAction: "保留为防乱回复样本，不要改成售前、售后、物流等业务 Skill。",
       trainable: true,
       flags: ["scene_clarification_reply", "anti_wrong_reply_only"],
     };
@@ -162,6 +165,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "risk",
       label: "低分需复核",
       reason: `评分 ${score}，低于 ${minScore} 分训练线。`,
+      recommendedAction: "先重写成高情商客服标准回复，并把评分提高到训练线以上，再确认训练。",
       trainable: false,
       flags: ["low_score"],
     };
@@ -171,6 +175,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "risk",
       label: "缺少回复",
       reason: "缺少客服标准回复，不能提炼可执行 Skill。",
+      recommendedAction: "补上客服应该怎么回，不能只留下客户问题；补完后再确认训练。",
       trainable: false,
       flags: ["missing_answer"],
     };
@@ -180,6 +185,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
       level: "review",
       label: "缺 Skill 提示",
       reason: "样本可训练，但缺少 Skill 提示，建议人工补充后再应用。",
+      recommendedAction: "补 1 到 3 个明确 Skill 提示，例如预算澄清、售后安抚、物流追踪。",
       trainable: true,
       flags: ["missing_skill_hints"],
     };
@@ -188,6 +194,7 @@ function evaluateTrainingSampleQuality(sample = {}, options = {}) {
     level: "safe",
     label: "可训练",
     reason: "样本状态、评分和 Skill 提示满足训练要求。",
+    recommendedAction: "可以进入 Skill 生成；应用前仍检查样本是否符合当前业务口径。",
     trainable: true,
     flags: [],
   };
@@ -279,6 +286,7 @@ function summarizeTrainingSamples(samples = [], agents = [], suggestions = []) {
   const chatImportSamples = rows.filter((sample) => normalizeSampleSource(sample) === "chat_import").length;
   const averageScore = average(rows.map((sample) => Number(sample.score || 0)));
   const topCorrectionScenes = summarizeCorrectionScenes(rows);
+  const qualitySummary = summarizeTrainingSampleQuality(rows);
   const recommendations = buildTrainingRecommendations({
     totalSamples: rows.length,
     readySamples,
@@ -287,6 +295,7 @@ function summarizeTrainingSamples(samples = [], agents = [], suggestions = []) {
     correctionSamples,
     suggestionCount: suggestionRows.length,
     byAgent,
+    qualitySummary,
   });
 
   return {
@@ -299,10 +308,40 @@ function summarizeTrainingSamples(samples = [], agents = [], suggestions = []) {
     averageScore,
     suggestionCount: suggestionRows.length,
     agentsWithSamples: byAgent.filter((item) => item.sampleCount > 0).length,
+    qualitySummary,
     topCorrectionScenes,
     byAgent,
     recommendations,
   };
+}
+
+function summarizeTrainingSampleQuality(samples = []) {
+  const summary = {
+    safeSamples: 0,
+    reviewQualitySamples: 0,
+    riskSamples: 0,
+    blockedSamples: 0,
+    trainableSamples: 0,
+    antiWrongReplySamples: 0,
+    lowScoreSamples: 0,
+    missingAnswerSamples: 0,
+    missingSkillHintSamples: 0,
+  };
+
+  for (const sample of Array.isArray(samples) ? samples : []) {
+    const quality = evaluateTrainingSampleQuality(sample);
+    if (quality.level === "safe") summary.safeSamples += 1;
+    if (quality.level === "review") summary.reviewQualitySamples += 1;
+    if (quality.level === "risk") summary.riskSamples += 1;
+    if (quality.level === "blocked") summary.blockedSamples += 1;
+    if (quality.trainable) summary.trainableSamples += 1;
+    if (quality.flags.includes("anti_wrong_reply_only")) summary.antiWrongReplySamples += 1;
+    if (quality.flags.includes("low_score")) summary.lowScoreSamples += 1;
+    if (quality.flags.includes("missing_answer")) summary.missingAnswerSamples += 1;
+    if (quality.flags.includes("missing_skill_hints")) summary.missingSkillHintSamples += 1;
+  }
+
+  return summary;
 }
 
 function createAgentBucket(agent = {}) {
@@ -375,6 +414,12 @@ function buildTrainingRecommendations(summary) {
   const messages = [];
   if (summary.correctionSamples > 0 && summary.suggestionCount > 0) {
     messages.push(`已有 ${summary.correctionSamples} 条场景纠错样本，可生成或更新 ${summary.suggestionCount} 个 Skill。`);
+  }
+  if (summary.qualitySummary?.antiWrongReplySamples > 0) {
+    messages.push(`${summary.qualitySummary.antiWrongReplySamples} 条场景确认样本只用于防乱回复，不进入业务 Skill 或普通知识匹配。`);
+  }
+  if (summary.qualitySummary?.riskSamples > 0) {
+    messages.push(`${summary.qualitySummary.riskSamples} 条样本存在低分或缺回复风险，需要先修正再训练。`);
   }
   if (summary.reviewSamples > 0) {
     messages.push(`${summary.reviewSamples} 条样本需要人工复核，复核后再进入自动 Skill 编译。`);

@@ -10,7 +10,34 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
     return skip("no_quote_acceptance_intent", { hasIntent: false });
   }
   if (!quote?.id) return skip("missing_active_quote", { hasIntent: true });
-  if (existingOrderDraft || quote.orderDraft) return skip("already_has_order_draft", { hasIntent: true });
+
+  const orderDraft = existingOrderDraft || quote.orderDraft || null;
+  if (orderDraft) {
+    if (!intent.paymentStatus) return skip("already_has_order_draft", { hasIntent: true });
+    if (!isPaymentUpgrade(orderDraft.paymentStatus || quote.paymentStatus, intent.paymentStatus)) {
+      return skip("order_payment_already_recorded", { hasIntent: true });
+    }
+    const paymentStatus = intent.paymentStatus;
+    return {
+      ok: true,
+      action: "update_existing_order_payment",
+      reason: "customer_payment_confirmed_existing_order",
+      hasIntent: true,
+      orderDraftId: orderDraft.id,
+      orderPatch: {
+        status: paymentStatus === "paid" || paymentStatus === "deposit_paid" ? "confirmed" : orderDraft.status,
+        paymentStatus,
+        customerNotes: buildCustomerNotes(text, intent),
+        owner: orderDraft.owner || quote.owner || "low_value_automation",
+      },
+      quotePatch: {
+        status: "accepted",
+        paymentStatus,
+        customerNotes: buildCustomerNotes(text, intent),
+        owner: quote.owner || orderDraft.owner || "low_value_automation",
+      },
+    };
+  }
 
   const designJob = quote.designJob || {};
   const highValueAmount = Number(options.highValueAmountCny || 10000);
@@ -50,6 +77,14 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
   };
 }
 
+function shouldDeferSelectionReviewToQuoteAcceptance(input = {}) {
+  const selectionPlan = input.selectionPlan || {};
+  if (!selectionPlan.reviewRequired) return false;
+  if (selectionPlan.result?.source && selectionPlan.result.source !== "text") return false;
+  if (selectionPlan.result?.index || selectionPlan.result?.candidate || selectionPlan.result?.imageId) return false;
+  return Boolean(detectQuoteAcceptanceIntent(input.text || "").hasIntent);
+}
+
 function detectQuoteAcceptanceIntent(text) {
   if (!text) return { hasIntent: false };
   if (/(不行|不要|算了|取消|先不|再看看|太贵|贵了|换|重新|改一下|不满意)/.test(text)) {
@@ -76,6 +111,17 @@ function normalizeText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function isPaymentUpgrade(current, next) {
+  return paymentRank(next) > paymentRank(current || "unpaid");
+}
+
+function paymentRank(status) {
+  if (status === "paid") return 3;
+  if (status === "deposit_paid") return 2;
+  if (status === "refunded") return 1;
+  return 0;
+}
+
 function skip(reason, extra = {}) {
   return {
     ok: false,
@@ -88,4 +134,5 @@ function skip(reason, extra = {}) {
 module.exports = {
   detectQuoteAcceptanceIntent,
   planInboundQuoteAcceptance,
+  shouldDeferSelectionReviewToQuoteAcceptance,
 };

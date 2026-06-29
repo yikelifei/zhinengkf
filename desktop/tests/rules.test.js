@@ -7,6 +7,7 @@ const {
   buildWaitingMessage,
   decideRevisionPolicy,
   DESIGN_STATUSES,
+  evaluateArtImageLocalHealthReadiness,
   evaluateDesignPlatformActivationStatus,
   inspectAssetReferences,
   inspectBundleReferences,
@@ -56,6 +57,40 @@ test("accepts active design platform activation status", () => {
   assert.match(result.detail, /abcd/);
 });
 
+test("accepts ready local art image platform health", () => {
+  const result = evaluateArtImageLocalHealthReadiness({
+    localDemo: { localGenerateEnabled: true },
+    ai: { imageConfigured: true, imageModel: "gpt-image-2" },
+    checks: [
+      { key: "AI provider API key", label: "configured", status: "ready", detail: "provider_api_key" },
+      { key: "AI_BASE_URL", label: "configured", status: "ready", detail: "ai_base_url" },
+      { key: "AI_TEXT_MODEL", label: "configured", status: "ready", detail: "text_model" },
+      { key: "AI_IMAGE_MODEL", label: "configured", status: "ready", detail: "image_model" },
+      { key: "GENERATED_ASSETS_BUCKET", label: "configured", status: "ready", detail: "generated_assets_bucket" },
+      { key: "STRIPE_SECRET_KEY", label: "not_configured", status: "optional", detail: "stripe_secret_key" },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.checks.every((check) => check.ok || check.severity !== "error"), true);
+});
+
+test("blocks local art image platform health when image generation is not ready", () => {
+  const result = evaluateArtImageLocalHealthReadiness({
+    localDemo: { localGenerateEnabled: false },
+    ai: { imageConfigured: false },
+    checks: [
+      { key: "AI provider API key", label: "not_configured", status: "missing", detail: "provider_api_key" },
+      { key: "STRIPE_SECRET_KEY", label: "not_configured", status: "optional", detail: "stripe_secret_key" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.some((check) => check.key === "art_image_local_generate" && check.severity === "error"), true);
+  assert.equal(result.checks.some((check) => check.key === "art_image_model" && check.severity === "error"), true);
+  assert.equal(result.checks.some((check) => /ai_provider_api_key/.test(check.key) && check.severity === "error"), true);
+});
+
 test("parses per-box budget and quantity into total amount", () => {
   const budget = parseBudget("每盒200元，做50份");
   assert.equal(budget.mode, "per_box");
@@ -78,9 +113,10 @@ test("recommends bundle with replacement when stock is missing", () => {
       { skuCode: "BOX-A", name: "礼盒A", type: "gift_box", salePrice: 60, costPrice: 30, stock: 10, sceneTags: ["员工福利"] },
       { skuCode: "TEA-A", name: "茶叶A", type: "item", salePrice: 120, costPrice: 70, stock: 0, replacementSkuCodes: ["TEA-B"], sceneTags: ["员工福利"] },
       { skuCode: "TEA-B", name: "茶叶B", type: "item", salePrice: 110, costPrice: 60, stock: 5, sceneTags: ["员工福利"] },
-      { skuCode: "CARD-A", name: "贺卡A", type: "accessory", salePrice: 20, costPrice: 5, stock: 99, sceneTags: ["员工福利"] }
+      { skuCode: "CARD-A", name: "贺卡A", type: "accessory", salePrice: 20, costPrice: 5, stock: 99, sceneTags: ["员工福利"] },
     ],
   });
+
   assert.ok(result.items.some((item) => item.skuCode === "BOX-A"));
   assert.ok(result.items.some((item) => item.replacedOriginalSkuCode === "TEA-A"));
   assert.equal(result.totals.salePrice <= 300, true);
@@ -94,6 +130,7 @@ test("validates design request required fields", () => {
     customerText: "想看礼盒效果图",
     assets: [{ assetId: "logo-1" }],
   });
+
   assert.equal(result.ok, true);
 });
 
@@ -133,9 +170,26 @@ test("matches customer referenced image selection", () => {
       { id: "candidate-2", imageId: "img-2" },
     ],
   });
+
   assert.equal(result.matched, true);
   assert.equal(result.source, "reference");
   assert.equal(result.imageId, "img-2");
+});
+
+test("does not match referenced image outside current conversation candidates", () => {
+  const result = planCustomerImageSelection({
+    referencedImageId: "other-conversation-candidate",
+    candidates: [
+      { id: "candidate-1", imageId: "img-1" },
+      { id: "candidate-2", imageId: "img-2" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.action, "manual_selection_review");
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.result.matched, false);
+  assert.equal(result.result.source, "reference");
 });
 
 test("plans inbound image selection only for explicit selection intent", () => {

@@ -13,7 +13,7 @@ const resetSteps = [
   },
   {
     label: "Run default startup preflight",
-    args: ["tools/start-dev-ports.js", "--preflight", "--require-free-ports"],
+    args: ["tools/start-dev-ports.js", "--mock-design", "--preflight", "--require-free-ports"],
     allowFailure: false,
     captureOutput: false,
   },
@@ -29,7 +29,7 @@ let failed = false;
 
 console.log("");
 console.log("== Check current default startup ==");
-const currentStatus = runNode(["tools/check-dev-startup.js"], true);
+const currentStatus = runNode(["tools/check-dev-startup.js", "--mock-design"], true);
 if (currentStatus.output) console.log(currentStatus.output);
 if (currentStatus.status === 0) {
   console.log("");
@@ -111,9 +111,9 @@ function runPackageScript(scriptName, captureOutput) {
 function defaultEnv() {
   return {
     ...process.env,
-    DESIGN_PLATFORM_ADAPTER: "art_image_local",
-    DESIGN_PLATFORM_BASE_URL: process.env.DESIGN_PLATFORM_BASE_URL || "http://127.0.0.1:3000",
-    START_MOCK_DESIGN_PLATFORM: "false",
+    DESIGN_PLATFORM_ADAPTER: "standard_v1",
+    DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700",
+    START_MOCK_DESIGN_PLATFORM: "true",
   };
 }
 

@@ -29,11 +29,11 @@ const {
   updateDesignPlatformRuntimeConfig,
 } = require("../apps/api/src/shared/app-config.ts");
 
-test("defaults design platform runtime config to local art image platform", () => {
+test("defaults design platform runtime config to local mock platform", () => {
   const summary = getDesignPlatformRuntimeConfigSummary();
 
-  assert.equal(summary.adapter, "art_image_local");
-  assert.equal(summary.baseUrl, "http://127.0.0.1:3000");
+  assert.equal(summary.adapter, "standard_v1");
+  assert.equal(summary.baseUrl, "http://127.0.0.1:3700");
   assert.equal(summary.hasAccessToken, false);
   assert.equal(summary.hasCookie, false);
   assert.equal(summary.hasDeviceId, false);

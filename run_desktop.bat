@@ -66,20 +66,11 @@ if errorlevel 1 (
   )
 )
 
-echo [build] Building API...
-call npm.cmd run build:api
-if errorlevel 1 (
-  echo [error] API build failed. Read the messages above.
-  pause
-  exit /b 1
-)
-
 echo.
-echo [start] Starting desktop services in foreground mode...
-echo Keep this window open while using the app.
+echo [start] Starting desktop services...
 echo Open workbench: http://127.0.0.1:3100/
 echo.
-call npm.cmd run dev:stack
+call npm.cmd run ports:launch:mock
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime\logs.
   echo You can also run repair_desktop.bat to reset default startup.
@@ -88,6 +79,17 @@ if errorlevel 1 (
 )
 
 echo.
-echo [stopped] Desktop services have stopped.
+echo [check] Verifying desktop startup...
+call npm.cmd run ports:doctor:mock
+if errorlevel 1 (
+  echo [error] Desktop startup check failed. Run repair_desktop.bat, then try again.
+  pause
+  exit /b 1
+)
+
+echo.
+echo [ok] Desktop services are running in the background.
+echo Open: http://127.0.0.1:3100/
+echo To stop them later, run stop_desktop.bat.
 echo.
 pause

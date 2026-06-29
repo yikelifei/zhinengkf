@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  validateDesignAssetBinding,
   validateDesignCallbackBinding,
   validateDesignJobIdentity,
   validateInboundConversationBinding,
@@ -87,6 +88,39 @@ test("blocks design job identity when account belongs to another conversation", 
 
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("wechatAccountMatchesConversation"), true);
+});
+
+test("passes design asset binding when all assets belong to design job customer", () => {
+  const result = validateDesignAssetBinding({
+    designJob: {
+      id: "design-1",
+      customerId: "customer-1",
+    },
+    requestedAssetIds: ["asset-1", "asset-2"],
+    assets: [
+      { id: "asset-1", ownerType: "customer", ownerId: "customer-1" },
+      { id: "asset-2", ownerType: "customer", ownerId: "customer-1" },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test("blocks design asset binding when an asset belongs to another customer", () => {
+  const result = validateDesignAssetBinding({
+    designJob: {
+      id: "design-1",
+      customerId: "customer-1",
+    },
+    requestedAssetIds: ["asset-1", "asset-2"],
+    assets: [
+      { id: "asset-1", ownerType: "customer", ownerId: "customer-1" },
+      { id: "asset-2", ownerType: "customer", ownerId: "customer-2" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("assetCustomerMatchesJob:asset-2"), true);
 });
 
 test("passes design callback binding when request and external job match", () => {

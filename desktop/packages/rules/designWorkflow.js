@@ -287,6 +287,85 @@ function evaluateDesignPlatformActivationStatus(status = {}) {
   };
 }
 
+function evaluateArtImageLocalHealthReadiness(health = {}) {
+  const checks = [];
+  const localGenerateEnabled = nestedValue(health, ["localDemo", "localGenerateEnabled"]);
+  const imageConfigured = nestedValue(health, ["ai", "imageConfigured"]);
+  const imageModel = nestedValue(health, ["ai", "imageModel"]);
+
+  checks.push({
+    key: "art_image_local_generate",
+    label: "真实出图接口",
+    ok: localGenerateEnabled === true,
+    severity: localGenerateEnabled === false ? "error" : localGenerateEnabled === true ? "info" : "warning",
+    detail:
+      localGenerateEnabled === true
+        ? "设计平台已开启 /api/local-generate，可以接收客服平台出图任务。"
+        : localGenerateEnabled === false
+          ? "设计平台未开启 /api/local-generate，不能提交真实出图任务。"
+          : "设计平台健康数据里没有 localDemo.localGenerateEnabled，请确认 /api/local-generate 可用。",
+  });
+
+  checks.push({
+    key: "art_image_model",
+    label: "图像模型配置",
+    ok: imageConfigured === true,
+    severity: imageConfigured === false ? "error" : imageConfigured === true ? "info" : "warning",
+    detail:
+      imageConfigured === true
+        ? `图像模型已配置${imageModel ? `：${imageModel}` : ""}。`
+        : imageConfigured === false
+          ? "设计平台图像模型未配置，不能生成候选图。"
+          : "设计平台健康数据里没有 ai.imageConfigured，请确认图像模型和密钥已配置。",
+  });
+
+  for (const item of criticalDesignPlatformChecks(health)) {
+    checks.push(item);
+  }
+
+  return {
+    ok: checks.every((check) => check.ok || check.severity !== "error"),
+    checks,
+  };
+}
+
+function criticalDesignPlatformChecks(health = {}) {
+  const platformChecks = Array.isArray(health?.checks) ? health.checks : [];
+  const criticalKeys = new Set([
+    "AI provider API key",
+    "AI_BASE_URL",
+    "AI_TEXT_MODEL",
+    "AI_IMAGE_MODEL",
+    "GENERATED_ASSETS_BUCKET",
+  ]);
+
+  return platformChecks
+    .filter((check) => criticalKeys.has(String(check?.key || "")))
+    .map((check) => {
+      const status = String(check?.status || "").toLowerCase();
+      const ok = status === "ready" || status === "configured";
+      const key = String(check?.key || "design_platform_check");
+      const label = String(check?.label || key);
+      const detail = String(check?.detail || status || "unknown");
+      return {
+        key: `art_image_health_${key.replace(/[^A-Za-z0-9]+/g, "_").toLowerCase()}`,
+        label: `${key}：${label}`,
+        ok,
+        severity: ok ? "info" : "error",
+        detail: ok ? `设计平台检查通过：${detail}` : `设计平台关键配置未就绪：${detail}`,
+      };
+    });
+}
+
+function nestedValue(value, pathParts) {
+  let current = value;
+  for (const part of pathParts) {
+    if (!current || typeof current !== "object") return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
 module.exports = {
   DESIGN_STATUSES,
   validateDesignRequest,
@@ -298,4 +377,5 @@ module.exports = {
   inspectRealDesignReferences,
   decideRevisionPolicy,
   evaluateDesignPlatformActivationStatus,
+  evaluateArtImageLocalHealthReadiness,
 };

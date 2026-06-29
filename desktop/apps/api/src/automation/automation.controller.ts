@@ -10,6 +10,11 @@ export class AutomationController {
     return this.automation.status();
   }
 
+  @Get("readiness")
+  readiness() {
+    return this.automation.readiness();
+  }
+
   @Post("run-once")
   runOnce() {
     return this.automation.runOnce("manual");

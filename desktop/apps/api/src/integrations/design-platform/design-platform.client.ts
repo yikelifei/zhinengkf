@@ -52,6 +52,25 @@ type ArtImageLocalAuthSession = {
   refreshed?: boolean;
 };
 
+type ArtImageLocalLoginPayload = {
+  email: string;
+  password: string;
+  deviceId: string;
+};
+
+type ArtImageLocalActivationRedeemPayload = {
+  code: string;
+  deviceId: string;
+  deviceLabel?: string;
+};
+
+type ArtImageLocalLoginResult = {
+  accessToken: string;
+  cookie: string;
+  deviceId: string;
+  user?: unknown;
+};
+
 const imageMimeByExtension: Record<string, string> = {
   ".bmp": "image/bmp",
   ".gif": "image/gif",
@@ -136,6 +155,75 @@ export class DesignPlatformClient {
 
     const response = await this.http.get("/api/activation/status", { timeout: 10000 });
     return this.unwrapApiData(response.data) as ArtImageLocalActivationStatus;
+  }
+
+  async loginArtImageLocal(payload: ArtImageLocalLoginPayload): Promise<ArtImageLocalLoginResult> {
+    if (!this.useArtImageLocalAdapter()) {
+      throw new Error("design platform login is only available for art_image_local adapter");
+    }
+
+    const email = payload.email.trim().toLowerCase();
+    const password = payload.password;
+    const deviceId = payload.deviceId.trim();
+    if (!email || !password || !deviceId) {
+      throw new Error("email, password and deviceId are required for design platform login");
+    }
+
+    const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
+    const response = await this.http.post(
+      "/api/auth/login",
+      { email, password, deviceId },
+      {
+        timeout: 30000,
+        headers: {
+          "x-art-client": "art-ai-studio",
+          "x-art-device-id": deviceId,
+          Origin: base,
+          Referer: `${base}/`,
+        },
+      },
+    );
+    const data = this.unwrapApiData(response.data) as Record<string, unknown>;
+    const accessToken = typeof data.accessToken === "string" ? data.accessToken.trim() : "";
+    if (!accessToken) {
+      throw new Error("design platform login did not return accessToken");
+    }
+
+    return {
+      accessToken,
+      cookie: cookieHeaderFromSetCookie(response.headers["set-cookie"]),
+      deviceId,
+      user: data.user,
+    };
+  }
+
+  async redeemArtImageLocalActivation(payload: ArtImageLocalActivationRedeemPayload) {
+    if (!this.useArtImageLocalAdapter()) {
+      throw new Error("design platform activation is only available for art_image_local adapter");
+    }
+
+    const code = payload.code.trim();
+    const deviceId = payload.deviceId.trim();
+    const deviceLabel = String(payload.deviceLabel || "智能客服工作台").trim();
+    if (!code || !deviceId) {
+      throw new Error("activation code and deviceId are required for design platform activation");
+    }
+
+    const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
+    const response = await this.http.post(
+      "/api/activation/redeem",
+      { code, deviceId, deviceLabel },
+      {
+        timeout: 30000,
+        headers: {
+          "x-art-client": "art-ai-studio",
+          "x-art-device-id": deviceId,
+          Origin: base,
+          Referer: `${base}/`,
+        },
+      },
+    );
+    return this.unwrapApiData(response.data);
   }
 
   async createDesignJob(payload: DesignPlatformJobPayload) {
@@ -284,7 +372,7 @@ export class DesignPlatformClient {
         const firstError = results.find((item) => item.error)?.error || "design platform returned no generated images";
         job.status = "failed";
         job.errorMessage = firstError;
-        job.raw = data;
+        job.raw = sanitizeArtImageLocalRaw(data);
         job.updatedAt = new Date().toISOString();
         return;
       }
@@ -296,7 +384,7 @@ export class DesignPlatformClient {
         width: parseImageSize(appConfig.designPlatformImageSize).width,
         height: parseImageSize(appConfig.designPlatformImageSize).height,
       }));
-      job.raw = data;
+      job.raw = sanitizeArtImageLocalRaw(data);
       job.updatedAt = new Date().toISOString();
     } catch (error) {
       job.status = "failed";
@@ -512,6 +600,18 @@ function uniqueRefs(refs: string[]) {
   return [...new Set(refs.filter(Boolean))];
 }
 
+function sanitizeArtImageLocalRaw(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeArtImageLocalRaw);
+  if (!isRecord(value)) return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key.toLowerCase().includes("prompt")) continue;
+    sanitized[key] = sanitizeArtImageLocalRaw(nested);
+  }
+  return sanitized;
+}
+
 function isAcceptedReferenceUrl(value: string) {
   if (value.startsWith("/local-assets/") || value.startsWith("/generated/")) return true;
   return /^https:\/\/[^\s]+$/i.test(value);
@@ -525,6 +625,14 @@ function inferMimeType(input: string, fileName: string, localPath: string) {
 
 function sanitizeMultipartFileName(fileName: string) {
   return fileName.replace(/[\r\n"\\]/g, "_").slice(0, 180) || `${randomUUID()}.png`;
+}
+
+function cookieHeaderFromSetCookie(value: unknown) {
+  const cookies = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return cookies
+    .map((cookie) => cookie.split(";")[0]?.trim() || "")
+    .filter(Boolean)
+    .join("; ");
 }
 
 function buildMultipartBody(fieldName: string, fileName: string, mimeType: string, file: Buffer) {

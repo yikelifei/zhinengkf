@@ -89,6 +89,7 @@ function windowSnapshotFreshness(windowState, now = new Date()) {
 
 function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) {
   const checks = [];
+  const payload = task && typeof task.payload === "object" && task.payload ? task.payload : {};
 
   checks.push({
     key: "conversationExists",
@@ -112,6 +113,52 @@ function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) 
     actual: conversation?.manualLocked ? "已人工接管" : "未锁定",
     passed: conversation?.manualLocked !== true,
   });
+
+  if (payload.wechatAccountId) {
+    checks.push({
+      key: "payloadWechatAccountMatchesTask",
+      label: "发送内容微信账号匹配任务",
+      expected: task?.wechatAccountId || "",
+      actual: payload.wechatAccountId || "",
+      passed: Boolean(task?.wechatAccountId && payload.wechatAccountId === task.wechatAccountId),
+    });
+  }
+  if (payload.conversationId) {
+    checks.push({
+      key: "payloadConversationMatchesTask",
+      label: "发送内容会话匹配任务",
+      expected: task?.conversationId || "",
+      actual: payload.conversationId || "",
+      passed: Boolean(task?.conversationId && payload.conversationId === task.conversationId),
+    });
+  }
+  if (payload.customerId) {
+    checks.push({
+      key: "payloadCustomerMatchesConversation",
+      label: "发送内容客户匹配会话",
+      expected: conversation?.customerId || "",
+      actual: payload.customerId || "",
+      passed: Boolean(conversation?.customerId && payload.customerId === conversation.customerId),
+    });
+  }
+  if (payload.designJobId) {
+    checks.push({
+      key: "payloadDesignJobMatchesTask",
+      label: "发送内容设计任务匹配任务",
+      expected: task?.designJobId || "",
+      actual: payload.designJobId || "",
+      passed: Boolean(task?.designJobId && payload.designJobId === task.designJobId),
+    });
+  }
+  if (payload.quoteDraftId) {
+    checks.push({
+      key: "payloadQuoteDraftMatchesTask",
+      label: "发送内容报价匹配任务",
+      expected: task?.quoteDraftId || "",
+      actual: payload.quoteDraftId || "",
+      passed: Boolean(task?.quoteDraftId && payload.quoteDraftId === task.quoteDraftId),
+    });
+  }
 
   if (task?.designJobId || designJob) {
     checks.push({

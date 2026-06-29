@@ -132,22 +132,36 @@ export class QuotesService {
 
     const text = this.buildCustomerMessage(quote);
     if (options.releaseManualLock && designJob.conversationId) {
+      assertManualReleaseReason(options.releaseReason, "quote send manual release");
       await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
         locked: false,
         reviewer: options.owner || "人工客服",
-        reason: options.releaseReason || "manual_approve_quote",
+        reason: options.releaseReason,
         note: "人工已审核通过报价，恢复该会话的发送队列。",
       });
     }
 
-    const sendTask = await this.wechatDispatch.enqueueQuoteMessage({
-      wechatAccountId: designJob.wechatAccountId,
-      conversationId: designJob.conversationId,
-      designJobId: designJob.id,
-      quoteDraftId: quote.id,
-      text,
-      automation: options.automation as any,
-    });
+    let sendTask: any;
+    try {
+      sendTask = await this.wechatDispatch.enqueueQuoteMessage({
+        wechatAccountId: designJob.wechatAccountId,
+        conversationId: designJob.conversationId,
+        designJobId: designJob.id,
+        quoteDraftId: quote.id,
+        text,
+        automation: options.automation as any,
+      });
+    } catch (error) {
+      if (options.releaseManualLock && designJob.conversationId) {
+        await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+          locked: true,
+          reviewer: options.owner || "人工客服",
+          reason: "manual_approve_quote_queue_failed",
+          note: `人工审核报价未能入队，已重新接管会话：${error instanceof Error ? error.message : "unknown error"}`,
+        });
+      }
+      throw error;
+    }
     const nextPatch = {
       status: "send_queued",
       sendTaskId: sendTask.id,
@@ -165,6 +179,26 @@ export class QuotesService {
             selectedImage: true,
           },
         });
+    if (options.releaseManualLock) {
+      await this.createReviewLog({
+        targetType: "quote",
+        targetId: quote.id,
+        decision: options.releaseReason || "manual_approve_quote",
+        reviewer: options.owner || "人工客服",
+        note: "人工审核通过并已创建微信报价发送任务。",
+        beforeStatus: quote.status || "",
+        afterStatus: updated.status,
+        metadata: {
+          source: "manual_release_quote_send",
+          conversationId: designJob.conversationId,
+          wechatAccountId: designJob.wechatAccountId,
+          designJobId: designJob.id,
+          quoteDraftId: quote.id,
+          sendTaskId: sendTask.id,
+          releaseReason: options.releaseReason,
+        },
+      });
+    }
 
     return { quote: updated, sendTask };
   }
@@ -356,6 +390,21 @@ export class QuotesService {
     if (!identity.ok) throw new BadRequestException(`quote draft identity invalid: ${identity.reason}`);
     return identity;
   }
+
+  private async createReviewLog(payload: {
+    targetType: string;
+    targetId: string;
+    decision: string;
+    reviewer?: string;
+    note?: string;
+    beforeStatus?: string;
+    afterStatus?: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
+    const prisma = this.prisma as any;
+    return prisma.reviewLog.create({ data: payload });
+  }
 }
 
 type QuoteUpdatePatch = {
@@ -414,4 +463,11 @@ function moneyNumber(value: unknown, fallback: number) {
 
 function roundMoney(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function assertManualReleaseReason(reason: unknown, context: string) {
+  const text = String(reason || "").trim();
+  if (!text || !text.startsWith("manual_")) {
+    throw new BadRequestException(`${context} requires an explicit manual release reason`);
+  }
 }

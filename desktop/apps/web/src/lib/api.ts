@@ -153,6 +153,35 @@ export type SkuCatalogAudit = {
   imageProblems?: SkuImageProblem[];
   lowStockCount: number;
   negativeMarginCount: number;
+  duplicateSkuCodeCount?: number;
+  duplicateNameCount?: number;
+  unsafeSkuCodeCount?: number;
+  typeIssueCount?: number;
+  invalidReplacementCount?: number;
+  invalidMatchingRuleCount?: number;
+  leadTimeIssueCount?: number;
+  specificationIssueCount?: number;
+  availableGiftBoxCount?: number;
+  availableItemCount?: number;
+  availableAccessoryCount?: number;
+  catalogStructureIssueCount?: number;
+  availableSceneTagCount?: number;
+  availableCategoryCount?: number;
+  topSceneTags?: Array<{ name: string; count: number }>;
+  topCategories?: Array<{ name: string; count: number }>;
+  catalogCoverageIssueCount?: number;
+  minGiftBoxPrice?: number;
+  minItemPrice?: number;
+  minBundleBudget?: number;
+  availableGiftBoxStock?: number;
+  availableItemStock?: number;
+  basicBundleCapacity?: number;
+  bundleCapacityBottleneck?: string;
+  bundleCapacityBottleneckLabel?: string;
+  bundleCapacityChecks?: Array<{ quantity: number; enough: boolean; shortage: number }>;
+  bundleCapacityRiskCount?: number;
+  bundleReadinessIssueCount?: number;
+  bundleReadinessWarnings?: string[];
   repairQueueCount?: number;
   blockingRepairCount?: number;
   repairQueue?: SkuRepairQueueItem[];
@@ -248,6 +277,7 @@ export type TrainingSample = {
     level: "safe" | "review" | "risk" | "blocked";
     label: string;
     reason: string;
+    recommendedAction?: string;
     trainable: boolean;
     flags: string[];
   };
@@ -264,6 +294,17 @@ export type TrainingOverview = {
   averageScore: number;
   suggestionCount: number;
   agentsWithSamples: number;
+  qualitySummary?: {
+    safeSamples: number;
+    reviewQualitySamples: number;
+    riskSamples: number;
+    blockedSamples: number;
+    trainableSamples: number;
+    antiWrongReplySamples: number;
+    lowScoreSamples: number;
+    missingAnswerSamples: number;
+    missingSkillHintSamples: number;
+  };
   topCorrectionScenes: Array<{
     scene: string;
     agentKey: string;
@@ -451,7 +492,6 @@ export type SendAdapterInfo = {
 
 export type BridgeOutboxEntry = {
   fileName: string;
-  filePath: string;
   taskId?: string;
   wechatAccountId?: string;
   conversationId?: string;
@@ -462,8 +502,6 @@ export type BridgeOutboxEntry = {
   ageSeconds: number;
   taskStatus?: string | null;
   attemptId?: string | null;
-  conversationTitle?: string;
-  accountDisplayName?: string;
   ignoreReason?: string;
   errorMessage?: string;
   preview?: {
@@ -471,18 +509,13 @@ export type BridgeOutboxEntry = {
     outboxFileName?: string;
     attemptId?: string;
     wechatAccountId?: string;
-    accountDisplayName?: string;
     conversationId?: string;
-    conversationTitle?: string;
     customerId?: string;
-    customerName?: string;
     payloadKind?: string;
     actionCount?: number;
     textActionCount?: number;
     imageActionCount?: number;
     textLength?: number;
-    textPreview?: string;
-    imageFileNames?: string[];
     windowSnapshotId?: string;
     guardStatus?: string;
     constraints?: Record<string, unknown>;
@@ -491,14 +524,12 @@ export type BridgeOutboxEntry = {
 };
 
 export type BridgeOutboxResult = {
-  outboxDir: string;
   pending: BridgeOutboxEntry[];
   ignored: BridgeOutboxEntry[];
 };
 
 export type BridgeInboxEntry = {
   fileName: string;
-  filePath: string;
   taskId?: string;
   attemptId?: string;
   wechatAccountId?: string;
@@ -523,23 +554,41 @@ export type BridgeInboxEntry = {
 };
 
 export type BridgeInboxScanResult = {
-  inboxDir: string;
   scanned: number;
   processed: BridgeInboxEntry[];
   failed: BridgeInboxEntry[];
 };
 
 export type WindowSnapshotInboxScanResult = {
-  inboxDir: string;
   scanned: number;
-  processed: Array<Record<string, unknown>>;
-  failed: Array<Record<string, unknown>>;
+  processed: Array<{
+    fileName: string;
+    modifiedAt: string;
+    ageSeconds: number;
+    snapshotCount: number;
+    snapshots: Array<{
+      id: string;
+      source: string;
+      isOnline: boolean;
+      wechatAccountId?: string;
+      recentCustomerId?: string;
+      confidence?: number;
+      capturedAt?: string;
+      createdAt?: string;
+      diagnostic?: WechatWindowSnapshot["diagnostic"];
+    }>;
+  }>;
+  failed: Array<{
+    fileName: string;
+    modifiedAt: string;
+    ageSeconds: number;
+    errorMessage: string;
+  }>;
 };
 
 export type BridgeWorkerStatus = {
   ok: boolean;
   status: string;
-  statusFile?: string;
   ageSeconds?: number | null;
   modifiedAt?: string;
   mode?: string;
@@ -551,13 +600,11 @@ export type BridgeWorkerStatus = {
     processedCount?: number;
     skippedCount?: number;
     failedCount?: number;
-    outboxDir?: string;
   };
 };
 
 export type BridgeLockEntry = {
   fileName: string;
-  filePath: string;
   accountId?: string;
   pid?: number;
   createdAt?: string;
@@ -571,18 +618,15 @@ export type BridgeStatusResult = {
   adapter: SendAdapterInfo;
   worker: BridgeWorkerStatus;
   outbox: {
-    outboxDir: string;
     pendingCount: number;
     ignoredCount: number;
     pending: BridgeOutboxEntry[];
   };
   inbox: {
-    inboxDir: string;
     pendingCount: number;
     pending: BridgeInboxEntry[];
   };
   locks: {
-    lockDir: string;
     activeCount: number;
     staleCount: number;
     active: BridgeLockEntry[];
@@ -592,7 +636,6 @@ export type BridgeStatusResult = {
 export type WindowObserverStatus = {
   ok: boolean;
   status: string;
-  statusFile?: string;
   ageSeconds?: number | null;
   modifiedAt?: string;
   scan?: boolean;
@@ -601,7 +644,6 @@ export type WindowObserverStatus = {
   errorMessage?: string;
   result?: {
     wroteSnapshot?: boolean;
-    snapshotFile?: string;
     isOnline?: boolean;
     wechatAccountId?: string;
     confidence?: number;
@@ -663,6 +705,27 @@ export type RouteEvaluation = {
     label?: string;
     matchedKeywords?: string[];
     confidence?: string;
+  } | null;
+  sceneMemory?: {
+    matched?: boolean;
+    applied?: boolean;
+    score?: number;
+    sampleId?: string | null;
+    sourceRouteId?: string | null;
+    agentKey?: string;
+    scene?: string;
+    reason?: string;
+    originalAgentKey?: string;
+    originalScene?: string;
+    originalScore?: number;
+  } | null;
+  sceneAudit?: {
+    level?: "pass" | "review" | "manual" | string;
+    label?: string;
+    summary?: string;
+    nextStep?: string;
+    evidence?: string[];
+    warnings?: string[];
   } | null;
   action: "auto_agent" | "collect_info" | "manual_review";
   confidence: number;
@@ -911,6 +974,17 @@ export type DesignPlatformConfigResponse = {
   readiness?: DesignPlatformReadiness;
 };
 
+export type DesignPlatformLoginResponse = DesignPlatformConfigResponse & {
+  user?: {
+    id?: string;
+    email?: string;
+  } | null;
+};
+
+export type DesignPlatformActivationResponse = DesignPlatformConfigResponse & {
+  activation?: Record<string, unknown>;
+};
+
 export type DesignJobPreflightResult = {
   ok: boolean;
   adapter: string;
@@ -1123,9 +1197,22 @@ export async function getChatImports(): Promise<ChatImport[]> {
   }
 }
 
-export async function getTrainingSamples(): Promise<TrainingSample[]> {
+export async function getTrainingSamples(filters: {
+  agentId?: string;
+  quality?: "all" | "safe" | "review" | "risk" | "blocked" | "anti_wrong_reply" | "trainable" | "not_trainable";
+  status?: string;
+  sourceType?: string;
+  limit?: number;
+} = {}): Promise<TrainingSample[]> {
   try {
-    const response = await fetch(`${API_BASE}/training/samples`, { cache: "no-store" });
+    const params = new URLSearchParams();
+    if (filters.agentId) params.set("agentId", filters.agentId);
+    if (filters.quality) params.set("quality", filters.quality);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sourceType) params.set("sourceType", filters.sourceType);
+    if (filters.limit) params.set("limit", String(filters.limit));
+    const query = params.toString();
+    const response = await fetch(`${API_BASE}/training/samples${query ? `?${query}` : ""}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1240,7 +1327,10 @@ export async function getWindowObserverStatus(): Promise<WindowObserverStatus> {
 export async function captureWindowObserverOnce(): Promise<{
   status: WindowObserverStatus;
   scan: WindowSnapshotInboxScanResult;
-  stdout?: string;
+  summary?: {
+    hasOutput: boolean;
+    lineCount: number;
+  };
 }> {
   return postJson("/wechat/window-observer/capture-once", {});
 }
@@ -1587,6 +1677,12 @@ export type AutomationRun = {
   durationMs?: number;
   skipped?: boolean;
   reason?: string;
+  steps?: Array<{
+    step: string;
+    status: "completed" | "failed";
+    durationMs: number;
+    errorMessage?: string;
+  }>;
   errors: Array<{ step: string; errorMessage: string }>;
   results: Record<string, unknown>;
 };
@@ -1596,13 +1692,68 @@ export type AutomationStatus = {
   running: boolean;
   active: boolean;
   startedAt?: string | null;
+  runningStartedAt?: string | null;
+  nextRunAt?: string | null;
   intervalMs: number;
   processSendQueue: boolean;
   sendQueueLimit: number;
   pollLimit: number;
   runCount: number;
   lastRun?: AutomationRun | null;
+  recentRuns?: AutomationRun[];
 };
+
+export type AutomationReadiness = {
+  checkedAt: string;
+  ready: boolean;
+  tone: "ok" | "warning" | "error";
+  summary: string;
+  checks: Array<{
+    key: string;
+    label: string;
+    ok: boolean;
+    severity: "info" | "warning" | "error";
+    detail: string;
+    action?: string;
+  }>;
+  blockers: AutomationReadiness["checks"];
+  warnings: AutomationReadiness["checks"];
+  metrics: {
+    lowValueDrafts: number;
+    quickConfirmJobs: number;
+    pendingSendTasks: number;
+    manualLockedConversations: number;
+    lowValueQuotesReady: number;
+    lowValueOrdersReady: number;
+    catalogReadyCount: number;
+    catalogBlockingRepairCount: number;
+  };
+};
+
+export function mergeAutomationStatusRun(
+  status: AutomationStatus | null,
+  run: AutomationRun | null,
+  options: { incrementRunCount?: boolean } = {},
+): AutomationStatus | null {
+  if (!status || !run) return status;
+  const runKey = automationRunIdentity(run);
+  const recentRuns = [
+    run,
+    ...(status.recentRuns || []).filter((item) => automationRunIdentity(item) !== runKey),
+  ].slice(0, 10);
+  return {
+    ...status,
+    running: false,
+    runningStartedAt: null,
+    lastRun: run,
+    recentRuns,
+    runCount: Number(status.runCount || 0) + (options.incrementRunCount ? 1 : 0),
+  };
+}
+
+function automationRunIdentity(run: AutomationRun) {
+  return [run.startedAt || "", run.trigger || "", run.completedAt || "", run.reason || ""].join("|");
+}
 
 export async function getAutomationStatus(): Promise<AutomationStatus | null> {
   try {
@@ -1614,8 +1765,26 @@ export async function getAutomationStatus(): Promise<AutomationStatus | null> {
   }
 }
 
+export async function getAutomationReadiness(): Promise<AutomationReadiness | null> {
+  try {
+    const response = await fetch(`${API_BASE}/automation/readiness`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`api ${response.status}`);
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function runAutomationOnce(): Promise<AutomationRun> {
   return postJson<AutomationRun>("/automation/run-once", {});
+}
+
+export async function startAutomation(): Promise<AutomationStatus> {
+  return postJson<AutomationStatus>("/automation/start", {});
+}
+
+export async function stopAutomation(): Promise<AutomationStatus> {
+  return postJson<AutomationStatus>("/automation/stop", {});
 }
 
 export type HighValueHandoffResult = {
@@ -1659,6 +1828,22 @@ export async function updateDesignPlatformConfig(payload: {
   deviceId?: string;
 }): Promise<DesignPlatformConfigResponse> {
   return postJson<DesignPlatformConfigResponse>("/integrations/design-platform/config", payload);
+}
+
+export async function loginDesignPlatform(payload: {
+  email: string;
+  password: string;
+  deviceId: string;
+}): Promise<DesignPlatformLoginResponse> {
+  return postJson<DesignPlatformLoginResponse>("/integrations/design-platform/login", payload);
+}
+
+export async function redeemDesignPlatformActivation(payload: {
+  code: string;
+  deviceId: string;
+  deviceLabel?: string;
+}): Promise<DesignPlatformActivationResponse> {
+  return postJson<DesignPlatformActivationResponse>("/integrations/design-platform/activation/redeem", payload);
 }
 
 export async function submitDesignJob(id: string): Promise<DesignJob> {
