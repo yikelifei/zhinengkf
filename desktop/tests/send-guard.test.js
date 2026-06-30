@@ -212,6 +212,24 @@ test("rejects requeue while bridge ack is pending", () => {
   assert.equal(result.failedKeys.includes("bridgeAckPending"), true);
 });
 
+test("rejects requeue after audited manual cancellation", () => {
+  const result = evaluateSendTaskRequeue({
+    task: {
+      ...task,
+      status: "cancelled",
+      conversation,
+      guardSnapshot: {
+        cancelledAt: "2026-06-30T08:00:00.000Z",
+        cancelReason: "manual_takeover_cancel_send_task",
+      },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "audited_cancelled_task");
+  assert.deepEqual(result.failedKeys, ["taskNotAuditedCancelled"]);
+});
+
 test("allows requeue after dry run audit", () => {
   const result = evaluateSendTaskRequeue({
     task: {

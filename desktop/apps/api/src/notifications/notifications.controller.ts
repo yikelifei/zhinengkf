@@ -1,26 +1,40 @@
 import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { NotificationsService } from "./notifications.service";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("notifications")
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
 
   @Get()
-  list(@Query("unreadOnly") unreadOnly?: string, @Query("limit") limit?: string) {
+  list(
+    @Query("unreadOnly") unreadOnly?: string,
+    @Query("limit") limit?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
     return this.notifications.list({
       unreadOnly: unreadOnly === "true",
       limit: Number(limit || 80),
+      wechatAccountId,
+      conversationId,
+      customerId,
     });
   }
 
   @Post("read-all")
-  markAllRead() {
-    return this.notifications.markAllRead();
+  markAllRead(@Body() body: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.notifications.markAllRead({
+      wechatAccountId: body?.wechatAccountId,
+      conversationId: body?.conversationId,
+      customerId: body?.customerId,
+    });
   }
 
   @Post(":id/read")
-  markRead(@Param("id") id: string) {
-    return this.notifications.markRead(id);
+  markRead(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.notifications.markRead(id, body || {});
   }
 
   @Post("demo")

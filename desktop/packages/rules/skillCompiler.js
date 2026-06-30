@@ -124,6 +124,17 @@ function isSkillSuggestionSafeToApply(suggestion = {}, options = {}) {
 }
 
 function evaluateTrainingSampleQuality(sample = {}, options = {}) {
+  const quality = {
+    ...evaluateTrainingSampleQualityCore(sample, options),
+    usage: classifyTrainingSampleUsage(sample, options),
+  };
+  return {
+    ...quality,
+    attention: classifyTrainingSampleAttention(sample, quality),
+  };
+}
+
+function evaluateTrainingSampleQualityCore(sample = {}, options = {}) {
   const minScore = Number(options.minScore || DEFAULT_MIN_SCORE);
   const status = String(sample.status || "ready");
   const score = Number(sample.score || 0);
@@ -209,6 +220,92 @@ function isSceneClarificationReply(value) {
   if (/我先确认一下.+是想让我先处理.+这个方向吗/.test(text)) return true;
   if (/我先确认一下.+现在主要想处理哪类问题/.test(text)) return true;
   return /如果是订单.*售后.*物流.*设计图/.test(text);
+}
+
+function classifyTrainingSampleUsage(sample = {}, options = {}) {
+  const minScore = Number(options.minScore || DEFAULT_MIN_SCORE);
+  const sourceType = normalizeSampleSource(sample);
+  const status = String(sample.status || "ready");
+  const score = Number(sample.score || 0);
+  const hasCustomerText = Boolean(String(sample.customerText || sample.question || "").trim());
+  const hasAnswer = Boolean(String(sample.idealReply || sample.answer || "").trim());
+  const hasAgent = Boolean(sample.agentKey || sample.agentId);
+  const hasScene = Boolean(sample.scene);
+  const sceneConfidence = classifyTrainingSampleSceneConfidence(sample);
+  const antiWrongReply = isSceneClarificationReply(sample.idealReply || sample.answer);
+  const flags = [];
+
+  if (status === "rejected") {
+    return trainingSampleUsageResult("none", "不参与训练", "样本已禁用，不参与场景判断、客服话术或知识匹配。", flags);
+  }
+  if (status === "review") {
+    return trainingSampleUsageResult("review", "待复核", "样本还在人工复核中，确认前不进入自动训练。", ["manual_review_required"]);
+  }
+  if (antiWrongReply) {
+    return trainingSampleUsageResult("anti_wrong_reply", "仅防乱回复", "这是场景澄清话术，只训练防乱回复，不能拿来判断具体业务场景。", [
+      "anti_wrong_reply_only",
+    ]);
+  }
+
+  const routeMemory =
+    hasCustomerText &&
+    hasAgent &&
+    hasScene &&
+    sceneConfidence.routeMemoryAllowed &&
+    ((sourceType === "route_correction" && score >= minScore) || (sourceType === "chat_import" && score >= 85));
+  const replySkill = hasAnswer && score >= minScore;
+
+  if (!hasCustomerText) flags.push("missing_customer_text");
+  if (!hasAnswer) flags.push("missing_answer");
+  if (!hasAgent) flags.push("missing_agent");
+  if (!hasScene) flags.push("missing_scene");
+  if (!sceneConfidence.routeMemoryAllowed) flags.push(sceneConfidence.flag);
+  if (score < minScore) flags.push("low_score");
+  if (sourceType === "chat_import" && score < 85) flags.push("chat_import_scene_score_low");
+
+  if (routeMemory && replySkill) {
+    return trainingSampleUsageResult("route_and_reply", "场景判断+客服话术", "这个样本既能帮助识别场景，也能提炼客服回复方式。", flags);
+  }
+  if (routeMemory) {
+    return trainingSampleUsageResult("route_memory", "仅场景判断", "这个样本适合帮助智能体判断客户属于哪个场景。", flags);
+  }
+  if (replySkill) {
+    return trainingSampleUsageResult("reply_only", "仅客服话术", "这个样本适合训练回复风格和处理方式，但不够稳，不用于自动判断场景。", flags);
+  }
+  return trainingSampleUsageResult("none", "不可训练", "样本缺少关键内容或评分过低，先修正后再训练。", flags);
+}
+
+function trainingSampleUsageResult(scope, label, reason, flags = []) {
+  return {
+    scope,
+    label,
+    reason,
+    routeMemory: scope === "route_and_reply" || scope === "route_memory",
+    replySkill: scope === "route_and_reply" || scope === "reply_only",
+    antiWrongReply: scope === "anti_wrong_reply",
+    trainable: ["route_and_reply", "route_memory", "reply_only", "anti_wrong_reply"].includes(scope),
+    flags: [...new Set(flags.filter(Boolean))],
+  };
+}
+
+function classifyTrainingSampleSceneConfidence(sample = {}) {
+  const sourceType = normalizeSampleSource(sample);
+  if (sourceType !== "chat_import") return { routeMemoryAllowed: true, flag: "" };
+
+  const sceneCheck = sample.sceneCheck || sample.sceneDecision || null;
+  if (sceneCheck?.status) {
+    if (sceneCheck.status === "clear") return { routeMemoryAllowed: true, flag: "" };
+    return { routeMemoryAllowed: false, flag: `scene_${sceneCheck.status}` };
+  }
+
+  if (sample.sceneScore === undefined || sample.sceneScore === null) {
+    return { routeMemoryAllowed: true, flag: "" };
+  }
+
+  const sceneScore = Number(sample.sceneScore || 0);
+  if (!Number.isFinite(sceneScore) || sceneScore <= 0) return { routeMemoryAllowed: false, flag: "scene_unmatched" };
+  if (sceneScore < 14) return { routeMemoryAllowed: false, flag: "scene_weak" };
+  return { routeMemoryAllowed: true, flag: "" };
 }
 
 function summarizeTrainingSamples(samples = [], agents = [], suggestions = []) {
@@ -316,6 +413,7 @@ function summarizeTrainingSamples(samples = [], agents = [], suggestions = []) {
 }
 
 function summarizeTrainingSampleQuality(samples = []) {
+  const attentionReasonCounts = new Map();
   const summary = {
     safeSamples: 0,
     reviewQualitySamples: 0,
@@ -323,6 +421,11 @@ function summarizeTrainingSampleQuality(samples = []) {
     blockedSamples: 0,
     trainableSamples: 0,
     antiWrongReplySamples: 0,
+    routeMemorySamples: 0,
+    replySkillSamples: 0,
+    routeAndReplySamples: 0,
+    needsAttentionSamples: 0,
+    attentionReasonCounts: [],
     lowScoreSamples: 0,
     missingAnswerSamples: 0,
     missingSkillHintSamples: 0,
@@ -336,12 +439,105 @@ function summarizeTrainingSampleQuality(samples = []) {
     if (quality.level === "blocked") summary.blockedSamples += 1;
     if (quality.trainable) summary.trainableSamples += 1;
     if (quality.flags.includes("anti_wrong_reply_only")) summary.antiWrongReplySamples += 1;
+    if (quality.usage?.routeMemory) summary.routeMemorySamples += 1;
+    if (quality.usage?.replySkill) summary.replySkillSamples += 1;
+    if (quality.usage?.routeMemory && quality.usage?.replySkill) summary.routeAndReplySamples += 1;
+    if (quality.attention?.needsAttention) {
+      summary.needsAttentionSamples += 1;
+      const primaryReasons = quality.attention.primaryReason ? [quality.attention.primaryReason] : [];
+      for (const reason of primaryReasons) {
+        const current = attentionReasonCounts.get(reason.code) || { code: reason.code, label: reason.label, count: 0 };
+        current.count += 1;
+        attentionReasonCounts.set(reason.code, current);
+      }
+    }
     if (quality.flags.includes("low_score")) summary.lowScoreSamples += 1;
     if (quality.flags.includes("missing_answer")) summary.missingAnswerSamples += 1;
     if (quality.flags.includes("missing_skill_hints")) summary.missingSkillHintSamples += 1;
   }
 
+  summary.attentionReasonCounts = [...attentionReasonCounts.values()]
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "zh-Hans-CN"))
+    .slice(0, 8);
   return summary;
+}
+
+function isTrainingSampleNeedingAttention(sample = {}, evaluatedQuality) {
+  return classifyTrainingSampleAttention(sample, evaluatedQuality).needsAttention;
+}
+
+function classifyTrainingSampleAttention(sample = {}, evaluatedQuality) {
+  const quality = resolveTrainingSampleQuality(sample, evaluatedQuality);
+  const status = String(sample.status || "ready");
+  const usage = quality.usage || {};
+  const flags = [
+    ...(Array.isArray(quality.flags) ? quality.flags : []),
+    ...(Array.isArray(usage.flags) ? usage.flags : []),
+  ];
+  const isAntiWrongReply = usage.antiWrongReply === true || flags.includes("anti_wrong_reply_only");
+  const reasons = [];
+
+  if (status !== "rejected" && quality.level !== "blocked" && !(isAntiWrongReply && status !== "review")) {
+    if (status === "review" || flags.includes("manual_review_required")) {
+      pushAttentionReason(reasons, "manual_review_required", "人工复核", "样本还在待复核状态，确认前不能进入自动训练。", "人工检查场景、客户问题、标准回复和 Skill 提示。");
+    }
+    if (flags.includes("low_score")) {
+      pushAttentionReason(reasons, "low_score", "低分", "样本评分低或被判定为风险样本。", "先重写成高情商客服标准回复，再提高评分后确认训练。");
+    }
+    if (flags.includes("missing_answer")) {
+      pushAttentionReason(reasons, "missing_answer", "缺回复", "样本缺少客服标准回复。", "补上客服应该怎么回，不能只留下客户问题。");
+    }
+    if (flags.includes("missing_customer_text")) {
+      pushAttentionReason(reasons, "missing_customer_text", "缺客户问题", "样本缺少客户原话。", "补上客户真实问题，避免训练成无上下文话术。");
+    }
+    if (flags.includes("missing_skill_hints")) {
+      pushAttentionReason(reasons, "missing_skill_hints", "缺 Skill", "样本缺少 Skill 提示。", "补 1 到 3 个明确 Skill，例如预算澄清、售后安抚、物流追踪。");
+    }
+    const sceneFlag = flags.find((flag) => /^scene_(weak|ambiguous|unmatched)$/.test(flag));
+    if (sceneFlag) {
+      pushAttentionReason(reasons, sceneFlag, "scene_uncertain", "chat import scene judgement is not confident enough for route memory", "confirm the scene and agent before using this sample for scene routing");
+    }
+    if (quality.level === "risk" && !reasons.length) {
+      pushAttentionReason(reasons, "quality_risk", "质量风险", "样本被判定为风险样本。", quality.recommendedAction || "先修正样本内容后再确认训练。");
+    }
+    if (quality.level === "review" && !reasons.length) {
+      pushAttentionReason(reasons, "quality_review", "质量复核", "样本质量需要人工再看一遍。", quality.recommendedAction || "确认没有跑偏后再放回训练。");
+    }
+    if (quality.trainable === false && !reasons.length) {
+      pushAttentionReason(reasons, "not_trainable", "不可训练", "样本当前不能进入自动训练。", quality.recommendedAction || "先修正样本内容后再确认训练。");
+    }
+    if (usage.scope === "review") {
+      pushAttentionReason(reasons, "usage_review", "用途待复核", "训练用途仍处于待复核。", "确认它是用于场景判断、客服话术，还是只用于防乱回复。");
+    }
+    if (usage.scope === "none") {
+      pushAttentionReason(reasons, "usage_none", "不可用样本", "样本缺少关键内容或评分过低。", "先补齐内容或禁用这条样本。");
+    }
+    if (usage.scope === undefined) {
+      pushAttentionReason(reasons, "usage_unknown", "用途未判定", "系统还没有给这条样本标记训练用途。", "重新保存或复核样本，让系统补齐用途判断。");
+    }
+  }
+
+  return {
+    needsAttention: reasons.length > 0,
+    label: reasons.length ? "需人工处理" : "无需优先处理",
+    primaryReason: reasons[0] || null,
+    reasons,
+    recommendedAction: reasons[0]?.action || quality.recommendedAction || "",
+  };
+}
+
+function resolveTrainingSampleQuality(sample = {}, evaluatedQuality) {
+  if (evaluatedQuality) return evaluatedQuality;
+  if (sample.quality) return sample.quality;
+  return {
+    ...evaluateTrainingSampleQualityCore(sample),
+    usage: classifyTrainingSampleUsage(sample),
+  };
+}
+
+function pushAttentionReason(reasons, code, label, detail, action) {
+  if (reasons.some((reason) => reason.code === code)) return;
+  reasons.push({ code, label, detail, action });
 }
 
 function createAgentBucket(agent = {}) {
@@ -546,10 +742,13 @@ module.exports = {
   compileAgentSkillSuggestions,
   summarizeTrainingSamples,
   canonicalSkillName,
+  classifyTrainingSampleAttention,
+  classifyTrainingSampleUsage,
   classifySkillSuggestionQuality,
   evaluateTrainingSampleQuality,
   isSceneClarificationReply,
   isSkillSuggestionSafeToApply,
+  isTrainingSampleNeedingAttention,
   isTrainingSampleReady,
   normalizeTrainingSampleStatus,
   trainingSampleReviewNote,

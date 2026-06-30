@@ -67,29 +67,14 @@ if errorlevel 1 (
 )
 
 echo.
-echo [start] Starting desktop services...
+echo [start] Starting desktop services in stable foreground mode...
 echo Open workbench: http://127.0.0.1:3100/
+echo Keep this window open while using the app. Close it after running stop_desktop.bat.
 echo.
-call npm.cmd run ports:launch:mock
+call npm.cmd run ports:keepalive:mock
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime\logs.
   echo You can also run repair_desktop.bat to reset default startup.
   pause
   exit /b 1
 )
-
-echo.
-echo [check] Verifying desktop startup...
-call npm.cmd run ports:doctor:mock
-if errorlevel 1 (
-  echo [error] Desktop startup check failed. Run repair_desktop.bat, then try again.
-  pause
-  exit /b 1
-)
-
-echo.
-echo [ok] Desktop services are running in the background.
-echo Open: http://127.0.0.1:3100/
-echo To stop them later, run stop_desktop.bat.
-echo.
-pause

@@ -8,6 +8,7 @@ const {
   canonicalSkillName,
   classifySkillSuggestionQuality,
   compileAgentSkillSuggestions,
+  isTrainingSampleNeedingAttention,
   isSkillSuggestionSafeToApply,
   parseChatTranscript,
   summarizeTrainingSamples,
@@ -37,6 +38,13 @@ type TrainingSampleReviewPayload = {
   skillHints?: string[] | string;
 };
 
+type TrainingSampleBatchReviewPayload = {
+  sampleIds?: string[];
+  status?: "ready" | "review" | "rejected";
+  reviewer?: string;
+  note?: string;
+};
+
 type ApplySkillSuggestionsPayload = {
   agentId?: string;
   minScore?: number;
@@ -44,7 +52,18 @@ type ApplySkillSuggestionsPayload = {
   includeNeedsReview?: boolean;
 };
 
-type TrainingSampleQualityFilter = "safe" | "review" | "risk" | "blocked" | "anti_wrong_reply" | "trainable" | "not_trainable";
+type TrainingSampleQualityFilter =
+  | "safe"
+  | "review"
+  | "risk"
+  | "blocked"
+  | "needs_attention"
+  | "anti_wrong_reply"
+  | "trainable"
+  | "not_trainable"
+  | "route_memory"
+  | "reply_skill"
+  | "route_and_reply";
 
 type ListTrainingSamplesOptions = {
   agentId?: string;
@@ -53,6 +72,8 @@ type ListTrainingSamplesOptions = {
   sourceType?: string;
   limit?: number;
 };
+
+const MAX_BATCH_REVIEW_SAMPLES = 100;
 
 @Injectable()
 export class TrainingService {
@@ -108,6 +129,40 @@ export class TrainingService {
     return result;
   }
 
+  batchReviewSamples(payload: TrainingSampleBatchReviewPayload = {}) {
+    if (!appConfig.useLocalStore) throw new Error("training sample batch review prisma mode is not implemented yet");
+    const sampleIds = normalizeTrainingSampleIds(payload.sampleIds);
+    const status = normalizeTrainingSampleBatchStatus(payload.status);
+    if (!sampleIds.length) throw new BadRequestException("sampleIds must include at least one training sample id");
+    if (sampleIds.length > MAX_BATCH_REVIEW_SAMPLES) {
+      throw new BadRequestException(`sampleIds cannot exceed ${MAX_BATCH_REVIEW_SAMPLES} per batch`);
+    }
+    const reviewPayload = {
+      status,
+      reviewer: payload.reviewer || "人工客服",
+      note: payload.note || trainingSampleBatchReviewNote(status, sampleIds.length),
+    };
+    const results = sampleIds.map((sampleId) => this.localStore.reviewTrainingSample(sampleId, reviewPayload));
+    this.notifications.create(
+      status === "rejected" ? "warning" : "info",
+      "训练样本批量状态已更新",
+      `已${trainingSampleBatchReviewVerb(status)} ${results.length} 条训练样本。`,
+      {
+        source: "training_sample_batch_review",
+        status,
+        count: results.length,
+        sampleIds,
+      },
+    );
+    return {
+      updated: results.length,
+      status,
+      sampleIds,
+      samples: results.map((result: any) => result.sample),
+      reviewLogs: results.map((result: any) => result.reviewLog),
+    };
+  }
+
   listSkillSuggestions(options: { agentId?: string; minScore?: number } = {}) {
     if (!appConfig.useLocalStore) throw new Error("skill suggestion prisma mode is not implemented yet");
     const samples = this.localStore.listTrainingSamples(options.agentId);
@@ -158,6 +213,33 @@ export class TrainingService {
   }
 }
 
+function normalizeTrainingSampleIds(value?: string[]) {
+  return [
+    ...new Set(
+      (Array.isArray(value) ? value : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function normalizeTrainingSampleBatchStatus(value?: string) {
+  if (value === "ready" || value === "review" || value === "rejected") return value;
+  throw new BadRequestException("status must be one of ready, review, rejected");
+}
+
+function trainingSampleBatchReviewNote(status: "ready" | "review" | "rejected", count: number) {
+  if (status === "ready") return `批量确认 ${count} 条训练样本进入训练。`;
+  if (status === "rejected") return `批量禁用 ${count} 条训练样本，不参与训练和场景记忆。`;
+  return `批量退回 ${count} 条训练样本，等待人工复核。`;
+}
+
+function trainingSampleBatchReviewVerb(status: "ready" | "review" | "rejected") {
+  if (status === "ready") return "确认";
+  if (status === "rejected") return "禁用";
+  return "退回复核";
+}
+
 function normalizeSuggestionKeySet(value?: string[]) {
   return new Set(
     (Array.isArray(value) ? value : [])
@@ -174,24 +256,33 @@ function normalizeTrainingSampleQualityFilter(value?: string): TrainingSampleQua
     quality === "review" ||
     quality === "risk" ||
     quality === "blocked" ||
+    quality === "needs_attention" ||
     quality === "anti_wrong_reply" ||
     quality === "trainable" ||
-    quality === "not_trainable"
+    quality === "not_trainable" ||
+    quality === "route_memory" ||
+    quality === "reply_skill" ||
+    quality === "route_and_reply"
   ) {
     return quality;
   }
   throw new BadRequestException(
-    "quality must be one of safe, review, risk, blocked, anti_wrong_reply, trainable, not_trainable, all",
+    "quality must be one of safe, review, risk, blocked, needs_attention, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all",
   );
 }
 
 function matchesTrainingSampleQuality(sample: any, quality: TrainingSampleQualityFilter) {
   const sampleQuality = sample?.quality || {};
+  const usage = sampleQuality.usage || {};
   const level = String(sampleQuality.level || "");
   const flags = Array.isArray(sampleQuality.flags) ? sampleQuality.flags : [];
+  if (quality === "needs_attention") return isTrainingSampleNeedingAttention(sample);
   if (quality === "anti_wrong_reply") return flags.includes("anti_wrong_reply_only");
   if (quality === "trainable") return sampleQuality.trainable === true;
   if (quality === "not_trainable") return sampleQuality.trainable === false;
+  if (quality === "route_memory") return usage.routeMemory === true;
+  if (quality === "reply_skill") return usage.replySkill === true;
+  if (quality === "route_and_reply") return usage.routeMemory === true && usage.replySkill === true;
   if (quality === "review") return level === "review" && !flags.includes("anti_wrong_reply_only");
   return level === quality;
 }

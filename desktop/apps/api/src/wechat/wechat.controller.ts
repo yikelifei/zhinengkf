@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { WechatDispatchService } from "./wechat-dispatch.service";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("wechat")
 export class WechatController {
@@ -18,7 +19,7 @@ export class WechatController {
   @Post("conversations/:id/manual-lock")
   setConversationManualLock(
     @Param("id") id: string,
-    @Body() payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string },
+    @Body() payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload,
   ) {
     return this.wechat.setConversationManualLock(id, payload || {});
   }
@@ -27,6 +28,7 @@ export class WechatController {
   processInboundMessage(@Body() payload: {
     wechatAccountId?: string;
     conversationId?: string;
+    customerId?: string;
     text: string;
     externalId?: string;
     assetIds?: string[];
@@ -36,13 +38,22 @@ export class WechatController {
   }
 
   @Get("send-tasks")
-  listSendTasks() {
-    return this.wechat.listSendTasks();
+  listSendTasks(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.listSendTasks({ wechatAccountId, conversationId, customerId });
   }
 
   @Get("send-attempts")
-  listSendAttempts(@Query("sendTaskId") sendTaskId?: string) {
-    return this.wechat.listSendAttempts(sendTaskId);
+  listSendAttempts(
+    @Query("sendTaskId") sendTaskId?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.listSendAttempts({ sendTaskId, wechatAccountId, conversationId, customerId });
   }
 
   @Get("send-adapter")
@@ -51,13 +62,21 @@ export class WechatController {
   }
 
   @Get("bridge/outbox")
-  listBridgeOutbox() {
-    return this.wechat.listBridgeOutbox();
+  listBridgeOutbox(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.listBridgeOutbox({ wechatAccountId, conversationId, customerId });
   }
 
   @Get("bridge/status")
-  getBridgeStatus() {
-    return this.wechat.getBridgeStatus();
+  getBridgeStatus(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.getBridgeStatus({ wechatAccountId, conversationId, customerId });
   }
 
   @Post("bridge/inbox/scan")
@@ -66,8 +85,12 @@ export class WechatController {
   }
 
   @Get("window-snapshots")
-  listWindowSnapshots() {
-    return this.wechat.listWindowSnapshots();
+  listWindowSnapshots(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.listWindowSnapshots({ wechatAccountId, conversationId, customerId });
   }
 
   @Get("window-observer/status")
@@ -105,7 +128,7 @@ export class WechatController {
   @Post("orders/:id/queue-confirmation")
   queueOrderConfirmation(
     @Param("id") id: string,
-    @Body() payload: { owner?: string; note?: string },
+    @Body() payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
   ) {
     return this.wechat.queueOrderConfirmation(id, payload || {});
   }
@@ -113,7 +136,7 @@ export class WechatController {
   @Post("orders/:id/queue-followup")
   queueOrderFollowup(
     @Param("id") id: string,
-    @Body() payload: { type?: "production" | "delivery"; owner?: string },
+    @Body() payload: { type?: "production" | "delivery"; owner?: string } & ExpectedIdentityPayload,
   ) {
     return this.wechat.queueOrderFollowup(id, payload || {});
   }
@@ -155,22 +178,22 @@ export class WechatController {
   }
 
   @Post("send-tasks/:id/execute-dry-run")
-  executeDryRun(@Param("id") id: string) {
-    return this.wechat.executeDryRunSend(id);
+  executeDryRun(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
+    return this.wechat.executeDryRunSend(id, payload || {});
   }
 
   @Post("send-tasks/:id/execute")
-  executeSend(@Param("id") id: string, @Body() payload: { adapter?: string }) {
+  executeSend(@Param("id") id: string, @Body() payload: { adapter?: string } & ExpectedIdentityPayload) {
     return this.wechat.executeSend(id, payload || {});
   }
 
   @Post("send-tasks/:id/requeue")
-  requeueSendTask(@Param("id") id: string, @Body() payload: { reason?: string }) {
+  requeueSendTask(@Param("id") id: string, @Body() payload: { reason?: string } & ExpectedIdentityPayload) {
     return this.wechat.requeueSendTask(id, payload || {});
   }
 
   @Post("send-tasks/:id/cancel")
-  cancelSendTask(@Param("id") id: string, @Body() payload: { reason?: string }) {
+  cancelSendTask(@Param("id") id: string, @Body() payload: { reason?: string } & ExpectedIdentityPayload) {
     return this.wechat.cancelSendTask(id, payload || {});
   }
 

@@ -171,6 +171,7 @@ function scoreSceneMemorySample(content, sample = {}) {
   if (!sourceType) return null;
   if (String(sample.status || "ready") !== "ready") return null;
   if (!sample.agentKey) return null;
+  if (sample.quality?.usage?.routeMemory === false) return null;
   const sampleScore = Number(sample.score || 0);
   if (sourceType === "route_correction" && sampleScore && sampleScore < 70) return null;
   if (sourceType === "chat_import" && sampleScore < 85) return null;

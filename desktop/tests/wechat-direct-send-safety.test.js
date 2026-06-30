@@ -9,6 +9,15 @@ function readProjectFile(relativePath) {
   return fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 }
 
+function sliceBetween(source, startPattern, endPattern) {
+  const start = source.search(startPattern);
+  assert.notEqual(start, -1, `missing start pattern: ${startPattern}`);
+  const afterStart = source.slice(start);
+  const end = afterStart.search(endPattern);
+  assert.notEqual(end, -1, `missing end pattern: ${endPattern}`);
+  return afterStart.slice(0, end);
+}
+
 test("legacy direct mark-sent service paths are disabled", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const legacySection = service.slice(
@@ -34,14 +43,8 @@ test("dry run execution is not mapped to real sent status", () => {
 
 test("bridge outbox list exposes preview instead of raw outbox data", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
-  const listSection = service.slice(
-    service.indexOf("  listBridgeOutbox()"),
-    service.indexOf("  private buildBridgeOutboxListItem"),
-  );
-  const itemSection = service.slice(
-    service.indexOf("  private buildBridgeOutboxListItem"),
-    service.indexOf("  private buildBridgeInboxListItem"),
-  );
+  const listSection = sliceBetween(service, /\n  listBridgeOutbox\(/, /\n  private matchesBridgeEntryIdentity\(/);
+  const itemSection = sliceBetween(service, /\n  private buildBridgeOutboxListItem\(/, /\n  private buildBridgeInboxListItem\(/);
 
   assert.doesNotMatch(listSection, /outboxDir:\s*appConfig\.wechatBridgeOutboxDir/);
   assert.match(itemSection, /preview:\s*this\.buildBridgeOutboxPreview/);
@@ -57,20 +60,11 @@ test("bridge outbox list exposes preview instead of raw outbox data", () => {
 
 test("bridge status and inbox scan expose sanitized inbox summaries only", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
-  const statusSection = service.slice(
-    service.indexOf("  getBridgeStatus()"),
-    service.indexOf("  listBridgeOutbox()"),
-  );
-  const scanSection = service.slice(
-    service.indexOf("  scanBridgeInbox()"),
-    service.indexOf("  scanSendOperations()"),
-  );
-  const inboxSummarySection = service.slice(
-    service.indexOf("  private buildBridgeInboxListItem"),
-    service.indexOf("  scanBridgeInbox()"),
-  );
+  const statusSection = sliceBetween(service, /\n  getBridgeStatus\(/, /\n  listBridgeOutbox\(/);
+  const scanSection = sliceBetween(service, /\n  scanBridgeInbox\(/, /\n  async scanSendOperations\(/);
+  const inboxSummarySection = sliceBetween(service, /\n  private buildBridgeInboxListItem\(/, /\n  scanBridgeInbox\(/);
 
-  assert.match(statusSection, /listBridgeInbox\(\)\.map\(\(entry\) => this\.buildBridgeInboxListItem\(entry\)\)/);
+  assert.match(statusSection, /listBridgeInbox\(\)[\s\S]*matchesBridgeEntryIdentity\(entry, null, filter\)[\s\S]*buildBridgeInboxListItem\(entry\)/);
   assert.match(statusSection, /sanitizeBridgeWorkerStatus\(worker\)/);
   assert.match(statusSection, /active:\s*locks\.map\(sanitizeBridgeLockItem\)/);
   assert.doesNotMatch(statusSection, /outboxDir:\s*outbox\.outboxDir/);
@@ -83,6 +77,372 @@ test("bridge status and inbox scan expose sanitized inbox summaries only", () =>
   assert.doesNotMatch(inboxSummarySection, /data:\s*data/);
   assert.doesNotMatch(scanSection, /processed\.push\(\{\s*\.\.\.entry/);
   assert.doesNotMatch(scanSection, /failed\.push\(\{\s*\.\.\.entry/);
+});
+
+test("frontend list APIs pass identity filters to multi-account resources", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  assert.match(api, /export type IdentityFilters/);
+  assert.match(api, /function identityQuery/);
+  assert.match(api, /getDesignJobs\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/design-jobs\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /getSendTasks\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/send-tasks\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /getQuotes\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/quotes\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /getOrderDrafts\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/orders\$\{identityQuery\(filters\)\}/);
+});
+
+test("frontend conversation picker reloads business lists with selected conversation identity", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const loadSection = page.slice(page.indexOf("  async function load("), page.indexOf("  async function runAction"));
+  const pickerSection = page.slice(page.indexOf("  function renderConversationSelect()"), page.indexOf("  const manualLockLogByConversationId"));
+
+  assert.match(loadSection, /identityFilterOverride/);
+  assert.match(loadSection, /getDesignJobs\(identityFilters\)/);
+  assert.match(loadSection, /getSendTasks\(identityFilters\)/);
+  assert.match(loadSection, /getQuotes\(identityFilters\)/);
+  assert.match(loadSection, /getOrderDrafts\(identityFilters\)/);
+  assert.match(loadSection, /async function changeActiveConversation/);
+  assert.match(loadSection, /wechatAccountId:\s*conversation\.wechatAccountId/);
+  assert.match(loadSection, /customerId:\s*conversation\.customerId/);
+  assert.match(loadSection, /async function focusConversation/);
+  assert.match(loadSection, /await changeActiveConversation\(conversationId\)/);
+  assert.match(pickerSection, /changeActiveConversation\(""\)/);
+  assert.match(pickerSection, /changeActiveConversation\(conversation\.id\)/);
+});
+
+test("frontend conversation focus actions refresh scoped business lists", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const allowedDirectSetters = (page.match(/setActiveConversationId\(/g) || []).length;
+  const sendTaskSection = page.slice(
+    page.indexOf("<div className=\"send-task-list\">"),
+    page.indexOf("<section className=\"panel review-panel\""),
+  );
+  const reviewSection = page.slice(
+    page.indexOf("<section className=\"panel\" id=\"review-center\""),
+    page.indexOf("<section className=\"panel deal-panel\""),
+  );
+  const readinessSection = page.slice(
+    page.indexOf("async function handleAutomationReadinessCheck"),
+    page.indexOf("function getAutomationReadinessPrimaryCheck"),
+  );
+
+  assert.equal(allowedDirectSetters, 2);
+  assert.match(sendTaskSection, /focusConversation\(task\.conversation\?\.id \|\| "", "conversation-center"\)/);
+  assert.doesNotMatch(sendTaskSection, /setActiveConversationId\(task\.conversation/);
+  assert.match(reviewSection, /focusConversation\(conversation\.id, "conversation-center"\)/);
+  assert.match(reviewSection, /focusConversation\(conversation\.id, "send-center"\)/);
+  assert.doesNotMatch(reviewSection, /setActiveConversationId\(conversation\.id\)/);
+  assert.match(readinessSection, /await changeActiveConversation\(firstLockedConversation\.id\)/);
+  assert.match(readinessSection, /await changeActiveConversation\(firstPendingTask\.conversationId\)/);
+});
+
+test("notice center exposes manual selection targets for operator follow-up", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const css = readProjectFile("apps/web/src/app/globals.css");
+  const focusNoticeSection = page.slice(
+    page.indexOf("async function focusNoticeTarget"),
+    page.indexOf("async function preflightActiveJob"),
+  );
+  const noticeSection = page.slice(
+    page.indexOf("<div className=\"notice-list\">"),
+    page.indexOf("<div className=\"empty empty-cta\"", page.indexOf("<div className=\"notice-list\">")),
+  );
+
+  assert.match(focusNoticeSection, /const quoteDraftId = String\(target\.quoteDraftId \|\| ""\)/);
+  assert.match(focusNoticeSection, /focusQuoteCenter\(quoteDraftId\)/);
+  assert.match(focusNoticeSection, /setActiveId\(designJobId\)/);
+  assert.match(focusNoticeSection, /await focusConversation\(conversationId, "conversation-center"\)/);
+  assert.match(noticeSection, /className="notice-main"/);
+  assert.match(noticeSection, /noticeTargetSummary\(notice\)/);
+  assert.match(noticeSection, /focusNoticeTarget\(notice\)/);
+  assert.match(noticeSection, /noticeHasTarget\(notice\)/);
+  assert.match(page, /function noticeTargetSummary\(notice: NotificationItem\)/);
+  assert.match(page, /inboundSelectionReasonLabel\(reason\)/);
+  assert.match(page, /客户想选图 \$\{target\.selectedImageId\}/);
+  assert.match(css, /\.notice-main/);
+  assert.match(css, /\.notice-target-actions/);
+});
+
+test("manual mutation APIs carry and enforce expected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const quoteService = readProjectFile("apps/api/src/quotes/quotes.service.ts");
+  const orderService = readProjectFile("apps/api/src/orders/orders.service.ts");
+  const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const identityHelper = readProjectFile("apps/api/src/shared/identity-expectation.ts");
+
+  assert.match(identityHelper, /export function assertExpectedIdentity/);
+  assert.match(identityHelper, /expectedWechatAccountId/);
+  assert.match(identityHelper, /expectedConversationId/);
+  assert.match(identityHelper, /expectedCustomerId/);
+  assert.match(api, /export function identityExpectation/);
+  assert.match(api, /expectedWechatAccountId/);
+  assert.match(api, /expectedConversationId/);
+  assert.match(api, /expectedCustomerId/);
+  assert.match(quoteService, /assertExpectedIdentity\(current, patch, "quote draft"\)/);
+  assert.match(quoteService, /assertExpectedIdentity\(quote, options, "quote draft"\)/);
+  assert.match(orderService, /assertExpectedIdentity\(quote, expected, "quote draft"\)/);
+  assert.match(orderService, /assertExpectedIdentity\(current, patch, "order draft"\)/);
+  assert.match(wechatService, /assertExpectedIdentity\(order, payload, "order draft"\)/);
+  assert.match(wechatService, /assertExpectedIdentity\(taskBeforeValidation, params, "send task"\)/);
+  assert.match(wechatService, /assertExpectedIdentity\(task, payload, "send task"\)/);
+  assert.match(page, /executeSendTask\(task\.id, identityExpectation\(task\)\)/);
+  assert.match(page, /queueQuoteSend\(quote\.id, identityExpectation\(quote\)\)/);
+  assert.match(page, /createOrderDraftFromQuote\(quote\.id, identityExpectation\(quote\)\)/);
+  assert.match(page, /queueOrderConfirmation\(order\.id, identityExpectation\(order\)\)/);
+  assert.match(page, /queueOrderFollowup\(order\.id, type, identityExpectation\(order\)\)/);
+});
+
+test("send attempt lists are filtered by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+
+  assert.match(api, /export async function getSendAttempts\(sendTaskId\?: string, filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /params\.set\("sendTaskId", sendTaskId\)/);
+  assert.match(page, /getSendAttempts\(undefined, identityFilters\)/);
+  assert.match(controller, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
+  assert.match(controller, /return this\.wechat\.listSendAttempts\(\{ sendTaskId, wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(service, /listSendAttempts\(filter: \{ sendTaskId\?: string; wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(service, /return this\.localStore\.listSendAttempts\(filter\)/);
+  assert.match(store, /listSendAttempts\(filter: \{ sendTaskId\?: string; limit\?: number \} & IdentityListFilter = \{\}\)/);
+  assert.match(store, /\.filter\(\(attempt\) => this\.matchesIdentityFilter\(attempt, filter\)\)/);
+  assert.match(store, /const sendTask = record\?\.sendTask \|\| null/);
+  assert.match(store, /sendTask\?\.conversationId/);
+  assert.match(store, /sendTask\?\.wechatAccountId/);
+});
+
+test("bridge outbox and status are scoped by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+
+  assert.match(api, /export async function getBridgeOutbox\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/bridge\/outbox\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /export async function getBridgeStatus\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/bridge\/status\$\{identityQuery\(filters\)\}/);
+  assert.match(page, /getBridgeOutbox\(identityFilters\)/);
+  assert.match(page, /getBridgeStatus\(identityFilters\)/);
+  assert.match(page, /getBridgeOutbox\([\s\S]*wechatAccountId: conversation\.wechatAccountId[\s\S]*conversationId: conversation\.id[\s\S]*customerId: conversation\.customerId/);
+  assert.match(controller, /listBridgeOutbox\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeOutbox\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(controller, /getBridgeStatus\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.getBridgeStatus\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(service, /type IdentityFilter = \{/);
+  assert.match(service, /getBridgeStatus\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /const outbox = this\.listBridgeOutbox\(filter\)/);
+  assert.match(service, /listBridgeOutbox\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /matchesBridgeEntryIdentity\(entry, task, filter\)/);
+  assert.match(service, /actualWechatAccountId/);
+  assert.match(service, /actualConversationId/);
+  assert.match(service, /actualCustomerId/);
+});
+
+test("wechat window snapshots are scoped by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+
+  assert.match(api, /export async function getWechatWindowSnapshots\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/window-snapshots\$\{identityQuery\(filters\)\}/);
+  assert.match(page, /getWechatWindowSnapshots\(identityFilters\)/);
+  assert.match(controller, /listWindowSnapshots\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listWindowSnapshots\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(service, /listWindowSnapshots\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /return this\.localStore\.listWechatWindowSnapshots\(filter\)/);
+  assert.match(store, /listWechatWindowSnapshots\(filter: \(IdentityListFilter & \{ limit\?: number \}\) \| number = \{\}\)/);
+  assert.match(store, /\.filter\(\(snapshot\) => this\.matchesIdentityFilter\(snapshot, options\)\)/);
+  assert.match(store, /record\?\.activeConversation/);
+});
+
+test("notifications and review center are scoped by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const notificationsController = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
+  const notificationsService = readProjectFile("apps/api/src/notifications/notifications.service.ts");
+  const reviewsController = readProjectFile("apps/api/src/reviews/reviews.controller.ts");
+  const reviewsService = readProjectFile("apps/api/src/reviews/reviews.service.ts");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+
+  assert.match(api, /export async function getNotifications\(unreadOnly = false, filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /params\.set\("unreadOnly", unreadOnly \? "true" : "false"\)/);
+  assert.match(api, /export async function getReviewCenter\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/reviews\$\{identityQuery\(filters\)\}/);
+  assert.match(page, /getNotifications\(false, identityFilters\)/);
+  assert.match(page, /getReviewCenter\(identityFilters\)/);
+  assert.match(notificationsController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
+  assert.match(notificationsController, /conversationId/);
+  assert.match(notificationsController, /customerId/);
+  assert.match(notificationsService, /list\(options: \{ unreadOnly\?: boolean; limit\?: number; wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(reviewsController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
+  assert.match(reviewsController, /return this\.reviews\.list\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(reviewsService, /async list\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(reviewsService, /\.listDesignJobs\(filter\)/);
+  assert.match(reviewsService, /\.listQuoteDrafts\(filter\)/);
+  assert.match(reviewsService, /listReviewLogs\(\{ \.\.\.filter, limit: 80 \}\)/);
+  assert.match(store, /listNotifications\(options: \{ unreadOnly\?: boolean; limit\?: number \} & IdentityListFilter = \{\}\)/);
+  assert.match(store, /\.filter\(\(notice\) => this\.matchesIdentityFilter\(notice, options\)\)/);
+  assert.match(store, /listReviewLogs\(filter: \(IdentityListFilter & \{ limit\?: number \}\) \| number = 100\)/);
+  assert.match(store, /\.filter\(\(log\) => this\.matchesIdentityFilter\(log, options\)\)/);
+});
+
+test("notification bulk read is scoped by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
+  const service = readProjectFile("apps/api/src/notifications/notifications.service.ts");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+
+  assert.match(api, /export async function markAllNotificationsRead\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /postJson<\{ count: number \}>\("\/notifications\/read-all", filters\)/);
+  assert.match(page, /function activeIdentityFilters\(\)/);
+  assert.match(page, /markAllNotificationsRead\(activeIdentityFilters\(\)\)/);
+  assert.match(controller, /markAllRead\(@Body\(\) body: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(controller, /return this\.notifications\.markAllRead\(\{[\s\S]*wechatAccountId: body\?\.wechatAccountId,[\s\S]*conversationId: body\?\.conversationId,[\s\S]*customerId: body\?\.customerId,[\s\S]*\}\)/);
+  assert.match(service, /markAllRead\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(service, /this\.localStore\.markAllNotificationsRead\(filter\)/);
+  assert.match(store, /markAllNotificationsRead\(filter: IdentityListFilter = \{\}\)/);
+  assert.match(store, /if \(!notice\.readAt && this\.matchesIdentityFilter\(notice, filter\)\)/);
+});
+
+test("review decisions carry and enforce expected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/reviews/reviews.controller.ts");
+  const service = readProjectFile("apps/api/src/reviews/reviews.service.ts");
+
+  assert.match(api, /reviewDesignJob\(id: string, payload: \{[\s\S]*\} & IdentityExpectation\)/);
+  assert.match(api, /reviewQuote\(id: string, payload: \{[\s\S]*\} & IdentityExpectation\)/);
+  assert.match(page, /reviewDesignJob\(job\.id, \{[\s\S]*\.\.\.identityExpectation\(job\),[\s\S]*decision,/);
+  assert.match(page, /reviewQuote\(quote\.id, \{[\s\S]*\.\.\.identityExpectation\(quote\),[\s\S]*decision,/);
+  assert.match(controller, /ExpectedIdentityPayload/);
+  assert.match(controller, /reviewDesignJob\([\s\S]*\} & ExpectedIdentityPayload/);
+  assert.match(controller, /reviewQuote\([\s\S]*\} & ExpectedIdentityPayload/);
+  assert.match(service, /ExpectedIdentityPayload, assertExpectedIdentity/);
+  assert.match(service, /type ReviewPayload = ExpectedIdentityPayload & \{/);
+  assert.match(service, /assertExpectedIdentity\(job, payload, "design job"\)/);
+  assert.match(service, /assertExpectedIdentity\(quote, payload, "quote draft"\)/);
+});
+
+test("design job manual actions carry and enforce expected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/design-jobs/design-jobs.controller.ts");
+  const service = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
+
+  assert.match(api, /submitDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /preflightDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /pollDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /retryDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /quickConfirmSend\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /cancelDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /createQuote\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /markManualReview\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /selectDesignImage\(id: string, input: SelectImagePayload, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /requestDesignRevision\(id: string, payload: \{[\s\S]*\} & IdentityExpectation\)/);
+  assert.match(page, /submitDesignJob\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /preflightDesignJob\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /pollDesignJob\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /retryDesignJob\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /quickConfirmSend\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /cancelDesignJob\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /createQuote\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /markManualReview\(activeJob\.id, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /selectDesignImage\(activeJob\.id,[\s\S]*identityExpectation\(activeJob\)\)/);
+  assert.match(page, /requestDesignRevision\(activeJob\.id, \{[\s\S]*\.\.\.identityExpectation\(activeJob\)/);
+  assert.match(controller, /ExpectedIdentityPayload/);
+  assert.match(controller, /submit\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(controller, /quickConfirmSend\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(controller, /requestRevision\(@Param\("id"\) id: string, @Body\(\) payload: CreateDesignRevisionPayload & ExpectedIdentityPayload\)/);
+  assert.match(service, /ExpectedIdentityPayload, assertExpectedIdentity/);
+  assert.match(service, /async submit\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(service, /async quickConfirmAndQueueSend\([\s\S]*ExpectedIdentityPayload = \{\}/);
+  assert.match(service, /async requestRevision\(id: string, payload: CreateDesignRevisionPayload & ExpectedIdentityPayload\)/);
+  assert.match(service, /private async retryDesignJob\([\s\S]*expected: ExpectedIdentityPayload = \{\}/);
+  assert.match(service, /assertExpectedIdentity\(job, expected, "design job"\)/);
+  assert.match(service, /assertExpectedIdentity\(job, payload, "design job"\)/);
+  assert.match(service, /assertExpectedIdentity\(job, options, "design job"\)/);
+});
+
+test("design assets and conversation manual locks carry expected identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const designController = readProjectFile("apps/api/src/design-jobs/design-jobs.controller.ts");
+  const designService = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
+  const wechatController = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+
+  assert.match(api, /attachDesignJobAssets\(id: string, assetIds: string\[\], expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /postJson<DesignJob>\(`\/design-jobs\/\$\{id\}\/assets`, \{ \.\.\.expected, assetIds \}\)/);
+  assert.match(api, /setConversationManualLock\([\s\S]*\} & IdentityExpectation/);
+  assert.match(api, /createDemoSendTask\(conversationId: string, wechatAccountId\?: string\)/);
+  assert.match(page, /function conversationIdentityExpectation\(conversation: Conversation\)/);
+  assert.match(page, /expectedWechatAccountId: conversation\.wechatAccountId/);
+  assert.match(page, /expectedConversationId: conversation\.id/);
+  assert.match(page, /expectedCustomerId: conversation\.customerId/);
+  assert.match(page, /attachDesignJobAssets\(activeJob\.id, selectedAssetIds, identityExpectation\(activeJob\)\)/);
+  assert.match(page, /createDemoSendTask\(targetConversation\.id, targetConversation\.wechatAccountId\)/);
+  assert.match(page, /setConversationManualLock\(conversation\.id, \{[\s\S]*\.\.\.conversationIdentityExpectation\(conversation\)/);
+  assert.match(designController, /attachAssets\(@Param\("id"\) id: string, @Body\(\) body: \{ assetIds: string\[\] \} & ExpectedIdentityPayload\)/);
+  assert.match(designController, /this\.designJobs\.attachAssets\(id, body\?\.assetIds \|\| \[\], body \|\| \{\}\)/);
+  assert.match(designService, /async attachAssets\(id: string, assetIds: string\[\], expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(designService, /assertExpectedIdentity\(job, expected, "design job"\)/);
+  assert.match(designService, /assertExpectedIdentity\(designJob, expected, "design job"\)/);
+  assert.match(wechatController, /setConversationManualLock\([\s\S]*\} & ExpectedIdentityPayload/);
+  assert.match(wechatService, /setConversationManualLock\([\s\S]*\} & ExpectedIdentityPayload = \{\}/);
+  assert.match(wechatService, /assertExpectedIdentity\(\{ \.\.\.before, conversationId: before\.id \}, payload, "conversation"\)/);
+  assert.match(wechatService, /this\.localStore\.listConversations\(payload\.wechatAccountId\)/);
+});
+
+test("routing decisions and chat imports stay bound to selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const routingController = readProjectFile("apps/api/src/routing/routing.controller.ts");
+  const routingService = readProjectFile("apps/api/src/routing/routing.service.ts");
+  const wechatController = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+
+  assert.match(api, /evaluateRoute\(text: string, filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /postJson<RouteEvaluation>\("\/routing\/evaluate", \{ channel: "wechat", \.\.\.filters, text \}\)/);
+  assert.match(api, /correctRouteEvaluation\([\s\S]*\} & IdentityExpectation/);
+  assert.match(api, /processInboundMessage\(payload: \{[\s\S]*customerId\?: string/);
+  assert.match(page, /importChatTranscript\(\{[\s\S]*\.\.\.activeIdentityFilters\(\),[\s\S]*text: chatText/);
+  assert.match(page, /evaluateRoute\(routeText, activeIdentityFilters\(\)\)/);
+  assert.match(page, /correctRouteEvaluation\(route\.id, \{[\s\S]*\.\.\.identityExpectation\(route\),[\s\S]*agentKey: agent\.key/);
+  assert.match(page, /processInboundMessage\(\{[\s\S]*wechatAccountId: conversation\.wechatAccountId,[\s\S]*conversationId: conversation\.id,[\s\S]*customerId: conversation\.customerId/);
+  assert.match(routingController, /wechatAccountId\?: string/);
+  assert.match(routingController, /ExpectedIdentityPayload/);
+  assert.match(routingService, /ExpectedIdentityPayload, assertExpectedIdentity/);
+  assert.match(routingService, /wechatAccountId\?: string/);
+  assert.match(routingService, /const route = this\.localStore\.listRouteEvaluations\(\)\.find/);
+  assert.match(routingService, /assertExpectedIdentity\(route, payload, "route evaluation"\)/);
+  assert.match(wechatController, /customerId\?: string/);
+  assert.match(wechatService, /customerId\?: string/);
+});
+
+test("single notification read carries and enforces expected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
+  const service = readProjectFile("apps/api/src/notifications/notifications.service.ts");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const expectation = readProjectFile("apps/api/src/shared/identity-expectation.ts");
+
+  assert.match(api, /markNotificationRead\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(page, /markNotificationRead\(notice\.id, identityExpectation\(notice\)\)/);
+  assert.match(api, /target\?: \{ wechatAccountId\?: string \| null; conversationId\?: string \| null; customerId\?: string \| null \} \| null/);
+  assert.match(api, /record\.target\?\.conversationId/);
+  assert.match(controller, /markRead\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(service, /markRead\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(service, /assertExpectedIdentity\(notice, expected, "notification"\)/);
+  assert.match(store, /markNotificationRead\(id: string, filter: IdentityListFilter = \{\}\)/);
+  assert.match(store, /notification identity mismatch/);
+  assert.match(store, /target\?\.conversationId/);
+  assert.match(expectation, /record\?\.target\?\.conversationId/);
 });
 
 test("window observer public endpoints expose summaries without local paths", () => {
@@ -154,28 +514,71 @@ test("web client confirms before releasing manual conversation lock", () => {
   );
 
   assert.match(toggleSection, /if \(!locked\)/);
+  assert.match(toggleSection, /manualLockBlockedSendTaskCount\(conversation\.id\)/);
+  assert.match(toggleSection, /普通解除只恢复后续自动化判断/);
+  assert.match(toggleSection, /发送中心逐条/);
   assert.match(toggleSection, /window\.confirm/);
+  assert.match(toggleSection, /promptManualResolutionNote\(conversation\.title\)/);
+  assert.match(toggleSection, /resolutionNote/);
   assert.match(toggleSection, /恢复自动化判断/);
   assert.match(toggleSection, /已取消解除人工接管/);
   assert.match(toggleSection, /manual_resolution_from_workbench/);
+  assert.match(toggleSection, /note: locked[\s\S]*resolutionNote/);
+  assert.match(page, /function promptManualResolutionNote/);
+  assert.match(page, /function manualLockBlockedSendTaskCount/);
+  assert.match(page, /task\.guardSnapshot\?\.blockedByManualLock/);
+  assert.match(page, /window\.prompt/);
 });
 
 test("web client confirms before releasing manual lock and requeueing send task", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
+  const apiClient = readProjectFile("apps/web/src/lib/api.ts");
   const releaseAndRequeueSection = page.slice(
     page.indexOf("async function releaseManualLockAndRequeueTask"),
     page.indexOf("function isSendTaskConversationLocked"),
+  );
+  const requeueSection = page.slice(
+    page.indexOf("async function requeueTask"),
+    page.indexOf("async function releaseManualLockAndRequeueTask"),
   );
   const sendTaskSection = page.slice(
     page.indexOf("<div className=\"send-task-list\">"),
     page.indexOf("<section className=\"panel review-panel\""),
   );
 
+  assert.match(apiClient, /export async function requeueSendTask\(id: string, payload: \{ reason\?: string \} & IdentityExpectation = \{\}\)/);
+  assert.match(apiClient, /\.\.\.payload/);
+  assert.match(apiClient, /requeueReason\?: string/);
+  assert.match(apiClient, /requeuedAt\?: string/);
+  assert.match(apiClient, /cancelReason\?: string/);
+  assert.match(apiClient, /cancelledAt\?: string/);
+  assert.match(apiClient, /history\?: Array/);
+  assert.match(apiClient, /export async function cancelSendTask\(id: string, payload: \{ reason\?: string \} & IdentityExpectation = \{\}\)/);
+  assert.match(requeueSection, /manual_operator_requeue_from_send_center/);
+  assert.match(page, /manual_takeover_cancel_send_task/);
+  assert.match(page, /manual_operator_cancel_from_send_center/);
   assert.match(releaseAndRequeueSection, /isSendTaskConversationLocked\(task\)/);
   assert.match(releaseAndRequeueSection, /window\.confirm/);
+  assert.match(releaseAndRequeueSection, /promptManualResolutionNote\(conversation\.title/);
+  assert.match(releaseAndRequeueSection, /resolutionNote/);
   assert.match(releaseAndRequeueSection, /解除人工接管后重新排队这条发送任务/);
   assert.match(releaseAndRequeueSection, /manual_resolution_before_send_requeue/);
-  assert.match(releaseAndRequeueSection, /await setConversationManualLock[\s\S]*locked: false[\s\S]*await requeueSendTask\(task\.id\)/);
+  assert.match(releaseAndRequeueSection, /note: resolutionNote/);
+  assert.match(page, /function SendRequeueAudit/);
+  assert.match(page, /sendRequeueReasonLabel/);
+  assert.match(page, /function SendCancelAudit/);
+  assert.match(page, /sendCancelReasonLabel/);
+  assert.match(page, /manual_operator_requeue_from_send_center: "人工从发送中心重新排队"/);
+  assert.match(page, /manual_resolution_before_send_requeue: "人工处理完成后解除接管并重排"/);
+  assert.match(page, /<SendRequeueAudit task=\{task\} \/>/);
+  assert.match(page, /<SendCancelAudit task=\{task\} \/>/);
+  assert.match(sendTaskSection, /taskCancelledWithAudit[\s\S]*guardSnapshot\?\.cancelledAt[\s\S]*guardSnapshot\?\.cancelReason/);
+  assert.match(page, /function isAuditedCancelledSendTask\(task\?: SendTask \| null\)/);
+  assert.match(page, /canRequeueOrderConfirmationTask[\s\S]*isAuditedCancelledSendTask\(task\)[\s\S]*return false/);
+  assert.match(page, /canRequeueOrderFollowupTask[\s\S]*isAuditedCancelledSendTask\(task\)[\s\S]*return false/);
+  assert.match(sendTaskSection, /taskCanBeRequeued[\s\S]*"blocked", "failed", "dry_run"[\s\S]*task\.status === "cancelled" && !taskCancelledWithAudit/);
+  assert.match(sendTaskSection, /className="manual-send-cancelled"/);
+  assert.match(releaseAndRequeueSection, /await setConversationManualLock[\s\S]*locked: false[\s\S]*await requeueSendTask\(task\.id,[\s\S]*manual_resolution_before_send_requeue/);
   assert.match(sendTaskSection, /taskConversationLocked[\s\S]*releaseManualLockAndRequeueTask\(task\)[\s\S]*解除并重排/);
 });
 
@@ -215,9 +618,13 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /task\.guardSnapshot\?\.blockedByManualLock/);
   assert.match(page, /const activeConversationSendTasks = activeConversationId/);
   assert.match(page, /activeConversationSendTasks[\s\S]*task\.conversationId === activeConversationId/);
-  assert.match(page, /const activeConversationSendTaskCount = .*activeConversationSendTasks\.length/);
+  assert.match(page, /const activeConversationSendTaskCount = activeConversationSendTasks\.length/);
+  assert.doesNotMatch(page, /activeConversationSendTaskScopeMatched/);
   assert.match(page, /\.\.\.activeConversationSendTasks/);
   assert.match(page, /latestSendTasks[\s\S]*task\.conversationId !== activeConversationId/);
+  assert.match(page, /const taskBlockedByManualLock =[\s\S]*task\.guardSnapshot\?\.blockedByManualLock/);
+  assert.match(page, /task\.guardSnapshot\?\.blockedBy === "manual_lock"/);
+  assert.match(page, /className="manual-send-block"/);
   assert.match(page, /const prioritizedManualLockedConversations = useMemo/);
   assert.match(page, /Date\.parse\(manualLockLogByConversationId\.get\(left\.id\)\?\.createdAt/);
   assert.match(page, /const hiddenManualLockedConversationCount = Math\.max/);
@@ -230,9 +637,10 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(reviewSection, /blockedSendCount/);
   assert.match(reviewSection, /formatDateTime\(manualLockLog\.createdAt\)/);
   assert.match(reviewSection, /hiddenManualLockedConversationCount/);
-  assert.match(reviewSection, /setActiveConversationId\(conversation\.id\)/);
-  assert.match(reviewSection, /scrollToWorkspaceSection\("send-center"\)/);
+  assert.match(reviewSection, /focusConversation\(conversation\.id, "conversation-center"\)/);
+  assert.match(reviewSection, /focusConversation\(conversation\.id, "send-center"\)/);
   assert.match(reviewSection, /toggleConversationManualLock\(conversation, false\)/);
+  assert.match(page, /activeConversationId && activeConversationSendTaskCount/);
   assert.match(page, /className="send-focus-hint"/);
   assert.match(css, /\.manual-lock-review-item/);
   assert.match(css, /\.manual-lock-review-actions/);
@@ -241,6 +649,10 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(css, /\.manual-lock-review-main mark/);
   assert.match(css, /\.manual-lock-review-more/);
   assert.match(css, /\.send-focus-hint/);
+  assert.match(css, /\.manual-send-block/);
+  assert.match(css, /\.manual-send-cancelled/);
+  assert.match(css, /\.send-requeue-audit/);
+  assert.match(css, /\.send-cancel-audit/);
 });
 
 test("web deal flow bulk action only progresses low-value quotes", () => {
@@ -256,6 +668,8 @@ test("web deal flow bulk action only progresses low-value quotes", () => {
 
   assert.match(section, /const sendableQuotes = dealFlowSendableQuotes/);
   assert.match(section, /const acceptedWithoutOrder = dealFlowAcceptedQuotesWithoutOrder/);
+  assert.match(section, /await queueQuoteAfterPreviewCheck\(quote\)/);
+  assert.doesNotMatch(section, /await queueQuoteSend\(quote\.id\)/);
   assert.match(sourceSection, /const dealFlowSendableQuotes = quotes\.filter/);
   assert.match(sourceSection, /!isHighValueQuote\(quote\)[\s\S]*\["draft", "auto_sent"\]/);
   assert.match(sourceSection, /const dealFlowAcceptedQuotesWithoutOrder = acceptedQuotesWithoutOrder\.filter/);
@@ -273,9 +687,9 @@ test("web deal flow queues same-cycle order confirmations after order creation",
     page.indexOf("async function evaluateCustomerRoute"),
   );
 
-  const createIndex = section.indexOf("const orderDraft = await createOrderDraftFromQuote(quote.id)");
+  const createIndex = section.indexOf("const orderDraft = await createOrderDraftFromQuote(quote.id, identityExpectation(quote))");
   const pushIndex = section.indexOf("confirmationCandidates.push(orderDraft)");
-  const queueIndex = section.indexOf("await queueOrderConfirmation(order.id)");
+  const queueIndex = section.indexOf("await queueOrderConfirmation(order.id, identityExpectation(order))");
 
   assert.ok(createIndex > 0);
   assert.ok(pushIndex > createIndex);
@@ -298,6 +712,10 @@ test("web quote center renders guarded next-step guidance", () => {
     page.indexOf("filteredQuotes.map"),
     page.indexOf("<div className=\"order-panel\">"),
   );
+  const queueQuoteSection = page.slice(
+    page.indexOf("async function queueQuoteDraft"),
+    page.indexOf("async function toggleQuoteCenterPreview"),
+  );
   const orderListStart = page.indexOf("filteredOrderDrafts.map");
   const orderListSection = page.slice(
     orderListStart,
@@ -308,14 +726,31 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(orderHelper, /isHighValueOrder\(order\)/);
   assert.match(quoteHelper, /sendRisk/);
   assert.match(orderHelper, /hasActiveOrderConfirmationTask\(order\)/);
-  assert.match(quoteListSection, /quoteDealNextStep\(quote, orderDraft, sendRisk\)/);
+  assert.match(queueQuoteSection, /getQuotePreview\(quote\.id\)/);
+  assert.match(queueQuoteSection, /async function checkQuoteReadyForSend\(quote: QuoteDraft\)/);
+  assert.match(queueQuoteSection, /async function queueQuoteAfterPreviewCheck\(quote: QuoteDraft\)/);
+  assert.match(queueQuoteSection, /报价话术预览生成失败/);
+  assert.match(queueQuoteSection, /const previewRisk = quoteSendBlockReason\(preview\.quote, preview\.warnings\)/);
+  assert.match(queueQuoteSection, /if \(previewRisk\)/);
+  assert.match(queueQuoteSection, /setMessage\(`发送前检查未通过：\$\{result\.reason\}`\)/);
+  assert.match(queueQuoteSection, /queueQuoteSend\(quote\.id, identityExpectation\(quote\)\)/);
+  assert.match(quoteListSection, /const rowPreviewWarnings = rowPreview\?\.warnings \|\| \[\]/);
+  assert.match(quoteListSection, /const rowSendRisk = quoteSendBlockReason\(quote, rowPreviewWarnings\)/);
+  assert.match(quoteListSection, /quoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
+  assert.match(quoteListSection, /发送检查 \{rowSendRisk\}/);
+  assert.match(quoteListSection, /Boolean\(rowSendRisk\)/);
+  assert.match(quoteListSection, /title=\{rowSendRisk \|\| "发送报价"\}/);
+  assert.match(quoteListSection, /className="quote-preview quote-row-preview"/);
+  assert.match(quoteListSection, /toggleQuoteCenterPreview\(quote\)/);
+  assert.match(quoteListSection, /copyQuoteCenterPreviewMessage\(rowPreview\)/);
   assert.match(orderListSection, /orderDealNextStep\(order\)/);
   assert.match(page, /className=\{`deal-next-step inline \$\{nextStep\.tone\}`\}/);
-  assert.match(quoteListSection, /runQuoteDealNextStep\(quote, orderDraft, sendRisk\)/);
+  assert.match(quoteListSection, /runQuoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
   assert.match(orderListSection, /runOrderDealNextStep\(order\)/);
   assert.match(page, /nextStep\.action === "none"/);
   assert.match(css, /\.deal-next-step/);
   assert.match(css, /\.deal-next-step\.inline/);
+  assert.match(css, /\.quote-row-preview/);
 });
 
 test("web quote center can filter records by next-step actionability", () => {
@@ -350,11 +785,31 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /setDealNextStepFilter\("all"\)/);
   assert.match(page, /function calculateDealNextStepCounts\(quotes: QuoteDraft\[\], orders: OrderDraft\[\]\)/);
   assert.match(page, /function calculateOrderNextStepCounts\(orders: OrderDraft\[\]\)/);
+  assert.match(page, /async function runVisibleActionableDealNextSteps\(\)/);
+  assert.match(page, /actionableDealNextStepItems\.slice\(0, 3\)/);
+  assert.match(page, /window\.confirm\(`将按顺序执行前 \$\{items\.length\} 个可执行成交事项/);
+  assert.match(page, /item\.action === "queue_quote" && item\.quote/);
+  assert.match(page, /await queueQuoteAfterPreviewCheck\(item\.quote\)/);
+  assert.match(page, /createOrderDraftFromQuote\(item\.quote\.id, identityExpectation\(item\.quote\)\)/);
+  assert.match(page, /item\.action === "queue_order_confirmation" && item\.order/);
+  assert.match(page, /queueOrderConfirmation\(item\.order\.id, identityExpectation\(item\.order\)\)/);
+  assert.match(page, /updateOrderDraft\(item\.order\.id, \{ \.\.\.identityExpectation\(item\.order\), status: "processing" \}\)/);
+  assert.match(page, /queueOrderFollowup\(item\.order\.id, "delivery", identityExpectation\(item\.order\)\)/);
+  assert.match(page, /summary\.skipped \+= 1/);
   assert.match(page, /const dealNextStepInsightItems = \[/);
+  assert.match(page, /const actionableDealNextStepItems = dealNextStepInsightItems\.filter\(\(item\) => item\.action !== "none"\)/);
+  assert.match(page, /const firstActionableDealNextStep = actionableDealNextStepItems\[0\] \|\| null/);
   assert.match(page, /quoteDealNextStep\(quote, orderDraft, quoteSendBlockReason\(quote\)\)/);
   assert.match(page, /orderDealNextStep\(order\)/);
   assert.match(page, /className="deal-attention-list"/);
   assert.match(page, /aria-label="成交优先处理提醒"/);
+  assert.match(page, /className="deal-attention-head-actions"/);
+  assert.match(page, /firstActionableDealNextStep\?\.execute\(\)/);
+  assert.match(page, /!firstActionableDealNextStep/);
+  assert.match(page, /执行第一项/);
+  assert.match(page, /onClick=\{runVisibleActionableDealNextSteps\}/);
+  assert.match(page, /!actionableDealNextStepItems\.length/);
+  assert.match(page, /执行前三项/);
   assert.match(page, /dealNextStepInsightItems\.map/);
   assert.match(page, /onClick=\{item\.focus\}/);
   assert.match(page, /execute: \(\) => runQuoteDealNextStep\(quote, orderDraft, sendRisk\)/);
@@ -369,6 +824,8 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(css, /\.deal-attention-grid/);
   assert.match(css, /\.deal-attention-item/);
   assert.match(css, /\.deal-attention-main/);
+  assert.match(css, /\.deal-attention-head-actions/);
+  assert.match(css, /\.deal-attention-head-actions \.ghost/);
   assert.match(css, /\.deal-attention-actions/);
 });
 
@@ -404,8 +861,8 @@ test("web active quote panel uses guarded next-step actions", () => {
   assert.match(activeRunSection, /runOrderDealNextStep\(activeOrderDraft\)/);
   assert.match(activeRunSection, /runQuoteDealNextStep\(activeQuote, activeOrderDraft, activeQuoteSendRisk\)/);
   assert.match(quoteRunSection, /step\.action === "queue_quote"[\s\S]*queueQuoteDraft\(quote\)/);
-  assert.match(quoteRunSection, /step\.action === "confirm_quote_create_order"[\s\S]*updateQuote\(quote\.id, \{ status: "accepted" \}\)/);
-  assert.match(quoteRunSection, /step\.action === "confirm_quote_create_order"[\s\S]*createOrderDraftFromQuote\(quote\.id\)/);
+  assert.match(quoteRunSection, /step\.action === "confirm_quote_create_order"[\s\S]*updateQuote\(quote\.id, \{ \.\.\.identityExpectation\(quote\), status: "accepted" \}\)/);
+  assert.match(quoteRunSection, /step\.action === "confirm_quote_create_order"[\s\S]*createOrderDraftFromQuote\(quote\.id, identityExpectation\(quote\)\)/);
   assert.match(orderRunSection, /step\.action === "queue_order_confirmation"[\s\S]*queueOrderDraftConfirmation\(order\)/);
   assert.match(page, /isHighValueQuote\(quote\)[\s\S]*action: "none"/);
   assert.match(page, /isHighValueOrder\(order\)[\s\S]*action: "none"/);

@@ -73,28 +73,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo [start] Starting real-design desktop services...
+echo [start] Starting real-design desktop services in stable foreground mode...
 echo Open workbench: http://127.0.0.1:3100/
+echo Keep this window open while using the app. Close it after running stop_desktop.bat.
 echo.
-call npm.cmd run ports:launch:real
+call npm.cmd run ports:keepalive:real
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime\logs.
   pause
   exit /b 1
 )
-
-echo.
-echo [check] Verifying real-design desktop startup...
-call npm.cmd run ports:doctor:real
-if errorlevel 1 (
-  echo [error] Desktop startup check failed. Make sure the real design platform is online, then try again.
-  pause
-  exit /b 1
-)
-
-echo.
-echo [ok] Desktop services are running in the background.
-echo Open: http://127.0.0.1:3100/
-echo To stop them later, run stop_desktop.bat.
-echo.
-pause

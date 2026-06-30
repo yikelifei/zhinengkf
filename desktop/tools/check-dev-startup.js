@@ -82,7 +82,7 @@ async function main() {
 
   printHeader("HTTP Health");
   for (const service of services) {
-    const result = await requestUrlWithRetry(service.url, 5, 700);
+    const result = await requestUrlWithRetry(service.url, 20, 1000);
     if (isExpectedStatus(result.statusCode, service.requiredStatus)) {
       console.log(`[ok] ${service.label}: HTTP ${result.statusCode} ${service.url}`);
       printHealthBody(service, result.body);

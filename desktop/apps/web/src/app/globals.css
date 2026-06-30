@@ -1826,6 +1826,7 @@ textarea:focus-visible {
 .quote-preview-warnings span,
 .sample-status,
 .sample-quality,
+.sample-usage,
 .revision-item em {
   display: inline-flex;
   align-items: center;
@@ -1855,6 +1856,7 @@ textarea:focus-visible {
 .quote-preview-warnings span::before,
 .sample-status::before,
 .sample-quality::before,
+.sample-usage::before,
 .revision-item em::before {
   content: "";
   width: 5px;
@@ -2432,6 +2434,29 @@ input[type="checkbox"]:disabled {
   font-size: 12px;
 }
 
+.deal-attention-head-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.deal-attention-head-actions .primary {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.deal-attention-head-actions .ghost {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .deal-attention-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2828,6 +2853,10 @@ input[type="checkbox"]:disabled {
   color: #333336;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.quote-row-preview {
+  width: 100%;
 }
 
 .quote-preview-warnings span {
@@ -3321,6 +3350,66 @@ input[type="checkbox"]:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.sku-commercial-readiness {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.4fr) minmax(220px, 1.4fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(255, 149, 0, 0.22);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255, 248, 235, 0.86);
+}
+
+.sku-commercial-readiness.ready {
+  border-color: rgba(52, 199, 89, 0.24);
+  background: rgba(235, 250, 240, 0.9);
+}
+
+.sku-commercial-readiness.blocked {
+  border-color: rgba(255, 59, 48, 0.22);
+  background: rgba(255, 241, 240, 0.88);
+}
+
+.sku-commercial-readiness small,
+.sku-commercial-readiness p {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sku-commercial-readiness strong {
+  display: block;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.sku-commercial-readiness p {
+  margin: 0;
+}
+
+.sku-commercial-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sku-commercial-flags span {
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: rgba(255, 59, 48, 0.1);
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.sku-commercial-flags span.ok {
+  background: rgba(52, 199, 89, 0.12);
+  color: #08783d;
 }
 
 .sku-audit-strip {
@@ -3916,7 +4005,7 @@ input[type="checkbox"]:disabled {
   overflow: hidden;
   width: 100%;
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
   padding: 12px;
@@ -3925,7 +4014,6 @@ input[type="checkbox"]:disabled {
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   text-align: left;
-  cursor: pointer;
 }
 
 .notice::after {
@@ -3951,7 +4039,7 @@ input[type="checkbox"]:disabled {
   border-color: rgba(0, 122, 255, 0.18);
 }
 
-.notice span {
+.notice > span {
   position: relative;
   width: 8px;
   height: 8px;
@@ -3960,7 +4048,7 @@ input[type="checkbox"]:disabled {
   background: var(--blue);
 }
 
-.notice span::after {
+.notice > span::after {
   content: "";
   position: absolute;
   inset: -4px;
@@ -3969,17 +4057,17 @@ input[type="checkbox"]:disabled {
   opacity: 0.14;
 }
 
-.notice.red span {
+.notice.red > span {
   color: var(--red);
   background: var(--red);
 }
 
-.notice.amber span {
+.notice.amber > span {
   color: var(--orange);
   background: var(--orange);
 }
 
-.notice.blue span {
+.notice.blue > span {
   color: var(--blue);
   background: var(--blue);
 }
@@ -3988,31 +4076,55 @@ input[type="checkbox"]:disabled {
   opacity: 0.62;
 }
 
-.notice.read span {
+.notice.read > span {
   background: transparent;
   border: 1px solid currentColor;
 }
 
-.notice.read span::after {
+.notice.read > span::after {
   opacity: 0;
 }
 
-.notice p {
+.notice-main {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
   margin: 0;
+  text-align: left;
   line-height: 1.45;
   color: #333336;
   font-size: 12.5px;
   overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
-.notice p strong,
-.notice p small {
+.notice-main strong,
+.notice-main small,
+.notice-main em {
   display: block;
 }
 
-.notice p small {
+.notice-main small,
+.notice-main em {
   margin-top: 4px;
   color: var(--text-muted);
+}
+
+.notice-main em {
+  font-style: normal;
+  color: #6b4a00;
+}
+
+.notice-target-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.notice-target-actions .ghost {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .automation-issue-panel {
@@ -5371,6 +5483,28 @@ input[type="checkbox"]:disabled {
   margin: 10px 0 0;
 }
 
+.bundle-capacity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bundle-capacity strong {
+  color: #167c34;
+}
+
+.bundle-capacity.warning strong {
+  color: #b42318;
+}
+
 .bundle-items {
   margin-top: 10px;
 }
@@ -5746,6 +5880,29 @@ input[type="checkbox"]:disabled {
   transform: none;
 }
 
+.training-attention-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.training-attention-reasons strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.training-attention-reasons .ghost.compact {
+  min-height: 28px;
+  padding: 4px 8px;
+  border-color: rgba(255, 149, 0, 0.24);
+  background: rgba(255, 149, 0, 0.08);
+  color: #8a4b00;
+}
+
 .training-metric,
 .coverage-row,
 .correction-samples {
@@ -5929,6 +6086,32 @@ input[type="checkbox"]:disabled {
   font-size: 12px;
 }
 
+.sample-list-head .sample-selection-summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(0, 122, 255, 0.18);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(0, 122, 255, 0.07);
+  color: #0a4f9f;
+  font-weight: 650;
+}
+
+.sample-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sample-batch-actions .ghost {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .sample-quality-segment {
   grid-auto-columns: minmax(74px, max-content);
 }
@@ -6050,6 +6233,30 @@ input[type="checkbox"]:disabled {
   gap: 10px;
 }
 
+.sample-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sample-check input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 6px;
+}
+
+.sample-check input:checked {
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.sample-check input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
 .sample-badges {
   display: flex;
   flex: 0 0 auto;
@@ -6115,6 +6322,47 @@ input[type="checkbox"]:disabled {
   color: #b42318;
 }
 
+.sample-usage {
+  flex: 0 0 auto;
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(0, 122, 255, 0.08);
+  color: #0b63b6;
+  font-size: 12px;
+}
+
+.sample-usage.route-and-reply {
+  border-color: rgba(0, 122, 255, 0.24);
+  background: rgba(0, 122, 255, 0.1);
+  color: #0b63b6;
+}
+
+.sample-usage.route-memory {
+  border-color: rgba(90, 78, 210, 0.2);
+  background: rgba(90, 78, 210, 0.08);
+  color: #4b43a8;
+}
+
+.sample-usage.reply-only {
+  border-color: rgba(52, 199, 89, 0.2);
+  background: var(--green-soft);
+  color: #167c34;
+}
+
+.sample-usage.anti-wrong,
+.sample-usage.review {
+  border-color: rgba(255, 149, 0, 0.22);
+  background: var(--orange-soft);
+  color: #8a4f00;
+}
+
+.sample-usage.blocked {
+  border-color: rgba(255, 59, 48, 0.2);
+  background: var(--red-soft);
+  color: #b42318;
+}
+
 .sample-quality-reason {
   color: #5c4a00;
 }
@@ -6123,6 +6371,70 @@ input[type="checkbox"]:disabled {
   border-left: 3px solid rgba(0, 122, 255, 0.28);
   padding-left: 8px;
   color: #1f4f82;
+}
+
+.sample-scene-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sample-scene-check strong,
+.sample-scene-check span,
+.sample-scene-check em {
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: rgba(248, 248, 250, 0.86);
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.sample-scene-check strong {
+  color: var(--text);
+}
+
+.sample-scene-check span.clear {
+  border-color: rgba(52, 199, 89, 0.22);
+  background: var(--green-soft);
+  color: #1f7a3b;
+}
+
+.sample-scene-check span.weak,
+.sample-scene-check span.ambiguous {
+  border-color: rgba(255, 149, 0, 0.24);
+  background: var(--orange-soft);
+  color: #8a4f00;
+}
+
+.sample-scene-check span.unmatched {
+  border-color: rgba(255, 59, 48, 0.22);
+  background: var(--red-soft);
+  color: #b42318;
+}
+
+.sample-attention-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: #8a4b00;
+  font-size: 12px;
+}
+
+.sample-attention-reasons strong,
+.sample-attention-reasons span {
+  border: 1px solid rgba(255, 149, 0, 0.24);
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: rgba(255, 149, 0, 0.08);
+}
+
+.sample-attention-reasons strong {
+  color: #6f3c00;
 }
 
 .sample-actions {
@@ -6421,6 +6733,50 @@ input[type="checkbox"]:disabled {
 
 .queue-advice.error::before {
   background: var(--red);
+}
+
+.send-requeue-audit {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0;
+  border: 1px solid rgba(88, 86, 214, 0.18);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: rgba(88, 86, 214, 0.07);
+}
+
+.send-requeue-audit strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.send-requeue-audit span,
+.send-requeue-audit small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.send-cancel-audit {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0;
+  border: 1px solid rgba(255, 59, 48, 0.18);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: rgba(255, 59, 48, 0.07);
+}
+
+.send-cancel-audit strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.send-cancel-audit span,
+.send-cancel-audit small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .send-task {
@@ -6881,6 +7237,25 @@ input[type="checkbox"]:disabled {
   color: #0a4f9f;
   font-size: 12.5px;
   font-weight: 650;
+}
+
+.manual-send-block {
+  border: 1px solid rgba(255, 59, 48, 0.2);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: rgba(255, 59, 48, 0.08);
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.manual-send-cancelled {
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: rgba(100, 116, 139, 0.08);
+  color: var(--text-muted);
+  font-size: 12.5px;
 }
 
 .quote-summary {
@@ -7909,6 +8284,14 @@ input[type="checkbox"]:disabled {
 
   .workspace {
     overflow-x: hidden;
+  }
+
+  .sku-commercial-readiness {
+    grid-template-columns: 1fr;
+  }
+
+  .sku-commercial-flags {
+    width: 100%;
   }
 
   .workspace::before,
@@ -9420,4 +9803,1030 @@ body {
     min-width: 0;
     flex: 1 1 auto;
   }
+}
+
+/* Iteration 27 Apple-white surface audit: pin the navigation rail and finish quote/deal controls. */
+.apple-light-shell .rail {
+  align-self: start;
+  height: 100vh;
+  max-height: 100vh;
+}
+
+.apple-light-shell .quote-grid {
+  scroll-margin-top: 104px;
+}
+
+.apple-light-shell .quote-panel,
+.apple-light-shell .deal-attention-list,
+.apple-light-shell .quote-filter-bar,
+.apple-light-shell .deal-flow-preview,
+.apple-light-shell .deal-next-summary button,
+.apple-light-shell .filter-segment,
+.apple-light-shell .filter-control,
+.apple-light-shell .deal-attention-item {
+  border-color: rgba(60, 60, 67, 0.09) !important;
+  background: #ffffff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.032),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94) !important;
+}
+
+.apple-light-shell .quote-panel {
+  background:
+    url("/apple-white-contour.svg") right -180px top -118px / 520px 320px no-repeat,
+    #ffffff !important;
+}
+
+.apple-light-shell .deal-pipeline-item,
+.apple-light-shell .deal-attention-item,
+.apple-light-shell .deal-next-summary button {
+  min-height: 86px;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.apple-light-shell .deal-pipeline-item:hover,
+.apple-light-shell .deal-attention-item:hover,
+.apple-light-shell .deal-next-summary button:hover {
+  border-color: rgba(0, 122, 255, 0.18) !important;
+  background: rgba(245, 245, 247, 0.82) !important;
+  transform: translateY(-1px);
+}
+
+.apple-light-shell .deal-pipeline-item:focus-visible,
+.apple-light-shell .deal-attention-main:focus-visible,
+.apple-light-shell .deal-attention-actions button:focus-visible,
+.apple-light-shell .deal-next-summary button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus), var(--shadow-sm) !important;
+}
+
+.apple-light-shell .deal-attention-main {
+  border-radius: 7px;
+}
+
+.apple-light-shell .quote-filter-bar {
+  align-items: end;
+  padding: 10px;
+}
+
+.apple-light-shell .filter-segment {
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.apple-light-shell .filter-segment button {
+  min-height: 28px;
+  border-radius: 6px;
+}
+
+.apple-light-shell .filter-segment button:hover {
+  background: rgba(60, 60, 67, 0.055);
+}
+
+.apple-light-shell .filter-segment button.selected,
+.apple-light-shell .filter-segment button[aria-pressed="true"] {
+  background: #ffffff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+@media (max-width: 920px) and (min-width: 761px) {
+  .apple-light-shell {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .apple-light-shell .rail {
+    width: 62px;
+    padding-inline: 8px;
+  }
+
+  .apple-light-shell .rail button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .apple-light-shell .brand {
+    width: 40px;
+    height: 40px;
+  }
+
+  .apple-light-shell .topbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    justify-content: flex-start;
+    min-height: 0;
+    padding-inline: 18px;
+  }
+
+  .apple-light-shell .top-title {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .apple-light-shell .top-actions {
+    width: 100%;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "status"
+      "conversation"
+      "utility"
+      "primary";
+    flex: none;
+  }
+
+  .apple-light-shell .top-actions .toolbar-group {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .apple-light-shell .top-actions .toolbar-group.status-group {
+    justify-content: flex-start;
+  }
+
+  .apple-light-shell .top-actions .toolbar-group:nth-of-type(2) {
+    justify-self: stretch;
+  }
+
+  .apple-light-shell .conversation-picker {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .apple-light-shell .rail {
+    height: auto;
+    max-height: none;
+  }
+
+  .apple-light-shell .quote-grid {
+    scroll-margin-top: 76px;
+  }
+
+  .apple-light-shell .quote-panel,
+  .apple-light-shell .quote-filter-bar {
+    background: #ffffff !important;
+  }
+
+  .apple-light-shell .conversation-picker {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 5px;
+    padding: 5px;
+  }
+
+  .apple-light-shell .conversation-picker button {
+    width: 100%;
+    max-width: none;
+    min-height: 32px;
+    justify-content: center;
+    white-space: normal;
+  }
+
+  .apple-light-shell .conversation-picker button:first-child {
+    grid-column: 1 / -1;
+    min-height: 34px;
+  }
+
+  .apple-light-shell .conversation-picker button > span {
+    justify-items: center;
+  }
+}
+
+/* Iteration 31 Apple-white interaction audit: make unavailable actions read as unavailable. */
+.apple-light-shell button:disabled,
+.apple-light-shell button[aria-disabled="true"] {
+  cursor: not-allowed !important;
+  opacity: 1 !important;
+  color: rgba(60, 60, 67, 0.46) !important;
+  border-color: rgba(60, 60, 67, 0.1) !important;
+  background: linear-gradient(180deg, #fbfbfd, #f5f5f7) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 1px 2px rgba(0, 0, 0, 0.025) !important;
+  transform: none !important;
+}
+
+.apple-light-shell button:disabled:hover,
+.apple-light-shell button[aria-disabled="true"]:hover {
+  color: rgba(60, 60, 67, 0.46) !important;
+  border-color: rgba(60, 60, 67, 0.1) !important;
+  background: linear-gradient(180deg, #fbfbfd, #f5f5f7) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 1px 2px rgba(0, 0, 0, 0.025) !important;
+}
+
+.apple-light-shell .primary:disabled,
+.apple-light-shell .primary[aria-disabled="true"] {
+  color: rgba(60, 60, 67, 0.44) !important;
+  border-color: rgba(60, 60, 67, 0.1) !important;
+  background: linear-gradient(180deg, #f6f6f8, #eeeeef) !important;
+  text-shadow: none !important;
+}
+
+.apple-light-shell .ghost.danger:disabled,
+.apple-light-shell .ghost.danger[aria-disabled="true"] {
+  color: rgba(60, 60, 67, 0.44) !important;
+  border-color: rgba(60, 60, 67, 0.1) !important;
+  background: linear-gradient(180deg, #fbfbfd, #f5f5f7) !important;
+}
+
+.apple-light-shell button:disabled svg,
+.apple-light-shell button[aria-disabled="true"] svg {
+  opacity: 0.52;
+}
+
+/* Iteration 34 Apple-white completion pass: fill empty feature surfaces and prevent control clipping. */
+.apple-light-shell .agent-list:has(.agent-empty) {
+  grid-template-columns: 1fr;
+  min-height: 360px;
+}
+
+.apple-light-shell .agent-empty {
+  min-height: 320px;
+  padding: 24px;
+  border-style: solid;
+  background:
+    url("/apple-white-agent-orbit.svg") center 42px / 168px 116px no-repeat,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 252, 0.9)),
+    repeating-linear-gradient(135deg, rgba(0, 122, 255, 0.026) 0, rgba(0, 122, 255, 0.026) 1px, transparent 1px, transparent 10px) !important;
+}
+
+.apple-light-shell .agent-empty::before {
+  display: none;
+}
+
+.apple-light-shell .agent-empty strong {
+  margin-top: 126px;
+}
+
+.apple-light-shell .training-quality-strip button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.apple-light-shell .sku-batch-bar label {
+  min-height: 30px;
+}
+
+.apple-light-shell .sku-batch-bar input[type="checkbox"] {
+  width: 38px;
+  height: 22px;
+}
+
+.apple-light-shell .sku-batch-bar input[type="checkbox"]::before {
+  width: 16px;
+  height: 16px;
+}
+
+.apple-light-shell .sku-batch-bar input[type="checkbox"]:checked::before {
+  transform: translateX(16px);
+}
+
+.apple-light-shell .training-panel textarea {
+  min-height: 172px;
+}
+
+@media (max-width: 920px) and (min-width: 761px) {
+  .apple-light-shell .conversation-picker {
+    display: grid;
+    grid-template-columns: minmax(160px, 0.9fr) repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .apple-light-shell .conversation-picker button {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 760px) {
+  .apple-light-shell .agent-list:has(.agent-empty) {
+    min-height: 300px;
+  }
+
+  .apple-light-shell .agent-empty {
+    min-height: 280px;
+    padding: 20px 14px;
+    background-size: 148px 102px, auto, auto !important;
+    background-position: center 34px, center, center !important;
+  }
+
+  .apple-light-shell .agent-empty strong {
+    margin-top: 112px;
+  }
+
+  .apple-light-shell .training-panel textarea {
+    min-height: 196px;
+  }
+}
+
+/* Iteration 35 App-deck mode: this is a desktop app, not a long landing page. */
+.apple-light-shell {
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+html:has(.apple-light-shell),
+body:has(.apple-light-shell) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.apple-light-shell,
+.apple-light-shell * {
+  box-sizing: border-box;
+}
+
+.apple-light-shell.shell {
+  min-height: 0;
+  height: 100vh;
+}
+
+.apple-light-shell .workspace {
+  height: 100vh;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  align-content: start;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.apple-light-shell .rail {
+  height: 100vh;
+  min-height: 0;
+}
+
+.apple-light-shell .system-footer {
+  position: relative !important;
+  bottom: auto !important;
+}
+
+.apple-light-shell .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.apple-light-shell .status-line {
+  position: sticky;
+  top: 0;
+  z-index: 28;
+}
+
+.apple-light-shell .workspace > .apple-overview,
+.apple-light-shell .workspace > .design-platform-config,
+.apple-light-shell .workspace > .dock-strip,
+.apple-light-shell .workspace > .metrics,
+.apple-light-shell .workspace > .asset-grid,
+.apple-light-shell .workspace > .main-grid,
+.apple-light-shell .workspace > .bottom-grid,
+.apple-light-shell .workspace > .catalog-grid,
+.apple-light-shell .workspace > .training-grid,
+.apple-light-shell .workspace > .send-safety-grid,
+.apple-light-shell .workspace > .routing-grid,
+.apple-light-shell .workspace > .review-grid,
+.apple-light-shell .workspace > .quote-grid {
+  display: none !important;
+}
+
+.apple-light-shell .workspace[data-active-section="design-platform-config"] > .design-platform-config,
+.apple-light-shell .workspace[data-active-section="asset-center"] > .asset-grid,
+.apple-light-shell .workspace[data-active-section="conversation-center"] > .main-grid,
+.apple-light-shell .workspace[data-active-section="design-center"] > .main-grid,
+.apple-light-shell .workspace[data-active-section="sku-library"] > .bottom-grid,
+.apple-light-shell .workspace[data-active-section="notice-center"] > .bottom-grid,
+.apple-light-shell .workspace[data-active-section="catalog-center"] > .catalog-grid,
+.apple-light-shell .workspace[data-active-section="agent-center"] > .training-grid,
+.apple-light-shell .workspace[data-active-section="training-center"] > .training-grid,
+.apple-light-shell .workspace[data-active-section="account-center"] > .send-safety-grid,
+.apple-light-shell .workspace[data-active-section="send-center"] > .send-safety-grid,
+.apple-light-shell .workspace[data-active-section="routing-center"] > .routing-grid,
+.apple-light-shell .workspace[data-active-section="review-center"] > .review-grid,
+.apple-light-shell .workspace[data-active-section="quote-center"] > .quote-grid {
+  display: grid !important;
+}
+
+.apple-light-shell .workspace[data-active-section] > :is(
+  .asset-grid,
+  .main-grid,
+  .bottom-grid,
+  .catalog-grid,
+  .training-grid,
+  .send-safety-grid,
+  .routing-grid,
+  .review-grid,
+  .quote-grid
+) {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  padding: 14px 20px 20px;
+  align-items: start;
+}
+
+.apple-light-shell .workspace[data-active-section] > :is(
+  .asset-grid,
+  .main-grid,
+  .bottom-grid,
+  .catalog-grid,
+  .training-grid,
+  .send-safety-grid,
+  .routing-grid,
+  .review-grid,
+  .quote-grid
+) > .panel,
+.apple-light-shell .workspace[data-active-section="design-platform-config"] > .design-platform-config {
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.apple-light-shell .workspace[data-active-section] > :is(
+  .main-grid,
+  .asset-grid,
+  .bottom-grid,
+  .catalog-grid,
+  .training-grid,
+  .send-safety-grid,
+  .routing-grid,
+  .review-grid,
+  .quote-grid
+) > .panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.apple-light-shell .workspace[data-active-section] > :is(
+  .main-grid,
+  .asset-grid,
+  .bottom-grid,
+  .catalog-grid,
+  .training-grid,
+  .send-safety-grid,
+  .routing-grid,
+  .review-grid,
+  .quote-grid
+) > .panel > :last-child {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.apple-light-shell .workspace[data-active-section="sku-library"] > .bottom-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.75fr);
+}
+
+.apple-light-shell .workspace[data-active-section="notice-center"] > .bottom-grid {
+  grid-template-columns: minmax(340px, 0.78fr) minmax(0, 1.28fr);
+}
+
+.apple-light-shell .workspace[data-active-section="catalog-center"] > .catalog-grid,
+.apple-light-shell .workspace[data-active-section="routing-center"] > .routing-grid,
+.apple-light-shell .workspace[data-active-section="review-center"] > .review-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.apple-light-shell .workspace[data-active-section="sku-library"] #sku-library {
+  overflow: hidden;
+}
+
+.apple-light-shell #sku-library .sku-controls {
+  grid-template-columns: minmax(190px, 1.4fr) minmax(210px, 0.82fr) minmax(230px, 0.95fr) auto;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.apple-light-shell #sku-library .segmented-control {
+  min-height: 32px;
+}
+
+.apple-light-shell #sku-library .segmented-control button {
+  min-height: 26px;
+  padding-inline: 8px;
+  font-size: 12px;
+}
+
+.apple-light-shell #sku-library .sku-repair-guide {
+  margin: 0 14px 8px;
+  padding: 10px 11px;
+}
+
+.apple-light-shell #sku-library .sku-batch-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 14px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.apple-light-shell #sku-library .sku-batch-bar label,
+.apple-light-shell #sku-library .sku-batch-bar input:not([type="checkbox"]),
+.apple-light-shell #sku-library .sku-batch-bar .primary,
+.apple-light-shell #sku-library .sku-batch-bar .ghost,
+.apple-light-shell #sku-library .sku-batch-bar > span {
+  flex: 0 0 auto;
+}
+
+.apple-light-shell #sku-library .sku-batch-bar input:not([type="checkbox"]) {
+  width: 124px;
+}
+
+.apple-light-shell #sku-library .sku-batch-bar > span {
+  margin-left: 0;
+}
+
+.apple-light-shell #sku-library .sku-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 7px 14px 14px;
+}
+
+.apple-light-shell #sku-library .sku-table .empty {
+  min-height: 170px;
+  align-content: center;
+}
+
+.apple-light-shell #sku-library .sku-table-empty > div[role="cell"] {
+  min-height: 170px;
+}
+
+.apple-light-shell #sku-library .sku-editor {
+  flex: 0 0 auto;
+  max-height: min(300px, 42%);
+  margin: 0 14px 14px;
+  overflow: auto;
+  border-top-color: rgba(60, 60, 67, 0.1);
+  scrollbar-width: thin;
+}
+
+.apple-light-shell #sku-library .sku-form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.apple-light-shell #notice-center .notice-list:has(> .empty.empty-cta),
+.apple-light-shell #review-center .review-list:has(> .empty.empty-cta),
+.apple-light-shell #routing-center .routing-panel:has(> .empty.empty-cta) {
+  min-height: 0;
+}
+
+.apple-light-shell .workspace[data-active-section] :is(
+  .empty-state,
+  .design-empty,
+  .agent-empty,
+  .quote-empty,
+  .review-empty
+) {
+  min-height: 260px;
+}
+
+.apple-light-shell .workspace[data-active-section] :is(
+  .job-list,
+  .conversation-list,
+  .notice-list,
+  .agent-list,
+  .training-samples,
+  .quote-list,
+  .review-list,
+  .send-task-list
+):has(> .empty.empty-cta) {
+  flex: 1 1 auto;
+  display: grid;
+  min-height: 0;
+}
+
+.apple-light-shell .workspace[data-active-section] :is(
+  .job-list,
+  .conversation-list,
+  .notice-list,
+  .agent-list,
+  .training-samples,
+  .quote-list,
+  .review-list,
+  .send-task-list
+) > .empty.empty-cta {
+  min-height: 100%;
+  align-content: center;
+}
+
+.apple-light-shell .workspace[data-active-section] .panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+.apple-light-shell .workspace[data-active-section="design-center"] .conversation-panel,
+.apple-light-shell .workspace[data-active-section="conversation-center"] .design-center,
+.apple-light-shell .workspace[data-active-section="sku-library"] #notice-center,
+.apple-light-shell .workspace[data-active-section="notice-center"] #sku-library,
+.apple-light-shell .workspace[data-active-section="agent-center"] #training-center,
+.apple-light-shell .workspace[data-active-section="training-center"] #agent-center,
+.apple-light-shell .workspace[data-active-section="account-center"] #send-center,
+.apple-light-shell .workspace[data-active-section="send-center"] #account-center {
+  opacity: 0.72;
+}
+
+.apple-light-shell .workspace[data-active-section="design-center"] .conversation-panel:hover,
+.apple-light-shell .workspace[data-active-section="conversation-center"] .design-center:hover,
+.apple-light-shell .workspace[data-active-section="sku-library"] #notice-center:hover,
+.apple-light-shell .workspace[data-active-section="notice-center"] #sku-library:hover,
+.apple-light-shell .workspace[data-active-section="agent-center"] #training-center:hover,
+.apple-light-shell .workspace[data-active-section="training-center"] #agent-center:hover,
+.apple-light-shell .workspace[data-active-section="account-center"] #send-center:hover,
+.apple-light-shell .workspace[data-active-section="send-center"] #account-center:hover {
+  opacity: 0.9;
+}
+
+@media (max-width: 1180px) {
+  .apple-light-shell .workspace[data-active-section] > :is(.bottom-grid, .training-grid, .send-safety-grid) {
+    grid-template-columns: 1fr;
+  }
+
+  .apple-light-shell .workspace[data-active-section] > :is(
+    .asset-grid,
+    .main-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) > .panel,
+  .apple-light-shell .workspace[data-active-section="design-platform-config"] > .design-platform-config {
+    height: auto;
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  html:has(.apple-light-shell),
+  body:has(.apple-light-shell) {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .apple-light-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .apple-light-shell.shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .apple-light-shell .rail {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    width: 100%;
+    height: 58px;
+    min-height: 58px;
+    max-height: 58px;
+    align-self: stretch;
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--separator);
+  }
+
+  .apple-light-shell .brand,
+  .apple-light-shell .rail button {
+    flex: 0 0 auto;
+  }
+
+  .apple-light-shell .workspace {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .apple-light-shell .topbar,
+  .apple-light-shell .status-line {
+    position: relative;
+    top: auto;
+  }
+
+  .apple-light-shell .workspace[data-active-section] > :is(
+    .asset-grid,
+    .main-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) {
+    height: auto;
+    padding: 12px 12px 18px;
+  }
+
+  .apple-light-shell .workspace[data-active-section] > :is(
+    .main-grid,
+    .asset-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) {
+    grid-template-columns: 1fr !important;
+    align-items: stretch;
+  }
+
+  .apple-light-shell .workspace[data-active-section] > :is(
+    .main-grid,
+    .asset-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) > .panel {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .apple-light-shell .workspace[data-active-section] > :is(
+    .main-grid,
+    .asset-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) > .panel > :last-child {
+    flex: initial;
+  }
+
+  .apple-light-shell .workspace[data-active-section] .panel-head {
+    top: 0;
+  }
+
+  .apple-light-shell .system-footer {
+    position: relative !important;
+    bottom: auto !important;
+    z-index: 1;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    margin: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: var(--radius);
+    scrollbar-width: none;
+  }
+
+  .apple-light-shell .system-footer::-webkit-scrollbar {
+    display: none;
+  }
+
+  .apple-light-shell .system-footer strong {
+    flex: 0 0 auto;
+    justify-content: flex-start;
+  }
+
+  .apple-light-shell .top-actions {
+    max-width: none;
+  }
+
+  .apple-light-shell .toolbar-group:not(.status-group) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .apple-light-shell .toolbar-group:not(.status-group) .primary {
+    grid-column: 1 / -1;
+  }
+
+  .apple-light-shell .toolbar-group .primary,
+  .apple-light-shell .toolbar-group .ghost,
+  .apple-light-shell .empty-actions .primary,
+  .apple-light-shell .empty-actions .ghost,
+  .apple-light-shell .empty-actions .file-button {
+    min-width: 0;
+    width: 100%;
+    min-height: 34px;
+    padding-inline: 9px;
+    gap: 5px;
+    font-size: 12.5px;
+    white-space: normal;
+  }
+
+  .apple-light-shell .toolbar-group .primary svg,
+  .apple-light-shell .toolbar-group .ghost svg,
+  .apple-light-shell .empty-actions .primary svg,
+  .apple-light-shell .empty-actions .ghost svg,
+  .apple-light-shell .empty-actions .file-button svg {
+    flex: 0 0 auto;
+  }
+
+  .apple-light-shell .empty-actions {
+    width: min(100%, 360px);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-self: center;
+    align-self: center;
+  }
+
+  .apple-light-shell .empty-actions:has(> :only-child) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .apple-light-shell .empty-cta {
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .apple-light-shell .empty-cta > span,
+  .apple-light-shell .empty-cta strong {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .apple-light-shell .panel,
+  .apple-light-shell .asset-list,
+  .apple-light-shell .job-list,
+  .apple-light-shell .conversation-list,
+  .apple-light-shell .notice-list,
+  .apple-light-shell .agent-list,
+  .apple-light-shell .training-samples,
+  .apple-light-shell .quote-list,
+  .apple-light-shell .review-list,
+  .apple-light-shell .send-task-list {
+    min-width: 0;
+  }
+}
+
+/* Iteration 36 Pure-white state surfaces: status is expressed by contour, not tinted blocks. */
+.apple-light-shell .platform-pill,
+.apple-light-shell .automation-summary,
+.apple-light-shell .automation-readiness,
+.apple-light-shell .automation-history-summary,
+.apple-light-shell .automation-step-panel,
+.apple-light-shell .automation-step-insight,
+.apple-light-shell .automation-issue-panel,
+.apple-light-shell .automation-issue-summary,
+.apple-light-shell .automation-history-list,
+.apple-light-shell .automation-history-row,
+.apple-light-shell .automation-issue-item,
+.apple-light-shell .automation-runtime-strip span,
+.apple-light-shell .automation-runtime-strip button,
+.apple-light-shell .automation-readiness-metrics span,
+.apple-light-shell .automation-readiness-checks button,
+.apple-light-shell .automation-history-grid span,
+.apple-light-shell .automation-history-grid button,
+.apple-light-shell .automation-summary-grid span,
+.apple-light-shell .automation-summary-grid button,
+.apple-light-shell .automation-step-insight-grid span,
+.apple-light-shell .automation-step-insight-grid button,
+.apple-light-shell .automation-step-list span,
+.apple-light-shell .automation-step-list button,
+.apple-light-shell .automation-issue-summary-grid span,
+.apple-light-shell .automation-issue-summary-grid button,
+.apple-light-shell .sku-audit-strip button,
+.apple-light-shell .sku-repair-empty,
+.apple-light-shell .automation-issue-head em,
+.apple-light-shell .automation-issue-fields span,
+.apple-light-shell .automation-readiness-checks button em {
+  background: #ffffff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.032),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96) !important;
+}
+
+.apple-light-shell .automation-summary.ok,
+.apple-light-shell .automation-readiness.ok,
+.apple-light-shell .automation-history-summary.ok,
+.apple-light-shell .automation-step-insight.ok,
+.apple-light-shell .automation-history-row.ok,
+.apple-light-shell .automation-runtime-strip .ok,
+.apple-light-shell .automation-history-grid .ok,
+.apple-light-shell .automation-summary-grid .ok,
+.apple-light-shell .automation-step-insight-grid .ok,
+.apple-light-shell .automation-step-list .ok {
+  border-color: rgba(52, 199, 89, 0.28) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(52, 199, 89, 0.56),
+    0 1px 2px rgba(0, 0, 0, 0.032) !important;
+}
+
+.apple-light-shell .platform-pill.online,
+.apple-light-shell .automation-summary.warning,
+.apple-light-shell .automation-readiness.warning,
+.apple-light-shell .automation-history-summary.warning,
+.apple-light-shell .automation-step-insight.warning,
+.apple-light-shell .automation-history-row.warning,
+.apple-light-shell .automation-issue-panel,
+.apple-light-shell .automation-issue-summary,
+.apple-light-shell .automation-issue-item.warning,
+.apple-light-shell .automation-runtime-strip .warning,
+.apple-light-shell .automation-readiness-checks button.warning,
+.apple-light-shell .automation-history-grid .warning,
+.apple-light-shell .automation-summary-grid .warning,
+.apple-light-shell .automation-step-insight-grid .warning,
+.apple-light-shell .automation-step-list .warning,
+.apple-light-shell .automation-issue-summary-grid .warning,
+.apple-light-shell .sku-audit-strip button.warning {
+  border-color: rgba(255, 149, 0, 0.32) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(255, 149, 0, 0.62),
+    0 1px 2px rgba(0, 0, 0, 0.032) !important;
+}
+
+.apple-light-shell .platform-pill.offline,
+.apple-light-shell .automation-summary.error,
+.apple-light-shell .automation-readiness.error,
+.apple-light-shell .automation-history-summary.error,
+.apple-light-shell .automation-step-insight.error,
+.apple-light-shell .automation-history-row.error,
+.apple-light-shell .automation-issue-item.error,
+.apple-light-shell .automation-runtime-strip .error,
+.apple-light-shell .automation-readiness-checks button.error,
+.apple-light-shell .automation-history-grid .error,
+.apple-light-shell .automation-summary-grid .error,
+.apple-light-shell .automation-step-insight-grid .error,
+.apple-light-shell .automation-step-list .error,
+.apple-light-shell .automation-issue-summary-grid .error,
+.apple-light-shell .sku-audit-strip button.error,
+.apple-light-shell .ghost.danger {
+  border-color: rgba(255, 59, 48, 0.3) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(255, 59, 48, 0.58),
+    0 1px 2px rgba(0, 0, 0, 0.032) !important;
+}
+
+.apple-light-shell .platform-pill,
+.apple-light-shell .current-section-pill {
+  border-color: rgba(60, 60, 67, 0.14) !important;
+  color: var(--text) !important;
+}
+
+.apple-light-shell .platform-pill.online {
+  color: #167c34 !important;
+}
+
+.apple-light-shell .platform-pill.warning,
+.apple-light-shell .automation-issue-head em {
+  color: #8a4f00 !important;
+}
+
+.apple-light-shell .platform-pill.offline,
+.apple-light-shell .automation-readiness-checks button em {
+  color: var(--red) !important;
+}
+
+.apple-light-shell .automation-issue-fields span {
+  border-color: rgba(0, 122, 255, 0.14) !important;
+  color: #0a4f9f !important;
+}
+
+.apple-light-shell .automation-issue-item.warning .automation-issue-fields span {
+  border-color: rgba(255, 149, 0, 0.22) !important;
+  color: #8a4f00 !important;
+}
+
+.apple-light-shell .automation-issue-item.error .automation-issue-fields span {
+  border-color: rgba(255, 59, 48, 0.2) !important;
+  color: #b42318 !important;
 }

@@ -235,6 +235,14 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     };
 
     try {
+      const readiness = await this.readiness();
+      run.results.readiness = readiness;
+      if (!readiness.ready) {
+        run.skipped = true;
+        run.reason = "automation_readiness_blocked";
+        return run;
+      }
+
       await this.captureStep(run, "pollActiveResults", () =>
         this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit),
       );
@@ -259,7 +267,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     } finally {
       run.completedAt = new Date().toISOString();
       run.durationMs = Date.now() - startedAt.getTime();
-      this.runCount += 1;
+      if (!run.skipped) this.runCount += 1;
       this.lastRun = run;
       this.recordRun(run);
       this.running = false;

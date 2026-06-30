@@ -54,7 +54,7 @@ function main() {
     throw new Error(String(result.stderr || result.stdout || "failed to launch desktop services").trim());
   }
   const pid = String(result.stdout || "").trim().split(/\s+/).pop();
-  console.log(`[launch] keeper node ${modeArgs.join(" ")} pid=${pid}`);
+  console.log(`[launch] stable node ${modeArgs.join(" ")} pid=${pid}`);
 }
 
 function assertModeSwitchAllowed() {
@@ -164,7 +164,11 @@ function buildLauncherCmd() {
     ...launcherEnvKeys()
       .filter((key) => process.env[key] !== undefined)
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
+    ":restart",
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
+    `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,
+    "timeout /t 2 /nobreak >nul",
+    "goto restart",
   ];
   return `${lines.join("\r\n")}\r\n`;
 }

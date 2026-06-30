@@ -8,6 +8,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { OrdersService } from "../orders/orders.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 import { WechatSendAdapterService } from "./wechat-send-adapter.service";
 
@@ -43,6 +44,12 @@ const {
 
 const BRIDGE_OUTBOX_VERSION = "wechat_bridge_outbox_v1";
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
+
+type IdentityFilter = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
 
 @Injectable()
 export class WechatDispatchService {
@@ -204,10 +211,11 @@ export class WechatDispatchService {
 
   async queueOrderConfirmation(
     orderDraftId: string,
-    payload: { owner?: string; note?: string; reason?: string; automation?: Prisma.InputJsonObject } = {},
+    payload: { owner?: string; note?: string; reason?: string; automation?: Prisma.InputJsonObject } & ExpectedIdentityPayload = {},
   ) {
     const order = await this.orders.getById(orderDraftId);
     if (!order) throw new BadRequestException(`order draft not found: ${orderDraftId}`);
+    assertExpectedIdentity(order, payload, "order draft");
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue confirmation");
     }
@@ -283,10 +291,11 @@ export class WechatDispatchService {
       owner?: string;
       reason?: string;
       automation?: Prisma.InputJsonObject;
-    } = {},
+    } & ExpectedIdentityPayload = {},
   ) {
     const order = await this.orders.getById(orderDraftId);
     if (!order) throw new BadRequestException(`order draft not found: ${orderDraftId}`);
+    assertExpectedIdentity(order, payload, "order draft");
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue follow-up");
     }
@@ -534,14 +543,16 @@ export class WechatDispatchService {
 
   async setConversationManualLock(
     id: string,
-    payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } = {},
+    payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload = {},
   ) {
     const before = appConfig.useLocalStore
       ? this.localStore.listConversations().find((conversation: any) => conversation.id === id)
       : await this.prisma.conversation.findUnique({ where: { id } });
     if (!before) throw new BadRequestException(`conversation not found: ${id}`);
+    assertExpectedIdentity({ ...before, conversationId: before.id }, payload, "conversation");
     if (payload.locked === false && before.manualLocked) {
       assertManualReleaseReason(payload.reason, "conversation manual release");
+      assertManualReleaseNote(payload.note, "conversation manual release");
     }
 
     const transition = buildConversationManualLockTransition({
@@ -620,6 +631,7 @@ export class WechatDispatchService {
   async processInboundMessage(payload: {
     wechatAccountId?: string;
     conversationId?: string;
+    customerId?: string;
     text: string;
     externalId?: string;
     assetIds?: string[];
@@ -788,9 +800,9 @@ export class WechatDispatchService {
     return result;
   }
 
-  listWindowSnapshots() {
+  listWindowSnapshots(filter: IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("wechat window snapshot prisma mode is not implemented yet");
-    return this.localStore.listWechatWindowSnapshots();
+    return this.localStore.listWechatWindowSnapshots(filter);
   }
 
   getWindowObserverStatus() {
@@ -958,25 +970,30 @@ export class WechatDispatchService {
     });
   }
 
-  listSendTasks() {
+  listSendTasks(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (!appConfig.useLocalStore) throw new Error("send task prisma mode is not implemented yet");
-    return this.localStore.listSendTasks();
+    return this.localStore.listSendTasks(filter);
   }
 
-  listSendAttempts(sendTaskId?: string) {
+  listSendAttempts(filter: { sendTaskId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (!appConfig.useLocalStore) throw new Error("send attempt prisma mode is not implemented yet");
-    return this.localStore.listSendAttempts({ sendTaskId });
+    return this.localStore.listSendAttempts(filter);
   }
 
   getSendAdapter(adapter?: string) {
     return this.sendAdapter.describe(adapter);
   }
 
-  getBridgeStatus() {
+  getBridgeStatus(filter: IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("wechat bridge status prisma mode is not implemented yet");
-    const outbox = this.listBridgeOutbox();
-    const inboxPending = this.sendAdapter.listBridgeInbox().map((entry) => this.buildBridgeInboxListItem(entry));
-    const locks = this.sendAdapter.listBridgeLocks();
+    const outbox = this.listBridgeOutbox(filter);
+    const inboxPending = this.sendAdapter
+      .listBridgeInbox()
+      .filter((entry) => this.matchesBridgeEntryIdentity(entry, null, filter))
+      .map((entry) => this.buildBridgeInboxListItem(entry));
+    const locks = this.sendAdapter
+      .listBridgeLocks()
+      .filter((lock) => !filter.wechatAccountId || String(lock.accountId || "") === String(filter.wechatAccountId));
     const worker = this.sendAdapter.getBridgeWorkerStatus();
 
     return {
@@ -999,7 +1016,7 @@ export class WechatDispatchService {
     };
   }
 
-  listBridgeOutbox() {
+  listBridgeOutbox(filter: IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("wechat bridge outbox prisma mode is not implemented yet");
     const entries = this.sendAdapter.listBridgeOutbox();
     const pending: any[] = [];
@@ -1010,6 +1027,7 @@ export class WechatDispatchService {
       const attempt = entry.taskId
         ? this.localStore.getLatestSendAttempt(entry.taskId, { adapter: "windows_bridge", status: "started" })
         : null;
+      if (!this.matchesBridgeEntryIdentity(entry, task, filter)) continue;
       const item = this.buildBridgeOutboxListItem(entry, task, attempt);
       if (!entry.errorMessage && task?.status === "sending" && attempt) pending.push(item);
       else {
@@ -1024,6 +1042,21 @@ export class WechatDispatchService {
       pending,
       ignored,
     };
+  }
+
+  private matchesBridgeEntryIdentity(entry: any, task: any, filter: IdentityFilter = {}) {
+    const expectedWechatAccountId = String(filter.wechatAccountId || "").trim();
+    const expectedConversationId = String(filter.conversationId || "").trim();
+    const expectedCustomerId = String(filter.customerId || "").trim();
+    if (!expectedWechatAccountId && !expectedConversationId && !expectedCustomerId) return true;
+    const conversation = task?.conversation || null;
+    const actualWechatAccountId = String(task?.wechatAccountId || entry?.wechatAccountId || "");
+    const actualConversationId = String(task?.conversationId || entry?.conversationId || "");
+    const actualCustomerId = String(conversation?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "");
+    if (expectedWechatAccountId && actualWechatAccountId !== expectedWechatAccountId) return false;
+    if (expectedConversationId && actualConversationId !== expectedConversationId) return false;
+    if (expectedCustomerId && actualCustomerId !== expectedCustomerId) return false;
+    return true;
   }
 
   private buildBridgeOutboxListItem(entry: any, task: any, attempt: any) {
@@ -1542,15 +1575,16 @@ export class WechatDispatchService {
     );
   }
 
-  executeDryRunSend(id: string) {
-    return this.executeSend(id, { adapter: "dry_run" });
+  executeDryRunSend(id: string, payload: ExpectedIdentityPayload = {}) {
+    return this.executeSend(id, { ...payload, adapter: "dry_run" });
   }
 
-  executeSend(id: string, params: { adapter?: string } = {}) {
+  executeSend(id: string, params: { adapter?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("send execution prisma mode is not implemented yet");
     const adapter = this.sendAdapter.describe(params.adapter);
     const taskBeforeValidation = this.localStore.getSendTask(id);
     if (!taskBeforeValidation) throw new Error(`send task not found: ${id}`);
+    assertExpectedIdentity(taskBeforeValidation, params, "send task");
     const binding = this.validateExistingSendTaskBinding(taskBeforeValidation);
     if (!binding.ok) {
       const startedAt = new Date().toISOString();
@@ -1728,10 +1762,11 @@ export class WechatDispatchService {
     return { task: this.localStore.getSendTask(id), attempt, binding, currentBinding };
   }
 
-  async requeueSendTask(id: string, payload: { reason?: string } = {}) {
+  async requeueSendTask(id: string, payload: { reason?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("send task requeue prisma mode is not implemented yet");
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
+    assertExpectedIdentity(task, payload, "send task");
     const decision = evaluateSendTaskRequeue({ task });
     if (!decision.ok) {
       if (decision.reason === "sent_task") throw new BadRequestException("sent task cannot be requeued");
@@ -1772,11 +1807,15 @@ export class WechatDispatchService {
     return updated;
   }
 
-  cancelSendTask(id: string, payload: { reason?: string } = {}) {
+  cancelSendTask(id: string, payload: { reason?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("send task cancel prisma mode is not implemented yet");
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
+    assertExpectedIdentity(task, payload, "send task");
     if (task.status === "sent") throw new Error("sent task cannot be cancelled");
+    if (task.status === "cancelled" && (task.guardSnapshot?.cancelledAt || task.guardSnapshot?.cancelReason)) {
+      throw new BadRequestException("audited cancelled task cannot be cancelled again");
+    }
     const now = new Date().toISOString();
     const reason = payload.reason || "人工取消发送任务";
     const pendingBridgeAttempt = this.localStore.getLatestSendAttempt(id, {
@@ -2030,7 +2069,7 @@ export class WechatDispatchService {
         targetId: job.id,
         decision: "high_value_customer_selected_image",
         reviewer: "system",
-        note: "High-value customer selected a design image; manual quote review is required.",
+        note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
         beforeStatus: job.status || "",
         afterStatus: "manual_review",
         metadata: {
@@ -2073,6 +2112,7 @@ export class WechatDispatchService {
         selectedImageId,
       });
       result.plan.reason = "quote_already_queued_or_sent";
+      result.plan.shouldNotifyHuman = true;
       return result;
     }
 
@@ -2346,7 +2386,7 @@ export class WechatDispatchService {
   }
 
   private findLatestSelectableDesignJob(conversation: any) {
-    const selectableStatuses = new Set(["sent"]);
+    const selectableStatuses = new Set(["sent", "customer_selected", "quote_created"]);
     return this.localStore
       .listDesignJobs()
       .filter((job: any) => this.jobMatchesConversationIdentity(job, conversation))
@@ -2469,7 +2509,7 @@ export class WechatDispatchService {
       locked: true,
       reviewer: options.reviewer || "system",
       reason: options.reason || "manual_review",
-      note: "Manual review is required; automation and queued sends are paused for this conversation.",
+      note: buildManualReviewLockNote(options.reason),
     });
     return {
       conversation: manualLock.conversation,
@@ -2886,6 +2926,30 @@ function assertManualReleaseReason(reason: unknown, context: string) {
   if (!text || !text.startsWith("manual_")) {
     throw new BadRequestException(`${context} requires an explicit manual release reason`);
   }
+}
+
+function assertManualReleaseNote(note: unknown, context: string) {
+  const text = String(note || "").trim();
+  if (!text) {
+    throw new BadRequestException(`${context} requires a manual resolution note`);
+  }
+}
+
+function buildManualReviewLockNote(reason?: string) {
+  const label = manualReviewReasonLabel(reason);
+  return `已转人工处理：${label}。自动回复和待发送任务已暂停，处理完成后请填写结果再恢复自动化。`;
+}
+
+function manualReviewReasonLabel(reason?: string) {
+  const key = String(reason || "").trim();
+  const labels: Record<string, string> = {
+    high_value_customer_selected_image: "高价值客户已选图，需要人工复核报价和跟进策略",
+    quote_already_queued_or_sent: "客户在报价进入发送流程后又修改选择，需要人工确认",
+    quote_acceptance_uncertain: "客户确认意图不够明确，需要人工判断是否成交",
+    quote_acceptance_manual_review: "客户回复涉及报价确认，需要人工复核",
+    manual_review: "当前对话需要人工判断后再继续",
+  };
+  return labels[key] || "当前情况不适合继续自动处理，需要人工判断";
 }
 
 function sanitizeBridgeAckMetadata(value: unknown): Record<string, unknown> {

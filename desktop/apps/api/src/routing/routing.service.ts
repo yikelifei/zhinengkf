@@ -2,13 +2,15 @@ import { Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
+import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 
-const { buildAgentReplyDraft, evaluateAgentRoute, findPendingSceneClarificationContext } = rules;
+const { buildAgentReplyDraft, classifyTrainingSampleUsage, evaluateAgentRoute, findPendingSceneClarificationContext } = rules;
 
 type RouteEvaluatePayload = {
   text: string;
   channel?: "wechat" | "xiaohongshu" | "douyin";
+  wechatAccountId?: string;
   customerId?: string;
   conversationId?: string;
   clarificationContext?: Record<string, unknown>;
@@ -51,8 +53,11 @@ export class RoutingService {
     });
   }
 
-  async correctEvaluation(id: string, payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string }) {
+  async correctEvaluation(id: string, payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string } & ExpectedIdentityPayload) {
     if (!appConfig.useLocalStore) throw new Error("routing correction prisma mode is not implemented yet");
+    const route = this.localStore.listRouteEvaluations().find((item: any) => item.id === id);
+    if (!route) throw new Error(`route evaluation not found: ${id}`);
+    assertExpectedIdentity(route, payload, "route evaluation");
     const result = this.localStore.correctRouteEvaluation(id, payload || {});
     await this.notifications.create(
       "info",
@@ -83,6 +88,8 @@ export class RoutingService {
 function isSceneMemorySample(sample: any) {
   if (!sample?.agentKey || !sample?.customerText) return false;
   if (String(sample.status || "ready") !== "ready") return false;
+  const usage = sample.quality?.usage || classifyTrainingSampleUsage(sample);
+  if (usage.routeMemory === false) return false;
   const sourceType = String(sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : ""));
   if (sourceType === "route_correction") return Number(sample.score || 0) >= 70;
   if (sourceType !== "chat_import") return false;

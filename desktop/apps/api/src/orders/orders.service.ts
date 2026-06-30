@@ -4,6 +4,7 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 const {
   buildOrderDraftFromQuote,
@@ -21,9 +22,14 @@ export class OrdersService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  async list() {
-    if (appConfig.useLocalStore) return this.localStore.listOrderDrafts();
+  async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    if (appConfig.useLocalStore) return this.localStore.listOrderDrafts(filter);
     const orders = await (this.prisma as any).orderDraft.findMany({
+      where: {
+        ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+        ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
+      },
       include: {
         customer: true,
         conversation: true,
@@ -42,9 +48,10 @@ export class OrdersService {
     return this.getOrderDraft(id);
   }
 
-  async createFromQuote(quoteId: string) {
+  async createFromQuote(quoteId: string, expected: ExpectedIdentityPayload = {}) {
     const quote = await this.getQuote(quoteId);
     if (!quote) throw new BadRequestException(`quote draft not found: ${quoteId}`);
+    assertExpectedIdentity(quote, expected, "quote draft");
 
     const decision = buildOrderDraftFromQuote(quote);
     if (!decision.ok) {
@@ -66,9 +73,10 @@ export class OrdersService {
     return orderDraft;
   }
 
-  async update(id: string, patch: OrderDraftUpdatePatch) {
+  async update(id: string, patch: OrderDraftUpdatePatch & ExpectedIdentityPayload) {
     const current = await this.getOrderDraft(id);
     if (!current) throw new BadRequestException(`order draft not found: ${id}`);
+    assertExpectedIdentity(current, patch, "order draft");
 
     const data = cleanOrderDraftPatch(patch || {});
     if (!Object.keys(data).length) {

@@ -4,11 +4,14 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  classifyTrainingSampleUsage,
+  classifyTrainingSampleAttention,
   classifySkillSuggestionQuality,
   compileAgentSkillSuggestions,
   evaluateTrainingSampleQuality,
   isSceneClarificationReply,
   isSkillSuggestionSafeToApply,
+  isTrainingSampleNeedingAttention,
   isTrainingSampleReady,
   normalizeTrainingSampleStatus,
   summarizeTrainingSamples,
@@ -196,6 +199,66 @@ test("labels training sample quality for review and anti-wrong-reply samples", (
   assert.match(lowScore.recommendedAction, /重写/);
 });
 
+test("classifies training sample usage for scene routing and reply skills", () => {
+  const routeAndReply = evaluateTrainingSampleQuality({
+    status: "ready",
+    sourceType: "chat_import",
+    agentKey: "after_sales",
+    scene: "售后安抚",
+    customerText: "杯子破了怎么处理",
+    idealReply: "我先帮您核对破损情况，再给您补发或退款方案。",
+    score: 92,
+    skillHints: ["售后方案"],
+  });
+  const replyOnly = classifyTrainingSampleUsage({
+    status: "ready",
+    sourceType: "chat_import",
+    agentKey: "after_sales",
+    scene: "售后安抚",
+    customerText: "杯子坏了",
+    idealReply: "我先帮您处理。",
+    score: 78,
+    skillHints: ["售后方案"],
+  });
+  const uncertainScene = evaluateTrainingSampleQuality({
+    status: "ready",
+    sourceType: "chat_import",
+    agentKey: "after_sales",
+    scene: "after_sales",
+    sceneScore: 8,
+    sceneCheck: { status: "weak", reason: "only_weak_scene_signal", needsReview: true },
+    customerText: "cup issue",
+    idealReply: "I can help confirm the issue first and then give the next step.",
+    score: 95,
+    skillHints: ["after sales"],
+  });
+  const blocked = classifyTrainingSampleUsage({
+    status: "review",
+    sourceType: "chat_import",
+    agentKey: "after_sales",
+    scene: "售后安抚",
+    customerText: "杯子坏了",
+    idealReply: "我先帮您处理。",
+    score: 96,
+    skillHints: ["售后方案"],
+  });
+
+  assert.equal(routeAndReply.usage.scope, "route_and_reply");
+  assert.equal(routeAndReply.usage.routeMemory, true);
+  assert.equal(routeAndReply.usage.replySkill, true);
+  assert.equal(replyOnly.scope, "reply_only");
+  assert.equal(replyOnly.routeMemory, false);
+  assert.equal(replyOnly.replySkill, true);
+  assert.equal(uncertainScene.usage.scope, "reply_only");
+  assert.equal(uncertainScene.usage.routeMemory, false);
+  assert.equal(uncertainScene.usage.replySkill, true);
+  assert.equal(uncertainScene.usage.flags.includes("scene_weak"), true);
+  assert.equal(uncertainScene.attention.needsAttention, true);
+  assert.equal(uncertainScene.attention.primaryReason.code, "scene_weak");
+  assert.equal(blocked.scope, "review");
+  assert.equal(blocked.routeMemory, false);
+});
+
 test("ignores low quality samples", () => {
   const suggestions = compileAgentSkillSuggestions([
     {
@@ -348,8 +411,66 @@ test("summarizes training sample quality buckets", () => {
   assert.equal(overview.qualitySummary.blockedSamples, 1);
   assert.equal(overview.qualitySummary.trainableSamples, 2);
   assert.equal(overview.qualitySummary.antiWrongReplySamples, 1);
+  assert.equal(overview.qualitySummary.routeMemorySamples, 0);
+  assert.equal(overview.qualitySummary.replySkillSamples, 1);
+  assert.equal(overview.qualitySummary.routeAndReplySamples, 0);
+  assert.equal(overview.qualitySummary.needsAttentionSamples, 1);
+  assert.deepEqual(overview.qualitySummary.attentionReasonCounts, [{ code: "low_score", label: "低分", count: 1 }]);
   assert.equal(overview.qualitySummary.lowScoreSamples, 1);
   assert.equal(overview.recommendations.some((text) => text.includes("防乱回复")), true);
+});
+
+test("identifies training samples that need operator attention", () => {
+  assert.equal(
+    isTrainingSampleNeedingAttention({
+      status: "ready",
+      quality: {
+        level: "risk",
+        trainable: false,
+        flags: ["low_score"],
+        usage: { scope: "reply_only", replySkill: true },
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isTrainingSampleNeedingAttention({
+      status: "ready",
+      quality: {
+        level: "review",
+        trainable: true,
+        flags: ["anti_wrong_reply_only"],
+        usage: { scope: "anti_wrong_reply", antiWrongReply: true },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isTrainingSampleNeedingAttention({
+      status: "rejected",
+      quality: {
+        level: "blocked",
+        trainable: false,
+        flags: ["rejected"],
+        usage: { scope: "none" },
+      },
+    }),
+    false,
+  );
+  const attention = classifyTrainingSampleAttention({
+    status: "ready",
+    quality: {
+      level: "risk",
+      trainable: false,
+      flags: ["missing_answer", "missing_customer_text"],
+      usage: { scope: "none", flags: ["missing_answer", "missing_customer_text"] },
+    },
+  });
+  assert.equal(attention.needsAttention, true);
+  assert.deepEqual(
+    attention.reasons.map((reason) => reason.code),
+    ["missing_answer", "missing_customer_text", "usage_none"],
+  );
 });
 
 test("normalizes training sample review status for local store", () => {

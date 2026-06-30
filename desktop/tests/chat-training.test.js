@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { classifyScene, parseChatTranscript, scoreTrainingPair } = require("../packages/rules");
+const { classifyScene, evaluateSceneClassification, parseChatTranscript, scoreTrainingPair } = require("../packages/rules");
 
 test("parses chat transcript into customer-service training pairs", () => {
   const result = parseChatTranscript(`
@@ -17,6 +17,9 @@ test("parses chat transcript into customer-service training pairs", () => {
   assert.equal(result.pairCount, 2);
   assert.equal(result.pairs[0].scene, "礼盒设计");
   assert.equal(result.pairs[0].agentKey, "gift_design");
+  assert.equal(result.pairs[0].sceneCheck.status, "clear");
+  assert.equal(result.pairs[0].sceneScore > 0, true);
+  assert.equal(result.pairs[0].matchedKeywords.length > 0, true);
   assert.equal(result.pairs[1].scene, "物流异常");
   assert.equal(result.warnings.length, 0);
 });
@@ -26,6 +29,30 @@ test("classifies scene by weighted keyword hits", () => {
   assert.equal(result.agentKey, "gift_design");
   assert.equal(result.matchedKeywords.includes("礼盒"), true);
   assert.equal(result.scores[0].agentKey, "gift_design");
+});
+
+test("explains weak and ambiguous scene classification for imported chat samples", () => {
+  const weak = evaluateSceneClassification({
+    scene: "pre_sales",
+    agentKey: "pre_sales",
+    score: 8,
+    scores: [{ scene: "pre_sales", agentKey: "pre_sales", score: 8, matchedKeywords: ["recommend"] }],
+  });
+  const ambiguous = evaluateSceneClassification({
+    scene: "after_sales",
+    agentKey: "after_sales",
+    score: 22,
+    scores: [
+      { scene: "after_sales", agentKey: "after_sales", score: 22, matchedKeywords: ["refund"] },
+      { scene: "order_payment", agentKey: "order_payment", score: 18, matchedKeywords: ["order"] },
+    ],
+  });
+
+  assert.equal(weak.status, "weak");
+  assert.equal(weak.needsReview, true);
+  assert.equal(ambiguous.status, "ambiguous");
+  assert.equal(ambiguous.needsReview, true);
+  assert.equal(ambiguous.scoreGap, 4);
 });
 
 test("classifies order and payment scene", () => {

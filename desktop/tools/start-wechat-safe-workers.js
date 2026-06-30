@@ -157,10 +157,36 @@ function startWindowsWorker(service) {
     encoding: "utf8",
     windowsHide: true,
   });
-  if (result.status !== 0) {
-    throw new Error(`failed to start ${service.name}: ${String(result.stderr || result.stdout || "unknown error").trim()}`);
+  if (result.status === 0) {
+    const startedPid = Number(String(result.stdout || "").trim().split(/\s+/).pop());
+    if (!Number.isFinite(startedPid)) throw new Error(`failed to read ${service.name} pid`);
+    return startedPid;
   }
-  const startedPid = Number(String(result.stdout || "").trim().split(/\s+/).pop());
+
+  const fallbackPid = startWindowsWorkerWithSpawn(service, wrapperPath, result);
+  if (Number.isFinite(fallbackPid)) return fallbackPid;
+  throw new Error(`failed to start ${service.name}: ${String(result.stderr || result.stdout || "unknown error").trim()}`);
+}
+
+function startWindowsWorkerWithSpawn(service, wrapperPath, failedResult) {
+  const stdoutPath = path.join(logsDir, `${service.name}.out.log`);
+  const stderrPath = path.join(logsDir, `${service.name}.err.log`);
+  const stdout = fs.openSync(stdoutPath, "a");
+  const stderr = fs.openSync(stderrPath, "a");
+  fs.appendFileSync(
+    path.join(logsDir, `${service.name}.launcher.log`),
+    `[${new Date().toISOString()}] Win32_Process.Create failed; falling back to direct detached worker spawn. wrapper=${wrapperPath} error=${String(failedResult.stderr || failedResult.stdout || "").trim()}\n`,
+    "utf8",
+  );
+  const child = spawn(process.execPath, service.commandArgs, {
+    cwd: desktopRoot,
+    env: windowsWorkerEnv(service),
+    detached: true,
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+  child.unref();
+  const startedPid = Number(child.pid);
   if (!Number.isFinite(startedPid)) throw new Error(`failed to read ${service.name} pid`);
   return startedPid;
 }
@@ -172,11 +198,22 @@ function buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogP
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(desktopRoot)}`,
-    ...Object.entries({ ...process.env, ...service.env }).map(([key, value]) => cmdSetEnv(key, value)),
+    ...Object.entries(windowsWorkerEnv(service)).map(([key, value]) => cmdSetEnv(key, value)),
     `echo [%date% %time%] launching ${service.name} >> ${cmdQuote(launcherLogPath)}`,
     runLine,
   ];
   return `${lines.join("\r\n")}\r\n`;
+}
+
+function windowsWorkerEnv(service) {
+  return windowsSafeEnv({
+    PATH: process.env.PATH || "",
+    SystemRoot: process.env.SystemRoot || "C:\\WINDOWS",
+    ComSpec: process.env.ComSpec || "C:\\WINDOWS\\System32\\cmd.exe",
+    TEMP: process.env.TEMP || process.env.TMP || runtimeDir,
+    TMP: process.env.TMP || process.env.TEMP || runtimeDir,
+    ...service.env,
+  });
 }
 
 function stopWorkers() {

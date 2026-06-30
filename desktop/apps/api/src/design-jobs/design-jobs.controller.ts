@@ -1,14 +1,19 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { DesignJobsService } from "./design-jobs.service";
 import { CreateDesignJobPayload, CreateDesignRevisionPayload, SelectDesignImagePayload } from "./design-jobs.types";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("design-jobs")
 export class DesignJobsController {
   constructor(private readonly designJobs: DesignJobsService) {}
 
   @Get()
-  list() {
-    return this.designJobs.list();
+  list(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.designJobs.list({ wechatAccountId, conversationId, customerId });
   }
 
   @Post()
@@ -52,28 +57,28 @@ export class DesignJobsController {
   }
 
   @Post(":id/submit")
-  submit(@Param("id") id: string) {
-    return this.designJobs.submit(id);
+  submit(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.submit(id, body || {});
   }
 
   @Post(":id/preflight")
-  preflight(@Param("id") id: string) {
-    return this.designJobs.preflight(id);
+  preflight(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.preflight(id, body || {});
   }
 
   @Post(":id/poll")
-  pollResult(@Param("id") id: string) {
-    return this.designJobs.pollResult(id);
+  pollResult(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.pollResult(id, body || {});
   }
 
   @Post(":id/retry")
-  retry(@Param("id") id: string) {
-    return this.designJobs.retry(id);
+  retry(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.retry(id, body || {});
   }
 
   @Post(":id/assets")
-  attachAssets(@Param("id") id: string, @Body() body: { assetIds: string[] }) {
-    return this.designJobs.attachAssets(id, body.assetIds || []);
+  attachAssets(@Param("id") id: string, @Body() body: { assetIds: string[] } & ExpectedIdentityPayload) {
+    return this.designJobs.attachAssets(id, body?.assetIds || [], body || {});
   }
 
   @Get(":id/revisions")
@@ -82,18 +87,19 @@ export class DesignJobsController {
   }
 
   @Post(":id/revisions")
-  requestRevision(@Param("id") id: string, @Body() payload: CreateDesignRevisionPayload) {
+  requestRevision(@Param("id") id: string, @Body() payload: CreateDesignRevisionPayload & ExpectedIdentityPayload) {
     return this.designJobs.requestRevision(id, payload);
   }
 
   @Post(":id/cancel")
-  cancel(@Param("id") id: string) {
-    return this.designJobs.cancel(id);
+  cancel(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.cancel(id, body || {});
   }
 
   @Post(":id/quick-confirm-send")
-  quickConfirmSend(@Param("id") id: string) {
+  quickConfirmSend(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
     return this.designJobs.quickConfirmAndQueueSend(id, {
+      ...(body || {}),
       releaseManualLock: true,
       reviewer: "人工客服",
       releaseReason: "manual_quick_confirm_send",
@@ -101,17 +107,17 @@ export class DesignJobsController {
   }
 
   @Post(":id/select-image")
-  selectImage(@Param("id") id: string, @Body() body: SelectDesignImagePayload) {
+  selectImage(@Param("id") id: string, @Body() body: SelectDesignImagePayload & ExpectedIdentityPayload) {
     return this.designJobs.selectImage(id, body || {});
   }
 
   @Post(":id/quote")
-  createQuote(@Param("id") id: string) {
-    return this.designJobs.createQuote(id);
+  createQuote(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.createQuote(id, body || {});
   }
 
   @Post(":id/manual-review")
-  markManualReview(@Param("id") id: string) {
-    return this.designJobs.markManualReview(id);
+  markManualReview(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+    return this.designJobs.markManualReview(id, body || {});
   }
 }

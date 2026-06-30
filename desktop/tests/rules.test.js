@@ -122,6 +122,63 @@ test("recommends bundle with replacement when stock is missing", () => {
   assert.equal(result.totals.salePrice <= 300, true);
 });
 
+test("does not recommend out-of-stock sku without an available replacement", () => {
+  const result = recommendBundle({
+    budget: { perUnitAmount: 260 },
+    scene: "vip",
+    skus: [
+      { skuCode: "BOX-OUT", name: "Out of stock box", type: "gift_box", salePrice: 50, costPrice: 20, stock: 0, sceneTags: ["vip"] },
+      { skuCode: "BOX-IN", name: "Available box", type: "gift_box", salePrice: 60, costPrice: 30, stock: 20, sceneTags: ["daily"] },
+      { skuCode: "ITEM-OUT", name: "Out of stock item", type: "item", salePrice: 80, costPrice: 40, stock: 0, sceneTags: ["vip"] },
+      { skuCode: "ITEM-IN", name: "Available item", type: "item", salePrice: 90, costPrice: 50, stock: 10, sceneTags: ["daily"] },
+    ],
+  });
+
+  assert.equal(result.items.some((item) => item.skuCode === "BOX-OUT"), false);
+  assert.equal(result.items.some((item) => item.skuCode === "ITEM-OUT"), false);
+  assert.equal(result.items.some((item) => item.stockWarning), false);
+  assert.ok(result.items.some((item) => item.skuCode === "BOX-IN"));
+  assert.ok(result.items.some((item) => item.skuCode === "ITEM-IN"));
+});
+
+test("does not duplicate replacement sku in the same bundle", () => {
+  const result = recommendBundle({
+    budget: { perUnitAmount: 300 },
+    scene: "vip",
+    skus: [
+      { skuCode: "BOX-A", name: "Gift box", type: "gift_box", salePrice: 60, costPrice: 30, stock: 10, sceneTags: ["vip"] },
+      { skuCode: "ITEM-A", name: "Original item", type: "item", salePrice: 90, costPrice: 40, stock: 0, replacementSkuCodes: ["ITEM-B"], sceneTags: ["vip"] },
+      { skuCode: "ITEM-B", name: "Replacement item", type: "item", salePrice: 90, costPrice: 45, stock: 10, sceneTags: ["vip"] },
+      { skuCode: "CARD-A", name: "Card", type: "accessory", salePrice: 20, costPrice: 5, stock: 20, sceneTags: ["vip"] },
+    ],
+  });
+
+  const itemBCount = result.items.filter((item) => item.skuCode === "ITEM-B").length;
+  assert.equal(itemBCount, 1);
+  assert.ok(result.items.some((item) => item.replacedOriginalSkuCode === "ITEM-A"));
+});
+
+test("requires stock to cover requested quantity when recommending bundle", () => {
+  const result = recommendBundle({
+    budget: { perUnitAmount: 260, quantity: 50 },
+    scene: "vip",
+    skus: [
+      { skuCode: "BOX-LOW", name: "Low stock box", type: "gift_box", salePrice: 50, costPrice: 20, stock: 20, sceneTags: ["vip"] },
+      { skuCode: "BOX-OK", name: "Enough stock box", type: "gift_box", salePrice: 60, costPrice: 30, stock: 80, sceneTags: ["daily"] },
+      { skuCode: "ITEM-LOW", name: "Low stock item", type: "item", salePrice: 80, costPrice: 40, stock: 10, replacementSkuCodes: ["ITEM-OK"], sceneTags: ["vip"] },
+      { skuCode: "ITEM-OK", name: "Enough stock item", type: "item", salePrice: 85, costPrice: 45, stock: 70, sceneTags: ["daily"] },
+    ],
+  });
+
+  assert.equal(result.items.some((item) => item.skuCode === "BOX-LOW"), false);
+  assert.ok(result.items.some((item) => item.skuCode === "BOX-OK"));
+  assert.ok(result.items.some((item) => item.replacedOriginalSkuCode === "ITEM-LOW"));
+  assert.equal(result.fulfillment.requestedQuantity, 50);
+  assert.equal(result.fulfillment.enough, true);
+  assert.equal(result.fulfillment.capacity, 70);
+  assert.equal(result.fulfillment.bottleneckSkuCode, "ITEM-OK");
+});
+
 test("validates design request required fields", () => {
   const result = validateDesignRequest({
     budget: { perUnitAmount: 200 },

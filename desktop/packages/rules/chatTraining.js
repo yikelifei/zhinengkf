@@ -131,11 +131,16 @@ function parseChatTranscript(text, options = {}) {
     }
     if (message.role === "service" && lastCustomer) {
       const scene = classifyScene(`${lastCustomer.text}\n${message.text}`, options.sceneRules);
+      const sceneCheck = evaluateSceneClassification(scene);
       pairs.push({
         question: lastCustomer.text,
         answer: message.text,
         scene: scene.scene,
         agentKey: scene.agentKey,
+        sceneScore: scene.score || 0,
+        matchedKeywords: scene.matchedKeywords || [],
+        sceneScores: scene.scores || [],
+        sceneCheck,
         score: scoreTrainingPair(lastCustomer.text, message.text),
         sourceLineStart: lastCustomer.lineNumber,
         sourceLineEnd: message.lineNumber,
@@ -203,6 +208,57 @@ function classifyScene(text, sceneRules = DEFAULT_SCENE_RULES) {
   };
 }
 
+function evaluateSceneClassification(classifiedScene = {}) {
+  const positiveScores = (classifiedScene.scores || []).filter((item) => Number(item.score || 0) > 0);
+  const top = positiveScores[0] || null;
+  const second = positiveScores[1] || null;
+  const topScore = Number(top?.score || classifiedScene.score || 0);
+  const secondScore = Number(second?.score || 0);
+  const scoreGap = topScore - secondScore;
+
+  if (!top || topScore <= 0) {
+    return {
+      status: "unmatched",
+      reason: "no_scene_keyword_hit",
+      needsReview: true,
+      topScene: null,
+      secondaryScene: null,
+      scoreGap: 0,
+    };
+  }
+
+  if (topScore < 14) {
+    return {
+      status: "weak",
+      reason: "only_weak_scene_signal",
+      needsReview: true,
+      topScene: top,
+      secondaryScene: second,
+      scoreGap,
+    };
+  }
+
+  if (second && secondScore >= 14 && (scoreGap <= 8 || secondScore / topScore >= 0.72)) {
+    return {
+      status: "ambiguous",
+      reason: "multiple_scene_signals_close",
+      needsReview: true,
+      topScene: top,
+      secondaryScene: second,
+      scoreGap,
+    };
+  }
+
+  return {
+    status: "clear",
+    reason: "top_scene_confident",
+    needsReview: false,
+    topScene: top,
+    secondaryScene: second,
+    scoreGap,
+  };
+}
+
 function scoreSceneRule(rule, content) {
   const matched = [];
   let score = 0;
@@ -256,6 +312,7 @@ function weighted(items) {
 module.exports = {
   DEFAULT_SCENE_RULES,
   classifyScene,
+  evaluateSceneClassification,
   parseChatTranscript,
   scoreTrainingPair,
 };

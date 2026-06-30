@@ -86,9 +86,29 @@ test("web automation status merge de-duplicates recent runs and keeps newest fir
 
 test("web automation readiness checks route to existing repair centers", () => {
   assert.match(webPage, /function handleAutomationReadinessCheck/);
+  assert.match(webPage, /function getAutomationReadinessPrimaryCheck/);
+  assert.match(webPage, /readiness\.blockers\[0\][\s\S]*readiness\.warnings\[0\][\s\S]*readiness\.checks\.find\(\(check\) => !check\.ok\)/);
+  assert.match(webPage, /function handleAutomationReadinessPrimaryCheck/);
+  assert.match(webPage, /handleAutomationReadinessCheck\(check\)/);
+  assert.match(webPage, /处理首个问题/);
   assert.match(webPage, /check\.key === "sku_catalog"[\s\S]*const firstBlockingRepair = skuRepairQueue\.find[\s\S]*repairSku\(firstBlockingRepair\)[\s\S]*setSkuIssueFilter\(check\.ok \? "ready" : "problem"\)[\s\S]*scrollToWorkspaceSection\("sku-library"\)/);
   assert.match(webPage, /check\.key === "design_platform"[\s\S]*scrollToWorkspaceSection\("design-platform-config"\)/);
-  assert.match(webPage, /check\.key === "manual_locks"[\s\S]*const firstLockedConversation = prioritizedManualLockedConversations\[0\][\s\S]*setActiveConversationId\(firstLockedConversation\.id\)[\s\S]*scrollToWorkspaceSection\("review-center"\)/);
-  assert.match(webPage, /check\.key === "send_queue"[\s\S]*const firstPendingTask = sendTasks\.find[\s\S]*setActiveConversationId\(firstPendingTask\.conversationId\)[\s\S]*scrollToWorkspaceSection\("send-center"\)/);
+  assert.match(webPage, /check\.key === "manual_locks"[\s\S]*const firstLockedConversation = prioritizedManualLockedConversations\[0\][\s\S]*changeActiveConversation\(firstLockedConversation\.id\)[\s\S]*scrollToWorkspaceSection\("review-center"\)/);
+  assert.match(webPage, /check\.key === "send_queue"[\s\S]*const firstPendingTask = sendTasks\.find[\s\S]*changeActiveConversation\(firstPendingTask\.conversationId\)[\s\S]*scrollToWorkspaceSection\("send-center"\)/);
   assert.match(webPage, /id="design-platform-config"/);
+});
+
+test("web low value automation run is blocked by readiness blockers", () => {
+  const runSection = webPage.slice(
+    webPage.indexOf("async function runLowValueAutomation"),
+    webPage.indexOf("async function runAutomationCycle"),
+  );
+  const blockerIndex = runSection.indexOf("const firstBlocker = latestReadiness?.blockers[0]");
+  const processIndex = runSection.indexOf("const result = await autoProcessLowValue()");
+
+  assert.ok(blockerIndex > 0);
+  assert.ok(processIndex > blockerIndex);
+  assert.match(runSection, /await getAutomationReadiness\(\)/);
+  assert.match(runSection, /handleAutomationReadinessCheck\(firstBlocker\)/);
+  assert.match(runSection, /return;\s*}\s*let summary/);
 });

@@ -146,10 +146,16 @@ test("automation status persists skipped run when another run is active", async 
   let releaseRunningStep;
   const saved = [];
   const service = createService({
-    designJobs: {
-      pollActiveResults: () =>
+    catalog: {
+      auditSkus: () =>
         new Promise((resolve) => {
-          releaseRunningStep = () => resolve({ scanned: 0 });
+          releaseRunningStep = () =>
+            resolve({
+              total: 2,
+              readyCount: 2,
+              catalogStructureIssueCount: 0,
+              blockingRepairCount: 0,
+            });
         }),
     },
     store: {
@@ -188,6 +194,38 @@ test("automation run clears running marker when history persistence fails", asyn
   assert.equal(status.runningStartedAt, null);
   assert.equal(status.lastRun, run);
   assert.equal(run.errors.some((error) => error.step === "persistAutomationRun"), true);
+});
+
+test("automation run is skipped before side effects when readiness has blockers", async () => {
+  let lowValueRan = false;
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => {
+        lowValueRan = true;
+        return { autoSubmit: { submitted: [] } };
+      },
+    },
+    catalog: {
+      auditSkus: async () => ({
+        total: 1,
+        readyCount: 0,
+        catalogStructureIssueCount: 1,
+        blockingRepairCount: 2,
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+  const status = service.status();
+
+  assert.equal(run.skipped, true);
+  assert.equal(run.reason, "automation_readiness_blocked");
+  assert.equal(run.steps.length, 0);
+  assert.equal(lowValueRan, false);
+  assert.equal(run.results.readiness.ready, false);
+  assert.equal(run.results.readiness.blockers.some((item) => item.key === "sku_catalog"), true);
+  assert.equal(status.runCount, 0);
+  assert.equal(status.lastRun, run);
 });
 
 test("automation step timing records failures without stopping later steps", async () => {

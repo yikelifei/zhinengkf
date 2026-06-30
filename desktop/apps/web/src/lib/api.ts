@@ -37,7 +37,12 @@ export type DesignJob = {
   assets?: DesignAsset[];
   revisions?: DesignRevision[];
   customer?: { name: string };
-  conversation?: { title: string };
+  conversation?: {
+    id?: string | null;
+    title?: string | null;
+    customerId?: string | null;
+    wechatAccountId?: string | null;
+  };
   updatedAt?: string;
   readiness?: {
     ok: boolean;
@@ -182,6 +187,16 @@ export type SkuCatalogAudit = {
   bundleCapacityRiskCount?: number;
   bundleReadinessIssueCount?: number;
   bundleReadinessWarnings?: string[];
+  commercialReadiness?: {
+    score: number;
+    level: "ready" | "review" | "blocked";
+    canAutoBundle: boolean;
+    canSubmitDesign: boolean;
+    canAutoQuote: boolean;
+    summary: string;
+    blockers: string[];
+    nextActions: string[];
+  };
   repairQueueCount?: number;
   blockingRepairCount?: number;
   repairQueue?: SkuRepairQueueItem[];
@@ -262,6 +277,32 @@ export type TrainingSample = {
   agentId?: string;
   agentKey: string;
   scene: string;
+  sceneScore?: number;
+  sceneScores?: Array<{
+    scene: string;
+    agentKey: string;
+    score: number;
+    matchedKeywords: string[];
+  }>;
+  matchedKeywords?: string[];
+  sceneCheck?: {
+    status: "clear" | "weak" | "ambiguous" | "unmatched" | string;
+    reason: string;
+    needsReview?: boolean;
+    scoreGap?: number;
+    topScene?: {
+      scene: string;
+      agentKey: string;
+      score: number;
+      matchedKeywords: string[];
+    } | null;
+    secondaryScene?: {
+      scene: string;
+      agentKey: string;
+      score: number;
+      matchedKeywords: string[];
+    } | null;
+  } | null;
   customerText: string;
   idealReply: string;
   score: number;
@@ -280,6 +321,33 @@ export type TrainingSample = {
     recommendedAction?: string;
     trainable: boolean;
     flags: string[];
+    usage?: {
+      scope: string;
+      label: string;
+      reason: string;
+      routeMemory: boolean;
+      replySkill: boolean;
+      antiWrongReply: boolean;
+      trainable: boolean;
+      flags: string[];
+    };
+    attention?: {
+      needsAttention: boolean;
+      label: string;
+      primaryReason?: {
+        code: string;
+        label: string;
+        detail: string;
+        action: string;
+      } | null;
+      reasons: Array<{
+        code: string;
+        label: string;
+        detail: string;
+        action: string;
+      }>;
+      recommendedAction?: string;
+    };
   };
   createdAt: string;
 };
@@ -301,6 +369,11 @@ export type TrainingOverview = {
     blockedSamples: number;
     trainableSamples: number;
     antiWrongReplySamples: number;
+    routeMemorySamples?: number;
+    replySkillSamples?: number;
+    routeAndReplySamples?: number;
+    needsAttentionSamples?: number;
+    attentionReasonCounts?: Array<{ code: string; label: string; count: number }>;
     lowScoreSamples: number;
     missingAnswerSamples: number;
     missingSkillHintSamples: number;
@@ -420,12 +493,16 @@ export type SendTask = {
   wechatAccountId: string;
   conversationId: string;
   payload: Record<string, unknown>;
-  guardSnapshot?: {
-    status?: string;
-    reason?: string;
-    queueBlockedAlertedBy?: string;
-    queueBlockedAlertedAt?: string;
-    queueBlockedAdvice?: {
+    guardSnapshot?: {
+      status?: string;
+      reason?: string;
+      requeueReason?: string;
+      requeuedAt?: string;
+      cancelReason?: string;
+      cancelledAt?: string;
+      queueBlockedAlertedBy?: string;
+      queueBlockedAlertedAt?: string;
+      queueBlockedAdvice?: {
       reason: string;
       severity: "info" | "warning" | "error";
       blockingTaskId?: string | null;
@@ -435,10 +512,17 @@ export type SendTask = {
     blockedByManualLock?: boolean;
     blockedBy?: string;
     blockedAt?: string;
-    failedKeys?: string[];
-    checks?: Array<{
-      key: string;
-      label: string;
+      failedKeys?: string[];
+      history?: Array<{
+        action?: string;
+        fromStatus?: string;
+        reason?: string;
+        at?: string;
+        reviewer?: string;
+      }>;
+      checks?: Array<{
+        key: string;
+        label: string;
       expected?: string;
       actual?: string;
       passed: boolean;
@@ -658,6 +742,9 @@ export type RouteEvaluation = {
   id: string;
   channel: string;
   text: string;
+  customerId?: string | null;
+  conversationId?: string | null;
+  wechatAccountId?: string | null;
   agentKey: string;
   scene: string;
   sceneScore?: number;
@@ -1014,6 +1101,12 @@ export type BundleRecommendation = {
     profit: number;
     profitRate: number;
   };
+  fulfillment?: {
+    requestedQuantity: number;
+    capacity: number;
+    enough: boolean;
+    bottleneckSkuCode?: string | null;
+  };
   warnings: string[];
 };
 
@@ -1051,6 +1144,67 @@ export type UploadAssetPayload = {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:3200/api";
 
+export type IdentityFilters = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
+
+export type IdentityExpectation = {
+  expectedWechatAccountId?: string;
+  expectedConversationId?: string;
+  expectedCustomerId?: string;
+};
+
+export function identityExpectation(record: {
+  wechatAccountId?: string | null;
+  conversationId?: string | null;
+  customerId?: string | null;
+  target?: { wechatAccountId?: string | null; conversationId?: string | null; customerId?: string | null } | null;
+  conversation?: { customerId?: string | null; title?: string | null } | null;
+  designJob?: { wechatAccountId?: string | null; conversationId?: string | null; customerId?: string | null } | null;
+  quoteDraft?: {
+    customerId?: string | null;
+    designJob?: { wechatAccountId?: string | null; conversationId?: string | null; customerId?: string | null } | null;
+  } | null;
+}): IdentityExpectation {
+  return {
+    expectedWechatAccountId: firstIdentityValue(
+      record.wechatAccountId,
+      record.target?.wechatAccountId,
+      record.designJob?.wechatAccountId,
+      record.quoteDraft?.designJob?.wechatAccountId,
+    ),
+    expectedConversationId: firstIdentityValue(
+      record.conversationId,
+      record.target?.conversationId,
+      record.designJob?.conversationId,
+      record.quoteDraft?.designJob?.conversationId,
+    ),
+    expectedCustomerId: firstIdentityValue(
+      record.customerId,
+      record.target?.customerId,
+      record.conversation?.customerId,
+      record.designJob?.customerId,
+      record.quoteDraft?.customerId,
+      record.quoteDraft?.designJob?.customerId,
+    ),
+  };
+}
+
+function firstIdentityValue(...values: Array<string | null | undefined>) {
+  return values.find((value): value is string => Boolean(value));
+}
+
+function identityQuery(filters: IdentityFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
+  if (filters.conversationId) params.set("conversationId", filters.conversationId);
+  if (filters.customerId) params.set("customerId", filters.customerId);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -1064,9 +1218,9 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json();
 }
 
-export async function getDesignJobs(): Promise<DesignJob[]> {
+export async function getDesignJobs(filters: IdentityFilters = {}): Promise<DesignJob[]> {
   try {
-    const response = await fetch(`${API_BASE}/design-jobs`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/design-jobs${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1199,7 +1353,19 @@ export async function getChatImports(): Promise<ChatImport[]> {
 
 export async function getTrainingSamples(filters: {
   agentId?: string;
-  quality?: "all" | "safe" | "review" | "risk" | "blocked" | "anti_wrong_reply" | "trainable" | "not_trainable";
+  quality?:
+    | "all"
+    | "safe"
+    | "review"
+    | "risk"
+    | "blocked"
+    | "needs_attention"
+    | "anti_wrong_reply"
+    | "trainable"
+    | "not_trainable"
+    | "route_memory"
+    | "reply_skill"
+    | "route_and_reply";
   status?: string;
   sourceType?: string;
   limit?: number;
@@ -1248,6 +1414,21 @@ export async function reviewTrainingSample(
   return postJson<{ sample: TrainingSample; reviewLog: ReviewLog }>(`/training/samples/${encodeURIComponent(id)}/review`, payload);
 }
 
+export async function batchReviewTrainingSamples(payload: {
+  sampleIds: string[];
+  status: "ready" | "review" | "rejected";
+  reviewer?: string;
+  note?: string;
+}): Promise<{
+  updated: number;
+  status: string;
+  sampleIds: string[];
+  samples: TrainingSample[];
+  reviewLogs: ReviewLog[];
+}> {
+  return postJson("/training/samples/batch-review", payload);
+}
+
 export async function getWechatAccounts(): Promise<WechatAccount[]> {
   try {
     const response = await fetch(`${API_BASE}/wechat/accounts`, { cache: "no-store" });
@@ -1270,14 +1451,14 @@ export async function getWechatConversations(): Promise<Conversation[]> {
 
 export async function setConversationManualLock(
   id: string,
-  payload: { locked: boolean; reviewer?: string; reason?: string; note?: string },
+  payload: { locked: boolean; reviewer?: string; reason?: string; note?: string } & IdentityExpectation,
 ): Promise<{ conversation: Conversation; log: ReviewLog }> {
   return postJson<{ conversation: Conversation; log: ReviewLog }>(`/wechat/conversations/${id}/manual-lock`, payload);
 }
 
-export async function getSendTasks(): Promise<SendTask[]> {
+export async function getSendTasks(filters: IdentityFilters = {}): Promise<SendTask[]> {
   try {
-    const response = await fetch(`${API_BASE}/wechat/send-tasks`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/wechat/send-tasks${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1285,9 +1466,12 @@ export async function getSendTasks(): Promise<SendTask[]> {
   }
 }
 
-export async function getSendAttempts(sendTaskId?: string): Promise<SendAttempt[]> {
+export async function getSendAttempts(sendTaskId?: string, filters: IdentityFilters = {}): Promise<SendAttempt[]> {
   try {
-    const suffix = sendTaskId ? `?sendTaskId=${encodeURIComponent(sendTaskId)}` : "";
+    const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+    if (sendTaskId) params.set("sendTaskId", sendTaskId);
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
     const response = await fetch(`${API_BASE}/wechat/send-attempts${suffix}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
@@ -1306,14 +1490,14 @@ export async function getSendAdapter(): Promise<SendAdapterInfo | null> {
   }
 }
 
-export async function getBridgeOutbox(): Promise<BridgeOutboxResult> {
-  const response = await fetch(`${API_BASE}/wechat/bridge/outbox`, { cache: "no-store" });
+export async function getBridgeOutbox(filters: IdentityFilters = {}): Promise<BridgeOutboxResult> {
+  const response = await fetch(`${API_BASE}/wechat/bridge/outbox${identityQuery(filters)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
 }
 
-export async function getBridgeStatus(): Promise<BridgeStatusResult> {
-  const response = await fetch(`${API_BASE}/wechat/bridge/status`, { cache: "no-store" });
+export async function getBridgeStatus(filters: IdentityFilters = {}): Promise<BridgeStatusResult> {
+  const response = await fetch(`${API_BASE}/wechat/bridge/status${identityQuery(filters)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
 }
@@ -1339,9 +1523,9 @@ export async function scanBridgeInbox(): Promise<BridgeInboxScanResult> {
   return postJson<BridgeInboxScanResult>("/wechat/bridge/inbox/scan", {});
 }
 
-export async function getWechatWindowSnapshots(): Promise<WechatWindowSnapshot[]> {
+export async function getWechatWindowSnapshots(filters: IdentityFilters = {}): Promise<WechatWindowSnapshot[]> {
   try {
-    const response = await fetch(`${API_BASE}/wechat/window-snapshots`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/wechat/window-snapshots${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1365,8 +1549,8 @@ export async function scanWindowSnapshotInbox(): Promise<WindowSnapshotInboxScan
   return postJson<WindowSnapshotInboxScanResult>("/wechat/window-snapshots/inbox/scan", {});
 }
 
-export async function createDemoSendTask(conversationId: string): Promise<SendTask> {
-  return postJson<SendTask>("/wechat/send-tasks/demo", { conversationId });
+export async function createDemoSendTask(conversationId: string, wechatAccountId?: string): Promise<SendTask> {
+  return postJson<SendTask>("/wechat/send-tasks/demo", { conversationId, wechatAccountId });
 }
 
 export async function validateSendTask(id: string, mode: "correct" | "wrong_chat"): Promise<SendTask> {
@@ -1377,23 +1561,25 @@ export async function validateSendTaskCurrentWindow(id: string): Promise<SendTas
   return postJson<SendTask>(`/wechat/send-tasks/${id}/validate-current-window`, {});
 }
 
-export async function executeDryRunSend(id: string): Promise<{ task: SendTask; attempt: SendAttempt }> {
-  return postJson<{ task: SendTask; attempt: SendAttempt }>(`/wechat/send-tasks/${id}/execute-dry-run`, {});
+export async function executeDryRunSend(id: string, expected: IdentityExpectation = {}): Promise<{ task: SendTask; attempt: SendAttempt }> {
+  return postJson<{ task: SendTask; attempt: SendAttempt }>(`/wechat/send-tasks/${id}/execute-dry-run`, expected);
 }
 
-export async function executeSendTask(id: string): Promise<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }> {
-  return postJson<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }>(`/wechat/send-tasks/${id}/execute`, {});
+export async function executeSendTask(id: string, expected: IdentityExpectation = {}): Promise<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }> {
+  return postJson<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }>(`/wechat/send-tasks/${id}/execute`, expected);
 }
 
-export async function requeueSendTask(id: string): Promise<SendTask> {
+export async function requeueSendTask(id: string, payload: { reason?: string } & IdentityExpectation = {}): Promise<SendTask> {
   return postJson<SendTask>(`/wechat/send-tasks/${id}/requeue`, {
     reason: "客服重新排队发送",
+    ...payload,
   });
 }
 
-export async function cancelSendTask(id: string): Promise<SendTask> {
+export async function cancelSendTask(id: string, payload: { reason?: string } & IdentityExpectation = {}): Promise<SendTask> {
   return postJson<SendTask>(`/wechat/send-tasks/${id}/cancel`, {
     reason: "客服取消发送任务",
+    ...payload,
   });
 }
 
@@ -1439,13 +1625,13 @@ export async function getRouteEvaluations(): Promise<RouteEvaluation[]> {
   }
 }
 
-export async function evaluateRoute(text: string): Promise<RouteEvaluation> {
-  return postJson<RouteEvaluation>("/routing/evaluate", { channel: "wechat", text });
+export async function evaluateRoute(text: string, filters: IdentityFilters = {}): Promise<RouteEvaluation> {
+  return postJson<RouteEvaluation>("/routing/evaluate", { channel: "wechat", ...filters, text });
 }
 
 export async function correctRouteEvaluation(
   id: string,
-  payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string },
+  payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string } & IdentityExpectation,
 ): Promise<{
   route: RouteEvaluation;
   trainingSample: TrainingSample;
@@ -1458,6 +1644,7 @@ export async function correctRouteEvaluation(
 export async function processInboundMessage(payload: {
   wechatAccountId: string;
   conversationId: string;
+  customerId?: string;
   text: string;
   assetIds?: string[];
   attachments?: Array<Record<string, unknown>>;
@@ -1846,43 +2033,43 @@ export async function redeemDesignPlatformActivation(payload: {
   return postJson<DesignPlatformActivationResponse>("/integrations/design-platform/activation/redeem", payload);
 }
 
-export async function submitDesignJob(id: string): Promise<DesignJob> {
-  return postJson<DesignJob>(`/design-jobs/${id}/submit`);
+export async function submitDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
+  return postJson<DesignJob>(`/design-jobs/${id}/submit`, expected);
 }
 
-export async function preflightDesignJob(id: string): Promise<DesignJobPreflightResult> {
-  return postJson<DesignJobPreflightResult>(`/design-jobs/${id}/preflight`);
+export async function preflightDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJobPreflightResult> {
+  return postJson<DesignJobPreflightResult>(`/design-jobs/${id}/preflight`, expected);
 }
 
-export async function pollDesignJob(id: string): Promise<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }> {
-  return postJson<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }>(`/design-jobs/${id}/poll`);
+export async function pollDesignJob(id: string, expected: IdentityExpectation = {}): Promise<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }> {
+  return postJson<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }>(`/design-jobs/${id}/poll`, expected);
 }
 
-export async function retryDesignJob(id: string): Promise<DesignJob> {
-  return postJson<DesignJob>(`/design-jobs/${id}/retry`);
+export async function retryDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
+  return postJson<DesignJob>(`/design-jobs/${id}/retry`, expected);
 }
 
 export async function requestDesignRevision(id: string, payload: {
   instruction: string;
   selectedImageId?: string;
   sourceText?: string;
-}): Promise<{ decision: Record<string, unknown>; revision: DesignRevision | null; job: DesignJob }> {
+} & IdentityExpectation): Promise<{ decision: Record<string, unknown>; revision: DesignRevision | null; job: DesignJob }> {
   return postJson<{ decision: Record<string, unknown>; revision: DesignRevision | null; job: DesignJob }>(
     `/design-jobs/${id}/revisions`,
     payload,
   );
 }
 
-export async function attachDesignJobAssets(id: string, assetIds: string[]): Promise<DesignJob> {
-  return postJson<DesignJob>(`/design-jobs/${id}/assets`, { assetIds });
+export async function attachDesignJobAssets(id: string, assetIds: string[], expected: IdentityExpectation = {}): Promise<DesignJob> {
+  return postJson<DesignJob>(`/design-jobs/${id}/assets`, { ...expected, assetIds });
 }
 
-export async function cancelDesignJob(id: string): Promise<{ job: DesignJob; remoteResult?: Record<string, unknown> | null }> {
-  return postJson<{ job: DesignJob; remoteResult?: Record<string, unknown> | null }>(`/design-jobs/${id}/cancel`);
+export async function cancelDesignJob(id: string, expected: IdentityExpectation = {}): Promise<{ job: DesignJob; remoteResult?: Record<string, unknown> | null }> {
+  return postJson<{ job: DesignJob; remoteResult?: Record<string, unknown> | null }>(`/design-jobs/${id}/cancel`, expected);
 }
 
-export async function quickConfirmSend(id: string): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quick-confirm-send`);
+export async function quickConfirmSend(id: string, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quick-confirm-send`, expected);
 }
 
 export type SelectImagePayload =
@@ -1896,18 +2083,18 @@ export type SelectImagePayload =
       attachmentFingerprint?: string;
     };
 
-export async function selectDesignImage(id: string, input: SelectImagePayload): Promise<Record<string, unknown>> {
-  const payload = typeof input === "string" ? { text: input } : input;
+export async function selectDesignImage(id: string, input: SelectImagePayload, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
+  const payload = typeof input === "string" ? { ...expected, text: input } : { ...expected, ...input };
   return postJson<Record<string, unknown>>(`/design-jobs/${id}/select-image`, payload);
 }
 
-export async function createQuote(id: string): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quote`);
+export async function createQuote(id: string, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quote`, expected);
 }
 
-export async function getQuotes(): Promise<QuoteDraft[]> {
+export async function getQuotes(filters: IdentityFilters = {}): Promise<QuoteDraft[]> {
   try {
-    const response = await fetch(`${API_BASE}/quotes`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/quotes${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1929,20 +2116,29 @@ export async function updateQuote(id: string, patch: {
   quantity?: number | string;
   unitPrice?: number | string;
   totalCost?: number | string;
-}): Promise<QuoteDraft> {
+} & IdentityExpectation): Promise<QuoteDraft> {
   return postJson<QuoteDraft>(`/quotes/${id}/update`, patch);
 }
 
-export async function queueQuoteSend(id: string): Promise<{ quote: QuoteDraft; sendTask: SendTask }> {
+export async function reviseQuoteSelection(id: string, patch: {
+  selectedImageId: string;
+  owner?: string;
+  note?: string;
+} & IdentityExpectation): Promise<QuoteDraft> {
+  return postJson<QuoteDraft>(`/quotes/${id}/revise-selection`, patch);
+}
+
+export async function queueQuoteSend(id: string, expected: IdentityExpectation = {}): Promise<{ quote: QuoteDraft; sendTask: SendTask }> {
   return postJson<{ quote: QuoteDraft; sendTask: SendTask }>(`/quotes/${id}/queue-send`, {
+    ...expected,
     owner: "人工客服",
     note: "报价已进入微信安全发送队列。",
   });
 }
 
-export async function getOrderDrafts(): Promise<OrderDraft[]> {
+export async function getOrderDrafts(filters: IdentityFilters = {}): Promise<OrderDraft[]> {
   try {
-    const response = await fetch(`${API_BASE}/orders`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/orders${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1950,8 +2146,8 @@ export async function getOrderDrafts(): Promise<OrderDraft[]> {
   }
 }
 
-export async function createOrderDraftFromQuote(id: string): Promise<OrderDraft> {
-  return postJson<OrderDraft>(`/orders/from-quote/${id}`);
+export async function createOrderDraftFromQuote(id: string, expected: IdentityExpectation = {}): Promise<OrderDraft> {
+  return postJson<OrderDraft>(`/orders/from-quote/${id}`, expected);
 }
 
 export async function updateOrderDraft(id: string, patch: {
@@ -1959,31 +2155,33 @@ export async function updateOrderDraft(id: string, patch: {
   paymentStatus?: string;
   customerNotes?: string;
   owner?: string;
-}): Promise<OrderDraft> {
+} & IdentityExpectation): Promise<OrderDraft> {
   return postJson<OrderDraft>(`/orders/${id}/update`, patch);
 }
 
-export async function queueOrderConfirmation(id: string): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+export async function queueOrderConfirmation(id: string, expected: IdentityExpectation = {}): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-confirmation`, {
+    ...expected,
     owner: "人工客服",
     note: "订单确认已进入微信安全发送队列。",
   });
 }
 
-export async function queueOrderFollowup(id: string, type: "production" | "delivery"): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+export async function queueOrderFollowup(id: string, type: "production" | "delivery", expected: IdentityExpectation = {}): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-followup`, {
+    ...expected,
     owner: "人工客服",
     type,
   });
 }
 
-export async function markManualReview(id: string): Promise<DesignJob> {
-  return postJson<DesignJob>(`/design-jobs/${id}/manual-review`);
+export async function markManualReview(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
+  return postJson<DesignJob>(`/design-jobs/${id}/manual-review`, expected);
 }
 
-export async function getReviewCenter(): Promise<ReviewCenter> {
+export async function getReviewCenter(filters: IdentityFilters = {}): Promise<ReviewCenter> {
   try {
-    const response = await fetch(`${API_BASE}/reviews`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/reviews${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1995,7 +2193,7 @@ export async function reviewDesignJob(id: string, payload: {
   decision: "approve_images" | "approve_send" | "request_revision" | "reject";
   reviewer?: string;
   note?: string;
-}): Promise<Record<string, unknown>> {
+} & IdentityExpectation): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>(`/reviews/design-jobs/${id}`, payload);
 }
 
@@ -2003,13 +2201,15 @@ export async function reviewQuote(id: string, payload: {
   decision: "approve_quote" | "request_followup" | "reject_quote";
   reviewer?: string;
   note?: string;
-}): Promise<Record<string, unknown>> {
+} & IdentityExpectation): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>(`/reviews/quotes/${id}`, payload);
 }
 
-export async function getNotifications(unreadOnly = false): Promise<NotificationItem[]> {
+export async function getNotifications(unreadOnly = false, filters: IdentityFilters = {}): Promise<NotificationItem[]> {
   try {
-    const response = await fetch(`${API_BASE}/notifications?unreadOnly=${unreadOnly ? "true" : "false"}`, {
+    const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+    params.set("unreadOnly", unreadOnly ? "true" : "false");
+    const response = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
       cache: "no-store",
     });
     if (!response.ok) throw new Error(`api ${response.status}`);
@@ -2019,12 +2219,12 @@ export async function getNotifications(unreadOnly = false): Promise<Notification
   }
 }
 
-export async function markNotificationRead(id: string): Promise<NotificationItem> {
-  return postJson<NotificationItem>(`/notifications/${id}/read`);
+export async function markNotificationRead(id: string, expected: IdentityExpectation = {}): Promise<NotificationItem> {
+  return postJson<NotificationItem>(`/notifications/${id}/read`, expected);
 }
 
-export async function markAllNotificationsRead(): Promise<{ count: number }> {
-  return postJson<{ count: number }>("/notifications/read-all");
+export async function markAllNotificationsRead(filters: IdentityFilters = {}): Promise<{ count: number }> {
+  return postJson<{ count: number }>("/notifications/read-all", filters);
 }
 
 const sampleDesignJobs: DesignJob[] = [

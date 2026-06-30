@@ -72,6 +72,19 @@ export class TrainingController {
     return this.training.reviewSample(id, payload);
   }
 
+  @Post("samples/batch-review")
+  batchReviewSamples(
+    @Body()
+    payload: {
+      sampleIds?: string[];
+      status?: "ready" | "review" | "rejected";
+      reviewer?: string;
+      note?: string;
+    },
+  ) {
+    return this.training.batchReviewSamples(payload || {});
+  }
+
   @Get("skill-suggestions")
   listSkillSuggestions(@Query("agentId") agentId?: string, @Query("minScore") minScore?: string) {
     return this.training.listSkillSuggestions({

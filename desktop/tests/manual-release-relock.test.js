@@ -351,3 +351,195 @@ test("manual-approved quote send writes review log with send task id", async () 
   assert.equal(reviewLogs[0].metadata.sendTaskId, "send_1");
   assert.equal(reviewLogs[0].metadata.conversationId, "conversation_1");
 });
+
+test("queued quote selection cannot be changed by later customer image selection", async () => {
+  let updateCount = 0;
+  const designJob = {
+    id: "design_1",
+    customerId: "customer_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    conversation: {
+      id: "conversation_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+    },
+    images: [
+      { id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1 },
+      { id: "image_2", imageId: "candidate_2", designJobId: "design_1", position: 2 },
+    ],
+  };
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    status: "send_queued",
+    sendTaskId: "send_1",
+    paymentStatus: "unpaid",
+    selectedImage: designJob.images[0],
+    designJob,
+  };
+  const service = new QuotesService(
+    {},
+    {
+      listQuoteDrafts: () => [quote],
+      getDesignJob: () => designJob,
+      updateQuoteDraft: () => {
+        updateCount += 1;
+        throw new Error("should not update locked quote selection");
+      },
+    },
+    {},
+  );
+
+  await assert.rejects(
+    () => service.createFromDesignJob("design_1", "image_2"),
+    /quote selection is locked/,
+  );
+
+  assert.equal(updateCount, 0);
+  assert.equal(quote.selectedImageId, "image_1");
+});
+
+test("manual quote revision changes selected image and cancels queued send task", async () => {
+  const cancelled = [];
+  const reviewLogs = [];
+  const designJob = {
+    id: "design_1",
+    customerId: "customer_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    conversation: {
+      id: "conversation_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+    },
+    images: [
+      { id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1 },
+      { id: "image_2", imageId: "candidate_2", designJobId: "design_1", position: 2 },
+    ],
+  };
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 200,
+    totalPrice: 10000,
+    totalCost: 7000,
+    profit: 3000,
+    status: "send_queued",
+    sendTaskId: "send_1",
+    paymentStatus: "unpaid",
+    selectedImage: designJob.images[0],
+    sendTask: { id: "send_1", status: "queued" },
+    designJob,
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      listOrderDrafts: () => [],
+      updateQuoteDraft: (id, patch) => ({
+        ...quote,
+        id,
+        ...patch,
+        selectedImage: designJob.images.find((image) => image.id === patch.selectedImageId) || quote.selectedImage,
+      }),
+      createReviewLog: (payload) => {
+        reviewLogs.push(payload);
+        return payload;
+      },
+    },
+    {
+      cancelSendTask: (id, payload) => {
+        cancelled.push({ id, payload });
+        return { id, status: "cancelled" };
+      },
+    },
+  );
+
+  const updated = await service.reviseSelectedImage("quote_1", {
+    selectedImageId: "image_2",
+    owner: "Alice",
+    note: "客户改选第二张",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(updated.selectedImageId, "image_2");
+  assert.equal(updated.status, "manual_review");
+  assert.equal(updated.sendTaskId, null);
+  assert.equal(updated.owner, "Alice");
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].id, "send_1");
+  assert.equal(reviewLogs.length, 1);
+  assert.equal(reviewLogs[0].decision, "manual_quote_revision");
+  assert.equal(reviewLogs[0].metadata.previousSelectedImageId, "image_1");
+  assert.equal(reviewLogs[0].metadata.selectedImageId, "image_2");
+  assert.equal(reviewLogs[0].metadata.cancelledSendTaskId, "send_1");
+});
+
+test("manual quote revision is blocked after order draft exists", async () => {
+  let cancelCount = 0;
+  let updateCount = 0;
+  const designJob = {
+    id: "design_1",
+    customerId: "customer_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    conversation: {
+      id: "conversation_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+    },
+    images: [
+      { id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1 },
+      { id: "image_2", imageId: "candidate_2", designJobId: "design_1", position: 2 },
+    ],
+  };
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    status: "send_queued",
+    sendTaskId: "send_1",
+    paymentStatus: "unpaid",
+    selectedImage: designJob.images[0],
+    sendTask: { id: "send_1", status: "queued" },
+    designJob,
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      listOrderDrafts: () => [{ id: "order_1", quoteDraftId: "quote_1" }],
+      updateQuoteDraft: () => {
+        updateCount += 1;
+        throw new Error("should not update quote with existing order draft");
+      },
+      createReviewLog: () => {
+        throw new Error("should not create revision log with existing order draft");
+      },
+    },
+    {
+      cancelSendTask: () => {
+        cancelCount += 1;
+        throw new Error("should not cancel send task with existing order draft");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.reviseSelectedImage("quote_1", { selectedImageId: "image_2" }),
+    /already has an order draft/,
+  );
+
+  assert.equal(cancelCount, 0);
+  assert.equal(updateCount, 0);
+  assert.equal(quote.selectedImageId, "image_1");
+});

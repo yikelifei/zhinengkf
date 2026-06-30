@@ -8,6 +8,23 @@ const IMAGE_ISSUE_CODES = [
   "local_angle_image_missing",
 ];
 
+const NON_BLOCKING_REPAIR_CODES = new Set([
+  "duplicate_name",
+  "invalid_angle_image_type",
+  "invalid_replacement_sku",
+  "local_angle_image_missing",
+  "missing_supplier",
+  "missing_scene_tags",
+  "low_stock",
+  "long_lead_time",
+  "missing_dimensions",
+  "incomplete_dimensions",
+  "invalid_dimensions",
+  "missing_weight",
+  "invalid_weight",
+  "self_replacement_sku",
+]);
+
 const ISSUE_REPAIR_GUIDE = {
   missing_sku_code: { field: "skuCode", label: "SKU编号", priority: 100, action: "补 SKU 编号，否则无法绑定库存、报价和设计任务" },
   duplicate_sku_code: { field: "skuCode", label: "SKU编号", priority: 98, action: "合并或重命名重复 SKU，避免库存、报价和出图绑定到错误商品" },
@@ -162,7 +179,7 @@ function auditSkuCatalog(skus = [], options = {}) {
     }
   }
 
-  const issueRowKeys = new Set(issues.filter((issue) => issue.severity !== "info").map((issue) => issue.rowKey || issue.skuCode || issue.name));
+  const issueRowKeys = new Set(issues.filter(isBlockingRepairIssue).map((issue) => issue.rowKey || issue.skuCode || issue.name));
   const repairQueue = buildSkuRepairQueue(skuList, issues);
   const imageProblems = buildSkuImageProblems(issues);
   const availableRoleCounts = countAvailableSkuRoles(skuList);
@@ -171,6 +188,18 @@ function auditSkuCatalog(skus = [], options = {}) {
   const catalogCoverageIssueCount = Number(coverage.sceneTagCount === 0) + Number(coverage.categoryCount === 0);
   const bundleReadiness = summarizeBundleReadiness(skuList, {
     quantityCheckpoints: normalizeQuantityCheckpoints(options.quantityCheckpoints),
+  });
+  const blockingRepairCount = repairQueue.filter((item) => item.blocking).length;
+  const commercialReadiness = buildCommercialReadiness({
+    total: skuList.length,
+    errorCount: issues.filter((issue) => issue.severity === "error").length,
+    warningCount: issues.filter((issue) => issue.severity === "warning").length,
+    blockingRepairCount,
+    missingImageCount: issues.filter((issue) => ["missing_main_image", "local_main_image_missing", "invalid_main_image_type"].includes(issue.code)).length,
+    negativeMarginCount: issues.filter((issue) => ["invalid_cost_price", "negative_margin", "low_margin_rate"].includes(issue.code)).length,
+    catalogStructureIssueCount,
+    catalogCoverageIssueCount,
+    bundleReadiness,
   });
   return {
     total: skuList.length,
@@ -216,7 +245,8 @@ function auditSkuCatalog(skus = [], options = {}) {
     bundleReadinessIssueCount: bundleReadiness.issueCount,
     bundleReadinessWarnings: bundleReadiness.warnings,
     repairQueueCount: repairQueue.length,
-    blockingRepairCount: repairQueue.filter((item) => item.blocking).length,
+    blockingRepairCount,
+    commercialReadiness,
     repairQueue,
     issues,
   };
@@ -365,6 +395,60 @@ function normalizeQuantityCheckpoints(value) {
     .sort((a, b) => a - b);
 }
 
+function buildCommercialReadiness(input) {
+  const canAutoBundle = (
+    input.total > 0 &&
+    input.errorCount === 0 &&
+    input.catalogStructureIssueCount === 0 &&
+    input.bundleReadiness.minBundleBudget > 0 &&
+    input.bundleReadiness.basicBundleCapacity > 0
+  );
+  const canSubmitDesign = canAutoBundle && input.blockingRepairCount === 0 && input.missingImageCount === 0;
+  const canAutoQuote = canSubmitDesign && input.negativeMarginCount === 0;
+  const blockers = [];
+  const nextActions = [];
+  if (!input.total) blockers.push("商品库为空");
+  if (input.errorCount) blockers.push(`${input.errorCount} 个严重资料问题`);
+  if (input.catalogStructureIssueCount) blockers.push("缺少可售礼盒或内搭");
+  if (input.bundleReadiness.basicBundleCapacity <= 0) blockers.push("基础礼盒容量为 0");
+  if (input.blockingRepairCount) blockers.push(`${input.blockingRepairCount} 个商品会影响自动搭配或出图`);
+  if (input.missingImageCount) blockers.push(`${input.missingImageCount} 个商品图片问题`);
+  if (input.negativeMarginCount) blockers.push(`${input.negativeMarginCount} 个利润异常`);
+  if (input.catalogCoverageIssueCount) nextActions.push("补场景标签和分类，让智能体能按客户场景选品");
+  if (input.bundleReadiness.capacityRiskCount) nextActions.push("补齐礼盒或内搭库存，提升 50/100/200 份订单承接能力");
+  if (input.warningCount) nextActions.push("处理警告项，降低人工审核次数");
+  if (!nextActions.length && canAutoQuote) nextActions.push("商品库已满足低价值客户自动搭配、出图和报价的基础要求");
+
+  const score = Math.max(0, Math.min(100, Math.round(
+    100 -
+    input.errorCount * 12 -
+    input.warningCount * 4 -
+    input.blockingRepairCount * 15 -
+    input.catalogStructureIssueCount * 20 -
+    input.catalogCoverageIssueCount * 8 -
+    input.bundleReadiness.issueCount * 10,
+  )));
+  const level = canAutoQuote ? "ready" : canAutoBundle ? "review" : "blocked";
+  const summary = canAutoQuote
+    ? "商品库已具备低价值客户自动搭配、出图和报价的基础条件。"
+    : canSubmitDesign
+      ? "商品库可自动搭配并提交设计出图，报价前仍建议处理利润或资料警告。"
+      : canAutoBundle
+        ? "商品库可以自动搭配，但出图或报价前还需要补关键商品资料。"
+        : "商品库暂不适合自动化，需要先补齐基础商品结构和关键资料。";
+
+  return {
+    score,
+    level,
+    canAutoBundle,
+    canSubmitDesign,
+    canAutoQuote,
+    summary,
+    blockers,
+    nextActions,
+  };
+}
+
 function topCountEntries(counts, limit = 5) {
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
@@ -444,14 +528,20 @@ function buildSkuRepairQueue(skus = [], issues = []) {
         type: sku.type || "",
         severity: highestSeverity(sortedIssues),
         priority: issuePriority(topIssue),
-        blocking: sortedIssues.some((issue) => ["error", "warning"].includes(issue.severity)),
+        blocking: sortedIssues.some(isBlockingRepairIssue),
         issueCount: sortedIssues.length,
         missingFields: fields,
         recommendedAction: fields[0]?.action || topIssue.message,
         issues: sortedIssues,
       };
     })
-    .sort((a, b) => b.priority - a.priority || Number(b.blocking) - Number(a.blocking) || String(a.skuCode || a.name).localeCompare(String(b.skuCode || b.name)));
+    .sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.priority - a.priority || String(a.skuCode || a.name).localeCompare(String(b.skuCode || b.name)));
+}
+
+function isBlockingRepairIssue(issue) {
+  if (!issue || issue.severity === "info") return false;
+  if (issue.severity === "error") return true;
+  return !NON_BLOCKING_REPAIR_CODES.has(issue.code);
 }
 
 function compareIssuePriority(a, b) {

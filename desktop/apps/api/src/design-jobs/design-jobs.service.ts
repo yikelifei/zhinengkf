@@ -14,6 +14,7 @@ import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { OrdersService } from "../orders/orders.service";
 import { rules } from "../shared/rules";
+import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 const {
   buildWaitingMessage,
   decideRevisionPolicy,
@@ -83,9 +84,10 @@ export class DesignJobsService {
     private readonly orders: OrdersService,
   ) {}
 
-  list() {
-    if (appConfig.useLocalStore) return this.localStore.listDesignJobs();
+  list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    if (appConfig.useLocalStore) return this.localStore.listDesignJobs(filter);
     return this.prisma.designJob.findMany({
+      where: cleanIdentityWhere(filter),
       include: { images: true, customer: true, conversation: true, assets: true },
       orderBy: { updatedAt: "desc" },
       take: 200,
@@ -519,11 +521,12 @@ export class DesignJobsService {
     return { ...resultJob, readiness: check };
   }
 
-  async submit(id: string) {
+  async submit(id: string, expected: ExpectedIdentityPayload = {}) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
 
     await this.assertDesignPlatformPreflight(id);
 
@@ -559,11 +562,12 @@ export class DesignJobsService {
     return updated;
   }
 
-  async preflight(id: string) {
+  async preflight(id: string, expected: ExpectedIdentityPayload = {}) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
 
     const checks: DesignPreflightCheck[] = [];
     let health: Record<string, unknown> | null = null;
@@ -716,11 +720,12 @@ export class DesignJobsService {
     throw new BadRequestException(`design job preflight failed: ${failed || "unknown preflight error"}`);
   }
 
-  async pollResult(id: string) {
+  async pollResult(id: string, expected: ExpectedIdentityPayload = {}) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
     if (!job.externalJobId) throw new Error("design job has no externalJobId");
 
     const result = await this.designPlatform.getDesignJobResults(job.externalJobId);
@@ -755,18 +760,24 @@ export class DesignJobsService {
     return { remoteStatus: result.status || "generating", job: updated, result };
   }
 
-  async retry(id: string) {
-    return this.retryDesignJob(id, "manual");
+  async retry(id: string, expected: ExpectedIdentityPayload = {}) {
+    return this.retryDesignJob(id, "manual", undefined, expected);
   }
 
-  async attachAssets(id: string, assetIds: string[]) {
+  async attachAssets(id: string, assetIds: string[], expected: ExpectedIdentityPayload = {}) {
     const uniqueAssetIds = [...new Set((assetIds || []).filter(Boolean))];
     if (!uniqueAssetIds.length) throw new Error("assetIds is required");
-    if (appConfig.useLocalStore) return this.localStore.attachDesignAssetsToJob(id, uniqueAssetIds);
+    if (appConfig.useLocalStore) {
+      const job = this.localStore.getDesignJob(id);
+      if (!job) throw new Error(`design job not found: ${id}`);
+      assertExpectedIdentity(job, expected, "design job");
+      return this.localStore.attachDesignAssetsToJob(id, uniqueAssetIds);
+    }
     const [designJob, assets] = await Promise.all([
-      this.prisma.designJob.findUnique({ where: { id }, select: { id: true, requestId: true, customerId: true } }),
+      this.prisma.designJob.findUnique({ where: { id }, select: { id: true, requestId: true, customerId: true, conversationId: true, wechatAccountId: true } }),
       this.prisma.designAsset.findMany({ where: { id: { in: uniqueAssetIds } } }),
     ]);
+    assertExpectedIdentity(designJob, expected, "design job");
     const binding = validateDesignAssetBinding({
       designJob,
       assets,
@@ -793,7 +804,7 @@ export class DesignJobsService {
     });
   }
 
-  async requestRevision(id: string, payload: CreateDesignRevisionPayload) {
+  async requestRevision(id: string, payload: CreateDesignRevisionPayload & ExpectedIdentityPayload) {
     const prisma = this.prisma as any;
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -802,6 +813,7 @@ export class DesignJobsService {
           include: { images: true, assets: true, revisions: true },
         });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, payload, "design job");
 
     const existingRevisions = appConfig.useLocalStore
       ? this.localStore.listDesignRevisions(job.id)
@@ -960,11 +972,12 @@ export class DesignJobsService {
     return { decision, revision, job: updated };
   }
 
-  async cancel(id: string) {
+  async cancel(id: string, expected: ExpectedIdentityPayload = {}) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
     let remoteResult: Record<string, unknown> | null = null;
     if (job.externalJobId) {
       try {
@@ -1148,7 +1161,7 @@ export class DesignJobsService {
 
   async quickConfirmAndQueueSend(
     id: string,
-    options: { releaseManualLock?: boolean; reviewer?: string; releaseReason?: string } = {},
+    options: { releaseManualLock?: boolean; reviewer?: string; releaseReason?: string } & ExpectedIdentityPayload = {},
   ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -1157,6 +1170,7 @@ export class DesignJobsService {
           include: { images: true },
     });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, options, "design job");
     if (!job.wechatAccountId) throw new Error("design job has no wechatAccountId");
     if (!job.conversationId) throw new Error("design job has no conversationId");
 
@@ -1240,11 +1254,13 @@ export class DesignJobsService {
     }
   }
 
-  async selectImage(id: string, input: string | SelectDesignImagePayload) {
+  async selectImage(id: string, input: string | (SelectDesignImagePayload & ExpectedIdentityPayload)) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    const expected = typeof input === "string" ? {} : input || {};
+    assertExpectedIdentity(job, expected, "design job");
     const orderedImages = [...((job.images || []) as DesignImageCandidateLike[])].sort(
       (a, b) => a.position - b.position,
     );
@@ -1340,18 +1356,25 @@ export class DesignJobsService {
     }
   }
 
-  async createQuote(id: string) {
+  async createQuote(id: string, expected: ExpectedIdentityPayload = {}) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
+
     const quote = await this.quotes.createFromDesignJob(id);
     if (appConfig.useLocalStore) this.localStore.updateDesignJob(id, { status: "quote_created" });
     else await this.prisma.designJob.update({ where: { id }, data: { status: "quote_created" } });
     return quote;
   }
 
-  async markManualReview(id: string) {
+  async markManualReview(id: string, expected: ExpectedIdentityPayload = {}) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
 
     return this.handoffDesignJobToManual(job, {
       reason: "manual_requested",
@@ -1522,11 +1545,17 @@ export class DesignJobsService {
     return Boolean(conversation?.manualLocked);
   }
 
-  private async retryDesignJob(id: string, mode: "automatic" | "manual", reason?: string) {
+  private async retryDesignJob(
+    id: string,
+    mode: "automatic" | "manual",
+    reason?: string,
+    expected: ExpectedIdentityPayload = {},
+  ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await (this.prisma as any).designJob.findUnique({ where: { id }, include: { assets: true, revisions: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
 
     try {
       await this.assertDesignPlatformPreflight(job.id);
@@ -1824,6 +1853,14 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cleanIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  return {
+    ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+    ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+    ...(filter.customerId ? { customerId: filter.customerId } : {}),
+  };
 }
 
 function assertManualReleaseReason(reason: unknown, context: string) {

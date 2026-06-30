@@ -216,7 +216,7 @@ test("audits duplicate SKU codes and names before automation uses products", () 
     { ...base, skuCode: "UNIQUE-1", name: "同款茶礼" },
   ]);
 
-  assert.equal(result.readyCount, 0);
+  assert.equal(result.readyCount, 1);
   assert.equal(result.duplicateSkuCodeCount, 2);
   assert.equal(result.duplicateNameCount, 2);
   assert.ok(result.issues.some((issue) => issue.code === "duplicate_sku_code" && issue.severity === "error"));
@@ -376,6 +376,43 @@ test("summarizes minimum budget needed for a basic gift bundle", () => {
   assert.ok(missingItem.bundleReadinessWarnings.some((warning) => warning.includes("内搭")));
 });
 
+test("summarizes commercial SKU readiness for automation", () => {
+  const base = {
+    costPrice: 20,
+    stock: 80,
+    sceneTags: ["employee_gift"],
+    category: "gift",
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const ready = auditSkuCatalog([
+    { ...base, skuCode: "BOX-READY", name: "Box ready", type: "gift_box", salePrice: 60 },
+    { ...base, skuCode: "ITEM-READY", name: "Item ready", type: "item", salePrice: 40 },
+  ]);
+  const designReview = auditSkuCatalog([
+    { ...base, skuCode: "BOX-REVIEW", name: "Box review", type: "gift_box", salePrice: 60, mainImagePath: "" },
+    { ...base, skuCode: "ITEM-REVIEW", name: "Item review", type: "item", salePrice: 40 },
+  ]);
+  const blocked = auditSkuCatalog([
+    { ...base, skuCode: "ITEM-ONLY", name: "Item only", type: "item", salePrice: 40 },
+  ]);
+
+  assert.equal(ready.commercialReadiness.level, "ready");
+  assert.equal(ready.commercialReadiness.canAutoBundle, true);
+  assert.equal(ready.commercialReadiness.canSubmitDesign, true);
+  assert.equal(ready.commercialReadiness.canAutoQuote, true);
+  assert.ok(ready.commercialReadiness.score > designReview.commercialReadiness.score);
+  assert.equal(designReview.commercialReadiness.level, "review");
+  assert.equal(designReview.commercialReadiness.canAutoBundle, true);
+  assert.equal(designReview.commercialReadiness.canSubmitDesign, false);
+  assert.ok(designReview.commercialReadiness.blockers.some((item) => item.includes("图片")));
+  assert.equal(blocked.commercialReadiness.level, "blocked");
+  assert.equal(blocked.commercialReadiness.canAutoBundle, false);
+  assert.ok(blocked.commercialReadiness.blockers.some((item) => item.includes("礼盒")));
+});
+
 test("identifies which SKU role limits basic bundle capacity", () => {
   const base = {
     costPrice: 20,
@@ -443,7 +480,11 @@ test("audits replacement SKU references before stock fallback uses them", () => 
   assert.equal(result.invalidReplacementCount, 2);
   assert.ok(result.issues.some((issue) => issue.code === "invalid_replacement_sku" && issue.field === "replacementSkuCodes"));
   assert.ok(result.issues.some((issue) => issue.code === "self_replacement_sku" && issue.field === "replacementSkuCodes"));
-  assert.ok(result.repairQueue.some((item) => item.missingFields.some((field) => field.field === "replacementSkuCodes")));
+  const replacementRepair = result.repairQueue.find((item) =>
+    item.missingFields.some((field) => field.field === "replacementSkuCodes"),
+  );
+  assert.equal(replacementRepair.blocking, false);
+  assert.equal(result.blockingRepairCount, 0);
 });
 
 test("audits matching rule SKU references before bundle matching uses them", () => {
@@ -575,4 +616,45 @@ test("prioritizes blocking SKU repair work before low risk info", () => {
   assert.equal(result.repairQueue[0].blocking, true);
   assert.equal(result.repairQueue[0].missingFields[0].field, "mainImagePath");
   assert.equal(result.repairQueue[1].severity, "info");
+});
+
+test("keeps operational SKU notes non-blocking for low value automation", () => {
+  const result = auditSkuCatalog([
+    {
+      skuCode: "OPS-NOTE-1",
+      name: "operational notes only",
+      type: "item",
+      salePrice: 100,
+      costPrice: 60,
+      stock: 20,
+      sceneTags: ["employee gift"],
+      mainImagePath: "good.jpg",
+      angleImageIssues: [{ fileMissing: true, path: "missing-side.jpg", index: 0 }],
+    },
+    {
+      skuCode: "BLOCK-MAIN-IMAGE",
+      name: "missing main image",
+      type: "item",
+      salePrice: 100,
+      costPrice: 60,
+      stock: 20,
+      sceneTags: ["employee gift"],
+      supplier: "supplier A",
+      dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+      weightGram: 300,
+    },
+  ]);
+
+  const opsNote = result.repairQueue.find((item) => item.skuCode === "OPS-NOTE-1");
+  const blocked = result.repairQueue.find((item) => item.skuCode === "BLOCK-MAIN-IMAGE");
+
+  assert.equal(opsNote.blocking, false);
+  assert.equal(blocked.blocking, true);
+  assert.equal(result.blockingRepairCount, 1);
+  assert.equal(result.readyCount, 1);
+  assert.equal(result.repairQueue[0].skuCode, "BLOCK-MAIN-IMAGE");
+  assert.ok(opsNote.missingFields.some((field) => field.field === "supplier"));
+  assert.ok(opsNote.missingFields.some((field) => field.field === "dimensions"));
+  assert.ok(opsNote.missingFields.some((field) => field.field === "weightGram"));
+  assert.ok(opsNote.missingFields.some((field) => field.field === "angleImages"));
 });

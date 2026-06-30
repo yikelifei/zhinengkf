@@ -395,6 +395,15 @@ function evaluateSendTaskRequeue({ task } = {}) {
       failedKeys: ["taskNotSent"],
     };
   }
+  if (task.status === "cancelled" && (task.guardSnapshot?.cancelledAt || task.guardSnapshot?.cancelReason)) {
+    return {
+      ok: false,
+      action: "reject_requeue",
+      reason: "audited_cancelled_task",
+      failedKeys: ["taskNotAuditedCancelled"],
+      message: "已人工取消并记录审计的发送任务不能重新排队，请重新创建发送任务。",
+    };
+  }
   if (task.status === "sending") {
     return {
       ok: false,

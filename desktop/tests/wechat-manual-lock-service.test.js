@@ -223,6 +223,7 @@ test("manual release does not requeue tasks paused by manual lock", async () => 
     locked: false,
     reviewer: "test",
     reason: "manual_release_test",
+    note: "manual handled the customer question and can resume automation",
   });
 
   const updatedQueuedTask = localStore.getSendTask(queuedTask.id);
@@ -254,6 +255,31 @@ test("manual release requires explicit manual reason and keeps conversation lock
   await assert.rejects(
     () => service.setConversationManualLock("conversation_demo_1", { locked: false, reviewer: "test" }),
     /explicit manual release reason/,
+  );
+
+  const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(conversation.manualLocked, true);
+  assert.equal(localStore.listReviewLogs().length, reviewLogCount);
+});
+
+test("manual release requires a resolution note and keeps conversation locked", async () => {
+  const { localStore, service } = setupService();
+
+  await service.setConversationManualLock("conversation_demo_1", {
+    locked: true,
+    reviewer: "test",
+    reason: "manual_takeover_test",
+  });
+  const reviewLogCount = localStore.listReviewLogs().length;
+
+  await assert.rejects(
+    () =>
+      service.setConversationManualLock("conversation_demo_1", {
+        locked: false,
+        reviewer: "test",
+        reason: "manual_release_test",
+      }),
+    /manual resolution note/,
   );
 
   const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
@@ -297,6 +323,117 @@ test("requeue rejects send task after its design binding becomes invalid", async
   const updatedTask = localStore.getSendTask(task.id);
   assert.equal(updatedTask.status, "failed");
   assert.equal(updatedTask.errorMessage, "previous failure");
+});
+
+test("requeue records explicit manual audit reason", async () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "manual requeue should keep reason" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      history: [{ action: "manual_lock_block", fromStatus: "queued", reason: "manual takeover" }],
+    },
+  });
+
+  const updated = await service.requeueSendTask(task.id, {
+    reason: "manual_resolution_before_send_requeue",
+  });
+
+  assert.equal(updated.status, "queued");
+  assert.equal(updated.guardSnapshot.requeueReason, "manual_resolution_before_send_requeue");
+  assert.equal(updated.guardSnapshot.history.at(-1).action, "requeue");
+  assert.equal(updated.guardSnapshot.history.at(-1).reason, "manual_resolution_before_send_requeue");
+});
+
+test("cancel records explicit manual audit reason", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "manual cancel should keep reason" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      blockedByManualLock: true,
+      history: [{ action: "manual_lock_block", fromStatus: "queued", reason: "manual takeover" }],
+    },
+  });
+
+  const updated = service.cancelSendTask(task.id, {
+    reason: "manual_takeover_cancel_send_task",
+  });
+
+  assert.equal(updated.status, "cancelled");
+  assert.equal(updated.guardSnapshot.cancelReason, "manual_takeover_cancel_send_task");
+  assert.ok(updated.guardSnapshot.cancelledAt);
+  assert.equal(updated.guardSnapshot.history.at(-1).action, "cancel");
+  assert.equal(updated.guardSnapshot.history.at(-1).reason, "manual_takeover_cancel_send_task");
+});
+
+test("requeue rejects audited cancelled send task", async () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "cancelled task should stay terminal" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  service.cancelSendTask(task.id, {
+    reason: "manual_takeover_cancel_send_task",
+  });
+
+  await assert.rejects(
+    () => service.requeueSendTask(task.id, { reason: "manual_resolution_before_send_requeue" }),
+    /已人工取消并记录审计|audited_cancelled_task/,
+  );
+
+  const updated = localStore.getSendTask(task.id);
+  assert.equal(updated.status, "cancelled");
+  assert.equal(updated.guardSnapshot.cancelReason, "manual_takeover_cancel_send_task");
+});
+
+test("cancel rejects audited cancelled send task without overwriting audit", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "cancel audit should stay immutable" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  const firstCancel = service.cancelSendTask(task.id, {
+    reason: "manual_takeover_cancel_send_task",
+  });
+
+  assert.throws(
+    () => service.cancelSendTask(task.id, { reason: "second_cancel_should_not_overwrite" }),
+    /audited cancelled task cannot be cancelled again/,
+  );
+
+  const updated = localStore.getSendTask(task.id);
+  assert.equal(updated.status, "cancelled");
+  assert.equal(updated.guardSnapshot.cancelReason, "manual_takeover_cancel_send_task");
+  assert.equal(updated.guardSnapshot.cancelledAt, firstCancel.guardSnapshot.cancelledAt);
+  assert.equal(
+    updated.guardSnapshot.history.filter((entry) => entry.action === "cancel").length,
+    1,
+  );
 });
 
 test("execute send blocks task after its design binding becomes invalid", () => {
@@ -552,6 +689,160 @@ test("local send attempts reject identity metadata from another task context", (
     /send attempt binding invalid/,
   );
   assert.equal(localStore.getLatestSendAttempt(task.id).metadata.wechatAccountId, "wechat_demo_1");
+});
+
+test("local notifications and review logs inherit target identity and reject conflicts", () => {
+  const { localStore } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "notice_identity_request_1",
+    status: "manual_review",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "identity notice",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    bundle: { items: [] },
+  });
+  const quote = localStore.createQuoteFromDesignJob(designJob.id);
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "quote", text: "identity-bound quote" },
+  });
+
+  const notice = localStore.createNotification("warning", "identity notice", "body", {
+    designJobId: designJob.id,
+  });
+  assert.equal(notice.target.conversationId, "conversation_demo_1");
+  assert.equal(notice.target.customerId, "customer_demo_1");
+  assert.equal(notice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(notice.target.identityBinding.ok, true);
+  assert.throws(
+    () =>
+      localStore.createNotification("warning", "wrong notice", "body", {
+        designJobId: designJob.id,
+        wechatAccountId: "wechat_demo_2",
+      }),
+    /notification target conversation binding invalid/,
+  );
+
+  const log = localStore.createReviewLog({
+    targetType: "send_task",
+    targetId: task.id,
+    decision: "identity_check",
+    metadata: {
+      sendTaskId: task.id,
+    },
+  });
+  assert.equal(log.metadata.conversationId, "conversation_demo_1");
+  assert.equal(log.metadata.customerId, "customer_demo_1");
+  assert.equal(log.metadata.wechatAccountId, "wechat_demo_1");
+  assert.equal(log.metadata.identityBinding.ok, true);
+  assert.throws(
+    () =>
+      localStore.createReviewLog({
+        targetType: "quote",
+        targetId: quote.id,
+        decision: "wrong_identity",
+        metadata: {
+          quoteDraftId: quote.id,
+          customerId: "customer_demo_2",
+        },
+      }),
+    /review log metadata customer binding invalid/,
+  );
+});
+
+test("local identity list filters keep account customer and conversation data isolated", () => {
+  const { localStore } = setupService();
+  localStore.updateConversation("conversation_demo_2", { manualLocked: false });
+
+  const job1 = localStore.createDesignJob({
+    requestId: "list_filter_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "list filter one",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box one", costPrice: 30, salePrice: 60 }] },
+  });
+  const job2 = localStore.createDesignJob({
+    requestId: "list_filter_request_2",
+    status: "sent",
+    customerId: "customer_demo_2",
+    conversationId: "conversation_demo_2",
+    wechatAccountId: "wechat_demo_2",
+    scene: "list filter two",
+    budget: { mode: "per_box", amount: 200, quantity: 5 },
+    bundle: { items: [{ skuCode: "BOX-B", name: "box two", costPrice: 40, salePrice: 90 }] },
+  });
+  const [image1] = localStore.upsertDesignImages(job1.id, [
+    { imageId: "candidate_filter_1", position: 1, localPath: "C:\\storage\\list-filter\\one.png" },
+  ]);
+  const [image2] = localStore.upsertDesignImages(job2.id, [
+    { imageId: "candidate_filter_2", position: 1, localPath: "C:\\storage\\list-filter\\two.png" },
+  ]);
+  const quote1 = localStore.createQuoteFromDesignJob(job1.id, image1.id);
+  const quote2 = localStore.createQuoteFromDesignJob(job2.id, image2.id);
+  const order1 = localStore.upsertOrderDraftFromQuote(quote1.id, {
+    designJobId: job1.id,
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    selectedImageId: image1.id,
+    quantity: 10,
+    unitPrice: 60,
+    totalPrice: 600,
+    totalCost: 300,
+    profit: 300,
+    status: "confirmed",
+    paymentStatus: "unpaid",
+  });
+  const order2 = localStore.upsertOrderDraftFromQuote(quote2.id, {
+    designJobId: job2.id,
+    customerId: "customer_demo_2",
+    conversationId: "conversation_demo_2",
+    wechatAccountId: "wechat_demo_2",
+    selectedImageId: image2.id,
+    quantity: 5,
+    unitPrice: 90,
+    totalPrice: 450,
+    totalCost: 200,
+    profit: 250,
+    status: "confirmed",
+    paymentStatus: "unpaid",
+  });
+  const send1 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job1.id,
+    quoteDraftId: quote1.id,
+    status: "queued",
+    payload: { kind: "quote", text: "quote one" },
+  });
+  const send2 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_2",
+    designJobId: job2.id,
+    quoteDraftId: quote2.id,
+    status: "queued",
+    payload: { kind: "quote", text: "quote two" },
+  });
+
+  assert.deepEqual(localStore.listDesignJobs({ wechatAccountId: "wechat_demo_1" }).map((item) => item.id), [job1.id]);
+  assert.deepEqual(localStore.listDesignJobs({ customerId: "customer_demo_2" }).map((item) => item.id), [job2.id]);
+  assert.deepEqual(localStore.listQuoteDrafts({ wechatAccountId: "wechat_demo_1" }).map((item) => item.id), [quote1.id]);
+  assert.deepEqual(localStore.listQuoteDrafts({ conversationId: "conversation_demo_2" }).map((item) => item.id), [quote2.id]);
+  assert.deepEqual(localStore.listOrderDrafts({ customerId: "customer_demo_1" }).map((item) => item.id), [order1.id]);
+  assert.deepEqual(localStore.listOrderDrafts({ wechatAccountId: "wechat_demo_2" }).map((item) => item.id), [order2.id]);
+  assert.deepEqual(localStore.listSendTasks({ conversationId: "conversation_demo_1" }).map((item) => item.id), [send1.id]);
+  assert.deepEqual(localStore.listSendTasks({ wechatAccountId: "wechat_demo_2" }).map((item) => item.id), [send2.id]);
+  assert.deepEqual(localStore.listSendTasks({ wechatAccountId: "wechat_demo_1", customerId: "customer_demo_2" }), []);
 });
 
 test("local design job update rejects invalid conversation binding changes by default", () => {
@@ -1139,6 +1430,10 @@ test("chat import training samples keep conversation identity and reject cross-a
     pairs: [
       {
         agentKey: "gift_design",
+        sceneScore: 30,
+        matchedKeywords: ["gift"],
+        sceneScores: [{ scene: "gift", agentKey: "gift_design", score: 30, matchedKeywords: ["gift"] }],
+        sceneCheck: { status: "clear", reason: "top_scene_confident", needsReview: false, scoreGap: 30 },
         scene: "礼盒设计",
         question: "想看端午礼盒效果图",
         answer: "我先按员工福利场景给您搭一套再出图。",
@@ -1195,6 +1490,9 @@ test("chat import training samples keep conversation identity and reject cross-a
   assert.equal(sample.conversationId, "conversation_demo_1");
   assert.equal(sample.wechatAccountId, "wechat_demo_1");
   assert.equal(sample.sourceType, "chat_import");
+  assert.equal(sample.sceneScore, 30);
+  assert.deepEqual(sample.matchedKeywords, ["gift"]);
+  assert.equal(sample.sceneCheck.status, "clear");
   assert.equal(sample.identityBinding.conversationId, "conversation_demo_1");
   assert.equal(knowledge.conversationId, "conversation_demo_1");
   assert.equal(knowledge.wechatAccountId, "wechat_demo_1");
@@ -1322,6 +1620,139 @@ test("inbound customer image selection queues low-value quote safely", async () 
   assert.equal(result.sendTask.conversationId, "conversation_demo_1");
   assert.equal(result.sendTask.payload.kind, "quote");
   assert.match(result.sendTask.payload.text, /报价|礼盒|9000/);
+});
+
+test("inbound customer image reselection after quote queueing goes to manual review", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_quote_reselect_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "tea", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_quote_reselect_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      localPath: "C:\\storage\\design-jobs\\selection_quote_reselect_request_1\\candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
+    },
+  ]);
+
+  const firstSelection = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "我选第2张，按这个报价",
+  });
+
+  assert.equal(firstSelection.plan.reason, "low_value_customer_selected_image_quote_queued");
+  assert.equal(firstSelection.quote.selectedImageId, images[1].id);
+  assert.equal(localStore.getDesignJob(job.id).status, "quote_created");
+
+  const reselection = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "我又看了下，换第1张",
+  });
+
+  const quoteAfterReselection = localStore.getQuoteDraft(firstSelection.quote.id);
+  const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+
+  assert.equal(reselection.plan.reason, "quote_already_queued_or_sent");
+  assert.equal(reselection.plan.shouldNotifyHuman, true);
+  assert.equal(reselection.sendTask, null);
+  assert.equal(reselection.notification.target.reason, "quote_already_queued_or_sent");
+  assert.equal(reselection.notification.target.selectedImageId, images[0].id);
+  assert.equal(quoteAfterReselection.selectedImageId, images[1].id);
+  assert.equal(conversation.manualLocked, true);
+  const manualLockLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "conversation" && log.targetId === "conversation_demo_1" && log.decision === "manual_lock");
+  assert.ok(manualLockLog);
+  assert.match(manualLockLog.note, /已转人工处理/);
+  assert.match(manualLockLog.note, /客户在报价进入发送流程后又修改选择/);
+  assert.doesNotMatch(manualLockLog.note, /Manual review is required/);
+});
+
+test("inbound high value image selection locks conversation and leaves human review note", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_high_value_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "total", amount: 15000, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "tea", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: true,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_high_value_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      localPath: "C:\\storage\\design-jobs\\selection_high_value_request_1\\candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
+    },
+  ]);
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "我选第2张，按这个继续报价",
+  });
+
+  const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  const updatedJob = localStore.getDesignJob(job.id);
+  const selectedImage = updatedJob.images.find((image) => image.selected);
+  const designLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "design_job" && log.targetId === job.id && log.decision === "high_value_customer_selected_image");
+  const lockLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "conversation" && log.targetId === "conversation_demo_1" && log.decision === "manual_lock");
+
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.quote, null);
+  assert.equal(result.sendTask, null);
+  assert.equal(updatedJob.status, "manual_review");
+  assert.equal(selectedImage.id, images[1].id);
+  assert.equal(conversation.manualLocked, true);
+  assert.ok(designLog);
+  assert.match(designLog.note, /高价值客户已选定效果图/);
+  assert.match(designLog.note, /人工复核报价/);
+  assert.doesNotMatch(designLog.note, /High-value customer selected/);
+  assert.ok(lockLog);
+  assert.match(lockLog.note, /高价值客户已选图/);
 });
 
 test("inbound image selection ignores design jobs with mismatched account identity", async () => {

@@ -11,6 +11,8 @@ const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
+const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
+const apiBuildEntryPath = path.join(desktopRoot, "dist", "apps", "api", "main.js");
 const webStandaloneServer = path.join("apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const webStandaloneServerPath = path.join(desktopRoot, webStandaloneServer);
 const args = new Set(process.argv.slice(2));
@@ -19,6 +21,7 @@ const statusOnly = args.has("--status");
 const preflightOnly = args.has("--preflight");
 const keepAliveLauncher = args.has("--keep-alive");
 const requireFreePorts = args.has("--require-free-ports");
+const allowMockDesignStart = process.env.ALLOW_MOCK_DESIGN_START === "1";
 const requestedMockDesignMode = args.has("--mock-design");
 const forceMockDesignMode = requestedMockDesignMode;
 const requestedRealDesignMode = args.has("--real-design");
@@ -49,7 +52,7 @@ const services = [
     port: webPort,
     url: `http://127.0.0.1:${webPort}/`,
     command: process.execPath,
-    commandArgs: [webStandaloneServer],
+    commandArgs: [webStandaloneServerPath],
     enabled: true,
   },
   {
@@ -72,18 +75,39 @@ const services = [
   },
 ];
 const managedChildren = [];
+const keepAliveTimers = [];
+const keepAliveAnchors = [];
+const serviceRestartGraceUntil = new Map();
 
 main().catch((error) => {
   console.error(error?.stack || error);
   process.exitCode = 1;
 });
 
+process.on("uncaughtException", (error) => {
+  logFatal("uncaughtException", error);
+});
+
+process.on("unhandledRejection", (error) => {
+  logFatal("unhandledRejection", error);
+});
+
+process.on("beforeExit", (code) => {
+  logLifecycle("beforeExit", code);
+});
+
+process.on("exit", (code) => {
+  logLifecycle("exit", code);
+});
+
 async function main() {
   fs.mkdirSync(logsDir, { recursive: true });
 
   if (!statusOnly && !preflightOnly) {
+    assertMockDesignStartAllowed();
     assertRealDesignStartAllowed();
     writeMockModeLockIfNeeded();
+    writeRealModeLockIfNeeded();
   }
 
   if (!statusOnly) {
@@ -93,6 +117,8 @@ async function main() {
   if (!statusOnly && !preflightOnly && includeApi) {
     await assertNoActiveApiModeConflict();
   }
+
+  if (keepAliveLauncher) startKeepAliveMonitor();
 
   if (!statusOnly && !preflightOnly) {
     writeRuntimeDesignPlatformConfig();
@@ -119,7 +145,6 @@ async function main() {
   for (const service of services.filter((item) => item.enabled)) {
     if (await isServiceReadyForCurrentConfig(service)) {
       const portOwners = getPortOwnerPids(service.port);
-      const existingPid = records[service.name]?.pid;
       console.log(`[ok] ${service.label} is already online: ${service.url}`);
       records[service.name] = {
         ...records[service.name],
@@ -127,7 +152,7 @@ async function main() {
         label: service.label,
         port: service.port,
         url: service.url,
-        pid: existingPid || numberOrUndefined(portOwners[0]),
+        pid: numberOrUndefined(portOwners[0]) || records[service.name]?.pid,
         portOwnerPids: portOwners,
         status: "already_running",
         updatedAt: new Date().toISOString(),
@@ -170,7 +195,7 @@ async function main() {
           label: service.label,
           port: service.port,
           url: service.url,
-          pid: records[service.name]?.pid || numberOrUndefined(healthyPortOwners[0]),
+          pid: numberOrUndefined(healthyPortOwners[0]) || records[service.name]?.pid,
           portOwnerPids: healthyPortOwners,
           status: "already_running",
           updatedAt: new Date().toISOString(),
@@ -202,7 +227,7 @@ async function main() {
       port: service.port,
       url: service.url,
       pid: child.pid,
-      command: [service.command, ...service.commandArgs].join(" "),
+      command: commandRecordLine(service.command, service.commandArgs),
       startedAt: new Date().toISOString(),
       status: "starting",
     };
@@ -223,38 +248,98 @@ async function main() {
   }
 
   if (keepAliveLauncher) {
+    startModeLockHeartbeat();
     console.log("[keep-alive] Port services are running. Use npm.cmd run ports:stop to stop them.");
     await waitUntilStopped();
   }
 }
 
-function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath) {
+function startKeepAliveMonitor() {
+  if (keepAliveTimers.length) return;
+  const timer = setInterval(() => {
+    try {
+      for (const service of services.filter((item) => item.enabled)) {
+        if (getPortOwnerPids(service.port).length) {
+          refreshServiceRecord(service);
+          continue;
+        }
+        if ((serviceRestartGraceUntil.get(service.name) || 0) > Date.now()) {
+          refreshServiceRecord(service);
+          continue;
+        }
+        const launcherLogPath = path.join(logsDir, `${service.name}.launcher.log`);
+        fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] monitor restarting ${service.name}\n`, "utf8");
+        startService(service);
+      }
+    } catch (error) {
+      logFatal("keepAliveMonitor", error, { exit: false });
+    }
+  }, 2000);
+  timer.ref();
+  keepAliveTimers.push(timer);
+}
+
+function startModeLockHeartbeat() {
+  if (!realDesignMode) return;
+  writeRealModeLockIfNeeded();
+  setInterval(writeRealModeLockIfNeeded, 5000);
+}
+
+function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath) {
   const stdout = fs.openSync(stdoutPath, "a");
   const stderr = fs.openSync(stderrPath, "a");
-  const launchCommand = windowsServiceLaunchCommand(service);
+  const launchCommand = { command: service.command, commandArgs: service.commandArgs };
   const child = spawn(launchCommand.command, launchCommand.commandArgs, {
     cwd: desktopRoot,
     env: serviceEnv(),
-    detached: true,
+    detached: false,
     stdio: ["ignore", stdout, stderr],
     windowsHide: true,
   });
-  child.unref();
+  fs.closeSync(stdout);
+  fs.closeSync(stderr);
+  fs.appendFileSync(
+    launcherLogPath,
+    `[${new Date().toISOString()}] launched managed child ${child.pid || "unknown"} via direct service command; wrapper kept at ${wrapperPath}\n`,
+    "utf8",
+  );
   managedChildren.push(child);
+  serviceRestartGraceUntil.set(service.name, Date.now() + serviceReadyTimeoutMs(service));
+  scheduleServiceRecordRefresh(service, child.pid);
   child.once("exit", (code, signal) => {
     fs.appendFileSync(
       launcherLogPath,
-      `[${new Date().toISOString()}] ${service.name} exited code=${code ?? ""} signal=${signal ?? ""}\n`,
+      `[${new Date().toISOString()}] ${service.name} managed process exited code=${code ?? ""} signal=${signal ?? ""}\n`,
       "utf8",
     );
-    if (keepAliveLauncher) {
-      setTimeout(() => {
-        fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] restarting ${service.name}\n`, "utf8");
-        startManagedChild(service, stdoutPath, stderrPath, launcherLogPath);
-      }, 2000);
-    }
+    const index = managedChildren.indexOf(child);
+    if (index >= 0) managedChildren.splice(index, 1);
   });
   return child;
+}
+
+function scheduleServiceRecordRefresh(service, childPid) {
+  for (const delayMs of [1000, 5000, 12000]) {
+    setTimeout(() => refreshServiceRecord(service, childPid), delayMs);
+  }
+}
+
+function refreshServiceRecord(service, childPid) {
+  const records = readPidFile();
+  const portOwners = getPortOwnerPids(service.port);
+  const preferredPid = numberOrUndefined(portOwners[0]) || numberOrUndefined(childPid) || records[service.name]?.pid;
+  records[service.name] = {
+    ...records[service.name],
+    name: service.name,
+    label: service.label,
+    port: service.port,
+    url: service.url,
+    pid: preferredPid,
+    portOwnerPids: portOwners,
+    status: portOwners.length ? "running" : records[service.name]?.status || "starting",
+    updatedAt: new Date().toISOString(),
+  };
+  writePidFile(records);
 }
 
 async function buildApiIfNeeded() {
@@ -269,6 +354,8 @@ async function buildApiIfNeeded() {
     console.log(`[blocked] API port ${apiService.port} is used by PID ${portOwners.join(", ")}. Skip API rebuild.`);
     return;
   }
+  if (!apiBuildIsStale()) return;
+
   console.log("[build] Building API before startup...");
   try {
     runPackageScript("build:api");
@@ -278,6 +365,17 @@ async function buildApiIfNeeded() {
     sleepMs(2000);
     runPackageScript("build:api");
   }
+}
+
+function apiBuildIsStale() {
+  if (!fs.existsSync(apiBuildEntryPath)) return true;
+  const builtAt = fs.statSync(apiBuildEntryPath).mtimeMs;
+  return [
+    path.join(desktopRoot, "apps", "api", "src"),
+    path.join(desktopRoot, "apps", "api", "nest-cli.json"),
+    path.join(desktopRoot, "apps", "api", "tsconfig.json"),
+    path.join(desktopRoot, "apps", "api", "tsconfig.build.json"),
+  ].some((item) => pathHasFileNewerThan(item, builtAt));
 }
 
 async function buildWebIfNeeded() {
@@ -301,7 +399,17 @@ async function buildWebIfNeeded() {
     console.log(`[warn] Web build failed once: ${error instanceof Error ? error.message : String(error)}`);
     console.log("[build] Waiting 2 seconds, then retrying web build...");
     sleepMs(2000);
-    runPackageScript("build:web");
+    try {
+      runPackageScript("build:web");
+    } catch (retryError) {
+      if (fs.existsSync(webStandaloneServerPath)) {
+        console.log(
+          `[warn] Web rebuild failed, but ${webStandaloneServer} exists. Starting with the existing standalone build.`,
+        );
+        return;
+      }
+      throw retryError;
+    }
   }
 }
 
@@ -333,12 +441,19 @@ function pathHasFileNewerThan(itemPath, builtAt) {
 function runPackageScript(scriptName) {
   const command = npmCommand();
   const args = ["run", scriptName];
-  const result =
-    process.platform === "win32"
-      ? spawnSync("cmd.exe", ["/d", "/c", [command, ...args].join(" ")], { cwd: desktopRoot, env: process.env, stdio: "inherit" })
-      : spawnSync(command, args, { cwd: desktopRoot, env: process.env, stdio: "inherit" });
-  if (result.status !== 0) {
-    throw new Error(`${scriptName} failed`);
+  const npmCliPath = process.platform === "win32" ? resolvedNpmCliPath() : "";
+  const packageCommand =
+    npmCliPath
+      ? { command: process.execPath, args: [npmCliPath, ...args] }
+      : { command, args };
+  const result = spawnSync(packageCommand.command, packageCommand.args, {
+    cwd: desktopRoot,
+    env: process.platform === "win32" ? windowsSafeEnv(process.env) : process.env,
+    stdio: "inherit",
+    shell: false,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`${scriptName} failed${result.error ? `: ${result.error.message}` : ""}`);
   }
 }
 
@@ -347,9 +462,39 @@ function sleepMs(ms) {
 }
 
 function waitUntilStopped() {
-  return new Promise(() => {
-    setInterval(() => undefined, 60_000);
-  });
+  startKeepAliveMonitor();
+  startKeepAliveAnchor();
+  return new Promise(() => undefined);
+}
+
+function startKeepAliveAnchor() {
+  if (keepAliveAnchors.length) return;
+  const anchor = setInterval(() => undefined, 60_000);
+  anchor.ref();
+  keepAliveAnchors.push(anchor);
+}
+
+function logFatal(scope, error, options = {}) {
+  const message = error?.stack || error?.message || String(error);
+  const line = `[${new Date().toISOString()}] ${scope}: ${message}\n`;
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.appendFileSync(path.join(logsDir, "start-dev-ports.fatal.log"), line, "utf8");
+  } catch {
+    // Fatal logging must not throw recursively.
+  }
+  console.error(line.trim());
+  if (options.exit === false) return;
+  process.exitCode = 1;
+}
+
+function logLifecycle(scope, code) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.appendFileSync(path.join(logsDir, "start-dev-ports.lifecycle.log"), `[${new Date().toISOString()}] ${scope} code=${code}\n`, "utf8");
+  } catch {
+    // Lifecycle logging must not block process shutdown.
+  }
 }
 
 function startService(service) {
@@ -375,9 +520,9 @@ function startWindowsService(service) {
   const stderrPath = path.join(logsDir, `${service.name}.err.log`);
   const launcherLogPath = path.join(logsDir, `${service.name}.launcher.log`);
   const wrapperPath = path.join(runtimeDir, `run-${service.name}.cmd`);
-  fs.rmSync(stdoutPath, { force: true });
-  fs.rmSync(stderrPath, { force: true });
-  fs.rmSync(launcherLogPath, { force: true });
+  removeLogFileIfUnlocked(stdoutPath);
+  removeLogFileIfUnlocked(stderrPath);
+  removeLogFileIfUnlocked(launcherLogPath);
 
   fs.writeFileSync(wrapperPath, buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLogPath), "utf8");
   if (!fs.existsSync(wrapperPath)) {
@@ -386,19 +531,21 @@ function startWindowsService(service) {
 
   fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] launching ${service.name}\n`, "utf8");
   if (keepAliveLauncher) {
-    return startManagedChild(service, stdoutPath, stderrPath, launcherLogPath);
+    return startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath);
   }
 
   const envAssignments = Object.entries(serviceDefaultEnv())
     .map(([key, value]) => `$env:${psEnvName(key)} = ${psQuote(value)}`)
     .join("; ");
-  const launchCommand = windowsServiceLaunchCommand(service);
+  const launchCommand = windowsServiceLaunchCommand(service, wrapperPath);
+  const redirectArgs = launchCommand.usesOwnRedirection
+    ? ""
+    : `-RedirectStandardOutput ${psQuote(stdoutPath)} -RedirectStandardError ${psQuote(stderrPath)} `;
   const script =
     `${envAssignments}; ` +
     `$process = Start-Process -FilePath ${psQuote(launchCommand.command)} ` +
     `-ArgumentList ${psArray(launchCommand.commandArgs)} ` +
-    `-WorkingDirectory ${psQuote(desktopRoot)} -WindowStyle Hidden -RedirectStandardOutput ${psQuote(stdoutPath)} ` +
-    `-RedirectStandardError ${psQuote(stderrPath)} -PassThru; ` +
+    `-WorkingDirectory ${psQuote(desktopRoot)} -WindowStyle Hidden ${redirectArgs}-PassThru; ` +
     "$process.Id";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
     cwd: desktopRoot,
@@ -411,6 +558,18 @@ function startWindowsService(service) {
   }
   const startedPid = Number(String(result.stdout || "").trim().split(/\s+/).pop());
   return { pid: numberOrUndefined(getPortOwnerPids(service.port)[0]) || (Number.isFinite(startedPid) ? startedPid : undefined) };
+}
+
+function removeLogFileIfUnlocked(filePath) {
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EBUSY") {
+      console.log(`[warn] Log file is locked, keeping existing file: ${filePath}`);
+      return;
+    }
+    throw error;
+  }
 }
 
 function buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLogPath) {
@@ -427,8 +586,15 @@ function buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLog
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function windowsServiceLaunchCommand(service) {
-  return { command: service.command, commandArgs: service.commandArgs };
+function commandRecordLine(command, args = []) {
+  return [cmdQuote(command), ...args.map(cmdQuote)].join(" ");
+}
+
+function windowsServiceLaunchCommand(service, wrapperPath) {
+  if (process.platform === "win32" && wrapperPath) {
+    return { command: "cmd.exe", commandArgs: ["/d", "/c", wrapperPath], usesOwnRedirection: true };
+  }
+  return { command: service.command, commandArgs: service.commandArgs, usesOwnRedirection: false };
 }
 
 function cmdSetEnv(key, value) {
@@ -467,7 +633,9 @@ async function waitAndPrint(enabledServices, records) {
 }
 
 function serviceReadyTimeoutMs(service) {
-  return service.name === "api" ? 90000 : 30000;
+  if (service.name === "api") return 90000;
+  if (service.name === "web") return 60000;
+  return 30000;
 }
 
 async function printStatus() {
@@ -497,7 +665,7 @@ async function printStatus() {
       label: service.label,
       port: service.port,
       url: service.url,
-      pid: records[service.name]?.pid || numberOrUndefined(portOwners[0]),
+      pid: numberOrUndefined(portOwners[0]) || records[service.name]?.pid,
       portOwnerPids: portOwners,
       status: ok ? "running" : configMismatch ? "wrong_mode" : "down",
       updatedAt: new Date().toISOString(),
@@ -675,11 +843,35 @@ function sleep(ms) {
 }
 
 function npmCommand() {
+  return resolvedNpmCommand() || npmCommandName();
+}
+
+function npmCommandName() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
+function resolvedNpmCommand() {
+  const fromPath = resolveCommandPath(npmCommandName());
+  if (fromPath) return fromPath;
+  if (process.platform === "win32") {
+    const besideNode = path.join(path.dirname(process.execPath), "npm.cmd");
+    if (fs.existsSync(besideNode)) return besideNode;
+  }
+  return "";
+}
+
+function resolvedNpmCliPath() {
+  const candidates = [
+    resolvedNpmCommand() ? path.join(path.dirname(resolvedNpmCommand()), "node_modules", "npm", "bin", "npm-cli.js") : "",
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+  return candidates.find((item) => item && fs.existsSync(item)) || "";
+}
+
 function assertRequiredCommands() {
-  const missing = ["node", npmCommand()].filter((command) => !commandExists(command));
+  const missing = [];
+  if (!commandExists("node")) missing.push("node");
+  if (!resolvedNpmCommand()) missing.push(npmCommandName());
   if (missing.length) {
     throw new Error(`Missing startup dependency: ${missing.join(", ")}. Install Node.js 20 or newer first.`);
   }
@@ -690,6 +882,7 @@ function commandExists(command) {
 }
 
 function resolveCommandPath(command) {
+  if (path.isAbsolute(command) && fs.existsSync(command)) return command;
   const checker = process.platform === "win32" ? "where" : "which";
   const result = spawnSync(checker, [command], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return "";
@@ -772,6 +965,8 @@ function findConflictingDesignLaunchers(mode) {
   if (process.platform !== "win32") return [];
 
   const launcherFile = mode === "real" ? "launch-real.cmd" : "launch-mock.cmd";
+  const supervisorFile = mode === "real" ? "supervise-real.cmd" : "supervise-mock.cmd";
+  const stableSupervisorFile = mode === "real" ? "stable-supervise-real.cmd" : "stable-supervise-mock.cmd";
   const modeArg = mode === "real" ? "--real-design" : "--mock-design";
   const batFile = mode === "real" ? "run_desktop_real_design.bat" : "run_desktop.bat";
   const script = [
@@ -780,9 +975,12 @@ function findConflictingDesignLaunchers(mode) {
     "$selfPid = $PID",
     "$items = Get-CimInstance Win32_Process | Where-Object {",
     "  $_.ProcessId -ne $selfPid -and $_.CommandLine -and",
+    "  ($_.CommandLine -notlike '*Get-CimInstance Win32_Process*') -and",
     "  ($_.CommandLine -replace '\\\\','/').ToLowerInvariant().Contains($root) -and",
     `  ((($_.CommandLine -like '*start-dev-ports.js*') -and ($_.CommandLine -like '*${modeArg}*')) -or`,
     `    ($_.CommandLine -like '*${launcherFile}*') -or`,
+    `    ($_.CommandLine -like '*${supervisorFile}*') -or`,
+    `    ($_.CommandLine -like '*${stableSupervisorFile}*') -or`,
     `    ($_.CommandLine -like '*${batFile}*'))`,
     "} | Select-Object -First 8 ProcessId,CommandLine",
     "if ($items) { $items | ConvertTo-Json -Compress }",
@@ -872,11 +1070,13 @@ function designPlatformHealthUrl() {
 
 function writeRuntimeDesignPlatformConfig() {
   const defaults = designPlatformDefaults();
+  const existing = readRuntimeDesignPlatformConfig();
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(
     designPlatformConfigFile,
     `${JSON.stringify(
       {
+        ...existing,
         designPlatformAdapter: defaults.DESIGN_PLATFORM_ADAPTER,
         designPlatformBaseUrl: defaults.DESIGN_PLATFORM_BASE_URL,
         launcherPid: process.pid,
@@ -898,10 +1098,27 @@ function assertRealDesignStartAllowed() {
   );
 }
 
+function assertMockDesignStartAllowed() {
+  if (!includeMockDesignPlatform) return;
+  const runtimeConfigLooksReal = existingDesignPlatformAdapter === "art_image_local";
+  if (!fs.existsSync(realModeLockFile) && !findConflictingDesignLaunchers("real").length && (!runtimeConfigLooksReal || allowMockDesignStart)) {
+    return;
+  }
+  throw new Error(
+    `Mock design startup is blocked because real mode is active or locked at ${realModeLockFile}. Run npm.cmd run ports:stop before switching to mock design mode.`,
+  );
+}
+
 function writeMockModeLockIfNeeded() {
-  if (requestedRealDesignMode) return;
+  if (!includeMockDesignPlatform) return;
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(mockModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+}
+
+function writeRealModeLockIfNeeded() {
+  if (!realDesignMode) return;
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
 }
 
 function readRuntimeDesignPlatformConfig() {

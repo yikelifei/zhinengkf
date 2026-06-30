@@ -5,8 +5,9 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { appConfig } from "../shared/app-config";
+import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 
-type ReviewPayload = {
+type ReviewPayload = ExpectedIdentityPayload & {
   decision: string;
   reviewer?: string;
   note?: string;
@@ -22,20 +23,20 @@ export class ReviewsService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  async list() {
+  async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (appConfig.useLocalStore) {
       const designJobs = this.localStore
-        .listDesignJobs()
+        .listDesignJobs(filter)
         .filter((job: any) => ["manual_review", "failed", "timeout"].includes(job.status))
         .slice(0, 80);
       const quoteDrafts = this.localStore
-        .listQuoteDrafts()
+        .listQuoteDrafts(filter)
         .filter((quote: any) => quote.status === "manual_review")
         .slice(0, 80);
       return {
         designJobs,
         quoteDrafts,
-        logs: this.localStore.listReviewLogs(80),
+        logs: this.localStore.listReviewLogs({ ...filter, limit: 80 }),
       };
     }
 
@@ -63,6 +64,7 @@ export class ReviewsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, payload, "design job");
     const beforeStatus = job.status;
     const decision = payload.decision || "approve_images";
     let result: any;
@@ -148,8 +150,9 @@ export class ReviewsService {
   async reviewQuote(id: string, payload: ReviewPayload) {
     const quote = appConfig.useLocalStore
       ? this.localStore.getQuoteDraft(id)
-      : await this.prisma.quoteDraft.findUnique({ where: { id } });
+      : await this.prisma.quoteDraft.findUnique({ where: { id }, include: { designJob: true } });
     if (!quote) throw new Error(`quote draft not found: ${id}`);
+    assertExpectedIdentity(quote, payload, "quote draft");
     const beforeStatus = quote.status;
     const decision = payload.decision || "approve_quote";
     let result: any;

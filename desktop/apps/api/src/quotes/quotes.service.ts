@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
@@ -67,9 +68,20 @@ export class QuotesService {
     });
   }
 
-  async list() {
-    if (appConfig.useLocalStore) return this.localStore.listQuoteDrafts();
+  async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    if (appConfig.useLocalStore) return this.localStore.listQuoteDrafts(filter);
     return this.prisma.quoteDraft.findMany({
+      where: {
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
+        ...(filter.wechatAccountId || filter.conversationId
+          ? {
+              designJob: {
+                ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+                ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+              },
+            }
+          : {}),
+      },
       include: {
         customer: true,
         designJob: true,
@@ -80,10 +92,11 @@ export class QuotesService {
     });
   }
 
-  async update(id: string, patch: QuoteUpdatePatch) {
+  async update(id: string, patch: QuoteUpdatePatch & ExpectedIdentityPayload) {
     const current = await this.getQuoteForSend(id);
     if (!current) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(current);
+    assertExpectedIdentity(current, patch, "quote draft");
     const data = cleanQuotePatch(patch, current);
     const updated = appConfig.useLocalStore
       ? this.localStore.updateQuoteDraft(id, data)
@@ -99,6 +112,77 @@ export class QuotesService {
     if (data.status === "manual_review") {
       await this.lockQuoteConversationForManualReview(current, patch.owner || current.owner);
     }
+    return updated;
+  }
+
+  async reviseSelectedImage(
+    id: string,
+    payload: {
+      selectedImageId?: string;
+      owner?: string;
+      note?: string;
+    } & ExpectedIdentityPayload = {},
+  ) {
+    const current = await this.getQuoteForSend(id);
+    if (!current) throw new Error(`quote draft not found: ${id}`);
+    this.ensureQuoteIdentity(current);
+    assertExpectedIdentity(current, payload, "quote draft");
+    if (current.status === "accepted") {
+      throw new BadRequestException("accepted quote cannot be revised; create a new order or quote instead");
+    }
+    const existingOrder = await this.findOrderDraftForQuote(id);
+    if (existingOrder) {
+      throw new BadRequestException("quote already has an order draft; revise the order or create a new quote instead");
+    }
+    const selectedImage = this.resolveQuoteDesignImage(current, payload.selectedImageId);
+    if (current.selectedImageId === selectedImage.id && current.status === "manual_review") return current;
+
+    const cancelledSendTask = await this.cancelLinkedQuoteSendTaskForRevision(current, payload);
+    const noteParts = [
+      payload.note || "客户重新选择效果图，报价已回到人工审核。",
+      cancelledSendTask ? `原发送任务 ${cancelledSendTask.id} 已取消。` : "",
+    ].filter(Boolean);
+    const patch = {
+      selectedImageId: selectedImage.id,
+      status: "manual_review",
+      sendTaskId: null,
+      owner: payload.owner || current.owner || "人工客服",
+      customerNotes: noteParts.join(" "),
+    };
+    const updated = appConfig.useLocalStore
+      ? this.localStore.updateQuoteDraft(id, patch)
+      : await (this.prisma as any).quoteDraft.update({
+          where: { id },
+          data: patch,
+          include: {
+            customer: true,
+            selectedImage: true,
+            designJob: {
+              include: {
+                conversation: true,
+                images: true,
+              },
+            },
+          },
+        });
+    this.ensureQuoteIdentity(updated);
+    await this.createReviewLog({
+      targetType: "quote",
+      targetId: id,
+      decision: "manual_quote_revision",
+      reviewer: payload.owner || "人工客服",
+      note: patch.customerNotes,
+      beforeStatus: current.status || "",
+      afterStatus: updated.status,
+      metadata: {
+        source: "manual_quote_revision",
+        quoteDraftId: id,
+        designJobId: current.designJobId,
+        previousSelectedImageId: current.selectedImageId || null,
+        selectedImageId: selectedImage.id,
+        cancelledSendTaskId: cancelledSendTask?.id || null,
+      },
+    });
     return updated;
   }
 
@@ -121,13 +205,14 @@ export class QuotesService {
       automation?: Record<string, unknown>;
       releaseManualLock?: boolean;
       releaseReason?: string;
-    } = {},
+    } & ExpectedIdentityPayload = {},
   ) {
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new Error(`quote draft not found: ${id}`);
     const designJob = quote.designJob;
     if (!designJob) throw new Error(`quote draft has no design job: ${id}`);
     this.ensureQuoteIdentity(quote);
+    assertExpectedIdentity(quote, options, "quote draft");
     this.assertQuoteReadyForSend(quote);
 
     const text = this.buildCustomerMessage(quote);
@@ -268,6 +353,9 @@ export class QuotesService {
       this.ensureQuoteIdentity({ ...existing, designJob, selectedImage });
       return existing;
     }
+    if (this.isQuoteSelectionLocked(existing)) {
+      throw new BadRequestException("quote selection is locked after queueing, sending, or acceptance; create a manual revision instead");
+    }
 
     const updated = appConfig.useLocalStore
       ? this.localStore.updateQuoteDraft(existing.id, { selectedImageId: selectedImage.id })
@@ -287,6 +375,41 @@ export class QuotesService {
         });
     this.ensureQuoteIdentity(updated);
     return updated;
+  }
+
+  private resolveQuoteDesignImage(quote: any, selectedImageId?: string) {
+    const id = String(selectedImageId || "").trim();
+    if (!id) throw new BadRequestException("selectedImageId is required");
+    const images = Array.isArray(quote?.designJob?.images) ? quote.designJob.images : [];
+    const selectedImage = images.find((image: any) => image.id === id || image.imageId === id);
+    if (!selectedImage) throw new BadRequestException(`selected image not found for quote draft: ${id}`);
+    if (selectedImage.designJobId && selectedImage.designJobId !== quote.designJobId) {
+      throw new BadRequestException("selected image does not belong to quote design job");
+    }
+    return selectedImage;
+  }
+
+  private async cancelLinkedQuoteSendTaskForRevision(
+    quote: any,
+    payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
+  ) {
+    if (!quote?.sendTaskId) return null;
+    if (quote.sendTask?.status === "sent" || quote.status === "sent") return null;
+    return this.wechatDispatch.cancelSendTask(quote.sendTaskId, {
+      ...payload,
+      reason: payload.note || "报价已人工修订，取消旧发送任务",
+    });
+  }
+
+  private async findOrderDraftForQuote(quoteDraftId: string) {
+    if (appConfig.useLocalStore) {
+      return this.localStore.listOrderDrafts().find((order: any) => order.quoteDraftId === quoteDraftId) || null;
+    }
+    return (this.prisma as any).orderDraft.findUnique({ where: { quoteDraftId } });
+  }
+
+  private isQuoteSelectionLocked(quote: any) {
+    return Boolean(quote?.sendTaskId) || ["send_queued", "sent", "accepted"].includes(String(quote?.status || ""));
   }
 
   private async getDesignJobForQuote(designJobId: string) {
