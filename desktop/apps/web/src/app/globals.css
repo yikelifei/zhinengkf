@@ -20896,3 +20896,400 @@ body .apple-light-shell.shell #sku-library .sku-batch-bar > label:first-child in
     justify-self: start;
   }
 }
+
+/* Iteration 52 Single-module workbench isolation: one navigation item equals one visible task surface. */
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] > .main-grid,
+body .apple-light-shell.shell .workspace[data-active-section="design-center"] > .main-grid,
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] > .bottom-grid,
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] > .bottom-grid,
+body .apple-light-shell.shell .workspace[data-active-section="agent-center"] > .training-grid,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] > .training-grid,
+body .apple-light-shell.shell .workspace[data-active-section="account-center"] > .send-safety-grid,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] > .send-safety-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #design-center,
+body .apple-light-shell.shell .workspace[data-active-section="design-center"] #conversation-center,
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #notice-center,
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #sku-library,
+body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #training-center,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #agent-center,
+body .apple-light-shell.shell .workspace[data-active-section="account-center"] #send-center,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #account-center {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center,
+body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center,
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library,
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center,
+body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center,
+body .apple-light-shell.shell .workspace[data-active-section="account-center"] #account-center,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Iteration 53 Conversation surface: keep the message center focused on customer-service actions. */
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .chat-detail {
+  display: grid !important;
+  grid-auto-flow: row !important;
+  grid-template-columns: minmax(260px, 0.34fr) minmax(0, 0.66fr) !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  gap: 10px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .customer-row {
+  display: grid !important;
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .budget-box {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  min-height: 68px !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center :is(
+  .preflight-panel,
+  .image-strip,
+  .selection-box,
+  .active-quote-box,
+  .action-row,
+  .revision-box
+) {
+  display: none !important;
+}
+
+.conversation-service-console {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.36fr) minmax(0, 0.64fr);
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-service-list,
+.conversation-service-detail {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  background:
+    url("/apple-white-panel-map.svg") right -76px top -72px / 190px 150px no-repeat,
+    #ffffff;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.045), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+}
+
+.conversation-service-list {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.conversation-service-title,
+.conversation-service-status,
+.conversation-service-actions,
+.conversation-service-insight {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.conversation-service-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px 9px;
+}
+
+.conversation-service-title strong,
+.conversation-service-status strong,
+.conversation-service-insight strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.conversation-service-title span,
+.conversation-service-status span,
+.conversation-service-status small,
+.conversation-service-insight span,
+.conversation-service-insight small,
+.conversation-message-composer span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.conversation-service-items {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+}
+
+.conversation-service-items button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 76px;
+  padding: 10px 11px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-service-items button.selected {
+  border-color: rgba(0, 122, 255, 0.42);
+  box-shadow: inset 3px 0 0 var(--blue), 0 10px 22px rgba(0, 122, 255, 0.1);
+}
+
+.conversation-service-items button span,
+.conversation-service-items button strong,
+.conversation-service-items button small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-service-items button strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.conversation-service-items button small {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.conversation-service-items em,
+.conversation-service-items mark {
+  justify-self: end;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.conversation-service-items em.ok {
+  color: #157347;
+  background: var(--green-soft);
+}
+
+.conversation-service-items em.danger,
+.conversation-service-items mark {
+  color: #b42318;
+  background: var(--red-soft);
+}
+
+.conversation-service-items mark {
+  grid-column: 2;
+  background: var(--orange-soft);
+  color: #a56200;
+}
+
+.conversation-service-empty {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  min-height: 180px;
+  border: 1px dashed rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.conversation-service-detail {
+  display: grid;
+  grid-template-rows: auto minmax(130px, 0.78fr) auto minmax(96px, 0.42fr);
+}
+
+.conversation-service-status,
+.conversation-service-insight {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.conversation-service-status div,
+.conversation-service-insight div {
+  min-width: 0;
+  border-radius: 11px;
+  background: rgba(247, 248, 250, 0.76);
+  padding: 9px 10px;
+}
+
+.conversation-service-status strong,
+.conversation-service-status span,
+.conversation-service-status small,
+.conversation-service-insight strong,
+.conversation-service-insight span,
+.conversation-service-insight small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-service-status strong,
+.conversation-service-insight strong {
+  margin-top: 5px;
+}
+
+.conversation-message-composer {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.conversation-message-composer textarea {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 108px;
+  resize: none;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.conversation-service-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(247, 248, 250, 0.68);
+}
+
+.conversation-service-actions :is(button, .primary, .ghost) {
+  justify-content: center;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 8px;
+  white-space: nowrap;
+}
+
+.conversation-service-insight {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-bottom: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .chat-detail,
+  .conversation-service-console,
+  .conversation-service-status,
+  .conversation-service-insight,
+  .conversation-service-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .chat-detail,
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .customer-row,
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .budget-box,
+  .conversation-service-console,
+  .conversation-service-list,
+  .conversation-service-detail,
+  .conversation-service-items,
+  .conversation-service-items button {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .customer-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .customer-row,
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .budget-box,
+  .conversation-service-console {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+
+  .conversation-service-detail {
+    grid-template-rows: auto auto auto auto;
+  }
+
+  .conversation-service-title {
+    align-items: flex-start !important;
+    flex-direction: column !important;
+    gap: 3px !important;
+  }
+
+  .conversation-service-title span {
+    display: none !important;
+  }
+
+  .conversation-message-composer textarea {
+    min-height: 118px;
+  }
+
+  .conversation-service-items button {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-auto-rows: max-content !important;
+    align-items: start !important;
+    gap: 6px !important;
+    min-height: 104px !important;
+    height: auto !important;
+    overflow-y: visible !important;
+  }
+
+  .conversation-service-items button span,
+  .conversation-service-items button strong,
+  .conversation-service-items button small {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .conversation-service-items em {
+    justify-self: start !important;
+  }
+
+  .conversation-service-items mark {
+    grid-column: 1 / -1 !important;
+    justify-self: start !important;
+  }
+
+  .conversation-service-status strong,
+  .conversation-service-status span,
+  .conversation-service-status small,
+  .conversation-service-insight strong,
+  .conversation-service-insight span,
+  .conversation-service-insight small {
+    white-space: normal !important;
+    overflow: visible !important;
+    overflow-wrap: anywhere !important;
+  }
+}

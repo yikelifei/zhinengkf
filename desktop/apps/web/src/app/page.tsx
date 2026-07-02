@@ -933,9 +933,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     setAutomationStatus(automation);
     setAutomationReadiness(automationReadinessResult);
     setActiveId((current) => current || jobRows[0]?.id || "");
-    setActiveConversationId((current) =>
-      current && conversationRows.some((conversation) => conversation.id === current) ? current : "",
-    );
+    setActiveConversationId((current) => {
+      if (identityFilterOverride === null) return "";
+      if (current && conversationRows.some((conversation) => conversation.id === current)) return current;
+      return conversationRows[0]?.id || "";
+    });
   }
 
   function activeIdentityFilters() {
@@ -3469,6 +3471,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ? sendTasks.filter((task) => task.conversationId === activeConversationId)
     : [];
   const activeConversationSendTaskCount = activeConversationSendTasks.length;
+  const activeConversationDesignJobs = activeConversationId
+    ? jobs.filter((job) => job.conversationId === activeConversationId)
+    : [];
+  const activeConversationDesignJobCount = activeConversationDesignJobs.length;
   const latestSendTasks = [
     ...activeConversationSendTasks,
     ...sendTasks.filter((task) => task.conversationId !== activeConversationId),
@@ -3482,6 +3488,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
   }
   const latestRoute = routeEvaluations[0];
+  const activeConversationRoute = activeConversationId
+    ? routeEvaluations.find((route) => route.conversationId === activeConversationId) || null
+    : latestRoute || null;
   const activeQuote = activeJob ? quotes.find((quote) => quote.designJobId === activeJob.id) || null : null;
   const activeSelectedImage = activeJob?.images?.find((image) => image.selected) || null;
   const activePreflightResult = preflightResult?.designJobId === activeJob?.id ? preflightResult : null;
@@ -4728,6 +4737,112 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     {activeJob.budget.quantity ? ` x ${activeJob.budget.quantity} 份` : ""}
                   </strong>
                   <small>总额 {activeJob.budget.totalAmount || "-"} 元</small>
+                </div>
+                <div className="conversation-service-console" aria-label="智能客服消息处理台">
+                  <div className="conversation-service-list">
+                    <div className="conversation-service-title">
+                      <strong>客户会话</strong>
+                      <span>{conversations.length} 个会话</span>
+                    </div>
+                    <div className="conversation-service-items">
+                      {conversations.length ? conversations.map((conversation) => {
+                        const lockedTaskCount = manualLockBlockedSendCountByConversationId.get(conversation.id) || 0;
+                        const conversationTaskCount = sendTasks.filter((task) => task.conversationId === conversation.id && !["sent", "cancelled"].includes(task.status)).length;
+                        return (
+                          <button
+                            aria-pressed={activeConversationId === conversation.id}
+                            className={activeConversationId === conversation.id ? "selected" : ""}
+                            disabled={Boolean(busy)}
+                            key={conversation.id}
+                            onClick={() => void changeActiveConversation(conversation.id)}
+                            type="button"
+                          >
+                            <span>
+                              <strong>{conversation.title}</strong>
+                              <small>{conversation.wechatAccount?.displayName || conversation.wechatAccountId}</small>
+                            </span>
+                            <em className={conversation.manualLocked ? "danger" : "ok"}>
+                              {conversation.manualLocked ? "人工" : "自动"}
+                            </em>
+                            {conversationTaskCount || lockedTaskCount ? (
+                              <mark>{lockedTaskCount ? `拦截 ${lockedTaskCount}` : `待发 ${conversationTaskCount}`}</mark>
+                            ) : null}
+                          </button>
+                        );
+                      }) : (
+                        <div className="conversation-service-empty" role="status">
+                          <strong>还没有会话</strong>
+                          <span>接入微信通道后，客户会话会出现在这里。</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="conversation-service-detail">
+                    <div className="conversation-service-status">
+                      <div>
+                        <span>当前客户</span>
+                        <strong>{activeConversation?.customer?.name || activeJob.customer?.name || "未选择"}</strong>
+                        <small>{activeConversation?.title || activeJob.conversation?.title || "先选择客户会话"}</small>
+                      </div>
+                      <div>
+                        <span>微信账号</span>
+                        <strong>{activeConversation?.wechatAccount?.displayName || activeConversation?.wechatAccountId || "未绑定"}</strong>
+                        <small>{activeConversation?.channel || "wechat"}</small>
+                      </div>
+                      <div>
+                        <span>处理状态</span>
+                        <strong>{activeConversation?.manualLocked ? "人工接管" : "自动路由"}</strong>
+                        <small>{activeConversationSendTaskCount} 个发送任务 · {activeConversationDesignJobCount} 个设计任务</small>
+                      </div>
+                    </div>
+                    <label className="conversation-message-composer">
+                      <span>客户最新消息</span>
+                      <textarea
+                        value={routeText}
+                        onChange={(event) => setRouteText(event.target.value)}
+                        placeholder="粘贴客户最新一句话，例如：端午礼盒每盒180元，做50份，想看效果图"
+                      />
+                    </label>
+                    <div className="conversation-service-actions">
+                      <button type="button" className="primary" onClick={processRouteInbound} disabled={Boolean(busy) || !activeConversation}>
+                        <Bot size={15} aria-hidden="true" />处理当前消息
+                      </button>
+                      {activeConversation ? (
+                        <button
+                          type="button"
+                          className={`ghost ${activeConversation.manualLocked ? "" : "danger"}`}
+                          onClick={() => toggleConversationManualLock(activeConversation, !activeConversation.manualLocked)}
+                          disabled={Boolean(busy)}
+                        >
+                          <LockKeyhole size={15} aria-hidden="true" />{activeConversation.manualLocked ? "解除接管" : "人工接管"}
+                        </button>
+                      ) : null}
+                      <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("routing-center")} disabled={Boolean(busy)}>
+                        <Route size={15} aria-hidden="true" />查看路由
+                      </button>
+                      <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("design-center")} disabled={Boolean(busy)}>
+                        <ImageIcon size={15} aria-hidden="true" />转到设计
+                      </button>
+                      <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
+                        <Send size={15} aria-hidden="true" />发送队列
+                      </button>
+                    </div>
+                    <div className="conversation-service-insight">
+                      <div>
+                        <span>最近路由</span>
+                        <strong>{activeConversationRoute ? agentNameByKey(agents, activeConversationRoute.agentKey) : "暂无路由"}</strong>
+                        <small>
+                          {activeConversationRoute?.sceneDecision?.reason ||
+                            (activeConversationRoute ? `${readableScene(activeConversationRoute.scene, "未识别场景")} · ${(activeConversationRoute.matchedKeywords || []).join("、") || "无关键词"}` : "处理客户消息后会生成路由理由和处理计划。")}
+                        </small>
+                      </div>
+                      <div>
+                        <span>处理摘要</span>
+                        <strong>{inboundSummary || "等待客户消息进入"}</strong>
+                        <small>消息中心只处理客户对话；设计、报价、发送进入各自中心。</small>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <PreflightPanel
                   job={activeJob}
