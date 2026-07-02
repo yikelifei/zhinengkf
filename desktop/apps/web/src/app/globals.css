@@ -21293,3 +21293,385 @@ body .apple-light-shell.shell .workspace[data-active-section="conversation-cente
     overflow-wrap: anywhere !important;
   }
 }
+
+/* Iteration 54 App workbench containment: each active nav target behaves like a bounded macOS work surface. */
+@media (min-width: 1024px) {
+  body .apple-light-shell.shell .workspace {
+    padding-bottom: 0;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] > .main-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] > .bottom-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] > .bottom-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] > .training-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] > .send-safety-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] > .review-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] > .quote-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] > .routing-grid {
+    padding-bottom: 72px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center,
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center,
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center,
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] .routing-panel {
+    height: clamp(540px, calc(100dvh - 286px), 664px);
+    overflow: hidden auto !important;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center,
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-list,
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center .agent-list {
+    min-height: 0;
+    overflow: auto;
+    padding-bottom: 18px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center .agent-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: start;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center .agent-card {
+    min-height: 118px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-controls {
+    grid-template-columns: minmax(260px, 0.9fr) minmax(260px, 0.78fr) minmax(360px, 1.1fr);
+    align-items: stretch;
+    padding-right: 18px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-controls > span {
+    grid-column: 1 / -1;
+    justify-self: start;
+    width: max-content;
+    margin-top: -2px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-batch-bar,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    align-items: center;
+    justify-content: stretch;
+    width: 100%;
+    max-width: 100%;
+    overflow: visible;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-batch-bar > span {
+    margin-left: 0;
+    justify-self: start;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-batch-bar input:not([type="checkbox"]) {
+    min-width: 0;
+    max-width: none;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-guide,
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-table,
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-readiness,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-history-list,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-step-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-list,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-columns,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-log-list,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-workbench {
+    max-height: none;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-guide {
+    max-height: 292px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-table {
+    max-height: 366px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor {
+    max-height: 420px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-actions {
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .panel-head {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.54fr) minmax(260px, 0.42fr) minmax(360px, 1fr);
+    align-items: center;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-view-switcher {
+    width: 100%;
+    grid-auto-columns: minmax(78px, 1fr);
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-actions {
+    padding: 4px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-readiness-checks,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-history-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-summary-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-step-insight-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .deal-pipeline,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .deal-filter-row {
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-list {
+    max-height: 332px;
+    padding-bottom: 16px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task {
+    padding: 10px 10px 10px 14px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions :is(button, .primary, .ghost),
+  body .apple-light-shell.shell .workspace[data-active-section="account-center"] #account-center .window-actions :is(button, .primary, .ghost),
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-batch-bar :is(button, .primary, .ghost),
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-actions :is(button, .primary, .ghost) {
+    justify-content: center;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-list {
+    max-height: 214px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-log-list {
+    max-height: 240px;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center {
+    overflow-x: hidden !important;
+  }
+}
+
+@media (max-width: 1220px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="agent-center"] #agent-center .agent-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-controls {
+    grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-controls .segmented-control.wide {
+    grid-column: 1 / -1;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .panel-head {
+    grid-template-columns: minmax(180px, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .panel-head,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-view-switcher {
+    width: 100%;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+}
+
+/* Iteration 55 Notice split-view override: remove legacy four-column placement after the notice center was separated by intent. */
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  align-content: start !important;
+  gap: 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center > :not(.panel-head) {
+  grid-column: 1 / -1 !important;
+  grid-row: auto !important;
+  width: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  margin-inline: 16px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-runtime-strip {
+  min-height: 50px !important;
+  height: auto !important;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
+  overflow: visible !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center :is(
+  .automation-readiness,
+  .automation-history-summary,
+  .automation-history-list,
+  .automation-summary,
+  .automation-step-panel,
+  .automation-issue-panel,
+  .notice-list
+) {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-summary,
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-history-summary {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.4fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-issue-panel,
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-step-panel {
+  max-height: calc(100dvh - 430px) !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-list {
+  max-height: calc(100dvh - 560px) !important;
+  overflow: auto !important;
+  padding-bottom: 10px;
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center > :not(.panel-head) {
+    margin-inline: 10px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-summary,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-history-summary,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-history-row,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-issue-summary,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-issue-item {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-issue-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .automation-step-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-list {
+    max-height: none !important;
+  }
+}
+
+/* Iteration 56 SKU and notice finish: keep empty states explicit and form actions reachable inside the bounded app pane. */
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-guide:has(.sku-repair-empty) {
+  max-height: 216px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-guide:has(.sku-repair-empty) .sku-repair-actions {
+  min-height: 0 !important;
+  padding: 4px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-empty {
+  min-height: 84px !important;
+  padding: 14px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor {
+  max-height: clamp(240px, calc(100dvh - 566px), 360px) !important;
+  padding-bottom: 10px !important;
+  scrollbar-gutter: stable;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-form-grid {
+  gap: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .field-control {
+  min-height: 52px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-form-readiness-warning {
+  max-height: 86px !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-form-readiness-summary {
+  grid-column: auto !important;
+  margin: 0 0 8px !important;
+  max-height: 78px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .catalog-actions {
+  position: static !important;
+  margin-top: 10px !important;
+  padding-top: 0 !important;
+  background: transparent !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-history-empty {
+  min-height: calc(100dvh - 430px) !important;
+  display: grid !important;
+  place-items: center !important;
+  text-align: center;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor-toolbar {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  margin: 10px 0 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor-toolbar button {
+  width: 100% !important;
+}
+
+@media (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library {
+    grid-template-rows: auto auto 42px 168px minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-repair-guide {
+    min-height: 0 !important;
+    overflow: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="sku-library"] #sku-library .sku-editor {
+    max-height: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-view-switcher {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    width: 100% !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="notice-center"] #notice-center .notice-view-switcher button {
+    min-width: 0 !important;
+    padding-inline: 8px !important;
+  }
+}

@@ -766,6 +766,7 @@ export default function HomePage() {
   const [orderPaymentFilter, setOrderPaymentFilter] = useState<string>("all");
   const [dealNextStepFilter, setDealNextStepFilter] = useState<string>("all");
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<string>("design-center");
+  const [noticeWorkbenchView, setNoticeWorkbenchView] = useState<"automation" | "issues" | "history">("automation");
   const [skuImportText, setSkuImportText] = useState<string>(`SKU编号\t商品名称\t商品类型\t分类\t成本价\t售价\t库存\t场景标签\t主图\t多角度图\t尺寸\t重量g\t材质\t供应商\t交期天数\t替代SKU\t搭配规则
 BOX-B\t雅黑礼盒B\t礼盒\t礼盒\t40\t80\t20\t员工福利、客户拜访\tC:\\products\\box-b-main.jpg\tC:\\products\\box-b-side.jpg、C:\\products\\box-b-open.jpg\t30*22*9\t650\t特种纸\t杭州礼盒厂\t5\tBOX-A\t{"preferWith":["TEA-C","CARD-B"]}
 TEA-C\t乌龙茶C\t内搭\t茶叶\t55\t120\t15\t员工福利\tC:\\products\\tea-c-main.jpg\tC:\\products\\tea-c-detail.jpg\t12*8*18\t300\t茶叶\t福建茶业供应商\t3\t\t适合与礼盒和感谢卡搭配
@@ -3382,7 +3383,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (typeof window === "undefined") return;
     const browserWindow = window as Window & typeof globalThis;
     const getHashSectionId = () => {
-      const sectionId = decodeURIComponent(browserWindow.location.hash.replace(/^#/, ""));
+      const rawHash = decodeURIComponent(browserWindow.location.hash.replace(/^#/, ""));
+      const [sectionId, noticeView] = rawHash.split(":");
+      if (
+        sectionId === "notice-center" &&
+        (noticeView === "automation" || noticeView === "issues" || noticeView === "history")
+      ) {
+        setNoticeWorkbenchView((current) => (current === noticeView ? current : noticeView));
+      }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
@@ -5588,6 +5596,28 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <strong>{skuForm.skuCode ? "编辑/新增商品" : "新增真实商品"}</strong>
                 <span>保存后立即进入 SKU 库，并参与搭配、体检和报价计算</span>
               </div>
+              <div className="catalog-actions sku-editor-toolbar">
+                <button type="button" className="primary" onClick={saveSkuForm} disabled={Boolean(busy)}>
+                  <Check size={16} aria-hidden="true" />保存商品
+                </button>
+                <button type="button" className="ghost" onClick={resetSkuForm} disabled={Boolean(busy)}>
+                  <RefreshCw size={16} aria-hidden="true" />清空表单
+                </button>
+              </div>
+              {skuFormReadinessWarnings.length ? (
+                <div className="sku-form-readiness-warning sku-form-readiness-summary">
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <div>
+                    <strong>保存前资料检查</strong>
+                    {skuFormReadinessWarnings.slice(0, 2).map((warning, index) => (
+                      <span key={`${warning.field}-${warning.path}-${index}`}>
+                        {warning.message}{warning.path ? `：${warning.path}` : ""}
+                      </span>
+                    ))}
+                    {skuFormReadinessWarnings.length > 2 ? <small>还有 {skuFormReadinessWarnings.length - 2} 个资料提醒，保存后商品体检会继续列出。</small> : null}
+                  </div>
+                </div>
+              ) : null}
               <div className="sku-form-grid">
                 <label className="field-control">
                   <span>SKU 编号</span>
@@ -5641,20 +5671,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <span>多角度图</span>
                   <input value={skuForm.angleImages} onChange={(event) => setSkuForm({ ...skuForm, angleImages: event.target.value })} placeholder="用顿号分隔" />
                 </label>
-                {skuFormReadinessWarnings.length ? (
-                  <div className="sku-form-readiness-warning">
-                    <AlertTriangle size={16} aria-hidden="true" />
-                    <div>
-                      <strong>保存前资料检查</strong>
-                      {skuFormReadinessWarnings.slice(0, 5).map((warning, index) => (
-                        <span key={`${warning.field}-${warning.path}-${index}`}>
-                          {warning.message}{warning.path ? `：${warning.path}` : ""}
-                        </span>
-                      ))}
-                      {skuFormReadinessWarnings.length > 5 ? <small>还有 {skuFormReadinessWarnings.length - 5} 个资料提醒，保存后商品体检会继续列出。</small> : null}
-                    </div>
-                  </div>
-                ) : null}
                 <label className="field-control">
                   <span>尺寸</span>
                   <input value={skuForm.dimensions} onChange={(event) => setSkuForm({ ...skuForm, dimensions: event.target.value })} placeholder="30*22*9" />
@@ -5713,14 +5729,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   placeholder='可写文字，也可写 JSON，例如 {"mustWith":["CARD-B"]}'
                 />
               </label>
-              <div className="catalog-actions">
-                <button type="button" className="primary" onClick={saveSkuForm} disabled={Boolean(busy)}>
-                  <Check size={16} aria-hidden="true" />保存商品
-                </button>
-                <button type="button" className="ghost" onClick={resetSkuForm} disabled={Boolean(busy)}>
-                  <RefreshCw size={16} aria-hidden="true" />清空表单
-                </button>
-              </div>
             </div>
           </section>
 
@@ -5730,22 +5738,62 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><Bell size={17} aria-hidden="true" />提醒</h2>
                 <span>生成完成、失败、超时、高价值转人工</span>
               </div>
-              <div className="notice-actions">
-                <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}><Bot size={16} aria-hidden="true" />后台跑一轮</button>
-                <button type="button" className="ghost" onClick={toggleAutomationActive} disabled={Boolean(busy) || !automationStatus?.enabled}>
-                  {automationStatus?.active ? <Ban size={16} aria-hidden="true" /> : <Bot size={16} aria-hidden="true" />}
-                  {automationStatus?.active ? "暂停后台" : "开启后台"}
+              <div className="notice-view-switcher segmented-control" role="group" aria-label="提醒中心视图">
+                <button
+                  type="button"
+                  className={noticeWorkbenchView === "automation" ? "selected" : ""}
+                  aria-pressed={noticeWorkbenchView === "automation"}
+                  onClick={() => setNoticeWorkbenchView("automation")}
+                >
+                  后台控制
                 </button>
-                <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />低价值自动处理</button>
-                <button type="button" className="ghost danger" onClick={handoffHighValueJobs} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />高价值转人工</button>
-                <button type="button" className="ghost" onClick={autoSubmitDrafts} disabled={Boolean(busy)}><Send size={16} aria-hidden="true" />自动提交草稿</button>
-                <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}><AlertTriangle size={16} aria-hidden="true" />超时演示</button>
-                <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}><Ban size={16} aria-hidden="true" />失败演示</button>
-                <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />扫描超时</button>
-                <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy)}><Bell size={16} aria-hidden="true" />全部已读</button>
+                <button
+                  type="button"
+                  className={noticeWorkbenchView === "issues" ? "selected" : ""}
+                  aria-pressed={noticeWorkbenchView === "issues"}
+                  onClick={() => setNoticeWorkbenchView("issues")}
+                >
+                  待处理
+                </button>
+                <button
+                  type="button"
+                  className={noticeWorkbenchView === "history" ? "selected" : ""}
+                  aria-pressed={noticeWorkbenchView === "history"}
+                  onClick={() => setNoticeWorkbenchView("history")}
+                >
+                  运行记录
+                </button>
+              </div>
+              <div className="notice-actions">
+                {noticeWorkbenchView === "automation" ? (
+                  <>
+                    <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}><Bot size={16} aria-hidden="true" />后台跑一轮</button>
+                    <button type="button" className="ghost" onClick={toggleAutomationActive} disabled={Boolean(busy) || !automationStatus?.enabled}>
+                      {automationStatus?.active ? <Ban size={16} aria-hidden="true" /> : <Bot size={16} aria-hidden="true" />}
+                      {automationStatus?.active ? "暂停后台" : "开启后台"}
+                    </button>
+                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />低价值自动处理</button>
+                    <button type="button" className="ghost" onClick={autoSubmitDrafts} disabled={Boolean(busy)}><Send size={16} aria-hidden="true" />自动提交草稿</button>
+                    <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />扫描超时</button>
+                  </>
+                ) : null}
+                {noticeWorkbenchView === "issues" ? (
+                  <>
+                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />处理低价值</button>
+                    <button type="button" className="ghost danger" onClick={handoffHighValueJobs} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />高价值转人工</button>
+                    <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy)}><Bell size={16} aria-hidden="true" />全部已读</button>
+                  </>
+                ) : null}
+                {noticeWorkbenchView === "history" ? (
+                  <>
+                    <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />扫描超时</button>
+                    <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}><AlertTriangle size={16} aria-hidden="true" />超时演示</button>
+                    <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}><Ban size={16} aria-hidden="true" />失败演示</button>
+                  </>
+                ) : null}
               </div>
             </div>
-            {automationRuntimeItems.length ? (
+            {noticeWorkbenchView === "automation" && automationRuntimeItems.length ? (
               <div className="automation-runtime-strip" aria-label="低价值后台自动化运行状态">
                 {automationRuntimeItems.map((item) => (
                   <button
@@ -5762,7 +5810,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 ))}
               </div>
             ) : null}
-            {automationReadiness ? (
+            {noticeWorkbenchView === "automation" && automationReadiness ? (
               <div className={`automation-readiness ${automationReadiness.tone}`} aria-label="低价值自动化开机检查">
                 <div className="automation-readiness-head">
                   <div>
@@ -5809,7 +5857,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
-            {automationRunHistorySummary ? (
+            {noticeWorkbenchView === "history" && automationRunHistorySummary ? (
               <div className={`automation-history-summary ${automationRunHistorySummary.tone}`}>
                 <div>
                   <strong>{automationRunHistorySummary.title}</strong>
@@ -5832,7 +5880,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
-            {automationRunHistoryItems.length ? (
+            {noticeWorkbenchView === "history" && automationRunHistoryItems.length ? (
               <div className="automation-history-list" aria-label="最近低价值后台自动化运行记录">
                 <div className="automation-history-list-head">
                   <strong>最近运行记录</strong>
@@ -5860,7 +5908,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 ))}
               </div>
             ) : null}
-            {lowValueAutomationSummary ? (
+            {noticeWorkbenchView === "automation" && lowValueAutomationSummary ? (
               <div className={`automation-summary ${lowValueAutomationSummary.tone}`}>
                 <div>
                   <strong>{lowValueAutomationSummary.title}</strong>
@@ -5882,7 +5930,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
-            {lowValueAutomationStepItems.length ? (
+            {noticeWorkbenchView === "history" && lowValueAutomationStepItems.length ? (
               <div className="automation-step-panel" aria-label="上一轮低价值自动化步骤">
                 <div className="automation-step-head">
                   <strong>上一轮执行步骤</strong>
@@ -5928,7 +5976,24 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
-            {lowValueAutomationIssues.length ? (
+            {noticeWorkbenchView === "history" && !automationRunHistorySummary && !automationRunHistoryItems.length && !lowValueAutomationStepItems.length ? (
+              <div className="empty empty-cta notice-history-empty" role="status">
+                <strong>暂无运行记录</strong>
+                <span>后台自动化跑完后会在这里显示结果、耗时和失败步骤。</span>
+                <div className="empty-actions">
+                  <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+                    <Bot size={16} aria-hidden="true" />后台跑一轮
+                  </button>
+                  <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}>
+                    <AlertTriangle size={16} aria-hidden="true" />超时演示
+                  </button>
+                  <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}>
+                    <Ban size={16} aria-hidden="true" />失败演示
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {noticeWorkbenchView === "issues" && lowValueAutomationIssues.length ? (
               <div className="automation-issue-panel">
                 {lowValueAutomationIssueSummary ? (
                   <div className="automation-issue-summary">
@@ -6025,56 +6090,58 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
-            <div className="notice-list">
-              {notifications.length ? (
-                notifications.slice(0, 6).map((notice) => (
-                  <article
-                    className={`notice ${noticeTone(notice.level)} ${notice.readAt ? "read" : ""}`}
-                    key={notice.id}
-                  >
-                    <span />
-                    <button
-                      type="button"
-                      className="notice-main"
-                      onClick={() => readNotice(notice)}
-                      disabled={Boolean(busy)}
-                      title={notice.readAt ? "已读提醒" : "标记为已读"}
+            {noticeWorkbenchView === "issues" ? (
+              <div className="notice-list">
+                {notifications.length ? (
+                  notifications.slice(0, 6).map((notice) => (
+                    <article
+                      className={`notice ${noticeTone(notice.level)} ${notice.readAt ? "read" : ""}`}
+                      key={notice.id}
                     >
-                      <strong>{notice.title}</strong>
-                      {notice.body ? <small>{notice.body}</small> : null}
-                      {noticeTargetSummary(notice) ? <em>{noticeTargetSummary(notice)}</em> : null}
-                    </button>
-                    <div className="notice-target-actions">
+                      <span />
                       <button
                         type="button"
-                        className="ghost"
-                        onClick={() => focusNoticeTarget(notice)}
-                        disabled={Boolean(busy) || !noticeHasTarget(notice)}
-                        title={noticeHasTarget(notice) ? "定位到这条提醒绑定的业务记录" : "这条提醒没有可定位目标"}
+                        className="notice-main"
+                        onClick={() => readNotice(notice)}
+                        disabled={Boolean(busy)}
+                        title={notice.readAt ? "已读提醒" : "标记为已读"}
                       >
-                        <Search size={14} aria-hidden="true" />定位
+                        <strong>{notice.title}</strong>
+                        {notice.body ? <small>{notice.body}</small> : null}
+                        {noticeTargetSummary(notice) ? <em>{noticeTargetSummary(notice)}</em> : null}
+                      </button>
+                      <div className="notice-target-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => focusNoticeTarget(notice)}
+                          disabled={Boolean(busy) || !noticeHasTarget(notice)}
+                          title={noticeHasTarget(notice) ? "定位到这条提醒绑定的业务记录" : "这条提醒没有可定位目标"}
+                        >
+                          <Search size={14} aria-hidden="true" />定位
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <div className="empty empty-cta" role="status">
+                    <strong>暂无提醒</strong>
+                    <span>可以主动跑一轮后台自动化，或创建超时/失败演示来验证提醒链路。</span>
+                    <div className="empty-actions">
+                      <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+                        <Bot size={16} aria-hidden="true" />后台跑一轮
+                      </button>
+                      <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}>
+                        <AlertTriangle size={16} aria-hidden="true" />超时演示
+                      </button>
+                      <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}>
+                        <Ban size={16} aria-hidden="true" />失败演示
                       </button>
                     </div>
-                  </article>
-                ))
-              ) : (
-                <div className="empty empty-cta" role="status">
-                  <strong>暂无提醒</strong>
-                  <span>可以主动跑一轮后台自动化，或创建超时/失败演示来验证提醒链路。</span>
-                  <div className="empty-actions">
-                    <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
-                      <Bot size={16} aria-hidden="true" />后台跑一轮
-                    </button>
-                    <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}>
-                      <AlertTriangle size={16} aria-hidden="true" />超时演示
-                    </button>
-                    <button type="button" className="ghost" onClick={createFailureDemo} disabled={Boolean(busy)}>
-                      <Ban size={16} aria-hidden="true" />失败演示
-                    </button>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            ) : null}
           </section>
         </section>
 
