@@ -17,6 +17,7 @@ import {
   Bot,
   Boxes,
   Brain,
+  Building2,
   Ban,
   Check,
   ClipboardList,
@@ -28,6 +29,8 @@ import {
   Layers,
   LockKeyhole,
   MessageCircle,
+  Monitor,
+  Network,
   Route,
   PackageSearch,
   Pencil,
@@ -36,9 +39,12 @@ import {
   Save,
   Search,
   Send,
+  Settings2,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Store,
+  Workflow,
   X,
 } from "lucide-react";
 import {
@@ -105,6 +111,7 @@ import {
   getTrainingOverview,
   getTrainingSamples,
   getWechatAccounts,
+  getWechatChannelStatus,
   getWechatConversations,
   getWechatWindowSnapshots,
   getWindowObserverStatus,
@@ -171,6 +178,7 @@ import {
   startAutomation,
   stopAutomation,
   submitDesignJob,
+  testWechatChannelInbound,
   TrainingSample,
   TrainingOverview,
   updateOrderDraft,
@@ -181,6 +189,8 @@ import {
   validateSendTask,
   validateSendTaskCurrentWindow,
   WechatAccount,
+  WechatChannelKey,
+  WechatChannelStatus,
   WechatWindowSnapshot,
   WindowObserverStatus,
 } from "../lib/api";
@@ -287,8 +297,10 @@ const dealNextStepFilterOptions = [
 ];
 
 const workspaceNavItems = [
+  { id: "design-platform-config", label: "平台配置", Icon: Settings2 },
   { id: "asset-center", label: "素材", Icon: FileUp },
   { id: "conversation-center", label: "消息", Icon: MessageCircle },
+  { id: "wechat-channel-center", label: "微信接入", Icon: Network },
   { id: "design-center", label: "设计中心", Icon: ImageIcon },
   { id: "sku-library", label: "商品库", Icon: Store },
   { id: "notice-center", label: "提醒", Icon: Bell },
@@ -301,6 +313,11 @@ const workspaceNavItems = [
   { id: "review-center", label: "审核", Icon: ShieldAlert },
   { id: "quote-center", label: "报价", Icon: ClipboardList },
 ] as const;
+
+const workspaceSectionLabels = new Map<string, string>([
+  ...workspaceNavItems.map((item) => [item.id, item.label] as [string, string]),
+]);
+const workspaceSectionIds = new Set(workspaceSectionLabels.keys());
 
 type SkuForm = {
   skuCode: string;
@@ -641,6 +658,13 @@ function designPlatformAdapterLabel(adapter?: string) {
   return adapter || "未配置";
 }
 
+function runtimeConfigDisplayName(path?: string) {
+  if (!path) return "运行时配置未加载";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  const fileName = parts[parts.length - 1] || "design-platform-config.json";
+  return `本地运行配置 · ${fileName}`;
+}
+
 function createDesignPlatformDeviceId() {
   const randomUuid =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -678,6 +702,7 @@ export default function HomePage() {
   const [sampleEdit, setSampleEdit] = useState<TrainingSampleEdit | null>(null);
   const [selectedTrainingSampleIds, setSelectedTrainingSampleIds] = useState<string[]>([]);
   const [wechatAccounts, setWechatAccounts] = useState<WechatAccount[]>([]);
+  const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
@@ -716,10 +741,11 @@ export default function HomePage() {
   const [activeConversationId, setActiveConversationId] = useState<string>("");
   const [busy, setBusy] = useState<string>("");
   const [message, setMessage] = useState<string>("本地演示模式：先创建任务，再提交出图，约 3 秒后刷新候选图。");
-  const [chatText, setChatText] = useState<string>(`客户：我想做端午礼盒，每盒预算180，能先看效果图吗？
-客服：可以的，我先按员工福利场景给您搭一套礼盒，再出几张真实摆拍效果图给您挑。
+  const [chatText, setChatText] = useState<string>(`客户：端午礼盒预算180，先看效果图。
+客服：按员工福利场景搭配礼盒。
+客服：出真实摆拍效果图给您挑。
 客户：快递一直不动怎么办？
-客服：我帮您查一下物流状态，如果确实停滞会同步安排催件或补发方案。`);
+客服：先查物流，停滞就催件或补发。`);
   const [routeText, setRouteText] = useState<string>("端午员工福利礼盒，每盒180元，做50份，想看真实摆拍效果图，logo已发");
   const [inboundSummary, setInboundSummary] = useState<string>("");
   const [selectionText, setSelectionText] = useState<string>("我选第1张");
@@ -788,7 +814,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 customerId: activeConversationFilter.customerId,
               }
             : {});
-    const [jobRows, skuRows, auditRows, skuLogRows, agentRows, importRows, sampleRows, correctionSampleRows, overviewRows, suggestionRows, accountRows, conversationRows, sendRows, attemptRows, adapterInfo, bridgeRows, bridgeStatusRows, windowRows, windowObserverRows, routeRows, quoteRows, orderRows, noticeRows, reviewRows, health, readiness, configResult, automation, automationReadinessResult] = await Promise.all([
+    const [jobRows, skuRows, auditRows, skuLogRows, agentRows, importRows, sampleRows, correctionSampleRows, overviewRows, suggestionRows, accountRows, channelStatusRows, conversationRows, sendRows, attemptRows, adapterInfo, bridgeRows, bridgeStatusRows, windowRows, windowObserverRows, routeRows, quoteRows, orderRows, noticeRows, reviewRows, health, readiness, configResult, automation, automationReadinessResult] = await Promise.all([
       getDesignJobs(identityFilters),
       getSkus(includeInactiveSkus),
       getSkuCatalogAudit(),
@@ -800,6 +826,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       getTrainingOverview(),
       getSkillSuggestions(),
       getWechatAccounts(),
+      getWechatChannelStatus(identityFilters),
       getWechatConversations(),
       getSendTasks(identityFilters),
       getSendAttempts(undefined, identityFilters),
@@ -884,6 +911,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return kept.length ? kept : safeKeys;
     });
     setWechatAccounts(accountRows);
+    setWechatChannelStatus(channelStatusRows);
     setConversations(conversationRows);
     setSendTasks(sendRows);
     setSendAttempts(attemptRows);
@@ -1909,8 +1937,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function executeDryRun(task: SendTask) {
-    if (!ensureTaskCanSend(task, "执行干跑发送")) return;
-    await runAction("执行干跑发送", () => executeDryRunSend(task.id, identityExpectation(task)));
+    if (!ensureTaskCanSend(task, "演练发送")) return;
+    await runAction("演练发送", () => executeDryRunSend(task.id, identityExpectation(task)));
   }
 
   async function executeActiveSend(task: SendTask) {
@@ -2000,7 +2028,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   async function refreshBridgeOutbox() {
     let summary = "";
     await runAction(
-      "刷新桥接 outbox",
+      "刷新桥接待发送",
       async () => {
         const conversation = activeConversationId
           ? conversations.find((item) => item.id === activeConversationId)
@@ -2017,7 +2045,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         summary = `桥接待处理 ${result.pending.length} 个，忽略旧文件 ${result.ignored.length} 个。`;
       },
       () => {
-        setMessage(summary || "桥接 outbox 已刷新。");
+        setMessage(summary || "桥接待发送已刷新。");
       },
     );
   }
@@ -2182,6 +2210,44 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       () => {
         setInboundSummary(summary);
         setMessage(summary || "客户消息处理完成。");
+      },
+    );
+  }
+
+  async function runWechatChannelInbound(channel: WechatChannelKey) {
+    const conversation = conversations.find((item) => item.id === activeConversationId);
+    if (!conversation) {
+      setMessage("请先在消息中心选择客户会话，再做微信通道入站演练。");
+      return;
+    }
+    const text = routeText.trim() || `来自${wechatChannelLabel(channel)}的客户咨询：想做一批企业礼盒，请帮我推荐方案。`;
+    let summary = "";
+    await runAction(
+      `${wechatChannelLabel(channel)}入站演练`,
+      async () => {
+        const result = (await testWechatChannelInbound(channel, {
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+          text,
+        })) as any;
+        const route = result?.result?.route;
+        const plan = result?.result?.plan;
+        const sendTask = result?.result?.sendTask;
+        const parts = [`已进入 ${conversation.title}`];
+        if (route?.agentKey) parts.push(`路由到 ${route.agent?.name || route.agentKey}`);
+        if (plan?.type) parts.push(`计划 ${plan.type}`);
+        if (sendTask?.id) parts.push(`安全发送任务 ${sendTask.id}`);
+        summary = parts.join(" · ");
+      },
+      () => {
+        setInboundSummary(summary);
+        setMessage(summary || `${wechatChannelLabel(channel)}入站演练完成。`);
+        void load({
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+        });
       },
     );
   }
@@ -3276,15 +3342,38 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   useEffect(() => {
     const activeRailButton = document.querySelector<HTMLButtonElement>(
-      `.rail button[aria-controls="${activeWorkspaceSection}"]`
+      `.rail button[data-section-id="${activeWorkspaceSection}"]`
     );
     const rail = activeRailButton?.closest<HTMLElement>(".rail");
     if (!activeRailButton || !rail) return;
-    rail.scrollTo({
-      top: activeRailButton.offsetTop - (rail.clientHeight - activeRailButton.clientHeight) / 2,
-      left: activeRailButton.offsetLeft - (rail.clientWidth - activeRailButton.clientWidth) / 2,
-      behavior: "smooth",
-    });
+    const centerActiveRailButton = () => {
+      const isHorizontalRail = rail.scrollWidth > rail.clientWidth && rail.clientWidth >= rail.clientHeight;
+
+      if (isHorizontalRail) {
+        const maxLeft = Math.max(0, rail.scrollWidth - rail.clientWidth);
+        const targetLeft =
+          activeRailButton.offsetLeft - (rail.clientWidth - activeRailButton.clientWidth) / 2;
+        rail.scrollTo({
+          top: 0,
+          left: Math.min(maxLeft, Math.max(0, targetLeft)),
+          behavior: "auto",
+        });
+        return;
+      }
+
+      rail.scrollTo({
+        top: activeRailButton.offsetTop - (rail.clientHeight - activeRailButton.clientHeight) / 2,
+        left: activeRailButton.offsetLeft - (rail.clientWidth - activeRailButton.clientWidth) / 2,
+        behavior: "auto",
+      });
+    };
+    centerActiveRailButton();
+    const frame = window.requestAnimationFrame(centerActiveRailButton);
+    const timers = [80, 260, 620].map((delay) => window.setTimeout(centerActiveRailButton, delay));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
   }, [activeWorkspaceSection]);
 
   useEffect(() => {
@@ -3292,7 +3381,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const browserWindow = window as Window & typeof globalThis;
     const getHashSectionId = () => {
       const sectionId = decodeURIComponent(browserWindow.location.hash.replace(/^#/, ""));
-      return workspaceNavItems.some((item) => item.id === sectionId) ? sectionId : null;
+      return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
       const sectionId = getHashSectionId();
@@ -3774,7 +3863,46 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
       const workspace = document.querySelector<HTMLElement>(".workspace");
+      const targetSection = document.getElementById(sectionId);
       workspace?.scrollTo({ top: 0, behavior });
+      targetSection?.scrollTo({ left: 0, top: 0, behavior: "auto" });
+      targetSection?.querySelectorAll<HTMLElement>(
+        [
+          ".quote-panel",
+          ".training-panel",
+          ".send-panel",
+          ".config-status-grid",
+          ".config-form-grid",
+          ".config-actions",
+          ".config-activation-panel",
+          ".config-login-panel",
+          ".sku-controls",
+          ".sku-repair-guide",
+          ".sku-batch-bar",
+          ".sku-table",
+          ".sku-editor",
+          ".automation-readiness",
+          ".automation-history-list",
+          ".automation-issue-panel",
+          ".notice-list",
+          ".catalog-tools",
+          ".sku-import-guide",
+          ".import-preview",
+          ".catalog-audit",
+          ".sku-change-log",
+          ".bundle-result",
+          ".review-panel",
+          ".routing-panel",
+          ".route-result",
+          ".chat-detail",
+          ".agent-list",
+          ".wechat-channel-panel-body",
+          ".wechat-channel-list",
+          ".wechat-visual-panel",
+        ].join(", "),
+      ).forEach((pane) => {
+        if (pane.scrollLeft || pane.scrollTop) pane.scrollTo({ left: 0, top: 0, behavior: "auto" });
+      });
       document.scrollingElement?.scrollTo({ top: 0, behavior: "auto" });
     });
   }
@@ -3820,7 +3948,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           type="button"
         >
           <MessageCircle size={14} aria-hidden="true" />
-          请选择客户会话
+          <span className="conversation-picker-label">请选择客户会话</span>
         </button>
         {conversations.map((conversation) => (
           <button
@@ -3843,8 +3971,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
-  const activeWorkspaceLabel =
-    workspaceNavItems.find((item) => item.id === activeWorkspaceSection)?.label || "工作台";
+  const activeWorkspaceLabel = workspaceSectionLabels.get(activeWorkspaceSection) || "工作台";
   const pendingSendTaskCount = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status)).length;
   const manualReviewJobCount = jobs.filter((job) => job.status === "manual_review").length;
   const manualLockedConversations = conversations.filter((conversation) => conversation.manualLocked);
@@ -3895,6 +4022,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     : platformHealth?.ok
       ? `${designPlatformAdapterLabel(platformHealth.adapter)} ${platformHealth.latencyMs}ms`
       : "离线";
+  const platformPillText = platformReadiness
+    ? platformReadiness.canSubmitFormalGeneration
+      ? `设计 ${platformReadiness.latencyMs}ms`
+      : "设计待处理"
+    : platformHealth?.ok
+      ? `设计 ${platformHealth.latencyMs}ms`
+      : "设计离线";
+  const automationPillText = automationStatus?.running
+    ? "自动运行"
+    : automationStatus?.active
+      ? `自动 ${Math.round((automationStatus.intervalMs || 0) / 1000)}s`
+      : "自动暂停";
+  const automationPillTitle = automationStatus?.running
+    ? "低价值自动化运行中"
+    : automationStatus?.active
+      ? `低价值自动化已开启，间隔 ${Math.round((automationStatus.intervalMs || 0) / 1000)} 秒`
+      : "低价值自动化未开启";
   const automationStateText = automationStatus?.active ? "自动化运行中" : "自动化暂停";
   const queueStateText = pendingSendTaskCount ? `${pendingSendTaskCount} 个待校验发送` : "发送队列空闲";
   const reviewStateText =
@@ -3917,6 +4061,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               aria-current={activeWorkspaceSection === item.id ? "page" : undefined}
               aria-label={item.label}
               className={activeWorkspaceSection === item.id ? "active" : ""}
+              data-section-id={item.id}
               key={item.id}
               onClick={() => scrollToWorkspaceSection(item.id)}
               title={item.label}
@@ -3944,15 +4089,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <span className="platform-pill current-section-pill" aria-live="polite">
                 当前 {activeWorkspaceLabel}
               </span>
-              <span className={`platform-pill ${platformPillTone}`} title={platformReadiness?.nextSteps[0] || platformStateText}>
-                设计平台 {platformStateText}
+              <span className={`platform-pill platform-health-pill ${platformPillTone}`} title={platformReadiness?.nextSteps[0] || platformStateText}>
+                {platformPillText}
               </span>
-              <span className={`platform-pill ${automationStatus?.active ? "online" : "warning"}`}>
-                {automationStatus?.running
-                  ? "低价值自动化运行中"
-                  : automationStatus?.active
-                    ? `低价值自动化已开启 ${Math.round((automationStatus.intervalMs || 0) / 1000)}s`
-                    : "低价值自动化未开启"}
+              <span className={`platform-pill automation-pill ${automationStatus?.active ? "online" : "warning"}`} title={automationPillTitle}>
+                {automationPillText}
               </span>
             </div>
             <div className="toolbar-group">{renderConversationSelect()}</div>
@@ -4035,7 +4176,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <div className="config-summary">
             <div>
               <strong>设计平台运行配置</strong>
-              <span>{platformConfig?.runtimeConfigPath || "运行时配置未加载"}</span>
+              <span title={platformConfig?.runtimeConfigPath || undefined}>
+                {runtimeConfigDisplayName(platformConfig?.runtimeConfigPath)}
+              </span>
             </div>
             <div className="config-status-grid" role="list" aria-label="设计平台凭证状态">
               <span role="listitem" className={platformConfig?.hasAccessToken ? "ready" : ""}>
@@ -4390,6 +4533,172 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           </section>
         </section>
 
+        <section className="wechat-channel-grid">
+          <section className="panel wechat-channel-panel" id="wechat-channel-center">
+            <div className="panel-head">
+              <div>
+                <h2><Network size={17} aria-hidden="true" />微信接入中心</h2>
+                <span>个人微信、企业微信、小程序分区接入，统一进入智能客服管线</span>
+              </div>
+              <div className="panel-actions">
+                <button type="button" className="ghost compact-button" onClick={() => void load()} disabled={Boolean(busy)}>
+                  <RefreshCw size={14} aria-hidden="true" />刷新状态
+                </button>
+              </div>
+            </div>
+            <div className="wechat-channel-panel-body">
+              <div className="wechat-channel-summary">
+                <div>
+                  <strong>{wechatChannelStatus ? `${wechatChannelStatus.summary.ready}/${wechatChannelStatus.summary.total}` : "0/3"}</strong>
+                  <span>通道就绪</span>
+                </div>
+                <div>
+                  <strong>{wechatChannelStatus?.summary.pendingSendTasks ?? pendingSendTaskCount}</strong>
+                  <span>待安全发送</span>
+                </div>
+                <div>
+                  <strong>{wechatChannelStatus?.summary.manualLockedConversations ?? manualLockedConversations.length}</strong>
+                  <span>人工接管</span>
+                </div>
+                <div>
+                  <strong>{wechatChannelStatus?.summary.needsConfig ?? 0}</strong>
+                  <span>待配置</span>
+                </div>
+              </div>
+              <div className="wechat-channel-layout">
+                <div className="wechat-channel-list" aria-label="微信通道列表">
+                  {wechatChannelStatus?.channels.length ? (
+                    wechatChannelStatus.channels.map((channel) => (
+                      <article className={`wechat-channel-card ${channel.status}`} key={channel.key}>
+                        <div className="wechat-channel-card-head">
+                          <span aria-hidden="true">
+                            {channel.key === "work_wechat" ? (
+                              <Building2 size={18} />
+                            ) : channel.key === "mini_program" ? (
+                              <Smartphone size={18} />
+                            ) : (
+                              <Monitor size={18} />
+                            )}
+                          </span>
+                          <div>
+                            <strong>{channel.label}</strong>
+                            <small>{wechatChannelKindLabel(channel.kind)}</small>
+                          </div>
+                          <em>{wechatChannelStatusLabel(channel.status)}</em>
+                        </div>
+                        <p>{channel.description}</p>
+                        <div className="wechat-channel-metrics" aria-label={`${channel.label}指标`}>
+                          {Object.entries(channel.metrics).slice(0, 4).map(([key, value]) => (
+                            <span key={key}>
+                              <b>{value}</b>
+                              <small>{wechatChannelMetricLabel(key)}</small>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="wechat-channel-checks" aria-label={`${channel.label}检查项`}>
+                          {channel.checks.map((check) => (
+                            <span className={check.passed ? "ok" : "warn"} key={check.key} title={check.detail || check.label}>
+                              {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
+                              {check.label}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="wechat-channel-actions">
+                          {channel.key === "personal_wechat" ? (
+                            <>
+                              <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                                <Search size={15} aria-hidden="true" />采集窗口
+                              </button>
+                              <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+                                <RefreshCw size={15} aria-hidden="true" />扫描快照
+                              </button>
+                              <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
+                                <ShieldCheck size={15} aria-hidden="true" />处理队列
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button type="button" className="primary" onClick={() => runWechatChannelInbound(channel.key)} disabled={Boolean(busy)}>
+                                <MessageCircle size={15} aria-hidden="true" />入站演练
+                              </button>
+                              <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("routing-center")} disabled={Boolean(busy)}>
+                                <Route size={15} aria-hidden="true" />查看路由
+                              </button>
+                              <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
+                                <Send size={15} aria-hidden="true" />发送队列
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty empty-cta" role="status">
+                      <strong>微信通道状态暂不可用</strong>
+                      <span>刷新后会读取后端真实通道状态；接入状态不再由前端静态假设。</span>
+                      <div className="empty-actions">
+                        <button type="button" className="primary" onClick={() => void load()} disabled={Boolean(busy)}>
+                          <RefreshCw size={16} aria-hidden="true" />刷新状态
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="wechat-visual-panel" aria-label="可视化智能客服流程">
+                  <div className="wechat-visual-head">
+                    <span aria-hidden="true"><Workflow size={18} /></span>
+                    <div>
+                      <strong>可视化智能客服</strong>
+                      <small>接入、路由、设计报价、人工审核、安全发送一条链</small>
+                    </div>
+                  </div>
+                  <div className="wechat-flow">
+                    {(wechatChannelStatus?.visualFlow || [
+                      { key: "inbound", label: "消息接入", detail: `${conversations.length} 个会话` },
+                      { key: "route", label: "智能路由", detail: `${routeEvaluations.length} 次评估` },
+                      { key: "review", label: "人工接管", detail: `${manualLockedConversations.length} 个锁定会话` },
+                      { key: "safe_send", label: "安全发送", detail: `${pendingSendTaskCount} 个待处理任务` },
+                    ]).map((step, index) => (
+                      <div className="wechat-flow-step" key={step.key}>
+                        <i>{index + 1}</i>
+                        <div>
+                          <strong>{step.label}</strong>
+                          <span>{step.detail}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="wechat-agent-live">
+                    <div>
+                      <span>当前会话</span>
+                      <strong>{activeConversation?.title || "未选择客户"}</strong>
+                    </div>
+                    <div>
+                      <span>最新路由</span>
+                      <strong>{latestRoute ? `${agentNameByKey(agents, latestRoute.agentKey)} · ${readableScene(latestRoute.scene, "未识别")}` : "暂无路由"}</strong>
+                    </div>
+                    <div>
+                      <span>处理摘要</span>
+                      <strong>{inboundSummary || "等待客户消息进入"}</strong>
+                    </div>
+                  </div>
+                  <div className="wechat-visual-actions">
+                    <button type="button" className="primary" onClick={processRouteInbound} disabled={Boolean(busy)}>
+                      <Bot size={15} aria-hidden="true" />处理当前消息
+                    </button>
+                    <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("conversation-center")} disabled={Boolean(busy)}>
+                      <MessageCircle size={15} aria-hidden="true" />查看会话
+                    </button>
+                    <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("review-center")} disabled={Boolean(busy)}>
+                      <ShieldAlert size={15} aria-hidden="true" />人工审核
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+
         <section className="main-grid">
           <section className="panel conversation-panel" id="conversation-center">
             <div className="panel-head">
@@ -4438,7 +4747,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         disabled={Boolean(busy)}
                         type="button"
                       >
-                        {image.downloadUrl ? <img src={image.downloadUrl} alt={`${image.position}号候选图`} /> : <ImageIcon size={24} aria-hidden="true" />}
+                        <SafeImagePreview
+                          src={image.downloadUrl}
+                          alt={`${image.position}号候选图`}
+                          fallbackLabel={image.downloadUrl ? "图片未连接" : "等待出图"}
+                          iconSize={24}
+                        />
                         <span>{image.position}号图</span>
                         {image.fingerprint ? <small>指纹 {image.fingerprint.slice(0, 6)}</small> : null}
                         {image.selected ? <Check size={16} aria-hidden="true" /> : null}
@@ -4803,7 +5117,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <strong>{job.customer?.name || "未命名客户"}</strong>
                     <small>{readableScene(job.scene, "未填写场景")} · {job.outputCount} 张候选</small>
                     {job.retryCount ? <small>已重试 {job.retryCount} 次</small> : null}
-                    {job.errorMessage ? <small className="error-text">{job.errorMessage}</small> : null}
+                    {job.errorMessage ? (
+                      <small className="error-text" title={job.errorMessage}>
+                        {operatorStatusMessage(job.errorMessage, job.errorMessage)}
+                      </small>
+                    ) : null}
                   </div>
                   <em>{statusLabel[job.status] || job.status}</em>
                 </button>
@@ -5092,7 +5410,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </label>
                     </div>
                     <div className="sku-thumb" role="cell">
-                      {imageUrl ? <img src={imageUrl} alt={sku.name} loading="lazy" /> : <PackageSearch size={18} aria-hidden="true" />}
+                      {imageUrl ? (
+                        <SafeImagePreview src={imageUrl} alt={sku.name} fallbackLabel="图片不可用" iconSize={18} />
+                      ) : (
+                        <PackageSearch size={18} aria-hidden="true" />
+                      )}
                     </div>
                     <strong role="cell">
                       {sku.name}
@@ -5646,7 +5968,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <div className="panel-head">
               <div>
                 <h2><PackageSearch size={17} aria-hidden="true" />商品导入与搭配</h2>
-                <span>下载标准模板，或从 Excel 复制表格/粘贴 CSV，导入后参与预算搭配</span>
+                <span>下载模板或粘贴 CSV，导入后参与预算搭配</span>
               </div>
               <Layers size={20} aria-hidden="true" />
             </div>
@@ -5920,6 +6242,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <div className="training-panel">
               <textarea
                 aria-label="粘贴训练聊天记录"
+                cols={24}
+                wrap="hard"
                 value={chatText}
                 onChange={(event) => setChatText(event.target.value)}
                 placeholder={"客户：问题内容\n客服：高质量回复"}
@@ -6572,7 +6896,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </div>
             <div className="bridge-summary">
               <strong>
-                窗口观察器：{windowObserverStatus?.status || "未检测"}
+                窗口观察器：{operatorStatusName(windowObserverStatus?.status)}
                 {windowObserverStatus?.ok ? " / 正常" : " / 需检查"}
               </strong>
               <span>
@@ -6582,10 +6906,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <small>
                 微信窗口 {windowObserverStatus?.result?.isOnline ? "已识别" : "未识别"}，置信度{" "}
                 {Math.round(Number(windowObserverStatus?.result?.confidence || 0) * 100)}%，自动扫描{" "}
-                {windowObserverStatus?.scan ? "开启" : "关闭"}，dry-run {windowObserverStatus?.dryRun ? "是" : "否"}
+                {windowObserverStatus?.scan ? "开启" : "关闭"}，演练模式 {windowObserverStatus?.dryRun ? "是" : "否"}
               </small>
               {windowObserverStatus?.errorMessage || windowObserverStatus?.message ? (
-                <small className="danger-text">{windowObserverStatus?.errorMessage || windowObserverStatus?.message}</small>
+                <small
+                  className="danger-text"
+                  title={String(windowObserverStatus?.errorMessage || windowObserverStatus?.message)}
+                >
+                  {operatorStatusMessage(
+                    windowObserverStatus?.errorMessage || windowObserverStatus?.message,
+                    "窗口观察器暂不可用，请确认本地安全服务后重试。"
+                  )}
+                </small>
               ) : null}
             </div>
             <div className="account-list">
@@ -6657,18 +6989,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <div className="bridge-summary">
                 <strong>
-                  桥接 worker：{bridgeStatus?.worker?.status || "未检测"}
+                  发送桥接：{operatorStatusName(bridgeStatus?.worker?.status)}
                   {bridgeStatus?.worker?.ok ? " / 正常" : " / 需检查"}
                 </strong>
                 <span>
-                  模式 {bridgeStatus?.worker?.mode || "-"}，回执 {bridgeStatus?.worker?.ackTransport || "-"}，最后更新 {bridgeStatus?.worker?.ageSeconds ?? "-"} 秒前
+                  模式 {bridgeModeLabel(bridgeStatus?.worker?.mode)}，回执 {bridgeTransportLabel(bridgeStatus?.worker?.ackTransport)}，最后更新 {bridgeStatus?.worker?.ageSeconds ?? "-"} 秒前
                 </span>
                 <small>
-                  outbox 待处理 {bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} 个，inbox 待扫描 {bridgeStatus?.inbox.pendingCount ?? 0} 个，账号锁 {bridgeStatus?.locks.activeCount ?? 0} 个
+                  待发送 {bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} 个，回执待扫 {bridgeStatus?.inbox.pendingCount ?? 0} 个，账号锁 {bridgeStatus?.locks.activeCount ?? 0} 个
                   {bridgeStatus?.locks.staleCount ? `，疑似超时锁 ${bridgeStatus.locks.staleCount} 个` : ""}
                 </small>
                 {bridgeStatus?.worker?.errorMessage || bridgeStatus?.worker?.message ? (
-                  <small className="danger-text">{bridgeStatus.worker.errorMessage || bridgeStatus.worker.message}</small>
+                  <small className="danger-text" title={String(bridgeStatus.worker.errorMessage || bridgeStatus.worker.message)}>
+                    {operatorStatusMessage(
+                      bridgeStatus.worker.errorMessage || bridgeStatus.worker.message,
+                      "发送桥接暂不可用，请确认本地安全服务后重试。"
+                    )}
+                  </small>
                 ) : null}
               </div>
               <div className="send-actions">
@@ -6753,7 +7090,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             <Send size={16} aria-hidden="true" />执行当前适配器
                           </button>
                           <button type="button" className="primary" onClick={() => executeDryRun(task)} disabled={sendDisabled}>
-                            <Send size={16} aria-hidden="true" />执行干跑发送
+                            <Send size={16} aria-hidden="true" />演练发送
                           </button>
                           {taskCanBeRequeued ? (
                             <button type="button" className="ghost" onClick={() => requeueTask(task)} disabled={Boolean(busy) || taskConversationLocked}>
@@ -6891,6 +7228,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   {prioritizedManualLockedConversations.slice(0, 5).map((conversation) => {
                     const manualLockLog = manualLockLogByConversationId.get(conversation.id);
                     const blockedSendCount = manualLockBlockedSendCountByConversationId.get(conversation.id) || 0;
+                    const manualLockLogText = manualLockLog ? reviewLogSummary(manualLockLog) : "人工接管中，自动发送已暂停。";
+                    const manualLockDisplayText = operatorStatusMessage(manualLockLogText, "人工接管中，自动发送已暂停。");
                     return (
                       <article className="manual-lock-review-item" key={conversation.id}>
                         <button
@@ -6905,7 +7244,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             {conversation.wechatAccount?.displayName || conversation.wechatAccountId} ·{" "}
                             {conversation.customer?.name || conversation.customerId}
                           </span>
-                          <small>{manualLockLog ? reviewLogSummary(manualLockLog) : "人工接管中，自动发送已暂停。"}</small>
+                          <small title={manualLockLogText}>{manualLockDisplayText}</small>
                           {blockedSendCount ? <mark>已拦截 {blockedSendCount} 个发送任务</mark> : null}
                           {manualLockLog ? <em>接管时间：{formatDateTime(manualLockLog.createdAt)}</em> : null}
                         </button>
@@ -6961,7 +7300,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             {statusLabel[job.status] || job.status} · {totalImages} 张图 · 本地可发 {localImageCount}/{totalImages} ·{" "}
                             {job.isHighValue ? "高价值" : "普通"}
                           </p>
-                          {job.errorMessage ? <small>{job.errorMessage}</small> : null}
+                          {job.errorMessage ? (
+                            <small title={job.errorMessage}>{operatorStatusMessage(job.errorMessage, job.errorMessage)}</small>
+                          ) : null}
                         </button>
                         <div className="review-actions">
                           <button
@@ -7594,17 +7935,25 @@ function PreflightPanel({
   const platformText = platformHealth?.ok
     ? `${designPlatformAdapterLabel(platformHealth.adapter)} ${platformHealth.latencyMs}ms`
     : "未连接";
+  const compactRequestId = formatCompactRequestId(job.requestId);
 
   return (
     <div className={`preflight-panel ${tone}`}>
       <div className="preflight-head">
         <div>
           <strong>{preflight ? (preflight.ok ? "出图预检通过" : "出图预检未通过") : "出图提交前预检"}</strong>
-          <span>
-            {job.requestId} · {job.isHighValue ? "高价值人工审核" : "普通客户快速确认"}
+          <span title={`任务 ${job.requestId}`}>
+            任务 {compactRequestId} · {job.isHighValue ? "高价值人工审核" : "普通客户快速确认"}
           </span>
         </div>
-        <button type="button" className="ghost compact-button" onClick={onPreflight} disabled={disabled}>
+        <button
+          type="button"
+          className="ghost compact-button"
+          onClick={onPreflight}
+          disabled={disabled}
+          aria-label="执行出图预检"
+          title="执行出图预检"
+        >
           <ShieldCheck size={15} aria-hidden="true" />预检
         </button>
       </div>
@@ -7636,6 +7985,12 @@ function PreflightPanel({
       )}
     </div>
   );
+}
+
+function formatCompactRequestId(value: string) {
+  const compact = value.replace(/[^a-zA-Z0-9]/g, "");
+  if (!compact) return "未编号";
+  return compact.length > 8 ? compact.slice(0, 8) : compact;
 }
 
 function Metric({
@@ -7847,9 +8202,11 @@ function SendAttemptSummary({ task }: { task: SendTask }) {
     <div className={`attempt-summary ${attempt.status}`}>
       <span>{sendAttemptStatusLabel(attempt.status)}</span>
       <small>
-        {attempt.adapter} · {attempt.payloadSummary?.kind || "unknown"} · 文本 {attempt.payloadSummary?.textLength || 0} 字 · 图片 {attempt.payloadSummary?.imageCount || 0} 张
+        {sendAdapterName(attempt.adapter)} · {sendPayloadKindLabel(attempt.payloadSummary?.kind)} · 文本 {attempt.payloadSummary?.textLength || 0} 字 · 图片 {attempt.payloadSummary?.imageCount || 0} 张
       </small>
-      {attempt.errorMessage ? <small>{attempt.errorMessage}</small> : null}
+      {attempt.errorMessage ? (
+        <small title={attempt.errorMessage}>{operatorStatusMessage(attempt.errorMessage, attempt.errorMessage)}</small>
+      ) : null}
     </div>
   );
 }
@@ -7869,7 +8226,7 @@ function BridgeOutboxPreview({
     <div className="bridge-preview">
       <div className="bridge-preview-head">
         <strong>桥接发送确认</strong>
-        <span>{outboxFile || "等待 outbox 文件"}</span>
+        <span title={outboxFile || undefined}>{outboxFile ? "桥接文件已生成" : "等待桥接文件"}</span>
       </div>
       <small>
         账号 {preview?.wechatAccountId || entry?.wechatAccountId || "-"} · 会话 {preview?.conversationId || entry?.conversationId || "-"}
@@ -9079,6 +9436,53 @@ function isWindowSnapshotStale(snapshot?: WechatWindowSnapshot | null) {
   return ageSeconds !== null && ageSeconds > WINDOW_SNAPSHOT_MAX_AGE_SECONDS;
 }
 
+function wechatChannelLabel(channel: WechatChannelKey) {
+  const labels: Record<WechatChannelKey, string> = {
+    personal_wechat: "个人微信",
+    work_wechat: "企业微信",
+    mini_program: "微信小程序",
+  };
+  return labels[channel] || channel;
+}
+
+function wechatChannelStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    ready: "已就绪",
+    needs_runtime: "需运行",
+    needs_config: "待配置",
+  };
+  return labels[status] || status;
+}
+
+function wechatChannelKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    desktop_bridge: "桌面桥接",
+    official_account_callback: "官方回调",
+    mini_program_customer_message: "客服消息",
+  };
+  return labels[kind] || kind;
+}
+
+function wechatChannelMetricLabel(key: string) {
+  const labels: Record<string, string> = {
+    accounts: "账号",
+    activeAccounts: "在线账号",
+    conversations: "会话",
+    pendingSendTasks: "待发送",
+    manualLockedConversations: "接管",
+    bridgeOutboxPending: "出站",
+    bridgeInboxPending: "回执",
+    latestRoutes: "路由",
+  };
+  return labels[key] || key;
+}
+
+function agentNameByKey(agents: Agent[], agentKey?: string | null) {
+  const key = String(agentKey || "").trim();
+  if (!key) return "未分配";
+  return agents.find((agent) => agent.key === key)?.name || key;
+}
+
 function revisionStatusLabel(status: string) {
   const labels: Record<string, string> = {
     requested: "已记录",
@@ -9414,6 +9818,90 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function operatorStatusMessage(value: unknown, fallback = "状态暂不可用，请稍后重试。") {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return fallback;
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("fetch failed") || normalized.includes("failed to fetch") || normalized.includes("econnrefused")) {
+    return "本地安全服务暂不可用，请确认桌面服务已启动后重试。";
+  }
+  if (normalized.includes("restore manual lock")) {
+    return "人工接管恢复保护已触发，系统已暂停自动发送，请人工确认后再解除接管。";
+  }
+  if (normalized.includes("smoke test")) {
+    return "演示校验已触发安全保护，请重新扫描后再继续。";
+  }
+  if (normalized.includes("timeout") || normalized.includes("timed out")) {
+    return "服务响应超时，请刷新状态后重试。";
+  }
+  return raw;
+}
+
+function operatorStatusName(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return "未检测";
+  const labels: Record<string, string> = {
+    ok: "正常",
+    ready: "就绪",
+    active: "运行中",
+    running: "运行中",
+    idle: "空闲",
+    offline: "离线",
+    failed: "异常",
+    error: "异常",
+    unavailable: "不可用",
+    stale: "待刷新",
+  };
+  return labels[raw.toLowerCase()] || raw;
+}
+
+function bridgeModeLabel(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const labels: Record<string, string> = {
+    noop: "安全演练",
+    safe_noop: "安全演练",
+    real: "真实发送",
+    disabled: "已停用",
+  };
+  return raw ? labels[raw.toLowerCase()] || raw : "-";
+}
+
+function bridgeTransportLabel(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const labels: Record<string, string> = {
+    file_scan: "文件回执",
+    file: "文件回执",
+    http: "接口回执",
+    none: "未启用",
+  };
+  return raw ? labels[raw.toLowerCase()] || raw : "-";
+}
+
+function sendAdapterName(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const labels: Record<string, string> = {
+    windows_bridge: "桌面桥接",
+    noop: "安全演练",
+    dry_run: "演练发送",
+    local: "本地发送",
+  };
+  return raw ? labels[raw.toLowerCase()] || raw : "发送适配器";
+}
+
+function sendPayloadKindLabel(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const labels: Record<string, string> = {
+    text: "文本",
+    image: "图片",
+    images: "图片",
+    quote: "报价",
+    order: "订单",
+    design_image: "设计图",
+    unknown: "待识别内容",
+  };
+  return raw ? labels[raw.toLowerCase()] || raw : "待识别内容";
+}
+
 function formatMoney(value: number) {
   if (!Number.isFinite(value)) return "0";
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
@@ -9489,6 +9977,43 @@ function formatSkuFieldValue(value: unknown): string {
   return String(value);
 }
 
+function isStaleLocalDesignFileUrl(src?: string | null) {
+  if (!src) return false;
+  try {
+    const url = new URL(src, "http://127.0.0.1:3100");
+    const isLocalHost = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    return isLocalHost && url.pathname.startsWith("/files/") && Boolean(url.port) && url.port !== "3700";
+  } catch {
+    return false;
+  }
+}
+
+function SafeImagePreview({
+  src,
+  alt,
+  fallbackLabel,
+  iconSize = 18,
+}: {
+  src?: string | null;
+  alt: string;
+  fallbackLabel: string;
+  iconSize?: number;
+}) {
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  useEffect(() => {
+    setImageLoadFailed(false);
+  }, [src]);
+  if (src && !imageLoadFailed && !isStaleLocalDesignFileUrl(src)) {
+    return <img src={src} alt={alt} loading="lazy" onError={() => setImageLoadFailed(true)} />;
+  }
+  return (
+    <span className="safe-image-fallback" role="img" aria-label={fallbackLabel}>
+      <ImageIcon size={iconSize} aria-hidden="true" />
+      <small>{fallbackLabel}</small>
+    </span>
+  );
+}
+
 function SelectedImageThumb({
   image,
   label,
@@ -9501,7 +10026,7 @@ function SelectedImageThumb({
     setImageLoadFailed(false);
   }, [image?.downloadUrl]);
   const title = image ? `${label}：第 ${image.position || "-"} 张` : `${label}：未选图`;
-  const canShowImage = Boolean(image?.downloadUrl && !imageLoadFailed);
+  const canShowImage = Boolean(image?.downloadUrl && !imageLoadFailed && !isStaleLocalDesignFileUrl(image.downloadUrl));
   return (
     <div className={`selected-image-thumb ${canShowImage ? "" : "empty"}`} title={title} aria-label={title}>
       {canShowImage ? (

@@ -61,6 +61,31 @@ export class WechatController {
     return this.wechat.getSendAdapter(adapter);
   }
 
+  @Get("channels/status")
+  getChannelStatus(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.getChannelStatus({ wechatAccountId, conversationId, customerId });
+  }
+
+  @Post("channels/:channel/inbound/test")
+  processChannelInboundTest(
+    @Param("channel") channel: "personal_wechat" | "work_wechat" | "mini_program",
+    @Body() payload: {
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      text?: string;
+      externalId?: string;
+      assetIds?: string[];
+      attachments?: Array<Record<string, unknown>>;
+    },
+  ) {
+    return this.wechat.processChannelInboundTest(channel, payload || {});
+  }
+
   @Get("bridge/outbox")
   listBridgeOutbox(
     @Query("wechatAccountId") wechatAccountId?: string,

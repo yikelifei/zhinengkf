@@ -717,6 +717,43 @@ export type BridgeStatusResult = {
   };
 };
 
+export type WechatChannelKey = "personal_wechat" | "work_wechat" | "mini_program";
+
+export type WechatChannelStatusItem = {
+  key: WechatChannelKey;
+  label: string;
+  kind: string;
+  status: "ready" | "needs_runtime" | "needs_config" | string;
+  ready: boolean;
+  description: string;
+  entrypoints: Record<string, string>;
+  metrics: Record<string, number>;
+  checks: Array<{
+    key: string;
+    label: string;
+    passed: boolean;
+    detail?: string;
+  }>;
+};
+
+export type WechatChannelStatus = {
+  updatedAt: string;
+  summary: {
+    total: number;
+    ready: number;
+    degraded: number;
+    needsConfig: number;
+    pendingSendTasks: number;
+    manualLockedConversations: number;
+  };
+  channels: WechatChannelStatusItem[];
+  visualFlow: Array<{
+    key: string;
+    label: string;
+    detail: string;
+  }>;
+};
+
 export type WindowObserverStatus = {
   ok: boolean;
   status: string;
@@ -1500,6 +1537,28 @@ export async function getBridgeStatus(filters: IdentityFilters = {}): Promise<Br
   const response = await fetch(`${API_BASE}/wechat/bridge/status${identityQuery(filters)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
+}
+
+export async function getWechatChannelStatus(filters: IdentityFilters = {}): Promise<WechatChannelStatus | null> {
+  try {
+    const response = await fetch(`${API_BASE}/wechat/channels/status${identityQuery(filters)}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`api ${response.status}`);
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function testWechatChannelInbound(
+  channel: WechatChannelKey,
+  payload: {
+    wechatAccountId?: string;
+    conversationId?: string;
+    customerId?: string;
+    text?: string;
+  },
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/wechat/channels/${channel}/inbound/test`, payload);
 }
 
 export async function getWindowObserverStatus(): Promise<WindowObserverStatus> {

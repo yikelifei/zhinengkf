@@ -51,6 +51,8 @@ type IdentityFilter = {
   customerId?: string;
 };
 
+type WechatChannelKey = "personal_wechat" | "work_wechat" | "mini_program";
+
 @Injectable()
 export class WechatDispatchService {
   constructor(
@@ -982,6 +984,168 @@ export class WechatDispatchService {
 
   getSendAdapter(adapter?: string) {
     return this.sendAdapter.describe(adapter);
+  }
+
+  getChannelStatus(filter: IdentityFilter = {}) {
+    if (!appConfig.useLocalStore) throw new Error("wechat channel status prisma mode is not implemented yet");
+    const accounts = this.localStore.listWechatAccounts();
+    const conversations = this.localStore.listConversations(filter.wechatAccountId);
+    const sendTasks = this.localStore.listSendTasks(filter);
+    const routeEvaluations = this.localStore.listRouteEvaluations();
+    const bridge = this.getBridgeStatus(filter);
+    const observer = this.getWindowObserverStatus();
+    const configuredSendAdapter = this.getSendAdapter();
+    const pendingSendCount = sendTasks.filter((task: any) => !["sent", "cancelled"].includes(task.status)).length;
+    const manualLockedCount = conversations.filter((conversation: any) => conversation.manualLocked).length;
+    const activeAccountCount = accounts.filter((account: any) => account.isActive !== false).length;
+
+    const personalChecks = [
+      channelCheck("wechat_accounts", "本地微信账号", accounts.length > 0, `${accounts.length} 个账号`),
+      channelCheck("window_observer", "窗口观察器", Boolean(observer?.ok), operatorStatusName(observer?.status)),
+      channelCheck("windows_bridge", "Windows 文件桥接", Boolean(bridge?.worker?.ok), operatorStatusName(bridge?.worker?.status)),
+      channelCheck(
+        "safe_send_queue",
+        "当前发送适配器",
+        configuredSendAdapter?.name === "windows_bridge" && Boolean(configuredSendAdapter?.realSend),
+        configuredSendAdapter?.label || "未配置",
+      ),
+    ];
+    const workChecks = [
+      channelCheck("normalized_inbound", "标准入站管线", true, "复用 /api/wechat/inbound/messages"),
+      channelCheck("corp_id", "企业 ID", Boolean(appConfig.wechatWorkCorpId), maskSecret(appConfig.wechatWorkCorpId)),
+      channelCheck("agent_id", "应用 Agent", Boolean(appConfig.wechatWorkAgentId), maskSecret(appConfig.wechatWorkAgentId)),
+      channelCheck("callback_token", "回调 Token", Boolean(appConfig.wechatWorkToken), appConfig.wechatWorkToken ? "已配置" : "未配置"),
+    ];
+    const miniChecks = [
+      channelCheck("normalized_inbound", "标准入站管线", true, "复用 /api/wechat/inbound/messages"),
+      channelCheck("app_id", "小程序 AppID", Boolean(appConfig.wechatMiniAppId), maskSecret(appConfig.wechatMiniAppId)),
+      channelCheck("callback_token", "消息 Token", Boolean(appConfig.wechatMiniToken), appConfig.wechatMiniToken ? "已配置" : "未配置"),
+      channelCheck("safe_send_queue", "人工/客服发送队列", true, "复用微信安全发送队列"),
+    ];
+
+    const channels = [
+      {
+        key: "personal_wechat",
+        label: "个人微信",
+        kind: "desktop_bridge",
+        status: channelStatus(personalChecks),
+        ready: checksReady(personalChecks),
+        description: "个人微信通过本机窗口观察、单账号锁和 Windows 文件桥接落地。",
+        entrypoints: {
+          inbound: "/api/wechat/inbound/messages",
+          status: "/api/wechat/bridge/status",
+          observer: "/api/wechat/window-observer/status",
+          send: "/api/wechat/send-tasks/:id/execute",
+        },
+        metrics: {
+          accounts: accounts.length,
+          activeAccounts: activeAccountCount,
+          conversations: conversations.length,
+          pendingSendTasks: pendingSendCount,
+          manualLockedConversations: manualLockedCount,
+          bridgeOutboxPending: bridge.outbox.pendingCount,
+          bridgeInboxPending: bridge.inbox.pendingCount,
+        },
+        checks: personalChecks,
+      },
+      {
+        key: "work_wechat",
+        label: "企业微信",
+        kind: "official_account_callback",
+        status: channelStatus(workChecks),
+        ready: checksReady(workChecks),
+        description: "企业微信侧完成应用凭证和回调后，消息进入同一套智能客服入站管线。",
+        entrypoints: {
+          inbound: "/api/wechat/inbound/messages",
+          testInbound: "/api/wechat/channels/work_wechat/inbound/test",
+          safeSend: "/api/wechat/send-tasks",
+        },
+        metrics: {
+          conversations: conversations.filter((conversation: any) => conversation.channel === "work_wechat").length,
+          latestRoutes: routeEvaluations.filter((route: any) => route.channel === "work_wechat").length,
+          pendingSendTasks: pendingSendCount,
+        },
+        checks: workChecks,
+      },
+      {
+        key: "mini_program",
+        label: "微信小程序",
+        kind: "mini_program_customer_message",
+        status: channelStatus(miniChecks),
+        ready: checksReady(miniChecks),
+        description: "小程序客服消息完成 AppID 和 Token 配置后，统一进入会话、路由、审核和发送队列。",
+        entrypoints: {
+          inbound: "/api/wechat/inbound/messages",
+          testInbound: "/api/wechat/channels/mini_program/inbound/test",
+          safeSend: "/api/wechat/send-tasks",
+        },
+        metrics: {
+          conversations: conversations.filter((conversation: any) => conversation.channel === "mini_program").length,
+          latestRoutes: routeEvaluations.filter((route: any) => route.channel === "mini_program").length,
+          pendingSendTasks: pendingSendCount,
+        },
+        checks: miniChecks,
+      },
+    ];
+
+    return {
+      updatedAt: new Date().toISOString(),
+      summary: {
+        total: channels.length,
+        ready: channels.filter((channel) => channel.ready).length,
+        degraded: channels.filter((channel) => channel.status === "needs_runtime").length,
+        needsConfig: channels.filter((channel) => channel.status === "needs_config").length,
+        pendingSendTasks: pendingSendCount,
+        manualLockedConversations: manualLockedCount,
+      },
+      channels,
+      visualFlow: [
+        { key: "inbound", label: "消息接入", detail: `${conversations.length} 个会话` },
+        { key: "route", label: "智能路由", detail: `${routeEvaluations.length} 次评估` },
+        { key: "design", label: "设计/报价", detail: "低风险自动推进，高价值人工审核" },
+        { key: "review", label: "人工接管", detail: `${manualLockedCount} 个锁定会话` },
+        { key: "safe_send", label: "安全发送", detail: `${pendingSendCount} 个待处理任务` },
+      ],
+    };
+  }
+
+  async processChannelInboundTest(
+    channel: WechatChannelKey,
+    payload: {
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      text?: string;
+      externalId?: string;
+      assetIds?: string[];
+      attachments?: Array<Record<string, unknown>>;
+    },
+  ) {
+    if (!["personal_wechat", "work_wechat", "mini_program"].includes(channel)) {
+      throw new BadRequestException(`unsupported wechat channel: ${channel}`);
+    }
+    const conversations = this.localStore.listConversations(payload.wechatAccountId);
+    const fallbackConversation = payload.conversationId
+      ? conversations.find((conversation: any) => conversation.id === payload.conversationId)
+      : conversations[0];
+    if (!fallbackConversation) {
+      throw new BadRequestException("wechat channel inbound test requires at least one local conversation");
+    }
+    const normalized = {
+      wechatAccountId: payload.wechatAccountId || fallbackConversation.wechatAccountId,
+      conversationId: payload.conversationId || fallbackConversation.id,
+      customerId: payload.customerId || fallbackConversation.customerId,
+      text: String(payload.text || "来自微信接入中心的入站演练消息").trim(),
+      externalId: payload.externalId || `${channel}-inbound-test-${Date.now()}`,
+      assetIds: payload.assetIds || [],
+      attachments: payload.attachments || [],
+    };
+    const result = await this.processInboundMessage(normalized);
+    return {
+      channel,
+      normalized,
+      result,
+    };
   }
 
   getBridgeStatus(filter: IdentityFilter = {}) {
@@ -2897,6 +3061,37 @@ function isOlderThan(value: unknown, now: Date, minutes: number) {
   const time = new Date(String(value || ""));
   if (Number.isNaN(time.getTime())) return false;
   return now.getTime() - time.getTime() > minutes * 60 * 1000;
+}
+
+function channelCheck(key: string, label: string, passed: boolean, detail?: string) {
+  return {
+    key,
+    label,
+    passed,
+    detail: detail || (passed ? "ready" : "not ready"),
+  };
+}
+
+function checksReady(checks: Array<{ passed: boolean }>) {
+  return checks.every((check) => check.passed);
+}
+
+function channelStatus(checks: Array<{ key: string; passed: boolean }>) {
+  if (checksReady(checks)) return "ready";
+  const runtimeKeys = new Set(["window_observer", "windows_bridge", "safe_send_queue"]);
+  return checks.some((check) => runtimeKeys.has(check.key) && !check.passed) ? "needs_runtime" : "needs_config";
+}
+
+function maskSecret(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "未配置";
+  if (text.length <= 6) return "已配置";
+  return `${text.slice(0, 2)}...${text.slice(-4)}`;
+}
+
+function operatorStatusName(value: unknown) {
+  const text = String(value || "").trim();
+  return text || "unknown";
 }
 
 function bridgeFileName(value: unknown) {
