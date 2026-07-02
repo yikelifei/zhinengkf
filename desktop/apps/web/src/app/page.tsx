@@ -760,6 +760,7 @@ export default function HomePage() {
   const [skuIssueFilter, setSkuIssueFilter] = useState<string>("all");
   const [skuForm, setSkuForm] = useState<SkuForm>(emptySkuForm);
   const [skuWorkbenchView, setSkuWorkbenchView] = useState<"catalog" | "repair" | "editor">("catalog");
+  const [catalogWorkbenchView, setCatalogWorkbenchView] = useState<"import" | "preview" | "audit" | "bundle">("import");
   const [includeInactiveSkus, setIncludeInactiveSkus] = useState<boolean>(false);
   const [selectedSkuCodes, setSelectedSkuCodes] = useState<string[]>([]);
   const [skuBatchStock, setSkuBatchStock] = useState<string>("");
@@ -2991,6 +2992,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       async () => {
         const result = await previewSkuImportText(skuImportText);
         setSkuImportPreview(result);
+        setCatalogWorkbenchDetail("preview");
         const firstError = result.errors[0] ? ` 第 ${result.errors[0].line} 行：${result.errors[0].message}` : "";
         summary = `识别 ${result.importedCount} 个商品，跳过 ${result.skippedCount} 行。${skuImportMappingSummary(result)}${firstError}`;
       },
@@ -3012,6 +3014,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         const dataBase64 = dataUrl.split(",")[1] || "";
         const result = await previewSkuImportFile(file.name, dataBase64);
         setSkuImportPreview(result);
+        setCatalogWorkbenchDetail("preview");
         const firstError = result.errors[0] ? ` 第 ${result.errors[0].line} 行：${result.errors[0].message}` : "";
         summary = `文件 ${file.name} 识别 ${result.importedCount} 个商品，跳过 ${result.skippedCount} 行。${skuImportMappingSummary(result)}${firstError}`;
       },
@@ -3035,6 +3038,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       },
       () => {
         setSkuImportPreview(null);
+        setCatalogWorkbenchDetail("audit");
         setMessage(summary || "商品已确认入库。");
       },
     );
@@ -3284,6 +3288,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         maxItems: 6,
       });
       setBundleResult(result);
+      setCatalogWorkbenchDetail("bundle");
     });
   }
 
@@ -3406,6 +3411,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         (detailView === "catalog" || detailView === "repair" || detailView === "editor")
       ) {
         setSkuWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
+      if (
+        sectionId === "catalog-center" &&
+        (detailView === "import" || detailView === "preview" || detailView === "audit" || detailView === "bundle")
+      ) {
+        setCatalogWorkbenchView((current) => (current === detailView ? current : detailView));
       }
       if (
         sectionId === "wechat-channel-center" &&
@@ -3973,6 +3984,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         .includes(query);
       });
   }, [catalogIssuesBySku, skuIssueFilter, skuSearch, skuTypeFilter, skus]);
+
+  function setCatalogWorkbenchDetail(view: "import" | "preview" | "audit" | "bundle") {
+    setCatalogWorkbenchView(view);
+    if (typeof window === "undefined") return;
+    const nextHash = `catalog-center:${view}`;
+    const currentHash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+    if (currentHash !== nextHash) {
+      window.history.replaceState(null, "", `#${nextHash}`);
+    }
+  }
 
   function scrollToWorkspaceSection(
     sectionId: string,
@@ -6484,12 +6505,57 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </section>
 
         <section className="catalog-grid">
-          <section className="panel" id="catalog-center">
+          <section className={`panel catalog-workbench catalog-mode-${catalogWorkbenchView}`} id="catalog-center">
             <div className="panel-head">
               <div>
                 <h2><PackageSearch size={17} aria-hidden="true" />商品导入与搭配</h2>
                 <span>下载模板或粘贴 CSV，导入后参与预算搭配</span>
               </div>
+              <div className="segmented-control catalog-view-switcher" role="tablist" aria-label="商品导入与搭配工作区视图">
+                <button
+                  type="button"
+                  className={catalogWorkbenchView === "import" ? "selected" : ""}
+                  aria-pressed={catalogWorkbenchView === "import"}
+                  onClick={() => setCatalogWorkbenchDetail("import")}
+                >
+                  导入
+                </button>
+                <button
+                  type="button"
+                  className={catalogWorkbenchView === "preview" ? "selected" : ""}
+                  aria-pressed={catalogWorkbenchView === "preview"}
+                  onClick={() => setCatalogWorkbenchDetail("preview")}
+                >
+                  预览
+                </button>
+                <button
+                  type="button"
+                  className={catalogWorkbenchView === "audit" ? "selected" : ""}
+                  aria-pressed={catalogWorkbenchView === "audit"}
+                  onClick={() => setCatalogWorkbenchDetail("audit")}
+                >
+                  体检
+                </button>
+                <button
+                  type="button"
+                  className={catalogWorkbenchView === "bundle" ? "selected" : ""}
+                  aria-pressed={catalogWorkbenchView === "bundle"}
+                  onClick={() => setCatalogWorkbenchDetail("bundle")}
+                >
+                  搭配
+                </button>
+              </div>
+              <span className="catalog-view-status">
+                {catalogWorkbenchView === "import"
+                  ? "录入表格"
+                  : catalogWorkbenchView === "preview"
+                    ? `预览 ${skuImportPreview?.importedCount || 0} 个`
+                    : catalogWorkbenchView === "audit"
+                      ? `问题 ${catalogAudit?.issueCount || 0} 个`
+                      : bundleResult
+                        ? `${bundleResult.totals.salePrice} 元/份`
+                        : "待推荐"}
+              </span>
               <Layers size={20} aria-hidden="true" />
             </div>
             <div className="catalog-tools">
@@ -6502,7 +6568,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 }}
                 placeholder={"SKU编号\t商品名称\t商品类型\t分类\t成本价\t售价\t库存\t场景标签"}
               />
-              <div className="catalog-actions">
+              <div className="catalog-actions catalog-import-actions">
                 <button type="button" className="primary" onClick={previewSkuImport} disabled={Boolean(busy)}>
                   <FileUp size={16} aria-hidden="true" />预览导入
                 </button>
@@ -6519,12 +6585,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </label>
                 <button type="button" className="ghost" onClick={downloadSkuTemplate} disabled={Boolean(busy)}>
                   <Download size={16} aria-hidden="true" />下载标准模板
-                </button>
-                <button type="button" className="ghost" onClick={confirmImportSkus} disabled={Boolean(busy) || !skuImportPreview?.rows.length}>
-                  <Check size={16} aria-hidden="true" />确认入库
-                </button>
-                <button type="button" className="ghost" onClick={recommendGiftBundle} disabled={Boolean(busy)}>
-                  <PackageSearch size={16} aria-hidden="true" />按180元推荐组合
                 </button>
                 <span>当前 SKU {skus.length} 个</span>
               </div>
@@ -6543,7 +6603,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     ))}
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <div className="sku-import-guide catalog-import-loading" role="status">
+                  <div>
+                    <strong>导入字段</strong>
+                    <span>正在读取字段规范，仍可先粘贴表格预览。</span>
+                  </div>
+                  <div className="sku-import-field-grid">
+                    {["SKU编号 *", "商品名称 *", "售价 *", "库存", "主图", "供应商"].map((label) => (
+                      <span key={label}>
+                        <strong>{label}</strong>
+                        <small>标准模板字段</small>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {skuImportPreview ? (
                 <div className="import-preview">
                   <div className="import-preview-head">
@@ -6575,6 +6650,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                     ))}
                     {skuImportPreview.rows.length > 6 ? <small>还有 {skuImportPreview.rows.length - 6} 个商品，确认入库时会一起保存。</small> : null}
+                  </div>
+                  <div className="import-preview-actions">
+                    <button type="button" className="primary" onClick={confirmImportSkus} disabled={Boolean(busy) || !skuImportPreview.rows.length}>
+                      <Check size={16} aria-hidden="true" />确认入库
+                    </button>
+                    <button type="button" className="ghost" onClick={() => setCatalogWorkbenchDetail("audit")}>
+                      <AlertTriangle size={16} aria-hidden="true" />查看体检
+                    </button>
                   </div>
                   {skuImportPreview.errors.length ? (
                     <div className="import-errors">
@@ -6650,6 +6733,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   </div>
                 </div>
                 )}
+              </div>
+              <div className="catalog-bundle-tools">
+                <div>
+                  <strong>预算搭配</strong>
+                  <span>按员工福利场景、180 元单盒预算和 50 份需求生成可报价组合。</span>
+                </div>
+                <button type="button" className="primary" onClick={recommendGiftBundle} disabled={Boolean(busy)}>
+                  <PackageSearch size={16} aria-hidden="true" />按180元推荐组合
+                </button>
+                {!bundleResult ? (
+                  <p>还没有生成组合。点击推荐后会显示单份售价、成本、利润、库存承接量和瓶颈商品。</p>
+                ) : null}
               </div>
               {bundleResult ? (
                 <div className="bundle-result">

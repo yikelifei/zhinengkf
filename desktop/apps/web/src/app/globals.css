@@ -23820,3 +23820,361 @@ body .apple-light-shell.shell .workspace[data-active-section="training-center"] 
     min-height: 112px !important;
   }
 }
+
+/* Iteration 117 Catalog workbench: split import, preview, audit and bundle into focused app modes. */
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench {
+  height: calc(100dvh - 226px) !important;
+  min-height: 0 !important;
+  max-height: calc(100dvh - 226px) !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench > .panel-head {
+  display: grid !important;
+  grid-template-columns: minmax(250px, 1fr) minmax(390px, 0.72fr) auto auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-switcher {
+  width: 100% !important;
+  justify-self: end !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-switcher button {
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-status {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 28px !important;
+  min-width: 92px !important;
+  padding: 4px 10px !important;
+  border: 1px solid rgba(52, 199, 89, 0.28) !important;
+  border-radius: 999px !important;
+  background: rgba(248, 255, 250, 0.92) !important;
+  color: #16783a !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .catalog-tools {
+  display: grid !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  gap: 10px !important;
+  padding: 10px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+  scroll-snap-type: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench :is(
+  .catalog-tools > textarea,
+  .catalog-import-actions,
+  .sku-import-guide,
+  .import-preview,
+  .catalog-audit,
+  .sku-change-log,
+  .catalog-bundle-tools,
+  .bundle-result
+) {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border-radius: 16px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .catalog-tools > textarea {
+  height: 100% !important;
+  min-height: 0 !important;
+  resize: none !important;
+  overflow: auto !important;
+  border: 1px solid rgba(0, 0, 0, 0.085) !important;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 24px, rgba(60, 60, 67, 0.055) 24px 25px),
+    #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench :is(
+  .sku-import-guide,
+  .import-preview,
+  .catalog-audit,
+  .sku-change-log,
+  .catalog-bundle-tools,
+  .bundle-result
+) {
+  height: 100% !important;
+  padding: 12px !important;
+  overflow: auto !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-import-actions,
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .import-preview-actions,
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools {
+  display: grid !important;
+  gap: 8px !important;
+  align-content: start !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-import-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  padding: 8px !important;
+  border: 1px solid rgba(0, 0, 0, 0.075) !important;
+  background: rgba(247, 247, 249, 0.72) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-import-actions > span {
+  grid-column: 1 / -1 !important;
+  justify-self: stretch !important;
+  text-align: center !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-import-actions :is(button, .file-button),
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .import-preview-actions :is(button, .file-button),
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools :is(button, .file-button) {
+  min-height: 34px !important;
+  width: 100% !important;
+  padding: 7px 10px !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .import-preview-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  border: 1px solid rgba(0, 122, 255, 0.12) !important;
+  background: rgba(247, 251, 255, 0.9) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools span,
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools p {
+  color: var(--text-muted) !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools p {
+  grid-column: 1 / -1 !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import .catalog-tools {
+  grid-template-columns: minmax(310px, 0.42fr) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import .catalog-tools > textarea {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import .catalog-import-actions {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import .sku-import-guide {
+  grid-column: 2 !important;
+  grid-row: 1 / 3 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .catalog-tools {
+  grid-template-columns: minmax(285px, 0.34fr) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .sku-import-guide {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .import-preview {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .catalog-tools {
+  grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .catalog-audit {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .sku-change-log {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-bundle .catalog-tools {
+  grid-template-columns: minmax(320px, 0.36fr) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-bundle .catalog-bundle-tools {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-bundle .bundle-result {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import :is(.import-preview, .catalog-audit, .sku-change-log, .catalog-bundle-tools, .bundle-result),
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview :is(.catalog-tools > textarea, .catalog-import-actions, .catalog-audit, .sku-change-log, .catalog-bundle-tools, .bundle-result),
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit :is(.catalog-tools > textarea, .catalog-import-actions, .sku-import-guide, .import-preview, .catalog-bundle-tools, .bundle-result),
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-bundle :is(.catalog-tools > textarea, .catalog-import-actions, .sku-import-guide, .import-preview, .catalog-audit, .sku-change-log) {
+  display: none !important;
+}
+
+@media (max-width: 1120px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench > .panel-head {
+    grid-template-columns: minmax(210px, 1fr) minmax(340px, 0.8fr) auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-status {
+    display: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench > .panel-head {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: stretch !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-switcher {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-switcher button {
+    min-height: 32px !important;
+    padding-inline: 6px !important;
+    white-space: normal !important;
+    line-height: 1.15 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-view-status {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .catalog-tools,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-import .catalog-tools,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .catalog-tools,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .catalog-tools,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-bundle .catalog-tools {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    gap: 10px !important;
+    padding: 10px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench :is(
+    .catalog-tools > textarea,
+    .catalog-import-actions,
+    .sku-import-guide,
+    .import-preview,
+    .catalog-audit,
+    .sku-change-log,
+    .catalog-bundle-tools,
+    .bundle-result
+  ) {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .catalog-tools > textarea {
+    height: 230px !important;
+    min-height: 230px !important;
+    max-height: 230px !important;
+    overflow: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-import-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .import-preview-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .catalog-bundle-tools {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .sku-import-field-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center .import-preview-list {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Iteration 118 Catalog detail polish: keep preview fields readable and audit issues compact. */
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .catalog-tools {
+  grid-template-columns: minmax(340px, 0.3fr) minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .sku-import-field-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .sku-import-guide {
+  grid-template-rows: auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-workbench .sku-import-field-grid {
+  align-content: start !important;
+  align-items: stretch !important;
+  grid-auto-rows: minmax(58px, max-content) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-preview .sku-import-field-grid span {
+  min-height: 58px !important;
+  padding: 9px 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .catalog-audit .catalog-issues {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-content: start !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  padding-top: 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #catalog-center.catalog-mode-audit .catalog-audit .catalog-issues span {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  min-height: 28px !important;
+  height: auto !important;
+  aspect-ratio: auto !important;
+  flex: 0 1 auto !important;
+  padding: 6px 10px !important;
+  border-radius: 999px !important;
+  white-space: normal !important;
+  text-align: left !important;
+}
