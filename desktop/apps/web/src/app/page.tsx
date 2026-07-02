@@ -703,6 +703,7 @@ export default function HomePage() {
   const [selectedTrainingSampleIds, setSelectedTrainingSampleIds] = useState<string[]>([]);
   const [wechatAccounts, setWechatAccounts] = useState<WechatAccount[]>([]);
   const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
+  const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
@@ -3401,6 +3402,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       ) {
         setSkuWorkbenchView((current) => (current === detailView ? current : detailView));
       }
+      if (
+        sectionId === "wechat-channel-center" &&
+        (detailView === "channels" || detailView === "flow" || detailView === "config")
+      ) {
+        setWechatWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
@@ -3926,6 +3933,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           ".wechat-channel-panel-body",
           ".wechat-channel-list",
           ".wechat-visual-panel",
+          ".wechat-config-list",
         ].join(", "),
       ).forEach((pane) => {
         if (pane.scrollLeft || pane.scrollTop) pane.scrollTo({ left: 0, top: 0, behavior: "auto" });
@@ -4561,11 +4569,37 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </section>
 
         <section className="wechat-channel-grid">
-          <section className="panel wechat-channel-panel" id="wechat-channel-center">
+          <section className={`panel wechat-channel-panel wechat-mode-${wechatWorkbenchView}`} id="wechat-channel-center">
             <div className="panel-head">
               <div>
                 <h2><Network size={17} aria-hidden="true" />微信接入中心</h2>
                 <span>个人微信、企业微信、小程序分区接入，统一进入智能客服管线</span>
+              </div>
+              <div className="segmented-control wechat-view-switcher" role="tablist" aria-label="微信接入中心视图">
+                <button
+                  type="button"
+                  className={wechatWorkbenchView === "channels" ? "selected" : ""}
+                  aria-pressed={wechatWorkbenchView === "channels"}
+                  onClick={() => setWechatWorkbenchView("channels")}
+                >
+                  接入通道
+                </button>
+                <button
+                  type="button"
+                  className={wechatWorkbenchView === "flow" ? "selected" : ""}
+                  aria-pressed={wechatWorkbenchView === "flow"}
+                  onClick={() => setWechatWorkbenchView("flow")}
+                >
+                  可视化客服
+                </button>
+                <button
+                  type="button"
+                  className={wechatWorkbenchView === "config" ? "selected" : ""}
+                  aria-pressed={wechatWorkbenchView === "config"}
+                  onClick={() => setWechatWorkbenchView("config")}
+                >
+                  配置检查
+                </button>
               </div>
               <div className="panel-actions">
                 <button type="button" className="ghost compact-button" onClick={() => void load()} disabled={Boolean(busy)}>
@@ -4592,7 +4626,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <span>待配置</span>
                 </div>
               </div>
-              <div className="wechat-channel-layout">
+              {wechatWorkbenchView === "channels" ? (
                 <div className="wechat-channel-list" aria-label="微信通道列表">
                   {wechatChannelStatus?.channels.length ? (
                     wechatChannelStatus.channels.map((channel) => (
@@ -4619,14 +4653,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             <span key={key}>
                               <b>{value}</b>
                               <small>{wechatChannelMetricLabel(key)}</small>
-                            </span>
-                          ))}
-                        </div>
-                        <div className="wechat-channel-checks" aria-label={`${channel.label}检查项`}>
-                          {channel.checks.map((check) => (
-                            <span className={check.passed ? "ok" : "warn"} key={check.key} title={check.detail || check.label}>
-                              {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
-                              {check.label}
                             </span>
                           ))}
                         </div>
@@ -4671,6 +4697,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     </div>
                   )}
                 </div>
+              ) : null}
+              {wechatWorkbenchView === "flow" ? (
                 <div className="wechat-visual-panel" aria-label="可视化智能客服流程">
                   <div className="wechat-visual-head">
                     <span aria-hidden="true"><Workflow size={18} /></span>
@@ -4721,7 +4749,60 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     </button>
                   </div>
                 </div>
-              </div>
+              ) : null}
+              {wechatWorkbenchView === "config" ? (
+                <div className="wechat-config-list" aria-label="微信通道配置检查">
+                  {wechatChannelStatus?.channels.length ? (
+                    wechatChannelStatus.channels.map((channel) => (
+                      <article className={`wechat-config-card ${channel.status}`} key={channel.key}>
+                        <div className="wechat-channel-card-head">
+                          <span aria-hidden="true">
+                            {channel.key === "work_wechat" ? (
+                              <Building2 size={18} />
+                            ) : channel.key === "mini_program" ? (
+                              <Smartphone size={18} />
+                            ) : (
+                              <Monitor size={18} />
+                            )}
+                          </span>
+                          <div>
+                            <strong>{channel.label}</strong>
+                            <small>{wechatChannelKindLabel(channel.kind)}</small>
+                          </div>
+                          <em>{wechatChannelStatusLabel(channel.status)}</em>
+                        </div>
+                        <div className="wechat-channel-checks" aria-label={`${channel.label}检查项`}>
+                          {channel.checks.map((check) => (
+                            <span className={check.passed ? "ok" : "warn"} key={check.key} title={check.detail || check.label}>
+                              {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
+                              <strong>{check.label}</strong>
+                              <small>{check.detail}</small>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="wechat-config-entrypoints">
+                          {Object.entries(channel.entrypoints).map(([key, value]) => (
+                            <span key={key}>
+                              <small>{wechatChannelMetricLabel(key)}</small>
+                              <code>{String(value)}</code>
+                            </span>
+                          ))}
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty empty-cta" role="status">
+                      <strong>还没有通道配置状态</strong>
+                      <span>刷新后会读取个人微信、企业微信和小程序的真实后端配置检查结果。</span>
+                      <div className="empty-actions">
+                        <button type="button" className="primary" onClick={() => void load()} disabled={Boolean(busy)}>
+                          <RefreshCw size={16} aria-hidden="true" />刷新状态
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </section>
         </section>
