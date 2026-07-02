@@ -754,6 +754,7 @@ export default function HomePage() {
   const [skuTypeFilter, setSkuTypeFilter] = useState<string>("all");
   const [skuIssueFilter, setSkuIssueFilter] = useState<string>("all");
   const [skuForm, setSkuForm] = useState<SkuForm>(emptySkuForm);
+  const [skuWorkbenchView, setSkuWorkbenchView] = useState<"catalog" | "repair" | "editor">("catalog");
   const [includeInactiveSkus, setIncludeInactiveSkus] = useState<boolean>(false);
   const [selectedSkuCodes, setSelectedSkuCodes] = useState<string[]>([]);
   const [skuBatchStock, setSkuBatchStock] = useState<string>("");
@@ -3035,6 +3036,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function editSku(sku: Sku) {
     setSkuForm(skuToForm(sku));
+    setSkuWorkbenchView("editor");
     setMessage(`正在编辑商品 ${sku.skuCode}`);
   }
 
@@ -3042,7 +3044,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (isNestedControlTarget(event.target)) return;
     setSelectedSkuCodes([sku.skuCode]);
     editSku(sku);
-    setMessage(`已选中 ${sku.skuCode}，可在下方编辑商品资料。`);
+    setMessage(`已选中 ${sku.skuCode}，已切到新增商品视图编辑资料。`);
   }
 
   function handleSkuRowKeyDown(event: KeyboardEvent<HTMLDivElement>, sku: Sku) {
@@ -3111,6 +3113,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function resetSkuForm() {
     setSkuForm(emptySkuForm);
+    setSkuWorkbenchView("editor");
   }
 
   async function saveSkuForm() {
@@ -3137,6 +3140,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       () => {
         setMessage(`商品 ${payload.skuCode} 已保存。`);
         setSkuForm(emptySkuForm);
+        setSkuWorkbenchView("catalog");
       },
     );
   }
@@ -3384,12 +3388,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const browserWindow = window as Window & typeof globalThis;
     const getHashSectionId = () => {
       const rawHash = decodeURIComponent(browserWindow.location.hash.replace(/^#/, ""));
-      const [sectionId, noticeView] = rawHash.split(":");
+      const [sectionId, detailView] = rawHash.split(":");
       if (
         sectionId === "notice-center" &&
-        (noticeView === "automation" || noticeView === "issues" || noticeView === "history")
+        (detailView === "automation" || detailView === "issues" || detailView === "history")
       ) {
-        setNoticeWorkbenchView((current) => (current === noticeView ? current : noticeView));
+        setNoticeWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
+      if (
+        sectionId === "sku-library" &&
+        (detailView === "catalog" || detailView === "repair" || detailView === "editor")
+      ) {
+        setSkuWorkbenchView((current) => (current === detailView ? current : detailView));
       }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
@@ -5267,13 +5277,40 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </section>
 
         <section className="bottom-grid">
-          <section className="panel" id="sku-library">
+          <section className={`panel sku-mode-${skuWorkbenchView}`} id="sku-library">
             <div className="panel-head">
               <div>
                 <h2><Store size={17} aria-hidden="true" />商品库</h2>
                 <span>礼盒、内搭物品、配件、供应商、图片和交期</span>
               </div>
+              <div className="segmented-control sku-view-switcher" role="tablist" aria-label="商品库工作区视图">
+                <button
+                  type="button"
+                  className={skuWorkbenchView === "catalog" ? "selected" : ""}
+                  aria-pressed={skuWorkbenchView === "catalog"}
+                  onClick={() => setSkuWorkbenchView("catalog")}
+                >
+                  商品列表
+                </button>
+                <button
+                  type="button"
+                  className={skuWorkbenchView === "repair" ? "selected" : ""}
+                  aria-pressed={skuWorkbenchView === "repair"}
+                  onClick={() => setSkuWorkbenchView("repair")}
+                >
+                  资料补齐
+                </button>
+                <button
+                  type="button"
+                  className={skuWorkbenchView === "editor" ? "selected" : ""}
+                  aria-pressed={skuWorkbenchView === "editor"}
+                  onClick={() => setSkuWorkbenchView("editor")}
+                >
+                  新增商品
+                </button>
+              </div>
             </div>
+            {skuWorkbenchView === "catalog" ? (
             <div className="sku-controls">
               <div className="search-field">
                 <Search size={15} aria-hidden="true" />
@@ -5312,6 +5349,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               <span>显示 {visibleSkus.length} / {skus.length}</span>
             </div>
+            ) : null}
+            {skuWorkbenchView === "repair" ? (
             <div className="sku-repair-guide">
               <div className="sku-repair-head">
                 <div>
@@ -5473,6 +5512,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               ) : null}
             </div>
+            ) : null}
+            {skuWorkbenchView === "catalog" ? (
+            <>
             <div className="sku-batch-bar">
               <label>
                 <input
@@ -5570,7 +5612,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <div className="empty empty-cta sku-table-empty" role="row">
                   <div role="cell" aria-colspan={9}>
                     <strong>没有匹配的商品</strong>
-                    <span>可以清空筛选，或在下方表单新增真实 SKU。</span>
+                    <span>可以清空筛选，或切到新增商品视图录入真实 SKU。</span>
                     <div className="empty-actions">
                       <button
                         type="button"
@@ -5583,7 +5625,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       >
                         <RefreshCw size={16} aria-hidden="true" />清空筛选
                       </button>
-                      <button type="button" className="ghost" onClick={resetSkuForm} disabled={Boolean(busy)}>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          resetSkuForm();
+                          setSkuWorkbenchView("editor");
+                        }}
+                        disabled={Boolean(busy)}
+                      >
                         <Pencil size={16} aria-hidden="true" />新增 SKU
                       </button>
                     </div>
@@ -5591,6 +5641,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               ) : null}
             </div>
+            </>
+            ) : null}
+            {skuWorkbenchView === "editor" ? (
             <div className="sku-editor">
               <div className="sku-editor-head">
                 <strong>{skuForm.skuCode ? "编辑/新增商品" : "新增真实商品"}</strong>
@@ -5730,6 +5783,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 />
               </label>
             </div>
+            ) : null}
           </section>
 
           <section className="panel" id="notice-center">
