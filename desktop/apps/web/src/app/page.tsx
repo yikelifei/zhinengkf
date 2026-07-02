@@ -706,6 +706,7 @@ export default function HomePage() {
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
   const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
   const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "logs">("handoff");
+  const [quoteWorkbenchView, setQuoteWorkbenchView] = useState<"overview" | "actions" | "quotes" | "orders">("overview");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
@@ -3422,6 +3423,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       ) {
         setReviewWorkbenchView((current) => (current === detailView ? current : detailView));
       }
+      if (
+        sectionId === "quote-center" &&
+        (detailView === "overview" || detailView === "actions" || detailView === "quotes" || detailView === "orders")
+      ) {
+        setQuoteWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
@@ -3708,6 +3715,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "报价已生成，等微信安全队列发送",
       tone: "blue",
       onClick: () => {
+        setQuoteWorkbenchView("quotes");
         setQuoteStatusFilter("send_queued");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("all");
@@ -3722,6 +3730,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "报价已发出，等客户说可以做",
       tone: "amber",
       onClick: () => {
+        setQuoteWorkbenchView("quotes");
         setQuoteStatusFilter("sent");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("all");
@@ -3736,6 +3745,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "客户已确认，需生成订单草稿",
       tone: "amber",
       onClick: () => {
+        setQuoteWorkbenchView("quotes");
         setQuoteStatusFilter("accepted");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("all");
@@ -3750,6 +3760,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "订单已建，未记录定金或全款",
       tone: "red",
       onClick: () => {
+        setQuoteWorkbenchView("orders");
         setQuoteStatusFilter("all");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("all");
@@ -3766,6 +3777,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "订单确认还没进入发送队列",
       tone: "blue",
       onClick: () => {
+        setQuoteWorkbenchView("orders");
         setQuoteStatusFilter("all");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("confirmed");
@@ -3783,6 +3795,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       note: "订单确认发送失败、拦截或取消",
       tone: "red",
       onClick: () => {
+        setQuoteWorkbenchView("orders");
         setQuoteStatusFilter("all");
         setQuotePaymentFilter("all");
         setOrderStatusFilter("all");
@@ -3791,6 +3804,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       },
     },
   ];
+  const quoteWorkbenchSummary =
+    quoteWorkbenchView === "actions"
+      ? `${actionableDealNextStepItems.length} 个可执行事项`
+      : quoteWorkbenchView === "quotes"
+        ? `${filteredQuotes.length}/${quotes.length} 个报价`
+        : quoteWorkbenchView === "orders"
+          ? `${filteredOrderDrafts.length}/${orderDrafts.length} 个订单`
+          : `${dealFlowPreviewTotal} 个本轮可推进节点`;
   const activeOrderDraft = activeQuote ? orderDrafts.find((order) => order.quoteDraftId === activeQuote.id) || null : null;
   const activeQuoteWarnings =
     activeQuote && activeQuotePreview?.quote.id === activeQuote.id ? activeQuotePreview.warnings : [];
@@ -8018,12 +8039,47 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </section>
 
         <section className="quote-grid">
-          <section className="panel" id="quote-center">
+          <section className={`panel quote-workbench quote-mode-${quoteWorkbenchView}`} id="quote-center">
             <div className="panel-head">
               <div>
                 <h2><ReceiptText size={17} aria-hidden="true" />报价/订单草稿</h2>
                 <span>客户选图后生成报价，跟进付款和成交状态</span>
               </div>
+              <div className="segmented-control quote-view-switcher" role="tablist" aria-label="报价订单工作台视图">
+                <button
+                  type="button"
+                  className={quoteWorkbenchView === "overview" ? "selected" : ""}
+                  aria-pressed={quoteWorkbenchView === "overview"}
+                  onClick={() => setQuoteWorkbenchView("overview")}
+                >
+                  概览
+                </button>
+                <button
+                  type="button"
+                  className={quoteWorkbenchView === "actions" ? "selected" : ""}
+                  aria-pressed={quoteWorkbenchView === "actions"}
+                  onClick={() => setQuoteWorkbenchView("actions")}
+                >
+                  优先处理
+                </button>
+                <button
+                  type="button"
+                  className={quoteWorkbenchView === "quotes" ? "selected" : ""}
+                  aria-pressed={quoteWorkbenchView === "quotes"}
+                  onClick={() => setQuoteWorkbenchView("quotes")}
+                >
+                  报价列表
+                </button>
+                <button
+                  type="button"
+                  className={quoteWorkbenchView === "orders" ? "selected" : ""}
+                  aria-pressed={quoteWorkbenchView === "orders"}
+                  onClick={() => setQuoteWorkbenchView("orders")}
+                >
+                  订单跟进
+                </button>
+              </div>
+              <span className="quote-view-status">{quoteWorkbenchSummary}</span>
               <div className="panel-actions">
                 <button type="button" className="primary" onClick={progressQuoteDealFlow} disabled={Boolean(busy)}>
                   <Bot size={16} aria-hidden="true" />推进成交链路
@@ -8042,6 +8098,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   tone="blue"
                   ariaControls="quote-center"
                   onClick={() => {
+                    setQuoteWorkbenchView("quotes");
                     setQuoteStatusFilter("all");
                     scrollToWorkspaceSection("quote-center");
                   }}
@@ -8053,6 +8110,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   tone="green"
                   ariaControls="quote-center"
                   onClick={() => {
+                    setQuoteWorkbenchView("quotes");
                     setQuotePaymentFilter("paid");
                     scrollToWorkspaceSection("quote-center");
                   }}
@@ -8064,6 +8122,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   tone="blue"
                   ariaControls="quote-center"
                   onClick={() => {
+                    setQuoteWorkbenchView("orders");
                     setOrderStatusFilter("all");
                     scrollToWorkspaceSection("quote-center");
                   }}
@@ -8075,6 +8134,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   tone="amber"
                   ariaControls="quote-center"
                   onClick={() => {
+                    setQuoteWorkbenchView("actions");
                     setQuoteStatusFilter("manual_review");
                     scrollToWorkspaceSection("quote-center");
                   }}
@@ -8109,7 +8169,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     type="button"
                     className={`${item.tone} ${dealNextStepFilter === item.filter ? "active" : ""}`}
                     key={item.key}
-                    onClick={() => setDealNextStepFilter(item.filter)}
+                    onClick={() => {
+                      setDealNextStepFilter(item.filter);
+                      setQuoteWorkbenchView("actions");
+                    }}
                     disabled={Boolean(busy)}
                     title={item.detail}
                   >
@@ -8121,7 +8184,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <button
                   type="button"
                   className={dealNextStepFilter === "all" ? "active" : ""}
-                  onClick={() => setDealNextStepFilter("all")}
+                  onClick={() => {
+                    setDealNextStepFilter("all");
+                    setQuoteWorkbenchView("actions");
+                  }}
                   disabled={Boolean(busy)}
                   title="显示全部报价和订单"
                 >
@@ -8210,8 +8276,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </label>
                 {renderFilterSegment("报价状态", quoteStatusOptions, quoteStatusFilter, setQuoteStatusFilter)}
                 {renderFilterSegment("报价付款", paymentStatusOptions, quotePaymentFilter, setQuotePaymentFilter)}
-                {renderFilterSegment("订单状态", orderStatusOptions, orderStatusFilter, setOrderStatusFilter)}
-                {renderFilterSegment("订单付款", paymentStatusOptions, orderPaymentFilter, setOrderPaymentFilter)}
                 {renderFilterSegment("下一步", dealNextStepFilterOptions, dealNextStepFilter, setDealNextStepFilter)}
               </div>
               <div className="quote-section-head">
@@ -8368,6 +8432,20 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <span>成交后进入排产、收款和人工跟进的工作台</span>
                   </div>
                   <em>{filteredOrderDrafts.length} / {orderDrafts.length} 个</em>
+                </div>
+                <div className="order-filter-bar">
+                  <label className="search-field quote-search">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      aria-label="搜索客户、场景、订单"
+                      value={quoteCenterSearch}
+                      onChange={(event) => setQuoteCenterSearch(event.target.value)}
+                      placeholder="搜索客户、场景、订单"
+                    />
+                  </label>
+                  {renderFilterSegment("订单状态", orderStatusOptions, orderStatusFilter, setOrderStatusFilter)}
+                  {renderFilterSegment("订单付款", paymentStatusOptions, orderPaymentFilter, setOrderPaymentFilter)}
+                  {renderFilterSegment("下一步", dealNextStepFilterOptions, dealNextStepFilter, setDealNextStepFilter)}
                 </div>
                 <div className="order-list">
                   {filteredOrderDrafts.length ? (

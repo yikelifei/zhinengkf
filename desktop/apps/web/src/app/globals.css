@@ -23005,3 +23005,388 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
     overflow: visible !important;
   }
 }
+
+/* Iteration 63 Quote center final override: single-purpose panes win over older stacked layout rules. */
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  height: clamp(560px, calc(100dvh - 238px), 690px) !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench > .panel-head {
+  display: grid !important;
+  grid-template-columns: minmax(230px, 1fr) minmax(380px, 0.72fr) minmax(150px, auto) minmax(250px, auto) !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-switcher {
+  width: 100% !important;
+  justify-self: end !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-switcher button {
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-status {
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(232, 242, 255, 0.66);
+  color: #0a4f9f;
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench .quote-panel {
+  display: grid !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  padding: 14px !important;
+  gap: 10px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .quote-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.7fr) !important;
+  grid-template-rows: auto auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .quote-panel,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-panel,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .quote-panel {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview :is(.deal-attention-list, .quote-filter-bar, .quote-section-head, .quote-list, .order-panel),
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions :is(.quote-summary, .deal-pipeline, .deal-flow-preview, .deal-next-summary, .quote-filter-bar, .quote-section-head, .quote-list, .order-panel),
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes :is(.quote-summary, .deal-pipeline, .deal-flow-preview, .deal-next-summary, .deal-attention-list, .order-panel),
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders :is(.quote-summary, .deal-pipeline, .deal-flow-preview, .deal-next-summary, .deal-attention-list, .quote-filter-bar, .quote-section-head, .quote-list) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .quote-summary {
+  grid-column: 1 / -1 !important;
+  grid-row: 1 !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-pipeline {
+  grid-column: 1 / -1 !important;
+  grid-row: 2 !important;
+  display: grid !important;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-flow-preview {
+  grid-column: 1 !important;
+  grid-row: 3 !important;
+  align-self: start !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-next-summary {
+  grid-column: 2 !important;
+  grid-row: 3 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-content: start !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+  padding-right: 2px !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .deal-attention-list,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-list,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-panel {
+  display: grid !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  padding: 12px !important;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 14px;
+  background: #ffffff;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .deal-attention-list {
+  grid-template-rows: auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .deal-attention-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+  padding-right: 2px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-panel {
+  grid-template-rows: auto auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-filter-bar {
+  display: grid !important;
+  grid-template-columns: minmax(220px, 0.9fr) repeat(3, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  padding: 10px !important;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 14px;
+  background: rgba(247, 248, 250, 0.72);
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-list {
+  overflow: auto !important;
+  align-content: start !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-panel {
+  grid-template-rows: auto auto minmax(0, 1fr) !important;
+  gap: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .order-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 0;
+  padding: 10px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 14px;
+  background: rgba(247, 248, 250, 0.72);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-list {
+  min-height: 0 !important;
+  overflow: auto !important;
+  padding-right: 2px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench :is(.quote-actions, .deal-attention-actions) {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  overflow: auto hidden !important;
+  scrollbar-width: none;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench :is(.quote-actions, .deal-attention-actions)::-webkit-scrollbar {
+  display: none;
+}
+
+/* Iteration 66 Quote center true endcap: keep this after the final override block. */
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-list,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-list {
+  display: flex !important;
+  flex-direction: column !important;
+  align-content: normal !important;
+  align-items: stretch !important;
+  gap: 10px !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding-right: 4px !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-row,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-row {
+  flex: 0 0 auto !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 12px 14px 12px 18px !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-main,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-row-main {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  min-height: 54px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-row :is(strong, p, span, small, em),
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-row :is(strong, p, span, small, em) {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-main p,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-row-main p {
+  display: block !important;
+  white-space: normal !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-tags,
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-tags {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 2px 0 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .deal-next-step.inline {
+  margin-top: 2px !important;
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench > .panel-head {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: stretch !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-switcher {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-status,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .panel-actions {
+    justify-self: stretch !important;
+    width: 100% !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench .quote-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .quote-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .quote-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .quote-panel {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 12px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center :is(
+    .quote-summary,
+    .deal-pipeline,
+    .deal-flow-preview,
+    .deal-next-summary,
+    .deal-attention-list,
+    .quote-filter-bar,
+    .quote-section-head,
+    .quote-list,
+    .order-panel
+  ) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    scroll-snap-align: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .quote-summary,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-flow-preview,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-next-summary {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-overview .deal-next-summary {
+    max-height: 260px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-actions .deal-attention-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-filter-bar,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .order-filter-bar {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-main,
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-row-main {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: start !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-money {
+    text-align: left !important;
+  }
+}
+
+/* Iteration 67 Quote center width fix: focused panes own the whole work area, not legacy columns. */
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes :is(.quote-filter-bar, .quote-section-head, .quote-list),
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-orders .order-panel {
+  grid-column: 1 !important;
+  grid-row: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-mode-quotes .quote-list {
+  min-height: 0 !important;
+}
+
+/* Iteration 68 Quote center mobile tabs: two-row segmented controls need real height. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench > .panel-head {
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-switcher {
+    height: auto !important;
+    min-height: 66px !important;
+    align-items: stretch !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-switcher button {
+    min-height: 30px !important;
+    line-height: 1.2 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center .quote-view-status {
+    display: none !important;
+  }
+}
+
+/* Iteration 69 Quote center mobile rows: the header must reserve space for two-row tabs. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #quote-center.quote-workbench {
+    grid-template-rows: auto auto !important;
+  }
+}
