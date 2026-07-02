@@ -23390,3 +23390,433 @@ body .apple-light-shell.shell .workspace[data-active-section="quote-center"] #qu
     grid-template-rows: auto auto !important;
   }
 }
+
+/* Iteration 115 Training workbench split: import, review and Skill evolution are separate app tasks. */
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  height: clamp(560px, calc(100dvh - 238px), 690px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench::after {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench > .panel-head {
+  display: grid !important;
+  grid-template-columns: minmax(230px, 1fr) minmax(360px, 0.72fr) minmax(170px, auto) !important;
+  align-items: center !important;
+  gap: 12px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-switcher {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  min-width: 0 !important;
+  padding: 3px !important;
+  border-radius: 13px !important;
+  background: #f4f5f7 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-switcher button {
+  min-height: 30px !important;
+  justify-content: center !important;
+  padding: 5px 8px !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-status {
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.06);
+  color: #0a4f9f;
+  font-size: 12px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench .training-panel {
+  display: grid !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  gap: 10px !important;
+  padding: 14px !important;
+  overflow: hidden !important;
+  scroll-snap-type: none !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench .training-panel > * {
+  grid-column: auto !important;
+  grid-row: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  scroll-snap-align: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench :is(
+  .skill-suggestion-list,
+  .sample-list-head,
+  .sample-list,
+  .coverage-list,
+  .correction-samples,
+  .training-summary,
+  .training-attention-reasons
+) {
+  border-radius: 18px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-panel {
+  grid-template-columns: minmax(320px, 0.45fr) minmax(0, 0.55fr) !important;
+  grid-template-rows: auto auto auto minmax(0, 1fr) !important;
+  align-content: stretch !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-panel > textarea {
+  grid-column: 1 !important;
+  grid-row: 1 / -1 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  resize: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-actions {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-height: 42px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-actions > span {
+  justify-self: center;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-actions > .ghost {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-overview {
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-quality-strip {
+  grid-column: 2 !important;
+  grid-row: 3 !important;
+  flex-wrap: nowrap !important;
+  overflow: auto hidden !important;
+  scrollbar-width: none;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-quality-strip::-webkit-scrollbar {
+  display: none;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import :is(.training-attention-reasons, .training-summary) {
+  grid-column: 2 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 10px 12px !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import :is(
+  .skill-suggestion-list,
+  .sample-list-head,
+  .sample-list,
+  .sample-load-more,
+  .coverage-list,
+  .correction-samples
+) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-panel {
+  grid-template-columns: minmax(250px, 0.34fr) minmax(0, 0.66fr) !important;
+  grid-template-rows: auto auto minmax(0, 1fr) auto !important;
+  align-content: stretch !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-panel > textarea,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-actions,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .skill-suggestion-list,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .coverage-list,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .correction-samples,
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-summary {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-overview {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-quality-strip {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-content: start !important;
+  max-height: 132px !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-attention-reasons {
+  grid-column: 1 !important;
+  grid-row: 3 / 5 !important;
+  display: flex !important;
+  align-content: start !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+  border: 1px solid rgba(255, 149, 0, 0.14) !important;
+  background: rgba(255, 250, 242, 0.76) !important;
+  padding: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-list-head {
+  grid-column: 2 !important;
+  grid-row: 1 / 3 !important;
+  min-height: 0 !important;
+  max-height: 188px !important;
+  padding: 10px !important;
+  overflow: auto !important;
+  border: 1px solid rgba(0, 0, 0, 0.075) !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-list {
+  grid-column: 2 !important;
+  grid-row: 3 !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  padding: 10px !important;
+  overflow: auto !important;
+  border: 1px solid rgba(0, 0, 0, 0.075) !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-load-more {
+  grid-column: 2 !important;
+  grid-row: 4 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .training-panel {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) auto !important;
+  align-content: stretch !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills :is(
+  textarea,
+  .training-actions,
+  .training-overview,
+  .training-quality-strip,
+  .training-attention-reasons,
+  .coverage-list,
+  .correction-samples,
+  .sample-list-head,
+  .sample-list,
+  .sample-load-more
+) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-list {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  padding: 12px !important;
+  overflow: auto !important;
+  border: 1px solid rgba(0, 0, 0, 0.075) !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .training-summary {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+  min-height: 0 !important;
+  max-height: 96px !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell #training-center .primary.compact {
+  min-height: 28px !important;
+  padding: 5px 10px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 1080px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench > .panel-head {
+    grid-template-columns: minmax(200px, 1fr) minmax(330px, 0.82fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-status {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench > .panel-head {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: stretch !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-switcher {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-switcher button {
+    min-height: 32px !important;
+    white-space: normal !important;
+    line-height: 1.18 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center .training-view-status {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench .training-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .training-panel {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    gap: 10px !important;
+    padding: 10px !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-workbench .training-panel > * {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-panel > textarea {
+    height: 210px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import .training-actions > span {
+    justify-self: stretch !important;
+    text-align: center !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .training-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review :is(.sample-list-head, .sample-list, .training-attention-reasons),
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills :is(.skill-suggestion-list, .training-summary) {
+    height: auto !important;
+    max-height: none !important;
+  }
+}
+
+/* Iteration 116 Training details: keep focused panes informative without filling space artificially. */
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import :is(.training-attention-reasons, .training-summary) {
+  align-self: start !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: 154px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-quality-segment {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  overflow: auto hidden !important;
+  scrollbar-width: none;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-quality-segment::-webkit-scrollbar {
+  display: none;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-review .sample-quality-segment button {
+  flex: 0 0 auto !important;
+  min-width: max-content !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-list {
+  grid-auto-rows: max-content !important;
+  align-content: start !important;
+  gap: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-row {
+  min-height: 96px !important;
+  padding: 12px 14px 12px 18px !important;
+  align-content: start !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-row p {
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-meta {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-evidence {
+  display: grid !important;
+  gap: 4px !important;
+  max-height: 48px !important;
+  overflow: hidden !important;
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-import :is(.training-attention-reasons, .training-summary) {
+    max-height: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-row {
+    min-height: 112px !important;
+  }
+}

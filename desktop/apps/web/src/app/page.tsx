@@ -703,6 +703,7 @@ export default function HomePage() {
   const [selectedTrainingSampleIds, setSelectedTrainingSampleIds] = useState<string[]>([]);
   const [wechatAccounts, setWechatAccounts] = useState<WechatAccount[]>([]);
   const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
+  const [trainingWorkbenchView, setTrainingWorkbenchView] = useState<"import" | "review" | "skills">("import");
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
   const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
   const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "logs">("handoff");
@@ -1635,6 +1636,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         text: chatText,
       }),
     );
+    setTrainingWorkbenchView("review");
   }
 
   async function compileTrainingSkills() {
@@ -3412,6 +3414,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         setWechatWorkbenchView((current) => (current === detailView ? current : detailView));
       }
       if (
+        sectionId === "training-center" &&
+        (detailView === "import" || detailView === "review" || detailView === "skills")
+      ) {
+        setTrainingWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
+      if (
         sectionId === "send-center" &&
         (detailView === "queue" || detailView === "blocked" || detailView === "diagnostics")
       ) {
@@ -3513,6 +3521,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   ).length;
   const autoSelectedSkillSuggestionCount = skillSuggestions.filter(isSkillSuggestionAutoSelected).length;
   const filteredNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion)).length;
+  const trainingWorkbenchSummary =
+    trainingWorkbenchView === "review"
+      ? `${visibleTrainingSamples.length}/${filteredTrainingSampleTotal} 条样本，已选 ${selectedVisibleTrainingSamples.length} 条`
+      : trainingWorkbenchView === "skills"
+        ? `${filteredSkillSuggestions.length} 条候选，已选 ${selectedSkillSuggestionCount} 条`
+        : `已导入 ${chatImports.length} 批，训练样本 ${trainingSampleTotalCount} 条`;
   const activeConversationSendTasks = activeConversationId
     ? sendTasks.filter((task) => task.conversationId === activeConversationId)
     : [];
@@ -4271,7 +4285,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <span>人工审核</span>
               <strong>{reviewStateText}</strong>
             </button>
-            <button type="button" role="listitem" onClick={() => scrollToWorkspaceSection("training-center")} aria-controls="training-center">
+            <button
+              type="button"
+              role="listitem"
+              onClick={() => {
+                setTrainingWorkbenchView("review");
+                scrollToWorkspaceSection("training-center");
+              }}
+              aria-controls="training-center"
+            >
               <Brain size={17} aria-hidden="true" />
               <span>训练进化</span>
               <strong>{trainingSampleTotalCount} 条样本</strong>
@@ -4497,7 +4519,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             aria-controls="training-center"
             aria-current={activeWorkspaceSection === "training-center" ? "page" : undefined}
             className={`dock-item ${activeWorkspaceSection === "training-center" ? "active" : ""}`}
-            onClick={() => scrollToWorkspaceSection("training-center")}
+            onClick={() => {
+              setTrainingWorkbenchView("review");
+              scrollToWorkspaceSection("training-center");
+            }}
             title="跳转到训练中心"
             type="button"
           >
@@ -6680,6 +6705,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   key={agent.id}
                   onClick={() => {
                     setSkillSuggestionAgentFilter(agentSuggestionKey);
+                    setTrainingWorkbenchView("skills");
                     scrollToWorkspaceSection("training-center");
                   }}
                   title={`查看 ${agent.name} 的训练样本和 Skill 建议`}
@@ -6706,7 +6732,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <button
                       type="button"
                       className="primary"
-                      onClick={() => scrollToWorkspaceSection("training-center")}
+                      onClick={() => {
+                        setTrainingWorkbenchView("import");
+                        scrollToWorkspaceSection("training-center");
+                      }}
                     >
                       <FileUp size={16} aria-hidden="true" />导入聊天记录
                     </button>
@@ -6715,6 +6744,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       className="ghost"
                       onClick={() => {
                         setSkillSuggestionAgentFilter("all");
+                        setTrainingWorkbenchView("skills");
                         scrollToWorkspaceSection("training-center");
                       }}
                     >
@@ -6726,13 +6756,39 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </div>
           </section>
 
-          <section className="panel" id="training-center">
+          <section className={`panel training-workbench training-mode-${trainingWorkbenchView}`} id="training-center">
             <div className="panel-head">
               <div>
                 <h2><Brain size={17} aria-hidden="true" />训练中心</h2>
                 <span>导入聊天记录，沉淀高情商客服样本</span>
               </div>
-              <Brain size={20} aria-hidden="true" />
+              <div className="segmented-control training-view-switcher" role="tablist" aria-label="训练中心视图">
+                <button
+                  type="button"
+                  className={trainingWorkbenchView === "import" ? "selected" : ""}
+                  aria-pressed={trainingWorkbenchView === "import"}
+                  onClick={() => setTrainingWorkbenchView("import")}
+                >
+                  导入训练
+                </button>
+                <button
+                  type="button"
+                  className={trainingWorkbenchView === "review" ? "selected" : ""}
+                  aria-pressed={trainingWorkbenchView === "review"}
+                  onClick={() => setTrainingWorkbenchView("review")}
+                >
+                  样本复核
+                </button>
+                <button
+                  type="button"
+                  className={trainingWorkbenchView === "skills" ? "selected" : ""}
+                  aria-pressed={trainingWorkbenchView === "skills"}
+                  onClick={() => setTrainingWorkbenchView("skills")}
+                >
+                  Skill 进化
+                </button>
+              </div>
+              <span className="training-view-status" role="status">{trainingWorkbenchSummary}</span>
             </div>
             <div className="training-panel">
               <textarea
@@ -6756,7 +6812,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <button
                   type="button"
                   className="training-metric"
-                  onClick={() => changeTrainingSampleQualityFilter("all")}
+                  onClick={() => {
+                    setTrainingWorkbenchView("review");
+                    changeTrainingSampleQualityFilter("all");
+                  }}
                   disabled={Boolean(busy)}
                   aria-controls="training-center"
                 >
@@ -6768,6 +6827,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   className="training-metric"
                   onClick={() => {
                     setSkillSuggestionAgentFilter("all");
+                    setTrainingWorkbenchView("skills");
                     scrollToWorkspaceSection("training-center");
                   }}
                   disabled={Boolean(busy)}
@@ -6779,7 +6839,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <button
                   type="button"
                   className="training-metric"
-                  onClick={() => changeTrainingSampleQualityFilter("review")}
+                  onClick={() => {
+                    setTrainingWorkbenchView("review");
+                    changeTrainingSampleQualityFilter("review");
+                  }}
                   disabled={Boolean(busy)}
                   aria-controls="training-center"
                 >
@@ -6795,7 +6858,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <button
                   type="button"
                   className="training-metric"
-                  onClick={() => changeTrainingSampleQualityFilter("all")}
+                  onClick={() => {
+                    setTrainingWorkbenchView("review");
+                    changeTrainingSampleQualityFilter("all");
+                  }}
                   disabled={Boolean(busy)}
                   aria-controls="training-center"
                 >
@@ -6984,6 +7050,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <button type="button" className="ghost compact" onClick={clearSkillSuggestions} disabled={Boolean(busy) || !filteredSelectedSkillSuggestionCount}>
                       清空当前
                     </button>
+                    <button type="button" className="primary compact" onClick={compileTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
+                      应用已选
+                    </button>
                   </div>
                 </div>
                 {visibleSkillSuggestions.length ? (
@@ -7057,6 +7126,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       key={agent.agentId || agent.agentKey}
                       onClick={() => {
                         setSkillSuggestionAgentFilter(agent.agentId || agent.agentKey || "all");
+                        setTrainingWorkbenchView("skills");
                         scrollToWorkspaceSection("training-center");
                       }}
                       disabled={Boolean(busy)}
