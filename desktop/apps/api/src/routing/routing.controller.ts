@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { RoutingService } from "./routing.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
@@ -7,8 +7,12 @@ export class RoutingController {
   constructor(private readonly routing: RoutingService) {}
 
   @Get("evaluations")
-  list() {
-    return this.routing.list();
+  list(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.routing.list({ wechatAccountId, conversationId, customerId });
   }
 
   @Post("evaluate")

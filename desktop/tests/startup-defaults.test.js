@@ -9,16 +9,21 @@ function readText(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
-test("developer startup scripts default to mock design platform", () => {
+test("developer startup scripts default to the current design mode", () => {
   const pkg = JSON.parse(readText("package.json"));
-  assert.equal(pkg.scripts["ports:start"], "node tools/start-dev-ports.js --mock-design");
-  assert.equal(pkg.scripts["ports:status"], "node tools/start-dev-ports.js --mock-design --status");
+  const smokeDevStack = readText("tools/smoke-dev-stack.js");
+  assert.equal(pkg.scripts["ports:start"], "node tools/ports-stack-starter.js");
+  assert.equal(pkg.scripts["ports:start:mock"], "node tools/ports-stack-starter.js --mock-design");
+  assert.equal(pkg.scripts["ports:start:real"], "node tools/ports-stack-starter.js --real-design");
+  assert.equal(pkg.scripts["ports:once"], "node tools/start-dev-ports.js");
+  assert.equal(pkg.scripts["ports:once:mock"], "node tools/start-dev-ports.js --mock-design");
+  assert.equal(pkg.scripts["ports:once:real"], "node tools/start-dev-ports.js --real-design");
+  assert.equal(pkg.scripts["ports:status"], "node tools/start-dev-ports.js --status");
   assert.equal(pkg.scripts["ports:preflight"], "node tools/start-dev-ports.js --mock-design --preflight");
   assert.equal(pkg.scripts["ports:doctor"], "node tools/check-dev-startup.js --mock-design");
-  assert.equal(pkg.scripts["ports:launch"], "node tools/ports-stack-starter.js --mock-design");
+  assert.equal(pkg.scripts["ports:launch"], "node tools/ports-stack-starter.js");
   assert.equal(pkg.scripts["ports:launch:mock"], "node tools/ports-stack-starter.js --mock-design");
   assert.equal(pkg.scripts["ports:launch:real"], "node tools/ports-stack-starter.js --real-design");
-  assert.equal(pkg.scripts["ports:start:real"], "node tools/start-dev-ports.js --real-design");
   assert.equal(pkg.scripts["ports:status:real"], "node tools/start-dev-ports.js --real-design --status");
   assert.match(pkg.scripts["dev:web"], /--webpack/);
   assert.match(pkg.scripts["dev:stack"], /--webpack/);
@@ -30,6 +35,8 @@ test("developer startup scripts default to mock design platform", () => {
   assert.doesNotMatch(pkg.scripts["ports:start"], /wechat/i);
   assert.match(pkg.scripts["dev:stack:real"], /start-dev-ports\.js --real-design --preflight/);
   assert.match(pkg.scripts["dev:stack:real"], /concurrently -k -n web,api/);
+  assert.match(smokeDevStack, /url: `http:\/\/127\.0\.0\.1:\$\{webPort\}\/`/);
+  assert.match(smokeDevStack, /"dev", "apps\/web", "-p", String\(webPort\), "--hostname", "127\.0\.0\.1"/);
 });
 
 test("startup tools keep explicit design mode and preserve current real mode for raw starts", () => {
@@ -38,30 +45,43 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /const requestedRealDesignMode = args\.has\("--real-design"\);/);
   assert.match(startDevPorts, /const mockModeLockFile = path\.join\(runtimeDir, "mock-mode\.lock"\);/);
   assert.match(startDevPorts, /const realModeLockFile = path\.join\(runtimeDir, "real-mode\.lock"\);/);
+  assert.match(startDevPorts, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
   assert.match(startDevPorts, /assertRealDesignStartAllowed\(\);/);
   assert.match(startDevPorts, /assertMockDesignStartAllowed\(\);/);
   assert.match(startDevPorts, /writeRealModeLockIfNeeded\(\);/);
+  assert.match(startDevPorts, /writePreferredDesignMode\(\);/);
   assert.match(startDevPorts, /const existing = readRuntimeDesignPlatformConfig\(\);/);
   assert.match(startDevPorts, /\.\.\.existing,/);
   assert.match(startDevPorts, /function assertRealDesignStartAllowed\(\)/);
   assert.match(startDevPorts, /function assertMockDesignStartAllowed\(\)/);
   assert.match(startDevPorts, /function writeRealModeLockIfNeeded\(\)/);
+  assert.match(startDevPorts, /function writePreferredDesignMode\(\)/);
+  assert.match(startDevPorts, /function readPreferredDesignMode\(\)/);
   assert.match(startDevPorts, /startModeLockHeartbeat\(\);/);
   assert.match(startDevPorts, /function startModeLockHeartbeat\(\)/);
   assert.match(startDevPorts, /setInterval\(writeRealModeLockIfNeeded, 5000\)/);
   assert.match(startDevPorts, /Real design startup is blocked because mock mode is locked/);
-  assert.match(startDevPorts, /Mock design startup is blocked because real mode is active or locked/);
+  assert.match(startDevPorts, /findConflictingDesignLaunchers\("mock"\)/);
+  assert.match(startDevPorts, /!getPortOwnerPids\(mockPort\)\.length/);
+  assert.match(startDevPorts, /!getPortOwnerPids\(apiPort\)\.length/);
+  assert.match(startDevPorts, /removed stale mock mode lock before real design startup/);
+  assert.match(startDevPorts, /Mock design startup is blocked because real mode is active, preferred, or locked/);
   assert.match(startDevPorts, /findConflictingDesignLaunchers\("real"\)/);
   assert.match(startDevPorts, /Run npm\.cmd run ports:stop before switching to real design mode/);
   assert.match(startDevPorts, /const keepAliveLauncher = args\.has\("--keep-alive"\);/);
+  assert.match(startDevPorts, /const net = require\("node:net"\);/);
   assert.match(startDevPorts, /const managedChildren = \[\];/);
   assert.match(startDevPorts, /const keepAliveTimers = \[\];/);
+  assert.match(startDevPorts, /const keepAliveServers = \[\];/);
   assert.match(startDevPorts, /const serviceRestartGraceUntil = new Map\(\);/);
   assert.match(startDevPorts, /const allowMockDesignStart = process\.env\.ALLOW_MOCK_DESIGN_START === "1";/);
   assert.match(startDevPorts, /Use npm\.cmd run ports:stop to stop them/);
   assert.match(startDevPorts, /const shouldReuseRealDesignMode =/);
   assert.match(startDevPorts, /existingDesignPlatformAdapter === "art_image_local"/);
-  assert.match(startDevPorts, /runtimeConfigLooksReal \|\| allowMockDesignStart/);
+  assert.match(startDevPorts, /preferredDesignMode === "real"/);
+  assert.match(startDevPorts, /fs\.existsSync\(realModeLockFile\)/);
+  assert.match(startDevPorts, /const preferredRealMode = preferredDesignMode === "real";/);
+  assert.match(startDevPorts, /\(\(!runtimeConfigLooksReal && !preferredRealMode\) \|\| allowMockDesignStart\)/);
   assert.match(
     startDevPorts,
     /\(requestedRealDesignMode \|\| shouldReuseRealDesignMode\) && !forceMockDesignMode \? "art_image_local" : "standard_v1";/,
@@ -86,9 +106,17 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /const wrapperPath = path\.join\(runtimeDir, `run-\$\{service\.name\}\.cmd`\);/);
   assert.match(startDevPorts, /const webStandaloneServer = path\.join\("apps", "web", "\.next", "standalone", "apps", "web", "server\.js"\);/);
   assert.match(startDevPorts, /commandArgs: \[webStandaloneServerPath\]/);
+  assert.match(startDevPorts, /cwd: path\.dirname\(webStandaloneServerPath\)/);
+  assert.match(startDevPorts, /function serviceCwd\(service\)/);
+  assert.match(startDevPorts, /cwd: serviceCwd\(service\)/);
+  assert.match(startDevPorts, /cd \/d \$\{cmdQuote\(serviceCwd\(service\)\)\}/);
   assert.match(startDevPorts, /await buildWebIfNeeded\(\);/);
   assert.match(startDevPorts, /async function buildWebIfNeeded\(\)/);
   assert.match(startDevPorts, /runPackageScript\("build:web"\)/);
+  assert.match(startDevPorts, /const hadExistingWebStandalone = fs\.existsSync\(webStandaloneServerPath\);/);
+  assert.match(startDevPorts, /useExistingWebStandaloneAfterBuildFailure\(error, hadExistingWebStandalone\)/);
+  assert.match(startDevPorts, /function useExistingWebStandaloneAfterBuildFailure\(error, hadExistingWebStandalone\)/);
+  assert.match(startDevPorts, /Starting with the existing standalone build/);
   assert.match(startDevPorts, /function resolvedNpmCommand\(\)/);
   assert.match(startDevPorts, /const besideNode = path\.join\(path\.dirname\(process\.execPath\), "npm\.cmd"\);/);
   assert.match(startDevPorts, /if \(!resolvedNpmCommand\(\)\) missing\.push\(npmCommandName\(\)\);/);
@@ -97,7 +125,9 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /command: process\.execPath, args: \[npmCliPath, \.\.\.args\]/);
   assert.match(startDevPorts, /const result = spawnSync\(packageCommand\.command, packageCommand\.args, \{/);
   assert.match(startDevPorts, /shell: false/);
-  assert.match(startDevPorts, /windowsSafeEnv\(process\.env\)/);
+  assert.match(startDevPorts, /env: packageScriptEnv\(\)/);
+  assert.match(startDevPorts, /function packageScriptEnv\(\)/);
+  assert.match(startDevPorts, /FORCE_WEB_CLEAN_BUILD: "0"/);
   assert.match(startDevPorts, /function webBuildIsStale\(\)/);
   assert.match(startDevPorts, /pathHasFileNewerThan\(item, builtAt\)/);
   assert.match(startDevPorts, /const launcherLogPath = path\.join\(logsDir, `\$\{service\.name\}\.launcher\.log`\);/);
@@ -105,46 +135,54 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /removeLogFileIfUnlocked\(stderrPath\)/);
   assert.match(startDevPorts, /removeLogFileIfUnlocked\(launcherLogPath\)/);
   assert.match(startDevPorts, /function removeLogFileIfUnlocked\(filePath\)/);
+  assert.match(startDevPorts, /function openServiceLogForAppend\(filePath, launcherLogPath, serviceName, streamName\)/);
+  assert.match(startDevPorts, /log was locked; using \$\{fallbackPath\}/);
+  assert.match(startDevPorts, /return "ignore";/);
+  assert.match(startDevPorts, /function closeLogFd\(value\)/);
   assert.match(startDevPorts, /error\?\.code === "EPERM" \|\| error\?\.code === "EBUSY"/);
   assert.match(startDevPorts, /Log file is locked, keeping existing file/);
   assert.match(startDevPorts, /fs\.writeFileSync\(wrapperPath, buildWindowsServiceWrapper/);
   assert.match(startDevPorts, /function buildWindowsServiceWrapper\(service,/);
   assert.match(startDevPorts, /function cmdSetEnv\(key, value\)/);
   assert.match(startDevPorts, /if \(keepAliveLauncher\) \{/);
-  assert.match(startDevPorts, /function startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath\)/);
-  assert.match(startDevPorts, /function startManagedChild[\s\S]+const envAssignments = Object\.entries\(serviceDefaultEnv\(\)\)/);
-  assert.match(startDevPorts, /function startManagedChild[\s\S]+\`\$\{envAssignments\}; `/);
-  assert.match(startDevPorts, /return startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath\);/);
+  assert.match(startDevPorts, /function startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath, launchCommandOverride\)/);
+  assert.match(startDevPorts, /const launchCommand = launchCommandOverride \|\| \{ command: service\.command, commandArgs: service\.commandArgs, usesOwnRedirection: false \}/);
+  assert.match(startDevPorts, /function windowsServiceLaunchCommand\(service, wrapperPath\)/);
+  assert.match(startDevPorts, /const launchCommand = keepAliveLauncher[\s\S]+\? windowsServiceLaunchCommand\(service, wrapperPath\)[\s\S]+usesOwnRedirection: false/);
+  assert.match(startDevPorts, /return startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath, launchCommand\);/);
   assert.match(startDevPorts, /managedChildren\.push\(child\);/);
   assert.match(startDevPorts, /serviceRestartGraceUntil\.set\(service\.name, Date\.now\(\) \+ serviceReadyTimeoutMs\(service\)\)/);
   assert.match(startDevPorts, /managed process exited code=\$\{code \?\? ""\} signal=\$\{signal \?\? ""\}/);
   assert.match(startDevPorts, /serviceRestartGraceUntil\.get\(service\.name\)/);
   assert.doesNotMatch(startDevPorts, /const restarted = startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath\);/);
-  assert.match(startDevPorts, /launched managed child \$\{child\.pid \|\| "unknown"\} via direct service command/);
+  assert.match(startDevPorts, /launched managed child \$\{child\.pid \|\| "unknown"\} via \$\{/);
+  assert.match(startDevPorts, /launchCommand\.usesOwnRedirection \? "wrapper command" : "direct service command"/);
+  assert.match(startDevPorts, /wrapper kept at \$\{wrapperPath\}/);
   assert.match(startDevPorts, /function scheduleServiceRecordRefresh\(service, childPid\)/);
   assert.match(startDevPorts, /function refreshServiceRecord\(service, childPid\)/);
   assert.match(startDevPorts, /pid: numberOrUndefined\(portOwners\[0\]\) \|\| records\[service\.name\]\?\.pid/);
-  assert.match(startDevPorts, /function startManagedChild[\s\S]+detached: false/);
+  assert.match(startDevPorts, /function startManagedChild[\s\S]+detached: process\.platform === "win32"/);
   const managedChildSource = startDevPorts.slice(
     startDevPorts.indexOf("function startManagedChild("),
     startDevPorts.indexOf("function startService("),
   );
-  assert.doesNotMatch(managedChildSource, /child\.unref\(\);/);
+  assert.match(managedChildSource, /if \(process\.platform === "win32"\) child\.unref\(\);/);
   assert.match(startDevPorts, /restarting \$\{service\.name\}/);
   assert.match(startDevPorts, /}, 2000\);/);
   assert.match(startDevPorts, /timer\.ref\(\);/);
   assert.match(startDevPorts, /keepAliveTimers\.push\(timer\);/);
+  assert.match(startDevPorts, /function startKeepAliveServerAnchor\(\)/);
+  assert.match(startDevPorts, /net\.createServer/);
+  assert.match(startDevPorts, /server\.listen\(0, "127\.0\.0\.1"/);
+  assert.match(startDevPorts, /keepAliveServers\.push\(server\)/);
   assert.match(startDevPorts, /Keeping launcher alive so managed services can recover/);
   assert.match(startDevPorts, /echo \[%date% %time%\] launching \$\{service\.name\}/);
   assert.match(startDevPorts, /const runLine = `\$\{command\} >> \$\{cmdQuote\(stdoutPath\)\} 2>> \$\{cmdQuote\(stderrPath\)\}`;/);
-  assert.match(startDevPorts, /const envAssignments = Object\.entries\(serviceDefaultEnv\(\)\)/);
   assert.match(startDevPorts, /function windowsServiceLaunchCommand\(service, wrapperPath\)/);
   assert.match(startDevPorts, /return \{ command: service\.command, commandArgs: service\.commandArgs, usesOwnRedirection: false \};/);
   assert.doesNotMatch(startDevPorts, /"-NoExit"/);
-  assert.match(startDevPorts, /Start-Process -FilePath \$\{psQuote\(launchCommand\.command\)\}/);
-  assert.match(startDevPorts, /-ArgumentList \$\{psArray\(launchCommand\.commandArgs\)\}/);
-  assert.match(startDevPorts, /const redirectArgs = launchCommand\.usesOwnRedirection/);
-  assert.match(startDevPorts, /\$\{redirectArgs\}-PassThru/);
+  assert.doesNotMatch(startDevPorts, /Start-Process -FilePath/);
+  assert.match(startDevPorts, /keepAliveLauncher[\s\S]+\? windowsServiceLaunchCommand\(service, wrapperPath\)[\s\S]+usesOwnRedirection: false/);
   assert.doesNotMatch(startDevPorts, /const workerPath = path\.join\(runtimeDir, `run-\$\{service\.name\}-worker\.cmd`\);/);
   assert.doesNotMatch(startDevPorts, /function buildWindowsServiceWorker\(service, stdoutPath, stderrPath\)/);
   assert.doesNotMatch(startDevPorts, /const commandLine = `cmd\.exe \/d \/c \$\{cmdQuote\(wrapperPath\)\}`;/);
@@ -156,6 +194,7 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /assertNoConflictingDesignLauncher\(\);/);
   assert.match(startDevPorts, /function findConflictingDesignLaunchers\(mode\)/);
   assert.match(startDevPorts, /start-dev-ports\.js/);
+  assert.match(startDevPorts, /desktop-service-supervisor\.js/);
   assert.match(startDevPorts, /launch-real\.cmd/);
   assert.match(startDevPorts, /launch-mock\.cmd/);
   assert.match(startDevPorts, /supervise-real\.cmd/);
@@ -182,7 +221,10 @@ test("startup tools keep explicit design mode and preserve current real mode for
   const desktopServiceSupervisor = readText("tools/desktop-service-supervisor.js");
   assert.match(desktopServiceSupervisor, /\["tools\/start-dev-ports\.js", "--real-design", "--keep-alive"\]/);
   assert.match(desktopServiceSupervisor, /\["tools\/start-dev-ports\.js", "--mock-design", "--keep-alive"\]/);
-  assert.match(desktopServiceSupervisor, /removed stale real mode lock before mock launch/);
+  assert.match(desktopServiceSupervisor, /--supervisor-child/);
+  assert.doesNotMatch(desktopServiceSupervisor, /removed stale real mode lock before mock launch/);
+  assert.match(desktopServiceSupervisor, /Real design launch is blocked because mock mode is locked/);
+  assert.doesNotMatch(desktopServiceSupervisor, /removed stale mock mode lock before real launch/);
 
   const appConfig = readText("apps/api/src/shared/app-config.ts");
   assert.match(appConfig, /const defaultDesignPlatformAdapter = "standard_v1";/);
@@ -191,8 +233,14 @@ test("startup tools keep explicit design mode and preserve current real mode for
 
 test("stop script recognizes child service command lines", () => {
   const stopDevPorts = readText("tools/stop-dev-ports.js");
-  assert.match(stopDevPorts, /const protectedPids = new Set/);
+  assert.match(stopDevPorts, /const protectedPids = buildProtectedPids\(\);/);
+  assert.match(stopDevPorts, /function buildProtectedPids\(\)/);
+  assert.match(stopDevPorts, /const forceProcessSweep = process\.env\.FORCE_PORTS_SWEEP === "1";/);
+  assert.match(stopDevPorts, /!forceProcessSweep && !hasManagedRuntimeState\(\)/);
+  assert.match(stopDevPorts, /function hasManagedRuntimeState\(\)/);
+  assert.match(stopDevPorts, /fs\.existsSync\(mockModeLockFile\) \|\| fs\.existsSync\(realModeLockFile\)/);
   assert.match(stopDevPorts, /const protectedStarterMode =/);
+  assert.match(stopDevPorts, /const skipStackStarterLaunchers = process\.env\.PORTS_STOP_SKIP_STACK_STARTERS === "1";/);
   assert.match(stopDevPorts, /process\.env\.PORTS_STACK_STARTER_PID/);
   assert.match(stopDevPorts, /process\.env\.PORTS_STACK_STARTER_PARENT_PID/);
   assert.match(stopDevPorts, /process\.env\.PORTS_STACK_STARTER_MODE/);
@@ -210,7 +258,8 @@ test("stop script recognizes child service command lines", () => {
   assert.match(stopDevPorts, /apps\\\/web\\\/\\\.next\\\/standalone\\\/apps\\\/web\\\/server\\\.js/);
   assert.match(stopDevPorts, /node\(\?:\\\.exe\)\?"\?\\s\+\.\*apps\\\/web/);
   assert.match(stopDevPorts, /next\/dist\/server\/lib\/start-server\.js/);
-  assert.match(stopDevPorts, /node_modules\/next\/dist\/bin\/next/);
+  assert.match(stopDevPorts, /node_modules\\\/next\\\/dist\\\/bin\\\/next/);
+  assert.match(stopDevPorts, /node_modules\\\/next\\\/dist\\\/bin\\\/next build apps\\\/web/);
   assert.match(stopDevPorts, /function stopManagedWrapperProcesses\(stoppedPids, attemptedPids\)/);
   assert.match(stopDevPorts, /function findManagedWrapperPids\(\)/);
   assert.match(stopDevPorts, /const standaloneWebWrapperPattern =/);
@@ -224,22 +273,28 @@ test("stop script recognizes child service command lines", () => {
   assert.match(stopDevPorts, /function findManagedDirectShellPids\(\)/);
   assert.match(stopDevPorts, /name = 'powershell\.exe'/);
   assert.match(stopDevPorts, /tools\/start-dev-ports\.js/);
-  assert.doesNotMatch(stopDevPorts, /\$cmd\.Contains\('--keep-alive'\)/);
+  assert.match(stopDevPorts, /\$cmd\.Contains\('--keep-alive'\)/);
   assert.match(stopDevPorts, /start-sleep -seconds 3600/);
   assert.match(stopDevPorts, /mock-mode\.lock/);
   assert.match(stopDevPorts, /real-mode\.lock/);
   assert.match(stopDevPorts, /if \(!preserveRealModeLock\) fs\.rmSync\(realModeLockFile, \{ force: true \}\)/);
   assert.match(stopDevPorts, /web\|api\|mock\)-direct/);
   assert.match(stopDevPorts, /node_modules\/next\/dist\/bin\/next dev apps\/web -p/);
+  assert.match(stopDevPorts, /npm\\\.cmd"\? run build:\(api\|web\)/);
   assert.match(stopDevPorts, /tools\/mock-design-platform\.js/);
   assert.match(stopDevPorts, /start-process/);
   assert.match(stopDevPorts, /server\\\.js\\b/);
   assert.match(stopDevPorts, /commandLine\.includes\("tools\/start-dev-ports\.js"\)/);
+  assert.match(stopDevPorts, /commandLine\.includes\("--keep-alive"\)/);
   assert.match(stopDevPorts, /commandLine\.includes\("tools\/ports-stack-starter\.js"\)/);
   assert.match(stopDevPorts, /commandLine\.includes\("tools\/desktop-service-supervisor\.js"\)/);
+  assert.match(stopDevPorts, /const npmPortsMatch = commandLine\.match/);
+  assert.match(stopDevPorts, /const npmMode = npmPortsMatch\[2\] === ":real" \? "real" : npmPortsMatch\[2\] === ":mock" \? "mock" : "";/);
+  assert.match(stopDevPorts, /return !protectedStarterMode \|\| !npmMode \|\| npmMode !== protectedStarterMode;/);
   assert.match(stopDevPorts, /commandLine\.includes\("--supervisor-child"\)/);
-  assert.match(stopDevPorts, /starterMode !== protectedStarterMode/);
-  assert.match(stopDevPorts, /npm\(\?:\\\.cmd\|\\\/bin\\\/npm-cli\\\.js\)"\? run ports:\(start\|launch\|keepalive\)\(:mock\|:real\)\?/);
+  assert.match(stopDevPorts, /if \(stackStarterMode\) return !protectedStarterMode \|\| stackStarterMode !== protectedStarterMode;/);
+  assert.match(stopDevPorts, /if \(skipStackStarterLaunchers && stackStarterMode\) return false;/);
+  assert.match(stopDevPorts, /npm\(\?:\\\.cmd\|\\\/bin\\\/npm-cli\\\.js\)"\? run ports:\(start\|launch\|keepalive\|once\)\(:mock\|:real\)\?/);
   assert.match(stopDevPorts, /run-\[\^" \]\+\(-worker\)\?\\\.cmd/);
   assert.match(stopDevPorts, /\(web\|api\|mock\)-persist/);
   assert.match(stopDevPorts, /const launcherPattern = \/\(launch\|supervise\|stable-supervise\)-\(mock\|real\)\\\.cmd\//);
@@ -291,22 +346,33 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(realDesignBat, /npm\.cmd run dev:stack:real/);
 });
 
-test("port stack launcher clears stale mode locks and starts supervised services", () => {
+test("port stack launcher blocks mock when real mode is active and starts supervised services", () => {
   const launcher = readText("tools/ports-stack-starter.js");
   assert.match(launcher, /const realModeLockFile = path\.join\(runtimeDir, "real-mode\.lock"\);/);
   assert.match(launcher, /const designPlatformConfigFile = path\.join\(runtimeDir, "design-platform-config\.json"\);/);
+  assert.match(launcher, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
   assert.match(launcher, /const http = require\("node:http"\);/);
   assert.match(launcher, /main\(\)\.catch/);
   assert.match(launcher, /async function main\(\)/);
-  assert.match(launcher, /Mock design launch is blocked because real design mode is active/);
   assert.match(launcher, /activeApiLooksRealDesignMode\(\)/);
   assert.match(launcher, /const activeApiRealMode = mockDesignMode \? await activeApiLooksRealDesignMode\(\) : false;/);
   assert.match(launcher, /runtimeConfigLooksRealDesignMode\(\)/);
-  assert.match(launcher, /if \(mockDesignMode && activeApiRealMode\) \{/);
-  assert.match(launcher, /fs\.existsSync\(realModeLockFile\) \|\| runtimeConfigRealMode/);
-  assert.match(launcher, /clearRuntimeDesignModeConfig\(\);/);
-  assert.match(launcher, /function clearRuntimeDesignModeConfig\(\)/);
-  assert.match(launcher, /removed stale real design mode state before mock design launch/);
+  assert.match(launcher, /writeRealDesignRuntimeConfig\(\);/);
+  assert.match(launcher, /function writeRealDesignRuntimeConfig\(\)/);
+  assert.match(launcher, /function readRuntimeDesignPlatformConfig\(\)/);
+  assert.match(launcher, /writePreferredDesignMode\(realDesignMode \? "real" : "mock"\);/);
+  assert.match(launcher, /function writePreferredDesignMode\(mode\)/);
+  assert.match(launcher, /function readPreferredDesignMode\(\)/);
+  assert.match(launcher, /function realDesignBaseUrl\(\)/);
+  assert.match(launcher, /designPlatformAdapter: "art_image_local"/);
+  assert.match(launcher, /designPlatformBaseUrl: realDesignBaseUrl\(\)/);
+  assert.match(launcher, /mock design launch is blocked because real design mode is locked, configured, or preferred/);
+  assert.match(launcher, /Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode/);
+  assert.match(launcher, /active API is using the real design platform/);
+  assert.match(launcher, /if \(mockDesignMode && activeApiRealMode && !allowMockDesignStart\) \{/);
+  assert.match(launcher, /fs\.existsSync\(realModeLockFile\) \|\| runtimeConfigRealMode \|\| preferredRealMode/);
+  assert.doesNotMatch(launcher, /clearRuntimeDesignModeConfig/);
+  assert.doesNotMatch(launcher, /removed stale real design mode state before mock design launch/);
   assert.match(launcher, /designPlatformAdapter === "art_image_local"/);
   assert.match(launcher, /health\?\.adapter === "art_image_local"/);
   assert.match(launcher, /api\/integrations\/design-platform\/health/);
@@ -316,13 +382,14 @@ test("port stack launcher clears stale mode locks and starts supervised services
   assert.match(launcher, /managedPortsAreFree\(\)/);
   assert.match(launcher, /stale process race, but managed ports are free/);
   assert.match(launcher, /function getPortOwnerPids\(port\)/);
-  assert.match(launcher, /const realDesignMode = args\.has\("--real-design"\);/);
+  assert.match(launcher, /const requestedRealDesignMode = args\.has\("--real-design"\);/);
+  assert.match(launcher, /const preferredDesignMode = readPreferredDesignMode\(\);/);
+  assert.match(launcher, /const realDesignMode =\s+requestedRealDesignMode \|\|/);
   assert.match(launcher, /const modeArg = realDesignMode \? "--real-design" : "--mock-design";/);
   assert.match(launcher, /const conflictMode = realDesignMode \? "mock" : "real";/);
   assert.match(launcher, /if \(realDesignMode && fs\.existsSync\(mockModeLockFile\)\) \{/);
-  assert.doesNotMatch(launcher, /Real design launch is blocked because mock mode is locked/);
-  assert.match(launcher, /fs\.rmSync\(mockModeLockFile, \{ force: true \}\);/);
-  assert.match(launcher, /removed stale mock mode lock before real design launch/);
+  assert.match(launcher, /Real design launch is blocked because mock mode is locked/);
+  assert.doesNotMatch(launcher, /removed stale mock mode lock before real design launch/);
   assert.match(launcher, /disableConflictingLaunchers\(\);/);
   assert.match(launcher, /function disableConflictingLaunchers\(\)/);
   assert.match(launcher, /`launch-\$\{conflictMode\}\.cmd`/);
@@ -333,12 +400,18 @@ test("port stack launcher clears stale mode locks and starts supervised services
   assert.match(launcher, /PORTS_STACK_STARTER_PID: String\(process\.pid\)/);
   assert.match(launcher, /PORTS_STACK_STARTER_PARENT_PID: String\(process\.ppid\)/);
   assert.match(launcher, /PORTS_STACK_STARTER_MODE: realDesignMode \? "real" : "mock"/);
+  assert.match(launcher, /PORTS_STOP_SKIP_STACK_STARTERS: "1"/);
   assert.match(launcher, /env\.ALLOW_MOCK_DESIGN_START = "1";/);
   assert.match(launcher, /env\.DESIGN_PLATFORM_ADAPTER = "standard_v1";/);
   assert.match(launcher, /env\.DESIGN_PLATFORM_BASE_URL = "http:\/\/127\.0\.0\.1:3700";/);
+  assert.match(launcher, /env\.DESIGN_PLATFORM_ADAPTER = "art_image_local";/);
+  assert.match(launcher, /env\.DESIGN_PLATFORM_BASE_URL = realDesignBaseUrl\(\);/);
   assert.match(launcher, /env\.ALLOW_REAL_DESIGN_START = "1";/);
-  assert.match(launcher, /spawnSync\(process\.execPath, \["tools\/desktop-service-supervisor\.js", modeArg\]/);
-  assert.match(launcher, /removed stale real design mode state before mock design launch/);
+  assert.match(launcher, /spawn\(process\.execPath, \["tools\/desktop-service-supervisor\.js", modeArg\]/);
+  assert.match(launcher, /detached: true/);
+  assert.match(launcher, /child\.unref\(\)/);
+  assert.match(launcher, /process\.exit\(0\);/);
+  assert.match(launcher, /process\.exit\(1\);/);
   assert.doesNotMatch(launcher, /mockDesignMode && \(fs\.existsSync\(realModeLockFile\) \|\| activeApiLooksRealDesignMode\(\) \|\| runtimeConfigLooksRealDesignMode\(\)\)/);
 
   const supervisorPs1 = readText("tools/desktop-service-supervisor.ps1");
@@ -349,12 +422,19 @@ test("port stack launcher clears stale mode locks and starts supervised services
   assert.match(supervisorPs1, /Mock design launch is blocked because real mode is active/);
   assert.match(supervisorPs1, /Find-ConflictingDesignLaunchers -TargetMode "real"/);
   assert.match(supervisorPs1, /\$DesignPlatformConfigFile = Join-Path \$RuntimeDir "design-platform-config\.json"/);
+  assert.match(supervisorPs1, /\$PreferredDesignModeFile = Join-Path \$RuntimeDir "preferred-design-mode\.json"/);
   assert.match(supervisorPs1, /function Test-RuntimeConfigRealMode/);
+  assert.match(supervisorPs1, /function Test-PreferredDesignModeReal/);
+  assert.match(supervisorPs1, /function Write-PreferredDesignMode/);
+  assert.match(supervisorPs1, /Write-PreferredDesignMode "real"/);
+  assert.match(supervisorPs1, /Write-PreferredDesignMode "mock"/);
   assert.match(supervisorPs1, /\$env:ALLOW_MOCK_DESIGN_START -ne "1"/);
   assert.match(supervisorPs1, /function Update-RealModeLock/);
   assert.match(supervisorPs1, /Update-RealModeLock/);
   assert.match(supervisorPs1, /Set-Content -Path \$StableConflictingLauncherCmd/);
   assert.match(supervisorPs1, /\$nodeLine = .+tools\/start-dev-ports\.js.+\$ModeArg.+--keep-alive/);
+  assert.match(supervisorPs1, /":restart"/);
+  assert.match(supervisorPs1, /"goto restart"/);
   assert.match(supervisorPs1, /Write-Output "\[supervisor\] node tools\/start-dev-ports\.js \$ModeArg --keep-alive pid=/);
   assert.match(supervisorPs1, /\$env:PORTS_STACK_STARTER_PID = \[string\]\$PID/);
   assert.match(supervisorPs1, /\$env:PORTS_STACK_STARTER_MODE = \$Mode/);
@@ -368,15 +448,23 @@ test("port stack launcher clears stale mode locks and starts supervised services
   const supervisorJs = readText("tools/desktop-service-supervisor.js");
   assert.match(supervisorJs, /\["tools\/start-dev-ports\.js", "--real-design", "--keep-alive"\]/);
   assert.match(supervisorJs, /\["tools\/start-dev-ports\.js", "--mock-design", "--keep-alive"\]/);
-  assert.match(supervisorJs, /removed stale real mode lock before mock launch/);
+  assert.match(supervisorJs, /--supervisor-child/);
+  assert.doesNotMatch(supervisorJs, /removed stale real mode lock before mock launch/);
+  assert.doesNotMatch(supervisorJs, /removed stale mock mode lock before real launch/);
   assert.match(supervisorJs, /const stableConflictingLauncherCmd = path\.join/);
   assert.match(supervisorJs, /const legacyLauncherCmd = path\.join/);
   assert.match(supervisorJs, /const stableLauncherCmd = path\.join/);
   assert.match(supervisorJs, /stable-supervise-mock\.cmd/);
   assert.match(supervisorJs, /stable-supervise-real\.cmd/);
   assert.match(supervisorJs, /findConflictingDesignLaunchers\("real"\)\.length/);
+  assert.match(supervisorJs, /desktop-service-supervisor\.js/);
   assert.match(supervisorJs, /const designPlatformConfigFile = path\.join\(runtimeDir, "design-platform-config\.json"\);/);
-  assert.match(supervisorJs, /runtimeConfigLooksRealDesignMode\(\) && process\.env\.ALLOW_MOCK_DESIGN_START !== "1"/);
+  assert.match(supervisorJs, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
+  assert.match(supervisorJs, /\(\(runtimeConfigLooksRealDesignMode\(\) \|\| preferredDesignModeIsReal\(\)\) && process\.env\.ALLOW_MOCK_DESIGN_START !== "1"\)/);
+  assert.match(supervisorJs, /function preferredDesignModeIsReal\(\)/);
+  assert.match(supervisorJs, /function writePreferredDesignMode\(mode\)/);
+  assert.match(supervisorJs, /writePreferredDesignMode\("real"\)/);
+  assert.match(supervisorJs, /writePreferredDesignMode\("mock"\)/);
   assert.match(supervisorJs, /\[conflictingLauncherCmd, legacyConflictingLauncherCmd, stableConflictingLauncherCmd\]/);
   assert.match(supervisorJs, /writeActiveLaunchers\(\);/);
   assert.match(supervisorJs, /function writeActiveLaunchers\(\)/);
@@ -385,12 +473,19 @@ test("port stack launcher clears stale mode locks and starts supervised services
   assert.match(supervisorJs, /PORTS_STACK_STARTER_PARENT_PID: String\(process\.ppid\)/);
   assert.match(supervisorJs, /PORTS_STACK_STARTER_MODE: realDesignMode \? "real" : "mock"/);
   assert.match(supervisorJs, /PRESERVE_REAL_MODE_LOCK: realDesignMode \? "1" : ""/);
+  assert.match(supervisorJs, /const supervisorChildResult = startSupervisorChild\(\);/);
+  assert.match(supervisorJs, /function startSupervisorChild\(\)/);
+  assert.match(supervisorJs, /"tools\/desktop-service-supervisor\.js"/);
+  assert.match(supervisorJs, /"--supervisor-child"/);
+  assert.match(supervisorJs, /Start-Process -FilePath \$\{psQuote\(process\.execPath\)\}/);
+  assert.match(supervisorJs, /-ArgumentList \$\{psArray\(/);
+  assert.match(supervisorJs, /function psArray\(values\)/);
   assert.match(supervisorJs, /const launcherResult = spawnSync\(/);
   assert.match(supervisorJs, /Start-Process -FilePath \$\{psQuote\(launcherCmd\)\}/);
   assert.match(supervisorJs, /\[supervisor\] \$\{path\.basename\(launcherCmd\)\} pid=\$\{launcherPid\}/);
   assert.ok(
-    supervisorJs.indexOf("const launcherResult = spawnSync(") < supervisorJs.indexOf("Invoke-CimMethod -ClassName Win32_Process"),
-    "desktop-service-supervisor.js must try the cmd launcher before Win32_Process fallback",
+    supervisorJs.indexOf("const supervisorChildResult = startSupervisorChild();") < supervisorJs.indexOf("const launcherResult = spawnSync("),
+    "desktop-service-supervisor.js must try the persistent Node supervisor before the cmd launcher fallback",
   );
   const supervisorLoop = supervisorJs.slice(supervisorJs.indexOf("function runSupervisorLoop()"));
   assert.ok(
@@ -405,9 +500,15 @@ test("port stack launcher clears stale mode locks and starts supervised services
   for (const legacyLauncher of ["tools/launch-dev-ports-stable.js", "tools/launch-dev-ports-keeper.js"]) {
     const source = readText(legacyLauncher);
     assert.match(source, /const realModeLockFile = path\.join\(runtimeDir, "real-mode\.lock"\);/);
-    assert.match(source, /Mock design launch is blocked because real mode is locked/);
+    assert.match(source, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
+    assert.match(source, /Mock design launch is blocked because real mode is preferred or locked/);
     assert.match(source, /\["tools\/start-dev-ports\.js", "--real-design", "--keep-alive"\]/);
     assert.match(source, /\["tools\/start-dev-ports\.js", "--mock-design", "--keep-alive"\]/);
+    assert.match(source, /updateRealModeLock\(\);/);
+    assert.match(source, /function updateRealModeLock\(\)/);
+    assert.match(source, /function preferredDesignModeIsReal\(\)/);
+    assert.match(source, /function writePreferredDesignMode\(mode\)/);
+    assert.match(source, /fs\.writeFileSync\(realModeLockFile/);
   }
 });
 
@@ -416,10 +517,28 @@ test("web build script refuses to build while dev web port is occupied", () => {
   const syncStandaloneAssets = readText("tools/sync-web-standalone-assets.js");
   assert.match(buildWeb, /getPortOwnerPids\(webPort\)/);
   assert.match(buildWeb, /Stop the desktop services before building web assets/);
+  assert.match(buildWeb, /const activeBuildPids = findProjectNextBuildPids\(\);/);
+  assert.match(buildWeb, /Next build is already running for this project/);
+  assert.match(buildWeb, /removeStaleNextBuildLock\(\);/);
+  assert.match(buildWeb, /resetNextBuildState\(\);/);
+  assert.match(buildWeb, /runNextBuild\(\);/);
+  assert.match(buildWeb, /function runNextBuild\(\)/);
+  assert.match(buildWeb, /function runWithCapturedOutput\(command, args\)/);
+  assert.match(buildWeb, /function isRetryableNextBuildRace\(result\)/);
+  assert.match(buildWeb, /Next build failed while copying generated \.next files; retrying once/);
+  assert.match(buildWeb, /Build error occurred/);
+  assert.match(buildWeb, /ENOENT/);
+  assert.match(buildWeb, /function removeStaleNextBuildLock\(\)/);
+  assert.match(buildWeb, /function resetNextBuildState\(\)/);
+  assert.match(buildWeb, /Removed stale Next build lock/);
+  assert.match(buildWeb, /Removed previous Next build directory/);
+  assert.match(buildWeb, /function findProjectNextBuildPids\(\)/);
   assert.match(buildWeb, /tools\/sync-web-standalone-assets\.js/);
   assert.match(syncStandaloneAssets, /function syncStandaloneNextBuild\(\)/);
   assert.match(syncStandaloneAssets, /const excludedNextEntries = new Set\(\["cache", "dev", "diagnostics", "standalone", "trace"\]\);/);
-  assert.match(syncStandaloneAssets, /fs\.rmSync\(standaloneNextRoot, \{ force: true, recursive: true \}\);/);
+  assert.doesNotMatch(syncStandaloneAssets, /fs\.rmSync\(standaloneNextRoot/);
+  assert.match(syncStandaloneAssets, /fs\.mkdirSync\(standaloneNextRoot, \{ recursive: true \}\);/);
+  assert.match(syncStandaloneAssets, /for \(const entry of fs\.readdirSync\(nextRoot, \{ withFileTypes: true \}\)\)/);
   assert.match(syncStandaloneAssets, /if \(excludedNextEntries\.has\(entry\.name\)\) continue;/);
   assert.match(syncStandaloneAssets, /copyFile\(source, target\)/);
   assert.match(syncStandaloneAssets, /Synced web standalone public and production build assets/);

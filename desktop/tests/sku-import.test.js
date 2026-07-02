@@ -334,6 +334,59 @@ test("summarizes available SKU category and scene coverage", () => {
   assert.equal(emptyCoverage.catalogCoverageIssueCount, 2);
 });
 
+test("summarizes real bundle coverage for each sales scene", () => {
+  const base = {
+    salePrice: 100,
+    costPrice: 50,
+    stock: 20,
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-GENERAL", name: "General box", type: "gift_box", salePrice: 40, sceneTags: [] },
+    { ...base, skuCode: "BOX-VIP", name: "VIP box", type: "gift_box", salePrice: 120, sceneTags: ["client_visit"], stock: 12 },
+    { ...base, skuCode: "ITEM-EMP", name: "Employee item", type: "item", salePrice: 60, sceneTags: ["employee_gift"], stock: 18 },
+    { ...base, skuCode: "ITEM-VIP", name: "Client item", type: "item", salePrice: 180, sceneTags: ["client_visit"], stock: 8 },
+    { ...base, skuCode: "CARD-ONLY", name: "Holiday card", type: "accessory", salePrice: 10, sceneTags: ["holiday_gift"] },
+  ], { targetSceneTags: ["employee_gift", "client_visit", "holiday_gift"] });
+  const employee = result.sceneBundleCoverage.find((scene) => scene.scene === "employee_gift");
+  const client = result.sceneBundleCoverage.find((scene) => scene.scene === "client_visit");
+  const holiday = result.sceneBundleCoverage.find((scene) => scene.scene === "holiday_gift");
+
+  assert.equal(employee.available, true);
+  assert.equal(employee.giftBoxCount, 1);
+  assert.equal(employee.itemCount, 1);
+  assert.equal(employee.minBundlePrice, 100);
+  assert.equal(employee.capacity, 18);
+  assert.deepEqual(employee.examples[0], {
+    giftBoxSkuCode: "BOX-GENERAL",
+    itemSkuCode: "ITEM-EMP",
+    totalPrice: 100,
+    costPrice: 100,
+    profit: 0,
+    marginRate: 0,
+    leadTimeDays: 0,
+    leadTimeKnown: false,
+    weightGram: 600,
+    specReady: true,
+    sizeReady: true,
+    sizeRisk: false,
+    deliveryRisk: false,
+    automationReady: false,
+    autoQuoteBlockers: ["low_margin"],
+  });
+  assert.equal(client.available, true);
+  assert.equal(client.giftBoxCount, 2);
+  assert.equal(client.itemCount, 1);
+  assert.equal(client.minBundlePrice, 220);
+  assert.equal(holiday.available, false);
+  assert.equal(holiday.itemCount, 0);
+  assert.equal(result.sceneBundleCoverageIssueCount, 1);
+  assert.ok(result.commercialReadiness.nextActions.some((action) => action.includes("holiday_gift")));
+});
+
 test("summarizes minimum budget needed for a basic gift bundle", () => {
   const base = {
     costPrice: 20,
@@ -374,6 +427,177 @@ test("summarizes minimum budget needed for a basic gift bundle", () => {
   assert.equal(missingItem.bundleCapacityBottleneck, "item");
   assert.equal(missingItem.bundleReadinessIssueCount, 4);
   assert.ok(missingItem.bundleReadinessWarnings.some((warning) => warning.includes("内搭")));
+});
+
+test("summarizes budget band coverage for low and high value customers", () => {
+  const base = {
+    costPrice: 20,
+    stock: 60,
+    sceneTags: ["employee_gift"],
+    category: "gift",
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-LOW", name: "Box low", type: "gift_box", salePrice: 40, stock: 50 },
+    { ...base, skuCode: "BOX-HIGH", name: "Box high", type: "gift_box", salePrice: 220, stock: 20 },
+    { ...base, skuCode: "ITEM-LOW", name: "Item low", type: "item", salePrice: 50, stock: 30 },
+    { ...base, skuCode: "ITEM-HIGH", name: "Item high", type: "item", salePrice: 180, stock: 25 },
+  ]);
+  const entry = result.budgetBandCoverage.find((band) => band.key === "entry");
+  const standard = result.budgetBandCoverage.find((band) => band.key === "standard");
+  const premium = result.budgetBandCoverage.find((band) => band.key === "premium");
+
+  assert.equal(entry.available, true);
+  assert.equal(entry.minBundlePrice, 90);
+  assert.equal(entry.capacity, 30);
+  assert.equal(entry.minMarginRate, 0.56);
+  assert.equal(entry.lowMarginCombinationCount, 0);
+  assert.equal(entry.automationReadyCombinationCount, 1);
+  assert.deepEqual(entry.automationBlockerCounts, []);
+  assert.deepEqual(entry.automationReadyExamples, [{
+    giftBoxSkuCode: "BOX-LOW",
+    itemSkuCode: "ITEM-LOW",
+    totalPrice: 90,
+    costPrice: 40,
+    profit: 50,
+    marginRate: 0.56,
+    leadTimeDays: 0,
+    leadTimeKnown: false,
+    weightGram: 600,
+    specReady: true,
+    sizeReady: true,
+    sizeRisk: false,
+    deliveryRisk: false,
+    automationReady: true,
+    autoQuoteBlockers: [],
+  }]);
+  assert.deepEqual(entry.examples[0], {
+    giftBoxSkuCode: "BOX-LOW",
+    itemSkuCode: "ITEM-LOW",
+    totalPrice: 90,
+    costPrice: 40,
+    profit: 50,
+    marginRate: 0.56,
+    leadTimeDays: 0,
+    leadTimeKnown: false,
+    weightGram: 600,
+    specReady: true,
+    sizeReady: true,
+    sizeRisk: false,
+    deliveryRisk: false,
+    automationReady: true,
+    autoQuoteBlockers: [],
+  });
+  assert.equal(standard.available, true);
+  assert.equal(standard.minBundlePrice, 220);
+  assert.equal(premium.available, true);
+  assert.equal(premium.minBundlePrice, 400);
+  assert.equal(result.budgetCoverageIssueCount, 0);
+});
+
+test("summarizes bundle delivery and specification readiness", () => {
+  const base = {
+    costPrice: 20,
+    stock: 40,
+    sceneTags: ["employee_gift"],
+    category: "gift",
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-FAST", name: "Fast box", type: "gift_box", salePrice: 40, costPrice: 20, leadTimeDays: 5, weightGram: 600, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 } },
+    { ...base, skuCode: "ITEM-FAST", name: "Fast item", type: "item", salePrice: 60, costPrice: 30, leadTimeDays: 7, weightGram: 300, dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 } },
+    { ...base, skuCode: "ITEM-SLOW", name: "Slow item", type: "item", salePrice: 80, costPrice: 50, leadTimeDays: 45, weightGram: 0, dimensions: { lengthCm: 12 } },
+    { ...base, skuCode: "ITEM-LARGE", name: "Large item", type: "item", salePrice: 90, costPrice: 55, leadTimeDays: 8, weightGram: 500, dimensions: { lengthCm: 40, widthCm: 25, heightCm: 12 } },
+  ], {
+    deliveryLeadTimeWarningDays: 30,
+    targetSceneTags: ["employee_gift"],
+  });
+  const standard = result.budgetBandCoverage.find((band) => band.key === "standard");
+  const scene = result.sceneBundleCoverage.find((item) => item.scene === "employee_gift");
+
+  assert.equal(standard.combinationCount, 3);
+  assert.equal(standard.maxLeadTimeDays, 45);
+  assert.equal(standard.deliveryRiskCombinationCount, 1);
+  assert.equal(standard.specReadyCombinationCount, 2);
+  assert.equal(standard.sizeReadyCombinationCount, 1);
+  assert.equal(standard.sizeRiskCombinationCount, 1);
+  assert.equal(standard.automationReadyCombinationCount, 1);
+  assert.deepEqual(standard.automationBlockerCounts, [
+    { code: "delivery_risk", count: 1 },
+    { code: "size_mismatch", count: 1 },
+    { code: "size_unknown", count: 1 },
+    { code: "spec_incomplete", count: 1 },
+  ]);
+  assert.deepEqual(standard.automationReadyExamples.map((item) => item.itemSkuCode), ["ITEM-FAST"]);
+  assert.equal(scene.maxLeadTimeDays, 45);
+  assert.equal(scene.deliveryRiskCombinationCount, 1);
+  assert.equal(scene.specReadyCombinationCount, 2);
+  assert.equal(scene.sizeReadyCombinationCount, 1);
+  assert.equal(scene.sizeRiskCombinationCount, 1);
+  assert.equal(scene.automationReadyCombinationCount, 1);
+  assert.deepEqual(standard.examples[0], {
+    giftBoxSkuCode: "BOX-FAST",
+    itemSkuCode: "ITEM-FAST",
+    totalPrice: 100,
+    costPrice: 50,
+    profit: 50,
+    marginRate: 0.5,
+    leadTimeDays: 7,
+    leadTimeKnown: true,
+    weightGram: 900,
+    specReady: true,
+    sizeReady: true,
+    sizeRisk: false,
+    deliveryRisk: false,
+    automationReady: true,
+    autoQuoteBlockers: [],
+  });
+  assert.ok(scene.examples.some((item) =>
+    item.itemSkuCode === "ITEM-SLOW" &&
+    item.deliveryRisk &&
+    !item.specReady &&
+    !item.automationReady &&
+    item.autoQuoteBlockers.includes("delivery_risk") &&
+    item.autoQuoteBlockers.includes("spec_incomplete"),
+  ));
+  assert.ok(scene.examples.some((item) =>
+    item.itemSkuCode === "ITEM-LARGE" &&
+    item.sizeRisk &&
+    !item.sizeReady &&
+    !item.automationReady &&
+    item.autoQuoteBlockers.includes("size_mismatch"),
+  ));
+});
+
+test("summarizes bundle margin risk before automatic quoting", () => {
+  const base = {
+    stock: 80,
+    sceneTags: ["employee_gift"],
+    category: "gift",
+    mainImagePath: "good.jpg",
+    supplier: "Supplier A",
+    dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 },
+    weightGram: 300,
+  };
+  const result = auditSkuCatalog([
+    { ...base, skuCode: "BOX-LOW-MARGIN", name: "Box low margin", type: "gift_box", salePrice: 60, costPrice: 56 },
+    { ...base, skuCode: "ITEM-LOW-MARGIN", name: "Item low margin", type: "item", salePrice: 40, costPrice: 36 },
+  ], { targetSceneTags: ["employee_gift"] });
+  const entry = result.budgetBandCoverage.find((band) => band.key === "entry");
+  const scene = result.sceneBundleCoverage.find((item) => item.scene === "employee_gift");
+
+  assert.equal(entry.lowMarginCombinationCount, 1);
+  assert.equal(entry.minMarginRate, 0.08);
+  assert.equal(scene.lowMarginCombinationCount, 1);
+  assert.equal(scene.minMarginRate, 0.08);
+  assert.equal(result.bundleMarginRiskCount, 3);
+  assert.ok(result.commercialReadiness.nextActions.some((action) => action.includes("毛利率偏低")));
 });
 
 test("summarizes commercial SKU readiness for automation", () => {

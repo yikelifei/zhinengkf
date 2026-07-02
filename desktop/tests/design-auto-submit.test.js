@@ -103,3 +103,23 @@ test("skips draft when bundle sku image is missing", () => {
   assert.equal(decision.reason, "missing_usable_real_images");
   assert.equal(decision.missing.includes("complete_sku_images"), true);
 });
+
+test("skips draft when recommended bundle is not automation ready", () => {
+  const decision = evaluateDesignAutoSubmit({
+    id: "design_1",
+    status: "draft",
+    isHighValue: false,
+    budget: { perUnitAmount: 180, quantity: 50 },
+    bundle: {
+      items: [{ skuCode: "BOX-A", imageUrl: "https://example.test/box.png" }],
+      automation: { ready: false, blockers: ["low_margin", "size_unknown"] },
+    },
+    designType: "bundle_render",
+    scene: "employee gift",
+    assets: [{ id: "asset_1", url: "https://example.test/logo.png" }],
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "bundle_automation_not_ready");
+  assert.deepEqual(decision.missing, ["low_margin", "size_unknown"]);
+});

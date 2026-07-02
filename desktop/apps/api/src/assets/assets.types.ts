@@ -8,4 +8,7 @@ export type UploadAssetPayload = {
   base64?: string;
   text?: string;
   url?: string;
+  expectedWechatAccountId?: string;
+  expectedConversationId?: string;
+  expectedCustomerId?: string;
 };

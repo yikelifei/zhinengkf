@@ -3,6 +3,7 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { createDemoPngBase64 } from "../shared/demo-png";
+import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { StorageService } from "../storage/storage.service";
 import { UploadAssetPayload } from "./assets.types";
 
@@ -14,7 +15,7 @@ export class AssetsService {
     private readonly storage: StorageService,
   ) {}
 
-  list(filter: { ownerType?: string; ownerId?: string } = {}) {
+  list(filter: { ownerType?: string; ownerId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (appConfig.useLocalStore) return this.localStore.listDesignAssets(filter);
     return this.prisma.designAsset.findMany({
       where: {
@@ -28,6 +29,7 @@ export class AssetsService {
 
   async upload(payload: UploadAssetPayload) {
     this.assertPayload(payload);
+    this.assertCustomerAssetIdentity(payload);
     const saved = await this.savePayload(payload);
     const record = {
       ownerType: payload.ownerType,
@@ -38,6 +40,9 @@ export class AssetsService {
       localPath: saved.localPath,
       sizeBytes: saved.sizeBytes,
       source: payload.source || (payload.url ? "url" : "manual_upload"),
+      wechatAccountId: payload.expectedWechatAccountId || null,
+      conversationId: payload.expectedConversationId || null,
+      customerId: payload.expectedCustomerId || (payload.ownerType === "customer" ? payload.ownerId : null),
     };
     if (appConfig.useLocalStore) return this.localStore.createDesignAsset(record);
     return this.prisma.designAsset.create({
@@ -53,10 +58,11 @@ export class AssetsService {
     });
   }
 
-  async createDemoCustomerLogo(customerId: string) {
+  async createDemoCustomerLogo(customerId: string, expected: ExpectedIdentityPayload = {}) {
     return this.upload({
       ownerType: "customer",
       ownerId: customerId,
+      ...expected,
       role: "customer_logo",
       fileName: "demo-customer-logo.png",
       mimeType: "image/png",
@@ -76,6 +82,27 @@ export class AssetsService {
     if (!payload.base64 && !payload.text && !payload.url) {
       throw new Error("one of base64, text or url is required");
     }
+  }
+
+  private assertCustomerAssetIdentity(payload: UploadAssetPayload & ExpectedIdentityPayload) {
+    if (payload.ownerType !== "customer") return;
+    assertExpectedIdentity({ customerId: payload.ownerId }, { expectedCustomerId: payload.expectedCustomerId }, "customer asset");
+    if (!payload.expectedConversationId && !payload.expectedWechatAccountId) return;
+    if (!appConfig.useLocalStore) return;
+    const conversations = this.localStore.listConversations(payload.expectedWechatAccountId);
+    const conversation =
+      conversations.find((item: any) => item.id === payload.expectedConversationId) ||
+      this.localStore.listConversations().find((item: any) => item.id === payload.expectedConversationId);
+    assertExpectedIdentity(
+      conversation ? { ...conversation, conversationId: conversation.id } : conversation,
+      payload,
+      "customer asset conversation",
+    );
+    assertExpectedIdentity(
+      { customerId: conversation?.customerId },
+      { expectedCustomerId: payload.expectedCustomerId },
+      "customer asset conversation customer",
+    );
   }
 
   private savePayload(payload: UploadAssetPayload) {

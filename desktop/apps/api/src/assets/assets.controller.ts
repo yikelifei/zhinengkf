@@ -2,14 +2,21 @@ import { BadRequestException, Body, Controller, Get, Post, Query, Res } from "@n
 import type { FastifyReply } from "fastify";
 import { AssetsService } from "./assets.service";
 import { UploadAssetPayload } from "./assets.types";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("assets")
 export class AssetsController {
   constructor(private readonly assets: AssetsService) {}
 
   @Get()
-  list(@Query("ownerType") ownerType?: string, @Query("ownerId") ownerId?: string) {
-    return this.assets.list({ ownerType, ownerId });
+  list(
+    @Query("ownerType") ownerType?: string,
+    @Query("ownerId") ownerId?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.assets.list({ ownerType, ownerId, wechatAccountId, conversationId, customerId });
   }
 
   @Post("upload")
@@ -27,8 +34,8 @@ export class AssetsController {
   }
 
   @Post("demo-customer-logo")
-  createDemoCustomerLogo(@Body() payload: { customerId?: string }) {
+  createDemoCustomerLogo(@Body() payload: { customerId?: string } & ExpectedIdentityPayload) {
     if (!payload?.customerId) throw new BadRequestException("customerId is required for demo customer logo");
-    return this.assets.createDemoCustomerLogo(payload.customerId);
+    return this.assets.createDemoCustomerLogo(payload.customerId, payload);
   }
 }

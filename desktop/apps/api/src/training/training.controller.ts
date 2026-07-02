@@ -1,13 +1,18 @@
 import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { TrainingService } from "./training.service";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("training")
 export class TrainingController {
   constructor(private readonly training: TrainingService) {}
 
   @Get("chat-imports")
-  listChatImports() {
-    return this.training.listChatImports();
+  listChatImports(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.training.listChatImports({ wechatAccountId, conversationId, customerId });
   }
 
   @Post("chat-imports")
@@ -33,22 +38,39 @@ export class TrainingController {
     @Query("quality") quality?: string,
     @Query("status") status?: string,
     @Query("sourceType") sourceType?: string,
+    @Query("importId") importId?: string,
     @Query("limit") limit?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
   ) {
     return this.training.listSamples({
       agentId,
       quality,
       status,
       sourceType,
+      importId,
       limit: limit ? Number(limit) : undefined,
+      wechatAccountId,
+      conversationId,
+      customerId,
     });
   }
 
   @Get("overview")
-  getOverview(@Query("agentId") agentId?: string, @Query("minScore") minScore?: string) {
+  getOverview(
+    @Query("agentId") agentId?: string,
+    @Query("minScore") minScore?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
     return this.training.getOverview({
       agentId,
       minScore: minScore ? Number(minScore) : undefined,
+      wechatAccountId,
+      conversationId,
+      customerId,
     });
   }
 
@@ -67,7 +89,7 @@ export class TrainingController {
       idealReply?: string;
       score?: number;
       skillHints?: string[] | string;
-    },
+    } & ExpectedIdentityPayload,
   ) {
     return this.training.reviewSample(id, payload);
   }
@@ -80,21 +102,42 @@ export class TrainingController {
       status?: "ready" | "review" | "rejected";
       reviewer?: string;
       note?: string;
+      expectedBySampleId?: Record<string, ExpectedIdentityPayload>;
     },
   ) {
     return this.training.batchReviewSamples(payload || {});
   }
 
   @Get("skill-suggestions")
-  listSkillSuggestions(@Query("agentId") agentId?: string, @Query("minScore") minScore?: string) {
+  listSkillSuggestions(
+    @Query("agentId") agentId?: string,
+    @Query("minScore") minScore?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
     return this.training.listSkillSuggestions({
       agentId,
       minScore: minScore ? Number(minScore) : undefined,
+      wechatAccountId,
+      conversationId,
+      customerId,
     });
   }
 
   @Post("skill-suggestions/apply")
-  applySkillSuggestions(@Body() payload: { agentId?: string; minScore?: number; suggestionKeys?: string[]; includeNeedsReview?: boolean }) {
+  applySkillSuggestions(
+    @Body()
+    payload: {
+      agentId?: string;
+      minScore?: number;
+      suggestionKeys?: string[];
+      includeNeedsReview?: boolean;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+    },
+  ) {
     return this.training.applySkillSuggestions(payload || {});
   }
 }

@@ -6,7 +6,13 @@ import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/ident
 import { rules } from "../shared/rules";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
-const { buildQuoteCustomerMessage, calculateTotals, evaluateLowValueQuoteSend, validateQuoteDraftIdentity } = rules;
+const {
+  buildQuoteCustomerMessage,
+  calculateTotals,
+  evaluateLowValueQuoteSend,
+  inspectBundleAutomationReadiness,
+  validateQuoteDraftIdentity,
+} = rules;
 
 @Injectable()
 export class QuotesService {
@@ -39,7 +45,8 @@ export class QuotesService {
 
     const totalPrice = Number(totals.salePrice) * quantity;
     const totalCost = Number(totals.cost) * quantity;
-    const isAutoQuote = !job.isHighValue;
+    const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
+    const isAutoQuote = !job.isHighValue && bundleAutomation.ok;
     const identity = validateQuoteDraftIdentity({
       quoteDraft: {
         designJobId: job.id,
@@ -438,19 +445,19 @@ export class QuotesService {
 
   private quotePreviewWarnings(quote: any) {
     const warnings: string[] = [];
-    if (quote.sendTaskId) warnings.push("quote already has a send task");
-    if (!quote.selectedImageId) warnings.push("quote has no selected image");
-    if (!quote.designJob?.wechatAccountId) warnings.push("quote design job has no wechat account");
-    if (!quote.designJob?.conversationId) warnings.push("quote design job has no conversation");
-    if (quote.status === "manual_review") warnings.push("quote is waiting for manual review");
-    if (Number(quote.profit || 0) < 0) warnings.push("quote profit is negative");
+    if (quote.sendTaskId) warnings.push("报价已进入发送队列");
+    if (!quote.selectedImageId) warnings.push("报价还没有选图");
+    if (!quote.designJob?.wechatAccountId) warnings.push("报价缺少微信账号");
+    if (!quote.designJob?.conversationId) warnings.push("报价缺少客户会话");
+    if (quote.status === "manual_review") warnings.push("报价正在等待人工审核");
+    if (Number(quote.profit || 0) < 0) warnings.push("报价利润为负，需要人工确认");
     return warnings;
   }
 
   private assertQuoteReadyForSend(quote: any) {
     const warnings = this.quotePreviewWarnings(quote);
     if (warnings.length) {
-      throw new BadRequestException(`quote is not ready to send: ${warnings.join(", ")}`);
+      throw new BadRequestException(`报价还不能发送：${warnings.join("；")}`);
     }
   }
 
@@ -591,6 +598,6 @@ function roundMoney(value: number) {
 function assertManualReleaseReason(reason: unknown, context: string) {
   const text = String(reason || "").trim();
   if (!text || !text.startsWith("manual_")) {
-    throw new BadRequestException(`${context} requires an explicit manual release reason`);
+    throw new BadRequestException(`${context} 需要填写明确的人工处理原因，原因编码必须以 manual_ 开头。`);
   }
 }

@@ -64,6 +64,23 @@ test("creates gift design job only when bundle and real assets exist", () => {
   assert.equal(plan.shouldQueueReply, true);
 });
 
+test("sends gift design request to manual review when recommended bundle is not automation ready", () => {
+  const plan = planInboundAutomation({
+    route: { action: "auto_agent", agentKey: "gift_design", missingFields: [] },
+    assetIds: ["asset_logo"],
+    bundleRecommendation: {
+      items: [{ skuCode: "BOX-A" }, { skuCode: "TEA-A" }],
+      automation: { ready: false, blockers: ["low_margin", "size_unknown"] },
+    },
+  });
+
+  assert.equal(plan.type, "manual_review");
+  assert.equal(plan.reason, "bundle_automation_not_ready");
+  assert.equal(plan.shouldNotifyHuman, true);
+  assert.equal(plan.shouldCreateDesignJob, false);
+  assert.deepEqual(plan.blockers, ["low_margin", "size_unknown"]);
+});
+
 test("appends real asset request to reply when assets are missing", () => {
   const text = buildInboundReplyText(
     { suggestedReply: "可以的，我先帮您整理方案。" },

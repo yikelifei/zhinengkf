@@ -420,6 +420,51 @@ test("summarizes training sample quality buckets", () => {
   assert.equal(overview.recommendations.some((text) => text.includes("防乱回复")), true);
 });
 
+test("summarizes imported samples that need scene confirmation", () => {
+  const overview = summarizeTrainingSamples([
+    {
+      id: "sample_scene_uncertain",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "gift design",
+      customerText: "show me a gift box rendering",
+      idealReply: "I will confirm the design details first and prepare a suitable visual direction.",
+      score: 90,
+      status: "ready",
+      sourceType: "chat_import",
+      sceneCheck: { status: "weak", reason: "weak_scene_signal" },
+      skillHints: ["design need confirmation"],
+    },
+    {
+      id: "sample_scene_clear",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "gift design",
+      customerText: "200 each, need a gift box rendering",
+      idealReply: "I will prepare a gift box rendering based on your budget.",
+      score: 90,
+      status: "ready",
+      sourceType: "chat_import",
+      sceneCheck: { status: "clear", reason: "high_confidence_scene" },
+      skillHints: ["design need confirmation"],
+    },
+  ]);
+
+  assert.equal(overview.qualitySummary.sceneUncertainSamples, 1);
+  assert.equal(overview.qualitySummary.needsAttentionSamples, 1);
+  assert.deepEqual(overview.qualitySummary.attentionReasonCounts, [
+    { code: "scene_weak", label: "scene_uncertain", count: 1 },
+  ]);
+  assert.equal(
+    overview.recommendations.some((text) => text.includes("聊天导入样本的场景不够确定")),
+    true,
+  );
+  assert.equal(
+    overview.recommendations.some((text) => text.includes("自动分流记忆")),
+    true,
+  );
+});
+
 test("identifies training samples that need operator attention", () => {
   assert.equal(
     isTrainingSampleNeedingAttention({

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
+import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 
 const {
@@ -25,7 +26,13 @@ type ChatImportPayload = {
   text: string;
 };
 
-type TrainingSampleReviewPayload = {
+type IdentityFilter = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
+
+type TrainingSampleReviewPayload = ExpectedIdentityPayload & {
   status: "ready" | "review" | "rejected";
   reviewer?: string;
   note?: string;
@@ -43,6 +50,7 @@ type TrainingSampleBatchReviewPayload = {
   status?: "ready" | "review" | "rejected";
   reviewer?: string;
   note?: string;
+  expectedBySampleId?: Record<string, ExpectedIdentityPayload>;
 };
 
 type ApplySkillSuggestionsPayload = {
@@ -50,6 +58,9 @@ type ApplySkillSuggestionsPayload = {
   minScore?: number;
   suggestionKeys?: string[];
   includeNeedsReview?: boolean;
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
 };
 
 type TrainingSampleQualityFilter =
@@ -58,6 +69,7 @@ type TrainingSampleQualityFilter =
   | "risk"
   | "blocked"
   | "needs_attention"
+  | "scene_uncertain"
   | "anti_wrong_reply"
   | "trainable"
   | "not_trainable"
@@ -70,7 +82,11 @@ type ListTrainingSamplesOptions = {
   quality?: string;
   status?: string;
   sourceType?: string;
+  importId?: string;
   limit?: number;
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
 };
 
 const MAX_BATCH_REVIEW_SAMPLES = 100;
@@ -82,9 +98,9 @@ export class TrainingService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  listChatImports() {
+  listChatImports(filter: IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("training prisma mode is not implemented yet");
-    return this.localStore.listChatImports();
+    return this.localStore.listChatImports(filter);
   }
 
   listSamples(options: string | ListTrainingSamplesOptions = {}) {
@@ -93,18 +109,25 @@ export class TrainingService {
     const quality = normalizeTrainingSampleQualityFilter(filters.quality);
     const status = String(filters.status || "").trim();
     const sourceType = String(filters.sourceType || "").trim();
+    const importId = String(filters.importId || "").trim();
     const limit = clampTrainingSampleLimit(filters.limit);
-    let samples = this.localStore.listTrainingSamples(filters.agentId);
+    let samples = this.localStore.listTrainingSamples({
+      agentId: filters.agentId,
+      wechatAccountId: filters.wechatAccountId,
+      conversationId: filters.conversationId,
+      customerId: filters.customerId,
+    });
 
     if (quality) samples = samples.filter((sample: any) => matchesTrainingSampleQuality(sample, quality));
     if (status) samples = samples.filter((sample: any) => String(sample.status || "ready") === status);
     if (sourceType) samples = samples.filter((sample: any) => trainingSampleSourceType(sample) === sourceType);
+    if (importId) samples = samples.filter((sample: any) => String(sample.importId || "") === importId);
     return limit ? samples.slice(0, limit) : samples;
   }
 
-  getOverview(options: { agentId?: string; minScore?: number } = {}) {
+  getOverview(options: { agentId?: string; minScore?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (!appConfig.useLocalStore) throw new Error("training overview prisma mode is not implemented yet");
-    const samples = this.localStore.listTrainingSamples(options.agentId);
+    const samples = this.localStore.listTrainingSamples(options);
     const agents = this.localStore.listAgents();
     const suggestions = this.listSkillSuggestions(options);
     return summarizeTrainingSamples(samples, agents, suggestions);
@@ -118,6 +141,9 @@ export class TrainingService {
 
   reviewSample(id: string, payload: TrainingSampleReviewPayload) {
     if (!appConfig.useLocalStore) throw new Error("training sample review prisma mode is not implemented yet");
+    const sample = this.localStore.listTrainingSamples().find((item: any) => item.id === id);
+    if (!sample) throw new Error(`training sample not found: ${id}`);
+    assertExpectedIdentity(sample, payload, "training sample");
     const result = this.localStore.reviewTrainingSample(id, payload || {});
     const statusLabel = result.sample.status === "ready" ? "已确认训练" : result.sample.status === "rejected" ? "已禁用" : "待复核";
     this.notifications.create(
@@ -142,6 +168,12 @@ export class TrainingService {
       reviewer: payload.reviewer || "人工客服",
       note: payload.note || trainingSampleBatchReviewNote(status, sampleIds.length),
     };
+    const samplesById = new Map(this.localStore.listTrainingSamples().map((sample: any) => [sample.id, sample]));
+    for (const sampleId of sampleIds) {
+      const sample = samplesById.get(sampleId);
+      if (!sample) throw new BadRequestException(`training sample not found: ${sampleId}`);
+      assertExpectedIdentity(sample, payload.expectedBySampleId?.[sampleId] || {}, "training sample");
+    }
     const results = sampleIds.map((sampleId) => this.localStore.reviewTrainingSample(sampleId, reviewPayload));
     this.notifications.create(
       status === "rejected" ? "warning" : "info",
@@ -163,9 +195,14 @@ export class TrainingService {
     };
   }
 
-  listSkillSuggestions(options: { agentId?: string; minScore?: number } = {}) {
+  listSkillSuggestions(options: { agentId?: string; minScore?: number } & IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("skill suggestion prisma mode is not implemented yet");
-    const samples = this.localStore.listTrainingSamples(options.agentId);
+    const samples = this.localStore.listTrainingSamples({
+      agentId: options.agentId,
+      wechatAccountId: options.wechatAccountId,
+      conversationId: options.conversationId,
+      customerId: options.customerId,
+    });
     const existingSkills = this.localStore.listAgentSkills(options.agentId);
     return compileAgentSkillSuggestions(samples, {
       agentId: options.agentId,
@@ -257,6 +294,7 @@ function normalizeTrainingSampleQualityFilter(value?: string): TrainingSampleQua
     quality === "risk" ||
     quality === "blocked" ||
     quality === "needs_attention" ||
+    quality === "scene_uncertain" ||
     quality === "anti_wrong_reply" ||
     quality === "trainable" ||
     quality === "not_trainable" ||
@@ -267,7 +305,7 @@ function normalizeTrainingSampleQualityFilter(value?: string): TrainingSampleQua
     return quality;
   }
   throw new BadRequestException(
-    "quality must be one of safe, review, risk, blocked, needs_attention, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all",
+    "quality must be one of safe, review, risk, blocked, needs_attention, scene_uncertain, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all",
   );
 }
 
@@ -277,6 +315,7 @@ function matchesTrainingSampleQuality(sample: any, quality: TrainingSampleQualit
   const level = String(sampleQuality.level || "");
   const flags = Array.isArray(sampleQuality.flags) ? sampleQuality.flags : [];
   if (quality === "needs_attention") return isTrainingSampleNeedingAttention(sample);
+  if (quality === "scene_uncertain") return isSceneUncertainTrainingSample(sample);
   if (quality === "anti_wrong_reply") return flags.includes("anti_wrong_reply_only");
   if (quality === "trainable") return sampleQuality.trainable === true;
   if (quality === "not_trainable") return sampleQuality.trainable === false;
@@ -285,6 +324,18 @@ function matchesTrainingSampleQuality(sample: any, quality: TrainingSampleQualit
   if (quality === "route_and_reply") return usage.routeMemory === true && usage.replySkill === true;
   if (quality === "review") return level === "review" && !flags.includes("anti_wrong_reply_only");
   return level === quality;
+}
+
+function isSceneUncertainTrainingSample(sample: any) {
+  const sourceType = trainingSampleSourceType(sample);
+  if (sourceType !== "chat_import") return false;
+  const flags = [
+    ...(Array.isArray(sample?.quality?.flags) ? sample.quality.flags : []),
+    ...(Array.isArray(sample?.quality?.usage?.flags) ? sample.quality.usage.flags : []),
+  ];
+  if (flags.some((flag) => /^scene_(weak|ambiguous|unmatched)$/.test(String(flag)))) return true;
+  const sceneCheckStatus = String(sample?.sceneCheck?.status || "");
+  return sceneCheckStatus === "weak" || sceneCheckStatus === "ambiguous" || sceneCheckStatus === "unmatched";
 }
 
 function trainingSampleSourceType(sample: any) {

@@ -179,6 +179,28 @@ test("requires stock to cover requested quantity when recommending bundle", () =
   assert.equal(result.fulfillment.bottleneckSkuCode, "ITEM-OK");
 });
 
+test("prefers automation-ready bundle over cheaper risky skus", () => {
+  const result = recommendBundle({
+    budget: { perUnitAmount: 200, quantity: 20 },
+    scene: "vip",
+    maxItems: 1,
+    skus: [
+      { skuCode: "BOX-RISK", name: "Risk box", type: "gift_box", salePrice: 50, costPrice: 49, stock: 50, sceneTags: ["vip"] },
+      { skuCode: "BOX-READY", name: "Ready box", type: "gift_box", salePrice: 60, costPrice: 30, stock: 50, sceneTags: ["vip"], dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 600, leadTimeDays: 5 },
+      { skuCode: "ITEM-RISK", name: "Large low margin item", type: "item", salePrice: 70, costPrice: 69, stock: 50, sceneTags: ["vip"], dimensions: { lengthCm: 40, widthCm: 25, heightCm: 12 }, weightGram: 500, leadTimeDays: 7 },
+      { skuCode: "ITEM-READY", name: "Ready item", type: "item", salePrice: 80, costPrice: 40, stock: 50, sceneTags: ["vip"], dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 }, weightGram: 300, leadTimeDays: 7 },
+    ],
+  });
+
+  assert.ok(result.items.some((item) => item.skuCode === "BOX-READY"));
+  assert.ok(result.items.some((item) => item.skuCode === "ITEM-READY"));
+  assert.equal(result.items.some((item) => item.skuCode === "BOX-RISK"), false);
+  assert.equal(result.items.some((item) => item.skuCode === "ITEM-RISK"), false);
+  assert.equal(result.automation.ready, true);
+  assert.deepEqual(result.automation.blockers, []);
+  assert.equal(result.status, "ready");
+});
+
 test("validates design request required fields", () => {
   const result = validateDesignRequest({
     budget: { perUnitAmount: 200 },

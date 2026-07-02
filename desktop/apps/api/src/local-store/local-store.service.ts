@@ -6,6 +6,7 @@ import { Injectable } from "@nestjs/common";
 const {
   diagnoseWechatWindowSnapshot,
   evaluateTrainingSampleQuality,
+  inspectBundleAutomationReadiness,
   isSceneClarificationReply,
   isTrainingSampleReady,
   normalizeTrainingSampleStatus,
@@ -202,11 +203,12 @@ export class LocalStoreService {
     return { count: updated.length, updated, skipped };
   }
 
-  listDesignAssets(filter: { ownerType?: string; ownerId?: string } = {}) {
+  listDesignAssets(filter: { ownerType?: string; ownerId?: string } & IdentityListFilter = {}) {
     return this.read()
       .designAssets
       .filter((asset) => !filter.ownerType || asset.ownerType === filter.ownerType)
       .filter((asset) => !filter.ownerId || asset.ownerId === filter.ownerId)
+      .filter((asset) => this.matchesIdentityFilter(asset, filter))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
@@ -227,6 +229,9 @@ export class LocalStoreService {
       localPath: payload.localPath,
       sizeBytes: payload.sizeBytes || 0,
       source: payload.source || "manual_upload",
+      wechatAccountId: payload.wechatAccountId || null,
+      conversationId: payload.conversationId || null,
+      customerId: payload.customerId || (payload.ownerType === "customer" ? payload.ownerId : null),
       createdAt: now,
     };
     data.designAssets.push(record);
@@ -548,12 +553,15 @@ export class LocalStoreService {
       capturedAt: payload.capturedAt || now,
       createdAt: now,
     };
+    const conversations = record.wechatAccountId
+      ? data.conversations.filter((conversation) => conversation.wechatAccountId === record.wechatAccountId)
+      : [];
     record.diagnostic =
       payload.diagnostic ||
       diagnoseWechatWindowSnapshot({
         snapshot: record,
         account,
-        conversations: data.conversations,
+        conversations,
       });
     data.wechatWindowSnapshots.push(record);
     this.write(data);
@@ -862,15 +870,20 @@ export class LocalStoreService {
     return { count };
   }
 
-  listChatImports() {
-    return this.read().chatImports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  listChatImports(filter: IdentityListFilter = {}) {
+    return this.read()
+      .chatImports
+      .filter((chatImport) => this.matchesIdentityFilter(chatImport, filter))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
-  listTrainingSamples(agentId?: string) {
+  listTrainingSamples(filter: string | ({ agentId?: string } & IdentityListFilter) = {}) {
     const data = this.read();
+    const options = typeof filter === "string" ? { agentId: filter } : filter;
     return data.trainingSamples
-      .filter((sample) => !agentId || sample.agentId === agentId)
+      .filter((sample) => !options.agentId || sample.agentId === options.agentId)
       .map((sample) => this.decorateTrainingSample(sample))
+      .filter((sample) => this.matchesIdentityFilter(sample, options))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
@@ -886,15 +899,18 @@ export class LocalStoreService {
     const before = data.trainingSamples[index];
     const agent = resolveTrainingSampleAgent(data, payload, before);
     const patch = buildTrainingSampleReviewPatch(payload, before, agent);
+    const reviewedSceneCheck = buildReviewedSceneCheck(status, before, patch);
     const changedFields = buildTrainingSampleChangedFields(before, {
       ...before,
       ...patch,
       status,
+      sceneCheck: reviewedSceneCheck,
     });
     const sample = {
       ...before,
       ...patch,
       status,
+      sceneCheck: reviewedSceneCheck,
       reviewer,
       reviewNote: note,
       reviewedAt: now,
@@ -910,6 +926,7 @@ export class LocalStoreService {
       updatedAt: now,
     };
     data.trainingSamples[index] = sample;
+    refreshChatImportSceneSummary(data, sample.importId, now);
     for (const entry of data.knowledgeEntries.filter((item) => item.sourceId === sample.id)) {
       entry.agentId = sample.agentId;
       entry.title = `${sample.scene || "未分类"}：${String(sample.customerText || "").slice(0, 28)}`;
@@ -943,25 +960,28 @@ export class LocalStoreService {
     return { sample: this.decorateTrainingSample(sample), reviewLog: log };
   }
 
-  listKnowledgeEntries(agentId?: string) {
+  listKnowledgeEntries(filter: string | ({ agentId?: string } & IdentityListFilter) = {}) {
     const data = this.read();
+    const options = typeof filter === "string" ? { agentId: filter } : filter;
     return data.knowledgeEntries
       .filter((entry) => {
         const sample = entry.sourceId ? data.trainingSamples.find((item) => item.id === entry.sourceId) : null;
         return !sample || isTrainingSampleReady(sample);
       })
       .filter((entry) => !localStoreIsSceneClarificationKnowledgeEntry(data, entry))
-      .filter((entry) => !agentId || entry.agentId === agentId)
+      .filter((entry) => !options.agentId || entry.agentId === options.agentId)
+      .filter((entry) => this.matchesIdentityFilter(entry, options))
       .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0));
   }
 
-  listRouteEvaluations() {
+  listRouteEvaluations(filter: IdentityListFilter = {}) {
     const data = this.read();
     return data.routeEvaluations
       .map((route) => ({
         ...route,
         agent: data.agents.find((agent) => agent.id === route.agentId) || null,
       }))
+      .filter((route) => this.matchesIdentityFilter(route, filter))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
 
@@ -1181,7 +1201,11 @@ export class LocalStoreService {
     };
     data.chatImports.push(record);
 
+    const importedSamples: any[] = [];
     for (const pair of parsed.pairs || []) {
+      const customerText = String(pair.customerText || pair.question || "").trim();
+      const idealReply = String(pair.idealReply || pair.agentReply || pair.answer || "").trim();
+      const score = Number.isFinite(Number(pair.score)) ? Number(pair.score) : 0;
       const agent = payload.agentId
         ? data.agents.find((item) => item.id === payload.agentId)
         : data.agents.find((item) => item.key === pair.agentKey) || data.agents.find((item) => item.key === "general");
@@ -1199,10 +1223,10 @@ export class LocalStoreService {
         sceneScores: Array.isArray(pair.sceneScores) ? pair.sceneScores : [],
         matchedKeywords: Array.isArray(pair.matchedKeywords) ? pair.matchedKeywords : [],
         sceneCheck: pair.sceneCheck || null,
-        customerText: pair.question,
-        idealReply: pair.answer,
-        score: pair.score,
-        status: pair.score >= 70 ? "ready" : "review",
+        customerText,
+        idealReply,
+        score,
+        status: score >= 70 ? "ready" : "review",
         skillHints: inferSkillHints(pair),
         sourceType: "chat_import",
         sourceLineStart: pair.sourceLineStart,
@@ -1211,6 +1235,7 @@ export class LocalStoreService {
         updatedAt: now,
       };
       data.trainingSamples.push(sample);
+      importedSamples.push(sample);
       data.knowledgeEntries.push({
         id: id("knowledge"),
         agentId: sample.agentId,
@@ -1228,11 +1253,12 @@ export class LocalStoreService {
         updatedAt: now,
       });
     }
+    record.sceneSummary = summarizeChatImportSceneChecks(importedSamples);
 
     this.write(data);
     return {
       ...record,
-      samples: data.trainingSamples.filter((sample) => sample.importId === record.id),
+      samples: importedSamples.map((sample) => this.decorateTrainingSample(sample)),
     };
   }
 
@@ -1545,6 +1571,7 @@ export class LocalStoreService {
       data.designImages.find((image) => image.designJobId === designJobId);
     const totalPrice = totals.salePrice * quantity;
     const totalCost = totals.cost * quantity;
+    const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
     const quoteDraft = {
       designJobId,
       customerId: job.customerId,
@@ -1564,7 +1591,7 @@ export class LocalStoreService {
       totalPrice,
       totalCost,
       profit: totalPrice - totalCost,
-      status: job.isHighValue ? "manual_review" : "auto_sent",
+      status: job.isHighValue || !bundleAutomation.ok ? "manual_review" : "auto_sent",
       paymentStatus: "unpaid",
       sendTaskId: null,
       identityBinding: identity,
@@ -2221,8 +2248,68 @@ function buildTrainingSampleReviewPatch(payload: any, before: any, agent: any) {
   return patch;
 }
 
+function buildReviewedSceneCheck(status: string, before: any, patch: Record<string, unknown>) {
+  const sourceType = String(before.sourceType || (before.importId ? "chat_import" : before.sourceRouteId ? "route_correction" : ""));
+  if (sourceType !== "chat_import") return before.sceneCheck || null;
+  if (status !== "ready") return before.sceneCheck || null;
+  const scene = String(patch.scene || before.scene || "");
+  const agentKey = String(patch.agentKey || before.agentKey || "");
+  if (!scene || !agentKey) return before.sceneCheck || null;
+  const score = Math.max(30, Number(before.sceneScore || 0));
+  return {
+    status: "clear",
+    reason: "human_confirmed_scene",
+    needsReview: false,
+    topScene: {
+      scene,
+      agentKey,
+      score,
+      matchedKeywords: Array.isArray(before.matchedKeywords) ? before.matchedKeywords : [],
+    },
+    secondaryScene: before.sceneCheck?.secondaryScene || null,
+    scoreGap: Math.max(score, Number(before.sceneCheck?.scoreGap || 0)),
+  };
+}
+
+function summarizeChatImportSceneChecks(samples: any[] = []) {
+  const summary = {
+    sampleCount: samples.length,
+    clearCount: 0,
+    weakCount: 0,
+    ambiguousCount: 0,
+    unmatchedCount: 0,
+    sceneUncertainCount: 0,
+    readyCount: 0,
+    reviewCount: 0,
+    rejectedCount: 0,
+  };
+  for (const sample of samples) {
+    const status = String(sample?.sceneCheck?.status || "");
+    if (status === "clear") summary.clearCount += 1;
+    if (status === "weak") summary.weakCount += 1;
+    if (status === "ambiguous") summary.ambiguousCount += 1;
+    if (status === "unmatched") summary.unmatchedCount += 1;
+    const sampleStatus = String(sample?.status || "ready");
+    if (sampleStatus === "ready") summary.readyCount += 1;
+    if (sampleStatus === "review") summary.reviewCount += 1;
+    if (sampleStatus === "rejected") summary.rejectedCount += 1;
+  }
+  summary.sceneUncertainCount = summary.weakCount + summary.ambiguousCount + summary.unmatchedCount;
+  return summary;
+}
+
+function refreshChatImportSceneSummary(data: any, importId?: string, updatedAt?: string) {
+  const idValue = String(importId || "");
+  if (!idValue) return;
+  const record = data.chatImports.find((item: any) => item.id === idValue);
+  if (!record) return;
+  const samples = data.trainingSamples.filter((sample: any) => sample.importId === idValue);
+  record.sceneSummary = summarizeChatImportSceneChecks(samples);
+  record.updatedAt = updatedAt || new Date().toISOString();
+}
+
 function buildTrainingSampleChangedFields(before: Record<string, unknown>, after: Record<string, unknown>) {
-  return ["agentKey", "scene", "customerText", "idealReply", "score", "skillHints", "status"]
+  return ["agentKey", "scene", "sceneCheck", "customerText", "idealReply", "score", "skillHints", "status"]
     .filter((field) => !sameValue(before[field], after[field]))
     .map((field) => ({ field, before: before[field] ?? null, after: after[field] ?? null }));
 }

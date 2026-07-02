@@ -15,9 +15,14 @@ function createTrainingService(samples) {
   const calls = [];
   const rows = samples.map((sample) => ({ ...sample }));
   const localStore = {
-    listTrainingSamples: (agentId) => {
-      calls.push({ method: "listTrainingSamples", agentId });
-      return agentId ? rows.filter((sample) => sample.agentId === agentId) : rows;
+    listTrainingSamples: (filter = {}) => {
+      const options = typeof filter === "string" ? { agentId: filter } : filter;
+      calls.push({ method: "listTrainingSamples", ...options });
+      return rows
+        .filter((sample) => !options.agentId || sample.agentId === options.agentId)
+        .filter((sample) => !options.wechatAccountId || sample.wechatAccountId === options.wechatAccountId)
+        .filter((sample) => !options.conversationId || sample.conversationId === options.conversationId)
+        .filter((sample) => !options.customerId || sample.customerId === options.customerId);
     },
     reviewTrainingSample: (sampleId, payload) => {
       calls.push({ method: "reviewTrainingSample", sampleId, payload });
@@ -38,6 +43,14 @@ function createTrainingService(samples) {
           note: payload.note,
         },
       };
+    },
+    listAgentSkills: (agentId) => {
+      calls.push({ method: "listAgentSkills", agentId });
+      return [];
+    },
+    applyAgentSkillSuggestions: (suggestions) => {
+      calls.push({ method: "applyAgentSkillSuggestions", suggestionCount: suggestions.length });
+      return { created: [], updated: [], skipped: [] };
     },
   };
   return {
@@ -129,8 +142,54 @@ test("filters training samples by usage target", () => {
   assert.deepEqual(service.listSamples({ quality: "route_and_reply" }).map((sample) => sample.id), ["safe_1"]);
 });
 
-test("filters training samples by trainability, status, source, agent and limit", () => {
-  const { service, calls } = createTrainingService(samples);
+test("filters imported samples that need scene confirmation before route memory", () => {
+  const { service } = createTrainingService([
+    {
+      id: "scene_weak_1",
+      agentId: "agent_after_sales",
+      status: "ready",
+      sourceType: "chat_import",
+      sceneCheck: { status: "weak", reason: "only_weak_scene_signal", needsReview: true },
+      quality: {
+        level: "safe",
+        trainable: true,
+        flags: [],
+        usage: { routeMemory: false, replySkill: true, scope: "reply_only", flags: ["scene_weak"] },
+      },
+    },
+    {
+      id: "scene_clear_1",
+      agentId: "agent_after_sales",
+      status: "ready",
+      sourceType: "chat_import",
+      sceneCheck: { status: "clear", reason: "human_confirmed_scene", needsReview: false },
+      quality: {
+        level: "safe",
+        trainable: true,
+        flags: [],
+        usage: { routeMemory: true, replySkill: true, scope: "route_and_reply", flags: [] },
+      },
+    },
+    {
+      id: "route_correction_1",
+      agentId: "agent_after_sales",
+      status: "ready",
+      sourceType: "route_correction",
+      sceneCheck: { status: "weak", reason: "legacy", needsReview: true },
+      quality: {
+        level: "safe",
+        trainable: true,
+        flags: [],
+        usage: { routeMemory: true, replySkill: false, scope: "route_memory", flags: [] },
+      },
+    },
+  ]);
+
+  assert.deepEqual(service.listSamples({ quality: "scene_uncertain" }).map((sample) => sample.id), ["scene_weak_1"]);
+});
+
+  test("filters training samples by trainability, status, source, agent and limit", () => {
+    const { service, calls } = createTrainingService(samples);
 
   assert.equal(service.listSamples({ quality: "all" }).length, samples.length);
   assert.deepEqual(service.listSamples({ quality: "trainable" }).map((sample) => sample.id), ["safe_1", "anti_1"]);
@@ -145,10 +204,150 @@ test("filters training samples by trainability, status, source, agent and limit"
   ]);
   assert.deepEqual(service.listSamples({ quality: "trainable", limit: 1 }).map((sample) => sample.id), ["safe_1"]);
   assert.deepEqual(service.listSamples("agent_gift").map((sample) => sample.id), ["safe_1", "anti_1"]);
-  assert.equal(calls.at(-1).agentId, "agent_gift");
-});
+    assert.equal(calls.at(-1).agentId, "agent_gift");
+  });
 
-test("batch reviews visible training samples with de-duplicated ids", () => {
+test("passes identity filters when listing training samples", () => {
+    const { service, calls } = createTrainingService([
+      {
+        id: "account_a_sample",
+        agentId: "agent_gift",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_a",
+        conversationId: "conv_a",
+        customerId: "customer_a",
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "account_b_sample",
+        agentId: "agent_gift",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_b",
+        conversationId: "conv_b",
+        customerId: "customer_b",
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    assert.deepEqual(
+      service
+        .listSamples({
+          agentId: "agent_gift",
+          wechatAccountId: "wechat_a",
+          conversationId: "conv_a",
+          customerId: "customer_a",
+        })
+        .map((sample) => sample.id),
+      ["account_a_sample"],
+    );
+    assert.deepEqual(calls.at(-1), {
+      method: "listTrainingSamples",
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+    });
+  });
+
+  test("filters training samples by chat import id after identity filtering", () => {
+    const { service, calls } = createTrainingService([
+      {
+        id: "import_a_sample",
+        agentId: "agent_gift",
+        status: "ready",
+        sourceType: "chat_import",
+        importId: "import_a",
+        wechatAccountId: "wechat_a",
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "import_b_sample",
+        agentId: "agent_gift",
+        status: "ready",
+        sourceType: "chat_import",
+        importId: "import_b",
+        wechatAccountId: "wechat_a",
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "other_account_import_a_sample",
+        agentId: "agent_gift",
+        status: "ready",
+        sourceType: "chat_import",
+        importId: "import_a",
+        wechatAccountId: "wechat_b",
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    assert.deepEqual(
+      service.listSamples({ wechatAccountId: "wechat_a", importId: "import_a" }).map((sample) => sample.id),
+      ["import_a_sample"],
+    );
+    assert.deepEqual(calls.at(-1), {
+      method: "listTrainingSamples",
+      agentId: undefined,
+      wechatAccountId: "wechat_a",
+      conversationId: undefined,
+      customerId: undefined,
+    });
+  });
+
+  test("passes identity filters when compiling skill suggestions", () => {
+    const { service, calls } = createTrainingService([
+      {
+        id: "account_a_skill_sample",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_a",
+        conversationId: "conv_a",
+        customerId: "customer_a",
+        scene: "礼盒设计",
+        customerText: "我要看礼盒效果图",
+        idealReply: "我先按您的预算整理礼盒方案。",
+        score: 92,
+        skillHints: ["预算识别"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "account_b_skill_sample",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_b",
+        conversationId: "conv_b",
+        customerId: "customer_b",
+        scene: "售后",
+        customerText: "我要退货",
+        idealReply: "我帮您核对订单。",
+        score: 92,
+        skillHints: ["售后识别"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    service.listSkillSuggestions({
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+    });
+
+    assert.deepEqual(calls.find((call) => call.method === "listTrainingSamples"), {
+      method: "listTrainingSamples",
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+    });
+  });
+
+  test("batch reviews visible training samples with de-duplicated ids", () => {
   const notifications = [];
   const { service, calls, rows } = createTrainingService(samples);
   service["notifications"] = { create: (...args) => notifications.push(args) };
@@ -213,6 +412,6 @@ test("rejects unknown training sample quality filters", () => {
 
   assert.throws(
     () => service.listSamples({ quality: "maybe" }),
-    /quality must be one of safe, review, risk, blocked, needs_attention, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all/,
+    /quality must be one of safe, review, risk, blocked, needs_attention, scene_uncertain, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all/,
   );
 });

@@ -43,6 +43,21 @@ export type DesignJob = {
     customerId?: string | null;
     wechatAccountId?: string | null;
   };
+  bundle?: {
+    giftBox?: Record<string, unknown> | null;
+    items?: Array<Record<string, unknown> & { type?: string; skuCode?: string }>;
+    totals?: {
+      cost?: number;
+      salePrice?: number;
+      profit?: number;
+      profitRate?: number;
+    };
+    automation?: {
+      ready: boolean;
+      blockers: string[];
+    } | null;
+    warnings?: string[];
+  };
   updatedAt?: string;
   readiness?: {
     ok: boolean;
@@ -71,6 +86,9 @@ export type DesignAsset = {
   id: string;
   ownerType: string;
   ownerId: string;
+  wechatAccountId?: string | null;
+  conversationId?: string | null;
+  customerId?: string | null;
   role?: string;
   fileName: string;
   mimeType: string;
@@ -144,6 +162,24 @@ export type SkuCatalogIssue = {
   path?: string;
 };
 
+export type SkuBundleCombinationExample = {
+  giftBoxSkuCode: string;
+  itemSkuCode: string;
+  totalPrice: number;
+  costPrice?: number;
+  profit?: number;
+  marginRate?: number;
+  leadTimeDays?: number;
+  leadTimeKnown?: boolean;
+  weightGram?: number;
+  specReady?: boolean;
+  sizeReady?: boolean;
+  sizeRisk?: boolean;
+  deliveryRisk?: boolean;
+  automationReady?: boolean;
+  autoQuoteBlockers?: string[];
+};
+
 export type SkuCatalogAudit = {
   total: number;
   readyCount: number;
@@ -187,6 +223,56 @@ export type SkuCatalogAudit = {
   bundleCapacityRiskCount?: number;
   bundleReadinessIssueCount?: number;
   bundleReadinessWarnings?: string[];
+  budgetBandCoverage?: Array<{
+    key: string;
+    label: string;
+    min: number;
+    max: number | null;
+    available: boolean;
+    combinationCount: number;
+    minBundlePrice: number;
+    maxBundlePrice: number;
+    capacity: number;
+    minMarginRate?: number;
+    lowMarginCombinationCount?: number;
+    maxLeadTimeDays?: number;
+    deliveryRiskCombinationCount?: number;
+    specReadyCombinationCount?: number;
+    sizeReadyCombinationCount?: number;
+    sizeRiskCombinationCount?: number;
+    automationReadyCombinationCount?: number;
+    automationBlockerCounts?: Array<{ code: string; count: number }>;
+    examples: SkuBundleCombinationExample[];
+    automationReadyExamples?: SkuBundleCombinationExample[];
+  }>;
+  budgetCoverageIssueCount?: number;
+  sceneBundleCoverage?: Array<{
+    scene: string;
+    available: boolean;
+    giftBoxCount: number;
+    itemCount: number;
+    combinationCount: number;
+    minBundlePrice: number;
+    maxBundlePrice: number;
+    capacity: number;
+    minMarginRate?: number;
+    lowMarginCombinationCount?: number;
+    maxLeadTimeDays?: number;
+    deliveryRiskCombinationCount?: number;
+    specReadyCombinationCount?: number;
+    sizeReadyCombinationCount?: number;
+    sizeRiskCombinationCount?: number;
+    automationReadyCombinationCount?: number;
+    automationBlockerCounts?: Array<{ code: string; count: number }>;
+    examples: SkuBundleCombinationExample[];
+    automationReadyExamples?: SkuBundleCombinationExample[];
+  }>;
+  sceneBundleCoverageIssueCount?: number;
+  bundleMarginRiskCount?: number;
+  bundleDeliveryRiskCount?: number;
+  bundleSpecRiskCount?: number;
+  bundleSizeRiskCount?: number;
+  bundleAutomationRiskCount?: number;
   commercialReadiness?: {
     score: number;
     level: "ready" | "review" | "blocked";
@@ -268,6 +354,17 @@ export type ChatImport = {
   messageCount: number;
   pairCount: number;
   warnings: string[];
+  sceneSummary?: {
+    sampleCount: number;
+    clearCount: number;
+    weakCount: number;
+    ambiguousCount: number;
+    unmatchedCount: number;
+    sceneUncertainCount: number;
+    readyCount?: number;
+    reviewCount?: number;
+    rejectedCount?: number;
+  };
   samples?: TrainingSample[];
   createdAt: string;
 };
@@ -276,6 +373,9 @@ export type TrainingSample = {
   id: string;
   agentId?: string;
   agentKey: string;
+  customerId?: string | null;
+  conversationId?: string | null;
+  wechatAccountId?: string | null;
   scene: string;
   sceneScore?: number;
   sceneScores?: Array<{
@@ -373,6 +473,7 @@ export type TrainingOverview = {
     replySkillSamples?: number;
     routeAndReplySamples?: number;
     needsAttentionSamples?: number;
+    sceneUncertainSamples?: number;
     attentionReasonCounts?: Array<{ code: string; label: string; count: number }>;
     lowScoreSamples: number;
     missingAnswerSamples: number;
@@ -402,6 +503,21 @@ export type TrainingOverview = {
   }>;
   recommendations: string[];
 };
+
+export type TrainingSampleQualityApiFilter =
+  | "all"
+  | "safe"
+  | "review"
+  | "risk"
+  | "blocked"
+  | "needs_attention"
+  | "scene_uncertain"
+  | "anti_wrong_reply"
+  | "trainable"
+  | "not_trainable"
+  | "route_memory"
+  | "reply_skill"
+  | "route_and_reply";
 
 export type SkillSuggestion = {
   suggestionKey: string;
@@ -1020,6 +1136,12 @@ export type QuotePreview = {
   warnings: string[];
 };
 
+export type OrderConfirmationPreview = {
+  orderDraft: OrderDraft;
+  message: string;
+  warnings: string[];
+};
+
 export type NotificationItem = {
   id: string;
   level: "info" | "warning" | "error" | string;
@@ -1144,6 +1266,10 @@ export type BundleRecommendation = {
     enough: boolean;
     bottleneckSkuCode?: string | null;
   };
+  automation?: {
+    ready: boolean;
+    blockers: string[];
+  };
   warnings: string[];
 };
 
@@ -1177,9 +1303,10 @@ export type UploadAssetPayload = {
   base64?: string;
   text?: string;
   url?: string;
-};
+} & IdentityExpectation;
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:3200/api";
+const WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS = [300, 700, 1200, 2000, 3200];
 
 export type IdentityFilters = {
   wechatAccountId?: string;
@@ -1192,6 +1319,10 @@ export type IdentityExpectation = {
   expectedConversationId?: string;
   expectedCustomerId?: string;
 };
+
+function sleepApi(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function identityExpectation(record: {
   wechatAccountId?: string | null;
@@ -1275,11 +1406,14 @@ export async function getSkus(includeInactive = false): Promise<Sku[]> {
   }
 }
 
-export async function getAssets(ownerType?: string, ownerId?: string): Promise<DesignAsset[]> {
+export async function getAssets(ownerType?: string, ownerId?: string, filters: IdentityFilters = {}): Promise<DesignAsset[]> {
   try {
     const params = new URLSearchParams();
     if (ownerType) params.set("ownerType", ownerType);
     if (ownerId) params.set("ownerId", ownerId);
+    if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
+    if (filters.conversationId) params.set("conversationId", filters.conversationId);
+    if (filters.customerId) params.set("customerId", filters.customerId);
     const query = params.toString();
     const response = await fetch(`${API_BASE}/assets${query ? `?${query}` : ""}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
@@ -1301,8 +1435,8 @@ export function localAssetUrl(localPath?: string): string {
   return `${API_BASE}/assets/local-file?path=${encodeURIComponent(value)}`;
 }
 
-export async function createDemoCustomerLogo(customerId: string): Promise<DesignAsset> {
-  return postJson<DesignAsset>("/assets/demo-customer-logo", { customerId });
+export async function createDemoCustomerLogo(customerId: string, expected: IdentityExpectation = {}): Promise<DesignAsset> {
+  return postJson<DesignAsset>("/assets/demo-customer-logo", { customerId, ...expected });
 }
 
 export async function importSkuText(text: string): Promise<SkuImportResult> {
@@ -1378,9 +1512,9 @@ export async function getAgents(): Promise<Agent[]> {
   }
 }
 
-export async function getChatImports(): Promise<ChatImport[]> {
+export async function getChatImports(filters: IdentityFilters = {}): Promise<ChatImport[]> {
   try {
-    const response = await fetch(`${API_BASE}/training/chat-imports`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/training/chat-imports${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1390,30 +1524,23 @@ export async function getChatImports(): Promise<ChatImport[]> {
 
 export async function getTrainingSamples(filters: {
   agentId?: string;
-  quality?:
-    | "all"
-    | "safe"
-    | "review"
-    | "risk"
-    | "blocked"
-    | "needs_attention"
-    | "anti_wrong_reply"
-    | "trainable"
-    | "not_trainable"
-    | "route_memory"
-    | "reply_skill"
-    | "route_and_reply";
+  quality?: TrainingSampleQualityApiFilter;
   status?: string;
   sourceType?: string;
+  importId?: string;
   limit?: number;
-} = {}): Promise<TrainingSample[]> {
+} & IdentityFilters = {}): Promise<TrainingSample[]> {
   try {
     const params = new URLSearchParams();
     if (filters.agentId) params.set("agentId", filters.agentId);
     if (filters.quality) params.set("quality", filters.quality);
     if (filters.status) params.set("status", filters.status);
     if (filters.sourceType) params.set("sourceType", filters.sourceType);
+    if (filters.importId) params.set("importId", filters.importId);
     if (filters.limit) params.set("limit", String(filters.limit));
+    if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
+    if (filters.conversationId) params.set("conversationId", filters.conversationId);
+    if (filters.customerId) params.set("customerId", filters.customerId);
     const query = params.toString();
     const response = await fetch(`${API_BASE}/training/samples${query ? `?${query}` : ""}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
@@ -1423,9 +1550,9 @@ export async function getTrainingSamples(filters: {
   }
 }
 
-export async function getTrainingOverview(): Promise<TrainingOverview | null> {
+export async function getTrainingOverview(filters: IdentityFilters = {}): Promise<TrainingOverview | null> {
   try {
-    const response = await fetch(`${API_BASE}/training/overview`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/training/overview${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1446,7 +1573,7 @@ export async function reviewTrainingSample(
     idealReply?: string;
     score?: number;
     skillHints?: string[] | string;
-  },
+  } & IdentityExpectation,
 ): Promise<{ sample: TrainingSample; reviewLog: ReviewLog }> {
   return postJson<{ sample: TrainingSample; reviewLog: ReviewLog }>(`/training/samples/${encodeURIComponent(id)}/review`, payload);
 }
@@ -1456,6 +1583,7 @@ export async function batchReviewTrainingSamples(payload: {
   status: "ready" | "review" | "rejected";
   reviewer?: string;
   note?: string;
+  expectedBySampleId?: Record<string, IdentityExpectation>;
 }): Promise<{
   updated: number;
   status: string;
@@ -1540,13 +1668,20 @@ export async function getBridgeStatus(filters: IdentityFilters = {}): Promise<Br
 }
 
 export async function getWechatChannelStatus(filters: IdentityFilters = {}): Promise<WechatChannelStatus | null> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/channels/status${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return null;
+  const url = `${API_BASE}/wechat/channels/status${identityQuery(filters)}`;
+  for (let attempt = 0; attempt <= WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`api ${response.status}`);
+      const status = await response.json();
+      if (status && Array.isArray(status.channels) && status.summary) return status;
+    } catch {
+      // The web app can render before the API port is ready; retry briefly before surfacing the empty state.
+    }
+    const delayMs = WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS[attempt];
+    if (delayMs) await sleepApi(delayMs);
   }
+  return null;
 }
 
 export async function testWechatChannelInbound(
@@ -1674,9 +1809,9 @@ export async function processSafeSendQueue(): Promise<SafeSendQueueResult> {
   return postJson<SafeSendQueueResult>("/wechat/send-tasks/process-safe-queue", {});
 }
 
-export async function getRouteEvaluations(): Promise<RouteEvaluation[]> {
+export async function getRouteEvaluations(filters: IdentityFilters = {}): Promise<RouteEvaluation[]> {
   try {
-    const response = await fetch(`${API_BASE}/routing/evaluations`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/routing/evaluations${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1721,10 +1856,17 @@ export async function importChatTranscript(payload: {
   return postJson<ChatImport>("/training/chat-imports", payload);
 }
 
-export async function getSkillSuggestions(agentId?: string): Promise<SkillSuggestion[]> {
+export async function getSkillSuggestions(filters: ({ agentId?: string; minScore?: number } & IdentityFilters) | string = {}): Promise<SkillSuggestion[]> {
   try {
-    const suffix = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
-    const response = await fetch(`${API_BASE}/training/skill-suggestions${suffix}`, { cache: "no-store" });
+    const options = typeof filters === "string" ? { agentId: filters } : filters;
+    const params = new URLSearchParams();
+    if (options.agentId) params.set("agentId", options.agentId);
+    if (options.minScore) params.set("minScore", String(options.minScore));
+    if (options.wechatAccountId) params.set("wechatAccountId", options.wechatAccountId);
+    if (options.conversationId) params.set("conversationId", options.conversationId);
+    if (options.customerId) params.set("customerId", options.customerId);
+    const query = params.toString();
+    const response = await fetch(`${API_BASE}/training/skill-suggestions${query ? `?${query}` : ""}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -1733,7 +1875,7 @@ export async function getSkillSuggestions(agentId?: string): Promise<SkillSugges
 }
 
 export async function applySkillSuggestions(
-  payload: { agentId?: string; minScore?: number; suggestionKeys?: string[]; includeNeedsReview?: boolean } = {},
+  payload: { agentId?: string; minScore?: number; suggestionKeys?: string[]; includeNeedsReview?: boolean } & IdentityFilters = {},
 ): Promise<ApplySkillSuggestionsResult> {
   return postJson<ApplySkillSuggestionsResult>("/training/skill-suggestions/apply", payload);
 }
@@ -1765,6 +1907,7 @@ export async function createDemoDesignJob(
       giftBox,
       items: recommendation.items,
       totals: recommendation.totals,
+      automation: recommendation.automation || null,
       warnings: recommendation.warnings,
     },
     assetIds,
@@ -2216,6 +2359,20 @@ export async function updateOrderDraft(id: string, patch: {
   owner?: string;
 } & IdentityExpectation): Promise<OrderDraft> {
   return postJson<OrderDraft>(`/orders/${id}/update`, patch);
+}
+
+export async function getOrderConfirmationPreview(id: string): Promise<OrderConfirmationPreview> {
+  const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/confirmation-preview`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
+}
+
+export async function reviseOrderSelection(id: string, patch: {
+  selectedImageId: string;
+  owner?: string;
+  note?: string;
+} & IdentityExpectation): Promise<OrderDraft> {
+  return postJson<OrderDraft>(`/orders/${id}/revise-selection`, patch);
 }
 
 export async function queueOrderConfirmation(id: string, expected: IdentityExpectation = {}): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {

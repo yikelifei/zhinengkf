@@ -658,6 +658,7 @@ export class WechatDispatchService {
       {
         text: payload.text || "",
         channel: conversation.channel || "wechat",
+        wechatAccountId: conversation.wechatAccountId,
         customerId: conversation.customerId,
         conversationId: conversation.id,
         clarificationContext,
@@ -666,7 +667,14 @@ export class WechatDispatchService {
     );
     const agent = this.localStore.getAgentByKey(routeBase.agentKey);
     const skills = agent?.id ? this.localStore.listAgentSkills(agent.id) : [];
-    const knowledgeEntries = agent?.id ? this.localStore.listKnowledgeEntries(agent.id) : [];
+    const knowledgeEntries = agent?.id
+      ? this.localStore.listKnowledgeEntries({
+          agentId: agent.id,
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+        })
+      : [];
     const draft = buildAgentReplyDraft(routeBase, {
       agentId: agent?.id,
       skills,
@@ -952,9 +960,7 @@ export class WechatDispatchService {
     if (!conversation) {
       throw new BadRequestException("conversation does not belong to selected wechat account");
     }
-    const otherConversation = this.localStore
-      .listConversations()
-      .find((item) => item.id !== conversation?.id);
+    const otherConversation = conversations.find((item) => item.id !== conversation.id) || null;
     const snapshot = buildDemoWechatWindowSnapshot({
       mode: payload?.mode || "correct",
       account,
@@ -1978,7 +1984,7 @@ export class WechatDispatchService {
     assertExpectedIdentity(task, payload, "send task");
     if (task.status === "sent") throw new Error("sent task cannot be cancelled");
     if (task.status === "cancelled" && (task.guardSnapshot?.cancelledAt || task.guardSnapshot?.cancelReason)) {
-      throw new BadRequestException("audited cancelled task cannot be cancelled again");
+      throw new BadRequestException("该发送任务已人工取消并记录审计，不能重复取消或覆盖原处理记录。");
     }
     const now = new Date().toISOString();
     const reason = payload.reason || "人工取消发送任务";
@@ -2087,7 +2093,7 @@ export class WechatDispatchService {
   }
 
   private findLatestSceneClarification(conversationId: string) {
-    return findPendingSceneClarificationContext(this.localStore.listRouteEvaluations(), conversationId);
+    return findPendingSceneClarificationContext(this.localStore.listRouteEvaluations({ conversationId }), conversationId);
   }
 
   private recommendGiftBundle(route: any, text: string) {
@@ -2127,6 +2133,7 @@ export class WechatDispatchService {
         giftBox,
         items: params.bundleRecommendation?.items || [],
         totals: params.bundleRecommendation?.totals || {},
+        automation: params.bundleRecommendation?.automation || null,
         warnings: params.bundleRecommendation?.warnings || [],
       },
       assetIds: params.assetIds,
@@ -2280,13 +2287,16 @@ export class WechatDispatchService {
       return result;
     }
 
+    const inboundSelectionQuoteNote = "客户在会话中选择了这张效果图，系统已绑定为报价图片。";
     const quote = existingQuote
       ? this.localStore.updateQuoteDraft(existingQuote.id, {
           selectedImageId,
           status: "auto_sent",
-          customerNotes: "Customer selected a design image from inbound message.",
+          customerNotes: inboundSelectionQuoteNote,
         })
-      : this.localStore.createQuoteFromDesignJob(job.id, selectedImageId);
+      : this.localStore.updateQuoteDraft(this.localStore.createQuoteFromDesignJob(job.id, selectedImageId).id, {
+          customerNotes: inboundSelectionQuoteNote,
+        });
     const updatedJob = this.localStore.updateDesignJob(job.id, { status: "quote_created" });
     result.quote = quote;
     result.designJob = updatedJob;
@@ -2321,7 +2331,7 @@ export class WechatDispatchService {
     conversation: any;
     message: any;
     route: any;
-    payload: { text?: string };
+    payload: { text?: string; assetIds?: string[]; attachments?: Array<Record<string, unknown>> };
   }) {
     const quote = this.findLatestQuoteForConversation(params.conversation);
     const existingOrderDraft = quote
@@ -2336,7 +2346,37 @@ export class WechatDispatchService {
       { highValueAmountCny: appConfig.highValueAmountCny },
     );
 
-    if (acceptancePlan.reason === "no_quote_acceptance_intent") return null;
+    if (acceptancePlan.reason === "no_quote_acceptance_intent") {
+      if (!quote || !this.hasInboundPaymentProof(params.payload)) return null;
+      const result: any = {
+        message: params.message,
+        route: params.route,
+        plan: {
+          type: "quote_payment_proof_manual_review",
+          reason: "payment_proof_needs_manual_verification",
+          shouldNotifyHuman: true,
+          shouldCreateDesignJob: false,
+          shouldQueueReply: false,
+        },
+        sendTask: null,
+        designJob: quote?.designJob || null,
+        notification: null,
+        bundleRecommendation: null,
+        quote,
+        orderDraft: existingOrderDraft,
+        quoteAcceptance: {
+          ...acceptancePlan,
+          hasIntent: true,
+          reason: "payment_proof_needs_manual_verification",
+        },
+      };
+      result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
+        reason: "payment_proof_needs_manual_verification",
+        title: "客户发送付款凭证，需要人工核验",
+        body: "客户消息里带有付款截图、转账凭证或收款相关附件，但文字没有明确说明已付金额。系统未自动改付款状态，请人工核对后再标记定金或全款。",
+      });
+      return result;
+    }
     if (!quote && acceptancePlan.reason === "missing_active_quote") return null;
 
     const result: any = {
@@ -2547,6 +2587,28 @@ export class WechatDispatchService {
       inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
       },
     );
+  }
+
+  private hasInboundPaymentProof(payload: { text?: string; assetIds?: string[]; attachments?: Array<Record<string, unknown>> }) {
+    const text = String(payload.text || "").trim();
+    const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+    const hasAsset = Boolean((payload.assetIds || []).length || attachments.length);
+    if (!hasAsset) return false;
+    const paymentTextHint = /(付款|支付|转账|打款|汇款|定金|订金|尾款|全款|凭证|截图|回单|收据|流水)/.test(text);
+    if (paymentTextHint) return true;
+    return attachments.some((attachment) => {
+      const values = [
+        attachment?.role,
+        attachment?.type,
+        attachment?.kind,
+        attachment?.label,
+        attachment?.fileName,
+        attachment?.name,
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .filter(Boolean);
+      return values.some((value) => /payment|pay|paid|receipt|transfer|voucher|proof|付款|支付|转账|凭证|回单|收据/.test(value));
+    });
   }
 
   private findLatestSelectableDesignJob(conversation: any) {
@@ -3119,14 +3181,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function assertManualReleaseReason(reason: unknown, context: string) {
   const text = String(reason || "").trim();
   if (!text || !text.startsWith("manual_")) {
-    throw new BadRequestException(`${context} requires an explicit manual release reason`);
+    throw new BadRequestException(`${context} 需要填写明确的人工处理原因，原因编码必须以 manual_ 开头。`);
   }
 }
 
 function assertManualReleaseNote(note: unknown, context: string) {
   const text = String(note || "").trim();
   if (!text) {
-    throw new BadRequestException(`${context} requires a manual resolution note`);
+    throw new BadRequestException(`${context} 需要填写人工处理结果，确认客户问题已处理完再解除接管。`);
   }
 }
 
@@ -3142,6 +3204,7 @@ function manualReviewReasonLabel(reason?: string) {
     quote_already_queued_or_sent: "客户在报价进入发送流程后又修改选择，需要人工确认",
     quote_acceptance_uncertain: "客户确认意图不够明确，需要人工判断是否成交",
     quote_acceptance_manual_review: "客户回复涉及报价确认，需要人工复核",
+    payment_proof_needs_manual_verification: "客户发送付款凭证，需要人工核验金额和收款状态",
     manual_review: "当前对话需要人工判断后再继续",
   };
   return labels[key] || "当前情况不适合继续自动处理，需要人工判断";

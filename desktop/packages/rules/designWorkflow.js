@@ -129,6 +129,22 @@ function inspectRealDesignReferences({ assets = [], bundle = {}, requireCustomer
   };
 }
 
+function inspectBundleAutomationReadiness(bundle = {}) {
+  const automation = bundle?.automation || null;
+  if (!automation || automation.ready !== false) {
+    return {
+      ok: true,
+      reason: "bundle_automation_ready",
+      blockers: [],
+    };
+  }
+  return {
+    ok: false,
+    reason: "bundle_automation_not_ready",
+    blockers: Array.isArray(automation.blockers) ? automation.blockers : [],
+  };
+}
+
 function firstImageReference(value = {}) {
   const directKeys = [
     "localPath",
@@ -375,6 +391,7 @@ module.exports = {
   inspectAssetReferences,
   inspectBundleReferences,
   inspectRealDesignReferences,
+  inspectBundleAutomationReadiness,
   decideRevisionPolicy,
   evaluateDesignPlatformActivationStatus,
   evaluateArtImageLocalHealthReadiness,

@@ -1,5 +1,7 @@
 "use strict";
 
+const { inspectBundleAutomationReadiness } = require("./designWorkflow");
+
 function evaluateLowValueDesignImageSend(job = {}) {
   if (!job || !job.id) return skip("invalid_job", ["job"]);
   if (job.isHighValue) return skip("manual_review_required", ["manualReview"]);
@@ -8,6 +10,8 @@ function evaluateLowValueDesignImageSend(job = {}) {
   if (!job.wechatAccountId || !job.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
+  const automation = inspectBundleAutomationReadiness(job.bundle || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   const images = Array.isArray(job.images) ? job.images : [];
   const sendableImages = images.filter((image) => image.localPath);
@@ -42,6 +46,8 @@ function evaluateLowValueQuoteSend(quote = {}, options = {}) {
   if (!designJob.wechatAccountId || !designJob.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
+  const automation = inspectBundleAutomationReadiness(designJob.bundle || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   return {
     ok: true,
@@ -80,6 +86,8 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   if (!designJob.wechatAccountId || !designJob.conversationId) {
     return skip("missing_order_target", ["wechatAccountId", "conversationId"]);
   }
+  const automation = inspectBundleAutomationReadiness(designJob.bundle || quote.bundleSnapshot || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   return {
     ok: true,
@@ -135,6 +143,8 @@ function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
   if (!order.wechatAccountId || !order.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
+  const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   return {
     ok: true,
@@ -198,6 +208,8 @@ function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
   if (!order.wechatAccountId || !order.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
+  const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   return {
     ok: true,

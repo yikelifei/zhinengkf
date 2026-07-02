@@ -80,6 +80,22 @@ test("does not queue design images without local file paths", () => {
   assert.equal(decision.reason, "missing_images");
 });
 
+test("does not auto-send design images when bundle automation is blocked", () => {
+  const decision = evaluateLowValueDesignImageSend({
+    id: "design_1",
+    status: "quick_confirm",
+    isHighValue: false,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    bundle: { automation: { ready: false, blockers: ["low_margin"] } },
+    images: [{ id: "image_1", localPath: "storage/results/1.png" }],
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "bundle_automation_not_ready");
+  assert.deepEqual(decision.missing, ["low_margin"]);
+});
+
 
 test("queues low-value selected quote for safe sending", () => {
   const decision = evaluateLowValueQuoteSend({
@@ -170,6 +186,27 @@ test("does not queue quote with negative profit", () => {
 
   assert.equal(decision.ok, false);
   assert.equal(decision.reason, "negative_profit");
+});
+
+test("does not queue quote when bundle automation is blocked", () => {
+  const decision = evaluateLowValueQuoteSend({
+    id: "quote_1",
+    status: "auto_sent",
+    selectedImageId: "image_1",
+    totalPrice: 9000,
+    profit: 3000,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      bundle: { automation: { ready: false, blockers: ["size_unknown"] } },
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "bundle_automation_not_ready");
+  assert.deepEqual(decision.missing, ["size_unknown"]);
 });
 
 test("creates low-value order draft after quote is sent", () => {

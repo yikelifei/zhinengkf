@@ -189,6 +189,30 @@ function auditSkuCatalog(skus = [], options = {}) {
   const bundleReadiness = summarizeBundleReadiness(skuList, {
     quantityCheckpoints: normalizeQuantityCheckpoints(options.quantityCheckpoints),
   });
+  const budgetBandCoverage = summarizeBudgetBandCoverage(skuList, options);
+  const budgetCoverageIssueCount = budgetBandCoverage.filter((band) => !band.available).length;
+  const sceneBundleCoverage = summarizeSceneBundleCoverage(skuList, options);
+  const sceneBundleCoverageIssueCount = sceneBundleCoverage.filter((scene) => !scene.available).length;
+  const bundleMarginRiskCount = [
+    ...budgetBandCoverage,
+    ...sceneBundleCoverage,
+  ].filter((item) => item.available && item.combinationCount > 0 && item.lowMarginCombinationCount >= item.combinationCount).length;
+  const bundleDeliveryRiskCount = [
+    ...budgetBandCoverage,
+    ...sceneBundleCoverage,
+  ].filter((item) => item.available && item.combinationCount > 0 && item.deliveryRiskCombinationCount >= item.combinationCount).length;
+  const bundleSpecRiskCount = [
+    ...budgetBandCoverage,
+    ...sceneBundleCoverage,
+  ].filter((item) => item.available && item.combinationCount > 0 && item.specReadyCombinationCount <= 0).length;
+  const bundleSizeRiskCount = [
+    ...budgetBandCoverage,
+    ...sceneBundleCoverage,
+  ].filter((item) => item.available && item.combinationCount > 0 && item.sizeRiskCombinationCount >= item.combinationCount).length;
+  const bundleAutomationRiskCount = [
+    ...budgetBandCoverage,
+    ...sceneBundleCoverage,
+  ].filter((item) => item.available && item.combinationCount > 0 && item.automationReadyCombinationCount <= 0).length;
   const blockingRepairCount = repairQueue.filter((item) => item.blocking).length;
   const commercialReadiness = buildCommercialReadiness({
     total: skuList.length,
@@ -200,6 +224,15 @@ function auditSkuCatalog(skus = [], options = {}) {
     catalogStructureIssueCount,
     catalogCoverageIssueCount,
     bundleReadiness,
+    budgetBandCoverage,
+    budgetCoverageIssueCount,
+    sceneBundleCoverage,
+    sceneBundleCoverageIssueCount,
+    bundleMarginRiskCount,
+    bundleDeliveryRiskCount,
+    bundleSpecRiskCount,
+    bundleSizeRiskCount,
+    bundleAutomationRiskCount,
   });
   return {
     total: skuList.length,
@@ -244,6 +277,15 @@ function auditSkuCatalog(skus = [], options = {}) {
     bundleCapacityRiskCount: bundleReadiness.capacityRiskCount,
     bundleReadinessIssueCount: bundleReadiness.issueCount,
     bundleReadinessWarnings: bundleReadiness.warnings,
+    budgetBandCoverage,
+    budgetCoverageIssueCount,
+    sceneBundleCoverage,
+    sceneBundleCoverageIssueCount,
+    bundleMarginRiskCount,
+    bundleDeliveryRiskCount,
+    bundleSpecRiskCount,
+    bundleSizeRiskCount,
+    bundleAutomationRiskCount,
     repairQueueCount: repairQueue.length,
     blockingRepairCount,
     commercialReadiness,
@@ -357,6 +399,289 @@ function summarizeBundleReadiness(skus = [], options = {}) {
   };
 }
 
+function summarizeBudgetBandCoverage(skus = [], options = {}) {
+  const bands = normalizeBudgetBands(options.budgetBands);
+  const leadTimeWarningDays = normalizeLeadTimeWarningDays(options.deliveryLeadTimeWarningDays);
+  const minimumMarginRate = normalizeMinimumMarginRate(options.minimumMarginRate);
+  const available = (Array.isArray(skus) ? skus : []).filter((sku) => (
+    sku.isActive !== false &&
+    Number(sku.salePrice || 0) > 0 &&
+    Number(sku.stock || 0) > 0
+  ));
+  const giftBoxes = available.filter((sku) => sku.type === "gift_box");
+  const items = available.filter((sku) => sku.type === "item");
+
+  return bands.map((band) => {
+    const combinations = [];
+    for (const giftBox of giftBoxes) {
+      for (const item of items) {
+        const totalPrice = round(Number(giftBox.salePrice || 0) + Number(item.salePrice || 0));
+        if (totalPrice < band.min) continue;
+        if (band.max !== null && totalPrice > band.max) continue;
+        combinations.push(buildBundleCombination(giftBox, item, {
+          totalPrice,
+          leadTimeWarningDays,
+          minimumMarginRate,
+        }));
+      }
+    }
+    const sorted = combinations
+      .sort((a, b) => a.totalPrice - b.totalPrice || String(a.giftBoxSkuCode).localeCompare(String(b.giftBoxSkuCode)) || String(a.itemSkuCode).localeCompare(String(b.itemSkuCode)));
+    const prices = sorted.map((item) => item.totalPrice);
+    const marginRates = sorted.map((item) => item.marginRate).filter((value) => Number.isFinite(value));
+    const leadTimes = sorted.map((item) => item.leadTimeDays).filter((value) => Number.isFinite(value));
+    const automationBlockerCounts = countAutomationBlockers(sorted);
+    return {
+      key: band.key,
+      label: band.label,
+      min: band.min,
+      max: band.max,
+      available: sorted.length > 0,
+      combinationCount: sorted.length,
+      minBundlePrice: prices.length ? prices[0] : 0,
+      maxBundlePrice: prices.length ? prices[prices.length - 1] : 0,
+      capacity: sorted.reduce((max, item) => Math.max(max, item.capacity), 0),
+      minMarginRate: marginRates.length ? round(Math.min(...marginRates)) : 0,
+      lowMarginCombinationCount: sorted.filter((item) => item.marginRate < minimumMarginRate).length,
+      maxLeadTimeDays: leadTimes.length ? Math.max(...leadTimes) : 0,
+      deliveryRiskCombinationCount: sorted.filter((item) => item.deliveryRisk).length,
+      specReadyCombinationCount: sorted.filter((item) => item.specReady).length,
+      sizeReadyCombinationCount: sorted.filter((item) => item.sizeReady).length,
+      sizeRiskCombinationCount: sorted.filter((item) => item.sizeRisk).length,
+      automationReadyCombinationCount: sorted.filter((item) => item.automationReady).length,
+      automationBlockerCounts,
+      examples: sorted.slice(0, 3).map(bundleCombinationSummary),
+      automationReadyExamples: sorted.filter((item) => item.automationReady).slice(0, 3).map(bundleCombinationSummary),
+    };
+  });
+}
+
+function summarizeSceneBundleCoverage(skus = [], options = {}) {
+  const leadTimeWarningDays = normalizeLeadTimeWarningDays(options.deliveryLeadTimeWarningDays);
+  const minimumMarginRate = normalizeMinimumMarginRate(options.minimumMarginRate);
+  const available = (Array.isArray(skus) ? skus : []).filter((sku) => (
+    sku.isActive !== false &&
+    Number(sku.salePrice || 0) > 0 &&
+    Number(sku.stock || 0) > 0
+  ));
+  const giftBoxes = available.filter((sku) => sku.type === "gift_box");
+  const items = available.filter((sku) => sku.type === "item");
+  const sceneTags = normalizeTargetSceneTags(options.targetSceneTags, available);
+
+  return sceneTags.map((scene) => {
+    const sceneGiftBoxes = giftBoxes.filter((sku) => skuMatchesScene(sku, scene, { allowGeneric: true }));
+    const sceneItems = items.filter((sku) => skuMatchesScene(sku, scene, { allowGeneric: false }));
+    const combinations = [];
+    for (const giftBox of sceneGiftBoxes) {
+      for (const item of sceneItems) {
+        combinations.push(buildBundleCombination(giftBox, item, {
+          leadTimeWarningDays,
+          minimumMarginRate,
+        }));
+      }
+    }
+    const sorted = combinations
+      .sort((a, b) => a.totalPrice - b.totalPrice || String(a.giftBoxSkuCode).localeCompare(String(b.giftBoxSkuCode)) || String(a.itemSkuCode).localeCompare(String(b.itemSkuCode)));
+    const prices = sorted.map((item) => item.totalPrice);
+    const marginRates = sorted.map((item) => item.marginRate).filter((value) => Number.isFinite(value));
+    const leadTimes = sorted.map((item) => item.leadTimeDays).filter((value) => Number.isFinite(value));
+    const automationBlockerCounts = countAutomationBlockers(sorted);
+    return {
+      scene,
+      available: sorted.length > 0,
+      giftBoxCount: sceneGiftBoxes.length,
+      itemCount: sceneItems.length,
+      combinationCount: sorted.length,
+      minBundlePrice: prices.length ? prices[0] : 0,
+      maxBundlePrice: prices.length ? prices[prices.length - 1] : 0,
+      capacity: sorted.reduce((max, item) => Math.max(max, item.capacity), 0),
+      minMarginRate: marginRates.length ? round(Math.min(...marginRates)) : 0,
+      lowMarginCombinationCount: sorted.filter((item) => item.marginRate < minimumMarginRate).length,
+      maxLeadTimeDays: leadTimes.length ? Math.max(...leadTimes) : 0,
+      deliveryRiskCombinationCount: sorted.filter((item) => item.deliveryRisk).length,
+      specReadyCombinationCount: sorted.filter((item) => item.specReady).length,
+      sizeReadyCombinationCount: sorted.filter((item) => item.sizeReady).length,
+      sizeRiskCombinationCount: sorted.filter((item) => item.sizeRisk).length,
+      automationReadyCombinationCount: sorted.filter((item) => item.automationReady).length,
+      automationBlockerCounts,
+      examples: sorted.slice(0, 3).map(bundleCombinationSummary),
+      automationReadyExamples: sorted.filter((item) => item.automationReady).slice(0, 3).map(bundleCombinationSummary),
+    };
+  });
+}
+
+function buildBundleCombination(giftBox, item, options = {}) {
+  const totalPrice = round(options.totalPrice ?? (Number(giftBox.salePrice || 0) + Number(item.salePrice || 0)));
+  const costPrice = round(Number(giftBox.costPrice || 0) + Number(item.costPrice || 0));
+  const profit = round(totalPrice - costPrice);
+  const giftBoxLeadTime = normalizePositiveNumber(giftBox.leadTimeDays);
+  const itemLeadTime = normalizePositiveNumber(item.leadTimeDays);
+  const leadTimeDays = Math.max(giftBoxLeadTime, itemLeadTime);
+  const giftBoxWeight = normalizePositiveNumber(giftBox.weightGram);
+  const itemWeight = normalizePositiveNumber(item.weightGram);
+  const leadTimeWarningDays = normalizeLeadTimeWarningDays(options.leadTimeWarningDays);
+  const minimumMarginRate = normalizeMinimumMarginRate(options.minimumMarginRate);
+  const specReady = skuDimensionIssue(giftBox.dimensions || {}) === "" &&
+    skuDimensionIssue(item.dimensions || {}) === "" &&
+    giftBoxWeight > 0 &&
+    itemWeight > 0;
+  const dimensionsReady = skuDimensionIssue(giftBox.dimensions || {}) === "" &&
+    skuDimensionIssue(item.dimensions || {}) === "";
+  const sizeReady = dimensionsReady && skuDimensionsFitInside(giftBox.dimensions, item.dimensions);
+  const marginRate = totalPrice > 0 ? round(profit / totalPrice) : 0;
+  const deliveryRisk = leadTimeDays > leadTimeWarningDays;
+  const sizeRisk = dimensionsReady && !sizeReady;
+  const autoQuoteBlockers = [];
+  if (marginRate < minimumMarginRate) autoQuoteBlockers.push("low_margin");
+  if (deliveryRisk) autoQuoteBlockers.push("delivery_risk");
+  if (!specReady) autoQuoteBlockers.push("spec_incomplete");
+  if (sizeRisk) autoQuoteBlockers.push("size_mismatch");
+  if (!dimensionsReady) autoQuoteBlockers.push("size_unknown");
+  return {
+    giftBoxSkuCode: giftBox.skuCode || "",
+    itemSkuCode: item.skuCode || "",
+    totalPrice,
+    costPrice,
+    profit,
+    marginRate,
+    leadTimeDays,
+    leadTimeKnown: giftBoxLeadTime > 0 || itemLeadTime > 0,
+    weightGram: round(giftBoxWeight + itemWeight),
+    specReady,
+    sizeReady,
+    sizeRisk,
+    deliveryRisk,
+    automationReady: autoQuoteBlockers.length === 0,
+    autoQuoteBlockers,
+    capacity: Math.min(
+      Math.max(0, Math.floor(Number(giftBox.stock || 0))),
+      Math.max(0, Math.floor(Number(item.stock || 0))),
+    ),
+  };
+}
+
+function normalizeTargetSceneTags(targetSceneTags, skus = []) {
+  const values = [];
+  for (const tag of Array.isArray(targetSceneTags) ? targetSceneTags : []) {
+    const normalized = String(tag || "").trim();
+    if (normalized) values.push(normalized);
+  }
+  for (const sku of Array.isArray(skus) ? skus : []) {
+    for (const tag of Array.isArray(sku.sceneTags) ? sku.sceneTags : []) {
+      const normalized = String(tag || "").trim();
+      if (normalized && !isGenericSceneTag(normalized)) values.push(normalized);
+    }
+  }
+  return [...new Set(values)].slice(0, 8);
+}
+
+function countAutomationBlockers(combinations = []) {
+  const counts = new Map();
+  for (const combination of combinations) {
+    for (const blocker of Array.isArray(combination.autoQuoteBlockers) ? combination.autoQuoteBlockers : []) {
+      counts.set(blocker, (counts.get(blocker) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+    .map(([code, count]) => ({ code, count }));
+}
+
+function bundleCombinationSummary(combination) {
+  const {
+    giftBoxSkuCode,
+    itemSkuCode,
+    totalPrice,
+    costPrice,
+    profit,
+    marginRate,
+    leadTimeDays,
+    leadTimeKnown,
+    weightGram,
+    specReady,
+    sizeReady,
+    sizeRisk,
+    deliveryRisk,
+    automationReady,
+    autoQuoteBlockers,
+  } = combination;
+  return {
+    giftBoxSkuCode,
+    itemSkuCode,
+    totalPrice,
+    costPrice,
+    profit,
+    marginRate,
+    leadTimeDays,
+    leadTimeKnown,
+    weightGram,
+    specReady,
+    sizeReady,
+    sizeRisk,
+    deliveryRisk,
+    automationReady,
+    autoQuoteBlockers,
+  };
+}
+
+function skuMatchesScene(sku, scene, options = {}) {
+  const tags = Array.isArray(sku.sceneTags) ? sku.sceneTags.map((tag) => String(tag || "").trim()).filter(Boolean) : [];
+  if (tags.some((tag) => normalizeDuplicateValue(tag) === normalizeDuplicateValue(scene))) return true;
+  return Boolean(options.allowGeneric && (!tags.length || tags.some(isGenericSceneTag)));
+}
+
+function isGenericSceneTag(tag) {
+  const normalized = normalizeDuplicateValue(tag);
+  return ["通用", "全场景", "不限场景", "general", "all", "universal"].includes(normalized);
+}
+
+function normalizeBudgetBands(value) {
+  const source = Array.isArray(value) && value.length ? value : [
+    { key: "entry", label: "低预算", min: 0, max: 100 },
+    { key: "standard", label: "标准预算", min: 100, max: 300 },
+    { key: "premium", label: "高预算", min: 300, max: null },
+  ];
+  return source
+    .map((band) => ({
+      key: String(band.key || band.label || "").trim(),
+      label: String(band.label || band.key || "").trim(),
+      min: Math.max(0, Number(band.min || 0)),
+      max: band.max === undefined || band.max === null || band.max === "" ? null : Math.max(0, Number(band.max)),
+    }))
+    .filter((band) => band.key && band.label && Number.isFinite(band.min) && (band.max === null || Number.isFinite(band.max)))
+    .sort((a, b) => a.min - b.min);
+}
+
+function normalizeLeadTimeWarningDays(value) {
+  const days = Number(value || 30);
+  return Number.isFinite(days) && days > 0 ? days : 30;
+}
+
+function normalizeMinimumMarginRate(value) {
+  const rate = Number(value ?? 0.15);
+  if (!Number.isFinite(rate) || rate < 0) return 0.15;
+  return rate > 1 ? rate / 100 : rate;
+}
+
+function normalizePositiveNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function skuDimensionsFitInside(containerDimensions = {}, itemDimensions = {}) {
+  const container = sortedPositiveDimensions(containerDimensions);
+  const item = sortedPositiveDimensions(itemDimensions);
+  if (container.length !== 3 || item.length !== 3) return false;
+  return item.every((value, index) => value <= container[index]);
+}
+
+function sortedPositiveDimensions(dimensions = {}) {
+  const values = ["lengthCm", "widthCm", "heightCm"]
+    .map((key) => Number(dimensions[key] || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return values.length === 3 ? values.sort((a, b) => a - b) : [];
+}
+
 function minSkuPrice(skus = []) {
   return skus.reduce((min, sku) => {
     const price = Number(sku.salePrice || 0);
@@ -396,6 +721,8 @@ function normalizeQuantityCheckpoints(value) {
 }
 
 function buildCommercialReadiness(input) {
+  const entryBudgetBand = (input.budgetBandCoverage || []).find((band) => band.key === "entry");
+  const lowValueBudgetReady = !entryBudgetBand || entryBudgetBand.available;
   const canAutoBundle = (
     input.total > 0 &&
     input.errorCount === 0 &&
@@ -404,7 +731,7 @@ function buildCommercialReadiness(input) {
     input.bundleReadiness.basicBundleCapacity > 0
   );
   const canSubmitDesign = canAutoBundle && input.blockingRepairCount === 0 && input.missingImageCount === 0;
-  const canAutoQuote = canSubmitDesign && input.negativeMarginCount === 0;
+  const canAutoQuote = canSubmitDesign && input.negativeMarginCount === 0 && lowValueBudgetReady;
   const blockers = [];
   const nextActions = [];
   if (!input.total) blockers.push("商品库为空");
@@ -414,8 +741,45 @@ function buildCommercialReadiness(input) {
   if (input.blockingRepairCount) blockers.push(`${input.blockingRepairCount} 个商品会影响自动搭配或出图`);
   if (input.missingImageCount) blockers.push(`${input.missingImageCount} 个商品图片问题`);
   if (input.negativeMarginCount) blockers.push(`${input.negativeMarginCount} 个利润异常`);
+  if (!lowValueBudgetReady) blockers.push("低预算客户没有可自动报价的礼盒组合");
   if (input.catalogCoverageIssueCount) nextActions.push("补场景标签和分类，让智能体能按客户场景选品");
   if (input.bundleReadiness.capacityRiskCount) nextActions.push("补齐礼盒或内搭库存，提升 50/100/200 份订单承接能力");
+  for (const band of (input.budgetBandCoverage || []).filter((item) => !item.available)) {
+    nextActions.push(`补 ${band.label} 商品组合，让智能体能承接 ${band.max === null ? `${band.min} 元以上` : `${band.min}-${band.max} 元`} 客户`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => !item.available)) {
+    nextActions.push(`补 ${scene.scene} 场景的礼盒或内搭，让智能体能按真实场景选品`);
+  }
+  for (const band of (input.budgetBandCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.lowMarginCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${band.label} 组合毛利率偏低，自动报价前先调价或补高毛利商品`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.lowMarginCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${scene.scene} 场景组合毛利率偏低，建议补高毛利内搭或礼盒`);
+  }
+  for (const band of (input.budgetBandCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.deliveryRiskCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${band.label} 组合交期偏长，自动报价或回复客户前需要人工确认交付时间`);
+  }
+  for (const band of (input.budgetBandCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.specReadyCombinationCount <= 0)) {
+    nextActions.push(`${band.label} 缺少尺寸重量完整的组合，设计出图和物流报价前先补规格`);
+  }
+  for (const band of (input.budgetBandCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.sizeRiskCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${band.label} 组合尺寸不匹配，内搭可能放不进礼盒，自动推荐前需要换礼盒或换内搭`);
+  }
+  for (const band of (input.budgetBandCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.automationReadyCombinationCount <= 0)) {
+    nextActions.push(`${band.label} 没有可直接自动报价的组合，低价值客户也需要先人工确认商品、交期或毛利`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.deliveryRiskCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${scene.scene} 场景组合交期偏长，适合先转人工确认交期`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.specReadyCombinationCount <= 0)) {
+    nextActions.push(`${scene.scene} 场景缺少规格完整组合，出图比例和物流判断会不准`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.sizeRiskCombinationCount >= item.combinationCount)) {
+    nextActions.push(`${scene.scene} 场景组合尺寸不匹配，先补可装下的礼盒组合`);
+  }
+  for (const scene of (input.sceneBundleCoverage || []).filter((item) => item.available && item.combinationCount > 0 && item.automationReadyCombinationCount <= 0)) {
+    nextActions.push(`${scene.scene} 场景没有可自动处理组合，智能体只能收集需求后转人工`);
+  }
   if (input.warningCount) nextActions.push("处理警告项，降低人工审核次数");
   if (!nextActions.length && canAutoQuote) nextActions.push("商品库已满足低价值客户自动搭配、出图和报价的基础要求");
 
@@ -426,6 +790,13 @@ function buildCommercialReadiness(input) {
     input.blockingRepairCount * 15 -
     input.catalogStructureIssueCount * 20 -
     input.catalogCoverageIssueCount * 8 -
+    input.budgetCoverageIssueCount * 8 -
+    input.sceneBundleCoverageIssueCount * 6 -
+    input.bundleMarginRiskCount * 5 -
+    input.bundleDeliveryRiskCount * 4 -
+    input.bundleSpecRiskCount * 4 -
+    input.bundleSizeRiskCount * 5 -
+    input.bundleAutomationRiskCount * 5 -
     input.bundleReadiness.issueCount * 10,
   )));
   const level = canAutoQuote ? "ready" : canAutoBundle ? "review" : "blocked";

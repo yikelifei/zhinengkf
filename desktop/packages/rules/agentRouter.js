@@ -175,6 +175,7 @@ function scoreSceneMemorySample(content, sample = {}) {
   const sampleScore = Number(sample.score || 0);
   if (sourceType === "route_correction" && sampleScore && sampleScore < 70) return null;
   if (sourceType === "chat_import" && sampleScore < 85) return null;
+  if (sourceType === "chat_import" && !isChatImportSceneMemoryConfirmed(sample)) return null;
   if (sourceType === "chat_import" && sample.quality?.trainable === false) return null;
   if (sourceType === "chat_import" && ["review", "risk", "blocked"].includes(String(sample.quality?.level || ""))) return null;
   const sampleText = normalizeSceneMemoryText(sample.customerText || sample.question || sample.text);
@@ -200,6 +201,14 @@ function scoreSceneMemorySample(content, sample = {}) {
     agentKey: sample.agentKey,
     scene: sample.scene || SCENE_META[sample.agentKey]?.scene || sample.agentKey,
   };
+}
+
+function isChatImportSceneMemoryConfirmed(sample = {}) {
+  const sceneCheck = sample.sceneCheck || sample.sceneDecision || null;
+  if (sceneCheck?.status) return sceneCheck.status === "clear";
+  if (sample.sceneScore === undefined || sample.sceneScore === null) return true;
+  const sceneScore = Number(sample.sceneScore || 0);
+  return Number.isFinite(sceneScore) && sceneScore >= 14;
 }
 
 function sceneMemorySourceType(sample = {}) {

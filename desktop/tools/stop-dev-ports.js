@@ -11,14 +11,12 @@ const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preserveRealModeLock = process.env.PRESERVE_REAL_MODE_LOCK === "1";
+const forceProcessSweep = process.env.FORCE_PORTS_SWEEP === "1";
+const skipStackStarterLaunchers = process.env.PORTS_STOP_SKIP_STACK_STARTERS === "1";
 const protectedStarterMode = /^(mock|real)$/.test(process.env.PORTS_STACK_STARTER_MODE || "")
   ? process.env.PORTS_STACK_STARTER_MODE
   : "";
-const protectedPids = new Set(
-  [process.env.PORTS_STACK_STARTER_PID, process.env.PORTS_STACK_STARTER_PARENT_PID]
-    .map((value) => String(value || ""))
-    .filter((value) => /^\d+$/.test(value)),
-);
+const protectedPids = buildProtectedPids();
 const managedPorts = [
   numberEnv("WEB_PORT", 3100),
   numberEnv("API_PORT", 3200),
@@ -36,6 +34,10 @@ function main() {
 
   if (!entries.length) {
     console.log("No launcher-recorded processes were found.");
+    if (!forceProcessSweep && !hasManagedRuntimeState()) {
+      cleanupRuntimeRecords();
+      return;
+    }
   } else {
     for (const record of entries) {
       if (!shouldStopRecordedProcess(record)) {
@@ -50,7 +52,10 @@ function main() {
   }
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const attemptedBefore = attemptedPids.size;
+    const stoppedBefore = stoppedPids.size;
     stopManagedProcessSweep(stoppedPids, attemptedPids, recordedPids);
+    if (attemptedPids.size === attemptedBefore && stoppedPids.size === stoppedBefore) break;
     waitForNoManagedPortOwners(attempt === 3 ? 8000 : 2500);
     sleep(500);
   }
@@ -65,6 +70,20 @@ function main() {
     return;
   }
 
+  cleanupRuntimeRecords();
+}
+
+function hasManagedRuntimeState() {
+  if (fs.existsSync(mockModeLockFile) || fs.existsSync(realModeLockFile)) return true;
+  if (listManagedPortOwners().length) return true;
+  if (findManagedWrapperPids().length) return true;
+  if (findManagedLauncherPids().length) return true;
+  if (findManagedKeeperPids().length) return true;
+  if (findManagedDirectShellPids().length) return true;
+  return false;
+}
+
+function cleanupRuntimeRecords() {
   fs.rmSync(pidFile, { force: true });
   fs.rmSync(mockModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(realModeLockFile, { force: true });
@@ -159,6 +178,7 @@ function findManagedWrapperPids() {
   const directWrapperPattern =
     /node (node_modules\/next\/dist\/bin\/next dev apps\/web -p \d+|dist\/apps\/api\/main\.js|tools\/mock-design-platform\.js).*\.runtime\/logs\/(web|api|mock)-direct\./;
   const projectWebDevWrapperPattern = /next dev apps\/web -p \d+/;
+  const projectWebBuildWrapperPattern = /node_modules\/next\/dist\/bin\/next build apps\/web/;
   const standaloneWebWrapperPattern =
     /apps\/web\/\.next\/standalone\/apps\/web.*node\s+server\.js|node(?:\.exe)?"?\s+.*apps\/web\/\.next\/standalone\/apps\/web\/server\.js/;
   const result = spawnSync(
@@ -192,6 +212,7 @@ function findManagedWrapperPids() {
         commandLine.includes(normalizedRuntime) &&
         (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine));
       const projectWebDevWrapper = commandLine.includes(normalizedRoot) && projectWebDevWrapperPattern.test(commandLine);
+      const projectWebBuildWrapper = commandLine.includes(normalizedRoot) && projectWebBuildWrapperPattern.test(commandLine);
       const projectStandaloneWebServer =
         /"?node(?:\.exe)?"?\s+server\.js\b/.test(commandLine) && parentCommandLine.includes(normalizedRoot);
       return (
@@ -199,6 +220,7 @@ function findManagedWrapperPids() {
         persistWrapperPattern.test(commandLine) ||
         directWrapperPattern.test(commandLine) ||
         projectWebDevWrapper ||
+        projectWebBuildWrapper ||
         projectStandaloneWebServer ||
         standaloneWebWrapperPattern.test(commandLine)
       );
@@ -229,7 +251,7 @@ function findManagedDirectShellPids() {
     "    ) -or",
     "    ($cmd.Contains($root) -and",
     "      $cmd.Contains('tools/start-dev-ports.js') -and",
-    "      ($cmd.Contains('--mock-design') -or $cmd.Contains('--real-design')))",
+    "      ($cmd.Contains('--mock-design') -or $cmd.Contains('--real-design') -or $cmd.Contains('--keep-alive')))",
     "  )",
     "} | Select-Object ProcessId,CommandLine",
     "if ($items) { $items | ConvertTo-Json -Compress }",
@@ -281,13 +303,11 @@ function findManagedLauncherPids() {
         : commandLine.includes("tools/ports-stack-starter.js") && commandLine.includes("--real-design")
           ? "real"
           : "";
-      if (stackStarterMode) {
-        const starterMode = stackStarterMode;
-        return !protectedStarterMode || starterMode !== protectedStarterMode;
-      }
+      if (skipStackStarterLaunchers && stackStarterMode) return false;
+      if (stackStarterMode) return !protectedStarterMode || stackStarterMode !== protectedStarterMode;
       if (
         commandLine.includes("tools/start-dev-ports.js") &&
-        (commandLine.includes("--mock-design") || commandLine.includes("--real-design"))
+        (commandLine.includes("--mock-design") || commandLine.includes("--real-design") || commandLine.includes("--keep-alive"))
       ) {
         return true;
       }
@@ -299,10 +319,13 @@ function findManagedLauncherPids() {
         return true;
       }
       if (!commandLine.includes(normalizedRoot)) return false;
-      return (
-        /npm(?:\.cmd|\/bin\/npm-cli\.js)"? run ports:(start|launch|keepalive)(:mock|:real)?/.test(commandLine) ||
-        /npm\.cmd"? run build:api/.test(commandLine)
-      );
+      const npmPortsMatch = commandLine.match(/npm(?:\.cmd|\/bin\/npm-cli\.js)"? run ports:(start|launch|keepalive|once)(:mock|:real)?/);
+      if (npmPortsMatch) {
+        if (skipStackStarterLaunchers && npmPortsMatch[1] === "launch") return false;
+        const npmMode = npmPortsMatch[2] === ":real" ? "real" : npmPortsMatch[2] === ":mock" ? "mock" : "";
+        return !protectedStarterMode || !npmMode || npmMode !== protectedStarterMode;
+      }
+      return /npm\.cmd"? run build:(api|web)/.test(commandLine) || /node_modules\/next\/dist\/bin\/next build apps\/web/.test(commandLine);
     })
     .map((item) => String(item.ProcessId || ""))
     .filter((pid) => /^\d+$/.test(pid));
@@ -320,7 +343,7 @@ function findManagedKeeperPids() {
     "  ($cmd = ($_.CommandLine -replace '\\\\','/').ToLowerInvariant()) -and",
     "  $cmd.Contains($root) -and",
     "  $cmd.Contains('tools/start-dev-ports.js') -and",
-    "  ($cmd.Contains('--mock-design') -or $cmd.Contains('--real-design')) -and",
+    "  ($cmd.Contains('--mock-design') -or $cmd.Contains('--real-design') -or $cmd.Contains('--keep-alive')) -and",
     "  ($cmd.Contains('start-sleep -seconds 3600') -or $cmd.Contains('launcher-mock.log') -or $cmd.Contains('launcher-real.log'))",
     "} | Select-Object ProcessId,CommandLine",
     "if ($items) { $items | ConvertTo-Json -Compress }",
@@ -375,6 +398,74 @@ function stopPid(pid) {
   } catch {
     return false;
   }
+}
+
+function buildProtectedPids() {
+  const seeds = [process.pid, process.ppid, process.env.PORTS_STACK_STARTER_PID, process.env.PORTS_STACK_STARTER_PARENT_PID]
+    .map((value) => String(value || ""))
+    .filter((value) => /^\d+$/.test(value));
+  const pids = new Set(seeds);
+  const parentByPid = getParentPidMap();
+  for (const seed of seeds) {
+    for (const ancestor of collectAncestorPids(seed, parentByPid)) {
+      pids.add(ancestor);
+    }
+  }
+  return pids;
+}
+
+function collectAncestorPids(pid, parentByPid = null) {
+  const ancestors = [];
+  let current = String(pid || "");
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = parentByPid ? parentByPid.get(current) : getParentPid(current);
+    if (!parent || ancestors.includes(parent)) break;
+    ancestors.push(parent);
+    current = parent;
+  }
+  return ancestors;
+}
+
+function getParentPidMap() {
+  if (process.platform !== "win32") return new Map();
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return new Map();
+  try {
+    const rows = JSON.parse(result.stdout);
+    return (Array.isArray(rows) ? rows : [rows]).reduce((map, item) => {
+      const pid = String(item?.ProcessId || "");
+      const parent = String(item?.ParentProcessId || "");
+      if (/^\d+$/.test(pid) && /^\d+$/.test(parent) && pid !== parent) map.set(pid, parent);
+      return map;
+    }, new Map());
+  } catch {
+    return new Map();
+  }
+}
+
+function getParentPid(pid) {
+  if (process.platform !== "win32") return "";
+  const safePid = Number(pid);
+  if (!Number.isFinite(safePid)) return "";
+  const script = [
+    `$p = Get-CimInstance Win32_Process -Filter ${psQuote(`ProcessId = ${safePid}`)}`,
+    "if ($p) { $p.ParentProcessId }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  const parent = String(result.stdout || "").trim();
+  return result.status === 0 && /^\d+$/.test(parent) && parent !== String(safePid) ? parent : "";
 }
 
 function stopPidWithPowerShell(pid) {

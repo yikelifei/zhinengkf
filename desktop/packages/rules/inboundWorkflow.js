@@ -59,6 +59,17 @@ function planInboundAutomation(input = {}) {
       };
     }
 
+    if (bundle.automation && bundle.automation.ready === false) {
+      return {
+        type: "manual_review",
+        reason: "bundle_automation_not_ready",
+        shouldQueueReply: false,
+        shouldCreateDesignJob: false,
+        shouldNotifyHuman: true,
+        blockers: Array.isArray(bundle.automation.blockers) ? bundle.automation.blockers : [],
+      };
+    }
+
     return {
       type: "create_design_job",
       reason: "complete_gift_design_request",

@@ -20,7 +20,7 @@ const services = [
     label: "Customer workbench",
     url: `http://127.0.0.1:${webPort}/`,
     command: process.execPath,
-    args: ["node_modules/next/dist/bin/next", "dev", "apps/web", "-p", String(webPort)],
+    args: ["node_modules/next/dist/bin/next", "dev", "apps/web", "-p", String(webPort), "--hostname", "127.0.0.1"],
   },
   {
     name: "design-platform-mock",

@@ -16,6 +16,12 @@ type RouteEvaluatePayload = {
   clarificationContext?: Record<string, unknown>;
 };
 
+type IdentityFilter = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
+
 @Injectable()
 export class RoutingService {
   constructor(
@@ -23,22 +29,32 @@ export class RoutingService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  list() {
+  list(filter: IdentityFilter = {}) {
     if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
-    return this.localStore.listRouteEvaluations();
+    return this.localStore.listRouteEvaluations(filter);
   }
 
   evaluate(payload: RouteEvaluatePayload) {
     if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
     const clarificationContext = payload.clarificationContext || this.findLatestSceneClarification(payload.conversationId);
-    const sceneMemory = this.listSceneMemorySamples();
+    const identityFilter = {
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+    };
+    const sceneMemory = this.listSceneMemorySamples(identityFilter);
     const result = evaluateAgentRoute({ ...payload, clarificationContext }, {
       highValueAmountCny: appConfig.highValueAmountCny,
       sceneMemory,
     });
     const agent = this.localStore.getAgentByKey(result.agentKey);
     const skills = agent?.id ? this.localStore.listAgentSkills(agent.id) : [];
-    const knowledgeEntries = agent?.id ? this.localStore.listKnowledgeEntries(agent.id) : [];
+    const knowledgeEntries = agent?.id
+      ? this.localStore.listKnowledgeEntries({
+          agentId: agent.id,
+          ...identityFilter,
+        })
+      : [];
     const draft = buildAgentReplyDraft(result, {
       agentId: agent?.id,
       skills,
@@ -73,12 +89,15 @@ export class RoutingService {
   }
 
   private findLatestSceneClarification(conversationId?: string) {
-    return findPendingSceneClarificationContext(this.localStore.listRouteEvaluations(), conversationId);
+    return findPendingSceneClarificationContext(
+      this.localStore.listRouteEvaluations(conversationId ? { conversationId } : {}),
+      conversationId,
+    );
   }
 
-  private listSceneMemorySamples() {
+  private listSceneMemorySamples(filter: IdentityFilter = {}) {
     return this.localStore
-      .listTrainingSamples()
+      .listTrainingSamples(filter)
       .filter((sample: any) => isSceneMemorySample(sample))
       .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
       .slice(0, 200);
@@ -94,7 +113,16 @@ function isSceneMemorySample(sample: any) {
   if (sourceType === "route_correction") return Number(sample.score || 0) >= 70;
   if (sourceType !== "chat_import") return false;
   if (Number(sample.score || 0) < 85) return false;
+  if (!isConfirmedChatImportScene(sample)) return false;
   if (sample.quality?.trainable === false) return false;
   if (["review", "risk", "blocked"].includes(String(sample.quality?.level || ""))) return false;
   return true;
+}
+
+function isConfirmedChatImportScene(sample: any) {
+  const sceneCheck = sample.sceneCheck || sample.sceneDecision || null;
+  if (sceneCheck?.status) return sceneCheck.status === "clear";
+  if (sample.sceneScore === undefined || sample.sceneScore === null) return true;
+  const sceneScore = Number(sample.sceneScore || 0);
+  return Number.isFinite(sceneScore) && sceneScore >= 14;
 }

@@ -165,6 +165,63 @@ test("does not use chat import memory before it is confirmed trainable", () => {
   assert.equal(result.matchedKeywords.includes("chat_import_memory"), false);
 });
 
+test("does not use chat import scene memory when imported scene judgement is uncertain", () => {
+  const result = evaluateAgentRoute(
+    {
+      text: "cup broken refund help",
+    },
+    {
+      sceneMemory: [
+        {
+          id: "sample_chat_import_weak_scene",
+          sourceType: "chat_import",
+          status: "ready",
+          score: 96,
+          agentKey: "after_sales",
+          scene: "鍞悗瀹夋姎",
+          sceneScore: 8,
+          sceneCheck: { status: "weak", reason: "only_weak_scene_signal", needsReview: true },
+          customerText: "cup broken refund help",
+          quality: { level: "safe", trainable: true, usage: { routeMemory: true } },
+        },
+      ],
+    },
+  );
+
+  assert.equal(result.agentKey, "general");
+  assert.equal(result.sceneMemory, null);
+  assert.equal(result.matchedKeywords.includes("chat_import_memory"), false);
+});
+
+test("uses chat import scene memory after human confirms the imported scene", () => {
+  const result = evaluateAgentRoute(
+    {
+      text: "cup broken refund help",
+    },
+    {
+      sceneMemory: [
+        {
+          id: "sample_chat_import_confirmed_scene",
+          sourceType: "chat_import",
+          status: "ready",
+          score: 96,
+          agentKey: "after_sales",
+          scene: "鍞悗瀹夋姎",
+          sceneScore: 8,
+          sceneCheck: { status: "clear", reason: "human_confirmed_scene", needsReview: false },
+          customerText: "cup broken refund help",
+          quality: { level: "safe", trainable: true, usage: { routeMemory: true } },
+        },
+      ],
+    },
+  );
+
+  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.sceneMemory.applied, true);
+  assert.equal(result.sceneMemory.reason, "chat_import_memory");
+  assert.equal(result.matchedKeywords.includes("chat_import_memory"), true);
+});
+
 test("resolves customer clarification reply to after-sales scene", () => {
   const previous = evaluateAgentRoute({
     text: "订单破损要退款，还能改地址开发票吗",

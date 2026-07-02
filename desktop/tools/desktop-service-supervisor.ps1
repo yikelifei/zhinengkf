@@ -12,6 +12,7 @@ $LogsDir = Join-Path $RuntimeDir "logs"
 $MockModeLockFile = Join-Path $RuntimeDir "mock-mode.lock"
 $RealModeLockFile = Join-Path $RuntimeDir "real-mode.lock"
 $DesignPlatformConfigFile = Join-Path $RuntimeDir "design-platform-config.json"
+$PreferredDesignModeFile = Join-Path $RuntimeDir "preferred-design-mode.json"
 $IsReal = $Mode -eq "real"
 $ModeArg = if ($IsReal) { "--real-design" } else { "--mock-design" }
 $ConflictMode = if ($IsReal) { "mock" } else { "real" }
@@ -119,8 +120,8 @@ function Stop-ConflictingDesktopServices {
 }
 
 function Assert-ModeSwitchAllowed {
-  if (-not $IsReal -and ((Test-Path $RealModeLockFile) -or @(Find-ConflictingDesignLaunchers -TargetMode "real").Count -gt 0 -or ((Test-RuntimeConfigRealMode) -and $env:ALLOW_MOCK_DESIGN_START -ne "1"))) {
-    throw "Mock design launch is blocked because real mode is active. Run npm.cmd run ports:stop before switching to mock design mode."
+  if (-not $IsReal -and ((Test-Path $RealModeLockFile) -or @(Find-ConflictingDesignLaunchers -TargetMode "real").Count -gt 0 -or (((Test-RuntimeConfigRealMode) -or (Test-PreferredDesignModeReal)) -and $env:ALLOW_MOCK_DESIGN_START -ne "1"))) {
+    throw "Mock design launch is blocked because real mode is active, preferred, or locked. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode."
   }
 
   if (-not $IsReal -or -not (Test-Path $MockModeLockFile)) { return }
@@ -144,14 +145,35 @@ function Test-RuntimeConfigRealMode {
   }
 }
 
+function Test-PreferredDesignModeReal {
+  if (-not (Test-Path $PreferredDesignModeFile)) { return $false }
+  try {
+    $preference = Get-Content -LiteralPath $PreferredDesignModeFile -Raw | ConvertFrom-Json
+    return $preference.mode -eq "real"
+  } catch {
+    return $false
+  }
+}
+
+function Write-PreferredDesignMode([string]$DesignMode) {
+  $payload = [ordered]@{
+    mode = $DesignMode
+    updatedAt = [DateTime]::UtcNow.ToString("o")
+    launcherPid = $PID
+  } | ConvertTo-Json
+  Set-Content -Path $PreferredDesignModeFile -Value $payload -Encoding UTF8
+}
+
 function Update-MockModeLock {
   if ($IsReal) { return }
   Set-Content -Path $MockModeLockFile -Value ([DateTime]::UtcNow.ToString("o")) -Encoding UTF8
+  Write-PreferredDesignMode "mock"
 }
 
 function Update-RealModeLock {
   if (-not $IsReal) { return }
   Set-Content -Path $RealModeLockFile -Value ([DateTime]::UtcNow.ToString("o")) -Encoding UTF8
+  Write-PreferredDesignMode "real"
 }
 
 function Disable-ConflictingLaunchers {

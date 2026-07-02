@@ -425,6 +425,7 @@ function summarizeTrainingSampleQuality(samples = []) {
     replySkillSamples: 0,
     routeAndReplySamples: 0,
     needsAttentionSamples: 0,
+    sceneUncertainSamples: 0,
     attentionReasonCounts: [],
     lowScoreSamples: 0,
     missingAnswerSamples: 0,
@@ -442,6 +443,11 @@ function summarizeTrainingSampleQuality(samples = []) {
     if (quality.usage?.routeMemory) summary.routeMemorySamples += 1;
     if (quality.usage?.replySkill) summary.replySkillSamples += 1;
     if (quality.usage?.routeMemory && quality.usage?.replySkill) summary.routeAndReplySamples += 1;
+    const sceneUncertain = [
+      ...(Array.isArray(quality.flags) ? quality.flags : []),
+      ...(Array.isArray(quality.usage?.flags) ? quality.usage.flags : []),
+    ].some((flag) => /^scene_(weak|ambiguous|unmatched)$/.test(flag));
+    if (sceneUncertain) summary.sceneUncertainSamples += 1;
     if (quality.attention?.needsAttention) {
       summary.needsAttentionSamples += 1;
       const primaryReasons = quality.attention.primaryReason ? [quality.attention.primaryReason] : [];
@@ -613,6 +619,9 @@ function buildTrainingRecommendations(summary) {
   }
   if (summary.qualitySummary?.antiWrongReplySamples > 0) {
     messages.push(`${summary.qualitySummary.antiWrongReplySamples} 条场景确认样本只用于防乱回复，不进入业务 Skill 或普通知识匹配。`);
+  }
+  if (summary.qualitySummary?.sceneUncertainSamples > 0) {
+    messages.push(`${summary.qualitySummary.sceneUncertainSamples} 条聊天导入样本的场景不够确定，请先人工确认 Agent 和场景，再允许进入自动分流记忆。`);
   }
   if (summary.qualitySummary?.riskSamples > 0) {
     messages.push(`${summary.qualitySummary.riskSamples} 条样本存在低分或缺回复风险，需要先修正再训练。`);

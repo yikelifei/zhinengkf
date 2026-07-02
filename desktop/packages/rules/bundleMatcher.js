@@ -1,8 +1,12 @@
 "use strict";
 
-function recommendBundle({ skus = [], budget, scene = "", maxItems = 8 }) {
+function recommendBundle({ skus = [], budget, scene = "", maxItems = 8, minimumMarginRate = 0.15, deliveryLeadTimeWarningDays = 30 }) {
   const perUnitBudget = Number(budget?.perUnitAmount || budget?.amount || 0);
   const requestedQuantity = positiveInteger(budget?.quantity, 1);
+  const automationOptions = {
+    minimumMarginRate: normalizeMinimumMarginRate(minimumMarginRate),
+    deliveryLeadTimeWarningDays: normalizeLeadTimeWarningDays(deliveryLeadTimeWarningDays),
+  };
   if (!perUnitBudget) {
     return {
       status: "need_budget",
@@ -10,18 +14,23 @@ function recommendBundle({ skus = [], budget, scene = "", maxItems = 8 }) {
       warnings: ["缺少单份预算，不能可靠搭配礼盒。"],
       totals: emptyTotals(),
       fulfillment: emptyFulfillment(requestedQuantity),
+      automation: {
+        ready: false,
+        blockers: ["missing_budget"],
+      },
     };
   }
 
   const activeSkus = skus.filter((sku) => Number(sku.salePrice || 0) > 0 && sku.isActive !== false);
   const giftBoxes = activeSkus.filter((sku) => sku.type === "gift_box");
   const products = activeSkus.filter((sku) => sku.type !== "gift_box");
-  const selectedGiftBox = pickBest(giftBoxes, scene, perUnitBudget, activeSkus, requestedQuantity) || null;
+  const selectedGiftBox = pickBest(giftBoxes, scene, perUnitBudget, activeSkus, requestedQuantity, automationOptions) || null;
   const remainingBudget = perUnitBudget - Number(selectedGiftBox?.salePrice || 0);
-  const selectedItems = pickItems(products, scene, remainingBudget, maxItems, activeSkus, requestedQuantity);
+  const selectedItems = pickItems(products, scene, remainingBudget, maxItems, activeSkus, requestedQuantity, selectedGiftBox, automationOptions);
   const items = [selectedGiftBox, ...selectedItems].filter(Boolean);
   const totals = calculateTotals(items);
   const fulfillment = calculateFulfillment(items, requestedQuantity);
+  const automation = inspectBundleAutomationReadiness(items, totals, automationOptions);
 
   const warnings = [];
   if (!selectedGiftBox) warnings.push("没有找到可用礼盒 SKU。");
@@ -29,29 +38,35 @@ function recommendBundle({ skus = [], budget, scene = "", maxItems = 8 }) {
   if (totals.salePrice > perUnitBudget) warnings.push("推荐组合超过单份预算，需要人工确认。");
   if (items.some((item) => item.replacedBy)) warnings.push("部分商品库存不足，已推荐替代品。");
 
+  for (const blocker of automation.blockers) {
+    warnings.push(automationBlockerWarning(blocker));
+  }
+
   return {
     status: warnings.length ? "needs_review" : "ready",
     items,
     totals,
     fulfillment,
+    automation,
     warnings,
   };
 }
 
-function pickBest(skus, scene, budget, allSkus = skus, requestedQuantity = 1) {
+function pickBest(skus, scene, budget, allSkus = skus, requestedQuantity = 1, automationOptions = {}) {
   const scored = skus
     .map((sku) => ({ original: sku, effective: withReplacementIfNeeded(sku, allSkus, requestedQuantity) }))
     .filter((candidate) => isUsable(candidate.effective, requestedQuantity))
     .filter((candidate) => Number(candidate.effective.salePrice || 0) <= budget)
     .map((candidate) => ({
       sku: candidate.effective,
-      score: Math.max(scoreSku(candidate.original, scene), scoreSku(candidate.effective, scene)),
+      score: Math.max(scoreSku(candidate.original, scene), scoreSku(candidate.effective, scene)) +
+        automationCandidateScore(candidate.effective, null, automationOptions),
     }))
     .sort((a, b) => b.score - a.score || Number(a.sku.salePrice || 0) - Number(b.sku.salePrice || 0));
   return scored[0]?.sku || null;
 }
 
-function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuantity = 1) {
+function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuantity = 1, giftBox = null, automationOptions = {}) {
   let remaining = budget;
   const selected = [];
   const selectedSkuCodes = new Set();
@@ -59,8 +74,10 @@ function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuant
     .map((sku) => ({ original: sku, effective: withReplacementIfNeeded(sku, allSkus, requestedQuantity) }))
     .filter((candidate) => isUsable(candidate.effective, requestedQuantity))
     .sort((a, b) => {
-      const bScore = Math.max(scoreSku(b.original, scene), scoreSku(b.effective, scene));
-      const aScore = Math.max(scoreSku(a.original, scene), scoreSku(a.effective, scene));
+      const bScore = Math.max(scoreSku(b.original, scene), scoreSku(b.effective, scene)) +
+        automationCandidateScore(b.effective, giftBox, automationOptions);
+      const aScore = Math.max(scoreSku(a.original, scene), scoreSku(a.effective, scene)) +
+        automationCandidateScore(a.effective, giftBox, automationOptions);
       return bScore - aScore || Number(a.effective.salePrice || 0) - Number(b.effective.salePrice || 0);
     });
 
@@ -133,6 +150,75 @@ function scoreSku(sku, scene) {
   return score;
 }
 
+function automationCandidateScore(sku, giftBox = null, options = {}) {
+  const blockers = skuAutomationBlockers(sku, giftBox, options);
+  return blockers.length ? -blockers.length * 30 : 100;
+}
+
+function inspectBundleAutomationReadiness(items = [], totals = emptyTotals(), options = {}) {
+  const blockers = new Set();
+  for (const item of items) {
+    const giftBox = item.type === "gift_box" ? null : items.find((candidate) => candidate.type === "gift_box") || null;
+    for (const blocker of skuAutomationBlockers(item, giftBox, options)) blockers.add(blocker);
+  }
+  if (Number(totals.profitRate || 0) < normalizeMinimumMarginRate(options.minimumMarginRate)) blockers.add("low_margin");
+  return {
+    ready: blockers.size === 0 && items.length > 0,
+    blockers: [...blockers].sort(),
+  };
+}
+
+function skuAutomationBlockers(sku, giftBox = null, options = {}) {
+  const blockers = [];
+  if (skuMarginRate(sku) < normalizeMinimumMarginRate(options.minimumMarginRate)) blockers.push("low_margin");
+  const leadTimeDays = Number(sku.leadTimeDays || 0);
+  if (leadTimeDays > normalizeLeadTimeWarningDays(options.deliveryLeadTimeWarningDays)) blockers.push("delivery_risk");
+  const specReady = dimensionsReady(sku.dimensions) && Number(sku.weightGram || 0) > 0;
+  if (!specReady) blockers.push("spec_incomplete");
+  if (giftBox && dimensionsReady(giftBox.dimensions) && dimensionsReady(sku.dimensions) && !skuDimensionsFitInside(giftBox.dimensions, sku.dimensions)) {
+    blockers.push("size_mismatch");
+  } else if (giftBox && (!dimensionsReady(giftBox.dimensions) || !dimensionsReady(sku.dimensions))) {
+    blockers.push("size_unknown");
+  }
+  return [...new Set(blockers)];
+}
+
+function automationBlockerWarning(blocker) {
+  const labels = {
+    low_margin: "推荐组合毛利偏低，需要人工确认售价或替换商品。",
+    delivery_risk: "推荐组合存在交期风险，需要人工确认交付时间。",
+    spec_incomplete: "推荐组合存在尺寸或重量资料缺失，出图和报价前需要补齐。",
+    size_mismatch: "推荐组合存在尺寸不匹配，内搭可能放不进礼盒。",
+    size_unknown: "推荐组合尺寸无法确认，建议人工核对礼盒和内搭规格。",
+  };
+  return labels[blocker] || `推荐组合存在 ${blocker} 风险，需要人工确认。`;
+}
+
+function skuMarginRate(sku) {
+  const salePrice = Number(sku.salePrice || 0);
+  const costPrice = Number(sku.costPrice || 0);
+  if (salePrice <= 0) return 0;
+  return (salePrice - costPrice) / salePrice;
+}
+
+function dimensionsReady(dimensions = {}) {
+  return ["lengthCm", "widthCm", "heightCm"].every((key) => Number(dimensions[key] || 0) > 0);
+}
+
+function skuDimensionsFitInside(containerDimensions = {}, itemDimensions = {}) {
+  const container = sortedPositiveDimensions(containerDimensions);
+  const item = sortedPositiveDimensions(itemDimensions);
+  if (container.length !== 3 || item.length !== 3) return false;
+  return item.every((value, index) => value <= container[index]);
+}
+
+function sortedPositiveDimensions(dimensions = {}) {
+  const values = ["lengthCm", "widthCm", "heightCm"]
+    .map((key) => Number(dimensions[key] || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return values.length === 3 ? values.sort((a, b) => a - b) : [];
+}
+
 function calculateTotals(items) {
   const totals = items.reduce(
     (acc, item) => {
@@ -160,6 +246,16 @@ function round(value) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function normalizeMinimumMarginRate(value) {
+  const rate = Number(value ?? 0.15);
+  return Number.isFinite(rate) && rate >= 0 ? rate : 0.15;
+}
+
+function normalizeLeadTimeWarningDays(value) {
+  const days = Number(value || 30);
+  return Number.isFinite(days) && days > 0 ? days : 30;
 }
 
 module.exports = {

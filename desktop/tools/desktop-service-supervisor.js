@@ -15,6 +15,7 @@ const logsDir = path.join(runtimeDir, "logs");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const launcherLog = path.join(logsDir, realDesignMode ? "launcher-real.log" : "launcher-mock.log");
 const launcherCmd = path.join(runtimeDir, realDesignMode ? "supervise-real.cmd" : "supervise-mock.cmd");
 const legacyLauncherCmd = path.join(runtimeDir, realDesignMode ? "launch-real.cmd" : "launch-mock.cmd");
@@ -49,6 +50,20 @@ function main() {
     if (result.error) throw result.error;
     return;
   }
+
+  const supervisorChildResult = startSupervisorChild();
+  if (supervisorChildResult.status === 0) {
+    const childPid = String(supervisorChildResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${childPid}`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] Start-Process supervisor child skipped: ${String(
+      supervisorChildResult.stderr || supervisorChildResult.stdout || supervisorChildResult.error || "failed",
+    ).trim()}`,
+  );
 
   const launcherResult = spawnSync(
     "powershell.exe",
@@ -94,6 +109,32 @@ function main() {
   console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
 }
 
+function startSupervisorChild() {
+  const childArgs = [
+    "tools/desktop-service-supervisor.js",
+    realDesignMode ? "--real-design" : "--mock-design",
+    "--supervisor-child",
+  ];
+  return spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `$process = Start-Process -FilePath ${psQuote(process.execPath)} -ArgumentList ${psArray(
+        childArgs,
+      )} -WorkingDirectory ${psQuote(process.cwd())} -WindowStyle Hidden -PassThru; $process.Id`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: "utf8",
+      windowsHide: true,
+    },
+  );
+}
+
 function runSupervisorLoop() {
   assertModeSwitchAllowed();
   updateMockModeLock();
@@ -123,23 +164,20 @@ function setModeEnv() {
     process.env.ALLOW_REAL_DESIGN_START = "1";
     return;
   }
+  process.env.ALLOW_MOCK_DESIGN_START = "1";
   process.env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
   process.env.DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
 }
 
 function assertModeSwitchAllowed() {
-  if (!realDesignMode && fs.existsSync(realModeLockFile) && !findConflictingDesignLaunchers("real").length && !runtimeConfigLooksRealDesignMode()) {
-    removeIfPossible(realModeLockFile);
-    appendLog(launcherLog, `[supervisor] removed stale real mode lock before mock launch: ${realModeLockFile}`);
-  }
   if (
     !realDesignMode &&
     (fs.existsSync(realModeLockFile) ||
       findConflictingDesignLaunchers("real").length ||
-      (runtimeConfigLooksRealDesignMode() && process.env.ALLOW_MOCK_DESIGN_START !== "1"))
+      ((runtimeConfigLooksRealDesignMode() || preferredDesignModeIsReal()) && process.env.ALLOW_MOCK_DESIGN_START !== "1"))
   ) {
     throw new Error(
-      `Mock design launch is blocked because real mode is active or locked at ${realModeLockFile}. Run npm.cmd run ports:stop before switching to mock design mode.`,
+      `Mock design launch is blocked because real mode is active, preferred, or locked at ${realModeLockFile}. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode.`,
     );
   }
   if (!realDesignMode) return;
@@ -163,6 +201,7 @@ function stopConflictingDesktopServices() {
       PORTS_STACK_STARTER_PARENT_PID: String(process.ppid),
       PORTS_STACK_STARTER_MODE: realDesignMode ? "real" : "mock",
       PRESERVE_REAL_MODE_LOCK: realDesignMode ? "1" : "",
+      FORCE_PORTS_SWEEP: "1",
     },
     encoding: "utf8",
     windowsHide: true,
@@ -188,6 +227,7 @@ function findConflictingDesignLaunchers(mode) {
     "  ($_.CommandLine -replace '\\\\','/').ToLowerInvariant().Contains($root) -and",
     "  (",
     `    (($_.CommandLine -like '*start-dev-ports.js*') -and ($_.CommandLine -like '*${modeArg}*')) -or`,
+    `    (($_.CommandLine -like '*desktop-service-supervisor.js*') -and ($_.CommandLine -like '*${modeArg}*')) -or`,
     `    ($_.CommandLine -like '*${supervisorFile}*') -or`,
     `    ($_.CommandLine -like '*${stableSupervisorFile}*') -or`,
     `    ($_.CommandLine -like '*${launcherFile}*') -or`,
@@ -220,14 +260,41 @@ function runtimeConfigLooksRealDesignMode() {
   }
 }
 
+function preferredDesignModeIsReal() {
+  try {
+    return JSON.parse(fs.readFileSync(preferredDesignModeFile, "utf8"))?.mode === "real";
+  } catch {
+    return false;
+  }
+}
+
 function updateMockModeLock() {
   if (realDesignMode) return;
   fs.writeFileSync(mockModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+  writePreferredDesignMode("mock");
 }
 
 function updateRealModeLock() {
   if (!realDesignMode) return;
   fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+  writePreferredDesignMode("real");
+}
+
+function writePreferredDesignMode(mode) {
+  fs.writeFileSync(
+    preferredDesignModeFile,
+    `${JSON.stringify(
+      {
+        mode,
+        updatedAt: new Date().toISOString(),
+        launcherPid: process.pid,
+        launcherArgs: process.argv.slice(2),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }
 
 function disableConflictingLauncher() {
@@ -275,6 +342,7 @@ function buildLauncherCmd() {
 
 function launcherEnvKeys() {
   const keys = [
+    "ALLOW_MOCK_DESIGN_START",
     "NEXT_TELEMETRY_DISABLED",
     "USE_LOCAL_STORE",
     "WEB_PORT",
@@ -297,6 +365,10 @@ function launcherModeEnv() {
 
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function psArray(values) {
+  return `@(${values.map(psQuote).join(", ")})`;
 }
 
 function cmdQuote(value) {

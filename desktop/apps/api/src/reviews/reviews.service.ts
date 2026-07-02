@@ -71,6 +71,9 @@ export class ReviewsService {
 
     if (decision === "approve_send") {
       result = await this.designJobs.quickConfirmAndQueueSend(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         releaseManualLock: true,
         reviewer: payload.reviewer || "人工客服",
         releaseReason: "manual_approve_send",
@@ -174,6 +177,9 @@ export class ReviewsService {
     } else {
       customerNotes = payload.note || "人工审核通过，报价已进入微信安全发送队列";
       result = await this.quotes.queueSend(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         owner: payload.reviewer || "人工客服",
         note: customerNotes,
         releaseManualLock: true,

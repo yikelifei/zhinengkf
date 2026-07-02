@@ -39,6 +39,15 @@ function setupService(overrides = {}) {
   return { tempDir, localStore, service };
 }
 
+test("wechat manual review copy stays readable Chinese", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "apps", "api", "src", "wechat", "wechat-dispatch.service.ts"), "utf8");
+
+  assert.match(source, /高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。/);
+  assert.match(source, /客户在报价后再次选图/);
+  assert.match(source, /低价值客户已选图，已生成报价草稿/);
+  assert.doesNotMatch(source, /瀹㈡埛|楂樹环|浣庝环|鎶ヤ环|浜哄伐/);
+});
+
 function buildOrderDraft(overrides = {}) {
   const conversation = {
     id: "conversation_demo_1",
@@ -254,7 +263,7 @@ test("manual release requires explicit manual reason and keeps conversation lock
 
   await assert.rejects(
     () => service.setConversationManualLock("conversation_demo_1", { locked: false, reviewer: "test" }),
-    /explicit manual release reason/,
+    /需要填写明确的人工处理原因/,
   );
 
   const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
@@ -279,12 +288,94 @@ test("manual release requires a resolution note and keeps conversation locked", 
         reviewer: "test",
         reason: "manual_release_test",
       }),
-    /manual resolution note/,
+    /需要填写人工处理结果/,
   );
 
   const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
   assert.equal(conversation.manualLocked, true);
   assert.equal(localStore.listReviewLogs().length, reviewLogCount);
+});
+
+test("customer asset upload rejects mismatched account conversation identity", async () => {
+  const { localStore } = setupService();
+  const { AssetsService } = require("../apps/api/src/assets/assets.service");
+  const storage = {
+    saveAssetFromBase64(payload) {
+      return {
+        localPath: path.join("storage", "assets", payload.ownerType, payload.ownerId, payload.fileName),
+        sizeBytes: 12,
+      };
+    },
+    saveAssetFromText(payload) {
+      return {
+        localPath: path.join("storage", "assets", payload.ownerType, payload.ownerId, payload.fileName),
+        sizeBytes: Buffer.byteLength(payload.text || "", "utf8"),
+      };
+    },
+    saveAssetFromUrl(payload) {
+      return {
+        localPath: path.join("storage", "assets", payload.ownerType, payload.ownerId, payload.fileName),
+        sizeBytes: 0,
+      };
+    },
+  };
+  const assets = new AssetsService({}, localStore, storage);
+  const primaryConversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.ok(primaryConversation);
+
+  await assert.rejects(
+    () =>
+      assets.upload({
+        ownerType: "customer",
+        ownerId: "customer_demo_1",
+        expectedWechatAccountId: "wechat_demo_2",
+        expectedConversationId: "conversation_demo_2",
+        expectedCustomerId: "customer_demo_1",
+        role: "customer_logo",
+        fileName: "logo.png",
+        mimeType: "image/png",
+        base64: "data:image/png;base64,AAAA",
+      }),
+    /customer asset (conversation|conversation customer) identity mismatch/,
+  );
+
+  const asset = await assets.upload({
+    ownerType: "customer",
+    ownerId: primaryConversation.customerId,
+    expectedWechatAccountId: primaryConversation.wechatAccountId,
+    expectedConversationId: primaryConversation.id,
+    expectedCustomerId: primaryConversation.customerId,
+    role: "customer_logo",
+    fileName: "logo.png",
+    mimeType: "image/png",
+    base64: "data:image/png;base64,AAAA",
+  });
+
+  assert.equal(asset.ownerType, "customer");
+  assert.equal(asset.ownerId, primaryConversation.customerId);
+  assert.equal(asset.wechatAccountId, primaryConversation.wechatAccountId);
+  assert.equal(asset.conversationId, primaryConversation.id);
+  assert.equal(asset.customerId, primaryConversation.customerId);
+  assert.equal(localStore.listDesignAssets({ ownerType: "customer", ownerId: primaryConversation.customerId }).length, 1);
+  assert.equal(
+    localStore.listDesignAssets({
+      ownerType: "customer",
+      ownerId: primaryConversation.customerId,
+      wechatAccountId: primaryConversation.wechatAccountId,
+      conversationId: primaryConversation.id,
+      customerId: primaryConversation.customerId,
+    }).length,
+    1,
+  );
+  assert.equal(
+    localStore.listDesignAssets({
+      ownerType: "customer",
+      ownerId: primaryConversation.customerId,
+      conversationId: "conversation_demo_2",
+      customerId: primaryConversation.customerId,
+    }).length,
+    0,
+  );
 });
 
 test("requeue rejects send task after its design binding becomes invalid", async () => {
@@ -423,7 +514,7 @@ test("cancel rejects audited cancelled send task without overwriting audit", () 
 
   assert.throws(
     () => service.cancelSendTask(task.id, { reason: "second_cancel_should_not_overwrite" }),
-    /audited cancelled task cannot be cancelled again/,
+    /已人工取消并记录审计/,
   );
 
   const updated = localStore.getSendTask(task.id);
@@ -1498,6 +1589,118 @@ test("chat import training samples keep conversation identity and reject cross-a
   assert.equal(knowledge.wechatAccountId, "wechat_demo_1");
 });
 
+test("chat import list filters keep account customer and conversation isolated", () => {
+  const { localStore } = setupService();
+
+  const accountOneImport = localStore.createChatImport(
+    {
+      name: "账号一聊天记录",
+      source: "manual_text",
+      channel: "wechat",
+      customerId: "customer_demo_1",
+      conversationId: "conversation_demo_1",
+      wechatAccountId: "wechat_demo_1",
+      text: "客户：我要看礼盒效果图\n客服：可以，我先给您整理方案。",
+    },
+    { messageCount: 2, pairCount: 1, warnings: [], pairs: [] },
+  );
+  const accountTwoImport = localStore.createChatImport(
+    {
+      name: "账号二聊天记录",
+      source: "manual_text",
+      channel: "wechat",
+      customerId: "customer_demo_2",
+      conversationId: "conversation_demo_2",
+      wechatAccountId: "wechat_demo_2",
+      text: "客户：售后怎么处理\n客服：我帮您核对订单。",
+    },
+    { messageCount: 2, pairCount: 1, warnings: [], pairs: [] },
+  );
+
+  assert.deepEqual(
+    localStore.listChatImports({ wechatAccountId: "wechat_demo_1" }).map((item) => item.id),
+    [accountOneImport.id],
+  );
+  assert.deepEqual(
+    localStore.listChatImports({ conversationId: "conversation_demo_2", customerId: "customer_demo_2" }).map((item) => item.id),
+    [accountTwoImport.id],
+  );
+  assert.deepEqual(localStore.listChatImports({ conversationId: "conversation_demo_2", customerId: "customer_demo_1" }), []);
+});
+
+test("knowledge entry list filters keep account customer and conversation isolated", () => {
+  const { localStore } = setupService();
+  const parsed = {
+    messageCount: 2,
+    pairCount: 1,
+    warnings: [],
+    pairs: [
+      {
+        question: "我要看礼盒效果图",
+        answer: "我先按您的预算整理礼盒方案。",
+        scene: "礼盒设计",
+        agentKey: "gift_design",
+        score: 92,
+        skillHints: ["预算识别"],
+        sceneScore: 80,
+        matchedKeywords: ["礼盒"],
+        sceneCheck: { status: "clear", reason: "strong_signal", needsReview: false },
+      },
+    ],
+  };
+  const accountOneImport = localStore.createChatImport(
+    {
+      text: "demo",
+      customerId: "customer_demo_1",
+      conversationId: "conversation_demo_1",
+      wechatAccountId: "wechat_demo_1",
+    },
+    parsed,
+  );
+  const accountTwoImport = localStore.createChatImport(
+    {
+      text: "demo",
+      customerId: "customer_demo_2",
+      conversationId: "conversation_demo_2",
+      wechatAccountId: "wechat_demo_2",
+    },
+    parsed,
+  );
+  const accountOneSample = accountOneImport.samples[0];
+  const accountTwoSample = accountTwoImport.samples[0];
+
+  assert.deepEqual(
+    localStore
+      .listKnowledgeEntries({
+        agentId: accountOneSample.agentId,
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_1",
+      })
+      .map((entry) => entry.sourceId),
+    [accountOneSample.id],
+  );
+  assert.deepEqual(
+    localStore
+      .listKnowledgeEntries({
+        agentId: accountTwoSample.agentId,
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_2",
+        customerId: "customer_demo_2",
+      })
+      .map((entry) => entry.sourceId),
+    [accountTwoSample.id],
+  );
+  assert.deepEqual(
+    localStore.listKnowledgeEntries({
+      agentId: accountTwoSample.agentId,
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_1",
+    }),
+    [],
+  );
+});
+
 test("route correction training samples inherit route conversation identity", () => {
   const { localStore } = setupService();
 
@@ -1569,6 +1772,53 @@ test("route correction training samples inherit route conversation identity", ()
   assert.equal(correction.knowledgeEntry.wechatAccountId, "wechat_demo_1");
 });
 
+test("route evaluation list filters keep account customer and conversation isolated", () => {
+  const { localStore } = setupService();
+
+  const accountOneRoute = localStore.createRouteEvaluation(
+    {
+      channel: "wechat",
+      text: "我要看端午礼盒效果图",
+      customerId: "customer_demo_1",
+      conversationId: "conversation_demo_1",
+      wechatAccountId: "wechat_demo_1",
+    },
+    {
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      score: 95,
+      matchedKeywords: ["礼盒"],
+      action: "auto_agent",
+    },
+  );
+  const accountTwoRoute = localStore.createRouteEvaluation(
+    {
+      channel: "wechat",
+      text: "售后退换货怎么处理",
+      customerId: "customer_demo_2",
+      conversationId: "conversation_demo_2",
+      wechatAccountId: "wechat_demo_2",
+    },
+    {
+      agentKey: "after_sales",
+      scene: "售后服务",
+      score: 91,
+      matchedKeywords: ["售后"],
+      action: "auto_agent",
+    },
+  );
+
+  assert.deepEqual(
+    localStore.listRouteEvaluations({ wechatAccountId: "wechat_demo_1" }).map((route) => route.id),
+    [accountOneRoute.id],
+  );
+  assert.deepEqual(
+    localStore.listRouteEvaluations({ conversationId: "conversation_demo_2", customerId: "customer_demo_2" }).map((route) => route.id),
+    [accountTwoRoute.id],
+  );
+  assert.deepEqual(localStore.listRouteEvaluations({ conversationId: "conversation_demo_2", customerId: "customer_demo_1" }), []);
+});
+
 test("inbound customer image selection queues low-value quote safely", async () => {
   const { localStore, service } = setupService();
 
@@ -1614,6 +1864,8 @@ test("inbound customer image selection queues low-value quote safely", async () 
   assert.equal(result.plan.shouldQueueReply, true);
   assert.equal(result.quote.status, "send_queued");
   assert.equal(result.quote.selectedImageId, images[1].id);
+  assert.match(result.quote.customerNotes, /客户选图后，低价值报价已自动进入微信安全发送队列/);
+  assert.doesNotMatch(result.quote.customerNotes || "", /Customer selected/);
   assert.equal(result.sendTask.status, "queued");
   assert.equal(result.sendTask.quoteDraftId, result.quote.id);
   assert.equal(result.sendTask.wechatAccountId, "wechat_demo_1");
@@ -1916,4 +2168,65 @@ test("sent low-value quote can become order confirmation after customer accepts"
   assert.equal(acceptance.sendTask.guardSnapshot.automation.source, "low_value_quote_acceptance");
   assert.equal(acceptance.sendTask.guardSnapshot.automation.orderDraftId, acceptance.orderDraft.id);
   assert.match(acceptance.sendTask.payload.text, /订单|确认|9000/);
+});
+
+test("inbound payment proof attachment goes to manual verification without marking paid", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "payment_proof_manual_review_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\payment_proof_manual_review_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "付款截图发你了",
+    attachments: [{ role: "payment_proof", fileName: "付款截图.png" }],
+  });
+
+  const updatedQuote = localStore.getQuoteDraft(quote.id);
+  const notification = localStore
+    .listNotifications()
+    .find((item) => item.target?.quoteDraftId === quote.id && item.target?.reason === "payment_proof_needs_manual_verification");
+  const reviewLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "quote_draft" && log.targetId === quote.id && log.decision === "payment_proof_needs_manual_verification");
+
+  assert.equal(result.plan.type, "quote_payment_proof_manual_review");
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.sendTask, null);
+  assert.match(
+    fs.readFileSync(path.join(process.cwd(), "apps/api/src/wechat/wechat-dispatch.service.ts"), "utf8"),
+    /payment_proof_needs_manual_verification: "客户发送付款凭证，需要人工核验金额和收款状态"/,
+  );
+  assert.equal(updatedQuote.paymentStatus, "unpaid");
+  assert.equal(updatedQuote.status, "sent");
+  assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
+  assert.ok(notification);
+  assert.match(notification.body, /人工核对/);
+  assert.ok(reviewLog);
+  assert.match(reviewLog.note, /未自动改付款状态/);
 });

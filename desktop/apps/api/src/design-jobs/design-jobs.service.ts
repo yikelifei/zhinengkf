@@ -24,6 +24,7 @@ const {
   evaluateHighValueHandoff,
   evaluateLowValueDesignImageSend,
   inspectAssetReferences,
+  inspectBundleAutomationReadiness,
   inspectBundleReferences,
   inspectRealDesignReferences,
   isHighValueBudget,
@@ -601,6 +602,7 @@ export class DesignJobsService {
     const assetRefs = realRefs.assetRefs || inspectAssetReferences(job.assets || []);
     const usableRefs = [...assetRefs, ...bundleRefs].filter((item) => item.ok);
     const unusableRefs = [...assetRefs, ...bundleRefs].filter((item) => !item.ok);
+    const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
 
     checks.push({
       key: "request_identity",
@@ -626,6 +628,16 @@ export class DesignJobsService {
       detail: requiresRealImages
         ? `可用图片 ${usableRefs.length} 个，不可用 ${unusableRefs.length} 个`
         : `未强制要求真实图片，可用图片 ${usableRefs.length} 个`,
+    });
+
+    checks.push({
+      key: "bundle_automation",
+      label: "商品组合自动化",
+      ok: bundleAutomation.ok,
+      severity: "error",
+      detail: bundleAutomation.ok
+        ? "商品组合满足自动出图/报价前置规则。"
+        : `商品组合需要人工确认：${(bundleAutomation.blockers || []).join(", ") || "unknown"}`,
     });
 
     if (appConfig.designPlatformAdapter === "art_image_local") {
@@ -1866,6 +1878,6 @@ function cleanIdentityWhere(filter: { wechatAccountId?: string; conversationId?:
 function assertManualReleaseReason(reason: unknown, context: string) {
   const text = String(reason || "").trim();
   if (!text || !text.startsWith("manual_")) {
-    throw new BadRequestException(`${context} requires an explicit manual release reason`);
+    throw new BadRequestException(`${context} 需要填写明确的人工处理原因，原因编码必须以 manual_ 开头。`);
   }
 }

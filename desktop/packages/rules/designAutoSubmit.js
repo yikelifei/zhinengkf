@@ -1,6 +1,6 @@
 "use strict";
 
-const { inspectRealDesignReferences, validateDesignRequest } = require("./designWorkflow");
+const { inspectBundleAutomationReadiness, inspectRealDesignReferences, validateDesignRequest } = require("./designWorkflow");
 
 function evaluateDesignAutoSubmit(job = {}) {
   if (!job || !job.id) return skip("invalid_job", ["job"]);
@@ -18,6 +18,9 @@ function evaluateDesignAutoSubmit(job = {}) {
     assets,
   });
   if (!check.ok) return skip("missing_required_fields", check.missing || []);
+
+  const automation = inspectBundleAutomationReadiness(job.bundle || {});
+  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
 
   const requiresRealImages = job.requirements?.useRealSkuImages !== false;
   if (requiresRealImages) {
