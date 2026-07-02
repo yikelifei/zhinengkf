@@ -704,6 +704,7 @@ export default function HomePage() {
   const [wechatAccounts, setWechatAccounts] = useState<WechatAccount[]>([]);
   const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
+  const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
@@ -3408,6 +3409,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       ) {
         setWechatWorkbenchView((current) => (current === detailView ? current : detailView));
       }
+      if (
+        sectionId === "send-center" &&
+        (detailView === "queue" || detailView === "blocked" || detailView === "diagnostics")
+      ) {
+        setSendWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
@@ -3500,11 +3507,48 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ? jobs.filter((job) => job.conversationId === activeConversationId)
     : [];
   const activeConversationDesignJobCount = activeConversationDesignJobs.length;
-  const latestSendTasks = [
-    ...activeConversationSendTasks,
-    ...sendTasks.filter((task) => task.conversationId !== activeConversationId),
-  ].slice(0, 4);
+  const openSendTasks = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status));
+  const prioritizeSendTasks = (tasks: SendTask[], limit = 4) => {
+    const taskIds = new Set<string>();
+    const ordered: SendTask[] = [];
+    for (const task of [...activeConversationSendTasks, ...tasks]) {
+      if (!tasks.some((candidate) => candidate.id === task.id)) continue;
+      if (taskIds.has(task.id)) continue;
+      taskIds.add(task.id);
+      ordered.push(task);
+      if (ordered.length >= limit) break;
+    }
+    return ordered;
+  };
+  const queuedSendTasks = prioritizeSendTasks(
+    openSendTasks.filter((task) => task.status !== "blocked" && !isSendTaskConversationLocked(task)),
+  );
+  const blockedSendTasksForView = prioritizeSendTasks(
+    openSendTasks.filter(
+      (task) =>
+        task.status === "blocked" ||
+        isSendTaskConversationLocked(task) ||
+        Boolean(task.guardSnapshot?.blockedByManualLock) ||
+        task.guardSnapshot?.blockedBy === "manual_lock",
+    ),
+  );
+  const diagnosticSendTasks = prioritizeSendTasks(openSendTasks, 3);
+  const visibleSendTasks =
+    sendWorkbenchView === "blocked"
+      ? blockedSendTasksForView
+      : sendWorkbenchView === "diagnostics"
+        ? diagnosticSendTasks
+        : queuedSendTasks;
+  const visibleActiveConversationSendTaskCount = activeConversationId
+    ? visibleSendTasks.filter((task) => task.conversationId === activeConversationId).length
+    : 0;
   const blockedSendCount = sendTasks.filter((task) => task.status === "blocked").length;
+  const sendWorkbenchSummary =
+    sendWorkbenchView === "blocked"
+      ? `${blockedSendTasksForView.length} 个拦截任务优先处理，${blockedSendCount} 个总拦截`
+      : sendWorkbenchView === "diagnostics"
+        ? `桥接 ${operatorStatusName(bridgeStatus?.worker?.status)}，${sendAttempts.length} 次发送尝试`
+        : `${queuedSendTasks.length} 个可处理任务，${openSendTasks.length} 个待发送`;
   const failedAttemptCount = sendAttempts.filter((attempt) => ["blocked", "failed"].includes(attempt.status)).length;
   const latestWindowByAccount = new Map<string, WechatWindowSnapshot>();
   for (const snapshot of windowSnapshots) {
@@ -3934,6 +3978,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           ".wechat-channel-list",
           ".wechat-visual-panel",
           ".wechat-config-list",
+          ".send-panel",
+          ".send-task-list",
         ].join(", "),
       ).forEach((pane) => {
         if (pane.scrollLeft || pane.scrollTop) pane.scrollTo({ left: 0, top: 0, behavior: "auto" });
@@ -7291,13 +7337,39 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             </div>
           </section>
 
-          <section className="panel" id="send-center">
+          <section className={`panel send-workbench send-mode-${sendWorkbenchView}`} id="send-center">
             <div className="panel-head">
               <div>
                 <h2><ShieldCheck size={17} aria-hidden="true" />发送安全队列</h2>
                 <span>账号、聊天对象、最近消息三重校验</span>
               </div>
-              <ShieldCheck size={20} aria-hidden="true" />
+              <div className="segmented-control send-view-switcher" role="tablist" aria-label="发送中心视图">
+                <button
+                  type="button"
+                  className={sendWorkbenchView === "queue" ? "selected" : ""}
+                  aria-pressed={sendWorkbenchView === "queue"}
+                  onClick={() => setSendWorkbenchView("queue")}
+                >
+                  队列处理
+                </button>
+                <button
+                  type="button"
+                  className={sendWorkbenchView === "blocked" ? "selected" : ""}
+                  aria-pressed={sendWorkbenchView === "blocked"}
+                  onClick={() => setSendWorkbenchView("blocked")}
+                >
+                  拦截处理
+                </button>
+                <button
+                  type="button"
+                  className={sendWorkbenchView === "diagnostics" ? "selected" : ""}
+                  aria-pressed={sendWorkbenchView === "diagnostics"}
+                  onClick={() => setSendWorkbenchView("diagnostics")}
+                >
+                  运行诊断
+                </button>
+              </div>
+              <span className="send-view-status" role="status">{sendWorkbenchSummary}</span>
             </div>
             <div className="send-panel">
               <div className={`adapter-banner ${sendAdapter?.realSend ? "live" : "dry"}`}>
@@ -7326,25 +7398,25 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 ) : null}
               </div>
               <div className="send-actions">
-                <button type="button" className="primary" onClick={createSendTask} disabled={Boolean(busy)}>
+                <button type="button" className="primary send-action-create" onClick={createSendTask} disabled={Boolean(busy)}>
                   <Send size={16} aria-hidden="true" />创建演示发送
                 </button>
-                <button type="button" className="ghost" onClick={scanSendOps} disabled={Boolean(busy)}>
+                <button type="button" className="ghost send-action-scan" onClick={scanSendOps} disabled={Boolean(busy)}>
                   <AlertTriangle size={16} aria-hidden="true" />扫描异常
                 </button>
-                <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
+                <button type="button" className="primary send-action-process" onClick={processSafeQueue} disabled={Boolean(busy)}>
                   <ShieldCheck size={16} aria-hidden="true" />安全处理队列
                 </button>
-                <span>{sendTasks.length} 个任务，{blockedSendCount} 个已拦截，{sendAttempts.length} 次尝试，{failedAttemptCount} 次异常</span>
+                <span className="send-action-summary">{sendTasks.length} 个任务，{blockedSendCount} 个已拦截，{sendAttempts.length} 次尝试，{failedAttemptCount} 次异常</span>
               </div>
-              {activeConversationId && activeConversationSendTaskCount ? (
+              {activeConversationId && visibleActiveConversationSendTaskCount ? (
                 <div className="send-focus-hint" role="status">
-                  当前会话相关发送任务已优先显示，共 {activeConversationSendTaskCount} 个。
+                  当前视图已优先显示此会话相关任务，共 {visibleActiveConversationSendTaskCount} 个。
                 </div>
               ) : null}
               <div className="send-task-list">
-                {latestSendTasks.length ? (
-                  latestSendTasks.map((task) => {
+                {visibleSendTasks.length ? (
+                  visibleSendTasks.map((task) => {
                     const taskConversationLocked = isSendTaskConversationLocked(task);
                     const taskBlockedByManualLock =
                       Boolean(task.guardSnapshot?.blockedByManualLock) || task.guardSnapshot?.blockedBy === "manual_lock";
@@ -7385,44 +7457,75 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <SendCancelAudit task={task} />
                         <SendAttemptSummary task={task} />
                         <BridgeOutboxPreview entry={bridgeEntry} attempt={task.latestAttempt || task.attempts?.[0]} />
-                        <div className="send-task-actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => void focusConversation(task.conversation?.id || "", "conversation-center")}
-                            disabled={Boolean(busy) || !task.conversation?.id}
-                          >
-                            <MessageCircle size={16} aria-hidden="true" />定位会话
-                          </button>
-                          <button type="button" className="ghost danger" onClick={() => validateWrong(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <AlertTriangle size={16} aria-hidden="true" />错误窗口校验
-                          </button>
-                          <button type="button" className="ghost" onClick={() => validateCorrect(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <ShieldCheck size={16} aria-hidden="true" />正确窗口校验
-                          </button>
-                          <button type="button" className="ghost" onClick={() => validateCurrentWindow(task)} disabled={Boolean(busy) || task.status === "sent"}>
-                            <LockKeyhole size={16} aria-hidden="true" />当前快照校验
-                          </button>
-                          <button type="button" className="primary" onClick={() => executeActiveSend(task)} disabled={sendDisabled}>
-                            <Send size={16} aria-hidden="true" />执行当前适配器
-                          </button>
-                          <button type="button" className="primary" onClick={() => executeDryRun(task)} disabled={sendDisabled}>
-                            <Send size={16} aria-hidden="true" />演练发送
-                          </button>
-                          {taskCanBeRequeued ? (
-                            <button type="button" className="ghost" onClick={() => requeueTask(task)} disabled={Boolean(busy) || taskConversationLocked}>
-                              <RefreshCw size={16} aria-hidden="true" />重新排队
-                            </button>
+                        <div className="send-task-actions" data-send-view={sendWorkbenchView}>
+                          {sendWorkbenchView === "queue" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void focusConversation(task.conversation?.id || "", "conversation-center")}
+                                disabled={Boolean(busy) || !task.conversation?.id}
+                              >
+                                <MessageCircle size={16} aria-hidden="true" />定位会话
+                              </button>
+                              <button type="button" className="ghost" onClick={() => validateCurrentWindow(task)} disabled={Boolean(busy) || task.status === "sent"}>
+                                <LockKeyhole size={16} aria-hidden="true" />快照校验
+                              </button>
+                              <button type="button" className="primary" onClick={() => executeActiveSend(task)} disabled={sendDisabled}>
+                                <Send size={16} aria-hidden="true" />执行适配器
+                              </button>
+                              <button type="button" className="primary" onClick={() => executeDryRun(task)} disabled={sendDisabled}>
+                                <Send size={16} aria-hidden="true" />演练发送
+                              </button>
+                            </>
                           ) : null}
-                          {taskConversationLocked && taskCanBeRequeued ? (
-                            <button type="button" className="ghost danger" onClick={() => releaseManualLockAndRequeueTask(task)} disabled={Boolean(busy) || !task.conversationId}>
-                              <LockKeyhole size={16} aria-hidden="true" />解除并重排
-                            </button>
+                          {sendWorkbenchView === "blocked" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void focusConversation(task.conversation?.id || "", "conversation-center")}
+                                disabled={Boolean(busy) || !task.conversation?.id}
+                              >
+                                <MessageCircle size={16} aria-hidden="true" />定位会话
+                              </button>
+                              {taskCanBeRequeued ? (
+                                <button type="button" className="ghost" onClick={() => requeueTask(task)} disabled={Boolean(busy) || taskConversationLocked}>
+                                  <RefreshCw size={16} aria-hidden="true" />重新排队
+                                </button>
+                              ) : null}
+                              {taskConversationLocked && taskCanBeRequeued ? (
+                                <button type="button" className="ghost danger" onClick={() => releaseManualLockAndRequeueTask(task)} disabled={Boolean(busy) || !task.conversationId}>
+                                  <LockKeyhole size={16} aria-hidden="true" />解除并重排
+                                </button>
+                              ) : null}
+                              {task.status !== "sent" && task.status !== "cancelled" ? (
+                                <button type="button" className="ghost danger" onClick={() => cancelTask(task)} disabled={Boolean(busy)}>
+                                  <Ban size={16} aria-hidden="true" />取消任务
+                                </button>
+                              ) : null}
+                            </>
                           ) : null}
-                          {task.status !== "sent" && task.status !== "cancelled" ? (
-                            <button type="button" className="ghost danger" onClick={() => cancelTask(task)} disabled={Boolean(busy)}>
-                              <Ban size={16} aria-hidden="true" />取消任务
-                            </button>
+                          {sendWorkbenchView === "diagnostics" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void focusConversation(task.conversation?.id || "", "conversation-center")}
+                                disabled={Boolean(busy) || !task.conversation?.id}
+                              >
+                                <MessageCircle size={16} aria-hidden="true" />定位会话
+                              </button>
+                              <button type="button" className="ghost danger" onClick={() => validateWrong(task)} disabled={Boolean(busy) || task.status === "sent"}>
+                                <AlertTriangle size={16} aria-hidden="true" />错误窗口
+                              </button>
+                              <button type="button" className="ghost" onClick={() => validateCorrect(task)} disabled={Boolean(busy) || task.status === "sent"}>
+                                <ShieldCheck size={16} aria-hidden="true" />正确窗口
+                              </button>
+                              <button type="button" className="ghost" onClick={() => validateCurrentWindow(task)} disabled={Boolean(busy) || task.status === "sent"}>
+                                <LockKeyhole size={16} aria-hidden="true" />当前快照
+                              </button>
+                            </>
                           ) : null}
                         </div>
                       </div>
@@ -7430,8 +7533,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   })
                 ) : (
                   <div className="empty empty-cta" role="status">
-                    <strong>发送队列为空</strong>
-                    <span>创建演示发送后，可继续做窗口校验、干跑发送、重新排队和取消任务。</span>
+                    <strong>{sendWorkbenchView === "blocked" ? "没有需要人工处理的拦截任务" : sendWorkbenchView === "diagnostics" ? "没有可诊断的发送任务" : "发送队列为空"}</strong>
+                    <span>{sendWorkbenchView === "blocked" ? "当前没有被人工接管或安全守卫拦截的发送任务。" : sendWorkbenchView === "diagnostics" ? "创建或接收发送任务后，可以在这里验证窗口、桥接和回执。" : "创建演示发送后，可继续做快照校验、适配器执行和演练发送。"}</span>
                     <div className="empty-actions">
                       <button type="button" className="primary" onClick={createSendTask} disabled={Boolean(busy)}>
                         <Send size={16} aria-hidden="true" />创建演示发送

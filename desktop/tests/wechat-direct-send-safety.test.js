@@ -621,7 +621,9 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /const activeConversationSendTaskCount = activeConversationSendTasks\.length/);
   assert.doesNotMatch(page, /activeConversationSendTaskScopeMatched/);
   assert.match(page, /\.\.\.activeConversationSendTasks/);
-  assert.match(page, /latestSendTasks[\s\S]*task\.conversationId !== activeConversationId/);
+  assert.match(page, /const prioritizeSendTasks = \(tasks: SendTask\[\], limit = 4\) => \{[\s\S]*\[\.\.\.activeConversationSendTasks, \.\.\.tasks\]/);
+  assert.match(page, /prioritizeSendTasks[\s\S]*!tasks\.some\(\(candidate\) => candidate\.id === task\.id\)/);
+  assert.match(page, /const visibleActiveConversationSendTaskCount = activeConversationId[\s\S]*visibleSendTasks\.filter\(\(task\) => task\.conversationId === activeConversationId\)/);
   assert.match(page, /const taskBlockedByManualLock =[\s\S]*task\.guardSnapshot\?\.blockedByManualLock/);
   assert.match(page, /task\.guardSnapshot\?\.blockedBy === "manual_lock"/);
   assert.match(page, /className="manual-send-block"/);
@@ -640,7 +642,7 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(reviewSection, /focusConversation\(conversation\.id, "conversation-center"\)/);
   assert.match(reviewSection, /focusConversation\(conversation\.id, "send-center"\)/);
   assert.match(reviewSection, /toggleConversationManualLock\(conversation, false\)/);
-  assert.match(page, /activeConversationId && activeConversationSendTaskCount/);
+  assert.match(page, /activeConversationId && visibleActiveConversationSendTaskCount/);
   assert.match(page, /className="send-focus-hint"/);
   assert.match(css, /\.manual-lock-review-item/);
   assert.match(css, /\.manual-lock-review-actions/);

@@ -22157,3 +22157,219 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     max-width: 370px !important;
   }
 }
+
+/* Iteration 60 Send workbench split: queue, blocked recovery and diagnostics are separate operator tasks. */
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-workbench {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  height: calc(100dvh - 184px) !important;
+  min-height: 540px !important;
+  max-height: 690px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-workbench > .panel-head {
+  display: grid !important;
+  grid-template-columns: minmax(220px, 1fr) minmax(320px, 0.58fr) minmax(180px, auto) !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-switcher {
+  width: 100% !important;
+  justify-self: end !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-switcher button {
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-status {
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(232, 242, 255, 0.66);
+  color: #0a4f9f !important;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-panel {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  gap: 10px !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  padding: 14px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-panel {
+  grid-template-rows: auto auto auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center:is(.send-mode-queue, .send-mode-blocked) .adapter-banner,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center:is(.send-mode-queue, .send-mode-blocked) .bridge-summary {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-queue .send-action-scan,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked :is(.send-action-create, .send-action-process),
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics :is(.send-action-create, .send-action-process) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-actions {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  padding: 8px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(60, 60, 67, 0.1) !important;
+  background: rgba(247, 247, 249, 0.72) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-actions,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-actions {
+  grid-template-columns: minmax(160px, 0.32fr) minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-actions > span {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-list {
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  display: grid !important;
+  grid-auto-rows: max-content !important;
+  align-content: start !important;
+  gap: 10px !important;
+  overflow: auto !important;
+  padding: 2px 2px 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task {
+  display: grid !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  padding: 12px 12px 12px 16px !important;
+  background:
+    url("/apple-white-panel-map.svg") right -74px top -70px / 180px 150px no-repeat,
+    linear-gradient(180deg, #ffffff 0%, #f9fafc 100%) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 7px !important;
+  margin-top: 0 !important;
+  overflow: visible !important;
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-task-actions,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-task-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions :is(button, .primary, .ghost) {
+  width: 100% !important;
+  min-width: 0 !important;
+  justify-content: center !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-task:not(.blocked) {
+  border-color: rgba(255, 149, 0, 0.32) !important;
+}
+
+@media (max-width: 1080px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-workbench > .panel-head {
+    grid-template-columns: minmax(180px, 1fr) minmax(300px, 0.72fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-status {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-workbench {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: hidden auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-workbench > .panel-head {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-switcher {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    width: 100% !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-switcher button {
+    padding-inline: 4px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-view-status {
+    justify-self: stretch;
+    white-space: normal;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-panel {
+    grid-template-rows: auto auto minmax(0, 1fr) !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-actions > span {
+    grid-column: 1 / -1 !important;
+    white-space: normal !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-list {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-task-actions,
+  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-task-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
