@@ -705,6 +705,7 @@ export default function HomePage() {
   const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
   const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
+  const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "logs">("handoff");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
@@ -3415,6 +3416,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       ) {
         setSendWorkbenchView((current) => (current === detailView ? current : detailView));
       }
+      if (
+        sectionId === "review-center" &&
+        (detailView === "handoff" || detailView === "design" || detailView === "quote" || detailView === "logs")
+      ) {
+        setReviewWorkbenchView((current) => (current === detailView ? current : detailView));
+      }
       return workspaceSectionIds.has(sectionId) ? sectionId : null;
     };
     const scrollToHashSection = (behavior: ScrollBehavior = "auto") => {
@@ -3560,6 +3567,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const activeConversationRoute = activeConversationId
     ? routeEvaluations.find((route) => route.conversationId === activeConversationId) || null
     : latestRoute || null;
+  const wechatChannels = wechatChannelStatus?.channels || [];
+  const wechatRuntimeIssueChannels = wechatChannels.filter((channel) => channel.status === "needs_runtime");
+  const wechatConfigIssueChannels = wechatChannels.filter((channel) => channel.status === "needs_config");
+  const activeWechatChannelName = wechatConversationChannelLabel(activeConversation?.channel);
   const activeQuote = activeJob ? quotes.find((quote) => quote.designJobId === activeJob.id) || null : null;
   const activeSelectedImage = activeJob?.images?.find((image) => image.selected) || null;
   const activePreflightResult = preflightResult?.designJobId === activeJob?.id ? preflightResult : null;
@@ -4056,6 +4067,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const pendingSendTaskCount = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status)).length;
   const manualReviewJobCount = jobs.filter((job) => job.status === "manual_review").length;
   const manualLockedConversations = conversations.filter((conversation) => conversation.manualLocked);
+  const wechatVisualFlowSteps = wechatChannelStatus?.visualFlow?.length
+    ? wechatChannelStatus.visualFlow
+    : [
+        { key: "inbound", label: "消息接入", detail: `${conversations.length} 个会话` },
+        { key: "route", label: "智能路由", detail: `${routeEvaluations.length} 次评估` },
+        { key: "review", label: "人工接管", detail: `${manualLockedConversations.length} 个锁定会话` },
+        { key: "safe_send", label: "安全发送", detail: `${pendingSendTaskCount} 个待处理任务` },
+      ];
   const manualLockLogByConversationId = useMemo(() => {
     const entries = new Map<string, ReviewLog>();
     for (const log of reviewCenter.logs) {
@@ -4126,6 +4145,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     manualReviewJobCount || manualLockedConversations.length
       ? `${manualReviewJobCount} 个设计待人工审核 · ${manualLockedConversations.length} 个人工接管`
       : "审核中心空闲";
+  const reviewWorkbenchSummary =
+    reviewWorkbenchView === "design"
+      ? `${reviewCenter.designJobs.length} 个设计待审`
+      : reviewWorkbenchView === "quote"
+        ? `${reviewCenter.quoteDrafts.length} 个报价待审`
+        : reviewWorkbenchView === "logs"
+          ? `${reviewCenter.logs.length} 条审核记录`
+          : `${manualLockedConversations.length} 个人工接管`;
   const automationReadinessPrimaryCheck = getAutomationReadinessPrimaryCheck(automationReadiness);
 
   return (
@@ -4752,46 +4779,130 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <strong>可视化智能客服</strong>
                       <small>接入、路由、设计报价、人工审核、安全发送一条链</small>
                     </div>
+                    <div className="wechat-visual-readiness" aria-label="通道运行摘要">
+                      <span><strong>{wechatChannelStatus?.summary.ready ?? 0}</strong> 已就绪</span>
+                      <span><strong>{wechatRuntimeIssueChannels.length}</strong> 待运行</span>
+                      <span><strong>{wechatConfigIssueChannels.length}</strong> 待配置</span>
+                    </div>
                   </div>
-                  <div className="wechat-flow">
-                    {(wechatChannelStatus?.visualFlow || [
-                      { key: "inbound", label: "消息接入", detail: `${conversations.length} 个会话` },
-                      { key: "route", label: "智能路由", detail: `${routeEvaluations.length} 次评估` },
-                      { key: "review", label: "人工接管", detail: `${manualLockedConversations.length} 个锁定会话` },
-                      { key: "safe_send", label: "安全发送", detail: `${pendingSendTaskCount} 个待处理任务` },
-                    ]).map((step, index) => (
-                      <div className="wechat-flow-step" key={step.key}>
-                        <i>{index + 1}</i>
+                  <div className="wechat-service-canvas">
+                    <div className="wechat-intake-lane" aria-label="接入通道">
+                      <div className="wechat-lane-title">
+                        <Network size={15} aria-hidden="true" />
                         <div>
-                          <strong>{step.label}</strong>
-                          <span>{step.detail}</span>
+                          <strong>接入通道</strong>
+                          <span>消息先统一进入入站管线</span>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <div className="wechat-agent-live">
-                    <div>
-                      <span>当前会话</span>
-                      <strong>{activeConversation?.title || "未选择客户"}</strong>
+                      <div className="wechat-lane-card-list">
+                        {wechatChannels.length ? (
+                          wechatChannels.map((channel) => (
+                            <button
+                              type="button"
+                              className={`wechat-lane-card ${channel.status}`}
+                              key={channel.key}
+                              onClick={() => setWechatWorkbenchView(channel.status === "needs_config" ? "config" : "channels")}
+                              disabled={Boolean(busy)}
+                              aria-label={`${channel.label}：${wechatChannelStatusLabel(channel.status)}`}
+                            >
+                              <span aria-hidden="true">
+                                {channel.key === "work_wechat" ? (
+                                  <Building2 size={16} />
+                                ) : channel.key === "mini_program" ? (
+                                  <Smartphone size={16} />
+                                ) : (
+                                  <Monitor size={16} />
+                                )}
+                              </span>
+                              <strong>{channel.label}</strong>
+                              <small>{wechatChannelStatusLabel(channel.status)}</small>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="wechat-lane-empty">等待后端通道状态</div>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <span>最新路由</span>
-                      <strong>{latestRoute ? `${agentNameByKey(agents, latestRoute.agentKey)} · ${readableScene(latestRoute.scene, "未识别")}` : "暂无路由"}</strong>
+                    <div className="wechat-flow-lane" aria-label="智能客服处理链路">
+                      <div className="wechat-lane-title">
+                        <Bot size={15} aria-hidden="true" />
+                        <div>
+                          <strong>客服处理链路</strong>
+                          <span>路由、设计、报价、审核和发送分步推进</span>
+                        </div>
+                      </div>
+                      <div className="wechat-flow">
+                        {wechatVisualFlowSteps.map((step, index) => (
+                          <button
+                            className="wechat-flow-step"
+                            key={step.key}
+                            type="button"
+                            onClick={() => {
+                              if (step.key === "route") scrollToWorkspaceSection("routing-center");
+                              else if (step.key === "design") scrollToWorkspaceSection("design-center");
+                              else if (step.key === "review") scrollToWorkspaceSection("review-center");
+                              else if (step.key === "safe_send") scrollToWorkspaceSection("send-center");
+                              else scrollToWorkspaceSection("conversation-center");
+                            }}
+                            disabled={Boolean(busy)}
+                          >
+                            <i>{index + 1}</i>
+                            <div>
+                              <strong>{step.label}</strong>
+                              <span>{step.detail}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <span>处理摘要</span>
-                      <strong>{inboundSummary || "等待客户消息进入"}</strong>
+                    <div className="wechat-live-lane" aria-label="当前客服现场">
+                      <div className="wechat-lane-title">
+                        <MessageCircle size={15} aria-hidden="true" />
+                        <div>
+                          <strong>当前客服现场</strong>
+                          <span>{activeConversation ? activeWechatChannelName : "选择会话后显示实时链路"}</span>
+                        </div>
+                      </div>
+                      <div className="wechat-agent-live">
+                        <div>
+                          <span>当前会话</span>
+                          <strong>{activeConversation?.title || "未选择客户"}</strong>
+                        </div>
+                        <div>
+                          <span>匹配 Agent</span>
+                          <strong>{activeConversationRoute ? `${agentNameByKey(agents, activeConversationRoute.agentKey)} · ${readableScene(activeConversationRoute.scene, "未识别")}` : "暂无路由"}</strong>
+                        </div>
+                        <div>
+                          <span>设计/发送负载</span>
+                          <strong>{activeConversationDesignJobCount} 个设计任务 · {activeConversationSendTaskCount} 个发送任务</strong>
+                        </div>
+                        <div>
+                          <span>处理摘要</span>
+                          <strong>{inboundSummary || "等待客户消息进入"}</strong>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div className="wechat-visual-actions">
                     <button type="button" className="primary" onClick={processRouteInbound} disabled={Boolean(busy)}>
                       <Bot size={15} aria-hidden="true" />处理当前消息
                     </button>
-                    <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("conversation-center")} disabled={Boolean(busy)}>
-                      <MessageCircle size={15} aria-hidden="true" />查看会话
+                    <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                      <Check size={15} aria-hidden="true" />配置检查
                     </button>
                     <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("review-center")} disabled={Boolean(busy)}>
                       <ShieldAlert size={15} aria-hidden="true" />人工审核
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setSendWorkbenchView("queue");
+                        scrollToWorkspaceSection("send-center");
+                      }}
+                      disabled={Boolean(busy)}
+                    >
+                      <Send size={15} aria-hidden="true" />安全发送
                     </button>
                   </div>
                 </div>
@@ -7600,13 +7711,47 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         </section>
 
         <section className="review-grid">
-          <section className="panel" id="review-center">
+          <section className={`panel review-workbench review-mode-${reviewWorkbenchView}`} id="review-center">
             <div className="panel-head">
               <div>
                 <h2><ShieldAlert size={17} aria-hidden="true" />人工审核中心</h2>
                 <span>高价值客户、失败任务、超时任务和待审核报价统一处理</span>
               </div>
-              <ShieldCheck size={20} aria-hidden="true" />
+              <div className="segmented-control review-view-switcher" role="tablist" aria-label="人工审核中心视图">
+                <button
+                  type="button"
+                  className={reviewWorkbenchView === "handoff" ? "selected" : ""}
+                  aria-pressed={reviewWorkbenchView === "handoff"}
+                  onClick={() => setReviewWorkbenchView("handoff")}
+                >
+                  人工接管
+                </button>
+                <button
+                  type="button"
+                  className={reviewWorkbenchView === "design" ? "selected" : ""}
+                  aria-pressed={reviewWorkbenchView === "design"}
+                  onClick={() => setReviewWorkbenchView("design")}
+                >
+                  设计审核
+                </button>
+                <button
+                  type="button"
+                  className={reviewWorkbenchView === "quote" ? "selected" : ""}
+                  aria-pressed={reviewWorkbenchView === "quote"}
+                  onClick={() => setReviewWorkbenchView("quote")}
+                >
+                  报价审核
+                </button>
+                <button
+                  type="button"
+                  className={reviewWorkbenchView === "logs" ? "selected" : ""}
+                  aria-pressed={reviewWorkbenchView === "logs"}
+                  onClick={() => setReviewWorkbenchView("logs")}
+                >
+                  审核记录
+                </button>
+              </div>
+              <span className="review-view-status">{reviewWorkbenchSummary}</span>
             </div>
             <div className="review-panel">
               <div className="review-summary">
@@ -7616,7 +7761,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   value={reviewCenter.designJobs.length}
                   tone="amber"
                   ariaControls="review-center"
-                  onClick={() => scrollToWorkspaceSection("review-center")}
+                  onClick={() => {
+                    setReviewWorkbenchView("design");
+                    scrollToWorkspaceSection("review-center");
+                  }}
                 />
                 <Metric
                   icon={<ReceiptText size={20} aria-hidden="true" />}
@@ -7624,7 +7772,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   value={reviewCenter.quoteDrafts.length}
                   tone="blue"
                   ariaControls="review-center"
-                  onClick={() => scrollToWorkspaceSection("review-center")}
+                  onClick={() => {
+                    setReviewWorkbenchView("quote");
+                    scrollToWorkspaceSection("review-center");
+                  }}
                 />
                 <Metric
                   icon={<LockKeyhole size={20} aria-hidden="true" />}
@@ -7632,7 +7783,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   value={manualLockedConversations.length}
                   tone="red"
                   ariaControls="review-center"
-                  onClick={() => scrollToWorkspaceSection("review-center")}
+                  onClick={() => {
+                    setReviewWorkbenchView("handoff");
+                    scrollToWorkspaceSection("review-center");
+                  }}
                 />
                 <Metric
                   icon={<Check size={20} aria-hidden="true" />}
@@ -7640,7 +7794,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   value={reviewCenter.logs.length}
                   tone="green"
                   ariaControls="review-center"
-                  onClick={() => scrollToWorkspaceSection("review-center")}
+                  onClick={() => {
+                    setReviewWorkbenchView("logs");
+                    scrollToWorkspaceSection("review-center");
+                  }}
                 />
               </div>
               {manualLockedConversations.length ? (
@@ -7700,7 +7857,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <div className="review-list">
                   <h3><ShieldCheck size={16} aria-hidden="true" />设计审核</h3>
                   {reviewCenter.designJobs.length ? (
-                    reviewCenter.designJobs.slice(0, 5).map((job) => {
+                    <>
+                    {reviewCenter.designJobs.slice(0, 2).map((job) => {
                       const totalImages = job.images?.length || 0;
                       const localImageCount = (job.images || []).filter((image) => Boolean(image.localPath)).length;
                       return (
@@ -7751,7 +7909,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </div>
                       </div>
                       );
-                    })
+                    })}
+                    {reviewCenter.designJobs.length > 2 ? (
+                      <button
+                        type="button"
+                        className="review-list-more"
+                        onClick={() => scrollToWorkspaceSection("design-center")}
+                        disabled={Boolean(busy)}
+                      >
+                        还有 {reviewCenter.designJobs.length - 2} 个设计任务，请进入设计中心连续处理
+                      </button>
+                    ) : null}
+                    </>
                   ) : (
                 <div className="empty empty-cta" role="status">
                   <strong>暂无待审核设计任务</strong>
@@ -7770,7 +7939,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <div className="review-list">
                   <h3><ReceiptText size={16} aria-hidden="true" />报价审核</h3>
                   {reviewCenter.quoteDrafts.length ? (
-                    reviewCenter.quoteDrafts.slice(0, 5).map((quote) => (
+                    <>
+                    {reviewCenter.quoteDrafts.slice(0, 2).map((quote) => (
                       <div className="review-card quote" key={quote.id}>
                         <button
                           type="button"
@@ -7804,7 +7974,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           </button>
                         </div>
                       </div>
-                    ))
+                    ))}
+                    {reviewCenter.quoteDrafts.length > 2 ? (
+                      <button
+                        type="button"
+                        className="review-list-more"
+                        onClick={() => scrollToWorkspaceSection("quote-center")}
+                        disabled={Boolean(busy)}
+                      >
+                        还有 {reviewCenter.quoteDrafts.length - 2} 个报价草稿，请进入报价中心连续处理
+                      </button>
+                    ) : null}
+                    </>
                   ) : (
                 <div className="empty empty-cta" role="status">
                   <strong>暂无待审核报价</strong>
@@ -9863,6 +10044,17 @@ function wechatChannelLabel(channel: WechatChannelKey) {
     mini_program: "微信小程序",
   };
   return labels[channel] || channel;
+}
+
+function wechatConversationChannelLabel(channel?: string | null) {
+  const labels: Record<string, string> = {
+    wechat: "个人微信",
+    personal_wechat: "个人微信",
+    work_wechat: "企业微信",
+    mini_program: "微信小程序",
+  };
+  const key = String(channel || "").trim();
+  return key ? labels[key] || key : "未绑定通道";
 }
 
 function wechatChannelStatusLabel(status: string) {

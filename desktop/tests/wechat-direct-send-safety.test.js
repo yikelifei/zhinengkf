@@ -119,8 +119,9 @@ test("frontend conversation focus actions refresh scoped business lists", () => 
     page.indexOf("<div className=\"send-task-list\">"),
     page.indexOf("<section className=\"panel review-panel\""),
   );
+  const reviewCenterIdIndex = page.indexOf("id=\"review-center\"");
   const reviewSection = page.slice(
-    page.indexOf("<section className=\"panel\" id=\"review-center\""),
+    page.lastIndexOf("<section", reviewCenterIdIndex),
     page.indexOf("<section className=\"panel deal-panel\""),
   );
   const readinessSection = page.slice(
@@ -606,8 +607,9 @@ test("review center renders manual lock audit details", () => {
 test("review center exposes current manual locked conversations", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
+  const reviewCenterIdIndex = page.indexOf("id=\"review-center\"");
   const reviewSection = page.slice(
-    page.indexOf("<section className=\"panel\" id=\"review-center\">"),
+    page.lastIndexOf("<section", reviewCenterIdIndex),
     page.indexOf("<section className=\"quote-grid\""),
   );
 

@@ -22367,9 +22367,641 @@ body .apple-light-shell.shell .workspace[data-active-section="send-center"] #sen
     overflow: visible !important;
   }
 
-  body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions,
+body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center .send-task-actions,
   body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-blocked .send-task-actions,
   body .apple-light-shell.shell .workspace[data-active-section="send-center"] #send-center.send-mode-diagnostics .send-task-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Iteration 61 WeChat visual service canvas and review handoff containment. */
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-visual-panel {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  overflow: hidden !important;
+  background:
+    url("/apple-white-panel-map.svg") right -110px top -96px / 300px 220px no-repeat,
+    linear-gradient(180deg, #ffffff 0%, #fbfcff 100%) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-head {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(70px, 1fr));
+  gap: 6px;
+  min-width: 250px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 12px;
+  background: rgba(247, 248, 250, 0.82);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness strong {
+  color: var(--text-strong);
+  font-size: 15px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.42fr) minmax(360px, 0.9fr) minmax(260px, 0.52fr);
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] :is(.wechat-intake-lane, .wechat-flow-lane, .wechat-live-lane) {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title > svg {
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border-radius: 9px;
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title strong,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title strong {
+  color: var(--text-strong);
+  font-size: 13.5px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-title span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card-list,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 13px;
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.035);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.ready {
+  border-color: rgba(52, 199, 89, 0.22);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.needs_runtime {
+  border-color: rgba(255, 149, 0, 0.28);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.needs_config {
+  border-color: rgba(255, 59, 48, 0.22);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card strong,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card small,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step strong,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card small {
+  justify-self: end;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.1);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-empty {
+  border: 1px dashed rgba(60, 60, 67, 0.18);
+  border-radius: 13px;
+  padding: 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step {
+  grid-template-columns: 32px minmax(0, 1fr);
+  min-height: 62px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step i {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #ffffff;
+  font-style: normal;
+  font-weight: 800;
+  box-shadow: 0 8px 20px rgba(0, 122, 255, 0.22);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live div {
+  display: grid;
+  gap: 4px;
+  min-height: 64px;
+  padding: 10px 11px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 13px;
+  background: rgba(247, 248, 250, 0.84);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live span,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live span {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-actions {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-actions :is(button, .primary, .ghost) {
+  width: 100% !important;
+  justify-content: center !important;
+  min-width: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-panel {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, auto) minmax(0, 1fr) auto !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-list {
+  max-height: 188px !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+  align-content: start !important;
+  margin-bottom: 8px !important;
+  padding: 0 2px 6px 0 !important;
+  scrollbar-width: thin;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-item {
+  align-items: stretch !important;
+  min-height: 98px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-main {
+  display: grid !important;
+  align-content: start !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-main small,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-main em,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-main mark {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-columns {
+  max-height: none !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-log-list {
+  max-height: 118px !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+  margin-top: 8px !important;
+  padding-right: 2px !important;
+}
+
+@media (max-width: 1080px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas {
+    grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-live-lane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-visual-panel {
+    grid-template-rows: auto auto auto !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-head,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-actions {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    min-width: 0 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] :is(.wechat-intake-lane, .wechat-flow-lane, .wechat-live-lane),
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card-list,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card {
+    grid-template-columns: 28px minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card small {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-panel {
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-columns,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-log-list {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-item {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .manual-lock-review-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step {
+  min-height: 43px !important;
+  padding-block: 5px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-flow-lane {
+  gap: 8px !important;
+  padding-block: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow {
+  gap: 6px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step i {
+  width: 26px !important;
+  height: 26px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live {
+  gap: 7px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-agent-live div {
+  min-height: 50px !important;
+  padding-block: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-workbench {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-workbench > .panel-head {
+  display: grid !important;
+  grid-template-columns: minmax(230px, 1fr) minmax(390px, 0.72fr) minmax(150px, auto) !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-switcher {
+  width: 100% !important;
+  justify-self: end !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-switcher button {
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-status {
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(232, 242, 255, 0.66);
+  color: #0a4f9f;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-panel {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding: 14px !important;
+  gap: 10px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .review-panel,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-panel,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-panel,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-panel {
+  grid-template-rows: auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff :is(.review-columns, .review-log-list),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design :is(.manual-lock-review-list, .review-log-list),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote :is(.manual-lock-review-list, .review-log-list),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs :is(.manual-lock-review-list, .review-columns) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-columns,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-columns > .review-list:nth-child(2),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns > .review-list:nth-child(1) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-list,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-list,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-list,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-log-list {
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  overflow: auto !important;
+  align-content: start !important;
+  padding: 2px 2px 12px 0 !important;
+  margin: 0 !important;
+  scrollbar-width: thin;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-item {
+  min-height: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-main mark {
+  justify-self: start !important;
+  max-width: 100% !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-log-list {
+  display: grid !important;
+  gap: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list {
+  display: grid !important;
+  grid-auto-rows: max-content !important;
+  align-content: start !important;
+  gap: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list h3 {
+  margin-bottom: 2px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card {
+  gap: 7px !important;
+  min-height: 0 !important;
+  padding: 10px 10px 10px 14px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card + .review-card {
+  margin-top: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card p,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card small {
+  margin-top: 3px !important;
+  line-height: 1.34 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-actions {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
+  gap: 7px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-actions :is(button, .primary, .ghost) {
+  min-height: 32px !important;
+  padding-block: 0 !important;
+  width: 100% !important;
+  justify-content: center !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-flow-lane {
+  gap: 7px !important;
+  padding: 9px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-flow-lane .wechat-lane-title {
+  grid-template-columns: 24px minmax(0, 1fr) !important;
+  gap: 7px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-flow-lane .wechat-lane-title > svg {
+  width: 24px !important;
+  height: 24px !important;
+  padding: 5px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow {
+  gap: 4px !important;
+  overflow: visible !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step {
+  grid-template-columns: 24px minmax(0, 1fr) !important;
+  min-height: 36px !important;
+  padding: 4px 8px !important;
+  gap: 7px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step i {
+  width: 22px !important;
+  height: 22px !important;
+  font-size: 11.5px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-service-canvas .wechat-flow-step span {
+  margin-top: 1px !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list {
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-list-more {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  width: 100%;
+  border: 1px solid rgba(0, 122, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(232, 242, 255, 0.72);
+  color: #0a4f9f;
+  font-size: 12.5px;
+  font-weight: 800;
+  text-align: center;
+  cursor: pointer;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-list-more:hover {
+  background: rgba(0, 122, 255, 0.12);
+}
+
+@media (max-width: 1080px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-workbench > .panel-head {
+    grid-template-columns: minmax(200px, 1fr) minmax(360px, 0.8fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-status {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-workbench {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-workbench > .panel-head,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-switcher {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-switcher {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-view-status {
+    justify-self: stretch;
+    white-space: normal;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center .review-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-log-list {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
 }
