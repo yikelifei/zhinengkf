@@ -246,7 +246,8 @@ export class DesignPlatformClient {
 
   async getDesignJob(externalJobId: string) {
     if (this.useArtImageLocalAdapter()) {
-      const job = this.getArtImageLocalJob(externalJobId);
+      const job = this.artImageJobs.get(externalJobId);
+      if (!job) return this.missingArtImageLocalJob(externalJobId);
       return {
         externalJobId,
         jobId: externalJobId,
@@ -262,7 +263,8 @@ export class DesignPlatformClient {
 
   async getDesignJobResults(externalJobId: string) {
     if (this.useArtImageLocalAdapter()) {
-      const job = this.getArtImageLocalJob(externalJobId);
+      const job = this.artImageJobs.get(externalJobId);
+      if (!job) return this.missingArtImageLocalJob(externalJobId);
       return {
         externalJobId,
         jobId: externalJobId,
@@ -481,6 +483,16 @@ export class DesignPlatformClient {
     return job;
   }
 
+  private missingArtImageLocalJob(externalJobId: string) {
+    return {
+      externalJobId,
+      jobId: externalJobId,
+      status: "failed" as const,
+      images: [],
+      errorMessage: "local design platform job state was lost; the customer-service platform should retry this design job",
+    };
+  }
+
   private unwrapApiData(data: unknown) {
     if (data && typeof data === "object" && "ok" in data && "data" in data) {
       return (data as { data: unknown }).data;
@@ -614,7 +626,20 @@ function sanitizeArtImageLocalRaw(value: unknown): unknown {
 
 function isAcceptedReferenceUrl(value: string) {
   if (value.startsWith("/local-assets/") || value.startsWith("/generated/")) return true;
+  if (isLoopbackDesignReferenceUrl(value)) return true;
   return /^https:\/\/[^\s]+$/i.test(value);
+}
+
+function isLoopbackDesignReferenceUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:") return false;
+    if (!url.pathname.startsWith("/local-assets/") && !url.pathname.startsWith("/generated/")) return false;
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 function inferMimeType(input: string, fileName: string, localPath: string) {

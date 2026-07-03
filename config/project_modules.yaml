@@ -8,7 +8,7 @@ modules:
     title: "微信主客服闭环"
     status: "running"
     purpose: "保持微信作为主要成交和客服承接阵地，稳定收消息、生成回复、发送回复、记录会话。"
-    doc: "docs/projects/01_wechat_core.md"
+    doc: "docs/agent_tasks/01_wechat_core.md"
     inputs:
       - "微信 PC 客户端消息"
       - "config/settings.yaml"
@@ -35,7 +35,7 @@ modules:
     title: "抖音/小红书平台线索承接"
     status: "partial"
     purpose: "把抖音、小红书来的客户作为获客线索记录下来，最终引导到微信成交。"
-    doc: "docs/projects/02_platform_lead_capture.md"
+    doc: "docs/agent_tasks/02_platform_lead_capture.md"
     inputs:
       - "平台来源"
       - "客户昵称"
@@ -62,7 +62,7 @@ modules:
     title: "知识库与真人话术学习"
     status: "partial"
     purpose: "从真实微信聊天记录中提取 FAQ、客户异议和高转化真人话术，人工审核后进入知识库。"
-    doc: "docs/projects/03_knowledge_learning.md"
+    doc: "docs/agent_tasks/03_knowledge_learning.md"
     inputs:
       - "微信聊天记录"
       - "人工客服回复"
@@ -90,7 +90,7 @@ modules:
     title: "智能回复与安全护栏"
     status: "running"
     purpose: "用规则、知识库、AI 和安全护栏生成自然、可靠、可控的客服回复。"
-    doc: "docs/projects/04_smart_reply_engine.md"
+    doc: "docs/agent_tasks/04_smart_reply_engine.md"
     inputs:
       - "客户消息"
       - "会话上下文"
@@ -118,7 +118,7 @@ modules:
     title: "高价值客户筛选"
     status: "running"
     purpose: "根据数量、预算、交期、企业采购、联系方式等信息筛出值得人工优先跟进的客户。"
-    doc: "docs/projects/05_high_value_leads.md"
+    doc: "docs/agent_tasks/05_high_value_leads.md"
     inputs:
       - "客户线索"
       - "会话阶段"
@@ -144,7 +144,7 @@ modules:
     title: "报价准备和跟进任务"
     status: "running"
     purpose: "检查报价必填字段是否齐全，并生成今日跟进任务。"
-    doc: "docs/projects/06_quote_and_followup.md"
+    doc: "docs/agent_tasks/06_quote_and_followup.md"
     inputs:
       - "客户线索"
       - "报价必填字段"
@@ -173,7 +173,7 @@ modules:
     title: "出图提示词和任务队列"
     status: "partial"
     purpose: "从客户需求中提取出图提示词，调用出图软件生成图片，修改交给人工处理。"
-    doc: "docs/projects/07_image_prompt_jobs.md"
+    doc: "docs/agent_tasks/07_image_prompt_jobs.md"
     inputs:
       - "客户需求"
       - "礼盒品类"
@@ -201,7 +201,7 @@ modules:
     title: "本地 API 和外部软件集成"
     status: "partial"
     purpose: "为 Web 控制台、出图软件和后续平台服务提供稳定 API。"
-    doc: "docs/projects/08_open_api.md"
+    doc: "docs/agent_tasks/08_open_api.md"
     inputs:
       - "HTTP 请求"
       - "API Key"
@@ -228,7 +228,7 @@ modules:
     title: "统一工作台和运营控制台"
     status: "partial"
     purpose: "把线索、会话、高价值客户、人工接管、报表和系统状态集中到一个终端。"
-    doc: "docs/projects/09_console_workspace.md"
+    doc: "docs/agent_tasks/09_console_workspace.md"
     inputs:
       - "数据库"
       - "报表"
@@ -259,7 +259,7 @@ modules:
     title: "测试、验收、备份和上线"
     status: "running"
     purpose: "让项目可以自测、自查、备份、验收，减少人工逐个找 bug。"
-    doc: "docs/projects/10_quality_release.md"
+    doc: "docs/agent_tasks/10_quality_release.md"
     inputs:
       - "项目代码"
       - "配置文件"

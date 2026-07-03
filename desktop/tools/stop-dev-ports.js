@@ -5,13 +5,20 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(desktopRoot, ".runtime");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
+const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const stackStarterRealLockFile = path.join(runtimeDir, "ports-stack-starter-real.lock");
+const stackStarterMockLockFile = path.join(runtimeDir, "ports-stack-starter-mock.lock");
+const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const preserveRealModeLock = process.env.PRESERVE_REAL_MODE_LOCK === "1";
+const preserveMockRepairLock = process.env.PRESERVE_MOCK_REPAIR_LOCK === "1";
 const forceProcessSweep = process.env.FORCE_PORTS_SWEEP === "1";
 const skipStackStarterLaunchers = process.env.PORTS_STOP_SKIP_STACK_STARTERS === "1";
 const protectedStarterMode = /^(mock|real)$/.test(process.env.PORTS_STACK_STARTER_MODE || "")
@@ -32,6 +39,12 @@ function main() {
   const recordedPids = new Set();
   const stoppedPids = new Set();
   const attemptedPids = new Set();
+
+  stopManagedLauncherProcesses(stoppedPids, attemptedPids);
+  stopManagedWrapperProcesses(stoppedPids, attemptedPids);
+  stopManagedKeeperProcesses(stoppedPids, attemptedPids);
+  stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
+  waitForNoManagedPortOwners(2500);
 
   if (!entries.length) {
     console.log("No launcher-recorded processes were found.");
@@ -77,6 +90,7 @@ function main() {
 
 function hasManagedRuntimeState() {
   if (fs.existsSync(mockModeLockFile) || fs.existsSync(realModeLockFile)) return true;
+  if (fs.existsSync(stackStarterRealLockFile) || fs.existsSync(stackStarterMockLockFile)) return true;
   if (listManagedPortOwners().length) return true;
   if (findManagedWrapperPids().length) return true;
   if (findManagedLauncherPids().length) return true;
@@ -88,6 +102,10 @@ function hasManagedRuntimeState() {
 
 function cleanupRuntimeRecords() {
   fs.rmSync(pidFile, { force: true });
+  fs.rmSync(keepAliveHeartbeatFile, { force: true });
+  fs.rmSync(stackStarterRealLockFile, { force: true });
+  fs.rmSync(stackStarterMockLockFile, { force: true });
+  if (!preserveMockRepairLock) fs.rmSync(mockRepairLockFile, { force: true });
   fs.rmSync(mockModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(realModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(preferredDesignModeFile, { force: true });
@@ -226,6 +244,7 @@ function findManagedWrapperPids() {
   const projectWebBuildWrapperPattern = /node_modules\/next\/dist\/bin\/next build apps\/web/;
   const standaloneWebWrapperPattern =
     /apps\/web\/\.next\/standalone\/apps\/web.*node\s+server\.js|node(?:\.exe)?"?\s+.*apps\/web\/\.next\/standalone\/apps\/web\/server\.js/;
+  const runtimeWebWrapperPattern = /\.runtime\/web-standalone-server\.js/;
   const result = spawnSync(
     "powershell.exe",
     [
@@ -254,7 +273,7 @@ function findManagedWrapperPids() {
         ? normalizePathText(getParentCommandLine(pid))
         : "";
       const runtimeWrapper =
-        commandLine.includes(normalizedRuntime) &&
+        (commandLine.includes(normalizedRuntime) || commandLine.includes(normalizedRoot)) &&
         (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine));
       const projectWebDevWrapper = commandLine.includes(normalizedRoot) && projectWebDevWrapperPattern.test(commandLine);
       const projectWebBuildWrapper = commandLine.includes(normalizedRoot) && projectWebBuildWrapperPattern.test(commandLine);
@@ -267,6 +286,7 @@ function findManagedWrapperPids() {
         projectWebDevWrapper ||
         projectWebBuildWrapper ||
         projectStandaloneWebServer ||
+        runtimeWebWrapperPattern.test(commandLine) ||
         standaloneWebWrapperPattern.test(commandLine)
       );
     })
@@ -405,6 +425,11 @@ function findManagedLauncherPids() {
         const npmMode = npmPortsMatch[2] === ":real" ? "real" : npmPortsMatch[2] === ":mock" ? "mock" : "";
         return !protectedStarterMode || !npmMode || npmMode !== protectedStarterMode;
       }
+      const runtimeLauncherMatch = commandLine.match(/\.runtime\/(launch|supervise|stable-supervise)-(mock|real)\.cmd/);
+      if (runtimeLauncherMatch) {
+        const launcherMode = runtimeLauncherMatch[2];
+        return !protectedStarterMode || launcherMode !== protectedStarterMode;
+      }
       if (!commandLine.includes(normalizedRoot)) return false;
       return /npm\.cmd"? run build:(api|web)/.test(commandLine) || /node_modules\/next\/dist\/bin\/next build apps\/web/.test(commandLine);
     })
@@ -451,7 +476,7 @@ function stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids) {
     for (const pid of pids) {
       if (protectedPids.has(pid)) continue;
       if (attemptedPids.has(pid)) continue;
-      if (!recordedPids.has(pid) && !isManagedProcess(pid)) {
+      if (!forceProcessSweep && !recordedPids.has(pid) && !isManagedProcess(pid) && !isManagedPortCommandLine(pid, port)) {
         console.log(`[warn] port=${port} pid=${pid} does not look like this desktop app. It was not stopped automatically.`);
         continue;
       }
@@ -607,11 +632,11 @@ function shouldStopRecordedProcess(record) {
 }
 
 function isManagedProcess(pid) {
-  return isManagedCommandLine(pid);
+  return isManagedCommandLine(pid) || hasManagedAncestor(pid);
 }
 
 function isManagedCommandLine(pid) {
-  const commandLine = getCommandLine(pid).toLowerCase();
+  const commandLine = getCommandLine(pid);
   if (!commandLine) return false;
   const normalizedCommand = normalizePathText(commandLine);
   const normalizedRoot = normalizePathText(desktopRoot);
@@ -624,12 +649,43 @@ function isManagedCommandLine(pid) {
     return true;
   }
   return [
+    "tools/desktop-service-supervisor.js",
+    "tools/ports-stack-starter.js",
+    "tools/start-dev-ports.js",
     "tools/mock-design-platform.js",
     "dist/apps/api/main.js",
+    ".runtime/web-standalone-server.js",
+    ".runtime-stable/web-standalone-server.js",
     "apps/web/.next/standalone/apps/web/server.js",
     "next/dist/server/lib/start-server.js",
     "node_modules/next/dist/bin/next",
   ].some((marker) => normalizedCommand.includes(marker));
+}
+
+function isManagedPortCommandLine(pid, port) {
+  const normalizedCommand = normalizePathText(getCommandLine(pid));
+  if (!normalizedCommand) return false;
+  if (Number(port) === managedPorts[0]) {
+    return normalizedCommand.includes("web-standalone-server.js") || normalizedCommand.includes("next/dist/server");
+  }
+  if (Number(port) === managedPorts[1]) {
+    return normalizedCommand.includes("dist/apps/api/main.js");
+  }
+  if (Number(port) === managedPorts[2]) {
+    return normalizedCommand.includes("tools/mock-design-platform.js");
+  }
+  return false;
+}
+
+function hasManagedAncestor(pid) {
+  let current = String(pid || "");
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = getParentPid(current);
+    if (!parent) return false;
+    if (isManagedCommandLine(parent)) return true;
+    current = parent;
+  }
+  return false;
 }
 
 function normalizePathText(value) {

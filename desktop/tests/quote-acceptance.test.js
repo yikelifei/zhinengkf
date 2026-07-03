@@ -35,6 +35,13 @@ test("detects customer payment confirmation", () => {
   assert.equal(intent.paymentStatus, "paid");
 });
 
+test("detects legacy mojibake deposit payment confirmation", () => {
+  const intent = detectQuoteAcceptanceIntent("瀹氶噾宸茬粡杞处浜嗭紝楹荤儲瀹夋帓鍒朵綔");
+
+  assert.equal(intent.hasIntent, true);
+  assert.equal(intent.paymentStatus, "deposit_paid");
+});
+
 test("does not mark deposit wording as paid without completed payment wording", () => {
   assert.deepEqual(detectQuoteAcceptanceIntent("定金怎么付"), { hasIntent: false });
   assert.deepEqual(detectQuoteAcceptanceIntent("付款码发我一下"), { hasIntent: false });
@@ -170,6 +177,22 @@ test("does not accept quote automatically when per-unit price is high value", ()
   const plan = planInboundQuoteAcceptance({
     text: "ok",
     quote: { ...sentLowValueQuote, unitPrice: 10000, totalPrice: 9000 },
+  });
+
+  assert.equal(plan.ok, false);
+  assert.equal(plan.reason, "manual_review_required");
+});
+
+test("does not accept quote automatically when design budget is high value", () => {
+  const plan = planInboundQuoteAcceptance({
+    text: "ok",
+    quote: {
+      ...sentLowValueQuote,
+      designJob: {
+        ...sentLowValueQuote.designJob,
+        budget: { totalAmount: 15000, perUnitAmount: 300 },
+      },
+    },
   });
 
   assert.equal(plan.ok, false);

@@ -6,9 +6,12 @@ const http = require("node:http");
 const path = require("node:path");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(desktopRoot, ".runtime");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
+const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const args = new Set(process.argv.slice(2));
@@ -18,6 +21,7 @@ const preferredDesignMode = readPreferredDesignMode();
 const realDesignMode =
   requestedRealDesignMode ||
   (!requestedMockDesignMode &&
+    !mockRepairLockIsFresh() &&
     (fs.existsSync(realModeLockFile) || runtimeConfigLooksRealDesignMode() || preferredDesignMode === "real"));
 const mockDesignMode = !realDesignMode;
 const allowMockDesignStart = process.env.FORCE_MOCK_DESIGN_START === "1";
@@ -29,6 +33,8 @@ const launcherLog = path.join(runtimeDir, "logs", realDesignMode ? "launcher-rea
 const stackStarterLog = path.join(runtimeDir, "logs", "ports-stack-starter.log");
 const conflictMode = realDesignMode ? "mock" : "real";
 const managedPorts = [numberEnv("WEB_PORT", 3100), numberEnv("API_PORT", 3200), numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)];
+const stackStarterLockFile = path.join(runtimeDir, `ports-stack-starter-${supervisorMode}.lock`);
+let stackStarterLockHeld = false;
 
 main().catch((error) => {
   logStep(`failed ${error?.stack || error}`);
@@ -42,10 +48,22 @@ async function main() {
   const activeApiRealMode = mockDesignMode ? await activeApiLooksRealDesignMode() : false;
   const runtimeConfigRealMode = runtimeConfigLooksRealDesignMode();
   const preferredRealMode = preferredDesignMode === "real";
-
-  if (mockDesignMode && (fs.existsSync(realModeLockFile) || runtimeConfigRealMode || preferredRealMode) && !allowMockDesignStart) {
+  const activeRealLaunchers = mockDesignMode ? findConflictingDesignLaunchers("real") : [];
+  if (realDesignMode && (process.env.ALLOW_REAL_DESIGN_LAUNCH !== "1" || process.env.CONFIRM_REAL_DESIGN_SWITCH !== "1")) {
     console.error(
-      `[launch] mock design launch is blocked because real design mode is locked, configured, or preferred at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+      "[launch] real design launch is disabled by default. Use run_desktop_real_design.bat, or run npm.cmd run ports:launch:real:confirmed when intentionally switching to the real design platform.",
+    );
+    process.exit(1);
+  }
+
+  if (realDesignMode && mockRepairLockIsFresh()) {
+    console.error("[launch] real design launch is blocked because default mock startup repair is in progress.");
+    process.exit(1);
+  }
+
+  if (realDesignMode && mockRuntimeStateIsActive()) {
+    console.error(
+      "[launch] real design launch is blocked because mock design mode is active. Run npm.cmd run ports:stop before switching to real design mode.",
     );
     process.exit(1);
   }
@@ -57,96 +75,131 @@ async function main() {
     process.exit(1);
   }
 
+  if (mockDesignMode && activeRealLaunchers.length && !allowMockDesignStart) {
+    console.error(
+      "[launch] mock design launch is blocked because a real design launcher is still running. Run npm.cmd run ports:stop before switching to mock design mode.",
+    );
+    process.exit(1);
+  }
+
+  if (
+    mockDesignMode &&
+    (fs.existsSync(realModeLockFile) || runtimeConfigRealMode || preferredRealMode) &&
+    !allowMockDesignStart
+  ) {
+    console.error(
+      `[launch] mock design launch is blocked because real design mode is locked, configured, or preferred at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+    );
+    process.exit(1);
+  }
+
   if (await activeStackMatchesRequestedMode()) {
     console.log(`[launch] ${realDesignMode ? "real" : "mock"} design stack is already running; skipping duplicate launch.`);
     return;
   }
 
-  if (realDesignMode) {
-    fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
-    writeRealDesignRuntimeConfig();
-  }
-  writePreferredDesignMode(realDesignMode ? "real" : "mock");
-  disableConflictingLaunchers();
-  stopConflictingDesignLaunchers();
-
-  if (shouldRunStopSweep()) {
-    logStep("stop sweep begin");
-    const stopResult = stopManagedPorts();
-    logStep(`stop sweep end status=${stopResult.status ?? "unknown"} signal=${stopResult.signal || ""}`);
-    console.log(`[launch] stop status=${stopResult.status ?? "unknown"} signal=${stopResult.signal || ""}`);
-    if (stopResult.status !== 0) {
-      if (!managedPortsAreFree()) {
-        console.log(`[launch] stop failed with status ${stopResult.status || 1}; managed ports are still occupied.`);
-        if (realDesignMode) fs.rmSync(realModeLockFile, { force: true });
-        process.exit(stopResult.status || 1);
-      }
-      console.log("[launch] stop reported a stale process race, but managed ports are free; continuing startup.");
+  if (!(await acquireStackStarterLockOrWait())) return;
+  try {
+    if (await activeStackMatchesRequestedMode()) {
+      console.log(`[launch] ${realDesignMode ? "real" : "mock"} design stack became ready while waiting for startup lock.`);
+      return;
     }
-  } else {
-    console.log("[launch] no existing desktop services detected; skipping stop sweep.");
-  }
 
-  if (realDesignMode && fs.existsSync(mockModeLockFile)) {
-    if (mockModeLockIsStaleForRealStart()) {
-      fs.rmSync(mockModeLockFile, { force: true });
-      console.log(`[launch] removed stale mock mode lock before real design startup: ${mockModeLockFile}`);
+    if (realDesignMode) {
+      fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+      writeRealDesignRuntimeConfig();
     } else {
-    throw new Error(
-      `Real design launch is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
-    );
+      fs.rmSync(realModeLockFile, { force: true });
+      writeMockDesignRuntimeConfig();
     }
-  }
-  if (realDesignMode) {
-    fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
-    writeRealDesignRuntimeConfig();
-  }
-  writePreferredDesignMode(realDesignMode ? "real" : "mock");
-  disableConflictingLaunchers();
-  stopConflictingDesignLaunchers();
+    writePreferredDesignMode(realDesignMode ? "real" : "mock");
+    disableConflictingLaunchers();
+    stopConflictingDesignLaunchers();
 
-  const env = {
-    ...process.env,
-  };
-  if (mockDesignMode) {
-    env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
-    env.DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
-    if (allowMockDesignStart) env.FORCE_MOCK_DESIGN_START = "1";
-  } else {
-    env.DESIGN_PLATFORM_ADAPTER = "art_image_local";
-    env.DESIGN_PLATFORM_BASE_URL = realDesignBaseUrl();
-    env.ALLOW_REAL_DESIGN_START = "1";
-  }
+    if (shouldRunStopSweep()) {
+      logStep("stop sweep begin");
+      const stopResult = stopManagedPorts();
+      logStep(`stop sweep end status=${stopResult.status ?? "unknown"} signal=${stopResult.signal || ""}`);
+      console.log(`[launch] stop status=${stopResult.status ?? "unknown"} signal=${stopResult.signal || ""}`);
+      if (stopResult.status !== 0) {
+        if (!managedPortsAreFree()) {
+          console.log(`[launch] stop failed with status ${stopResult.status || 1}; managed ports are still occupied.`);
+          if (realDesignMode) fs.rmSync(realModeLockFile, { force: true });
+          process.exit(stopResult.status || 1);
+        }
+        console.log("[launch] stop reported a stale process race, but managed ports are free; continuing startup.");
+      }
+    } else {
+      console.log("[launch] no existing desktop services detected; skipping stop sweep.");
+    }
 
-  if (process.platform === "win32" && fs.existsSync(supervisorJs)) {
-    logStep(`run supervisor js ${modeArg}`);
-    const result = spawnSync(process.execPath, ["tools/desktop-service-supervisor.js", modeArg], {
-      cwd: desktopRoot,
-      env,
-      stdio: "inherit",
-      windowsHide: true,
-    });
-    logStep(`supervisor js exited status=${result.status ?? "unknown"} signal=${result.signal || ""}`);
-    if (result.status !== 0) process.exit(result.status || 1);
-    return;
-  }
+    if (realDesignMode && fs.existsSync(mockModeLockFile)) {
+      if (mockModeLockIsStaleForRealStart()) {
+        fs.rmSync(mockModeLockFile, { force: true });
+        console.log(`[launch] removed stale mock mode lock before real design startup: ${mockModeLockFile}`);
+      } else {
+        throw new Error(
+          `Real design launch is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
+        );
+      }
+    }
+    if (realDesignMode) {
+      fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+      writeRealDesignRuntimeConfig();
+    } else {
+      fs.rmSync(realModeLockFile, { force: true });
+      writeMockDesignRuntimeConfig();
+    }
+    writePreferredDesignMode(realDesignMode ? "real" : "mock");
+    disableConflictingLaunchers();
+    stopConflictingDesignLaunchers();
 
-  if (process.platform === "win32" && fs.existsSync(supervisorScript)) {
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", supervisorScript, "-Mode", supervisorMode],
-      {
+    const env = {
+      ...process.env,
+    };
+    if (mockDesignMode) {
+      env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
+      env.DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
+      if (allowMockDesignStart) env.FORCE_MOCK_DESIGN_START = "1";
+    } else {
+      env.DESIGN_PLATFORM_ADAPTER = "art_image_local";
+      env.DESIGN_PLATFORM_BASE_URL = realDesignBaseUrl();
+      env.ALLOW_REAL_DESIGN_START = "1";
+    }
+
+    if (process.platform === "win32" && fs.existsSync(supervisorJs)) {
+      logStep(`run supervisor js ${modeArg}`);
+      const result = spawnSync(process.execPath, ["tools/desktop-service-supervisor.js", modeArg], {
         cwd: desktopRoot,
         env,
         stdio: "inherit",
         windowsHide: true,
-      },
-    );
-    if (result.status !== 0) process.exit(result.status || 1);
-    return;
-  }
+      });
+      logStep(`supervisor js exited status=${result.status ?? "unknown"} signal=${result.signal || ""}`);
+      if (result.status !== 0) process.exit(result.status || 1);
+      await waitForStartedStack();
+      return;
+    }
 
-  launchDirectKeepAlive(env);
+    if (process.platform === "win32" && fs.existsSync(supervisorScript)) {
+      const result = spawnSync(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", supervisorScript, "-Mode", supervisorMode],
+        {
+          cwd: desktopRoot,
+          env,
+          stdio: "inherit",
+          windowsHide: true,
+        },
+      );
+      if (result.status !== 0) process.exit(result.status || 1);
+      return;
+    }
+
+    launchDirectKeepAlive(env);
+  } finally {
+    releaseStackStarterLock();
+  }
 }
 
 function launchDirectKeepAlive(env) {
@@ -164,6 +217,193 @@ function launchDirectKeepAlive(env) {
   logStep(`spawn direct keep-alive ${modeArg} pid=${child.pid || "unknown"}`);
   console.log(`[launch] node tools/start-dev-ports.js ${modeArg} --keep-alive pid=${child.pid}`);
   process.exit(0);
+}
+
+async function waitForStartedStack() {
+  const timeoutMs = numberEnv("PORTS_STACK_READY_TIMEOUT_MS", 120000);
+  const startedAt = Date.now();
+  let lastReason = "startup has not been checked yet";
+  let lastLoggedAt = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    const stack = await activeStackReadiness();
+    const heartbeat = keepAliveHeartbeatReadiness();
+    if (stack.ok && heartbeat.ok) {
+      console.log(`[launch] ${realDesignMode ? "real" : "mock"} design stack is ready and supervised.`);
+      return;
+    }
+    lastReason = [stack.reason, heartbeat.reason].filter(Boolean).join("; ");
+    if (Date.now() - lastLoggedAt >= 5000) {
+      console.log(`[launch] waiting for ${realDesignMode ? "real" : "mock"} design stack: ${lastReason}`);
+      logStep(`waiting readiness ${lastReason}`);
+      lastLoggedAt = Date.now();
+    }
+    await sleep(1000);
+  }
+  throw new Error(
+    `${realDesignMode ? "real" : "mock"} design stack did not become ready within ${Math.round(
+      timeoutMs / 1000,
+    )} seconds: ${lastReason}`,
+  );
+}
+
+function keepAliveHeartbeatIsFresh() {
+  return keepAliveHeartbeatReadiness().ok;
+}
+
+function keepAliveHeartbeatReadiness() {
+  const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
+    const expectedMode = realDesignMode ? "real" : "mock";
+    const updatedAt = Date.parse(String(heartbeat.updatedAt || ""));
+    if (heartbeat.mode !== expectedMode) {
+      return { ok: false, reason: `keep-alive heartbeat mode is ${heartbeat.mode || "missing"}, expected ${expectedMode}` };
+    }
+    if (!Number.isFinite(updatedAt)) {
+      return { ok: false, reason: "keep-alive heartbeat timestamp is missing" };
+    }
+    const ageMs = Date.now() - updatedAt;
+    if (ageMs > 30000) {
+      return { ok: false, reason: `keep-alive heartbeat is stale (${Math.round(ageMs / 1000)}s old)` };
+    }
+    return { ok: true, reason: "" };
+  } catch (error) {
+    return { ok: false, reason: `keep-alive heartbeat is unavailable (${error?.code || error?.message || "read failed"})` };
+  }
+}
+
+function mockRepairLockIsFresh() {
+  try {
+    const updatedAt = Date.parse(fs.readFileSync(mockRepairLockFile, "utf8").trim());
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 10 * 60_000) return false;
+    if (process.platform !== "win32") return true;
+    return findMockRepairProcesses().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function findMockRepairProcesses() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !result.stdout.trim()) return [];
+
+  let processes = [];
+  try {
+    const parsed = JSON.parse(result.stdout);
+    processes = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  } catch {
+    return [];
+  }
+
+  return processes.filter((item) => {
+    const pid = String(item.ProcessId || "");
+    const commandLine = normalizePathText(item.CommandLine || "");
+    if (!/^\d+$/.test(pid) || pid === String(process.pid)) return false;
+    if (!commandLine.includes(normalizedRoot)) return false;
+    return commandLine.includes("tools/repair-dev-startup.js") || commandLine.includes("ports:repair");
+  });
+}
+
+async function acquireStackStarterLockOrWait() {
+  for (;;) {
+    try {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      const fd = fs.openSync(stackStarterLockFile, "wx");
+      fs.writeFileSync(
+        fd,
+        `${JSON.stringify(
+          {
+            pid: process.pid,
+            ppid: process.ppid,
+            mode: supervisorMode,
+            modeArg,
+            startedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.closeSync(fd);
+      stackStarterLockHeld = true;
+      process.once("exit", releaseStackStarterLock);
+      return true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const owner = readStackStarterLock();
+      if (stackStarterLockOwnerIsActive(owner)) {
+        console.log(
+          `[launch] ${realDesignMode ? "real" : "mock"} design stack startup is already running under PID ${owner.pid}; waiting for it.`,
+        );
+        await waitForStartedStack();
+        return false;
+      }
+      fs.rmSync(stackStarterLockFile, { force: true });
+    }
+  }
+}
+
+function readStackStarterLock() {
+  try {
+    return JSON.parse(fs.readFileSync(stackStarterLockFile, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function stackStarterLockOwnerIsActive(owner) {
+  if (!owner || owner.mode !== supervisorMode) return false;
+  const pid = Number(owner.pid);
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) return false;
+  const startedAt = Date.parse(String(owner.startedAt || ""));
+  if (Number.isFinite(startedAt) && Date.now() - startedAt > 10 * 60_000) return false;
+  if (process.platform === "win32") return windowsProcessLooksLikeStackStarter(pid);
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function windowsProcessLooksLikeStackStarter(pid) {
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty CommandLine`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const commandLine = normalizePathText(result.stdout || "");
+  if (result.status !== 0 || !commandLine) return false;
+  return commandLine.includes(normalizePathText(desktopRoot)) && commandLine.includes("tools/ports-stack-starter.js");
+}
+
+function releaseStackStarterLock() {
+  if (!stackStarterLockHeld) return;
+  const owner = readStackStarterLock();
+  if (Number(owner?.pid) === process.pid) {
+    fs.rmSync(stackStarterLockFile, { force: true });
+  }
+  stackStarterLockHeld = false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function logStep(message) {
@@ -185,6 +425,7 @@ function stopManagedPorts() {
       PORTS_STACK_STARTER_MODE: realDesignMode ? "real" : "mock",
       PORTS_STOP_SKIP_STACK_STARTERS: "1",
       PRESERVE_REAL_MODE_LOCK: realDesignMode ? "1" : "",
+      PRESERVE_MOCK_REPAIR_LOCK: mockRepairLockIsFresh() ? "1" : "",
       FORCE_PORTS_SWEEP: "1",
     },
     stdio: "inherit",
@@ -303,25 +544,65 @@ function mockModeLockIsStaleForRealStart() {
 }
 
 async function activeStackMatchesRequestedMode() {
+  return (await activeStackReadiness()).ok;
+}
+
+async function activeStackReadiness() {
   const webPort = numberEnv("WEB_PORT", 3100);
   const apiPort = numberEnv("API_PORT", 3200);
   const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
-  if (!getPortOwnerPids(webPort).length || !getPortOwnerPids(apiPort).length) return false;
-  if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) return false;
-  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
-  if (!apiHealth?.ok) return false;
-  const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
-  if (!integrationHealth?.ok) return false;
-  if (realDesignMode) {
-    return (
-      integrationHealth.adapter === "art_image_local" &&
-      normalizeBaseUrl(integrationHealth.baseUrl) === normalizeBaseUrl(realDesignBaseUrl())
-    );
+  const webPids = getPortOwnerPids(webPort);
+  const apiPids = getPortOwnerPids(apiPort);
+  if (!webPids.length) return { ok: false, reason: `web port ${webPort} is not listening` };
+  if (!apiPids.length) return { ok: false, reason: `api port ${apiPort} is not listening` };
+  const webOwnerMismatch = workspacePortOwnerMismatchReason("web", webPids);
+  if (webOwnerMismatch) return { ok: false, reason: webOwnerMismatch };
+  const apiOwnerMismatch = workspacePortOwnerMismatchReason("api", apiPids);
+  if (apiOwnerMismatch) return { ok: false, reason: apiOwnerMismatch };
+  if (mockDesignMode) {
+    const mockPids = getPortOwnerPids(mockPort);
+    if (!mockPids.length) return { ok: false, reason: `mock design port ${mockPort} is not listening` };
+    const mockOwnerMismatch = workspacePortOwnerMismatchReason("mock design", mockPids);
+    if (mockOwnerMismatch) return { ok: false, reason: mockOwnerMismatch };
   }
-  return (
+  if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) {
+    return { ok: false, reason: `web health check failed on port ${webPort} (pids ${webPids.join(",")})` };
+  }
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealth?.ok) {
+    return { ok: false, reason: `api health check failed on port ${apiPort} (pids ${apiPids.join(",")})` };
+  }
+  const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
+  if (realDesignMode) {
+    if (!integrationHealth) {
+      return { ok: false, reason: `design integration health failed on api port ${apiPort}` };
+    }
+    const matches =
+      integrationHealth.adapter === "art_image_local" &&
+      normalizeBaseUrl(integrationHealth.baseUrl) === normalizeBaseUrl(realDesignBaseUrl());
+    return matches
+      ? { ok: true, reason: "" }
+      : {
+          ok: false,
+          reason: `design integration is ${integrationHealth.adapter || "unknown"} at ${
+            integrationHealth.baseUrl || "unknown"
+          }, expected art_image_local at ${realDesignBaseUrl()}`,
+        };
+  }
+  if (!integrationHealth?.ok) {
+    return { ok: false, reason: `design integration health failed on api port ${apiPort}` };
+  }
+  const matches =
     integrationHealth.adapter === "standard_v1" &&
-    normalizeBaseUrl(integrationHealth.baseUrl) === `http://127.0.0.1:${mockPort}`
-  );
+    normalizeBaseUrl(integrationHealth.baseUrl) === `http://127.0.0.1:${mockPort}`;
+  return matches
+    ? { ok: true, reason: "" }
+    : {
+        ok: false,
+        reason: `design integration is ${integrationHealth.adapter || "unknown"} at ${
+          integrationHealth.baseUrl || "unknown"
+        }, expected standard_v1 at http://127.0.0.1:${mockPort}`,
+      };
 }
 
 async function activeApiLooksRealDesignMode() {
@@ -335,6 +616,10 @@ async function activeApiLooksRealDesignMode() {
 
 function runtimeConfigLooksRealDesignMode() {
   return runtimeConfigDesignMode() === "real";
+}
+
+function mockRuntimeStateIsActive() {
+  return fs.existsSync(mockModeLockFile) || runtimeConfigDesignMode() === "mock" || preferredDesignMode === "mock";
 }
 
 function runtimeConfigDesignMode() {
@@ -358,6 +643,27 @@ function writeRealDesignRuntimeConfig() {
         ...existing,
         designPlatformAdapter: "art_image_local",
         designPlatformBaseUrl: realDesignBaseUrl(),
+        launcherPid: process.pid,
+        launcherArgs: process.argv.slice(2),
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function writeMockDesignRuntimeConfig() {
+  const existing = readRuntimeDesignPlatformConfig();
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(
+    designPlatformConfigFile,
+    `${JSON.stringify(
+      {
+        ...existing,
+        designPlatformAdapter: "standard_v1",
+        designPlatformBaseUrl: "http://127.0.0.1:3700",
         launcherPid: process.pid,
         launcherArgs: process.argv.slice(2),
         updatedAt: new Date().toISOString(),
@@ -468,9 +774,50 @@ function getPortOwnerPids(port) {
   return pids;
 }
 
+function workspacePortOwnerMismatchReason(label, pids) {
+  if (process.platform !== "win32" || !pids.length) return "";
+  const commandLines = getProcessCommandLinesByPid(pids);
+  const normalizedOwnerRoots = [desktopRoot, runtimeDir].map(normalizePathText).filter(Boolean);
+  const mismatched = pids.filter((pid) => {
+    const commandLine = normalizePathText(commandLines.get(String(pid)) || "");
+    return commandLine && !normalizedOwnerRoots.some((ownerRoot) => commandLine.includes(ownerRoot));
+  });
+  if (!mismatched.length) return "";
+  return `${label} port is owned by non-current workspace PID ${mismatched.join(",")}`;
+}
+
+function getProcessCommandLinesByPid(pids) {
+  const ids = [...new Set(pids.map((pid) => String(pid)).filter((pid) => /^\d+$/.test(pid)))];
+  if (!ids.length) return new Map();
+  const filter = ids.map((pid) => `ProcessId = ${pid}`).join(" OR ");
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter ${psQuote(filter)} | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return new Map();
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+    return new Map(rows.map((item) => [String(item.ProcessId || ""), String(item.CommandLine || "")]));
+  } catch {
+    return new Map();
+  }
+}
+
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function normalizePathText(value) {

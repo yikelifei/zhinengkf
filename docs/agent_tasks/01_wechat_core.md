@@ -22,7 +22,7 @@
 - 模块 ID：`01_wechat_core`
 - 分类：`channel`
 - 状态：`running`
-- 文档：`docs/projects/01_wechat_core.md`
+- 文档：`docs/agent_tasks/01_wechat_core.md`
 
 ## 目标
 

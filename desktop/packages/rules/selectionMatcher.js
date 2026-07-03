@@ -14,12 +14,29 @@ const CHINESE_NUMBERS = {
   十: 10,
 };
 
+function letterSelectionIndex(value) {
+  const text = String(value || "");
+  const match =
+    text.match(/^(?:选|要|用|按|pick|choose)([a-z])$/i) ||
+    text.match(/^(?:第)?([a-z])(?:款|版|套|方案|号|號)$/i) ||
+    text.match(/^(?:方案|款式|效果图|效果圖|候选图|候選圖|图|圖)([a-z])$/i);
+  if (!match) return 0;
+  return match[1].toLowerCase().charCodeAt(0) - 96;
+}
+
 function matchTextSelection(text, candidates = []) {
   const normalized = String(text || "").replace(/\s+/g, "");
+  const letterIndex = letterSelectionIndex(normalized);
+  const explicitNumericUnit = normalized.match(/^(?:第)?(\d{1,2})(?:张|張|个|個|号|號|款|版|套)$/);
+  const explicitChineseUnit = normalized.match(/^(?:第)?([一二两三四五六七八九十])(?:张|張|个|個|号|號|款|版|套)$/);
   const numeric = normalized.match(/(?:第)?(\d{1,2})(?:张|个|号|款|版)/);
   const chinese = normalized.match(/(?:第)?([一二两三四五六七八九十])(?:张|个|号|款|版)/);
   const fallbackNumeric = normalized.match(/(?:选|要|用|看|#|no\.?|NO\.?)?(\d{1,2})/);
-  const index = numeric ? Number(numeric[1]) : CHINESE_NUMBERS[chinese?.[1]] || Number(fallbackNumeric?.[1] || 0);
+  const index = letterIndex ||
+    (explicitNumericUnit
+      ? Number(explicitNumericUnit[1])
+      : CHINESE_NUMBERS[explicitChineseUnit?.[1]] ||
+        (numeric ? Number(numeric[1]) : CHINESE_NUMBERS[chinese?.[1]] || Number(fallbackNumeric?.[1] || 0)));
   if (!index || index < 1) {
     return { matched: false, confidence: "low", reason: "没有识别到明确编号" };
   }
@@ -84,6 +101,11 @@ function hasSelectionIntent(input = {}) {
   const text = String(value.text || "").replace(/\s+/g, "");
   if (value.referencedImageId || value.quotedImageId || value.attachmentImageId) return true;
   if (normalizeFingerprint(value.screenshotFingerprint || value.attachmentFingerprint)) return true;
+  if (letterSelectionIndex(text)) return true;
+  if (/(?:^|[^\d])(?:no\.?|#)\d{1,2}(?:$|[^\d])/i.test(text)) return true;
+  if (/^(?:第)?\d{1,2}(?:号|號|张|張|个|個|款|版|套)$/.test(text)) return true;
+  if (/^(?:第)?[一二两三四五六七八九十](?:号|號|张|張|个|個|款|版|套)$/.test(text)) return true;
+  if (/(?:编号|編號|方案|款式|效果图|效果圖|候选图|候選圖|图|圖|款|版)\d{1,2}/.test(text)) return true;
   return /(?:选|要第|第[一二两三四五六七八九十\d]{1,2}[张个号款版]|这张|这个|就它|就这|用这个|按这个|喜欢这个|要这个|pick|choose|thisone)/i.test(text);
 }
 

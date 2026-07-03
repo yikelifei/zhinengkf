@@ -58,6 +58,7 @@ if errorlevel 1 (
 
 echo.
 echo Repair completed.
-echo Now run run_desktop.bat to start the app in foreground mode.
+echo Desktop services are running now.
+echo Open workbench: http://127.0.0.1:3100/
 echo.
 pause

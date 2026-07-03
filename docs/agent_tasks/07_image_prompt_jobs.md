@@ -22,7 +22,7 @@
 - 模块 ID：`07_image_prompt_jobs`
 - 分类：`image_delivery`
 - 状态：`partial`
-- 文档：`docs/projects/07_image_prompt_jobs.md`
+- 文档：`docs/agent_tasks/07_image_prompt_jobs.md`
 
 ## 目标
 

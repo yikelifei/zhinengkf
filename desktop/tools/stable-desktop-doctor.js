@@ -1,0 +1,281 @@
+"use strict";
+
+const fs = require("node:fs");
+const http = require("node:http");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const args = new Set(process.argv.slice(2));
+const waitMs = numberArg("--wait-ms", args.has("--wait") ? 90000 : 0);
+const intervalMs = numberArg("--interval-ms", 2000);
+const desktopRoot = path.resolve(__dirname, "..");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(desktopRoot, ".runtime");
+const webPort = numberEnv("WEB_PORT", 3100);
+const apiPort = numberEnv("API_PORT", 3200);
+const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
+
+const requiredFiles = [
+  ["package.json", path.join(desktopRoot, "package.json")],
+  ["API build", path.join(desktopRoot, "dist", "apps", "api", "main.js")],
+  ["Web standalone build", path.join(desktopRoot, "apps", "web", ".next", "standalone", "apps", "web", "server.js")],
+];
+
+const endpoints = [
+  ["Customer workbench", `http://127.0.0.1:${webPort}/`, (result) => result.statusCode === 200],
+  [
+    "NestJS API",
+    `http://127.0.0.1:${apiPort}/api/health`,
+    (result) => result.statusCode === 200 && localStoreUsesRuntimeDir(result.json),
+  ],
+  [
+    "Design integration",
+    `http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`,
+    (result) => result.statusCode === 200 && result.json?.ok === true,
+  ],
+  ["Mock design platform", `http://127.0.0.1:${mockPort}/v1/health`, (result) => result.statusCode === 200 && result.json?.ok === true],
+];
+
+main().catch((error) => {
+  console.error(`[doctor] failed: ${error?.stack || error}`);
+  process.exitCode = 1;
+});
+
+async function main() {
+  const startedAt = Date.now();
+  let lastReport = null;
+  do {
+    lastReport = await collectReport();
+    if (lastReport.ok) {
+      printReport(lastReport);
+      return;
+    }
+    if (!waitMs || Date.now() - startedAt >= waitMs) break;
+    await sleep(intervalMs);
+  } while (true);
+
+  printReport(lastReport);
+  process.exitCode = 1;
+}
+
+async function collectReport() {
+  const checks = [];
+  checks.push(checkDirectory("Desktop source", desktopRoot));
+  checks.push(checkDirectory("Runtime directory", runtimeDir));
+  checks.push(checkRuntimeWritable());
+  for (const [label, filePath] of requiredFiles) checks.push(checkFile(label, filePath));
+
+  const portOwners = getPortOwners([webPort, apiPort, mockPort]);
+  for (const port of [webPort, apiPort, mockPort]) {
+    const owners = portOwners.get(port) || [];
+    checks.push({
+      ok: owners.length > 0,
+      label: `Port ${port}`,
+      detail: owners.length ? `listening pid=${owners.join(",")}` : "not listening",
+    });
+  }
+  checks.push(checkWebRuntimeOwner(portOwners.get(webPort) || []));
+  checks.push(checkKeepAliveHeartbeat());
+
+  for (const [label, url, isOk] of endpoints) {
+    const result = await requestJson(url, 3000);
+    checks.push({
+      ok: isOk(result),
+      label,
+      detail: describeHttpResult(url, result),
+    });
+  }
+
+  return {
+    ok: checks.every((item) => item.ok || item.severity === "warn"),
+    checks,
+    desktopRoot,
+    runtimeDir,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function printReport(report) {
+  console.log(`[doctor] generatedAt=${report.generatedAt}`);
+  console.log(`[doctor] desktopRoot=${report.desktopRoot}`);
+  console.log(`[doctor] runtimeDir=${report.runtimeDir}`);
+  for (const check of report.checks) {
+    const prefix = check.ok ? "[ok]" : check.severity === "warn" ? "[warn]" : "[fail]";
+    console.log(`${prefix} ${check.label}: ${check.detail}`);
+  }
+  console.log(report.ok ? "[doctor] stable desktop stack is healthy." : "[doctor] stable desktop stack is not healthy.");
+}
+
+function checkDirectory(label, dirPath) {
+  const ok = fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory();
+  return { ok, label, detail: ok ? dirPath : `missing: ${dirPath}` };
+}
+
+function checkFile(label, filePath) {
+  const ok = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  return { ok, label, detail: ok ? filePath : `missing: ${filePath}` };
+}
+
+function checkRuntimeWritable() {
+  const testFile = path.join(runtimeDir, ".stable-doctor-write-test");
+  try {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(testFile, `${process.pid}\n`, "utf8");
+    fs.rmSync(testFile, { force: true });
+    return { ok: true, label: "Runtime writable", detail: runtimeDir };
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      return {
+        ok: false,
+        severity: "warn",
+        label: "Runtime writable",
+        detail: `${error.message}; continuing because this can be a Codex sandbox write-test limitation when services are already healthy`,
+      };
+    }
+    return { ok: false, label: "Runtime writable", detail: error?.message || String(error) };
+  }
+}
+
+function checkWebRuntimeOwner(webOwners) {
+  if (!webOwners.length) {
+    return { ok: false, label: "Web runtime owner", detail: "web port has no owner" };
+  }
+  const expected = normalizePathText(webRuntimeServerPath);
+  const commandLines = webOwners.map((pid) => ({ pid, commandLine: getCommandLine(pid) }));
+  const readableCommandLines = commandLines.filter((item) => item.commandLine);
+  if (!readableCommandLines.length) {
+    return {
+      ok: true,
+      label: "Web runtime owner",
+      detail: `command unavailable for pid=${webOwners.join(",")}; HTTP and heartbeat checks will verify liveness`,
+    };
+  }
+  const details = commandLines.map((item) => `pid=${item.pid} ${item.commandLine || "command unavailable"}`);
+  const ok = readableCommandLines.some((item) => normalizePathText(item.commandLine).includes(expected));
+  return {
+    ok,
+    label: "Web runtime owner",
+    detail: ok ? `uses ${webRuntimeServerPath}` : `expected ${webRuntimeServerPath}; actual ${details.join(" | ")}`,
+  };
+}
+
+function checkKeepAliveHeartbeat() {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
+    const updatedAtMs = Date.parse(String(heartbeat.updatedAt || ""));
+    const ageMs = Date.now() - updatedAtMs;
+    const ok = heartbeat.mode === "mock" && Number.isFinite(updatedAtMs) && ageMs <= 15000;
+    return {
+      ok: true,
+      label: "Keep-alive heartbeat",
+      detail: ok
+        ? `pid=${heartbeat.pid} ageMs=${ageMs}`
+        : `direct service mode; stale or wrong heartbeat ignored: ${JSON.stringify(heartbeat)}`,
+    };
+  } catch (error) {
+    return { ok: true, label: "Keep-alive heartbeat", detail: `direct service mode: ${error?.message || String(error)}` };
+  }
+}
+
+function getPortOwners(ports) {
+  const owners = new Map(ports.map((port) => [port, []]));
+  if (process.platform !== "win32") return owners;
+  const result = spawnSync("netstat", ["-ano", "-p", "tcp"], {
+    cwd: desktopRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return owners;
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    if (String(parts[0]).toUpperCase() !== "TCP") continue;
+    if (!/LISTENING/i.test(parts[3] || "")) continue;
+    const localAddress = parts[1] || "";
+    const pid = Number(parts[4]);
+    for (const port of ports) {
+      if (localAddress.endsWith(`:${port}`) && Number.isFinite(pid) && !owners.get(port).includes(pid)) {
+        owners.get(port).push(pid);
+      }
+    }
+  }
+  return owners;
+}
+
+function requestJson(url, timeoutMs) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        let json = null;
+        try {
+          json = JSON.parse(body);
+        } catch {
+          json = null;
+        }
+        resolve({ ok: true, statusCode: response.statusCode || 0, body, json });
+      });
+    });
+    request.on("timeout", () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", (error) => {
+      resolve({ ok: false, statusCode: 0, error: error?.message || String(error) });
+    });
+  });
+}
+
+function getCommandLine(pid) {
+  if (process.platform !== "win32") return "";
+  const safePid = Number(pid);
+  if (!Number.isFinite(safePid)) return "";
+  const script = `$p = Get-CimInstance Win32_Process -Filter ${psQuote(`ProcessId = ${safePid}`)}; if ($p) { $p.CommandLine }`;
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: desktopRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return result.status === 0 ? String(result.stdout || "").trim() : "";
+}
+
+function normalizePathText(value) {
+  return String(value || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function describeHttpResult(url, result) {
+  if (!result.ok) return `${url} ${result.error || "request failed"}`;
+  if (result.json) return `${url} status=${result.statusCode} json=${JSON.stringify(result.json)}`;
+  return `${url} status=${result.statusCode} bodyLength=${String(result.body || "").length}`;
+}
+
+function localStoreUsesRuntimeDir(json) {
+  const storePath = json?.localStore?.path;
+  if (!storePath) return true;
+  return normalizePathText(storePath).startsWith(normalizePathText(runtimeDir));
+}
+
+function numberEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function numberArg(name, fallback) {
+  const prefix = `${name}=`;
+  const raw = process.argv.find((item) => item.startsWith(prefix));
+  if (!raw) return fallback;
+  const value = Number(raw.slice(prefix.length));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

@@ -22,7 +22,7 @@
 - 模块 ID：`06_quote_and_followup`
 - 分类：`sales_ops`
 - 状态：`running`
-- 文档：`docs/projects/06_quote_and_followup.md`
+- 文档：`docs/agent_tasks/06_quote_and_followup.md`
 
 ## 目标
 

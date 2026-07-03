@@ -7,7 +7,9 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(desktopRoot, ".runtime");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
@@ -21,6 +23,7 @@ const webStandaloneServer = path.join("apps", "web", ".next", "standalone", "app
 const webStandaloneServerPath = path.join(desktopRoot, webStandaloneServer);
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webBuildIdPath = path.join(desktopRoot, "apps", "web", ".next", "BUILD_ID");
+const webRequiredServerFilesPath = path.join(desktopRoot, "apps", "web", ".next", "required-server-files.json");
 const webStandaloneBuildIdPath = path.join(
   desktopRoot,
   "apps",
@@ -82,7 +85,8 @@ const services = [
     port: mockPort,
     url: `http://127.0.0.1:${mockPort}/v1/health`,
     command: process.execPath,
-    commandArgs: ["tools/mock-design-platform.js"],
+    commandArgs: [path.join(desktopRoot, "tools", "mock-design-platform.js")],
+    cwd: desktopRoot,
     enabled: includeMockDesignPlatform,
   },
   {
@@ -91,7 +95,8 @@ const services = [
     port: apiPort,
     url: `http://127.0.0.1:${apiPort}/api/health`,
     command: process.execPath,
-    commandArgs: ["dist/apps/api/main.js"],
+    commandArgs: [path.join(desktopRoot, "dist", "apps", "api", "main.js")],
+    cwd: desktopRoot,
     enabled: includeApi,
   },
 ];
@@ -241,20 +246,26 @@ async function main() {
         console.log(`[ok] ${service.label} is already online: ${service.url}`);
         continue;
       }
-      records[service.name] = {
-        ...records[service.name],
-        name: service.name,
-        label: service.label,
-        port: service.port,
-        url: service.url,
-        status: "port_blocked",
-        portOwnerPids: portOwners,
-        updatedAt: new Date().toISOString(),
-      };
-      writePidFile(records);
-      console.log(`[blocked] ${service.label} port ${service.port} is used by PID ${portOwners.join(", ")}.`);
-      console.log("          Run stop_desktop.bat, or close the listed PID in Task Manager.");
-      continue;
+      if (keepAliveLauncher) {
+        console.log(`[recover] ${service.label} port ${service.port} is unhealthy. Stopping PID ${portOwners.join(", ")} before restart.`);
+        for (const pid of portOwners) stopPid(pid);
+        await sleep(1000);
+      } else {
+        records[service.name] = {
+          ...records[service.name],
+          name: service.name,
+          label: service.label,
+          port: service.port,
+          url: service.url,
+          status: "port_blocked",
+          portOwnerPids: portOwners,
+          updatedAt: new Date().toISOString(),
+        };
+        writePidFile(records);
+        console.log(`[blocked] ${service.label} port ${service.port} is used by PID ${portOwners.join(", ")}.`);
+        console.log("          Run stop_desktop.bat, or close the listed PID in Task Manager.");
+        continue;
+      }
     }
 
     ensureServiceArtifactReady(service);
@@ -274,19 +285,19 @@ async function main() {
     console.log(`[start] ${service.label} pid=${child.pid} port=${service.port}`);
   }
 
-  const allReady = await waitAndPrint(services.filter((item) => item.enabled), records);
+  let allReady = false;
+  try {
+    allReady = await waitAndPrint(services.filter((item) => item.enabled), records);
+  } catch (error) {
+    if (!keepAliveLauncher) throw error;
+    logFatal("initialReadyCheck", error, { exit: false });
+  }
   console.log("[info] Local JSON data mode is enabled by default. Set USE_LOCAL_STORE=false for database mode later.");
 
-  if (!allReady) {
-    if (keepAliveLauncher) {
-      console.log("[keep-alive] Some services were not ready yet. Keeping launcher alive so managed services can recover.");
-    } else {
-      process.exitCode = 1;
-      return;
-    }
-  }
-
   if (keepAliveLauncher) {
+    if (!allReady) {
+      console.log("[keep-alive] Some services were not ready yet. Keeping launcher alive so managed services can recover.");
+    }
     if (!startedAnyService && allReady && findSameModeKeepAliveLaunchers().length) {
       console.log("[keep-alive] Services are already owned by another launcher; exiting duplicate keep-alive.");
       return;
@@ -294,6 +305,12 @@ async function main() {
     startModeLockHeartbeat();
     console.log("[keep-alive] Port services are running. Use npm.cmd run ports:stop to stop them.");
     await waitUntilStopped();
+    return;
+  }
+
+  if (!allReady) {
+    process.exitCode = 1;
+    return;
   }
 }
 
@@ -326,8 +343,16 @@ function startKeepAliveMonitor() {
 
 function ensureServiceArtifactReady(service, launcherLogPath = "") {
   if (service.name === "web" && webDevServerFallback) return;
-  if (service.name === "web" && !fs.existsSync(webRuntimeServerPath)) {
-    appendLauncherLine(launcherLogPath || path.join(logsDir, "web.launcher.log"), "web standalone server missing; rebuilding web before start");
+  if (service.name === "web" && (!fs.existsSync(webRuntimeServerPath) || !webProductionBuildReadyForStartup())) {
+    if (process.env.SKIP_EXISTING_WEB_BUILD === "1" && webProductionBuildReadyForStartup()) {
+      appendLauncherLine(
+        launcherLogPath || path.join(logsDir, "web.launcher.log"),
+        "web runtime wrapper missing; reusing existing web production build",
+      );
+      writeRuntimeWebStandaloneServer();
+      return;
+    }
+    appendLauncherLine(launcherLogPath || path.join(logsDir, "web.launcher.log"), "web standalone build incomplete; rebuilding web before start");
     try {
       runPackageScript("build:web");
       writeRuntimeWebStandaloneServer();
@@ -346,15 +371,21 @@ function ensureServiceArtifactReady(service, launcherLogPath = "") {
   }
 }
 
+function webProductionBuildReadyForStartup() {
+  return fs.existsSync(webBuildIdPath) && fs.existsSync(webRequiredServerFilesPath);
+}
+
 function writeRuntimeWebStandaloneServer() {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(
     webRuntimeServerPath,
     `"use strict";\n` +
       `const path = require("node:path");\n` +
-      `const root = path.resolve(__dirname, "..");\n` +
+      `const { createRequire } = require("node:module");\n` +
+      `const root = ${JSON.stringify(desktopRoot)};\n` +
+      `const rootRequire = createRequire(path.join(root, "package.json"));\n` +
       `const webRoot = path.join(root, "apps", "web");\n` +
-      `const requiredServerFiles = require(path.join(webRoot, ".next", "required-server-files.json"));\n` +
+      `const requiredServerFiles = rootRequire(path.join(webRoot, ".next", "required-server-files.json"));\n` +
       `const currentPort = parseInt(process.env.PORT, 10) || 3100;\n` +
       `const hostname = process.env.HOSTNAME || "127.0.0.1";\n` +
       `let keepAliveTimeout = parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10);\n` +
@@ -364,8 +395,8 @@ function writeRuntimeWebStandaloneServer() {
       `process.chdir(webRoot);\n` +
       `const nextConfig = { ...requiredServerFiles.config, distDir: ".next" };\n` +
       `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(nextConfig);\n` +
-      `require("next");\n` +
-      `const { startServer } = require("next/dist/server/lib/start-server");\n` +
+      `rootRequire("next");\n` +
+      `const { startServer } = rootRequire("next/dist/server/lib/start-server");\n` +
       `if (Number.isNaN(keepAliveTimeout) || !Number.isFinite(keepAliveTimeout) || keepAliveTimeout < 0) keepAliveTimeout = undefined;\n` +
       `startServer({ dir: webRoot, isDev: false, config: nextConfig, hostname, port: currentPort, allowRetry: false, keepAliveTimeout })\n` +
       `  .catch((error) => { console.error(error); clearInterval(keepAlive); process.exit(1); });\n`,
@@ -416,6 +447,17 @@ function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wra
     if (index >= 0) managedChildren.splice(index, 1);
     if (stdout !== null) closeLogFd(stdout);
     if (stderr !== null) closeLogFd(stderr);
+    if (keepAliveLauncher && service.name === "web" && code !== 0 && !webDevServerFallback) {
+      configureWebDevServerFallback(`web standalone exited with code ${code ?? "unknown"}`);
+      serviceRestartGraceUntil.set(service.name, 0);
+      setImmediate(() => {
+        if (getPortOwnerPids(service.port).length) return;
+        const restartedChild = startService(service);
+        refreshServiceRecord(service, restartedChild?.pid);
+      });
+    } else if (keepAliveLauncher && service.name === "web" && code !== 0) {
+      serviceRestartGraceUntil.set(service.name, 0);
+    }
   });
   return child;
 }
@@ -489,6 +531,10 @@ function refreshServiceRecord(service, childPid) {
 async function buildApiIfNeeded() {
   const apiService = services.find((service) => service.name === "api");
   if (!apiService?.enabled) return;
+  if (process.env.SKIP_EXISTING_API_BUILD === "1" && fs.existsSync(apiBuildEntryPath)) {
+    console.log("[ok] API build entry exists, skip API rebuild.");
+    return;
+  }
   if (await isServiceReadyForCurrentConfig(apiService)) {
     console.log("[ok] API is already online, skip API rebuild.");
     return;
@@ -535,6 +581,11 @@ async function buildWebIfNeeded() {
     console.log(`[blocked] Web port ${webService.port} is used by PID ${portOwners.join(", ")}. Skip web rebuild.`);
     return;
   }
+  if (process.env.SKIP_EXISTING_WEB_BUILD === "1" && webProductionBuildReadyForStartup()) {
+    writeRuntimeWebStandaloneServer();
+    console.log("[ok] Web production build exists, skip web rebuild.");
+    return;
+  }
   if (!webBuildIsStale()) return;
 
   const hadExistingWebStandalone = fs.existsSync(webRuntimeServerPath);
@@ -560,7 +611,6 @@ async function buildWebIfNeeded() {
 
 function useWebDevServerFallback(error, reason) {
   if (!keepAliveLauncher) return false;
-  stopExistingWebBuildProcesses(reason);
   configureWebDevServerFallback(`${reason}: ${error instanceof Error ? error.message : String(error)}`);
   return true;
 }
@@ -885,7 +935,9 @@ function startWindowsService(service) {
       `wrapper prepared at ${wrapperPath}; launching direct service process for keep-alive supervision`,
     );
   }
-  const launchCommand = { command: service.command, commandArgs: service.commandArgs, usesOwnRedirection: false };
+  const launchCommand = keepAliveLauncher
+    ? { command: service.command, commandArgs: service.commandArgs, usesOwnRedirection: false }
+    : windowsServiceLaunchCommand(service, wrapperPath);
   return startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath, launchCommand);
 }
 
@@ -931,15 +983,12 @@ function windowsServiceLaunchCommand(service, wrapperPath) {
     );
   }
   return {
-    command: "powershell.exe",
+    command: "cmd.exe",
     commandArgs: [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `$process = Start-Process -FilePath ${psQuote(wrapperPath)} -WorkingDirectory ${psQuote(
-        serviceCwd(service),
-      )} -WindowStyle Hidden -PassThru; $process.Id`,
+      "/d",
+      "/s",
+      "/c",
+      `start "" /min cmd.exe /d /s /c ${cmdQuote(wrapperPath)}`,
     ],
     usesOwnRedirection: true,
   };
@@ -1004,11 +1053,13 @@ async function printStatus() {
     const reachable = await isHealthyWithRetry(service.url, 10, 500);
     const configMismatch =
       service.name === "api" && reachable && integrationHealth && !integrationMatchesCurrentConfig(integrationHealth);
-    const ok = reachable && !configMismatch;
     const portOwners = getPortOwnerPids(service.port);
+    const ownerMismatch = workspacePortOwnerMismatchReason(service.name, portOwners);
+    const ok = reachable && !configMismatch && !ownerMismatch;
     const portText = portOwners.length ? ` port=${service.port} pid=${portOwners.join(",")}` : "";
-    const statusLabel = ok ? "[ready]" : configMismatch ? "[wrong-mode]" : "[down] ";
+    const statusLabel = ok ? "[ready]" : configMismatch ? "[wrong-mode]" : ownerMismatch ? "[blocked]" : "[down] ";
     console.log(`${statusLabel} ${service.label} ${service.url}${portText}`);
+    if (ownerMismatch) console.log(`          ${ownerMismatch}`);
     records[service.name] = {
       ...records[service.name],
       name: service.name,
@@ -1095,6 +1146,8 @@ async function printPreflight() {
 }
 
 async function isServiceReadyForCurrentConfig(service) {
+  const portOwners = getPortOwnerPids(service.port);
+  if (workspacePortOwnerMismatchReason(service.name, portOwners)) return false;
   if (!(await isHealthy(service.url))) return false;
   if (service.name !== "api") return true;
 
@@ -1274,6 +1327,43 @@ function getPortOwnerPids(port) {
     if (/^\d+$/.test(pid) && !pids.includes(pid)) pids.push(pid);
   }
   return pids;
+}
+
+function workspacePortOwnerMismatchReason(label, pids) {
+  if (process.platform !== "win32" || !pids.length) return "";
+  const commandLines = getProcessCommandLinesByPid(pids);
+  const normalizedOwnerRoots = [desktopRoot, runtimeDir].map(normalizePathText).filter(Boolean);
+  const mismatched = pids.filter((pid) => {
+    const commandLine = normalizePathText(commandLines.get(String(pid)) || "");
+    return commandLine && !normalizedOwnerRoots.some((ownerRoot) => commandLine.includes(ownerRoot));
+  });
+  if (!mismatched.length) return "";
+  return `${label} port is owned by non-current workspace PID ${mismatched.join(",")}`;
+}
+
+function getProcessCommandLinesByPid(pids) {
+  const ids = [...new Set(pids.map((pid) => String(pid)).filter((pid) => /^\d+$/.test(pid)))];
+  if (!ids.length) return new Map();
+  const filter = ids.map((pid) => `ProcessId = ${pid}`).join(" OR ");
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter ${psQuote(filter)} | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return new Map();
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+    return new Map(rows.map((item) => [String(item.ProcessId || ""), String(item.CommandLine || "")]));
+  } catch {
+    return new Map();
+  }
 }
 
 function numberEnv(name, fallback) {
@@ -1475,6 +1565,9 @@ function serviceDefaultEnv(service) {
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
     USE_LOCAL_STORE: process.env.USE_LOCAL_STORE || "true",
+    DESKTOP_RUNTIME_DIR: runtimeDir,
+    LOCAL_STORE_FILE: path.join(runtimeDir, "local-store.json"),
+    LOCAL_STORAGE_ROOT: path.join(runtimeDir, "storage"),
     LOW_VALUE_AUTOMATION_ENABLED: process.env.LOW_VALUE_AUTOMATION_ENABLED || "true",
     LOW_VALUE_AUTOMATION_RUN_ON_START: process.env.LOW_VALUE_AUTOMATION_RUN_ON_START || "true",
     PORT: String(service?.port || webPort),
@@ -1482,6 +1575,13 @@ function serviceDefaultEnv(service) {
     API_PORT: String(apiPort),
     MOCK_DESIGN_PLATFORM_PORT: String(mockPort),
     DESIGN_PLATFORM_RUNTIME_CONFIG: designPlatformConfigFile,
+    WECHAT_BRIDGE_OUTBOX_DIR: path.join(runtimeDir, "wechat-outbox"),
+    WECHAT_BRIDGE_INBOX_DIR: path.join(runtimeDir, "wechat-inbox"),
+    WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
+    WECHAT_BRIDGE_LOCK_DIR: path.join(runtimeDir, "wechat-bridge-locks"),
+    WECHAT_BRIDGE_WORKER_STATUS_FILE: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
+    WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
+    WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
     ...designPlatformDefaults(),
   };
 }

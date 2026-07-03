@@ -10,7 +10,9 @@ const supervisorChild = args.has("--supervisor-child");
 const modeArgs = realDesignMode
   ? ["tools/start-dev-ports.js", "--real-design", "--keep-alive"]
   : ["tools/start-dev-ports.js", "--mock-design", "--keep-alive"];
-const runtimeDir = path.join(process.cwd(), ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(process.cwd(), ".runtime");
 const logsDir = path.join(runtimeDir, "logs");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
@@ -53,6 +55,18 @@ function main() {
     return;
   }
 
+  const launcherResult = startLauncherProcess(launcherCmd);
+  if (launcherResult.status === 0) {
+    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`,
+  );
+
   const supervisorCommandLine = buildSupervisorCommandLine();
   const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
   if (supervisorCreateResult.status === 0) {
@@ -81,12 +95,6 @@ function main() {
     ).trim()}`,
   );
 
-  if (!nonDurableSupervisorFallbackAllowed()) {
-    throw new Error(
-      "Durable Windows supervisor launch failed. Run run_desktop_real_design.bat for foreground mode, or set ALLOW_NON_DURABLE_SUPERVISOR_FALLBACK=1 only for local debugging.",
-    );
-  }
-
   const supervisorChildResult = startSupervisorChild();
   if (supervisorChildResult.status === 0) {
     const childPid = String(supervisorChildResult.stdout || "").trim().split(/\s+/).pop();
@@ -101,14 +109,19 @@ function main() {
     ).trim()}`,
   );
 
-  const launcherResult = startLauncherProcess(launcherCmd);
-  if (launcherResult.status === 0) {
-    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
+  if (!nonDurableSupervisorFallbackAllowed()) {
+    throw new Error(
+      "Durable Windows supervisor launch failed. Run run_desktop_real_design.bat for foreground mode, or set ALLOW_NON_DURABLE_SUPERVISOR_FALLBACK=1 only for local debugging.",
+    );
+  }
+
+  const detachedSupervisorChild = spawnSupervisorChildDetached();
+  if (detachedSupervisorChild.pid) {
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${detachedSupervisorChild.pid}`);
     return;
   }
 
-  appendLog(launcherLog, `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`);
+  appendLog(launcherLog, `[supervisor] detached node supervisor skipped: ${detachedSupervisorChild.error || "failed"}`);
 
   const launcherCommandLine = `cmd.exe /d /c ${cmdQuote(launcherCmd)}`;
   const launcherCreateResult = createWindowsProcess(launcherCommandLine);
@@ -125,18 +138,14 @@ function main() {
     ).trim()}`,
   );
 
-  const detachedSupervisorChild = spawnSupervisorChildDetached();
-  if (detachedSupervisorChild.pid) {
-    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${detachedSupervisorChild.pid}`);
-    return;
-  }
-
-  appendLog(launcherLog, `[supervisor] detached node supervisor skipped: ${detachedSupervisorChild.error || "failed"}`);
-
   throw new Error("failed to launch desktop services");
 }
 
 function startLauncherProcess(filePath) {
+  const isCmd = /\.cmd$/i.test(filePath);
+  const file = isCmd ? "cmd.exe" : filePath;
+  const argumentList = isCmd ? ["/d", "/c", filePath] : [];
+  const argumentListScript = argumentList.length ? ` -ArgumentList ${psArray(argumentList)}` : "";
   return spawnSync(
     "powershell.exe",
     [
@@ -144,7 +153,7 @@ function startLauncherProcess(filePath) {
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      `$process = Start-Process -FilePath ${psQuote(filePath)} -WorkingDirectory ${psQuote(process.cwd())} -WindowStyle Hidden -PassThru; $process.Id`,
+      `$process = Start-Process -FilePath ${psQuote(file)}${argumentListScript} -WorkingDirectory ${psQuote(process.cwd())} -WindowStyle Hidden -PassThru; $process.Id`,
     ],
     {
       cwd: process.cwd(),
@@ -601,6 +610,9 @@ function launcherEnvKeys() {
     "MOCK_DESIGN_PLATFORM_PORT",
     "START_MOCK_DESIGN_PLATFORM",
     "DESIGN_PLATFORM_RUNTIME_CONFIG",
+    "DESKTOP_RUNTIME_DIR",
+    "SKIP_EXISTING_API_BUILD",
+    "SKIP_EXISTING_WEB_BUILD",
   ];
   if (realDesignMode) keys.push("DESIGN_PLATFORM_ADAPTER", "DESIGN_PLATFORM_BASE_URL");
   return keys;

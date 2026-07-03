@@ -5,6 +5,8 @@ set "DESKTOP_DIR=%ROOT_DIR%desktop"
 
 set "DESIGN_PLATFORM_ADAPTER=art_image_local"
 if "%DESIGN_PLATFORM_BASE_URL%"=="" set "DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3000"
+set "ALLOW_REAL_DESIGN_LAUNCH=1"
+set "ALLOW_REAL_DESIGN_START=1"
 
 if not exist "%DESKTOP_DIR%\package.json" (
   echo [error] Desktop app folder not found: %DESKTOP_DIR%

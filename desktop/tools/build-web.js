@@ -6,7 +6,9 @@ const path = require("node:path");
 
 const webPort = numberEnv("WEB_PORT", 3100);
 const root = process.cwd();
-const runtimeDir = path.join(root, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(root, ".runtime");
 const buildLockFile = path.join(runtimeDir, "web-build.lock");
 const nextDir = path.join(root, "apps", "web", ".next");
 const nextLockFile = path.join(root, "apps", "web", ".next", "lock");

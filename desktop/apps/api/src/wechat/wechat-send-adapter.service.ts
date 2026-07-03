@@ -65,12 +65,13 @@ const adapters = {
 export class WechatSendAdapterService {
   describe(adapterName?: string) {
     const adapter = this.resolve(adapterName);
+    const supportsImageActions = adapter.name === "dry_run" || adapter.name === "windows_bridge";
     return {
       ...adapter,
       configuredName: appConfig.wechatSendAdapter,
       capabilities: {
         text: true,
-        images: adapter.name === "dry_run",
+        images: supportsImageActions,
         quote: true,
         requiresWindowGuard: true,
         writesOutbox: adapter.name === "windows_bridge",
@@ -90,6 +91,10 @@ export class WechatSendAdapterService {
 
   listBridgeInbox(): BridgeFileEntry[] {
     return this.listBridgeFiles(appConfig.wechatBridgeInboxDir);
+  }
+
+  listBridgeDispatch(): BridgeFileEntry[] {
+    return this.listBridgeFiles(appConfig.wechatBridgeDispatchDir);
   }
 
   getBridgeWorkerStatus() {
@@ -153,6 +158,17 @@ export class WechatSendAdapterService {
     if (!checked) return null;
     const { resolved, root: outboxRoot } = checked;
     const targetDir = path.join(outboxRoot, outcome);
+    fs.mkdirSync(targetDir, { recursive: true });
+    const targetPath = path.join(targetDir, `${Date.now()}-${path.basename(resolved)}`);
+    fs.renameSync(resolved, targetPath);
+    return targetPath;
+  }
+
+  moveBridgeDispatchFile(filePath: string, outcome: "processed" | "failed" | "cancelled") {
+    const checked = resolveBridgeChildFile(filePath, appConfig.wechatBridgeDispatchDir, "bridge dispatch");
+    if (!checked) return null;
+    const { resolved, root: dispatchRoot } = checked;
+    const targetDir = path.join(dispatchRoot, outcome);
     fs.mkdirSync(targetDir, { recursive: true });
     const targetPath = path.join(targetDir, `${Date.now()}-${path.basename(resolved)}`);
     fs.renameSync(resolved, targetPath);

@@ -10,10 +10,12 @@ const defaultLocalStorageRoot = path.join(desktopRoot, "storage");
 const defaultApiBase = `http://127.0.0.1:${process.env.API_PORT || "3200"}/api`;
 const defaultOutboxDir = path.join(runtimeDir, "wechat-outbox");
 const defaultInboxDir = path.join(runtimeDir, "wechat-inbox");
+const defaultDispatchDir = path.join(runtimeDir, "wechat-dispatch");
 const defaultLockDir = path.join(runtimeDir, "wechat-bridge-locks");
 const defaultStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
 const BRIDGE_OUTBOX_VERSION = "wechat_bridge_outbox_v1";
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
+const BRIDGE_DISPATCH_VERSION = "wechat_bridge_dispatch_v1";
 
 const args = process.argv.slice(2);
 
@@ -49,6 +51,7 @@ async function main() {
 
 async function runOnce(config = readConfig()) {
   fs.mkdirSync(config.inboxDir, { recursive: true });
+  fs.mkdirSync(config.dispatchDir, { recursive: true });
   fs.mkdirSync(config.lockDir, { recursive: true });
 
   const outbox = await fetchJson(`${config.apiBase}/wechat/bridge/outbox`);
@@ -117,6 +120,18 @@ async function processPendingEntry(entry, config) {
   }
   const outbox = loadAndValidateOutboxPayload(entry);
 
+  if (config.mode === "dispatch") {
+    const dispatchFile = writeDispatchFile(config.dispatchDir, entry, outbox, config);
+    return {
+      taskId: entry.taskId,
+      wechatAccountId: entry.wechatAccountId,
+      status: "dispatch_pending",
+      transport: "dispatch_file",
+      dispatchFile,
+      reason: "已生成外部 Windows 微信桥接程序待执行指令；未收到真实 ack 前不会标记已发送",
+    };
+  }
+
   const ackPayload = buildAckPayload(entry, config.mode, outbox.payload);
   if (config.ackTransport === "api") {
     const result = await postJson(`${config.apiBase}/wechat/send-tasks/${encodeURIComponent(entry.taskId)}/bridge-ack`, ackPayload);
@@ -163,6 +178,80 @@ function assertScanAcceptedAck(scanResult, ackPayload) {
     throw new Error(`bridge inbox scan did not process ack for ${ackPayload.taskId}`);
   }
   return scanResult;
+}
+
+function buildDispatchPayload(entry, outbox, config = {}) {
+  const payload = outbox?.payload || {};
+  const sendPlan = payload && typeof payload.sendPlan === "object" && payload.sendPlan ? payload.sendPlan : {};
+  const target = payload && typeof payload.target === "object" && payload.target ? payload.target : {};
+  const createdAt = new Date();
+  const dispatchTtlMs = numberValue(config.dispatchTtlMs, config.lockStaleMs || 5 * 60 * 1000, 1000, 60 * 60 * 1000);
+  const expiresAt = new Date(createdAt.getTime() + dispatchTtlMs).toISOString();
+  return {
+    version: BRIDGE_DISPATCH_VERSION,
+    taskId: String(entry.taskId || ""),
+    attemptId: entry.attemptId || undefined,
+    wechatAccountId: String(entry.wechatAccountId || ""),
+    conversationId: String(entry.conversationId || ""),
+    sourceOutboxFileName: String(entry.fileName || ""),
+    sourceOutboxFilePath: outbox.filePath,
+    target: {
+      wechatAccountId: String(target.wechatAccountId || entry.wechatAccountId || ""),
+      accountDisplayName: String(target.accountDisplayName || ""),
+      conversationId: String(target.conversationId || entry.conversationId || ""),
+      conversationTitle: String(target.conversationTitle || ""),
+      customerId: String(target.customerId || ""),
+      customerName: String(target.customerName || ""),
+      windowSnapshotId: target.windowSnapshotId || null,
+      requiredChecks: Array.isArray(target.requiredChecks) ? target.requiredChecks : [],
+    },
+    sendPlan: {
+      kind: String(sendPlan.kind || entry.payloadKind || "unknown"),
+      actionCount: Array.isArray(sendPlan.actions) ? sendPlan.actions.length : 0,
+      actions: Array.isArray(sendPlan.actions) ? sendPlan.actions.map(sanitizeDispatchAction) : [],
+      constraints: {
+        singleAccountLock: true,
+        requireActiveWindowMatch: true,
+        requireRecentCustomerMatch: true,
+        doNotMarkSentWithoutAck: true,
+        doNotSendAfter: expiresAt,
+      },
+    },
+    ack: {
+      version: BRIDGE_ACK_VERSION,
+      inboxDirHint: config.inboxDir || defaultInboxDir,
+      fileNameHint: buildAckFileName(entry, "sent"),
+      failedFileNameHint: buildAckFileName(entry, "failed"),
+      scanEndpointHint: `${String(config.apiBase || defaultApiBase).replace(/\/$/, "")}/wechat/bridge/inbox/scan`,
+      requiredOutboxFileName: String(entry.fileName || ""),
+      requiredTaskId: String(entry.taskId || ""),
+      requiredAttemptId: entry.attemptId || undefined,
+      requiredWechatAccountId: String(entry.wechatAccountId || ""),
+      requiredConversationId: String(entry.conversationId || ""),
+      note: "真实发送完成后，外部桥接程序必须从 sourceOutboxFilePath 读取发送凭证，并写入 wechat_bridge_ack_v1；本 dispatch 文件不包含发送凭证。",
+    },
+    createdAt: createdAt.toISOString(),
+    expiresAt,
+    expiresInMs: dispatchTtlMs,
+  };
+}
+
+function sanitizeDispatchAction(action) {
+  if (!action || typeof action !== "object" || Array.isArray(action)) return { type: "invalid" };
+  const type = String(action.type || "").trim();
+  if (type === "text") return { type, text: String(action.text || "") };
+  if (type === "image") return { type, filePath: String(action.filePath || "") };
+  return { type: type || "unknown" };
+}
+
+function writeDispatchFile(dispatchDir, entry, outbox, config = {}) {
+  fs.mkdirSync(dispatchDir, { recursive: true });
+  const fileName = `${safeFileSegment(entry.wechatAccountId)}-${safeFileSegment(entry.taskId)}-${safeFileSegment(entry.attemptId)}.dispatch.json`;
+  const filePath = path.join(dispatchDir, fileName);
+  if (fs.existsSync(filePath)) return filePath;
+  const payload = buildDispatchPayload(entry, outbox, config);
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return filePath;
 }
 
 function buildAckPayload(entry, mode, outboxPayload = {}) {
@@ -402,10 +491,18 @@ function resolveLocalStorageFile(value) {
 
 function writeAckFile(inboxDir, ackPayload) {
   fs.mkdirSync(inboxDir, { recursive: true });
-  const fileName = `${Date.now()}-${safeFileSegment(ackPayload.taskId)}-${ackPayload.status}.json`;
+  const fileName = buildAckFileName(ackPayload, ackPayload.status);
   const filePath = path.join(inboxDir, fileName);
   fs.writeFileSync(filePath, `${JSON.stringify(ackPayload, null, 2)}\n`, "utf8");
   return filePath;
+}
+
+function buildAckFileName(source, status = "sent") {
+  const taskId = safeFileSegment(source?.taskId || source?.sendTaskId);
+  const attemptId = safeFileSegment(source?.attemptId || "attempt");
+  const accountId = safeFileSegment(source?.wechatAccountId || "account");
+  const safeStatus = status === "failed" ? "failed" : "sent";
+  return `${Date.now()}-${accountId}-${taskId}-${attemptId}-${safeStatus}.ack.json`;
 }
 
 function buildWorkerStatus(result, config, startedAt, error) {
@@ -424,6 +521,7 @@ function buildWorkerStatus(result, config, startedAt, error) {
     ackTransport: config.ackTransport,
     apiBase: config.apiBase,
     inboxDir: config.inboxDir,
+    dispatchDir: config.dispatchDir,
     lockDir: config.lockDir,
     statusFile: config.statusFile,
     startedAt,
@@ -525,24 +623,27 @@ async function fetchWithContext(url, init) {
 }
 
 function readConfig() {
+  const lockStaleMs = numberValue(valueArg("--lock-stale-ms") || process.env.BRIDGE_LOCK_STALE_MS, 5 * 60 * 1000, 1000, 60 * 60 * 1000);
   return {
     apiBase: String(valueArg("--api-base") || process.env.BRIDGE_API_BASE || defaultApiBase).replace(/\/$/, ""),
     outboxDir: path.resolve(valueArg("--outbox-dir") || process.env.WECHAT_BRIDGE_OUTBOX_DIR || defaultOutboxDir),
     inboxDir: path.resolve(valueArg("--inbox-dir") || process.env.WECHAT_BRIDGE_INBOX_DIR || defaultInboxDir),
+    dispatchDir: path.resolve(valueArg("--dispatch-dir") || process.env.WECHAT_BRIDGE_DISPATCH_DIR || defaultDispatchDir),
     lockDir: path.resolve(valueArg("--lock-dir") || process.env.WECHAT_BRIDGE_LOCK_DIR || defaultLockDir),
     statusFile: path.resolve(valueArg("--status-file") || process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || defaultStatusFile),
     mode: normalizeMode(valueArg("--mode") || process.env.BRIDGE_MODE || "noop"),
     ackTransport: normalizeAckTransport(valueArg("--ack") || process.env.BRIDGE_ACK_TRANSPORT || "file_scan"),
     limit: numberValue(valueArg("--limit") || process.env.BRIDGE_LIMIT, 5, 1, 50),
     intervalMs: numberValue(valueArg("--interval-ms") || process.env.BRIDGE_POLL_INTERVAL_MS, 3000, 500, 60000),
-    lockStaleMs: numberValue(valueArg("--lock-stale-ms") || process.env.BRIDGE_LOCK_STALE_MS, 5 * 60 * 1000, 1000, 60 * 60 * 1000),
+    lockStaleMs,
+    dispatchTtlMs: numberValue(valueArg("--dispatch-ttl-ms") || process.env.BRIDGE_DISPATCH_TTL_MS, lockStaleMs, 1000, 60 * 60 * 1000),
     watch: hasArg("--watch"),
   };
 }
 
 function normalizeMode(value) {
   const mode = String(value || "").trim();
-  if (["noop", "simulate_sent", "simulate_failed"].includes(mode)) return mode;
+  if (["noop", "dispatch", "simulate_sent", "simulate_failed"].includes(mode)) return mode;
   return "noop";
 }
 
@@ -590,22 +691,27 @@ function printRunSummary(result, config) {
 }
 
 function printHelp() {
-  console.log(`Usage: node tools/wechat-bridge-worker.js [--once|--watch] [--mode noop|simulate_sent|simulate_failed]
+  console.log(`Usage: node tools/wechat-bridge-worker.js [--once|--watch] [--mode noop|dispatch|simulate_sent|simulate_failed]
 
 Environment:
   BRIDGE_API_BASE=http://127.0.0.1:3200/api
-  BRIDGE_MODE=noop|simulate_sent|simulate_failed
+  BRIDGE_MODE=noop|dispatch|simulate_sent|simulate_failed
   BRIDGE_ACK_TRANSPORT=file_scan|file|api
   WECHAT_BRIDGE_INBOX_DIR=.runtime/wechat-inbox
   WECHAT_BRIDGE_OUTBOX_DIR=.runtime/wechat-outbox
+  WECHAT_BRIDGE_DISPATCH_DIR=.runtime/wechat-dispatch
   WECHAT_BRIDGE_LOCK_DIR=.runtime/wechat-bridge-locks
   WECHAT_BRIDGE_WORKER_STATUS_FILE=.runtime/wechat-bridge-worker-status.json
+  BRIDGE_DISPATCH_TTL_MS=300000
 
-Default mode is noop: it only reads pending bridge outbox tasks and does not mark anything sent.`);
+Default mode is noop: it only reads pending bridge outbox tasks and does not mark anything sent.
+Dispatch mode writes external bridge instruction files and still does not mark anything sent without a real ack.`);
 }
 
 module.exports = {
   buildAckPayload,
+  buildAckFileName,
+  buildDispatchPayload,
   buildWorkerStatus,
   assertScanAcceptedAck,
   loadAndValidateOutboxPayload,
@@ -616,5 +722,6 @@ module.exports = {
   numberValue,
   safeFileSegment,
   runOnce,
+  writeDispatchFile,
   writeWorkerStatus,
 };

@@ -23,6 +23,16 @@ type AutomationIdentityAudit = {
   warnings: Array<{ step: string; path: string; reason: string; fields?: string[] }>;
 };
 
+type AutomationSkipSummary = {
+  total: number;
+  reasons: Array<{
+    reason: string;
+    count: number;
+    steps: string[];
+    sampleTargets: string[];
+  }>;
+};
+
 type AutomationRun = {
   trigger: "startup" | "interval" | "manual";
   startedAt: string;
@@ -34,6 +44,7 @@ type AutomationRun = {
   errors: Array<{ step: string; errorMessage: string }>;
   results: Record<string, unknown>;
   identityAudit?: AutomationIdentityAudit;
+  skipSummary?: AutomationSkipSummary;
 };
 
 const AUTOMATION_IDENTITY_SOURCE_KEYS = new Set([
@@ -45,7 +56,6 @@ const AUTOMATION_IDENTITY_SOURCE_KEYS = new Set([
   "sent",
   "timedOut",
   "failed",
-  "skipped",
 ]);
 
 function normalizeIdentityValue(value: unknown) {
@@ -153,6 +163,77 @@ function buildAutomationIdentityAudit(run: AutomationRun): AutomationIdentityAud
     identityCount: identities.length,
     identities,
     warnings,
+  };
+}
+
+function firstStringValue(record: any, keys: string[]) {
+  for (const key of keys) {
+    const value = String(record?.[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function collectAutomationSkippedRecords(step: string, value: unknown, records: any[]) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectAutomationSkippedRecords(step, item, records));
+    return;
+  }
+  const entry = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(entry)) {
+    if (key === "skipped" && Array.isArray(child)) {
+      child.forEach((item) => records.push({ step, item }));
+      continue;
+    }
+    if (child && typeof child === "object") {
+      collectAutomationSkippedRecords(step, child, records);
+    }
+  }
+}
+
+function buildAutomationSkipSummary(run: AutomationRun): AutomationSkipSummary {
+  const records: Array<{ step: string; item: any }> = [];
+  if (run.skipped && run.reason) {
+    records.push({ step: "run", item: { reason: run.reason } });
+  }
+  for (const [step, result] of Object.entries(run.results || {})) {
+    collectAutomationSkippedRecords(step, result, records);
+  }
+
+  const grouped = new Map<string, { reason: string; count: number; steps: Set<string>; sampleTargets: Set<string> }>();
+  for (const record of records) {
+    const reason = firstStringValue(record.item, ["reason", "skipReason", "code"]) || "unknown";
+    const current =
+      grouped.get(reason) || { reason, count: 0, steps: new Set<string>(), sampleTargets: new Set<string>() };
+    current.count += 1;
+    current.steps.add(record.step);
+    const target = firstStringValue(record.item, [
+      "designJobId",
+      "quoteDraftId",
+      "orderDraftId",
+      "sendTaskId",
+      "requestId",
+      "conversationId",
+      "customerId",
+      "wechatAccountId",
+    ]);
+    if (target && current.sampleTargets.size < 3) current.sampleTargets.add(target);
+    grouped.set(reason, current);
+  }
+
+  const reasons = [...grouped.values()]
+    .map((item) => ({
+      reason: item.reason,
+      count: item.count,
+      steps: [...item.steps].sort(),
+      sampleTargets: [...item.sampleTargets],
+    }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+
+  return {
+    total: records.length,
+    reasons,
   };
 }
 
@@ -266,7 +347,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       action: !catalogAudit
         ? "先检查商品库服务。"
         : catalogStructureIssueCount || blockingRepairCount
-          ? "先补齐商品类型、图片、价格、库存、礼盒/内搭结构。"
+          ? "先补齐商品类型、图片、价格、库存、礼盒和内搭结构。"
           : undefined,
     });
 
@@ -363,7 +444,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async runOnce(trigger: AutomationRun["trigger"] = "manual") {
+  async runOnce(trigger: AutomationRun["trigger"] = "manual", filter: IdentityFields = {}) {
     if (this.running) {
       const skipped: AutomationRun = {
         trigger,
@@ -375,6 +456,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
         errors: [],
         results: {},
       };
+      skipped.skipSummary = buildAutomationSkipSummary(skipped);
       this.lastRun = skipped;
       this.recordRun(skipped);
       return skipped;
@@ -401,30 +483,32 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       }
 
       await this.captureStep(run, "pollActiveResults", () =>
-        this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit),
+        this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit, filter),
       );
-      await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation());
-      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts());
-      await this.captureStep(run, "scanSendOperations", () => this.wechatDispatch.scanSendOperations());
+      await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation(filter));
+      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
+      await this.captureStep(run, "scanSendOperations", () => this.wechatDispatch.scanSendOperations(filter));
       if (appConfig.lowValueAutomationProcessSendQueue) {
         await this.captureStep(run, "processLowValueSendQueue", () =>
           this.wechatDispatch.processSafeSendQueue({
             limit: appConfig.lowValueAutomationSendQueueLimit,
             automationOnly: true,
+            ...filter,
           }),
         );
       }
-      await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts());
+      await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
       await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
-        this.wechatDispatch.scanLowValueOrderConfirmations(),
+        this.wechatDispatch.scanLowValueOrderConfirmations(filter),
       );
       await this.captureStep(run, "scanLowValueOrderFollowups", () =>
-        this.wechatDispatch.scanLowValueOrderFollowups(),
+        this.wechatDispatch.scanLowValueOrderFollowups(filter),
       );
     } finally {
       run.completedAt = new Date().toISOString();
       run.durationMs = Date.now() - startedAt.getTime();
       run.identityAudit = buildAutomationIdentityAudit(run);
+      run.skipSummary = buildAutomationSkipSummary(run);
       if (!run.skipped) this.runCount += 1;
       this.lastRun = run;
       this.recordRun(run);

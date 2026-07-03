@@ -22,7 +22,7 @@
 - 模块 ID：`03_knowledge_learning`
 - 分类：`knowledge`
 - 状态：`partial`
-- 文档：`docs/projects/03_knowledge_learning.md`
+- 文档：`docs/agent_tasks/03_knowledge_learning.md`
 
 ## 目标
 

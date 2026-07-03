@@ -194,6 +194,8 @@ function Get-LauncherEnvLines {
   $lines = @()
   if ($IsReal) {
     $lines += ConvertTo-CmdEnvLine "ALLOW_REAL_DESIGN_START" "1"
+    $lines += ConvertTo-CmdEnvLine "ALLOW_REAL_DESIGN_LAUNCH" "1"
+    $lines += ConvertTo-CmdEnvLine "CONFIRM_REAL_DESIGN_SWITCH" "1"
   } else {
     $lines += ConvertTo-CmdEnvLine "DESIGN_PLATFORM_ADAPTER" "standard_v1"
     $lines += ConvertTo-CmdEnvLine "DESIGN_PLATFORM_BASE_URL" "http://127.0.0.1:3700"

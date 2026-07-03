@@ -25,8 +25,18 @@ export class AssetsController {
   }
 
   @Get("local-file")
-  async localFile(@Query("path") localPath: string, @Res() reply: FastifyReply) {
-    const file = await this.assets.readLocalAsset(localPath);
+  async localFile(
+    @Query("path") localPath: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("conversationId") conversationId: string,
+    @Query("customerId") customerId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const file = await this.assets.readLocalAsset(localPath, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
     reply.header("Content-Type", file.mimeType);
     reply.header("Content-Length", String(file.sizeBytes));
     reply.header("Cache-Control", "private, max-age=3600");

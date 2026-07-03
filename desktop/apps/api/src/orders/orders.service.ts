@@ -31,14 +31,7 @@ export class OrdersService {
         ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
         ...(filter.customerId ? { customerId: filter.customerId } : {}),
       },
-      include: {
-        customer: true,
-        conversation: true,
-        wechatAccount: true,
-        designJob: true,
-        quoteDraft: true,
-        selectedImage: true,
-      },
+      include: this.orderInclude(),
       orderBy: { updatedAt: "desc" },
       take: 200,
     });
@@ -49,9 +42,10 @@ export class OrdersService {
     return this.getOrderDraft(id);
   }
 
-  async confirmationPreview(id: string) {
+  async confirmationPreview(id: string, expected: ExpectedIdentityPayload = {}) {
     const order = await this.getOrderDraft(id);
     if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
     const warnings = this.orderConfirmationPreviewWarnings(order);
     return {
       orderDraft: order,
@@ -114,14 +108,7 @@ export class OrdersService {
       : await (this.prisma as any).orderDraft.update({
           where: { id },
           data,
-          include: {
-            customer: true,
-            conversation: true,
-            wechatAccount: true,
-            designJob: true,
-            quoteDraft: true,
-            selectedImage: true,
-          },
+          include: this.orderInclude(),
         });
 
     if (current.quoteDraftId && Object.keys(quotePatch).length) {
@@ -177,8 +164,8 @@ export class OrdersService {
     };
 
     const updated = appConfig.useLocalStore
-      ? this.updateLocalOrderAndQuoteSelection(current, orderPatch, quotePatch)
-      : await this.updatePrismaOrderAndQuoteSelection(id, current.quoteDraftId, orderPatch, quotePatch);
+      ? this.updateLocalOrderAndQuoteSelection(current, orderPatch, quotePatch, selectedImage, note)
+      : await this.updatePrismaOrderAndQuoteSelection(id, current.quoteDraftId, current.designJobId, orderPatch, quotePatch, selectedImage, note);
 
     await this.createReviewLog({
       targetType: "order",
@@ -208,8 +195,8 @@ export class OrdersService {
     return updated;
   }
 
-  async scanLowValueAutoOrderDrafts() {
-    const [quotes, orders] = await Promise.all([this.listQuotes(), this.list()]);
+  async scanLowValueAutoOrderDrafts(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    const [quotes, orders] = await Promise.all([this.listQuotes(filter), this.list(filter)]);
     const orderByQuoteId = new Map((orders as any[]).map((order) => [order.quoteDraftId, order]));
     const result = {
       scanned: quotes.length,
@@ -234,7 +221,7 @@ export class OrdersService {
       }
 
       try {
-        const orderDraft = await this.createFromQuote(quote.id);
+        const orderDraft = await this.createFromQuote(quote.id, this.expectedIdentityFromQuote(quote));
         result.created.push(orderDraft);
         orderByQuoteId.set(quote.id, orderDraft);
       } catch (error) {
@@ -267,18 +254,40 @@ export class OrdersService {
     });
   }
 
+  private orderInclude() {
+    return {
+      customer: true,
+      conversation: true,
+      wechatAccount: true,
+      designJob: {
+        include: {
+          conversation: true,
+          wechatAccount: true,
+          images: true,
+        },
+      },
+      quoteDraft: {
+        include: {
+          selectedImage: true,
+          customer: true,
+          designJob: {
+            include: {
+              conversation: true,
+              wechatAccount: true,
+              images: true,
+            },
+          },
+        },
+      },
+      selectedImage: true,
+    };
+  }
+
   private async getOrderDraft(id: string) {
     if (appConfig.useLocalStore) return this.localStore.getOrderDraft(id);
     const order = await (this.prisma as any).orderDraft.findUnique({
       where: { id },
-      include: {
-        customer: true,
-        conversation: true,
-        wechatAccount: true,
-        designJob: true,
-        quoteDraft: true,
-        selectedImage: true,
-      },
+      include: this.orderInclude(),
     });
     return this.attachOrderSendTasks(order);
   }
@@ -292,6 +301,8 @@ export class OrdersService {
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       items: context.items,
+      hasSelectedImage: Boolean(context.selectedImage),
+      selectedImagePosition: context.selectedImage?.position,
     });
   }
 
@@ -307,6 +318,7 @@ export class OrdersService {
       customerName: order.customer?.name || order.quoteDraft?.customer?.name,
       scene: designJob?.scene,
       items,
+      selectedImage: this.orderSelectedImage(order),
     };
   }
 
@@ -325,11 +337,23 @@ export class OrdersService {
         quoteDraft: order.quoteDraft,
         designJob,
         conversation: order.conversation || designJob?.conversation,
-        selectedImage: order.selectedImage || order.quoteDraft?.selectedImage,
+        selectedImage: this.orderSelectedImage(order),
       });
       if (!binding.ok) warnings.push(`订单绑定校验异常：${binding.reason}`);
     }
     return warnings;
+  }
+
+  private orderSelectedImage(order: any) {
+    return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
+  }
+
+  private expectedIdentityFromQuote(quote: any): ExpectedIdentityPayload {
+    return {
+      expectedWechatAccountId: quote?.designJob?.wechatAccountId || quote?.wechatAccountId,
+      expectedConversationId: quote?.designJob?.conversationId || quote?.conversationId,
+      expectedCustomerId: quote?.customerId || quote?.designJob?.customerId,
+    };
   }
 
   private orderRevisionSendTaskBlocker(order: any) {
@@ -380,26 +404,36 @@ export class OrdersService {
     });
   }
 
-  private updateLocalOrderAndQuoteSelection(current: any, orderPatch: any, quotePatch: any) {
+  private updateLocalOrderAndQuoteSelection(current: any, orderPatch: any, quotePatch: any, selectedImage: any, feedback: string) {
+    this.localStore.selectDesignImage(current.designJobId, selectedImage.id, feedback);
     if (current.quoteDraftId) this.localStore.updateQuoteDraft(current.quoteDraftId, quotePatch);
     return this.localStore.updateOrderDraft(current.id, orderPatch);
   }
 
-  private async updatePrismaOrderAndQuoteSelection(id: string, quoteDraftId: string | null, orderPatch: any, quotePatch: any) {
+  private async updatePrismaOrderAndQuoteSelection(
+    id: string,
+    quoteDraftId: string | null,
+    designJobId: string,
+    orderPatch: any,
+    quotePatch: any,
+    selectedImage: any,
+    feedback: string,
+  ) {
     const prisma = this.prisma as any;
     return prisma.$transaction(async (tx: any) => {
       if (quoteDraftId) await tx.quoteDraft.update({ where: { id: quoteDraftId }, data: quotePatch });
+      await tx.designImageCandidate.updateMany({
+        where: { designJobId },
+        data: { selected: false },
+      });
+      await tx.designImageCandidate.update({
+        where: { id: selectedImage.id },
+        data: { selected: true, customerFeedback: feedback },
+      });
       return tx.orderDraft.update({
         where: { id },
         data: orderPatch,
-        include: {
-          customer: true,
-          conversation: true,
-          wechatAccount: true,
-          designJob: true,
-          quoteDraft: true,
-          selectedImage: true,
-        },
+        include: this.orderInclude(),
       });
     });
   }
@@ -481,9 +515,20 @@ export class OrdersService {
     return (this.prisma as any).reviewLog.create({ data: payload });
   }
 
-  private async listQuotes() {
-    if (appConfig.useLocalStore) return this.localStore.listQuoteDrafts();
+  private async listQuotes(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    if (appConfig.useLocalStore) return this.localStore.listQuoteDrafts(filter);
     return (this.prisma as any).quoteDraft.findMany({
+      where: {
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
+        ...(filter.wechatAccountId || filter.conversationId
+          ? {
+              designJob: {
+                ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+                ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+              },
+            }
+          : {}),
+      },
       include: {
         customer: true,
         selectedImage: true,
@@ -526,14 +571,7 @@ export class OrdersService {
         ...data,
       },
       update: data,
-      include: {
-        customer: true,
-        conversation: true,
-        wechatAccount: true,
-        designJob: true,
-        quoteDraft: true,
-        selectedImage: true,
-      },
+      include: this.orderInclude(),
     });
   }
 }

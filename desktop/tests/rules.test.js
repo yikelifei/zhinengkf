@@ -357,6 +357,48 @@ test("plans inbound image selection only for explicit selection intent", () => {
   assert.equal(missingCandidates.reviewRequired, true);
 });
 
+test("recognizes common numbered customer image choices without treating bare numbers as selection", () => {
+  const candidates = [
+    { id: "candidate-1", imageId: "img-1" },
+    { id: "candidate-2", imageId: "img-2" },
+    { id: "candidate-3", imageId: "img-3" },
+  ];
+  for (const text of ["NO.2", "no.2", "#2", "2号", "二号", "二款", "二版", "第2套", "第二套", "方案2", "编号2", "效果图2"]) {
+    const selected = planCustomerImageSelection({ text, candidates });
+    assert.equal(selected.ok, true, text);
+    assert.equal(selected.action, "select_design_image", text);
+    assert.equal(selected.result.imageId, "img-2", text);
+  }
+
+  const bareNumber = planCustomerImageSelection({ text: "2", candidates });
+  assert.equal(bareNumber.ok, false);
+  assert.equal(bareNumber.action, "skip");
+  assert.equal(bareNumber.reason, "no_selection_intent");
+  const bareChineseNumber = planCustomerImageSelection({ text: "二", candidates });
+  assert.equal(bareChineseNumber.ok, false);
+  assert.equal(bareChineseNumber.action, "skip");
+  assert.equal(bareChineseNumber.reason, "no_selection_intent");
+});
+
+test("recognizes lettered customer image choices without treating bare letters as selection", () => {
+  const candidates = [
+    { id: "candidate-1", imageId: "img-1" },
+    { id: "candidate-2", imageId: "img-2" },
+    { id: "candidate-3", imageId: "img-3" },
+  ];
+  for (const text of ["B款", "b款", "方案B", "选B", "B版", "第B套"]) {
+    const selected = planCustomerImageSelection({ text, candidates });
+    assert.equal(selected.ok, true, text);
+    assert.equal(selected.action, "select_design_image", text);
+    assert.equal(selected.result.imageId, "img-2", text);
+  }
+
+  const bareLetter = planCustomerImageSelection({ text: "C", candidates });
+  assert.equal(bareLetter.ok, false);
+  assert.equal(bareLetter.action, "skip");
+  assert.equal(bareLetter.reason, "no_selection_intent");
+});
+
 test("matches screenshot fingerprint and flags uncertain screenshots", () => {
   const candidates = [
     { id: "candidate-1", imageId: "img-1", fingerprint: "aaaaaaaaaaaaaaaa" },
@@ -399,19 +441,27 @@ test("detects design job timeout after configured minutes", () => {
 test("inspects real image references for assets and bundle items", () => {
   const assets = inspectAssetReferences([
     { id: "asset-1", url: "https://example.test/logo.png" },
+    { id: "asset-loopback", url: "http://127.0.0.1:3000/local-assets/logo.png" },
+    { id: "asset-localhost", url: "http://localhost:3000/generated/logo.png" },
+    { id: "asset-remote-http", url: "http://example.test/local-assets/logo.png" },
     { id: "asset-2" },
   ]);
   assert.equal(assets[0].ok, true);
-  assert.equal(assets[1].reason, "missing_asset_image_reference");
+  assert.equal(assets[1].ok, true);
+  assert.equal(assets[2].ok, true);
+  assert.equal(assets[3].reason, "unsupported_image_reference");
+  assert.equal(assets[4].reason, "missing_asset_image_reference");
 
   const bundle = inspectBundleReferences({
-    giftBox: { skuCode: "BOX-A", mainImageUrl: "https://example.test/box.png" },
+    giftBox: { skuCode: "BOX-A", mainImageUrl: "http://127.0.0.1:3000/local-assets/box.png" },
     items: [
       { skuCode: "TEA-A", images: [{ url: "https://example.test/tea.png" }] },
+      { skuCode: "CARD-LOCAL", images: [{ url: "http://localhost:3000/generated/card.png" }] },
       { skuCode: "CARD-A" },
     ],
   });
-  assert.equal(bundle.filter((item) => item.ok).length, 2);
+  assert.equal(bundle.filter((item) => item.ok).length, 3);
+  assert.equal(bundle.find((item) => item.skuCode === "BOX-A").role, "gift_box");
   assert.equal(bundle.find((item) => item.skuCode === "CARD-A").reason, "missing_sku_image_reference");
 });
 

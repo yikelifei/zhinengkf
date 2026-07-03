@@ -22,7 +22,7 @@
 - 模块 ID：`08_open_api`
 - 分类：`integration`
 - 状态：`partial`
-- 文档：`docs/projects/08_open_api.md`
+- 文档：`docs/agent_tasks/08_open_api.md`
 
 ## 目标
 

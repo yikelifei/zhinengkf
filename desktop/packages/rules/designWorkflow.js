@@ -96,6 +96,7 @@ function inspectBundleReferences(bundle = {}) {
     return {
       ...inspectImageReference(source, ref, item?.mimeType),
       index,
+      role: item?.role || null,
       skuCode: item?.skuCode || null,
       name: item?.name || null,
     };
@@ -202,8 +203,25 @@ function inspectImageReference(source, ref, mimeType) {
 
 function isPreflightAcceptedRemoteRef(value) {
   if (typeof value !== "string") return false;
-  if (value.startsWith("/local-assets/") || value.startsWith("/generated/")) return true;
-  return /^https:\/\/[^\s]+$/i.test(value);
+  if (isRelativeDesignReference(value)) return true;
+  if (/^https:\/\/[^\s]+$/i.test(value)) return true;
+  return isLoopbackDesignReferenceUrl(value);
+}
+
+function isRelativeDesignReference(value) {
+  return value.startsWith("/local-assets/") || value.startsWith("/generated/");
+}
+
+function isLoopbackDesignReferenceUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:") return false;
+    if (!isRelativeDesignReference(url.pathname)) return false;
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 function decideRevisionPolicy({

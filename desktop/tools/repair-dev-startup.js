@@ -1,9 +1,17 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const desktopRoot = path.resolve(__dirname, "..");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.join(desktopRoot, ".runtime");
+const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
+const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
+const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const resetSteps = [
   {
     label: "Stop existing desktop services",
@@ -23,20 +31,19 @@ const resetSteps = [
     allowFailure: false,
     captureOutput: false,
   },
+  {
+    label: "Start default desktop services",
+    packageScript: "ports:launch:mock",
+    allowFailure: false,
+    captureOutput: false,
+  },
 ];
-
 let failed = false;
 
 console.log("");
-console.log("== Check current default startup ==");
-const currentStatus = runNode(["tools/check-dev-startup.js", "--mock-design"], true);
-if (currentStatus.output) console.log(currentStatus.output);
-if (currentStatus.status === 0) {
-  console.log("");
-  console.log("[result] Desktop startup is already healthy. Open http://127.0.0.1:3100/");
-  process.exit(0);
-}
-console.log("[info] Current startup is not healthy. Repair will clean ports, verify defaults, and build the API.");
+console.log("== Repair default desktop startup ==");
+console.log("[info] Repair will clean ports, verify defaults, build the API, and start supervised desktop services.");
+clearDefaultMockModeLocks();
 failed = !runSteps(resetSteps);
 
 if (failed) {
@@ -44,8 +51,9 @@ if (failed) {
   console.log("[result] Repair failed.");
   process.exitCode = 1;
 } else {
+  clearMockRepairLock();
   console.log("");
-  console.log("[result] Repair completed. Run run_desktop.bat to start the app in foreground mode.");
+  console.log("[result] Repair completed. Desktop services are running at http://127.0.0.1:3100/");
 }
 
 function runSteps(steps) {
@@ -56,9 +64,13 @@ function runSteps(steps) {
     const output = result.output;
     if (output) console.log(output);
 
-    if (result.status === 0) continue;
+    if (result.status === 0) {
+      if (step.label === "Stop existing desktop services") clearDefaultMockModeLocks();
+      continue;
+    }
     if (step.allowFailure && !cleanupFailureBlocksRepair(output)) {
       console.log("[warn] Cleanup reported a problem. Continuing so the next step can show the current blocker.");
+      if (step.label === "Stop existing desktop services") clearDefaultMockModeLocks();
       continue;
     }
 
@@ -111,10 +123,36 @@ function runPackageScript(scriptName, captureOutput) {
 function defaultEnv() {
   return {
     ...process.env,
+    FORCE_MOCK_DESIGN_START: "1",
     DESIGN_PLATFORM_ADAPTER: "standard_v1",
     DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700",
     START_MOCK_DESIGN_PLATFORM: "true",
   };
+}
+
+function clearDefaultMockModeLocks() {
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(mockRepairLockFile, `${new Date().toISOString()}\n`, "utf8");
+  fs.rmSync(realModeLockFile, { force: true });
+  fs.rmSync(preferredDesignModeFile, { force: true });
+  let config = {};
+  try {
+    config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
+  } catch {
+    return;
+  }
+  for (const key of ["designPlatformAdapter", "designPlatformBaseUrl", "launcherPid", "launcherArgs", "updatedAt"]) {
+    delete config[key];
+  }
+  if (Object.keys(config).length) {
+    fs.writeFileSync(designPlatformConfigFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } else {
+    fs.rmSync(designPlatformConfigFile, { force: true });
+  }
+}
+
+function clearMockRepairLock() {
+  fs.rmSync(mockRepairLockFile, { force: true });
 }
 
 function cleanupFailureBlocksRepair(output) {

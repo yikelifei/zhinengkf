@@ -22,7 +22,7 @@
 - 模块 ID：`10_quality_release`
 - 分类：`quality`
 - 状态：`running`
-- 文档：`docs/projects/10_quality_release.md`
+- 文档：`docs/agent_tasks/10_quality_release.md`
 
 ## 目标
 

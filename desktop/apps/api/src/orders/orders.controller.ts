@@ -16,8 +16,17 @@ export class OrdersController {
   }
 
   @Get(":id/confirmation-preview")
-  confirmationPreview(@Param("id") id: string) {
-    return this.orders.confirmationPreview(id);
+  confirmationPreview(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.orders.confirmationPreview(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
   }
 
   @Post("from-quote/:quoteId")

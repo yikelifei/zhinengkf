@@ -53,6 +53,21 @@ type IdentityListFilter = {
   customerId?: string;
 };
 
+function localStoreNumberEnv(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+const MAX_WECHAT_WINDOW_SNAPSHOTS = localStoreNumberEnv("LOCAL_STORE_MAX_WECHAT_WINDOW_SNAPSHOTS", 500);
+
+function resolveLocalStoreFilePath() {
+  if (process.env.LOCAL_STORE_FILE) return path.resolve(process.env.LOCAL_STORE_FILE);
+  const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+    ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+    : path.join(process.cwd(), ".runtime");
+  return path.join(runtimeDir, "local-store.json");
+}
+
 function normalizePathKey(value: unknown) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -134,7 +149,7 @@ function sameSkillIdentityScope(left: IdentityListFilter = {}, right: IdentityLi
 
 @Injectable()
 export class LocalStoreService {
-  private readonly filePath = path.join(process.cwd(), ".runtime", "local-store.json");
+  private readonly filePath = resolveLocalStoreFilePath();
 
   listSkus(options: { includeInactive?: boolean } = {}) {
     return this.read().skus.filter((sku) => options.includeInactive || sku.isActive !== false);
@@ -634,6 +649,7 @@ export class LocalStoreService {
         conversations,
       });
     data.wechatWindowSnapshots.push(record);
+    pruneWechatWindowSnapshots(data);
     this.write(data);
     return this.hydrateWechatWindowSnapshot(data, record);
   }
@@ -792,11 +808,15 @@ export class LocalStoreService {
       const index = data.designImages.findIndex(
         (item) => item.designJobId === designJobId && item.imageId === image.imageId,
       );
+      const existing = index >= 0 ? data.designImages[index] : null;
       const record = {
-        id: index >= 0 ? data.designImages[index].id : id("image"),
-        selected: false,
-        createdAt: index >= 0 ? data.designImages[index].createdAt : new Date().toISOString(),
+        ...(existing || {}),
+        id: existing?.id || id("image"),
+        createdAt: existing?.createdAt || new Date().toISOString(),
         ...image,
+        selected: typeof image.selected === "boolean" ? image.selected : Boolean(existing?.selected),
+        customerFeedback:
+          image.customerFeedback !== undefined ? image.customerFeedback : existing?.customerFeedback,
         designJobId,
       };
       if (index >= 0) data.designImages[index] = record;
@@ -1961,30 +1981,16 @@ export class LocalStoreService {
   }
 
   health() {
-    const data = this.read();
+    this.ensure();
+    const stat = fs.statSync(this.filePath);
     return {
       ok: true,
       mode: "local-json",
       path: this.filePath,
-      counts: {
-        skus: data.skus.length,
-        designAssets: data.designAssets.length,
-        designJobs: data.designJobs.length,
-        designRevisions: data.designRevisions.length,
-        notifications: data.notifications.length,
-        sendTasks: data.sendTasks.length,
-        sendAttempts: data.sendAttempts.length,
-        wechatWindowSnapshots: data.wechatWindowSnapshots.length,
-        quoteDrafts: data.quoteDrafts.length,
-        orderDrafts: data.orderDrafts.length,
-        skuChangeLogs: data.skuChangeLogs.length,
-        reviewLogs: data.reviewLogs.length,
-        agents: data.agents.length,
-        agentSkills: data.agentSkills.length,
-        chatImports: data.chatImports.length,
-        trainingSamples: data.trainingSamples.length,
-        routeEvaluations: data.routeEvaluations.length,
-      },
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+      countsAvailable: false,
+      maxWechatWindowSnapshots: MAX_WECHAT_WINDOW_SNAPSHOTS,
     };
   }
 
@@ -2485,8 +2491,34 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     applyMultiAccountSeed(normalized, now);
     changed = true;
   }
+  changed = pruneWechatWindowSnapshots(normalized) || changed;
 
   return { data: normalized, changed };
+}
+
+function pruneWechatWindowSnapshots(data: StoreData) {
+  const snapshots = Array.isArray(data.wechatWindowSnapshots) ? data.wechatWindowSnapshots : [];
+  if (snapshots.length <= MAX_WECHAT_WINDOW_SNAPSHOTS) return false;
+
+  const referencedIds = new Set(
+    (Array.isArray(data.sendAttempts) ? data.sendAttempts : [])
+      .map((attempt) => String(attempt?.windowSnapshotId || "").trim())
+      .filter(Boolean),
+  );
+  const latestIds = new Set(
+    [...snapshots]
+      .sort((a, b) => String(b?.capturedAt || b?.createdAt || "").localeCompare(String(a?.capturedAt || a?.createdAt || "")))
+      .slice(0, MAX_WECHAT_WINDOW_SNAPSHOTS)
+      .map((snapshot) => String(snapshot?.id || "").trim())
+      .filter(Boolean),
+  );
+  const next = snapshots.filter((snapshot) => {
+    const snapshotId = String(snapshot?.id || "").trim();
+    return latestIds.has(snapshotId) || referencedIds.has(snapshotId);
+  });
+  if (next.length === snapshots.length) return false;
+  data.wechatWindowSnapshots = next;
+  return true;
 }
 
 function syncSeedAgentConfig(data: StoreData, seeded: ReturnType<typeof seedAgentConfig>, now: string) {

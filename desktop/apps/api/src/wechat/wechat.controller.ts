@@ -81,7 +81,7 @@ export class WechatController {
       externalId?: string;
       assetIds?: string[];
       attachments?: Array<Record<string, unknown>>;
-    },
+    } & ExpectedIdentityPayload,
   ) {
     return this.wechat.processChannelInboundTest(channel, payload || {});
   }
@@ -93,6 +93,15 @@ export class WechatController {
     @Query("customerId") customerId?: string,
   ) {
     return this.wechat.listBridgeOutbox({ wechatAccountId, conversationId, customerId });
+  }
+
+  @Get("bridge/dispatch")
+  listBridgeDispatch(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.wechat.listBridgeDispatch({ wechatAccountId, conversationId, customerId });
   }
 
   @Get("bridge/status")
@@ -140,20 +149,32 @@ export class WechatController {
 
   @Post("window-snapshots/demo")
   createDemoWindowSnapshot(
-    @Body() payload: { mode?: "correct" | "wrong_chat" | "offline"; wechatAccountId?: string; conversationId?: string },
+    @Body()
+    payload: {
+      mode?: "correct" | "wrong_chat" | "offline";
+      wechatAccountId?: string;
+      conversationId?: string;
+    } & ExpectedIdentityPayload,
   ) {
     return this.wechat.createDemoWindowSnapshot(payload || {});
   }
 
   @Post("send-tasks/demo")
-  createDemoSendTask(@Body() payload: { wechatAccountId?: string; conversationId?: string; text?: string }) {
+  createDemoSendTask(@Body() payload: { wechatAccountId?: string; conversationId?: string; text?: string } & ExpectedIdentityPayload) {
     return this.wechat.createDemoSendTask(payload || {});
   }
 
   @Post("orders/:id/queue-confirmation")
   queueOrderConfirmation(
     @Param("id") id: string,
-    @Body() payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
+    @Body()
+    payload: {
+      owner?: string;
+      note?: string;
+      reason?: string;
+      releaseManualLock?: boolean;
+      releaseReason?: string;
+    } & ExpectedIdentityPayload,
   ) {
     return this.wechat.queueOrderConfirmation(id, payload || {});
   }
@@ -161,32 +182,41 @@ export class WechatController {
   @Post("orders/:id/queue-followup")
   queueOrderFollowup(
     @Param("id") id: string,
-    @Body() payload: { type?: "production" | "delivery"; owner?: string } & ExpectedIdentityPayload,
+    @Body()
+    payload: {
+      type?: "production" | "delivery";
+      owner?: string;
+      reason?: string;
+      releaseManualLock?: boolean;
+      releaseReason?: string;
+    } & ExpectedIdentityPayload,
   ) {
     return this.wechat.queueOrderFollowup(id, payload || {});
   }
 
   @Post("send-tasks/scan-ops")
-  scanSendOperations() {
-    return this.wechat.scanSendOperations();
+  scanSendOperations(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.wechat.scanSendOperations(payload || {});
   }
 
   @Post("send-tasks/process-safe-queue")
-  processSafeSendQueue(@Body() payload: { adapter?: string; limit?: number }) {
+  processSafeSendQueue(
+    @Body() payload: { adapter?: string; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string },
+  ) {
     return this.wechat.processSafeSendQueue(payload || {});
   }
 
   @Post("send-tasks/:id/validate")
   validateSendTask(
     @Param("id") id: string,
-    @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> },
+    @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> } & ExpectedIdentityPayload,
   ) {
     return this.wechat.validateSendTask(id, payload || {});
   }
 
   @Post("send-tasks/:id/validate-current-window")
-  validateWithCurrentWindow(@Param("id") id: string) {
-    return this.wechat.validateSendTaskWithCurrentWindow(id);
+  validateWithCurrentWindow(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
+    return this.wechat.validateSendTaskWithCurrentWindow(id, payload || {});
   }
 
   @Post("send-tasks/:id/mark-sent")

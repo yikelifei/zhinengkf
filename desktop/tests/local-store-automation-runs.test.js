@@ -106,3 +106,64 @@ test("local store normalizes legacy data without automation run history", () => 
   const stored = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
   assert.deepEqual(stored.automationRuns, []);
 });
+
+test("local store health uses file metadata without parsing the full store", () => {
+  const { store } = createStore();
+  fs.writeFileSync(store.filePath, "{", "utf8");
+
+  const health = store.health();
+
+  assert.equal(health.ok, true);
+  assert.equal(health.mode, "local-json");
+  assert.equal(health.countsAvailable, false);
+  assert.equal(health.sizeBytes, 1);
+  assert.equal(typeof health.updatedAt, "string");
+});
+
+test("local store prunes old wechat window snapshots while preserving referenced snapshots", () => {
+  const snapshots = Array.from({ length: 520 }, (_, index) => ({
+    id: `snapshot_${String(index).padStart(3, "0")}`,
+    source: "test",
+    isOnline: true,
+    wechatAccountId: "wechat_demo_1",
+    chatTitle: "demo",
+    activeChatTitle: "demo",
+    capturedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+  }));
+  const { store } = createStore({
+    wechatAccounts: [],
+    customers: [],
+    conversations: [],
+    messages: [],
+    wechatWindowSnapshots: snapshots,
+    skus: [],
+    skuChangeLogs: [],
+    designAssets: [],
+    designJobs: [],
+    designImages: [],
+    designRevisions: [],
+    notifications: [],
+    sendTasks: [],
+    sendAttempts: [{ id: "attempt_1", windowSnapshotId: "snapshot_000" }],
+    quoteDrafts: [],
+    orderDrafts: [],
+    reviewLogs: [],
+    agents: [],
+    agentSkills: [],
+    chatImports: [],
+    trainingSamples: [],
+    knowledgeEntries: [],
+    routeEvaluations: [],
+    automationRuns: [],
+  });
+
+  store.listWechatWindowSnapshots(200);
+
+  const stored = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
+  const snapshotIds = stored.wechatWindowSnapshots.map((snapshot) => snapshot.id);
+  assert.equal(stored.wechatWindowSnapshots.length, 501);
+  assert.equal(snapshotIds.includes("snapshot_000"), true);
+  assert.equal(snapshotIds.includes("snapshot_001"), false);
+  assert.equal(snapshotIds.includes("snapshot_519"), true);
+});

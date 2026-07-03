@@ -15,8 +15,16 @@ function booleanEnv(name: string, fallback: boolean): boolean {
 
 const defaultDesignPlatformAdapter = "standard_v1";
 const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3700";
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+  ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+  : path.resolve("./.runtime");
+
+function runtimePath(...segments: string[]) {
+  return path.join(runtimeDir, ...segments);
+}
+
 const designPlatformRuntimeConfigPath = path.resolve(
-  process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || "./.runtime/design-platform-config.json",
+  process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || runtimePath("design-platform-config.json"),
 );
 
 function readRuntimeConfig(): Record<string, unknown> {
@@ -60,7 +68,7 @@ const designPlatformRuntime = resolveDesignPlatformRuntime();
 export const appConfig = {
   apiPort: numberEnv("API_PORT", 3200),
   useLocalStore: process.env.USE_LOCAL_STORE !== "false",
-  localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || "./storage"),
+  localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || runtimePath("storage")),
   designPlatformAdapter: designPlatformRuntime.adapter,
   designPlatformBaseUrl: designPlatformRuntime.baseUrl,
   designPlatformApiKey: process.env.DESIGN_PLATFORM_API_KEY || "",
@@ -75,12 +83,13 @@ export const appConfig = {
   designResultPollMaxMs: numberEnv("DESIGN_RESULT_POLL_MAX_MS", 20 * 60 * 1000),
   callbackApiKey: process.env.DESIGN_PLATFORM_CALLBACK_API_KEY || "",
   wechatSendAdapter: process.env.WECHAT_SEND_ADAPTER || "dry_run",
-  wechatBridgeOutboxDir: path.resolve(process.env.WECHAT_BRIDGE_OUTBOX_DIR || "./.runtime/wechat-outbox"),
-  wechatBridgeInboxDir: path.resolve(process.env.WECHAT_BRIDGE_INBOX_DIR || "./.runtime/wechat-inbox"),
-  wechatBridgeLockDir: path.resolve(process.env.WECHAT_BRIDGE_LOCK_DIR || "./.runtime/wechat-bridge-locks"),
-  wechatBridgeWorkerStatusFile: path.resolve(process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || "./.runtime/wechat-bridge-worker-status.json"),
-  wechatWindowSnapshotInboxDir: path.resolve(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR || "./.runtime/wechat-window-snapshots"),
-  wechatWindowObserverStatusFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || "./.runtime/wechat-window-observer-status.json"),
+  wechatBridgeOutboxDir: path.resolve(process.env.WECHAT_BRIDGE_OUTBOX_DIR || runtimePath("wechat-outbox")),
+  wechatBridgeInboxDir: path.resolve(process.env.WECHAT_BRIDGE_INBOX_DIR || runtimePath("wechat-inbox")),
+  wechatBridgeDispatchDir: path.resolve(process.env.WECHAT_BRIDGE_DISPATCH_DIR || runtimePath("wechat-dispatch")),
+  wechatBridgeLockDir: path.resolve(process.env.WECHAT_BRIDGE_LOCK_DIR || runtimePath("wechat-bridge-locks")),
+  wechatBridgeWorkerStatusFile: path.resolve(process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || runtimePath("wechat-bridge-worker-status.json")),
+  wechatWindowSnapshotInboxDir: path.resolve(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR || runtimePath("wechat-window-snapshots")),
+  wechatWindowObserverStatusFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || runtimePath("wechat-window-observer-status.json")),
   wechatWindowSnapshotMaxAgeSeconds: numberEnv("WECHAT_WINDOW_SNAPSHOT_MAX_AGE_SECONDS", 30),
   wechatWindowSnapshotScanLimit: numberEnv("WECHAT_WINDOW_SNAPSHOT_SCAN_LIMIT", 5),
   wechatWorkCorpId: process.env.WECHAT_WORK_CORP_ID || "",

@@ -22,7 +22,7 @@
 - 模块 ID：`09_console_workspace`
 - 分类：`console`
 - 状态：`partial`
-- 文档：`docs/projects/09_console_workspace.md`
+- 文档：`docs/agent_tasks/09_console_workspace.md`
 
 ## 目标
 

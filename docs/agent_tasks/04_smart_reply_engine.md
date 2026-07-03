@@ -22,7 +22,7 @@
 - 模块 ID：`04_smart_reply_engine`
 - 分类：`reply`
 - 状态：`running`
-- 文档：`docs/projects/04_smart_reply_engine.md`
+- 文档：`docs/agent_tasks/04_smart_reply_engine.md`
 
 ## 目标
 

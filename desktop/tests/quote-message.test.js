@@ -13,6 +13,7 @@ test("builds a customer-facing quote message with selected design and bundle det
     unitPrice: 180,
     totalPrice: 9000,
     hasSelectedImage: true,
+    selectedImagePosition: 2,
     items: [
       { name: "红金礼盒A" },
       { name: "茶叶礼品A" },
@@ -21,7 +22,7 @@ test("builds a customer-facing quote message with selected design and bundle det
   });
 
   assert.match(message, /王总/);
-  assert.match(message, /刚刚选中的效果图/);
+  assert.match(message, /刚刚选中的第2张效果图/);
   assert.match(message, /端午员工福利礼盒/);
   assert.match(message, /红金礼盒A、茶叶礼品A、感谢卡A/);
   assert.match(message, /数量 50 份/);
@@ -49,11 +50,13 @@ test("builds a paid low-value order confirmation message", () => {
     quantity: 50,
     totalPrice: 9000,
     paymentStatus: "paid",
+    hasSelectedImage: true,
+    selectedImagePosition: 2,
     items: [{ name: "红金礼盒A" }, { name: "茶叶礼品A" }],
   });
 
   assert.match(message, /王总/);
-  assert.match(message, /按您确认的端午员工福利礼盒/);
+  assert.match(message, /按您确认的第2张效果图，端午员工福利礼盒/);
   assert.match(message, /红金礼盒A、茶叶礼品A/);
   assert.match(message, /数量 50 份/);
   assert.match(message, /合计 9000 元/);

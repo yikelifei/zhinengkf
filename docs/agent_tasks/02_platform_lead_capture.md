@@ -22,7 +22,7 @@
 - 模块 ID：`02_platform_lead_capture`
 - 分类：`lead_acquisition`
 - 状态：`partial`
-- 文档：`docs/projects/02_platform_lead_capture.md`
+- 文档：`docs/agent_tasks/02_platform_lead_capture.md`
 
 ## 目标
 

@@ -52,8 +52,12 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(statusSection, /const sendAdapterKeys = new Set\(\["safe_send_queue"\]\)/);
   assert.match(statusSection, /return "needs_send_adapter"/);
   assert.match(service, /needsSendAdapter/);
+  assert.match(service, /bridgeDispatchPending:\s*bridge\.dispatch\.pendingCount/);
+  assert.match(service, /bridgeDispatchStale:\s*bridge\.dispatch\.staleCount/);
   assert.match(api, /"needs_send_adapter"/);
   assert.match(page, /needs_send_adapter:\s*"待发送器"/);
+  assert.match(page, /bridgeDispatchPending:\s*"指令"/);
+  assert.match(page, /bridgeDispatchStale:\s*"超时指令"/);
   assert.match(page, /function wechatChannelNextStep/);
   assert.match(page, /WECHAT_SEND_ADAPTER=windows_bridge/);
   assert.match(page, /wechat-config-runbook/);
@@ -130,6 +134,36 @@ test("bridge outbox list exposes preview instead of raw outbox data", () => {
   assert.doesNotMatch(itemSection, /customerName/);
   assert.doesNotMatch(itemSection, /textPreview/);
   assert.doesNotMatch(itemSection, /imageFileNames/);
+});
+
+test("web send task cards show dispatch instruction state", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const previewSection = sliceBetween(page, /\nfunction BridgeOutboxPreview\(/, /\nfunction bridgeOutboxEntryForTask\(/);
+  const dispatchMatcherSection = sliceBetween(page, /\nfunction bridgeDispatchEntryForTask\(/, /\nfunction sendStatusLabel\(/);
+  const taskListSection = page.slice(
+    page.indexOf("<div className=\"send-task-list\">"),
+    page.indexOf("<section className=\"panel review-panel\""),
+  );
+
+  assert.match(api, /export type BridgeDispatchEntry/);
+  assert.match(api, /export type BridgeDispatchResult = \{[\s\S]*staleCount\?: number/);
+  assert.match(api, /dispatch\?:\s*\{[\s\S]*pending:\s*BridgeDispatchEntry\[\]/);
+  assert.match(api, /dispatch\?:\s*\{[\s\S]*staleCount\?: number/);
+  assert.match(taskListSection, /const bridgeDispatchEntry = bridgeDispatchEntryForTask\(task, bridgeStatus\)/);
+  assert.match(taskListSection, /dispatchEntry=\{bridgeDispatchEntry\}/);
+  assert.match(previewSection, /dispatchEntry\?: BridgeDispatchEntry \| null/);
+  assert.match(previewSection, /桥接指令已生成/);
+  assert.match(previewSection, /等待外部微信桥发送后回执/);
+  assert.match(previewSection, /dispatchEntry\?\.ackFileNameHint/);
+  assert.match(previewSection, /回执建议文件/);
+  assert.match(previewSection, /dispatchEntry\?\.protocolVersion/);
+  assert.match(previewSection, /dispatchEntry\?\.expiresAt/);
+  assert.match(previewSection, /dispatchEntry\.expired \? "，已过期请重新生成" : ""/);
+  assert.match(page, /bridgeStatus\?\.dispatch\?\.staleCount \? `，指令超时 \$\{bridgeStatus\.dispatch\.staleCount\} 个` : ""/);
+  assert.match(dispatchMatcherSection, /bridgeStatus\?\.dispatch\?\.pending/);
+  assert.match(dispatchMatcherSection, /entry\.taskId === task\.id/);
+  assert.match(dispatchMatcherSection, /entry\.attemptId === latestAttempt\.id/);
 });
 
 test("bridge status and inbox scan expose sanitized inbox summaries only", () => {
@@ -263,11 +297,19 @@ test("notice center exposes manual selection targets for operator follow-up", ()
   assert.doesNotMatch(verifyPaymentProofSection, /options: \{ queueConfirmation\?: boolean \} = \{\}/);
   assert.match(api, /function verifyQuotePaymentProofAndQueueConfirmation/);
   assert.match(api, /\/quotes\/\$\{id\}\/verify-payment-proof/);
+  assert.match(api, /sendTask\?: SendTask \| null/);
   assert.match(verifyPaymentProofSection, /verifyQuotePaymentProofAndQueueConfirmation\([\s\S]*quote\.id,[\s\S]*paymentStatus,[\s\S]*identityExpectation\(quote\)/);
   assert.match(verifyPaymentProofSection, /setQuotes\(\(items\) =>[\s\S]*item\.id === result\.quote\.id[\s\S]*\[result\.quote, \.\.\.items\]/);
-  assert.match(verifyPaymentProofSection, /setOrderDrafts\(\(items\) =>[\s\S]*item\.id === result\.orderDraft\.id[\s\S]*\[result\.orderDraft, \.\.\.items\]/);
-  assert.match(verifyPaymentProofSection, /setSendTasks\(\(items\) =>[\s\S]*item\.id === result\.sendTask\.id[\s\S]*\[result\.sendTask, \.\.\.items\]/);
-  assert.match(verifyPaymentProofSection, /setMessage\(`\$\{paymentLabel\}已核验，订单确认已进入微信安全发送队列。`\)/);
+  assert.match(verifyPaymentProofSection, /upsertOrderDraftState\(result\.orderDraft\)/);
+  assert.match(verifyPaymentProofSection, /function upsertOrderDraftState\(order: OrderDraft \| null \| undefined\)/);
+  assert.match(verifyPaymentProofSection, /setOrderDrafts\(\(items\) =>[\s\S]*item\.id === order\.id[\s\S]*\[order, \.\.\.items\]/);
+  assert.match(verifyPaymentProofSection, /if \(result\.sendTask\?\.id\)/);
+  assert.doesNotMatch(verifyPaymentProofSection, /result\.sendTask\.id/);
+  assert.match(verifyPaymentProofSection, /upsertSendTaskState\(result\.sendTask\)/);
+  assert.match(verifyPaymentProofSection, /function upsertSendTaskState\(task: SendTask \| null \| undefined\)/);
+  assert.match(verifyPaymentProofSection, /setSendTasks\(\(items\) =>[\s\S]*item\.id === task\.id[\s\S]*\[task, \.\.\.items\]/);
+  assert.match(verifyPaymentProofSection, /queuedSendTask[\s\S]*订单确认已进入微信安全发送队列/);
+  assert.match(verifyPaymentProofSection, /订单已更新，请人工确认后再发送/);
   assert.doesNotMatch(page, /verifyQuotePaymentProof\(quote, "deposit_paid", \{ queueConfirmation: true \}\)/);
   assert.doesNotMatch(page, /verifyQuotePaymentProof\(quote, "paid", \{ queueConfirmation: true \}\)/);
   assert.match(page, /定金并确认/);
@@ -304,6 +346,21 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   const orderService = readProjectFile("apps/api/src/orders/orders.service.ts");
   const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const identityHelper = readProjectFile("apps/api/src/shared/identity-expectation.ts");
+  const lowValueOrderConfirmationSection = sliceBetween(
+    wechatService,
+    /\n  async scanLowValueOrderConfirmations\(/,
+    /\n  async scanLowValueOrderFollowups\(/,
+  );
+  const lowValueOrderFollowupSection = sliceBetween(
+    wechatService,
+    /\n  async scanLowValueOrderFollowups\(/,
+    /\n  listAccounts\(/,
+  );
+  const inboundAcceptanceSection = sliceBetween(
+    wechatService,
+    /\n  private async handleInboundQuoteAcceptance\(/,
+    /\n  private findLatestQuoteForConversation\(/,
+  );
 
   assert.match(identityHelper, /export function assertExpectedIdentity/);
   assert.match(identityHelper, /expectedWechatAccountId/);
@@ -323,6 +380,15 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   assert.match(wechatService, /assertExpectedIdentity\(order, payload, "order draft"\)/);
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order confirmation"\)/);
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order follow-up"\)/);
+  assert.match(wechatService, /this\.orders\.update\(order\.id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId/);
+  assert.match(wechatService, /queueOrderFollowup\([\s\S]*selectedImage: this\.orderSelectedImage\(order\)/);
+  assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload/);
+  assert.match(wechatService, /expectedWechatAccountId: order\?\.wechatAccountId \|\| designJob\?\.wechatAccountId/);
+  assert.match(wechatService, /expectedConversationId: order\?\.conversationId \|\| designJob\?\.conversationId/);
+  assert.match(wechatService, /expectedCustomerId: order\?\.customerId \|\| order\?\.quoteDraft\?\.customerId \|\| designJob\?\.customerId/);
+  assert.match(lowValueOrderConfirmationSection, /queueOrderConfirmation\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
+  assert.match(lowValueOrderFollowupSection, /queueOrderFollowup\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
+  assert.match(inboundAcceptanceSection, /queueOrderConfirmation\(result\.orderDraft\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(result\.orderDraft\)/);
   assert.match(wechatService, /private assertHighValueOrderHasManualRelease/);
   assert.match(wechatService, /private isHighValueOrder\(order: any\)[\s\S]*isHighValueBudget\(designJob\?\.budget, threshold\)/);
   assert.match(wechatService, /assertExpectedIdentity\(taskBeforeValidation, params, "send task"\)/);
@@ -362,11 +428,15 @@ test("manual send operation scans are scoped by selected conversation identity",
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
 
-  assert.match(api, /scanSendOperations\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /postJson<Record<string, unknown>>\("\/wechat\/send-tasks\/scan-ops", filters\)/);
+  assert.match(api, /export type SendOperationsScanResult = \{/);
+  assert.match(api, /bridgeDispatchExpired\?: number/);
+  assert.match(api, /scanSendOperations\(filters: IdentityFilters = \{\}\): Promise<SendOperationsScanResult>/);
+  assert.match(api, /postJson<SendOperationsScanResult>\("\/wechat\/send-tasks\/scan-ops", filters\)/);
   assert.match(api, /processSafeSendQueue\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /postJson<SafeSendQueueResult>\("\/wechat\/send-tasks\/process-safe-queue", filters\)/);
   assert.match(page, /scanSendOperations\(activeIdentityFilters\(\)\)/);
+  assert.match(page, /sendOperationsScanSummary\(result\)/);
+  assert.match(page, /指令过期 \$\{row\.bridgeDispatchExpired \|\| 0\} 个/);
   assert.match(page, /processSafeSendQueue\(activeIdentityFilters\(\)\)/);
   assert.match(controller, /scanSendOperations\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
   assert.match(controller, /return this\.wechat\.scanSendOperations\(payload \|\| \{\}\)/);
@@ -377,7 +447,7 @@ test("manual send operation scans are scoped by selected conversation identity",
   assert.match(service, /listSendTasks\(\{[\s\S]*wechatAccountId: params\.wechatAccountId,[\s\S]*conversationId: params\.conversationId,[\s\S]*customerId: params\.customerId,[\s\S]*\}\)/);
 });
 
-  test("bridge outbox and status are scoped by selected conversation identity", () => {
+test("bridge outbox, dispatch and status are scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
@@ -385,16 +455,29 @@ test("manual send operation scans are scoped by selected conversation identity",
 
   assert.match(api, /export async function getBridgeOutbox\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /\/wechat\/bridge\/outbox\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /export type BridgeDispatchResult/);
+  assert.match(api, /export async function getBridgeDispatch\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/bridge\/dispatch\$\{identityQuery\(filters\)\}/);
   assert.match(api, /export async function getBridgeStatus\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /\/wechat\/bridge\/status\$\{identityQuery\(filters\)\}/);
   assert.match(page, /getBridgeOutbox\(identityFilters\)/);
   assert.match(page, /getBridgeStatus\(identityFilters\)/);
   assert.match(page, /getBridgeOutbox\([\s\S]*wechatAccountId: conversation\.wechatAccountId[\s\S]*conversationId: conversation\.id[\s\S]*customerId: conversation\.customerId/);
   assert.match(controller, /listBridgeOutbox\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeOutbox\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(controller, /listBridgeDispatch\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeDispatch\(\{ wechatAccountId, conversationId, customerId \}\)/);
   assert.match(controller, /getBridgeStatus\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.getBridgeStatus\(\{ wechatAccountId, conversationId, customerId \}\)/);
   assert.match(service, /type IdentityFilter = \{/);
   assert.match(service, /getBridgeStatus\(filter: IdentityFilter = \{\}\)/);
   assert.match(service, /const outbox = this\.listBridgeOutbox\(filter\)/);
+  assert.match(service, /listBridgeDispatch\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /listBridgeDispatch\(\)[\s\S]*matchesBridgeEntryIdentity\(entry, null, filter\)[\s\S]*buildBridgeDispatchListItem\(entry\)/);
+  assert.match(service, /expiresAt:\s*typeof data\.expiresAt === "string" \? data\.expiresAt : ""/);
+  assert.match(service, /expired:\s*this\.isBridgeDispatchEntryStale/);
+  assert.match(api, /expiresAt\?: string/);
+  assert.match(api, /expired\?: boolean/);
+  assert.match(service, /isBridgeDispatchEntryStale\(entry\)/);
+  assert.match(service, /Date\.parse\(String\(entry\?\.expiresAt \|\| ""\)\)/);
+  assert.match(service, /sendBridgeAckTimeoutMinutes \* 60/);
   assert.match(service, /listBridgeOutbox\(filter: IdentityFilter = \{\}\)/);
   assert.match(service, /matchesBridgeEntryIdentity\(entry, task, filter\)/);
   assert.match(service, /actualWechatAccountId/);
@@ -1052,25 +1135,51 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /const hiddenManualLockedConversationCount = Math\.max/);
   assert.match(page, /const orderDraftByQuoteId = new Map\(orderDrafts\.map\(\(order\) => \[order\.quoteDraftId, order\]\)\)/);
   assert.match(page, /const reviewOrderDrafts = dedupeOrdersById\(\[\.\.\.\(reviewCenter\.orderDrafts \|\| \[\]\), \.\.\.orderDrafts\]\)/);
-  assert.match(page, /const highValueManualQueueItems = \[/);
+  assert.match(page, /const highValueManualQueueItems[\s\S]*= \[/);
   assert.match(page, /job\.status === "manual_review"/);
   assert.match(page, /isHighValueDesignJob\(job\) && \["completed", "quick_confirm", "timeout", "failed"\]\.includes\(job\.status\)/);
   assert.match(page, /reason: highValueDesignReason\(job\)/);
   assert.match(page, /nextAction: step\.nextAction/);
   assert.match(page, /!orderDraftByQuoteId\.has\(quote\.id\) && \(quote\.status === "manual_review" \|\| isHighValueQuote\(quote\)\)/);
   assert.match(page, /reason: highValueQuoteReason\(quote\)/);
-  assert.match(page, /const highValueReviewOrderDrafts = reviewOrderDrafts\.filter\(\(order\) => isHighValueOrder\(order\) && !\["fulfilled", "cancelled"\]\.includes\(order\.status\)\)/);
+  assert.match(page, /const highValueReviewOrderDrafts = sortHighValueReviewOrderDrafts\(/);
+  assert.match(page, /reviewOrderDrafts\.filter\(\(order\) => isHighValueOrder\(order\) && !\["fulfilled", "cancelled"\]\.includes\(order\.status\)\)/);
+  assert.match(page, /const highValueOrderReviewFilterOptions = \[/);
+  assert.match(page, /\{ value: "payment", label: "待收款" \}/);
+  assert.match(page, /\{ value: "confirmation", label: "待发确认" \}/);
+  assert.match(page, /\{ value: "delivery", label: "交付跟进" \}/);
+  assert.match(page, /\{ value: "overdue", label: "已到跟进" \}/);
+  assert.match(page, /const \[highValueOrderReviewFilter, setHighValueOrderReviewFilter\] = useState/);
+  assert.match(page, /const highValueOrderReviewFilterCounts = highValueOrderReviewFilterOptions\.reduce/);
+  assert.match(page, /const filteredHighValueReviewOrderDrafts = highValueReviewOrderDrafts\.filter/);
+  assert.match(page, /function focusHighValueOrderReview\(order: OrderDraft\)/);
+  assert.match(page, /setReviewWorkbenchView\("order"\)[\s\S]*setHighValueOrderReviewFilter\(highValueOrderReviewFilterForOrder\(order\)\)[\s\S]*focusOrderDraft\(order\)/);
+  assert.match(page, /const highValueOrderReviewFilterLabel = highValueOrderReviewFilterOptionLabel\(highValueOrderReviewFilter\)/);
+  assert.match(page, /`\$\{filteredHighValueReviewOrderDrafts\.length\}\/\$\{highValueReviewOrderDrafts\.length\} 个高价值订单 · \$\{highValueOrderReviewFilterLabel\}`/);
   assert.match(page, /\.\.\.highValueReviewOrderDrafts/);
   assert.match(page, /reason: highValueOrderReason\(order\)/);
   assert.match(page, /const action = highValueOrderManualPrimaryAction\(order\)/);
+  assert.match(page, /const reviewFilter = highValueOrderReviewFilterForOrder\(order\)/);
   assert.match(page, /primaryLabel: action\.label/);
+  assert.match(page, /reviewFilterLabel: highValueOrderReviewFilterOptionLabel\(reviewFilter\)/);
   assert.match(page, /action\.type === "queue_confirmation"[\s\S]*reviewOrderDraft\(order, "approve_confirmation"\)/);
   assert.match(page, /action\.type === "queue_delivery"[\s\S]*reviewOrderDraft\(order, "approve_followup", "delivery"\)/);
+  assert.match(page, /focus: \(\) => \{[\s\S]*focusHighValueOrderReview\(order\);[\s\S]*\}/);
+  assert.match(page, /run: \(\) => \{[\s\S]*setReviewWorkbenchView\("order"\);[\s\S]*setHighValueOrderReviewFilter\(highValueOrderReviewFilterForOrder\(order\)\)/);
   assert.match(page, /highValueManualQueueItems\[0\]\?\.run\(\)/);
+  assert.match(page, /item\.reviewFilterLabel \? <small>订单阶段：\{item\.reviewFilterLabel\}<\/small> : null/);
   assert.match(page, /setReviewWorkbenchView\("order"\)/);
   assert.match(page, /label="待审订单"/);
   assert.match(page, /highValueReviewOrderDrafts\.length/);
-  assert.match(page, /highValueReviewOrderDrafts\.slice\(0, 2\)\.map/);
+  assert.match(page, /const visibleHighValueReviewOrderDrafts =[\s\S]*reviewWorkbenchView === "order" \? filteredHighValueReviewOrderDrafts : filteredHighValueReviewOrderDrafts\.slice\(0, 2\)/);
+  assert.match(page, /className="segmented-control filter-segment high-value-order-filter"/);
+  assert.match(page, /aria-label="高价值订单处理筛选"/);
+  assert.match(page, /setHighValueOrderReviewFilter\(option\.value\)/);
+  assert.match(page, /\{option\.label\}<span>\{highValueOrderReviewFilterCounts\[option\.value\] \|\| 0\}<\/span>/);
+  assert.match(page, /visibleHighValueReviewOrderDrafts\.map/);
+  assert.match(page, /reviewWorkbenchView !== "order" && filteredHighValueReviewOrderDrafts\.length > visibleHighValueReviewOrderDrafts\.length/);
+  assert.match(page, /当前筛选下没有高价值订单/);
+  assert.match(page, /setHighValueOrderReviewFilter\("all"\)/);
   assert.match(page, /const followupStatus = orderFollowupStatusText\(order\)/);
   assert.match(page, /paymentStatusLabel\(order\.paymentStatus\)/);
   assert.match(page, /orderStatusLabel\(order\.status\)/);
@@ -1085,6 +1194,26 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /reviewOrder\(order\.id, \{[\s\S]*decision: "request_followup"[\s\S]*note: manualNote/);
   assert.match(page, /latestHighValueOrderManualNote\(order\.customerNotes\)/);
   assert.match(page, /recordHighValueOrderManualFollowup\(order\)/);
+  assert.match(page, /function sortHighValueReviewOrderDrafts\(orders: OrderDraft\[\]\)/);
+  assert.match(page, /highValueOrderManualStep\(left\)/);
+  assert.match(page, /highValueOrderNextFollowTime\(left\)/);
+  assert.match(page, /rightAmount - leftAmount/);
+  assert.match(page, /orderUpdatedTime\(left\) - orderUpdatedTime\(right\)/);
+  assert.match(page, /function highValueOrderFollowRank/);
+  assert.match(page, /function highValueOrderNextFollowTime\(order: OrderDraft\)/);
+  assert.match(page, /line\.match\(\/下次跟进：\(\[\^；\\n\]\+\)\/\)/);
+  assert.match(page, /function highValueOrderMatchesReviewFilter\(order: OrderDraft, filter:/);
+  assert.match(page, /filter === "payment"[\s\S]*!orderPaymentReady\(order\)/);
+  assert.match(page, /filter === "confirmation"[\s\S]*orderPaymentReady\(order\) && !hasActiveOrderConfirmationTask\(order\)/);
+  assert.match(page, /filter === "delivery"[\s\S]*order\.status === "processing"/);
+  assert.match(page, /filter === "overdue"[\s\S]*nextFollowAt > 0 && nextFollowAt <= Date\.now\(\)/);
+  assert.match(page, /function highValueOrderReviewFilterForOrder\(order: OrderDraft\)/);
+  assert.match(page, /highValueOrderMatchesReviewFilter\(order, "payment"\)[\s\S]*return "payment"/);
+  assert.match(page, /highValueOrderMatchesReviewFilter\(order, "confirmation"\)[\s\S]*return "confirmation"/);
+  assert.match(page, /highValueOrderMatchesReviewFilter\(order, "delivery"\)[\s\S]*return "delivery"/);
+  assert.match(page, /highValueOrderMatchesReviewFilter\(order, "overdue"\)[\s\S]*return "overdue"/);
+  assert.match(page, /function highValueOrderReviewFilterOptionLabel\(filter:/);
+  assert.match(page, /highValueOrderReviewFilterOptions\.find\(\(option\) => option\.value === filter\)\?\.label \|\| "全部"/);
   assert.match(page, /function buildHighValueOrderManualNote/);
   assert.match(page, /function appendOrderCustomerNotes/);
   assert.match(page, /function latestHighValueOrderManualNote/);
@@ -1225,6 +1354,22 @@ test("web deal flow queues same-cycle order confirmations after order creation",
   assert.match(section, /for \(const order of dedupeOrdersById\(confirmationCandidates\)\)/);
 });
 
+test("inbound quote acceptance carries conversation identity into order mutations", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const acceptanceSection = sliceBetween(
+    service,
+    /\n  private async handleInboundQuoteAcceptance\(/,
+    /\n  private findLatestQuoteForConversation\(/,
+  );
+
+  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedWechatAccountId: params\.conversation\.wechatAccountId/);
+  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedConversationId: params\.conversation\.id/);
+  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedCustomerId: params\.conversation\.customerId/);
+  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedWechatAccountId: params\.conversation\.wechatAccountId/);
+  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedConversationId: params\.conversation\.id/);
+  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedCustomerId: params\.conversation\.customerId/);
+});
+
 test("web quote center renders guarded next-step guidance", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
@@ -1253,6 +1398,55 @@ test("web quote center renders guarded next-step guidance", () => {
   const orderListSection = page.slice(
     orderListStart,
     page.indexOf("<div className=\"empty empty-cta small\"", orderListStart),
+  );
+  const orderSelectedImageSection = page.slice(
+    page.indexOf("function snapshotDesignImage"),
+    page.indexOf("function matchesQuoteSearch"),
+  );
+  const getQuoteForSendSection = sliceBetween(
+    quotesService,
+    /\n  private async getQuoteForSend\(/,
+    /\n  private async findExistingForDesignJob\(/,
+  );
+  const findExistingQuoteSection = sliceBetween(
+    quotesService,
+    /\n  private async findExistingForDesignJob\(/,
+    /\n  private ensureQuoteIdentity\(/,
+  );
+  const syncExistingQuoteSelectionSection = sliceBetween(
+    quotesService,
+    /\n  private async syncExistingQuoteSelection\(/,
+    /\n  private resolveQuoteDesignImage\(/,
+  );
+  const quoteReviseSelectionSection = sliceBetween(
+    quotesService,
+    /\n  async reviseSelectedImage\(/,
+    /\n  async preview\(/,
+  );
+  const quoteMarkSelectionSection = sliceBetween(
+    quotesService,
+    /\n  private async markDesignImageSelected\(/,
+    /\n  private async cancelLinkedQuoteSendTaskForRevision\(/,
+  );
+  const orderReviseSelectionSection = sliceBetween(
+    ordersService,
+    /\n  async reviseSelectedImage\(/,
+    /\n  async scanLowValueAutoOrderDrafts\(/,
+  );
+  const orderAutoDraftScanSection = sliceBetween(
+    ordersService,
+    /\n  async scanLowValueAutoOrderDrafts\(/,
+    /\n  private async getQuote\(/,
+  );
+  const orderPrismaSelectionSection = sliceBetween(
+    ordersService,
+    /\n  private async updatePrismaOrderAndQuoteSelection\(/,
+    /\n  private async attachOrderSendTasks\(/,
+  );
+  const orderIncludeSection = sliceBetween(
+    ordersService,
+    /\n  private orderInclude\(/,
+    /\n  private async getOrderDraft\(/,
   );
 
   assert.match(quoteHelper, /isHighValueQuote\(quote\)/);
@@ -1293,6 +1487,27 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(quotesController, /this\.quotes\.preview\(id, \{[\s\S]*expectedWechatAccountId: wechatAccountId,[\s\S]*expectedConversationId: conversationId,[\s\S]*expectedCustomerId: customerId/);
   assert.match(quotesService, /async preview\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
   assert.match(quotesService, /assertExpectedIdentity\(quote, expected, "quote draft"\)/);
+  assert.match(getQuoteForSendSection, /images:\s*true/);
+  assert.match(findExistingQuoteSection, /images:\s*true/);
+  assert.match(syncExistingQuoteSelectionSection, /Array\.isArray\(existing\.designJob\.images\)/);
+  assert.match(syncExistingQuoteSelectionSection, /await this\.getDesignJobForQuote\(existing\.designJobId\)/);
+  assert.match(syncExistingQuoteSelectionSection, /markDesignImageSelected\(existing\.designJobId, selectedImage/);
+  assert.match(quoteReviseSelectionSection, /markDesignImageSelected\(current\.designJobId, selectedImage/);
+  assert.match(quoteMarkSelectionSection, /localStore\.selectDesignImage\(designJobId, selectedImage\.id, feedback\)/);
+  assert.match(quoteMarkSelectionSection, /designImageCandidate\.updateMany\([\s\S]*data: \{ selected: false \}/);
+  assert.match(quoteMarkSelectionSection, /designImageCandidate\.update\([\s\S]*selected: true, customerFeedback: feedback/);
+  assert.match(orderReviseSelectionSection, /updateLocalOrderAndQuoteSelection\(current, orderPatch, quotePatch, selectedImage, note\)/);
+  assert.match(orderReviseSelectionSection, /updatePrismaOrderAndQuoteSelection\(id, current\.quoteDraftId, current\.designJobId, orderPatch, quotePatch, selectedImage, note\)/);
+  assert.match(orderAutoDraftScanSection, /createFromQuote\(quote\.id, this\.expectedIdentityFromQuote\(quote\)\)/);
+  assert.match(ordersService, /private expectedIdentityFromQuote\(quote: any\): ExpectedIdentityPayload/);
+  assert.match(ordersService, /expectedWechatAccountId: quote\?\.designJob\?\.wechatAccountId \|\| quote\?\.wechatAccountId/);
+  assert.match(ordersService, /expectedConversationId: quote\?\.designJob\?\.conversationId \|\| quote\?\.conversationId/);
+  assert.match(ordersService, /expectedCustomerId: quote\?\.customerId \|\| quote\?\.designJob\?\.customerId/);
+  assert.match(orderPrismaSelectionSection, /designImageCandidate\.updateMany\([\s\S]*where: \{ designJobId \}[\s\S]*selected: false/);
+  assert.match(orderPrismaSelectionSection, /designImageCandidate\.update\([\s\S]*selected: true, customerFeedback: feedback/);
+  assert.ok((ordersService.match(/include: this\.orderInclude\(\)/g) || []).length >= 5);
+  assert.match(orderIncludeSection, /designJob:\s*\{[\s\S]*include:\s*\{[\s\S]*conversation:\s*true,[\s\S]*wechatAccount:\s*true,[\s\S]*images:\s*true/);
+  assert.match(orderIncludeSection, /quoteDraft:\s*\{[\s\S]*include:\s*\{[\s\S]*selectedImage:\s*true,[\s\S]*customer:\s*true,[\s\S]*designJob:\s*\{[\s\S]*images:\s*true/);
   assert.match(ordersController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
   assert.match(ordersController, /this\.orders\.confirmationPreview\(id, \{[\s\S]*expectedWechatAccountId: wechatAccountId,[\s\S]*expectedConversationId: conversationId,[\s\S]*expectedCustomerId: customerId/);
   assert.match(ordersService, /async confirmationPreview\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
@@ -1300,6 +1515,7 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(quoteListSection, /const rowPreviewWarnings = rowPreview\?\.warnings \|\| \[\]/);
   assert.match(quoteListSection, /const rowSendRisk = quoteSendBlockReason\(quote, rowPreviewWarnings\)/);
   assert.match(quoteListSection, /quoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
+  assert.match(quoteListSection, /selectedImage \? `选中第 \$\{selectedImage\.position \|\| "-"\} 张` : "未选图"/);
   assert.match(quoteListSection, /发送检查 \{rowSendRisk\}/);
   assert.match(quoteListSection, /Boolean\(rowSendRisk\)/);
   assert.match(quoteListSection, /title=\{rowSendRisk \|\| "发送报价"\}/);
@@ -1307,6 +1523,10 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(quoteListSection, /toggleQuoteCenterPreview\(quote\)/);
   assert.match(quoteListSection, /copyQuoteCenterPreviewMessage\(rowPreview\)/);
   assert.match(orderListSection, /orderDealNextStep\(order\)/);
+  assert.match(orderListSection, /selectedImage \? `选中第 \$\{selectedImage\.position \|\| "-"\} 张` : "未选图"/);
+  assert.match(orderSelectedImageSection, /function snapshotDesignImage/);
+  assert.match(orderSelectedImageSection, /snapshotDesignImage\(order\.selectedImageSnapshot\)/);
+  assert.match(orderSelectedImageSection, /order\.quoteDraft\?\.designJob\?\.images\?\.find/);
   assert.match(page, /className=\{`deal-next-step inline \$\{nextStep\.tone\}`\}/);
   assert.match(quoteListSection, /runQuoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
   assert.match(orderListSection, /runOrderDealNextStep\(order\)/);
@@ -1334,6 +1554,13 @@ test("web quote center can filter records by next-step actionability", () => {
 
   assert.match(page, /const dealNextStepFilterOptions = \[/);
   assert.match(page, /const \[dealNextStepFilter, setDealNextStepFilter\] = useState<string>\("all"\)/);
+  assert.match(page, /function upsertOrderDraftState\(order: OrderDraft \| null \| undefined\)/);
+  assert.match(page, /function upsertSendTaskState\(task: SendTask \| null \| undefined\)/);
+  assert.match(page, /async function createOrderDraft\(quote: QuoteDraft\)[\s\S]*const orderDraft = await createOrderDraftFromQuote\(quote\.id, identityExpectation\(quote\)\)[\s\S]*upsertOrderDraftState\(orderDraft\)/);
+  assert.match(page, /async function updateOrderDraftStatus\([\s\S]*const updated = await updateOrderDraft\(order\.id,[\s\S]*upsertOrderDraftState\(updated\)/);
+  assert.match(page, /async function queueOrderDraftConfirmation\([\s\S]*const result = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
+  assert.match(page, /async function queueOrderFollowupDraft\([\s\S]*const result = await queueOrderFollowup\(order\.id, type, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
+  assert.match(page, /async function queueOrderConfirmationAfterPreviewCheck\([\s\S]*const confirmation = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(confirmation\.orderDraft\)[\s\S]*upsertSendTaskState\(confirmation\.sendTask\)/);
   assert.match(quoteFilterSection, /quoteDealNextStep\(quote, orderDraft, quoteSendBlockReason\(quote\)\)/);
   assert.match(quoteFilterSection, /orderDealNextStep\(order\)/);
   assert.match(quoteFilterSection, /matchesDealNextStepFilter\(step, dealNextStepFilter, quote\.status\)/);
@@ -1353,11 +1580,11 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /window\.confirm\(`将按顺序执行前 \$\{items\.length\} 个可执行成交事项/);
   assert.match(page, /item\.action === "queue_quote" && item\.quote/);
   assert.match(page, /await queueQuoteAfterPreviewCheck\(item\.quote\)/);
-  assert.match(page, /createOrderDraftFromQuote\(item\.quote\.id, identityExpectation\(item\.quote\)\)/);
+  assert.match(page, /const orderDraft = await createOrderDraftFromQuote\(item\.quote\.id, identityExpectation\(item\.quote\)\)[\s\S]*upsertOrderDraftState\(orderDraft\)/);
   assert.match(page, /item\.action === "queue_order_confirmation" && item\.order/);
   assert.match(page, /queueOrderConfirmationAfterPreviewCheck\(item\.order\)/);
-  assert.match(page, /updateOrderDraft\(item\.order\.id, \{ \.\.\.identityExpectation\(item\.order\), status: "processing" \}\)/);
-  assert.match(page, /queueOrderFollowup\(item\.order\.id, "delivery", identityExpectation\(item\.order\)\)/);
+  assert.match(page, /const updated = await updateOrderDraft\(item\.order\.id, \{ \.\.\.identityExpectation\(item\.order\), status: "processing" \}\)[\s\S]*upsertOrderDraftState\(updated\)/);
+  assert.match(page, /const result = await queueOrderFollowup\(item\.order\.id, "delivery", identityExpectation\(item\.order\)\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
   assert.match(page, /summary\.skipped \+= 1/);
   assert.match(page, /const dealNextStepInsightItems = \[/);
   assert.match(page, /const actionableDealNextStepItems = dealNextStepInsightItems\.filter\(\(item\) => item\.action !== "none"\)/);
@@ -1482,6 +1709,74 @@ test("external bridge acknowledgement validates local outbox file body before ar
   assert.match(ackSection, /bridgeOutboxPayloadValidation/);
 });
 
+test("bridge acknowledgement rejects late ack after task leaves sending state", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const ackSection = service.slice(
+    service.indexOf("  acknowledgeBridgeSend("),
+    service.indexOf("  requeueSendTask("),
+  );
+
+  assert.match(ackSection, /task\.status !== "sending"/);
+  assert.match(ackSection, /send task is no longer waiting for bridge ack/);
+  assert.match(ackSection, /!pendingAttempt \|\| pendingAttempt\.status !== "started"/);
+  assert.match(ackSection, /no active bridge send attempt is waiting for ack/);
+  assert.ok(
+    ackSection.indexOf('task.status !== "sending"') < ackSection.indexOf("this.resolveBridgeAckAttempt"),
+    "task status must be checked before resolving or mutating bridge ack attempts",
+  );
+  assert.ok(
+    ackSection.indexOf('pendingAttempt.status !== "started"') < ackSection.indexOf("validateBridgeAckBinding"),
+    "attempt status must be checked before bridge ack binding and persistence",
+  );
+});
+
+test("bridge acknowledgement rejects sent ack after dispatch instruction expires", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const ackSection = service.slice(
+    service.indexOf("  acknowledgeBridgeSend("),
+    service.indexOf("  requeueSendTask("),
+  );
+
+  assert.match(ackSection, /const dispatchState = this\.findPendingBridgeDispatchForTask\(task, pendingAttempt\)/);
+  assert.match(ackSection, /status === "sent" && dispatchState\?\.expired/);
+  assert.match(ackSection, /bridge ack rejected: dispatch instruction expired/);
+  assert.ok(
+    ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("validateBridgeAckBinding"),
+    "expired dispatch sent ack must be rejected before binding and persistence",
+  );
+  assert.ok(
+    ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("archiveBridgeOutboxFile"),
+    "expired dispatch sent ack must be rejected before archiving files",
+  );
+});
+
+test("bridge ack and cancellation archive dispatch instruction files", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const adapter = readProjectFile("apps/api/src/wechat/wechat-send-adapter.service.ts");
+  const ackSection = service.slice(
+    service.indexOf("  acknowledgeBridgeSend("),
+    service.indexOf("  requeueSendTask("),
+  );
+  const cancelSection = service.slice(
+    service.indexOf("  cancelSendTask("),
+    service.indexOf("  private blockSendTask("),
+  );
+  const dispatchArchiveSection = service.slice(
+    service.indexOf("  private archiveBridgeDispatchFile"),
+    service.indexOf("  private buildWindowState"),
+  );
+
+  assert.match(ackSection, /archiveBridgeDispatchFile\([\s\S]*status === "sent" \? "processed" : "failed"/);
+  assert.match(ackSection, /archivedDispatchPath/);
+  assert.match(cancelSection, /archiveBridgeDispatchFile\(task, pendingBridgeAttempt, "cancelled"\)/);
+  assert.match(cancelSection, /archivedDispatchPath/);
+  assert.match(dispatchArchiveSection, /resolveBridgeDispatchFileName/);
+  assert.match(dispatchArchiveSection, /safeBridgeFileSegment/);
+  assert.match(dispatchArchiveSection, /appConfig\.wechatBridgeDispatchDir/);
+  assert.match(adapter, /moveBridgeDispatchFile\(filePath: string, outcome: "processed" \| "failed" \| "cancelled"\)/);
+  assert.match(adapter, /resolveBridgeChildFile\(filePath, appConfig\.wechatBridgeDispatchDir, "bridge dispatch"\)/);
+});
+
 test("backend bridge outbox payload validation checks ack protocol, identity and guard constraints", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const validationSection = service.slice(
@@ -1520,6 +1815,15 @@ test("send operations scan is the only internal simplified failed bridge ack pat
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
 
   assert.match(scanOpsSection, /acknowledgeBridgeSend\([\s\S]*\{ internal: true \}/);
+  assert.match(scanOpsSection, /const bridgeDispatchExpired: any\[\] = \[\]/);
+  assert.match(scanOpsSection, /findPendingBridgeDispatchForTask\(task, pendingBridgeAttempt\)/);
+  assert.match(scanOpsSection, /dispatchState\?\.expired/);
+  assert.match(scanOpsSection, /recovery: "bridge_dispatch_expired"/);
+  assert.match(scanOpsSection, /dispatchFileName: dispatchState\.fileName/);
+  assert.match(scanOpsSection, /bridgeDispatchExpired: bridgeDispatchExpired\.length/);
+  assert.match(scanOpsSection, /微信桥接发送指令过期/);
+  assert.match(service, /private findPendingBridgeDispatchForTask\(task: any, attempt: any\)/);
+  assert.match(service, /listBridgeDispatch\(\)[\s\S]*buildBridgeDispatchListItem\(entry\)[\s\S]*entry\.taskId === task\.id[\s\S]*entry\.attemptId === attempt\?\.id/);
   assert.doesNotMatch(controller, /internal:\s*true/);
 });
 

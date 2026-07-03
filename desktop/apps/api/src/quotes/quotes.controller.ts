@@ -16,8 +16,17 @@ export class QuotesController {
   }
 
   @Get(":id/preview")
-  preview(@Param("id") id: string) {
-    return this.quotes.preview(id);
+  preview(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.quotes.preview(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
   }
 
   @Post(":id/update")

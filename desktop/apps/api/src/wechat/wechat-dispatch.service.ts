@@ -240,7 +240,7 @@ export class WechatDispatchService {
       quoteDraft: order.quoteDraft,
       designJob,
       conversation: order.conversation || designJob?.conversation,
-      selectedImage: order.selectedImage || order.quoteDraft?.selectedImage,
+      selectedImage: this.orderSelectedImage(order),
     });
     if (!binding.ok) {
       throw new BadRequestException(`order confirmation binding invalid: ${binding.reason}`);
@@ -260,6 +260,8 @@ export class WechatDispatchService {
       totalPrice: order.totalPrice,
       paymentStatus: order.paymentStatus,
       items,
+      hasSelectedImage: Boolean(this.orderSelectedImage(order)),
+      selectedImagePosition: this.orderSelectedImage(order)?.position,
     });
     const sendTask = await this.enqueueTextMessage({
       wechatAccountId: order.wechatAccountId,
@@ -278,6 +280,9 @@ export class WechatDispatchService {
       },
     });
     const updatedOrder = await this.orders.update(order.id, {
+      expectedWechatAccountId: payload.expectedWechatAccountId,
+      expectedConversationId: payload.expectedConversationId,
+      expectedCustomerId: payload.expectedCustomerId,
       owner: payload.owner || order.owner || "人工客服",
       customerNotes: payload.note || order.customerNotes || "订单确认已进入微信安全发送队列。",
     });
@@ -323,7 +328,7 @@ export class WechatDispatchService {
       quoteDraft: order.quoteDraft,
       designJob,
       conversation: order.conversation || designJob?.conversation,
-      selectedImage: order.selectedImage || order.quoteDraft?.selectedImage,
+      selectedImage: this.orderSelectedImage(order),
     });
     if (!binding.ok) {
       throw new BadRequestException(`order follow-up binding invalid: ${binding.reason}`);
@@ -395,6 +400,19 @@ export class WechatDispatchService {
       const value = Number(item?.leadTimeDays || item?.leadTime || item?.deliveryDays || 0);
       return Number.isFinite(value) && value > max ? value : max;
     }, 0);
+  }
+
+  private orderSelectedImage(order: any) {
+    return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
+  }
+
+  private expectedIdentityFromOrder(order: any): ExpectedIdentityPayload {
+    const designJob = order?.designJob || order?.quoteDraft?.designJob || {};
+    return {
+      expectedWechatAccountId: order?.wechatAccountId || designJob?.wechatAccountId,
+      expectedConversationId: order?.conversationId || designJob?.conversationId,
+      expectedCustomerId: order?.customerId || order?.quoteDraft?.customerId || designJob?.customerId,
+    };
   }
 
   private assertHighValueOrderHasManualRelease(
@@ -484,6 +502,7 @@ export class WechatDispatchService {
       try {
         result.queued.push(
           await this.queueOrderConfirmation(order.id, {
+            ...this.expectedIdentityFromOrder(order),
             owner: "low_value_automation",
             note: "低价值订单确认已自动进入微信安全发送队列。",
             reason: "low_value_order_confirmation",
@@ -545,6 +564,7 @@ export class WechatDispatchService {
       try {
         result.queued.push(
           await this.queueOrderFollowup(order.id, {
+            ...this.expectedIdentityFromOrder(order),
             type: decision.followupType,
             owner: "low_value_automation",
             reason: "low_value_order_followup",
@@ -1142,6 +1162,8 @@ export class WechatDispatchService {
           pendingSendTasks: pendingSendCount,
           manualLockedConversations: manualLockedCount,
           bridgeOutboxPending: bridge.outbox.pendingCount,
+          bridgeDispatchPending: bridge.dispatch.pendingCount,
+          bridgeDispatchStale: bridge.dispatch.staleCount,
           bridgeInboxPending: bridge.inbox.pendingCount,
         },
         checks: personalChecks,
@@ -1259,6 +1281,7 @@ export class WechatDispatchService {
       .listBridgeDispatch()
       .filter((entry) => this.matchesBridgeEntryIdentity(entry, null, filter))
       .map((entry) => this.buildBridgeDispatchListItem(entry));
+    const staleDispatchCount = dispatchPending.filter((entry) => this.isBridgeDispatchEntryStale(entry)).length;
     const locks = this.sendAdapter
       .listBridgeLocks()
       .filter((lock) => !filter.wechatAccountId || String(lock.accountId || "") === String(filter.wechatAccountId));
@@ -1278,6 +1301,7 @@ export class WechatDispatchService {
       },
       dispatch: {
         pendingCount: dispatchPending.length,
+        staleCount: staleDispatchCount,
         pending: dispatchPending,
       },
       locks: {
@@ -1285,6 +1309,18 @@ export class WechatDispatchService {
         staleCount: locks.filter((lock) => lock.stale).length,
         active: locks.map(sanitizeBridgeLockItem),
       },
+    };
+  }
+
+  listBridgeDispatch(filter: IdentityFilter = {}) {
+    if (!appConfig.useLocalStore) throw new Error("wechat bridge dispatch prisma mode is not implemented yet");
+    const pending = this.sendAdapter
+      .listBridgeDispatch()
+      .filter((entry) => this.matchesBridgeEntryIdentity(entry, null, filter))
+      .map((entry) => this.buildBridgeDispatchListItem(entry));
+    return {
+      staleCount: pending.filter((entry) => this.isBridgeDispatchEntryStale(entry)).length,
+      pending,
     };
   }
 
@@ -1416,11 +1452,24 @@ export class WechatDispatchService {
       payloadKind: String(sendPlan.kind || entry?.payloadKind || ""),
       actionCount: Number.isFinite(Number(sendPlan.actionCount || entry?.actionCount)) ? Number(sendPlan.actionCount || entry.actionCount) : undefined,
       outboxFileName: bridgeFileName(data.sourceOutboxFileName || ack.requiredOutboxFileName),
+      ackFileNameHint: bridgeFileName(ack.fileNameHint),
+      failedAckFileNameHint: bridgeFileName(ack.failedFileNameHint),
       createdAt: entry?.createdAt,
+      expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : "",
       modifiedAt: entry?.modifiedAt,
       ageSeconds: entry?.ageSeconds,
+      expired: this.isBridgeDispatchEntryStale({
+        expiresAt: data.expiresAt,
+        ageSeconds: entry?.ageSeconds,
+      }),
       errorMessage: entry?.errorMessage,
     };
+  }
+
+  private isBridgeDispatchEntryStale(entry: any) {
+    const expiresAt = Date.parse(String(entry?.expiresAt || ""));
+    if (Number.isFinite(expiresAt)) return Date.now() > expiresAt;
+    return Number(entry?.ageSeconds || 0) > appConfig.sendBridgeAckTimeoutMinutes * 60;
   }
 
   scanBridgeInbox() {
@@ -1491,6 +1540,7 @@ export class WechatDispatchService {
     const tasks = this.localStore.listSendTasks(filter);
     const bridgeTimedOut: any[] = [];
     const bridgeOutboxBroken: any[] = [];
+    const bridgeDispatchExpired: any[] = [];
     const alerted: any[] = [];
     const staleQueued: any[] = [];
 
@@ -1518,6 +1568,39 @@ export class WechatDispatchService {
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
             reason,
+          });
+          continue;
+        }
+        const pendingBridgeAttempt = this.localStore.getLatestSendAttempt(task.id, {
+          adapter: "windows_bridge",
+          status: "started",
+        });
+        const dispatchState = pendingBridgeAttempt
+          ? this.findPendingBridgeDispatchForTask(task, pendingBridgeAttempt)
+          : null;
+        if (dispatchState?.expired) {
+          const reason = `Windows 桥接发送指令已过期：${dispatchState.expiresAt || dispatchState.fileName || "unknown"}`;
+          const ack = this.acknowledgeBridgeSend(
+            task.id,
+            {
+              status: "failed",
+              errorMessage: reason,
+              metadata: {
+                source: "send_ops_scan",
+                recovery: "bridge_dispatch_expired",
+                dispatchFileName: dispatchState.fileName || undefined,
+                expiresAt: dispatchState.expiresAt || undefined,
+              },
+            },
+            { internal: true },
+          );
+          bridgeDispatchExpired.push(ack.task);
+          await this.notifications.create("warning", "微信桥接发送指令过期", `${task.conversation?.title || task.conversationId} 的发送任务已转失败，请重新校验窗口并生成新的发送指令。`, {
+            sendTaskId: task.id,
+            wechatAccountId: task.wechatAccountId,
+            conversationId: task.conversationId,
+            dispatchFileName: dispatchState.fileName,
+            expiresAt: dispatchState.expiresAt,
           });
           continue;
         }
@@ -1588,11 +1671,13 @@ export class WechatDispatchService {
       scanned: tasks.length,
       bridgeTimedOut: bridgeTimedOut.length,
       bridgeOutboxBroken: bridgeOutboxBroken.length,
+      bridgeDispatchExpired: bridgeDispatchExpired.length,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
       tasks: {
         bridgeTimedOut,
         bridgeOutboxBroken,
+        bridgeDispatchExpired,
         staleQueued,
         alerted,
       },
@@ -2070,8 +2155,18 @@ export class WechatDispatchService {
     if (!appConfig.useLocalStore) throw new Error("send bridge ack prisma mode is not implemented yet");
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
+    if (task.status !== "sending") {
+      throw new BadRequestException(`bridge ack rejected: send task is no longer waiting for bridge ack (${task.status || "unknown"})`);
+    }
     const status = payload.status === "sent" ? "sent" : "failed";
     const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
+    if (!pendingAttempt || pendingAttempt.status !== "started") {
+      throw new BadRequestException("bridge ack rejected: no active bridge send attempt is waiting for ack");
+    }
+    const dispatchState = this.findPendingBridgeDispatchForTask(task, pendingAttempt);
+    if (status === "sent" && dispatchState?.expired) {
+      throw new BadRequestException(`bridge ack rejected: dispatch instruction expired (${dispatchState.expiresAt || dispatchState.fileName || "unknown"})`);
+    }
     const binding = validateBridgeAckBinding({ task, attempt: pendingAttempt, payload });
     if (!binding.ok) {
       throw new BadRequestException(`bridge ack binding invalid: ${binding.reason}`);
@@ -2090,6 +2185,11 @@ export class WechatDispatchService {
     const archivedOutboxPath = outboxFileName
       ? this.archiveBridgeOutboxFile(outboxFileName, status === "sent" ? "processed" : "failed")
       : null;
+    const archivedDispatchPath = this.archiveBridgeDispatchFile(
+      task,
+      pendingAttempt,
+      status === "sent" ? "processed" : "failed",
+    );
     const attempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
       status,
       errorMessage: payload.errorMessage || "",
@@ -2110,6 +2210,7 @@ export class WechatDispatchService {
             }
           : undefined,
         archivedOutboxPath,
+        archivedDispatchPath,
       },
       completedAt: now,
     });
@@ -2189,6 +2290,7 @@ export class WechatDispatchService {
       const archivedOutboxPath = outboxFileName
         ? this.archiveBridgeOutboxFile(outboxFileName, "cancelled")
         : null;
+      const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingBridgeAttempt, "cancelled");
       this.localStore.updateSendAttempt(pendingBridgeAttempt.id, {
         status: "failed",
         errorMessage: reason,
@@ -2197,6 +2299,7 @@ export class WechatDispatchService {
           cancelReason: reason,
           bridgeAckOutboxFileName: outboxFileName,
           archivedOutboxPath,
+          archivedDispatchPath,
         },
         completedAt: now,
       });
@@ -2660,7 +2763,12 @@ export class WechatDispatchService {
 
     if (acceptancePlan.action === "update_existing_order_payment") {
       const orderDraftId = acceptancePlan.orderDraftId || existingOrderDraft?.id;
-      result.orderDraft = await this.orders.update(orderDraftId, acceptancePlan.orderPatch);
+      result.orderDraft = await this.orders.update(orderDraftId, {
+        ...acceptancePlan.orderPatch,
+        expectedWechatAccountId: params.conversation.wechatAccountId,
+        expectedConversationId: params.conversation.id,
+        expectedCustomerId: params.conversation.customerId,
+      });
       result.quote = quote?.id ? this.localStore.getQuoteDraft(quote.id) || result.orderDraft?.quoteDraft || quote : quote;
       result.plan.type = "order_payment_updated";
       const confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
@@ -2668,6 +2776,7 @@ export class WechatDispatchService {
       });
       if (confirmationDecision.ok) {
         const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
+          ...this.expectedIdentityFromOrder(result.orderDraft),
           owner: "low_value_automation",
           note: "客户补充付款信息后，订单确认已自动进入微信安全发送队列。",
           reason: "low_value_order_confirmation",
@@ -2707,12 +2816,17 @@ export class WechatDispatchService {
 
     const updatedQuote = this.localStore.updateQuoteDraft(quote.id, acceptancePlan.quotePatch);
     result.quote = updatedQuote;
-    result.orderDraft = await this.orders.createFromQuote(updatedQuote.id);
+    result.orderDraft = await this.orders.createFromQuote(updatedQuote.id, {
+      expectedWechatAccountId: params.conversation.wechatAccountId,
+      expectedConversationId: params.conversation.id,
+      expectedCustomerId: params.conversation.customerId,
+    });
     const confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
       highValueAmountCny: appConfig.highValueAmountCny,
     });
     if (confirmationDecision.ok) {
       const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
+        ...this.expectedIdentityFromOrder(result.orderDraft),
         owner: "low_value_automation",
         note: "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。",
         reason: "low_value_order_confirmation",
@@ -2773,6 +2887,7 @@ export class WechatDispatchService {
       unitPrice: quote.unitPrice,
       totalPrice: quote.totalPrice,
       hasSelectedImage: Boolean(quote.selectedImageId),
+      selectedImagePosition: quote.selectedImage?.position,
       items: Array.isArray(designJob?.bundle?.items) ? designJob.bundle.items : [],
     });
     const sendTask = await this.enqueueQuoteMessage({
@@ -3194,6 +3309,18 @@ export class WechatDispatchService {
     return { ok: true, reason: "outbox_ready", fileName: safeName };
   }
 
+  private findPendingBridgeDispatchForTask(task: any, attempt: any) {
+    return this.sendAdapter
+      .listBridgeDispatch()
+      .map((entry) => this.buildBridgeDispatchListItem(entry))
+      .find((entry) =>
+        entry.taskId === task.id &&
+        entry.attemptId === attempt?.id &&
+        entry.wechatAccountId === task.wechatAccountId &&
+        entry.conversationId === task.conversationId,
+      ) || null;
+  }
+
   private validateBridgeAckOutboxPayload(task: any, attempt: any, payload: any, outboxFileName: string) {
     const safeName = path.basename(String(outboxFileName || ""));
     if (!safeName || safeName !== outboxFileName) {
@@ -3380,6 +3507,23 @@ export class WechatDispatchService {
     return this.sendAdapter.moveBridgeOutboxFile(path.join(appConfig.wechatBridgeOutboxDir, safeName), outcome);
   }
 
+  private archiveBridgeDispatchFile(task: any, attempt: any, outcome: "processed" | "failed" | "cancelled") {
+    const fileName = this.resolveBridgeDispatchFileName(task, attempt);
+    if (!fileName) return null;
+    return this.sendAdapter.moveBridgeDispatchFile(path.join(appConfig.wechatBridgeDispatchDir, fileName), outcome);
+  }
+
+  private resolveBridgeDispatchFileName(task: any, attempt: any) {
+    const metadata = isPlainObject(attempt?.metadata) ? attempt.metadata : {};
+    const explicit = bridgeFileName(metadata.dispatchFileName || metadata.dispatchFile || metadata.archivedDispatchFileName);
+    if (explicit) return explicit;
+    const accountId = safeBridgeFileSegment(task?.wechatAccountId || attempt?.wechatAccountId || "");
+    const taskId = safeBridgeFileSegment(task?.id || attempt?.sendTaskId || "");
+    const attemptId = safeBridgeFileSegment(attempt?.id || "");
+    if (!accountId || !taskId || !attemptId) return "";
+    return `${accountId}-${taskId}-${attemptId}.dispatch.json`;
+  }
+
   private buildWindowState(task: any, mode: "correct" | "wrong_chat") {
     if (mode === "wrong_chat") {
       const otherConversation = this.localStore
@@ -3461,6 +3605,10 @@ function bridgeFileName(value: unknown) {
   const text = String(value || "").trim();
   if (!text) return "";
   return text.split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function safeBridgeFileSegment(value: unknown) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80) || "";
 }
 
 function normalizeAssetIds(value: any[]): string[] {

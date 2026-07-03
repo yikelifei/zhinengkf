@@ -169,6 +169,7 @@ export class QuotesService {
       owner: payload.owner || current.owner || "人工客服",
       customerNotes: noteParts.join(" "),
     };
+    await this.markDesignImageSelected(current.designJobId, selectedImage, patch.customerNotes);
     const updated = appConfig.useLocalStore
       ? this.localStore.updateQuoteDraft(id, patch)
       : await (this.prisma as any).quoteDraft.update({
@@ -206,10 +207,11 @@ export class QuotesService {
     return updated;
   }
 
-  async preview(id: string) {
+  async preview(id: string, expected: ExpectedIdentityPayload = {}) {
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(quote);
+    assertExpectedIdentity(quote, expected, "quote draft");
     return {
       quote,
       message: this.buildCustomerMessage(quote),
@@ -234,6 +236,7 @@ export class QuotesService {
     this.ensureQuoteIdentity(quote);
     assertExpectedIdentity(quote, options, "quote draft");
     this.assertQuoteReadyForSend(quote);
+    this.assertHighValueQuoteHasManualRelease(quote, options);
 
     const text = this.buildCustomerMessage(quote);
     if (options.releaseManualLock && designJob.conversationId) {
@@ -408,8 +411,8 @@ export class QuotesService {
     }
   }
 
-  async scanLowValueAutoQuoteSends() {
-    const quotes = await this.list();
+  async scanLowValueAutoQuoteSends(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    const quotes = await this.list(filter);
     const result = {
       scanned: quotes.length,
       queued: [] as any[],
@@ -459,7 +462,10 @@ export class QuotesService {
       return existing;
     }
 
-    const designJob = existing.designJob || (await this.getDesignJobForQuote(existing.designJobId));
+    const designJob =
+      existing.designJob && Array.isArray(existing.designJob.images)
+        ? existing.designJob
+        : await this.getDesignJobForQuote(existing.designJobId);
     const images = Array.isArray(designJob?.images) ? designJob.images : [];
     const selectedImage =
       images.find((image: any) => image.id === selectedImageId || image.imageId === selectedImageId) ||
@@ -470,6 +476,7 @@ export class QuotesService {
       throw new Error("selected image does not belong to quote design job");
     }
     if (existing.selectedImageId === selectedImage.id) {
+      await this.markDesignImageSelected(existing.designJobId, selectedImage, "报价选图已同步。");
       this.ensureQuoteIdentity({ ...existing, designJob, selectedImage });
       return existing;
     }
@@ -477,6 +484,7 @@ export class QuotesService {
       throw new BadRequestException("quote selection is locked after queueing, sending, or acceptance; create a manual revision instead");
     }
 
+    await this.markDesignImageSelected(existing.designJobId, selectedImage, "报价选图已同步。");
     const updated = appConfig.useLocalStore
       ? this.localStore.updateQuoteDraft(existing.id, { selectedImageId: selectedImage.id })
       : await (this.prisma as any).quoteDraft.update({
@@ -507,6 +515,23 @@ export class QuotesService {
       throw new BadRequestException("selected image does not belong to quote design job");
     }
     return selectedImage;
+  }
+
+  private async markDesignImageSelected(designJobId: string, selectedImage: any, feedback: string) {
+    if (!designJobId || !selectedImage?.id) return;
+    if (appConfig.useLocalStore) {
+      this.localStore.selectDesignImage(designJobId, selectedImage.id, feedback);
+      return;
+    }
+    const prisma = this.prisma as any;
+    await prisma.designImageCandidate.updateMany({
+      where: { designJobId },
+      data: { selected: false },
+    });
+    await prisma.designImageCandidate.update({
+      where: { id: selectedImage.id },
+      data: { selected: true, customerFeedback: feedback },
+    });
   }
 
   private async cancelLinkedQuoteSendTaskForRevision(
@@ -552,6 +577,7 @@ export class QuotesService {
       unitPrice: quote.unitPrice,
       totalPrice: quote.totalPrice,
       hasSelectedImage: Boolean(quote.selectedImageId),
+      selectedImagePosition: quote.selectedImage?.position,
       items: Array.isArray(designJob?.bundle?.items) ? designJob.bundle.items : [],
     });
   }
@@ -573,6 +599,30 @@ export class QuotesService {
     if (warnings.length) {
       throw new BadRequestException(`报价还不能发送：${warnings.join("；")}`);
     }
+  }
+
+  private assertHighValueQuoteHasManualRelease(
+    quote: any,
+    options: { releaseManualLock?: boolean; releaseReason?: string },
+  ) {
+    if (!this.isHighValueQuote(quote)) return;
+    if (!options.releaseManualLock) {
+      throw new BadRequestException("高价值报价必须先由人工审核，不能走自动或普通发送队列。");
+    }
+    assertManualReleaseReason(options.releaseReason, "high value quote manual send");
+  }
+
+  private isHighValueQuote(quote: any) {
+    const threshold = Number(appConfig.highValueAmountCny || 10000);
+    const totalPrice = Number(quote?.totalPrice ?? 0);
+    const unitPrice = Number(quote?.unitPrice ?? 0);
+    return (
+      Boolean(quote?.isHighValue) ||
+      Boolean(quote?.designJob?.isHighValue) ||
+      isHighValueBudget(quote?.designJob?.budget, threshold) ||
+      (Number.isFinite(totalPrice) && totalPrice >= threshold) ||
+      (Number.isFinite(unitPrice) && unitPrice >= threshold)
+    );
   }
 
   private async lockQuoteConversationForManualReview(quote: any, reviewer?: string) {
@@ -598,6 +648,7 @@ export class QuotesService {
           include: {
             conversation: true,
             wechatAccount: true,
+            images: true,
           },
         },
       },
@@ -615,6 +666,7 @@ export class QuotesService {
         designJob: {
           include: {
             conversation: true,
+            images: true,
           },
         },
         selectedImage: true,

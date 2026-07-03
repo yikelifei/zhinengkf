@@ -13,7 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "project_modules.yaml"
-INDEX_PATH = ROOT / "docs" / "PROJECT_MODULES_INDEX.md"
+INDEX_PATH = ROOT / "docs" / "agent_tasks" / "AGENT_TASK_INDEX.md"
 SHELL_META_CHARS = set("&|;<>()\r\n")
 
 
@@ -207,63 +207,10 @@ def module_doc(module: dict[str, Any]) -> str:
 
 
 def generate_docs(data: dict[str, Any]) -> None:
-    project_dir = ROOT / "docs" / "projects"
-    project_dir.mkdir(parents=True, exist_ok=True)
+    from scripts.agent_task_board import generate
 
-    index_lines = [
-        "# 智能客服项目模块索引",
-        "",
-        f"配置来源: `config/project_modules.yaml`",
-        f"更新时间: `{data.get('updated_at', '-')}`",
-        "",
-        "## 使用方式",
-        "",
-        "- 查看全部模块: `tools\\projects\\list_projects.bat`",
-        "- 查看单个模块: `tools\\_run_python_task.bat scripts\\project_modules.py show <模块ID>`",
-        "- 独立运行模块: `tools\\projects\\run_project.bat <模块ID>`",
-        "- 独立检查模块: `tools\\projects\\check_project.bat <模块ID>`",
-        "- 运行全部可运行模块: `tools\\projects\\run_all_projects.bat`",
-        "- 检查全部模块: `tools\\projects\\check_all_projects.bat`",
-        "",
-        "## 模块列表",
-        "",
-        "| 模块 | 分类 | 状态 | 说明 |",
-        "| --- | --- | --- | --- |",
-    ]
-
-    for module in data["modules"]:
-        doc_rel = module.get("doc", f"docs/projects/{module['id']}.md")
-        doc_path = ROOT / doc_rel
-        doc_path.parent.mkdir(parents=True, exist_ok=True)
-        doc_path.write_text(module_doc(module), encoding="utf-8", newline="\n")
-        doc_link = Path(doc_rel).relative_to("docs").as_posix()
-        index_lines.append(
-            f"| [{module.get('title', module['id'])}]({doc_link}) "
-            f"| `{module.get('category', '-')}` | `{module.get('status', '-')}` "
-            f"| {module.get('purpose', '')} |"
-        )
-
-    index_lines.extend(
-        [
-            "",
-            "## 分类说明",
-            "",
-            "- `channel`: 微信和后续平台消息通道。",
-            "- `lead_acquisition`: 抖音、小红书等平台线索承接。",
-            "- `knowledge`: 知识库、话术学习和人工审核。",
-            "- `reply`: 智能回复、人情味表达和安全护栏。",
-            "- `crm`: 高价值客户筛选和优先跟进。",
-            "- `sales_ops`: 报价、跟进、订单交接。",
-            "- `image_delivery`: 出图提示词和图片交付任务。",
-            "- `integration`: 本地 API 和外部软件集成。",
-            "- `console`: 统一工作台。",
-            "- `quality`: 自动测试、验收、备份和上线检查。",
-            "",
-        ]
-    )
-    INDEX_PATH.write_text("\n".join(index_lines), encoding="utf-8", newline="\n")
-    print(f"Generated {INDEX_PATH}")
-    print(f"Generated {len(data['modules'])} project docs in {project_dir}")
+    generate()
+    print("Project module docs are consolidated under docs/agent_tasks.")
 
 
 def resolve_module(data: dict[str, Any], module_id: str) -> dict[str, Any]:

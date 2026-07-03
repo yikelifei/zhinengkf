@@ -13,6 +13,7 @@ const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.j
 const apiPort = numberEnv("API_PORT", 3200);
 const apiBase = String(process.env.BRIDGE_API_BASE || process.env.WECHAT_WINDOW_OBSERVER_API_BASE || `http://127.0.0.1:${apiPort}/api`).replace(/\/$/, "");
 const args = new Set(process.argv.slice(2));
+const requestedBridgeMode = resolveBridgeMode();
 
 const services = [
   {
@@ -32,7 +33,7 @@ const services = [
     statusFile: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
     env: {
       BRIDGE_API_BASE: apiBase,
-      BRIDGE_MODE: process.env.BRIDGE_MODE || "noop",
+      BRIDGE_MODE: requestedBridgeMode,
       BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
     },
   },
@@ -63,6 +64,7 @@ async function main() {
   for (const service of services) {
     const existingPid = Number(records[service.name]?.pid);
     if (isProcessRunning(existingPid)) {
+      assertExistingWorkerMode(service);
       console.log(`[ok] ${service.label} already running pid=${existingPid}`);
       continue;
     }
@@ -73,6 +75,7 @@ async function main() {
       label: service.label,
       pid,
       command: [process.execPath, ...service.commandArgs].join(" "),
+      mode: service.env.BRIDGE_MODE || "",
       status: "starting",
       startedAt: new Date().toISOString(),
     };
@@ -81,7 +84,27 @@ async function main() {
     console.log(`[start] ${service.label} pid=${pid}`);
   }
 
-  console.log("[info] Bridge worker defaults to BRIDGE_MODE=noop, so it observes outbox tasks but does not mark WeChat messages sent.");
+  console.log(`[info] Bridge worker mode is BRIDGE_MODE=${requestedBridgeMode}; it will not mark WeChat messages sent without a real ack.`);
+}
+
+function resolveBridgeMode() {
+  if (args.has("--dispatch")) return "dispatch";
+  if (args.has("--noop")) return "noop";
+  const modeArg = valueArg("--mode");
+  if (modeArg === "dispatch" || modeArg === "noop") return modeArg;
+  const envMode = String(process.env.BRIDGE_MODE || "").trim();
+  if (envMode === "dispatch" || envMode === "noop") return envMode;
+  return "noop";
+}
+
+function assertExistingWorkerMode(service) {
+  if (service.name !== "wechat-bridge-worker") return;
+  const status = readJson(service.statusFile);
+  const runningMode = String(status.mode || "").trim();
+  if (!runningMode || runningMode === requestedBridgeMode) return;
+  throw new Error(
+    `WeChat bridge worker is already running with BRIDGE_MODE=${runningMode}; run npm.cmd run wechat:safe:stop before starting BRIDGE_MODE=${requestedBridgeMode}.`,
+  );
 }
 
 async function assertApiReadyForSafeWorkers() {
@@ -259,6 +282,7 @@ function printStatus() {
     const lastStatus = status.status || "no_status";
     const statusPid = Number(status.pid);
     const ok = Object.hasOwn(status, "ok") ? ` ok=${status.ok === true}` : "";
+    const mode = status.mode || records[service.name]?.mode ? ` mode=${status.mode || records[service.name]?.mode}` : "";
     const failedCount = Number(status.result?.failedCount);
     const failed = Number.isFinite(failedCount) && failedCount > 0 ? ` failed=${failedCount}` : "";
     const stale = running && Number.isFinite(statusPid) && statusPid > 0 && statusPid !== pid
@@ -266,7 +290,7 @@ function printStatus() {
       : "";
     const message = singleLine(status.errorMessage || status.message || "");
     const detail = message ? ` message=${message.slice(0, 160)}` : "";
-    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}${ok}${failed}${stale}${detail}`);
+    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}${ok}${mode}${failed}${stale}${detail}`);
   }
 }
 
@@ -366,6 +390,12 @@ function singleLine(value) {
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function valueArg(name) {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return "";
+  return String(process.argv[index + 1] || "").trim();
 }
 
 function normalizeBaseUrl(value) {

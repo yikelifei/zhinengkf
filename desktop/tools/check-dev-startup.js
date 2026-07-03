@@ -9,6 +9,7 @@ const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = path.join(desktopRoot, ".runtime");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
+const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const args = new Set(process.argv.slice(2));
 const forceMockDesignMode = args.has("--mock-design");
 const requestedRealDesignMode = args.has("--real-design");
@@ -45,6 +46,8 @@ const mockDesignService = {
 };
 
 const integrationHealthUrl = `http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`;
+const wechatSnapshotsUrl = `http://127.0.0.1:${apiPort}/api/wechat/window-snapshots`;
+const maxWechatSnapshotLatencyMs = numberEnv("MAX_WECHAT_SNAPSHOT_LATENCY_MS", 2000);
 
 const fallbackServices = [
   ...baseServices,
@@ -124,6 +127,30 @@ async function main() {
     }
   } else {
     console.log(`[warn] Design integration health is not available yet: ${integrationHealthUrl}`);
+  }
+
+  printHeader("Startup Load Guards");
+  const snapshotResult = await requestUrlWithRetry(wechatSnapshotsUrl, 3, 500);
+  if (isExpectedStatus(snapshotResult.statusCode, "2xx") && snapshotResult.durationMs <= maxWechatSnapshotLatencyMs) {
+    console.log(`[ok] WeChat window snapshots: HTTP ${snapshotResult.statusCode} latency=${snapshotResult.durationMs}ms`);
+  } else {
+    hasError = true;
+    const status = snapshotResult.statusCode ? `HTTP ${snapshotResult.statusCode}` : snapshotResult.error || "not reachable";
+    const latency = Number.isFinite(snapshotResult.durationMs) ? ` latency=${snapshotResult.durationMs}ms` : "";
+    console.log(`[fail] WeChat window snapshots: ${status}${latency}`);
+    console.log(`[fix] Run npm.cmd run ports:stop to clear stale workers, then npm.cmd run ports:launch:mock.`);
+  }
+  printWechatWorkerProcesses();
+  const supervisors = await waitForKeepAliveSupervisorProcesses(45, 1000);
+  if (supervisors.length) {
+    console.log(`[ok] Keep-alive supervisor: ${supervisors.length} process(es) running`);
+    for (const supervisor of supervisors.slice(0, 3)) {
+      console.log(`       pid=${supervisor.pid} ${trimMiddle(supervisor.commandLine, 180)}`);
+    }
+  } else {
+    hasError = true;
+    console.log("[fail] Keep-alive supervisor: no default startup supervisor process is running");
+    console.log("[fix] Run npm.cmd run ports:repair so the app is started and supervised.");
   }
 
   if (hasError) {
@@ -244,6 +271,7 @@ function printLogTail(serviceName) {
 
 function requestUrl(url) {
   return new Promise((resolve) => {
+    const startedAt = Date.now();
     const request = http.get(url, { timeout: 3000 }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -251,14 +279,15 @@ function requestUrl(url) {
         resolve({
           statusCode: response.statusCode,
           body: Buffer.concat(chunks).toString("utf8"),
+          durationMs: Date.now() - startedAt,
         });
       });
     });
     request.on("timeout", () => {
       request.destroy();
-      resolve({ error: "timeout" });
+      resolve({ error: "timeout", durationMs: Date.now() - startedAt });
     });
-    request.on("error", (error) => resolve({ error: error.message }));
+    request.on("error", (error) => resolve({ error: error.message, durationMs: Date.now() - startedAt }));
   });
 }
 
@@ -340,6 +369,123 @@ function getCommandLine(pid) {
   return result.status === 0 ? String(result.stdout || "").trim() : "";
 }
 
+function printWechatWorkerProcesses() {
+  const workers = findWechatWorkerProcesses();
+  if (!workers.length) {
+    console.log("[ok] WeChat safe workers: no background worker process is running");
+    return;
+  }
+  console.log(`[info] WeChat safe workers: ${workers.length} process(es) running`);
+  for (const worker of workers) {
+    console.log(`       pid=${worker.pid} ${trimMiddle(worker.commandLine, 180)}`);
+  }
+}
+
+function findWechatWorkerProcesses() {
+  if (process.platform !== "win32") return [];
+  const script = [
+    "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" |",
+    "Where-Object { $_.CommandLine -and (",
+    "  $_.CommandLine -like '*tools/wechat-window-observer.js*' -or",
+    "  $_.CommandLine -like '*tools\\\\wechat-window-observer.js*' -or",
+    "  $_.CommandLine -like '*tools/wechat-bridge-worker.js*' -or",
+    "  $_.CommandLine -like '*tools\\\\wechat-bridge-worker.js*'",
+    ") } | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+  ].join(" ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .map((item) => ({
+      pid: String(item.ProcessId || ""),
+      commandLine: String(item.CommandLine || ""),
+    }))
+    .filter((item) => /^\d+$/.test(item.pid));
+}
+
+function findKeepAliveSupervisorProcesses() {
+  const heartbeatProcess = findKeepAliveHeartbeatProcess();
+  if (heartbeatProcess.length) return heartbeatProcess;
+  if (process.platform !== "win32") return [];
+  const modeArg = realDesignMode ? "--real-design" : "--mock-design";
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$root = ${psQuote(normalizePathText(desktopRoot))}`,
+    "$selfPid = $PID",
+    "$items = Get-CimInstance Win32_Process | Where-Object {",
+    "  $_.ProcessId -ne $selfPid -and $_.CommandLine -and",
+    "  ($_.CommandLine -notlike '*Get-CimInstance Win32_Process*') -and",
+    "  ($cmd = ($_.CommandLine -replace '\\\\','/').ToLowerInvariant()) -and",
+    "  $cmd.Contains($root) -and",
+    `  (`,
+    `    ($cmd.Contains('tools/start-dev-ports.js') -and $cmd.Contains('${modeArg}') -and $cmd.Contains('--keep-alive')) -or`,
+    `    ($cmd.Contains('tools/desktop-service-supervisor.js') -and $cmd.Contains('${modeArg}') -and $cmd.Contains('--supervisor-child'))`,
+    "  )",
+    "} | Select-Object ProcessId,CommandLine",
+    "if ($items) { $items | ConvertTo-Json -Compress }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows])
+    .map((item) => ({
+      pid: String(item.ProcessId || ""),
+      commandLine: String(item.CommandLine || ""),
+    }))
+    .filter((item) => /^\d+$/.test(item.pid));
+}
+
+async function waitForKeepAliveSupervisorProcesses(attempts, delayMs) {
+  let supervisors = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    supervisors = findKeepAliveSupervisorProcesses();
+    if (supervisors.length) return supervisors;
+    if (attempt < attempts) await sleep(delayMs);
+  }
+  return supervisors;
+}
+
+function findKeepAliveHeartbeatProcess() {
+  const heartbeat = readJson(keepAliveHeartbeatFile);
+  const expectedMode = realDesignMode ? "real" : "mock";
+  if (heartbeat.mode !== expectedMode) return [];
+  const updatedAt = Date.parse(String(heartbeat.updatedAt || ""));
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 30_000) return [];
+  const pid = String(heartbeat.pid || "");
+  if (!/^\d+$/.test(pid)) return [];
+  const commandLine = getCommandLine(pid);
+  const normalizedCommand = normalizePathText(commandLine);
+  const modeArg = realDesignMode ? "--real-design" : "--mock-design";
+  if (
+    !normalizedCommand.includes("tools/start-dev-ports.js") ||
+    !normalizedCommand.includes(modeArg) ||
+    !normalizedCommand.includes("--keep-alive")
+  ) {
+    return [];
+  }
+  return [
+    {
+      pid,
+      commandLine,
+    },
+  ];
+}
+
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -370,6 +516,10 @@ function trimMiddle(value, maxLength) {
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function normalizePathText(value) {
+  return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
 function parseUrlPort(value) {

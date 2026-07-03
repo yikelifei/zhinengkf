@@ -45,6 +45,7 @@ test("approved high-value budget design job stays in manual review after image a
         return {};
       },
     },
+    {},
   );
 
   const result = await service.reviewDesignJob("design_1", {
@@ -60,6 +61,209 @@ test("approved high-value budget design job stays in manual review after image a
   assert.equal(result.log.afterStatus, "manual_review");
   assert.equal(reviewLogs[0].decision, "approve_images");
   assert.equal(notifications.length, 1);
+});
+
+test("review list includes high-value budget design jobs that are already quick confirm", async () => {
+  const job = {
+    id: "design_1",
+    requestId: "request_1",
+    status: "quick_confirm",
+    isHighValue: false,
+    budget: { totalAmount: 15000, perUnitAmount: 300 },
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      listDesignJobs: () => [job],
+      listQuoteDrafts: () => [],
+      listOrderDrafts: () => [],
+      listReviewLogs: () => [],
+    },
+    {},
+    {},
+    {},
+    {},
+  );
+
+  const result = await service.list({
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  });
+
+  assert.equal(result.designJobs.length, 1);
+  assert.equal(result.designJobs[0].id, "design_1");
+});
+
+test("review list includes stale high-value quote drafts outside manual review", async () => {
+  const highValueQuote = {
+    id: "quote_high",
+    status: "auto_sent",
+    totalPrice: 15000,
+    unitPrice: 300,
+    designJob: {
+      id: "design_high",
+      isHighValue: false,
+      budget: { totalAmount: 8000, perUnitAmount: 300 },
+    },
+  };
+  const lowValueQuote = {
+    id: "quote_low",
+    status: "auto_sent",
+    totalPrice: 3000,
+    unitPrice: 150,
+    designJob: {
+      id: "design_low",
+      isHighValue: false,
+      budget: { totalAmount: 3000, perUnitAmount: 150 },
+    },
+  };
+  const highBudgetQuote = {
+    id: "quote_budget",
+    status: "draft",
+    totalPrice: 3000,
+    unitPrice: 150,
+    designJob: {
+      id: "design_budget",
+      isHighValue: false,
+      budget: { totalAmount: 12000, perUnitAmount: 150 },
+    },
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      listDesignJobs: () => [],
+      listQuoteDrafts: () => [highValueQuote, lowValueQuote, highBudgetQuote],
+      listOrderDrafts: () => [],
+      listReviewLogs: () => [],
+    },
+    {},
+    {},
+    {},
+    {},
+  );
+
+  const result = await service.list();
+
+  assert.deepEqual(
+    result.quoteDrafts.map((quote) => quote.id),
+    ["quote_high", "quote_budget"],
+  );
+});
+
+test("review list includes active high-value order drafts", async () => {
+  const highValueOrder = {
+    id: "order_high",
+    status: "confirmed",
+    totalPrice: 10000,
+    unitPrice: 200,
+    quoteDraft: { id: "quote_high", totalPrice: 10000, unitPrice: 200 },
+  };
+  const highBudgetOrder = {
+    id: "order_budget",
+    status: "processing",
+    totalPrice: 3000,
+    unitPrice: 150,
+    quoteDraft: {
+      id: "quote_budget",
+      totalPrice: 3000,
+      unitPrice: 150,
+      designJob: { id: "design_budget", budget: { totalAmount: 12000, perUnitAmount: 150 } },
+    },
+  };
+  const lowValueOrder = {
+    id: "order_low",
+    status: "confirmed",
+    totalPrice: 3000,
+    unitPrice: 150,
+    quoteDraft: { id: "quote_low", totalPrice: 3000, unitPrice: 150 },
+  };
+  const fulfilledHighValueOrder = {
+    id: "order_done",
+    status: "fulfilled",
+    totalPrice: 20000,
+    unitPrice: 200,
+    quoteDraft: { id: "quote_done", totalPrice: 20000, unitPrice: 200 },
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      listDesignJobs: () => [],
+      listQuoteDrafts: () => [],
+      listOrderDrafts: () => [highValueOrder, lowValueOrder, highBudgetOrder, fulfilledHighValueOrder],
+      listReviewLogs: () => [],
+    },
+    {},
+    {},
+    {},
+    {},
+  );
+
+  const result = await service.list();
+
+  assert.deepEqual(
+    result.orderDrafts.map((order) => order.id),
+    ["order_high", "order_budget"],
+  );
+});
+
+test("manual-approved order review queues confirmation and records audit log", async () => {
+  const reviewLogs = [];
+  let queuedPayload = null;
+  const order = {
+    id: "order_high",
+    status: "confirmed",
+    quoteDraftId: "quote_high",
+    designJobId: "design_high",
+    totalPrice: 10000,
+    unitPrice: 200,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getOrderDraft: () => order,
+      createReviewLog: (payload) => {
+        reviewLogs.push(payload);
+        return payload;
+      },
+    },
+    {},
+    {},
+    { create: async () => ({}) },
+    {
+      queueOrderConfirmation: async (id, payload) => {
+        queuedPayload = { id, payload };
+        return {
+          orderDraft: { ...order, status: "confirmed" },
+          sendTask: { id: "send_order_1" },
+          message: "queued",
+        };
+      },
+    },
+  );
+
+  const result = await service.reviewOrder("order_high", {
+    decision: "approve_confirmation",
+    reviewer: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(queuedPayload.id, "order_high");
+  assert.equal(queuedPayload.payload.releaseManualLock, true);
+  assert.equal(queuedPayload.payload.releaseReason, "manual_approve_order_confirmation");
+  assert.equal(reviewLogs.length, 1);
+  assert.equal(reviewLogs[0].targetType, "order_draft");
+  assert.equal(reviewLogs[0].decision, "approve_confirmation");
+  assert.equal(reviewLogs[0].metadata.sendTaskId, "send_order_1");
+  assert.equal(result.log.afterStatus, "confirmed");
 });
 
 test("manual-approved design image send relocks conversation when queueing fails", async () => {
@@ -387,6 +591,127 @@ test("quote send refuses to release manual lock without explicit manual reason",
   assert.equal(locks.length, 0);
 });
 
+test("quote send refuses high-value total without manual release", async () => {
+  let enqueueCalled = false;
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 200,
+    totalPrice: 10000,
+    totalCost: 7000,
+    profit: 3000,
+    status: "draft",
+    paymentStatus: "unpaid",
+    selectedImage: {
+      id: "image_1",
+      designJobId: "design_1",
+    },
+    customer: {
+      id: "customer_1",
+      name: "客户A",
+    },
+    designJob: {
+      id: "design_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      scene: "企业礼盒",
+      bundle: { items: [] },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+    },
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      updateQuoteDraft: () => {
+        throw new Error("should not queue high-value quote without manual release");
+      },
+    },
+    {},
+    {
+      enqueueQuoteMessage: async () => {
+        enqueueCalled = true;
+        return { id: "send_1" };
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.queueSend("quote_1", {}),
+    /高价值报价必须先由人工审核/,
+  );
+  assert.equal(enqueueCalled, false);
+});
+
+test("quote send refuses high-value budget without manual release", async () => {
+  let enqueueCalled = false;
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 20,
+    unitPrice: 150,
+    totalPrice: 3000,
+    totalCost: 1800,
+    profit: 1200,
+    status: "draft",
+    paymentStatus: "unpaid",
+    selectedImage: {
+      id: "image_1",
+      designJobId: "design_1",
+    },
+    customer: {
+      id: "customer_1",
+      name: "客户A",
+    },
+    designJob: {
+      id: "design_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      scene: "企业礼盒",
+      budget: { totalAmount: 12000, perUnitAmount: 150 },
+      bundle: { items: [] },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+    },
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      updateQuoteDraft: () => {
+        throw new Error("should not queue high-value budget quote without manual release");
+      },
+    },
+    {},
+    {
+      enqueueQuoteMessage: async () => {
+        enqueueCalled = true;
+        return { id: "send_1" };
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.queueSend("quote_1", {}),
+    /高价值报价必须先由人工审核/,
+  );
+  assert.equal(enqueueCalled, false);
+});
+
 test("quote preview and send readiness warnings stay readable Chinese", async () => {
   const quote = {
     id: "quote_1",
@@ -429,7 +754,11 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
     },
   );
 
-  const preview = await service.preview("quote_1");
+  const preview = await service.preview("quote_1", {
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
 
   assert.ok(preview.warnings.includes("报价已进入发送队列"));
   assert.ok(preview.warnings.includes("报价还没有选图"));
@@ -437,6 +766,15 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
   assert.ok(preview.warnings.includes("报价正在等待人工审核"));
   assert.ok(preview.warnings.includes("报价利润为负，需要人工确认"));
   assert.doesNotMatch(preview.warnings.join(" "), /quote has no selected image|quote is waiting for manual review/);
+  await assert.rejects(
+    () =>
+      service.preview("quote_1", {
+        expectedWechatAccountId: "wechat_2",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }),
+    /quote draft identity mismatch: wechatAccountId expected wechat_2, got wechat_1/,
+  );
   await assert.rejects(
     () => service.queueSend("quote_1", {}),
     /付款凭证需要先人工核验金额和收款账户/,
@@ -775,6 +1113,13 @@ test("manual quote revision changes selected image and cancels queued send task"
         ...patch,
         selectedImage: designJob.images.find((image) => image.id === patch.selectedImageId) || quote.selectedImage,
       }),
+      selectDesignImage: (designJobId, imageId, feedback) => {
+        assert.equal(designJobId, "design_1");
+        for (const image of designJob.images) {
+          image.selected = image.id === imageId || image.imageId === imageId;
+          if (image.selected) image.customerFeedback = feedback;
+        }
+      },
       createReviewLog: (payload) => {
         reviewLogs.push(payload);
         return payload;
@@ -809,6 +1154,9 @@ test("manual quote revision changes selected image and cancels queued send task"
   assert.equal(reviewLogs[0].metadata.previousSelectedImageId, "image_1");
   assert.equal(reviewLogs[0].metadata.selectedImageId, "image_2");
   assert.equal(reviewLogs[0].metadata.cancelledSendTaskId, "send_1");
+  assert.equal(designJob.images[0].selected, false);
+  assert.equal(designJob.images[1].selected, true);
+  assert.match(designJob.images[1].customerFeedback, /客户改选第二张/);
 });
 
 test("manual quote revision is blocked after order draft exists", async () => {
@@ -946,6 +1294,13 @@ test("manual order revision changes selected image and syncs bound quote", async
         };
         return updated.order;
       },
+      selectDesignImage: (designJobId, imageId, feedback) => {
+        assert.equal(designJobId, "design_1");
+        for (const image of designJob.images) {
+          image.selected = image.id === imageId || image.imageId === imageId;
+          if (image.selected) image.customerFeedback = feedback;
+        }
+      },
       createReviewLog: (payload) => {
         reviewLogs.push(payload);
         return payload;
@@ -962,7 +1317,7 @@ test("manual order revision changes selected image and syncs bound quote", async
   const result = await service.reviseSelectedImage("order_1", {
     selectedImageId: "image_2",
     owner: "Alice",
-    note: "瀹㈡埛鏀归€夌浜屽紶",
+    note: "客户改选第二张",
     expectedWechatAccountId: "wechat_1",
     expectedConversationId: "conversation_1",
     expectedCustomerId: "customer_1",
@@ -976,6 +1331,9 @@ test("manual order revision changes selected image and syncs bound quote", async
   assert.equal(reviewLogs[0].metadata.previousSelectedImageId, "image_1");
   assert.equal(reviewLogs[0].metadata.selectedImageId, "image_2");
   assert.equal(notifications.length, 1);
+  assert.equal(designJob.images[0].selected, false);
+  assert.equal(designJob.images[1].selected, true);
+  assert.match(designJob.images[1].customerFeedback, /客户改选第二张/);
 });
 
 test("manual order revision is blocked while confirmation send task is active", async () => {
@@ -1233,12 +1591,25 @@ test("order confirmation preview returns message and readiness warnings", async 
     { create: async () => ({}) },
   );
 
-  const preview = await service.confirmationPreview("order_1");
+  const preview = await service.confirmationPreview("order_1", {
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
 
   assert.equal(preview.orderDraft.id, "order_1");
   assert.equal(typeof preview.message, "string");
   assert.ok(preview.message.length > 20);
   assert.deepEqual(preview.warnings, []);
+  await assert.rejects(
+    () =>
+      service.confirmationPreview("order_1", {
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_2",
+        expectedCustomerId: "customer_1",
+      }),
+    /order draft identity mismatch: conversationId expected conversation_2, got conversation_1/,
+  );
 });
 
 test("order confirmation preview warns when selected image is missing", async () => {

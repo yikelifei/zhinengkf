@@ -53,6 +53,38 @@ function createStore(seed) {
   return { store, tempDir };
 }
 
+test("local design image upsert preserves selected state on repeated callbacks", () => {
+  const { store } = createStore(
+    emptyStoreData({
+      designJobs: [{ id: "design_1", requestId: "request_1" }],
+      designImages: [
+        {
+          id: "image_1",
+          designJobId: "design_1",
+          imageId: "candidate_1",
+          selected: true,
+          customerFeedback: "客户选了第一张",
+          localPath: "C:\\storage\\old.png",
+        },
+      ],
+    }),
+  );
+
+  const [image] = store.upsertDesignImages("design_1", [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      downloadUrl: "https://example.test/candidate-1.png",
+      localPath: "C:\\storage\\new.png",
+    },
+  ]);
+
+  assert.equal(image.id, "image_1");
+  assert.equal(image.selected, true);
+  assert.equal(image.customerFeedback, "客户选了第一张");
+  assert.equal(image.localPath, "C:\\storage\\new.png");
+});
+
 test("local quote draft goes to manual review when bundle automation is blocked", () => {
   const { store } = createStore(
     emptyStoreData({

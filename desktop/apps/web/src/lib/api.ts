@@ -763,9 +763,13 @@ export type BridgeDispatchEntry = {
   payloadKind?: string;
   actionCount?: number;
   outboxFileName?: string;
+  ackFileNameHint?: string;
+  failedAckFileNameHint?: string;
   createdAt?: string;
+  expiresAt?: string;
   modifiedAt?: string;
   ageSeconds?: number;
+  expired?: boolean;
   errorMessage?: string;
 };
 
@@ -773,6 +777,11 @@ export type BridgeInboxScanResult = {
   scanned: number;
   processed: BridgeInboxEntry[];
   failed: BridgeInboxEntry[];
+};
+
+export type BridgeDispatchResult = {
+  staleCount?: number;
+  pending: BridgeDispatchEntry[];
 };
 
 export type WindowSnapshotInboxScanResult = {
@@ -847,6 +856,7 @@ export type BridgeStatusResult = {
   };
   dispatch?: {
     pendingCount: number;
+    staleCount?: number;
     pending: BridgeDispatchEntry[];
   };
   locks: {
@@ -1714,6 +1724,12 @@ export async function getBridgeStatus(filters: IdentityFilters = {}): Promise<Br
   return response.json();
 }
 
+export async function getBridgeDispatch(filters: IdentityFilters = {}): Promise<BridgeDispatchResult> {
+  const response = await fetch(`${API_BASE}/wechat/bridge/dispatch${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
+}
+
 export async function getWechatChannelStatus(filters: IdentityFilters = {}): Promise<WechatChannelStatus | null> {
   const url = `${API_BASE}/wechat/channels/status${identityQuery(filters)}`;
   for (let attempt = 0; attempt <= WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
@@ -1830,8 +1846,18 @@ export async function cancelSendTask(id: string, payload: { reason?: string } & 
   });
 }
 
-export async function scanSendOperations(filters: IdentityFilters = {}): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>("/wechat/send-tasks/scan-ops", filters);
+export type SendOperationsScanResult = {
+  scanned: number;
+  bridgeTimedOut: number;
+  bridgeOutboxBroken: number;
+  bridgeDispatchExpired?: number;
+  staleQueued: number;
+  alerted: number;
+  tasks?: Record<string, unknown>;
+};
+
+export async function scanSendOperations(filters: IdentityFilters = {}): Promise<SendOperationsScanResult> {
+  return postJson<SendOperationsScanResult>("/wechat/send-tasks/scan-ops", filters);
 }
 
 export type SafeSendQueueResult = {
@@ -2427,9 +2453,9 @@ export async function verifyQuotePaymentProofAndQueueConfirmation(
   id: string,
   paymentStatus: "deposit_paid" | "paid",
   expected: IdentityExpectation = {},
-): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask?: SendTask | null; message: string }> {
   const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
-  return postJson<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask: SendTask; message: string }>(
+  return postJson<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask?: SendTask | null; message: string }>(
     `/quotes/${id}/verify-payment-proof`,
     {
       ...expected,

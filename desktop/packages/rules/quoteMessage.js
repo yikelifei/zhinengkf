@@ -14,7 +14,10 @@ function buildQuoteCustomerMessage(input = {}) {
     : [];
 
   const greeting = customerName ? `${customerName}，` : "";
-  const imageContext = input.hasSelectedImage ? "按您刚刚选中的效果图" : "按我们刚才确认的搭配方向";
+  const selectedImageText = selectedImageContext(input);
+  const imageContext = input.hasSelectedImage
+    ? `按您刚刚选中的${selectedImageText}`
+    : "按我们刚才确认的搭配方向";
   const bundleText = itemNames.length
     ? `这套里包含${itemNames.join("、")}`
     : "这套搭配我已经重新核过";
@@ -36,8 +39,10 @@ function buildOrderConfirmationCustomerMessage(input = {}) {
     : [];
 
   const greeting = customerName ? `${customerName}，` : "";
+  const selectedImageText = orderSelectedImageContext(input);
+  const confirmedSubject = selectedImageText ? `${selectedImageText}，${scene}` : scene;
   const itemText = itemNames.length ? `，搭配按${itemNames.join("、")}这套来` : "";
-  const base = `${greeting}收到，我这边先按您确认的${scene}${itemText}锁定下来。数量 ${quantity} 份，合计 ${totalPrice} 元。`;
+  const base = `${greeting}收到，我这边先按您确认的${confirmedSubject}${itemText}锁定下来。数量 ${quantity} 份，合计 ${totalPrice} 元。`;
 
   if (paymentStatus === "paid") {
     return `${base}款项我先按已付款记录，接下来给您整理订单信息并推进排产；交期或细节有变化，我会及时跟您同步。`;
@@ -61,6 +66,24 @@ function formatMoney(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function selectedImageContext(input = {}) {
+  const position = toPositiveInteger(input.selectedImagePosition);
+  if (position) return `第${position}张效果图`;
+  const label = cleanText(input.selectedImageLabel);
+  if (label) return `${label}效果图`;
+  return "效果图";
+}
+
+function orderSelectedImageContext(input = {}) {
+  if (!input.hasSelectedImage && !input.selectedImagePosition && !input.selectedImageLabel) return "";
+  return selectedImageContext(input);
+}
+
+function toPositiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
 module.exports = {

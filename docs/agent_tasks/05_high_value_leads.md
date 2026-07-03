@@ -22,7 +22,7 @@
 - 模块 ID：`05_high_value_leads`
 - 分类：`crm`
 - 状态：`running`
-- 文档：`docs/projects/05_high_value_leads.md`
+- 文档：`docs/agent_tasks/05_high_value_leads.md`
 
 ## 目标
 

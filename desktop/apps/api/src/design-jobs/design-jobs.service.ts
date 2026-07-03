@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import { DesignPlatformClient } from "../integrations/design-platform/design-platform.client";
 import {
   DesignPlatformCallbackPayload,
@@ -70,6 +71,12 @@ type DesignRevisionLike = {
   externalJobId?: string | null;
 };
 
+type IdentityFilter = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
+
 @Injectable()
 export class DesignJobsService {
   private readonly activeResultPolls = new Set<string>();
@@ -95,10 +102,11 @@ export class DesignJobsService {
     });
   }
 
-  async scanHighValueHandoffs() {
+  async scanHighValueHandoffs(filter: IdentityFilter = {}) {
     const jobs = appConfig.useLocalStore
-      ? this.localStore.listDesignJobs()
+      ? this.localStore.listDesignJobs(filter)
       : await this.prisma.designJob.findMany({
+          where: cleanIdentityWhere(filter),
           include: { customer: true, conversation: true },
           orderBy: { updatedAt: "desc" },
           take: 300,
@@ -133,11 +141,11 @@ export class DesignJobsService {
     };
   }
 
-  async scanAutoSubmitDrafts() {
+  async scanAutoSubmitDrafts(filter: IdentityFilter = {}) {
     const jobs = appConfig.useLocalStore
-      ? this.localStore.listDesignJobs()
+      ? this.localStore.listDesignJobs(filter)
       : await this.prisma.designJob.findMany({
-          where: { status: "draft" },
+          where: { status: "draft", ...cleanIdentityWhere(filter) },
           include: { assets: true, customer: true, conversation: true },
           orderBy: { updatedAt: "desc" },
           take: 300,
@@ -182,12 +190,12 @@ export class DesignJobsService {
     };
   }
 
-  async runLowValueAutomation() {
-    const autoSubmit = await this.scanAutoSubmitDrafts();
+  async runLowValueAutomation(filter: IdentityFilter = {}) {
+    const autoSubmit = await this.scanAutoSubmitDrafts(filter);
     const jobs = appConfig.useLocalStore
-      ? this.localStore.listDesignJobs()
+      ? this.localStore.listDesignJobs(filter)
       : await this.prisma.designJob.findMany({
-          where: { status: "quick_confirm", isHighValue: false },
+          where: { status: "quick_confirm", isHighValue: false, ...cleanIdentityWhere(filter) },
           include: { images: true, customer: true, conversation: true },
           orderBy: { updatedAt: "desc" },
           take: 300,
@@ -200,7 +208,7 @@ export class DesignJobsService {
     };
 
     for (const job of jobs as any[]) {
-      const decision = evaluateLowValueDesignImageSend(job);
+      const decision = evaluateLowValueDesignImageSend(job, { highValueAmountCny: appConfig.highValueAmountCny });
       if (!decision.ok) {
         imageSend.skipped.push({
           designJobId: job.id,
@@ -227,10 +235,10 @@ export class DesignJobsService {
       }
     }
 
-    const quoteSend = await this.quotes.scanLowValueAutoQuoteSends();
-    const orderDraft = await this.orders.scanLowValueAutoOrderDrafts();
-    const orderConfirmation = await this.wechatDispatch.scanLowValueOrderConfirmations();
-    const orderFollowup = await this.wechatDispatch.scanLowValueOrderFollowups();
+    const quoteSend = await this.quotes.scanLowValueAutoQuoteSends(filter);
+    const orderDraft = await this.orders.scanLowValueAutoOrderDrafts(filter);
+    const orderConfirmation = await this.wechatDispatch.scanLowValueOrderConfirmations(filter);
+    const orderFollowup = await this.wechatDispatch.scanLowValueOrderFollowups(filter);
 
     return {
       autoSubmit,
@@ -242,17 +250,18 @@ export class DesignJobsService {
     };
   }
 
-  async pollActiveResults(limit = appConfig.lowValueAutomationPollLimit) {
+  async pollActiveResults(limit = appConfig.lowValueAutomationPollLimit, filter: IdentityFilter = {}) {
     const max = Math.max(1, Math.min(Number(limit || 50), 200));
     const jobs = appConfig.useLocalStore
       ? this.localStore
-          .listDesignJobs()
+          .listDesignJobs(filter)
           .filter((job: any) => ["submitted", "generating"].includes(job.status) && job.externalJobId)
           .slice(0, max)
       : await this.prisma.designJob.findMany({
           where: {
             status: { in: ["submitted", "generating"] },
             externalJobId: { not: null },
+            ...cleanIdentityWhere(filter),
           },
           include: { images: true },
           orderBy: { updatedAt: "asc" },
@@ -262,6 +271,7 @@ export class DesignJobsService {
       scanned: jobs.length,
       completed: [] as any[],
       failed: [] as any[],
+      retried: [] as any[],
       generating: [] as any[],
       cancelled: [] as any[],
       errors: [] as any[],
@@ -271,7 +281,8 @@ export class DesignJobsService {
       try {
         const polled = await this.pollResult(job.id);
         const remoteStatus = polled.remoteStatus || "generating";
-        if (remoteStatus === "completed") result.completed.push(polled.job);
+        if (polled.autoRetried || this.wasAutoRetried(job, polled.job)) result.retried.push(polled.job);
+        else if (remoteStatus === "completed") result.completed.push(polled.job);
         else if (remoteStatus === "failed") result.failed.push(polled.job);
         else if (remoteStatus === "cancelled") result.cancelled.push(polled.job);
         else result.generating.push(polled.job);
@@ -288,12 +299,12 @@ export class DesignJobsService {
     return result;
   }
 
-  async scanTimeouts() {
+  async scanTimeouts(filter: IdentityFilter = {}) {
     const now = new Date();
     const jobs = appConfig.useLocalStore
-      ? this.localStore.listDesignJobs()
+      ? this.localStore.listDesignJobs(filter)
       : await this.prisma.designJob.findMany({
-          where: { status: { in: ["submitted", "generating"] } },
+          where: { status: { in: ["submitted", "generating"] }, ...cleanIdentityWhere(filter) },
           include: { customer: true, conversation: true },
           take: 300,
         });
@@ -341,13 +352,14 @@ export class DesignJobsService {
     };
   }
 
-  createTimeoutDemo(payload: { conversationId?: string } = {}) {
+  createTimeoutDemo(payload: { conversationId?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("timeout demo is only available in local-json mode");
     if (!payload.conversationId) {
       throw new BadRequestException("conversationId is required for timeout demo");
     }
     const conversation = this.localStore.listConversations().find((item) => item.id === payload.conversationId);
     if (!conversation) throw new BadRequestException("conversation not found for timeout demo");
+    this.assertDemoConversationIdentity(conversation, payload, "timeout demo");
     const oldSubmittedAt = new Date(Date.now() - (appConfig.designTimeoutMinutes + 1) * 60 * 1000).toISOString();
     const job = this.localStore.createDesignJob({
       customerId: conversation.customerId,
@@ -380,13 +392,14 @@ export class DesignJobsService {
     });
   }
 
-  createFailureDemo(payload: { conversationId?: string } = {}) {
+  createFailureDemo(payload: { conversationId?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("failure demo is only available in local-json mode");
     if (!payload.conversationId) {
       throw new BadRequestException("conversationId is required for failure demo");
     }
     const conversation = this.localStore.listConversations().find((item) => item.id === payload.conversationId);
     if (!conversation) throw new BadRequestException("conversation not found for failure demo");
+    this.assertDemoConversationIdentity(conversation, payload, "failure demo");
     const job = this.localStore.createDesignJob({
       customerId: conversation.customerId,
       conversationId: conversation.id,
@@ -415,6 +428,18 @@ export class DesignJobsService {
       status: "failed",
       errorMessage: "演示：设计平台返回失败，等待人工重试。",
     });
+  }
+
+  private assertDemoConversationIdentity(conversation: any, expected: ExpectedIdentityPayload = {}, label = "design demo") {
+    const missing = [
+      !expected.expectedWechatAccountId ? "expectedWechatAccountId" : "",
+      !expected.expectedConversationId ? "expectedConversationId" : "",
+      !expected.expectedCustomerId ? "expectedCustomerId" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      throw new BadRequestException(`${label} requires conversation identity: ${missing.join(", ")}`);
+    }
+    assertExpectedIdentity({ ...conversation, conversationId: conversation.id }, expected, label);
   }
 
   async create(payload: CreateDesignJobPayload) {
@@ -528,10 +553,21 @@ export class DesignJobsService {
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
 
-    await this.assertDesignPlatformPreflight(id);
+    let remote: any;
+    try {
+      await this.assertDesignPlatformPreflight(id);
+      const payload = await this.buildDesignPlatformPayload(job);
+      remote = await this.designPlatform.createDesignJob(payload);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "unknown design submit error";
+      await this.failDesignJobForManualReview(job, {
+        reason: "design_platform_submit_failed",
+        source: "submit_design_job",
+        errorMessage,
+      });
+      throw error;
+    }
 
-    const payload = await this.buildDesignPlatformPayload(job);
-    const remote = await this.designPlatform.createDesignJob(payload);
     const externalJobId = remote.externalJobId || remote.jobId || remote.id;
     const waitMessage = buildWaitingMessage({
       scene: job.scene || "",
@@ -712,7 +748,7 @@ export class DesignJobsService {
       designJobId: job.id,
       requestId: job.requestId,
       status: job.status,
-      isHighValue: Boolean(job.isHighValue),
+      isHighValue: this.isHighValueDesignJob(job),
       usableReferenceCount: usableRefs.length,
       unusableReferenceCount: unusableRefs.length,
       checks,
@@ -747,7 +783,7 @@ export class DesignJobsService {
         status: "completed",
         images: result.images || [],
       });
-      return { remoteStatus: result.status, job: updated, result };
+      return { remoteStatus: result.status, autoRetried: this.wasAutoRetried(job, updated), job: updated, result };
     }
     if (result.status === "failed") {
       const updated = await this.handleDesignPlatformCallback({
@@ -756,7 +792,7 @@ export class DesignJobsService {
         status: "failed",
         errorMessage: result.errorMessage || "设计平台轮询返回失败",
       });
-      return { remoteStatus: result.status, job: updated, result };
+      return { remoteStatus: result.status, autoRetried: this.wasAutoRetried(job, updated), job: updated, result };
     }
     if (result.status === "cancelled") {
       const updated = appConfig.useLocalStore
@@ -806,9 +842,20 @@ export class DesignJobsService {
     });
   }
 
-  async listRevisions(id: string) {
-    if (appConfig.useLocalStore) return this.localStore.listDesignRevisions(id);
+  async listRevisions(id: string, expected: ExpectedIdentityPayload = {}) {
+    if (appConfig.useLocalStore) {
+      const job = this.localStore.getDesignJob(id);
+      if (!job) throw new Error(`design job not found: ${id}`);
+      assertExpectedIdentity(job, expected, "design job");
+      return this.localStore.listDesignRevisions(id);
+    }
     const prisma = this.prisma as any;
+    const job = await prisma.designJob.findUnique({
+      where: { id },
+      select: { id: true, customerId: true, conversationId: true, wechatAccountId: true },
+    });
+    if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
     return prisma.designRevision.findMany({
       where: { designJobId: id },
       orderBy: { revisionNumber: "asc" },
@@ -940,8 +987,24 @@ export class DesignJobsService {
 
     await this.assertDesignPlatformPreflight(job.id);
 
-    const payloadForPlatform = await this.buildDesignPlatformPayload(job, revision);
-    const remote = await this.designPlatform.createDesignJob(payloadForPlatform);
+    let remote: any;
+    try {
+      const payloadForPlatform = await this.buildDesignPlatformPayload(job, revision);
+      remote = await this.designPlatform.createDesignJob(payloadForPlatform);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "unknown design revision submit error";
+      revision = await this.updateRevision(revision.id, { status: "failed" });
+      await this.notifications.create("error", "改图提交设计平台失败", errorMessage, {
+        designJobId: job.id,
+        revisionId: revision.id,
+      });
+      const updated = await this.failDesignJobForManualReview(job, {
+        reason: "design_revision_submit_failed",
+        source: "design_revision",
+        errorMessage,
+      });
+      return { decision, revision, job: updated, errorMessage };
+    }
     const externalJobId = remote.externalJobId || remote.jobId || remote.id;
     revision = await this.updateRevision(revision.id, {
       externalJobId,
@@ -1044,7 +1107,7 @@ export class DesignJobsService {
       });
     }
 
-    const images = payload.images || [];
+    const images = this.normalizeCallbackImages(payload.images || []);
     if (!images.length) {
       const errorMessage = "design platform completed without images";
       await this.finishLatestRevision(job.id, "failed", [], errorMessage);
@@ -1058,6 +1121,55 @@ export class DesignJobsService {
       }
       return this.failDesignJobForManualReview(job, {
         reason: "design_platform_completed_without_images",
+        source: "design_platform_callback",
+        errorMessage,
+      });
+    }
+    const imageMetadataCheck = this.validateCallbackImages(job, images);
+    if (!imageMetadataCheck.ok) {
+      const errorMessage = `design platform returned invalid image metadata: ${imageMetadataCheck.reasons.join("; ")}`;
+      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = Number(job.retryCount || 0);
+      await this.notifications.create(
+        retryCount < 1 && this.isInitialDesignResult(job) ? "warning" : "error",
+        "设计平台图片数据无效",
+        imageMetadataCheck.reasons.join("；"),
+        {
+          designJobId: job.id,
+          externalJobId: payload.externalJobId || job.externalJobId,
+          invalidImageReasons: imageMetadataCheck.reasons,
+        },
+      );
+      if (this.isInitialDesignResult(job) && retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      }
+      return this.failDesignJobForManualReview(job, {
+        reason: "design_platform_invalid_image_metadata",
+        source: "design_platform_callback",
+        errorMessage,
+      });
+    }
+    const minimumInitialImageCount = this.minimumRequiredInitialImageCount(job);
+    if (this.isInitialDesignResult(job) && images.length < minimumInitialImageCount) {
+      const errorMessage = `design platform returned only ${images.length} candidate images; expected at least ${minimumInitialImageCount}`;
+      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = Number(job.retryCount || 0);
+      await this.notifications.create(
+        retryCount < 1 ? "warning" : "error",
+        "设计平台候选图不足",
+        `只返回 ${images.length} 张候选图，至少需要 ${minimumInitialImageCount} 张。`,
+        {
+          designJobId: job.id,
+          externalJobId: payload.externalJobId || job.externalJobId,
+          returnedImageCount: images.length,
+          requiredImageCount: minimumInitialImageCount,
+        },
+      );
+      if (retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      }
+      return this.failDesignJobForManualReview(job, {
+        reason: "design_platform_insufficient_images",
         source: "design_platform_callback",
         errorMessage,
       });
@@ -1077,43 +1189,42 @@ export class DesignJobsService {
       const fingerprint = this.buildImageFingerprint(job, image, imageId, position);
       let localPath: string | undefined;
       try {
-        localPath = await this.storage.saveDesignImage(job.id, image.imageId, image.downloadUrl);
+        localPath = await this.storage.saveDesignImage(job.id, imageId, image.downloadUrl);
       } catch (error) {
         localPath = undefined;
       }
       savedImages.push({ image, imageId, position, fingerprint, localPath });
-      if (appConfig.useLocalStore) {
-        continue;
-      }
-      await this.prisma.designImageCandidate.upsert({
-        where: {
-          designJobId_imageId: {
-            designJobId: job.id,
-            imageId,
-          },
-        },
-        update: {
-          downloadUrl: image.downloadUrl,
-          localPath,
-          width: image.width,
-          height: image.height,
-          fingerprint,
-          position,
-        } as any,
-        create: {
-          designJobId: job.id,
-          imageId,
-          downloadUrl: image.downloadUrl,
-          localPath,
-          width: image.width,
-          height: image.height,
-          fingerprint,
-          position,
-        } as any,
-      });
     }
 
     const downloadFailureCount = savedImages.filter((item) => !item.localPath).length;
+    const localSavedCount = savedImages.length - downloadFailureCount;
+    const requiredLocalImageCount = this.minimumRequiredLocalImageCount(job);
+    if (localSavedCount < requiredLocalImageCount) {
+      const errorMessage = `design platform saved only ${localSavedCount} local image files; expected at least ${requiredLocalImageCount}`;
+      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = Number(job.retryCount || 0);
+      await this.notifications.create(
+        retryCount < 1 && this.isInitialDesignResult(job) ? "warning" : "error",
+        "设计图本地保存不足",
+        `只有 ${localSavedCount} 张候选图保存到本地，至少需要 ${requiredLocalImageCount} 张才能安全发给客户。`,
+        {
+          designJobId: job.id,
+          externalJobId: payload.externalJobId || job.externalJobId,
+          localSavedCount,
+          requiredLocalImageCount,
+          downloadFailureCount,
+        },
+      );
+      if (this.isInitialDesignResult(job) && retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      }
+      return this.failDesignJobForManualReview(job, {
+        reason: "design_platform_local_image_save_failed",
+        source: "design_platform_callback",
+        errorMessage,
+      });
+    }
+
     if (downloadFailureCount) {
       await this.notifications.create(
         "warning",
@@ -1139,6 +1250,35 @@ export class DesignJobsService {
           position,
         })),
       );
+    } else {
+      for (const { image, imageId, position, fingerprint, localPath } of savedImages) {
+        await this.prisma.designImageCandidate.upsert({
+          where: {
+            designJobId_imageId: {
+              designJobId: job.id,
+              imageId,
+            },
+          },
+          update: {
+            downloadUrl: image.downloadUrl,
+            localPath,
+            width: image.width,
+            height: image.height,
+            fingerprint,
+            position,
+          } as any,
+          create: {
+            designJobId: job.id,
+            imageId,
+            downloadUrl: image.downloadUrl,
+            localPath,
+            width: image.width,
+            height: image.height,
+            fingerprint,
+            position,
+          } as any,
+        });
+      }
     }
 
     await this.finishLatestRevision(
@@ -1172,6 +1312,58 @@ export class DesignJobsService {
       },
       include: { images: true },
     });
+  }
+
+  private isInitialDesignResult(job: any) {
+    return Number(job.revisionCount || 0) <= 0;
+  }
+
+  private minimumRequiredInitialImageCount(job: any) {
+    const requestedCount = Number(job.outputCount || appConfig.defaultOutputCount || 6);
+    if (!Number.isFinite(requestedCount) || requestedCount <= 0) return 4;
+    return Math.min(Math.max(Math.trunc(requestedCount), 1), 4);
+  }
+
+  private minimumRequiredLocalImageCount(job: any) {
+    return this.isInitialDesignResult(job) ? this.minimumRequiredInitialImageCount(job) : 1;
+  }
+
+  private normalizeCallbackImages(images: any[]) {
+    return images.map((image) => {
+      const record = isPlainObject(image) ? image : {};
+      return {
+        ...record,
+        imageId: typeof record.imageId === "string" ? record.imageId.trim() : "",
+        downloadUrl: typeof record.downloadUrl === "string" ? record.downloadUrl.trim() : "",
+      };
+    });
+  }
+
+  private validateCallbackImages(job: any, images: any[]) {
+    const reasons: string[] = [];
+    const seenImageIds = new Set<string>();
+    const seenDownloadUrls = new Set<string>();
+    images.forEach((image, index) => {
+      if (!image.imageId) {
+        reasons.push(`image[${index}].imageId is required`);
+        return;
+      }
+      const versionedImageId = this.versionedImageId(job, image.imageId);
+      if (seenImageIds.has(versionedImageId)) {
+        reasons.push(`duplicate imageId: ${versionedImageId}`);
+      }
+      seenImageIds.add(versionedImageId);
+
+      if (!image.downloadUrl) {
+        reasons.push(`image[${index}].downloadUrl is required`);
+        return;
+      }
+      if (seenDownloadUrls.has(image.downloadUrl)) {
+        reasons.push(`duplicate downloadUrl: ${image.downloadUrl}`);
+      }
+      seenDownloadUrls.add(image.downloadUrl);
+    });
+    return { ok: reasons.length === 0, reasons };
   }
 
   async quickConfirmAndQueueSend(
@@ -1327,7 +1519,7 @@ export class DesignJobsService {
   }
 
   private async afterImageSelected(job: any, selectedImageId: string) {
-    if (job.isHighValue) {
+    if (this.isHighValueDesignJob(job)) {
       const updated = await this.handoffDesignJobToManual(job, {
         reason: "high_value_customer_selected_image",
         source: "customer_image_selection",
@@ -1625,7 +1817,16 @@ export class DesignJobsService {
   }
 
   private async buildDesignPlatformPayload(job: any, revision?: DesignRevisionLike | null): Promise<DesignPlatformJobPayload> {
-    const assets = await this.uploadAssetsForDesignPlatform(job.assets || []);
+    const requestedAssets = [
+      ...(job.assets || []),
+      ...this.bundleImageAssetsForDesignPlatform(job.bundle || {}, job.assets || []),
+    ];
+    const assets = await this.uploadAssetsForDesignPlatform(requestedAssets);
+    const failedAssets = assets.filter((asset: any) => asset.uploadError);
+    if (failedAssets.length) {
+      const failedNames = failedAssets.map((asset: any) => asset.fileName || asset.assetId || "asset").join(", ");
+      throw new BadRequestException(`design asset upload failed: ${failedNames}`);
+    }
     return {
       requestId: job.requestId,
       wechatAccountId: job.wechatAccountId,
@@ -1725,14 +1926,21 @@ export class DesignJobsService {
           ownerType: asset.ownerType,
           ownerId: asset.ownerId,
           source: asset.source,
+          sourceRef: asset.sourceRef,
+          skuCode: asset.skuCode,
+          name: asset.name,
         });
         uploaded.push({
           assetId: asset.id,
-          remoteAssetId: remote.assetId || remote.remoteAssetId || remote.id,
+          remoteAssetId: remote.assetId || remote.remoteAssetId || remote.id || remote.url,
+          url: remote.url,
           fileName: asset.fileName,
           mimeType: asset.mimeType,
           role: asset.role || "reference",
           source: asset.source,
+          sourceRef: asset.sourceRef,
+          skuCode: asset.skuCode,
+          name: asset.name,
         });
       } catch (error) {
         uploaded.push({
@@ -1741,11 +1949,50 @@ export class DesignJobsService {
           mimeType: asset.mimeType,
           role: asset.role || "reference",
           source: asset.source,
+          sourceRef: asset.sourceRef,
+          skuCode: asset.skuCode,
+          name: asset.name,
           uploadError: error instanceof Error ? error.message : "unknown asset upload error",
         });
       }
     }
     return uploaded;
+  }
+
+  private bundleImageAssetsForDesignPlatform(bundle: Record<string, unknown>, existingAssets: any[] = []) {
+    if (appConfig.designPlatformAdapter === "art_image_local") return [];
+
+    const existingLocalRefs = new Set(
+      existingAssets.map((asset) => this.normalizedLocalRef(asset?.localPath)).filter(Boolean),
+    );
+
+    return inspectBundleReferences(bundle)
+      .filter((ref: any) => ref.ok && typeof ref.ref === "string" && path.isAbsolute(ref.ref))
+      .filter((ref: any) => {
+        const normalized = this.normalizedLocalRef(ref.ref);
+        if (!normalized || existingLocalRefs.has(normalized)) return false;
+        existingLocalRefs.add(normalized);
+        return true;
+      })
+      .map((ref: any) => ({
+        id: `bundle_${createHash("sha1")
+          .update([ref.skuCode || "", ref.name || "", ref.ref || ""].join("|"))
+          .digest("hex")
+          .slice(0, 16)}`,
+        fileName: path.basename(ref.ref),
+        mimeType: mimeTypeFromImagePath(ref.ref),
+        localPath: ref.ref,
+        role: ref.role || "sku_image",
+        source: "bundle",
+        sourceRef: ref.source,
+        skuCode: ref.skuCode || undefined,
+        name: ref.name || undefined,
+      }));
+  }
+
+  private normalizedLocalRef(value: unknown) {
+    if (typeof value !== "string" || !value.trim() || !path.isAbsolute(value)) return "";
+    return path.resolve(value).toLowerCase();
   }
 
   private async validateCreateIdentity(payload: CreateDesignJobPayload) {
@@ -1864,6 +2111,15 @@ export class DesignJobsService {
     const sceneName = job.scene ? `这组${job.scene}效果图` : "这组效果图";
     return `${sceneName}我这边还在帮您盯着生成进度，时间比平时稍久一点。为了不耽误您确认方案，我先同步跟进一下，出图后马上发您挑选。`;
   }
+  private isHighValueDesignJob(job: any) {
+    return Boolean(job?.isHighValue) || isHighValueBudget(job?.budget, Number(appConfig.highValueAmountCny || 10000));
+  }
+
+  private wasAutoRetried(before: any, after: any) {
+    const beforeRetryCount = Number(before?.retryCount || 0);
+    const afterRetryCount = Number(after?.retryCount || 0);
+    return afterRetryCount > beforeRetryCount && ["submitted", "generating"].includes(String(after?.status || ""));
+  }
 }
 
 function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
@@ -1874,6 +2130,15 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mimeTypeFromImagePath(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".bmp") return "image/bmp";
+  return "image/png";
 }
 
 function cleanIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {

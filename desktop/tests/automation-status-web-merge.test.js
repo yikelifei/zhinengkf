@@ -115,17 +115,37 @@ test("web automation history renders identity audit from latest run", () => {
   assert.match(webCss, /\.automation-identity-grid/);
 });
 
+test("web automation history renders skipped reason summary from latest run", () => {
+  assert.match(webApi, /skipSummary\?: \{/);
+  assert.match(webApi, /sampleTargets: string\[\]/);
+  assert.match(webPage, /const lowValueAutomationSkipSummary = useMemo/);
+  assert.match(webPage, /buildAutomationSkipSummaryPanel\(automationStatus\?\.lastRun\)/);
+  assert.match(webPage, /aria-label="上一轮自动化跳过原因汇总"/);
+  assert.match(webPage, /className="automation-skip-summary"/);
+  assert.match(webPage, /lowValueAutomationSkipSummary\.reasons\.map/);
+  assert.match(webPage, /function buildAutomationSkipSummaryPanel/);
+  assert.match(webPage, /LOW_VALUE_NORMAL_SKIP_REASONS\.has\(item\.reason\) \? "ok" : lowValueIssueTone\(item\.reason\)/);
+  assert.match(webCss, /\.automation-skip-summary/);
+  assert.match(webCss, /\.automation-skip-grid/);
+});
+
 test("web low value automation run is blocked by readiness blockers", () => {
   const runSection = webPage.slice(
     webPage.indexOf("async function runLowValueAutomation"),
     webPage.indexOf("async function runAutomationCycle"),
   );
   const blockerIndex = runSection.indexOf("const firstBlocker = latestReadiness?.blockers[0]");
-  const processIndex = runSection.indexOf("const result = await autoProcessLowValue()");
+  const processIndex = runSection.indexOf("const result = await runAutomationOnce(activeIdentityFilters())");
 
   assert.ok(blockerIndex > 0);
   assert.ok(processIndex > blockerIndex);
   assert.match(runSection, /await getAutomationReadiness\(\)/);
   assert.match(runSection, /handleAutomationReadinessCheck\(firstBlocker\)/);
   assert.match(runSection, /return;\s*}\s*let summary/);
+  assert.doesNotMatch(runSection, /autoProcessLowValue\(\)/);
+  assert.match(webApi, /runAutomationOnce\(filters: IdentityFilters = \{\}\)/);
+  assert.match(webApi, /\/automation\/run-once", filters/);
+  assert.match(runSection, /runAutomationOnce\(activeIdentityFilters\(\)\)/);
+  assert.match(runSection, /processLowValueSendQueue/);
+  assert.match(runSection, /mergeAutomationStatusRun\(current, result, \{ incrementRunCount: !result\.skipped \}\)/);
 });

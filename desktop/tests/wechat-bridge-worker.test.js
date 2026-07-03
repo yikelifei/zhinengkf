@@ -8,7 +8,9 @@ const test = require("node:test");
 
 const {
   assertScanAcceptedAck,
+  buildAckFileName,
   buildAckPayload,
+  buildDispatchPayload,
   buildWorkerStatus,
   loadAndValidateOutboxPayload,
   normalizeAckTransport,
@@ -17,6 +19,7 @@ const {
   safeFileSegment,
   validateOutboxEntry,
   validateOutboxPayload,
+  writeDispatchFile,
   writeWorkerStatus,
 } = require("../tools/wechat-bridge-worker");
 
@@ -75,6 +78,7 @@ function validOutboxPayload(overrides = {}) {
 }
 
 test("normalizes bridge worker mode to safe noop by default", () => {
+  assert.equal(normalizeMode("dispatch"), "dispatch");
   assert.equal(normalizeMode("simulate_sent"), "simulate_sent");
   assert.equal(normalizeMode("simulate_failed"), "simulate_failed");
   assert.equal(normalizeMode("unexpected"), "noop");
@@ -126,6 +130,69 @@ test("builds bridge failed ack payload without pretending sent", () => {
   assert.equal(ack.status, "failed");
   assert.equal(Boolean(ack.sentAt), false);
   assert.match(ack.errorMessage, /模拟失败/);
+});
+
+test("builds external dispatch payload without leaking ack token", () => {
+  const outbox = {
+    filePath: "C:\\runtime\\wechat-outbox\\outbox.json",
+    payload: validOutboxPayload({ ackToken: "c".repeat(64) }),
+  };
+  const dispatch = buildDispatchPayload(validOutboxEntry(), outbox, {
+    inboxDir: "C:\\runtime\\wechat-inbox",
+    apiBase: "http://127.0.0.1:3200/api",
+    dispatchTtlMs: 120000,
+  });
+  const createdAt = Date.parse(dispatch.createdAt);
+  const expiresAt = Date.parse(dispatch.expiresAt);
+
+  assert.equal(dispatch.version, "wechat_bridge_dispatch_v1");
+  assert.equal(dispatch.ack.version, "wechat_bridge_ack_v1");
+  assert.equal(dispatch.ack.requiredOutboxFileName, "outbox.json");
+  assert.equal(dispatch.ack.inboxDirHint, "C:\\runtime\\wechat-inbox");
+  assert.match(dispatch.ack.fileNameHint, /wechat_1-send_1-attempt_1-sent\.ack\.json$/);
+  assert.match(dispatch.ack.failedFileNameHint, /wechat_1-send_1-attempt_1-failed\.ack\.json$/);
+  assert.equal(dispatch.ack.scanEndpointHint, "http://127.0.0.1:3200/api/wechat/bridge/inbox/scan");
+  assert.equal(dispatch.sourceOutboxFilePath, outbox.filePath);
+  assert.equal(dispatch.sendPlan.actionCount, 1);
+  assert.equal(dispatch.expiresInMs, 120000);
+  assert.ok(Number.isFinite(createdAt));
+  assert.ok(Number.isFinite(expiresAt));
+  assert.ok(expiresAt > createdAt);
+  assert.equal(dispatch.sendPlan.constraints.doNotSendAfter, dispatch.expiresAt);
+  assert.doesNotMatch(JSON.stringify(dispatch), /cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/);
+  assert.doesNotMatch(JSON.stringify(dispatch), /ackToken/);
+});
+
+test("builds bridge ack file names with account task and attempt identity", () => {
+  const name = buildAckFileName(
+    {
+      taskId: "send:1",
+      attemptId: "attempt/1",
+      wechatAccountId: "wechat demo",
+    },
+    "sent",
+  );
+
+  assert.match(name, /^\d+-wechat_demo-send_1-attempt_1-sent\.ack\.json$/);
+});
+
+test("writes idempotent external dispatch instruction files", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-dispatch-"));
+  const outbox = {
+    filePath: path.join(dir, "source-outbox.json"),
+    payload: validOutboxPayload(),
+  };
+
+  const first = writeDispatchFile(dir, validOutboxEntry(), outbox, { inboxDir: path.join(dir, "inbox") });
+  const second = writeDispatchFile(dir, validOutboxEntry(), outbox, { inboxDir: path.join(dir, "inbox") });
+  const payload = JSON.parse(fs.readFileSync(first, "utf8"));
+
+  assert.equal(first, second);
+  assert.equal(path.basename(first), "wechat_1-send_1-attempt_1.dispatch.json");
+  assert.equal(payload.version, "wechat_bridge_dispatch_v1");
+  assert.equal(payload.taskId, "send_1");
+  assert.equal(payload.ack.requiredAttemptId, "attempt_1");
+  assert.equal(payload.sendPlan.constraints.doNotSendAfter, payload.expiresAt);
 });
 
 test("validates bridge outbox identity before building a sent ack", () => {
@@ -349,6 +416,17 @@ test("worker keeps a local outbox directory fallback instead of requiring public
   assert.match(worker, /const defaultOutboxDir = path\.join\(runtimeDir, "wechat-outbox"\)/);
   assert.match(worker, /outboxDir:\s*path\.resolve\(valueArg\("--outbox-dir"\)/);
   assert.match(worker, /outbox\.outboxDir \|\| config\.outboxDir/);
+});
+
+test("worker exposes dispatch mode without marking anything sent", () => {
+  const worker = fs.readFileSync(path.join(__dirname, "..", "tools", "wechat-bridge-worker.js"), "utf8");
+
+  assert.match(worker, /BRIDGE_MODE=noop\|dispatch\|simulate_sent\|simulate_failed/);
+  assert.match(worker, /WECHAT_BRIDGE_DISPATCH_DIR/);
+  assert.match(worker, /BRIDGE_DISPATCH_TTL_MS/);
+  assert.match(worker, /--dispatch-ttl-ms/);
+  assert.match(worker, /status: "dispatch_pending"/);
+  assert.match(worker, /does not mark anything sent without a real ack/);
 });
 
 test("accepts bridge inbox scan only when current ack is processed", () => {

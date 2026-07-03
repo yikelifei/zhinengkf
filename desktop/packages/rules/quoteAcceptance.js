@@ -1,5 +1,7 @@
 "use strict";
 
+const { isHighValueBudget } = require("./budget");
+
 function planInboundQuoteAcceptance(input = {}, options = {}) {
   const text = normalizeText(input.text || "");
   const quote = input.quote || null;
@@ -58,6 +60,7 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
   if (!designJob?.id) return skip("missing_design_job", { hasIntent: true });
   if (
     designJob.isHighValue ||
+    isHighValueBudget(designJob.budget, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
   ) {
@@ -100,7 +103,7 @@ function detectQuoteAcceptanceIntent(text) {
   }
 
   const hasPayment = hasCompletedPayment(text);
-  const hasDeposit = /(定金|订金|预付款|先付一部分)/.test(text);
+  const hasDeposit = /(定金|订金|预付款|先付一部分|瀹氶噾|璁㈤噾|棰勪粯娆)/.test(text);
   const hasPaymentQuestion = hasPaymentQuestionOrPreparation(text);
   const hasAccept =
     /(确认|可以|没问题|就按这个|就这个|按这个|下单|定了|安排|开始做|走这个|做吧|ok|OK|好的|行)/.test(text);
@@ -114,7 +117,7 @@ function detectQuoteAcceptanceIntent(text) {
 
 function hasCompletedPayment(text) {
   return (
-    /(已付款|已经付款|付款了|付过了|已支付|已经支付|支付了|支付成功|付款成功|已转账|已经转账|转账了|已打款|已经打款|打款了|钱转了|款已转|款付了|付好了)/i.test(text) ||
+    /(已付款|已经付款|付款了|付过了|已支付|已经支付|支付了|支付成功|付款成功|已转账|已经转账|转账了|已打款|已经打款|打款了|钱转了|款已转|款付了|付好了|宸茬粡杞处|杞处浜嗘|杞处|鎵撴)/i.test(text) ||
     /(付了|已付|已经付).*(定金|订金|预付款)/.test(text) ||
     /(定金|订金|预付款).*(付了|已付|已经付|转账了|已转账|已经转账|打款了|已打款|已经打款)/.test(text)
   );
@@ -129,6 +132,7 @@ function isHighValueQuoteOrOrder({ quote = {}, orderDraft = {}, designJob = {}, 
   const unitPrice = Number(orderDraft.unitPrice ?? quote.unitPrice ?? 0);
   return (
     designJob.isHighValue === true ||
+    isHighValueBudget(designJob.budget, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
   );

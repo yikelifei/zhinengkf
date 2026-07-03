@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
@@ -16,6 +16,7 @@ export class AssetsService {
   ) {}
 
   list(filter: { ownerType?: string; ownerId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    this.assertCustomerAssetListIdentity(filter);
     if (appConfig.useLocalStore) return this.localStore.listDesignAssets(filter);
     return this.prisma.designAsset.findMany({
       where: {
@@ -71,7 +72,8 @@ export class AssetsService {
     });
   }
 
-  readLocalAsset(localPath: string) {
+  async readLocalAsset(localPath: string, expected: ExpectedIdentityPayload = {}) {
+    await this.assertLocalAssetReadIdentity(localPath, expected);
     return this.storage.readLocalAsset(localPath);
   }
 
@@ -86,8 +88,15 @@ export class AssetsService {
 
   private assertCustomerAssetIdentity(payload: UploadAssetPayload & ExpectedIdentityPayload) {
     if (payload.ownerType !== "customer") return;
+    const missing = [
+      !payload.expectedWechatAccountId ? "expectedWechatAccountId" : "",
+      !payload.expectedConversationId ? "expectedConversationId" : "",
+      !payload.expectedCustomerId ? "expectedCustomerId" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      throw new BadRequestException(`customer asset requires conversation identity: ${missing.join(", ")}`);
+    }
     assertExpectedIdentity({ customerId: payload.ownerId }, { expectedCustomerId: payload.expectedCustomerId }, "customer asset");
-    if (!payload.expectedConversationId && !payload.expectedWechatAccountId) return;
     if (!appConfig.useLocalStore) return;
     const conversations = this.localStore.listConversations(payload.expectedWechatAccountId);
     const conversation =
@@ -103,6 +112,89 @@ export class AssetsService {
       { expectedCustomerId: payload.expectedCustomerId },
       "customer asset conversation customer",
     );
+  }
+
+  private assertCustomerAssetListIdentity(filter: {
+    ownerType?: string;
+    ownerId?: string;
+    wechatAccountId?: string;
+    conversationId?: string;
+    customerId?: string;
+  }) {
+    if (filter.ownerType !== "customer") return;
+    const expected = {
+      expectedWechatAccountId: filter.wechatAccountId,
+      expectedConversationId: filter.conversationId,
+      expectedCustomerId: filter.customerId,
+    };
+    const missing = [
+      !filter.wechatAccountId ? "wechatAccountId" : "",
+      !filter.conversationId ? "conversationId" : "",
+      !filter.customerId ? "customerId" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      throw new BadRequestException(`customer asset list requires conversation identity: ${missing.join(", ")}`);
+    }
+    if (filter.ownerId) {
+      assertExpectedIdentity(
+        { customerId: filter.ownerId },
+        { expectedCustomerId: filter.customerId },
+        "customer asset list owner",
+      );
+    }
+    if (!appConfig.useLocalStore) return;
+    const conversation =
+      this.localStore.listConversations(filter.wechatAccountId).find((item: any) => item.id === filter.conversationId) ||
+      this.localStore.listConversations().find((item: any) => item.id === filter.conversationId);
+    assertExpectedIdentity(
+      conversation ? { ...conversation, conversationId: conversation.id } : conversation,
+      expected,
+      "customer asset list conversation",
+    );
+    assertExpectedIdentity(
+      { customerId: conversation?.customerId },
+      { expectedCustomerId: filter.customerId },
+      "customer asset list conversation customer",
+    );
+  }
+
+  private async assertLocalAssetReadIdentity(localPath: string, expected: ExpectedIdentityPayload = {}) {
+    const asset = await this.findDesignAssetByLocalPath(localPath);
+    if (!asset) return;
+    const scopedToCustomer =
+      asset.ownerType === "customer" || Boolean(asset.wechatAccountId || asset.conversationId || asset.customerId);
+    if (!scopedToCustomer) return;
+    const missing = [
+      !expected.expectedWechatAccountId ? "expectedWechatAccountId" : "",
+      !expected.expectedConversationId ? "expectedConversationId" : "",
+      !expected.expectedCustomerId ? "expectedCustomerId" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      throw new BadRequestException(`local customer asset requires conversation identity: ${missing.join(", ")}`);
+    }
+    assertExpectedIdentity(asset, expected, "local asset");
+  }
+
+  private async findDesignAssetByLocalPath(localPath: string) {
+    const normalized = this.normalizeLocalAssetPath(localPath);
+    if (!normalized) return null;
+    if (appConfig.useLocalStore) {
+      return (
+        this.localStore
+          .listDesignAssets()
+          .find((asset: any) => this.normalizeLocalAssetPath(asset.localPath) === normalized) || null
+      );
+    }
+    const direct = await this.prisma.designAsset.findFirst({ where: { localPath } });
+    if (direct) return direct;
+    return null;
+  }
+
+  private normalizeLocalAssetPath(value?: string | null) {
+    return String(value || "")
+      .trim()
+      .replace(/[\\/]+/g, "/")
+      .toLowerCase();
   }
 
   private savePayload(payload: UploadAssetPayload) {

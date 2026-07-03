@@ -22,37 +22,37 @@ export class DesignJobsController {
   }
 
   @Post("scan-timeouts")
-  scanTimeouts() {
-    return this.designJobs.scanTimeouts();
+  scanTimeouts(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.designJobs.scanTimeouts(payload || {});
   }
 
   @Post("poll-active-results")
-  pollActiveResults() {
-    return this.designJobs.pollActiveResults();
+  pollActiveResults(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.designJobs.pollActiveResults(undefined, payload || {});
   }
 
   @Post("auto-submit-drafts")
-  autoSubmitDrafts() {
-    return this.designJobs.scanAutoSubmitDrafts();
+  autoSubmitDrafts(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.designJobs.scanAutoSubmitDrafts(payload || {});
   }
 
   @Post("auto-process-low-value")
-  autoProcessLowValue() {
-    return this.designJobs.runLowValueAutomation();
+  autoProcessLowValue(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.designJobs.runLowValueAutomation(payload || {});
   }
 
   @Post("scan-high-value-handoffs")
-  scanHighValueHandoffs() {
-    return this.designJobs.scanHighValueHandoffs();
+  scanHighValueHandoffs(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.designJobs.scanHighValueHandoffs(payload || {});
   }
 
   @Post("demo-timeout")
-  createTimeoutDemo(@Body() payload: { conversationId?: string }) {
+  createTimeoutDemo(@Body() payload: { conversationId?: string } & ExpectedIdentityPayload) {
     return this.designJobs.createTimeoutDemo(payload || {});
   }
 
   @Post("demo-failure")
-  createFailureDemo(@Body() payload: { conversationId?: string }) {
+  createFailureDemo(@Body() payload: { conversationId?: string } & ExpectedIdentityPayload) {
     return this.designJobs.createFailureDemo(payload || {});
   }
 
@@ -82,8 +82,17 @@ export class DesignJobsController {
   }
 
   @Get(":id/revisions")
-  listRevisions(@Param("id") id: string) {
-    return this.designJobs.listRevisions(id);
+  listRevisions(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.designJobs.listRevisions(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
   }
 
   @Post(":id/revisions")

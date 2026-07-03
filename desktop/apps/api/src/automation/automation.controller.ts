@@ -1,4 +1,4 @@
-import { Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Post } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 
 @Controller("automation")
@@ -16,8 +16,8 @@ export class AutomationController {
   }
 
   @Post("run-once")
-  runOnce() {
-    return this.automation.runOnce("manual");
+  runOnce(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.automation.runOnce("manual", payload || {});
   }
 
   @Post("start")

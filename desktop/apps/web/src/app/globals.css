@@ -3811,6 +3811,60 @@ input[type="checkbox"]:disabled {
   color: #fff;
 }
 
+.sku-repair-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+}
+
+.sku-repair-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13px;
+}
+
+.sku-repair-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.sku-repair-sort,
+.sku-image-problem-sort {
+  display: inline-grid;
+  grid-template-columns: auto minmax(132px, 180px);
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.sku-repair-sort select,
+.sku-image-problem-sort select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 9px;
+}
+
 .sku-commercial-readiness {
   display: grid;
   grid-template-columns: minmax(96px, 0.4fr) minmax(220px, 1.4fr) auto auto;
@@ -4288,6 +4342,13 @@ input[type="checkbox"]:disabled {
   gap: 2px;
 }
 
+.sku-image-problem-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .sku-image-problem-head strong,
 .sku-image-problem-item strong {
   color: var(--text);
@@ -4297,17 +4358,90 @@ input[type="checkbox"]:disabled {
 .sku-image-problem-item span,
 .sku-image-problem-item p,
 .sku-image-problem-item small,
-.sku-image-problem-list > small {
+.sku-image-problem-advice,
+.sku-image-problem-list > small,
+.sku-image-problem-empty {
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.45;
+}
+
+.sku-image-problem-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 149, 0, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 149, 0, 0.06);
+  color: var(--text-muted);
+}
+
+.sku-image-problem-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13px;
+}
+
+.sku-image-problem-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.sku-image-problem-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sku-image-problem-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 149, 0, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 149, 0, 0.05);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.sku-image-problem-filter button.selected {
+  border-color: rgba(191, 30, 46, 0.28);
+  background: rgba(191, 30, 46, 0.08);
+  color: var(--text-strong);
+}
+
+.sku-image-problem-filter button strong {
+  color: inherit;
+  font-size: 13px;
+}
+
+.sku-image-problem-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 9px 10px;
+  border: 1px dashed rgba(255, 149, 0, 0.26);
+  border-radius: 10px;
+  background: rgba(255, 149, 0, 0.04);
 }
 
 .sku-image-problem-item {
   position: relative;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(170px, 0.9fr) minmax(190px, 1fr) minmax(200px, 1.1fr) auto;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1fr) minmax(150px, 0.8fr) minmax(180px, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 10px 10px 10px 14px;
@@ -4341,6 +4475,39 @@ input[type="checkbox"]:disabled {
 .sku-image-problem-item small {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.sku-image-problem-item .sku-image-problem-count {
+  width: fit-content;
+  margin-top: 3px;
+  padding: 3px 7px;
+  border: 1px solid rgba(0, 122, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--blue);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.sku-image-problem-advice {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 149, 0, 0.18);
+  border-radius: 9px;
+  background: rgba(255, 149, 0, 0.05);
+  overflow-wrap: anywhere;
+}
+
+.sku-image-problem-advice.error {
+  border-color: rgba(255, 59, 48, 0.2);
+  background: rgba(255, 59, 48, 0.06);
+}
+
+.sku-image-problem-advice strong {
+  color: var(--text-strong);
+  font-size: 12.5px;
 }
 
 .sku-image-problem-actions {
@@ -7372,6 +7539,25 @@ input[type="checkbox"]:disabled {
   font-size: 12.5px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+
+.skill-suggestion-review-note {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255, 149, 0, 0.22);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #6f3c00;
+  background: rgba(255, 149, 0, 0.08);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.skill-suggestion-review-note strong {
+  color: #6f3c00;
+  font-size: 12px;
 }
 
 .skill-suggestion-meta {
@@ -23670,6 +23856,10 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-sections {
+    gap: 14px !important;
+  }
+
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-mode-flow .wechat-agent-live,
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-card {
     max-height: none !important;
@@ -25508,6 +25698,7 @@ body .apple-light-shell.shell .workspace[data-active-section="training-center"] 
   overflow: hidden !important;
 }
 
+
 body .apple-light-shell.shell .workspace[data-active-section="training-center"] #training-center.training-mode-skills .skill-suggestion-meta {
   display: flex !important;
   flex-wrap: wrap !important;
@@ -26390,5 +26581,60 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-runbook strong,
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-entrypoints code {
     overflow-wrap: anywhere !important;
+  }
+}
+
+/* Iteration 68 WeChat mobile empty state: keep the first app screen complete while data loads. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list:has(> .empty.empty-cta) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: clamp(220px, calc(100dvh - 520px), 320px) !important;
+    max-height: 320px !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    place-items: stretch !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list > .empty.empty-cta {
+    align-content: center !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    padding: 20px 16px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list > .empty.empty-cta .empty-actions {
+    width: min(280px, 100%) !important;
+  }
+}
+
+/* Iteration 69 WeChat mobile metrics: show every status cell without horizontal clipping. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-channel-summary {
+    grid-auto-flow: row !important;
+    grid-auto-columns: auto !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+    min-height: 54px !important;
+    max-height: none !important;
+    overflow: visible !important;
+    scroll-snap-type: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-channel-summary > div {
+    min-height: 52px !important;
+    padding: 7px 5px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-channel-summary strong {
+    font-size: 18px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-channel-summary small {
+    display: block !important;
+    font-size: 10px !important;
+    line-height: 1.12 !important;
+    overflow-wrap: anywhere !important;
+    white-space: normal !important;
   }
 }

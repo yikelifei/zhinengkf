@@ -30,4 +30,18 @@ export class ReviewsController {
   ) {
     return this.reviews.reviewQuote(id, payload || { decision: "approve_quote" });
   }
+
+  @Post("orders/:id")
+  reviewOrder(
+    @Param("id") id: string,
+    @Body()
+    payload: {
+      decision: "approve_confirmation" | "approve_followup" | "request_followup" | "reject_order";
+      reviewer?: string;
+      note?: string;
+      followupType?: "production" | "delivery";
+    } & ExpectedIdentityPayload,
+  ) {
+    return this.reviews.reviewOrder(id, payload || { decision: "request_followup" });
+  }
 }
