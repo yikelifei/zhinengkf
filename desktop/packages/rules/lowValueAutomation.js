@@ -1,10 +1,14 @@
 "use strict";
 
 const { inspectBundleAutomationReadiness } = require("./designWorkflow");
+const { isHighValueBudget } = require("./budget");
 
-function evaluateLowValueDesignImageSend(job = {}) {
+function evaluateLowValueDesignImageSend(job = {}, options = {}) {
   if (!job || !job.id) return skip("invalid_job", ["job"]);
-  if (job.isHighValue) return skip("manual_review_required", ["manualReview"]);
+  const highValueAmount = Number(options.highValueAmountCny || 10000);
+  if (job.isHighValue || isHighValueBudget(job.budget, highValueAmount)) {
+    return skip("manual_review_required", ["manualReview"]);
+  }
   if (job.status !== "quick_confirm") return skip("status_not_ready", ["status"]);
   if (job.conversation?.manualLocked || job.manualLocked) return skip("conversation_manual_locked", ["manualLocked"]);
   if (!job.wechatAccountId || !job.conversationId) {
@@ -30,6 +34,7 @@ function evaluateLowValueQuoteSend(quote = {}, options = {}) {
   const designJob = quote.designJob || {};
   const highValueAmount = Number(options.highValueAmountCny || 10000);
   const totalPrice = Number(quote.totalPrice || 0);
+  const unitPrice = Number(quote.unitPrice || 0);
   const profit = Number(quote.profit);
 
   if (quote.sendTaskId) return skip("already_queued", ["sendTaskId"]);
@@ -37,7 +42,7 @@ function evaluateLowValueQuoteSend(quote = {}, options = {}) {
   if (!quote.selectedImageId) return skip("missing_selected_image", ["selectedImageId"]);
   if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || !designJob.id) return skip("missing_design_job", ["designJob"]);
-  if (designJob.isHighValue || (Number.isFinite(totalPrice) && totalPrice >= highValueAmount)) {
+  if (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount)) {
     return skip("manual_review_required", ["manualReview"]);
   }
   if (designJob.conversation?.manualLocked || designJob.manualLocked) {
@@ -66,6 +71,7 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   const designJob = quote.designJob || {};
   const highValueAmount = Number(options.highValueAmountCny || 10000);
   const totalPrice = Number(quote.totalPrice || 0);
+  const unitPrice = Number(quote.unitPrice || 0);
   const profit = Number(quote.profit);
   const paymentStatus = quote.paymentStatus || "unpaid";
   const readyStatuses = new Set(["sent", "accepted"]);
@@ -77,7 +83,7 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   if (!quote.selectedImageId) return skip("missing_selected_image", ["selectedImageId"]);
   if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || !designJob.id) return skip("missing_design_job", ["designJob"]);
-  if (designJob.isHighValue || (Number.isFinite(totalPrice) && totalPrice >= highValueAmount)) {
+  if (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount)) {
     return skip("manual_review_required", ["manualReview"]);
   }
   if (designJob.conversation?.manualLocked || designJob.manualLocked) {
@@ -118,6 +124,9 @@ function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
     paymentStatus === "paid";
 
   if (!acceptedByCustomer) return skip("quote_not_accepted", ["acceptedQuoteOrPayment"]);
+  if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+    return skip("payment_not_ready", ["paymentStatus"]);
+  }
   if (!order.selectedImageId && !quote.selectedImageId) {
     return skip("missing_selected_image", ["selectedImageId"]);
   }
@@ -126,7 +135,7 @@ function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
     return skip("missing_design_job", ["designJob"]);
   }
   if (
-    designJob.isHighValue ||
+    isHighValueDesignJob(designJob, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
   ) {
@@ -191,7 +200,7 @@ function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
     return skip("missing_design_job", ["designJob"]);
   }
   if (
-    designJob.isHighValue ||
+    isHighValueDesignJob(designJob, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
   ) {
@@ -226,6 +235,17 @@ function existingOrderFollowupTypes(order = {}) {
     order.followupSendTask,
   ].filter(Boolean);
   return tasks.map((task) => task?.guardSnapshot?.automation?.followupType || "any");
+}
+
+function isHighValueAmount({ totalPrice = 0, unitPrice = 0, highValueAmount = 10000 } = {}) {
+  return (
+    (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
+    (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
+  );
+}
+
+function isHighValueDesignJob(designJob = {}, highValueAmount = 10000) {
+  return Boolean(designJob?.isHighValue) || isHighValueBudget(designJob?.budget, highValueAmount);
 }
 
 function skip(reason, missing = []) {

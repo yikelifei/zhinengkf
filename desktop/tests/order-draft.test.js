@@ -36,6 +36,33 @@ test("builds an order draft snapshot from a selected quote", () => {
   assert.deepEqual(decision.orderDraft.bundleSnapshot.items[0].skuCode, "BOX-A");
 });
 
+test("keeps accepted quote order draft unconfirmed until payment is recorded", () => {
+  const decision = buildOrderDraftFromQuote({
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 180,
+    totalPrice: 9000,
+    totalCost: 5200,
+    profit: 3800,
+    status: "accepted",
+    paymentStatus: "unpaid",
+    designJob: {
+      id: "design_1",
+      conversationId: "conversation_1",
+      wechatAccountId: "wechat_1",
+      bundle: { items: [{ skuCode: "BOX-A", salePrice: 80 }] },
+      images: [{ id: "image_1", imageId: "external_1", selected: true }],
+    },
+  });
+
+  assert.equal(decision.ok, true);
+  assert.equal(decision.orderDraft.status, "draft");
+  assert.equal(decision.orderDraft.paymentStatus, "unpaid");
+});
+
 test("does not build an order draft without selected image and send binding", () => {
   const decision = buildOrderDraftFromQuote({
     id: "quote_1",

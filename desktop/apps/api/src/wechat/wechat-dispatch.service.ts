@@ -21,6 +21,7 @@ const {
   buildInboundReplyText,
   buildOrderConfirmationCustomerMessage,
   buildOrderFollowupCustomerMessage,
+  classifyTrainingSampleUsage,
   diagnoseWechatWindowSnapshot,
   evaluateSendTaskRequeue,
   evaluateAgentRoute,
@@ -28,6 +29,7 @@ const {
   evaluateLowValueOrderConfirmationSend,
   evaluateLowValueOrderFollowupSend,
   findPendingSceneClarificationContext,
+  isHighValueBudget,
   normalizeWechatWindowSnapshot,
   planInboundAutomation,
   planInboundQuoteAcceptance,
@@ -654,6 +656,11 @@ export class WechatDispatchService {
       metadata: { assetIds },
     });
     const clarificationContext = this.findLatestSceneClarification(conversation.id);
+    const sceneMemory = this.listSceneMemorySamples({
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+    });
     const routeBase = evaluateAgentRoute(
       {
         text: payload.text || "",
@@ -663,10 +670,16 @@ export class WechatDispatchService {
         conversationId: conversation.id,
         clarificationContext,
       },
-      { highValueAmountCny: appConfig.highValueAmountCny },
+      { highValueAmountCny: appConfig.highValueAmountCny, sceneMemory },
     );
     const agent = this.localStore.getAgentByKey(routeBase.agentKey);
-    const skills = agent?.id ? this.localStore.listAgentSkills(agent.id) : [];
+    const skills = agent?.id
+      ? this.localStore.listAgentSkills(agent.id, {
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+        })
+      : [];
     const knowledgeEntries = agent?.id
       ? this.localStore.listKnowledgeEntries({
           agentId: agent.id,
@@ -677,6 +690,9 @@ export class WechatDispatchService {
       : [];
     const draft = buildAgentReplyDraft(routeBase, {
       agentId: agent?.id,
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
       skills,
       knowledgeEntries,
     });
@@ -1367,10 +1383,39 @@ export class WechatDispatchService {
     const now = new Date();
     const tasks = this.localStore.listSendTasks();
     const bridgeTimedOut: any[] = [];
+    const bridgeOutboxBroken: any[] = [];
     const alerted: any[] = [];
     const staleQueued: any[] = [];
 
     for (const task of tasks) {
+      if (task.status === "sending") {
+        const outboxState = this.inspectPendingBridgeOutbox(task);
+        if (!outboxState.ok) {
+          const reason = `Windows 桥接待发送文件不可用：${outboxState.reason}`;
+          const ack = this.acknowledgeBridgeSend(
+            task.id,
+            {
+              status: "failed",
+              errorMessage: reason,
+              metadata: {
+                source: "send_ops_scan",
+                recovery: "bridge_outbox_unavailable",
+                outboxFileName: outboxState.fileName || undefined,
+              },
+            },
+            { internal: true },
+          );
+          bridgeOutboxBroken.push(ack.task);
+          await this.notifications.create("error", "微信桥接待发送文件异常", `${task.conversation?.title || task.conversationId} 的发送任务已转失败，请人工核查后重新排队。`, {
+            sendTaskId: task.id,
+            wechatAccountId: task.wechatAccountId,
+            conversationId: task.conversationId,
+            reason,
+          });
+          continue;
+        }
+      }
+
       if (task.status === "sending" && this.isBridgeAckTimedOut(task, now)) {
         const reason = `Windows 桥接回执超过 ${appConfig.sendBridgeAckTimeoutMinutes} 分钟未返回`;
         const ack = this.acknowledgeBridgeSend(
@@ -1435,10 +1480,12 @@ export class WechatDispatchService {
     return {
       scanned: tasks.length,
       bridgeTimedOut: bridgeTimedOut.length,
+      bridgeOutboxBroken: bridgeOutboxBroken.length,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
       tasks: {
         bridgeTimedOut,
+        bridgeOutboxBroken,
         staleQueued,
         alerted,
       },
@@ -1472,6 +1519,19 @@ export class WechatDispatchService {
           wechatAccountId: task.wechatAccountId,
           reason: "task_no_longer_queued",
           advice,
+        });
+        continue;
+      }
+
+      if (isHighValueLowValueAutomationTask(freshTask)) {
+        const blockedTask = this.blockSendTask(freshTask.id, "低价值自动化发送任务已达到高价值线，已转人工确认。", {
+          failedKeys: ["manualReviewRequired"],
+          blockedByHighValueReview: true,
+          blockedAt: new Date().toISOString(),
+        });
+        blocked.push({
+          task: blockedTask,
+          reason: "manual_review_required",
         });
         continue;
       }
@@ -1755,6 +1815,9 @@ export class WechatDispatchService {
     const taskBeforeValidation = this.localStore.getSendTask(id);
     if (!taskBeforeValidation) throw new Error(`send task not found: ${id}`);
     assertExpectedIdentity(taskBeforeValidation, params, "send task");
+    if (taskBeforeValidation.status !== "queued") {
+      throw new BadRequestException(`send task is not queued: ${taskBeforeValidation.status || "unknown"}`);
+    }
     const binding = this.validateExistingSendTaskBinding(taskBeforeValidation);
     if (!binding.ok) {
       const startedAt = new Date().toISOString();
@@ -2096,6 +2159,14 @@ export class WechatDispatchService {
     return findPendingSceneClarificationContext(this.localStore.listRouteEvaluations({ conversationId }), conversationId);
   }
 
+  private listSceneMemorySamples(filter: IdentityFilter = {}) {
+    return this.localStore
+      .listTrainingSamples(filter)
+      .filter((sample: any) => isSceneMemorySample(sample))
+      .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+      .slice(0, 200);
+  }
+
   private recommendGiftBundle(route: any, text: string) {
     const skus = this.localStore.listSkus().map((sku: any) => ({
       ...sku,
@@ -2348,6 +2419,11 @@ export class WechatDispatchService {
 
     if (acceptancePlan.reason === "no_quote_acceptance_intent") {
       if (!quote || !this.hasInboundPaymentProof(params.payload)) return null;
+      const reviewQuote = this.localStore.updateQuoteDraft(quote.id, {
+        status: "manual_review",
+        owner: quote.owner || "人工客服",
+        customerNotes: appendCustomerNote(quote.customerNotes, "客户发送付款凭证，需要人工核验金额和收款状态。"),
+      });
       const result: any = {
         message: params.message,
         route: params.route,
@@ -2359,10 +2435,10 @@ export class WechatDispatchService {
           shouldQueueReply: false,
         },
         sendTask: null,
-        designJob: quote?.designJob || null,
+        designJob: reviewQuote?.designJob || quote?.designJob || null,
         notification: null,
         bundleRecommendation: null,
-        quote,
+        quote: reviewQuote,
         orderDraft: existingOrderDraft,
         quoteAcceptance: {
           ...acceptancePlan,
@@ -2378,6 +2454,51 @@ export class WechatDispatchService {
       return result;
     }
     if (!quote && acceptancePlan.reason === "missing_active_quote") return null;
+
+    if (
+      quote &&
+      acceptancePlan.ok &&
+      this.hasInboundPaymentProof(params.payload) &&
+      ["deposit_paid", "paid"].includes(
+        acceptancePlan.quotePatch?.paymentStatus || acceptancePlan.orderPatch?.paymentStatus || "",
+      )
+    ) {
+      const reviewQuote = this.localStore.updateQuoteDraft(quote.id, {
+        status: "manual_review",
+        owner: quote.owner || "人工客服",
+        customerNotes: appendCustomerNote(quote.customerNotes, "客户文字说明已付款并发送凭证，需要人工核验金额和收款账户。"),
+      });
+      const result: any = {
+        message: params.message,
+        route: params.route,
+        plan: {
+          type: "quote_payment_proof_manual_review",
+          reason: "payment_proof_needs_manual_verification",
+          shouldNotifyHuman: true,
+          shouldCreateDesignJob: false,
+          shouldQueueReply: false,
+        },
+        sendTask: null,
+        designJob: reviewQuote?.designJob || quote?.designJob || null,
+        notification: null,
+        bundleRecommendation: null,
+        quote: reviewQuote,
+        orderDraft: existingOrderDraft,
+        quoteAcceptance: {
+          ...acceptancePlan,
+          ok: false,
+          hasIntent: true,
+          reason: "payment_proof_needs_manual_verification",
+          originalReason: acceptancePlan.reason,
+        },
+      };
+      result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
+        reason: "payment_proof_needs_manual_verification",
+        title: "客户发送付款凭证，需要人工核验",
+        body: "客户文字说明已付款，且消息里带有付款截图、转账凭证或收款相关附件。系统未自动改付款状态，请人工核对金额和收款账户后再标记定金或全款。",
+      });
+      return result;
+    }
 
     const result: any = {
       message: params.message,
@@ -2458,37 +2579,45 @@ export class WechatDispatchService {
     const updatedQuote = this.localStore.updateQuoteDraft(quote.id, acceptancePlan.quotePatch);
     result.quote = updatedQuote;
     result.orderDraft = await this.orders.createFromQuote(updatedQuote.id);
-    const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
-      owner: "low_value_automation",
-      note: "低价值客户确认后，订单确认已自动进入微信安全发送队列。",
-      reason: "low_value_order_confirmation",
-      automation: {
-        source: "low_value_quote_acceptance",
-        valueLevel: "low",
-        reason: acceptancePlan.reason,
-        quoteDraftId: updatedQuote.id,
-        orderDraftId: result.orderDraft.id,
-        queuedBy: "low_value_automation",
-      },
+    const confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
+      highValueAmountCny: appConfig.highValueAmountCny,
     });
-    result.orderDraft = confirmation.orderDraft;
-    result.sendTask = confirmation.sendTask;
-    result.plan.shouldQueueReply = true;
+    if (confirmationDecision.ok) {
+      const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
+        owner: "low_value_automation",
+        note: "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。",
+        reason: "low_value_order_confirmation",
+        automation: {
+          source: "low_value_quote_acceptance",
+          valueLevel: "low",
+          reason: acceptancePlan.reason,
+          quoteDraftId: updatedQuote.id,
+          orderDraftId: result.orderDraft.id,
+          queuedBy: "low_value_automation",
+        },
+      });
+      result.orderDraft = confirmation.orderDraft;
+      result.sendTask = confirmation.sendTask;
+      result.plan.shouldQueueReply = true;
+    }
     result.notification = await this.notifications.create(
       "info",
       acceptancePlan.quotePatch.paymentStatus === "paid" || acceptancePlan.quotePatch.paymentStatus === "deposit_paid"
         ? "低价值客户已确认付款，订单草稿已生成"
         : "低价值客户已确认报价，订单草稿已生成",
-      "系统已根据客户确认消息更新报价、生成订单草稿，并把确认回复放入微信安全发送队列。",
+      result.sendTask
+        ? "系统已根据客户确认付款消息更新报价、生成订单草稿，并把确认回复放入微信安全发送队列。"
+        : "系统已根据客户确认消息更新报价并生成待付款订单草稿，收到付款凭证并核验后再发送订单确认。",
       {
         quoteDraftId: updatedQuote.id,
         orderDraftId: result.orderDraft.id,
-        sendTaskId: result.sendTask.id,
+        sendTaskId: result.sendTask?.id,
         designJobId: updatedQuote.designJobId,
         conversationId: params.conversation.id,
         customerId: params.conversation.customerId,
         routeId: params.route.id,
         reason: acceptancePlan.reason,
+        confirmationReason: confirmationDecision.reason,
       },
     );
     return result;
@@ -2669,11 +2798,7 @@ export class WechatDispatchService {
   private shouldManualReviewSelectedJob(job: any) {
     if (job.isHighValue) return true;
     const threshold = Number(appConfig.highValueAmountCny || 10000);
-    const budget = job.budget || {};
-    const amount = Number(budget.amount || 0);
-    const quantity = Math.max(1, Number(budget.quantity || 1));
-    const total = budget.mode === "total" ? amount : amount * quantity;
-    return amount >= threshold || total >= threshold;
+    return isHighValueBudget(job.budget || {}, threshold);
   }
 
   private async createInboundSelectionReview(
@@ -2896,6 +3021,48 @@ export class WechatDispatchService {
     return latestAttempt?.adapter === "windows_bridge" &&
       latestAttempt.status === "started" &&
       isOlderThan(latestAttempt.startedAt || latestAttempt.createdAt, now, appConfig.sendBridgeAckTimeoutMinutes);
+  }
+
+  private inspectPendingBridgeOutbox(task: any) {
+    const attempt = this.localStore.getLatestSendAttempt(task.id, {
+      adapter: "windows_bridge",
+      status: "started",
+    });
+    if (!attempt) return { ok: true, reason: "not_waiting_for_windows_bridge" };
+    const fileName = this.resolveBridgeAckOutboxFileName({}, attempt);
+    if (!fileName) return { ok: false, reason: "missing_outbox_file_name", fileName: "" };
+    const safeName = path.basename(fileName);
+    if (!safeName || safeName !== fileName) return { ok: false, reason: "unsafe_outbox_file_name", fileName };
+    const root = path.resolve(appConfig.wechatBridgeOutboxDir);
+    const resolved = path.resolve(path.join(root, safeName));
+    const relative = path.relative(root, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || relative !== safeName) {
+      return { ok: false, reason: "outbox_file_outside_root", fileName: safeName };
+    }
+    if (!fs.existsSync(resolved)) return { ok: false, reason: "outbox_file_missing", fileName: safeName };
+    if (!fs.lstatSync(resolved).isFile()) return { ok: false, reason: "outbox_file_not_regular_file", fileName: safeName };
+    try {
+      const realRoot = fs.realpathSync(root);
+      const realResolved = fs.realpathSync(resolved);
+      const realRelative = path.relative(realRoot, realResolved);
+      if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+        return { ok: false, reason: "outbox_file_resolves_outside_root", fileName: safeName };
+      }
+      const data = readJsonFile(realResolved);
+      if (!isPlainObject(data)) return { ok: false, reason: "outbox_json_root_invalid", fileName: safeName };
+      if (data.version !== BRIDGE_OUTBOX_VERSION) return { ok: false, reason: "outbox_protocol_invalid", fileName: safeName };
+      if (String(data.taskId || "") !== String(task.id || "")) return { ok: false, reason: "outbox_task_mismatch", fileName: safeName };
+      if (String(data.wechatAccountId || "") !== String(task.wechatAccountId || "")) {
+        return { ok: false, reason: "outbox_account_mismatch", fileName: safeName };
+      }
+      if (String(data.conversationId || "") !== String(task.conversationId || "")) {
+        return { ok: false, reason: "outbox_conversation_mismatch", fileName: safeName };
+      }
+      if (!/^[a-f0-9]{64}$/i.test(String(data.ackToken || ""))) return { ok: false, reason: "outbox_ack_token_invalid", fileName: safeName };
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : "outbox_json_invalid", fileName: safeName };
+    }
+    return { ok: true, reason: "outbox_ready", fileName: safeName };
   }
 
   private validateBridgeAckOutboxPayload(task: any, attempt: any, payload: any, outboxFileName: string) {
@@ -3359,6 +3526,15 @@ function validateBridgeSendPlanActions(actions: unknown[]) {
   return { ok: true, reason: "send plan actions are valid" };
 }
 
+function appendCustomerNote(current: unknown, next: string) {
+  const existing = String(current || "").trim();
+  const note = String(next || "").trim();
+  if (!note) return existing;
+  if (!existing) return note;
+  if (existing.includes(note)) return existing;
+  return `${existing} ${note}`;
+}
+
 function resolveBridgeLocalStorageFile(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw || /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return "";
@@ -3429,10 +3605,56 @@ function moveJsonInboxFile(filePath: string, inboxDir: string, status: "processe
   return target;
 }
 
+function isSceneMemorySample(sample: any) {
+  if (!sample?.agentKey || !sample?.customerText) return false;
+  if (String(sample.status || "ready") !== "ready") return false;
+  const usage = sample.quality?.usage || classifyTrainingSampleUsage(sample);
+  if (usage.routeMemory === false) return false;
+  const sourceType = String(sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : ""));
+  if (sourceType === "route_correction") return Number(sample.score || 0) >= 70;
+  if (sourceType !== "chat_import") return false;
+  if (Number(sample.score || 0) < 85) return false;
+  if (!isConfirmedChatImportScene(sample)) return false;
+  if (sample.quality?.trainable === false) return false;
+  if (["review", "risk", "blocked"].includes(String(sample.quality?.level || ""))) return false;
+  return true;
+}
+
+function isConfirmedChatImportScene(sample: any) {
+  const sceneCheck = sample.sceneCheck || sample.sceneDecision || null;
+  if (sceneCheck?.status) return sceneCheck.status === "clear";
+  if (sample.sceneScore === undefined || sample.sceneScore === null) return true;
+  const sceneScore = Number(sample.sceneScore || 0);
+  return Number.isFinite(sceneScore) && sceneScore >= 14;
+}
+
 function isLowValueAutomationTask(task: any) {
   const automation = task?.guardSnapshot?.automation || {};
   if (automation.valueLevel !== "low") return false;
-  if (task?.designJob?.isHighValue === true) return false;
-  if (task?.quoteDraft?.designJob?.isHighValue === true) return false;
+  if (isHighValueAutomationTask(task)) return false;
   return true;
+}
+
+function isHighValueLowValueAutomationTask(task: any) {
+  const automation = task?.guardSnapshot?.automation || {};
+  return automation.valueLevel === "low" && isHighValueAutomationTask(task);
+}
+
+function isHighValueAutomationTask(task: any) {
+  const threshold = Number(appConfig.highValueAmountCny || 10000);
+  const designJob = task?.designJob || task?.quoteDraft?.designJob || task?.orderDraft?.designJob || task?.orderDraft?.quoteDraft?.designJob || {};
+  const quote = task?.quoteDraft || task?.orderDraft?.quoteDraft || {};
+  const order = task?.orderDraft || {};
+  if (designJob?.isHighValue === true || quote?.isHighValue === true || order?.isHighValue === true) return true;
+  if (isHighValueBudget(designJob?.budget, threshold)) return true;
+  return isHighValueAmount(order?.totalPrice ?? quote?.totalPrice, order?.unitPrice ?? quote?.unitPrice, threshold);
+}
+
+function isHighValueAmount(totalAmount: unknown, unitAmount: unknown, threshold: number) {
+  const total = Number(totalAmount || 0);
+  const unit = Number(unitAmount || 0);
+  return (
+    (Number.isFinite(total) && total >= threshold) ||
+    (Number.isFinite(unit) && unit >= threshold)
+  );
 }

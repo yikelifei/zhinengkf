@@ -41,6 +41,20 @@ test("detects real Chinese quote acceptance and payment wording", () => {
   });
 });
 
+test("does not treat real Chinese payment questions as paid", () => {
+  assert.deepEqual(detectQuoteAcceptanceIntent("定金多少，怎么付"), {
+    hasIntent: false,
+  });
+  assert.deepEqual(detectQuoteAcceptanceIntent("可以，收款码发我，我马上付"), {
+    hasIntent: true,
+    paymentStatus: null,
+  });
+  assert.deepEqual(detectQuoteAcceptanceIntent("定金我已转账，按这个做"), {
+    hasIntent: true,
+    paymentStatus: "deposit_paid",
+  });
+});
+
 test("does not treat real Chinese rejection or revision as acceptance", () => {
   assert.equal(detectQuoteAcceptanceIntent("这个太贵了，先不下单").hasIntent, false);
   assert.equal(detectQuoteAcceptanceIntent("再改一下背景，暂时不做").hasIntent, false);

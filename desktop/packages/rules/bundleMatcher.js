@@ -69,15 +69,19 @@ function pickBest(skus, scene, budget, allSkus = skus, requestedQuantity = 1, au
 function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuantity = 1, giftBox = null, automationOptions = {}) {
   let remaining = budget;
   const selected = [];
-  const selectedSkuCodes = new Set();
+  const selectedSkuCodes = new Set(giftBox?.skuCode ? [giftBox.skuCode] : []);
   const candidates = skus
     .map((sku) => ({ original: sku, effective: withReplacementIfNeeded(sku, allSkus, requestedQuantity) }))
     .filter((candidate) => isUsable(candidate.effective, requestedQuantity))
     .sort((a, b) => {
       const bScore = Math.max(scoreSku(b.original, scene), scoreSku(b.effective, scene)) +
-        automationCandidateScore(b.effective, giftBox, automationOptions);
+        automationCandidateScore(b.effective, giftBox, automationOptions) +
+        matchingRuleCandidateScore(b.effective, [giftBox].filter(Boolean)) +
+        matchingRuleInventoryScore(b.effective, allSkus, requestedQuantity);
       const aScore = Math.max(scoreSku(a.original, scene), scoreSku(a.effective, scene)) +
-        automationCandidateScore(a.effective, giftBox, automationOptions);
+        automationCandidateScore(a.effective, giftBox, automationOptions) +
+        matchingRuleCandidateScore(a.effective, [giftBox].filter(Boolean)) +
+        matchingRuleInventoryScore(a.effective, allSkus, requestedQuantity);
       return bScore - aScore || Number(a.effective.salePrice || 0) - Number(b.effective.salePrice || 0);
     });
 
@@ -86,9 +90,19 @@ function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuant
     const skuCode = candidate.effective.skuCode;
     if (price <= 0 || price > remaining || selected.length >= maxItems) continue;
     if (skuCode && selectedSkuCodes.has(skuCode)) continue;
+    const currentItems = [giftBox, ...selected].filter(Boolean);
+    if (conflictsWithSelection(candidate.effective, currentItems)) continue;
+    const required = resolveRequiredCompanions(candidate.effective, allSkus, requestedQuantity, currentItems, remaining - price);
+    if (!required.ok || selected.length + 1 + required.items.length > maxItems) continue;
     selected.push(candidate.effective);
     if (skuCode) selectedSkuCodes.add(skuCode);
     remaining -= price;
+    for (const requiredItem of required.items) {
+      if (requiredItem.skuCode && selectedSkuCodes.has(requiredItem.skuCode)) continue;
+      selected.push(requiredItem);
+      if (requiredItem.skuCode) selectedSkuCodes.add(requiredItem.skuCode);
+      remaining -= Number(requiredItem.salePrice || 0);
+    }
   }
   return selected;
 }
@@ -148,6 +162,81 @@ function scoreSku(sku, scene) {
   }
   if (Number(sku.stock || 0) > 0) score += 3;
   return score;
+}
+
+function matchingRuleCandidateScore(sku, selectedItems = []) {
+  let score = 0;
+  for (const selected of selectedItems) {
+    if (!selected) continue;
+    if (matchingRuleCodes(sku, "preferWith").includes(selected.skuCode)) score += 20;
+    if (matchingRuleCodes(selected, "preferWith").includes(sku.skuCode)) score += 20;
+    if (matchingRuleCodes(sku, "mustWith").includes(selected.skuCode)) score += 10;
+    if (matchingRuleCodes(selected, "mustWith").includes(sku.skuCode)) score += 10;
+  }
+  return score;
+}
+
+function matchingRuleInventoryScore(sku, allSkus, requestedQuantity) {
+  const mustWithCodes = matchingRuleCodes(sku, "mustWith");
+  if (!mustWithCodes.length) return 0;
+  const availableCount = mustWithCodes.filter((skuCode) => findEffectiveSkuByCode(skuCode, allSkus, requestedQuantity)).length;
+  return availableCount === mustWithCodes.length ? 35 + availableCount * 5 : -40;
+}
+
+function resolveRequiredCompanions(sku, allSkus, requestedQuantity, selectedItems, remainingBudget) {
+  const selectedCodes = new Set(selectedItems.map((item) => item?.skuCode).filter(Boolean));
+  const items = [];
+  let remaining = remainingBudget;
+  for (const skuCode of matchingRuleCodes(sku, "mustWith")) {
+    if (selectedCodes.has(skuCode)) continue;
+    const required = findEffectiveSkuByCode(skuCode, allSkus, requestedQuantity);
+    if (!required || conflictsWithSelection(required, [...selectedItems, sku, ...items])) {
+      return { ok: false, items: [] };
+    }
+    const price = Number(required.salePrice || 0);
+    if (price <= 0 || price > remaining) return { ok: false, items: [] };
+    items.push(required);
+    selectedCodes.add(required.skuCode);
+    remaining -= price;
+  }
+  return { ok: true, items };
+}
+
+function findEffectiveSkuByCode(skuCode, allSkus, requestedQuantity) {
+  const sku = allSkus.find((item) => item.skuCode === skuCode && item.isActive !== false);
+  if (!sku) return null;
+  const effective = withReplacementIfNeeded(sku, allSkus, requestedQuantity);
+  return isUsable(effective, requestedQuantity) ? effective : null;
+}
+
+function conflictsWithSelection(sku, selectedItems = []) {
+  for (const selected of selectedItems) {
+    if (!selected) continue;
+    if (conflictRuleCodes(sku).includes(selected.skuCode)) return true;
+    if (conflictRuleCodes(selected).includes(sku.skuCode)) return true;
+  }
+  return false;
+}
+
+function conflictRuleCodes(sku) {
+  return [
+    ...matchingRuleCodes(sku, "cannotWith"),
+    ...matchingRuleCodes(sku, "excludeWith"),
+    ...matchingRuleCodes(sku, "avoidWith"),
+  ];
+}
+
+function matchingRuleCodes(sku, key) {
+  const rules = sku?.matchingRules;
+  if (!rules || typeof rules !== "object" || Array.isArray(rules)) return [];
+  const value = rules[key];
+  if (Array.isArray(value)) return value.map(cleanSkuCode).filter(Boolean);
+  if (typeof value === "string") return value.split(/[、，,;；|]+/).map(cleanSkuCode).filter(Boolean);
+  return [];
+}
+
+function cleanSkuCode(value) {
+  return String(value || "").trim();
 }
 
 function automationCandidateScore(sku, giftBox = null, options = {}) {

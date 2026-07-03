@@ -44,7 +44,7 @@ function buildOrderDraftFromQuote(quote, options = {}) {
   }
 
   const paymentStatus = quote.paymentStatus || "unpaid";
-  const status = quote.status === "accepted" || paymentStatus === "paid" ? "confirmed" : "draft";
+  const status = paymentStatus === "paid" || paymentStatus === "deposit_paid" ? "confirmed" : "draft";
   const profitRate = totalPrice > 0 ? round(profit / totalPrice) : 0;
   const selectedImage = quote.selectedImage || findSelectedImage(designJob, quote.selectedImageId);
   if (!selectedImage) {

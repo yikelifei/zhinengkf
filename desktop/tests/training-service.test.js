@@ -44,8 +44,8 @@ function createTrainingService(samples) {
         },
       };
     },
-    listAgentSkills: (agentId) => {
-      calls.push({ method: "listAgentSkills", agentId });
+    listAgentSkills: (agentId, filter = {}) => {
+      calls.push({ method: "listAgentSkills", agentId, ...filter });
       return [];
     },
     applyAgentSkillSuggestions: (suggestions) => {
@@ -340,6 +340,13 @@ test("passes identity filters when listing training samples", () => {
 
     assert.deepEqual(calls.find((call) => call.method === "listTrainingSamples"), {
       method: "listTrainingSamples",
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+    });
+    assert.deepEqual(calls.find((call) => call.method === "listAgentSkills"), {
+      method: "listAgentSkills",
       agentId: "agent_gift",
       wechatAccountId: "wechat_a",
       conversationId: "conv_a",

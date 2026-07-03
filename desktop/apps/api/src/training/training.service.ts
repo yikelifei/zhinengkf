@@ -203,7 +203,11 @@ export class TrainingService {
       conversationId: options.conversationId,
       customerId: options.customerId,
     });
-    const existingSkills = this.localStore.listAgentSkills(options.agentId);
+    const existingSkills = this.localStore.listAgentSkills(options.agentId, {
+      wechatAccountId: options.wechatAccountId,
+      conversationId: options.conversationId,
+      customerId: options.customerId,
+    });
     return compileAgentSkillSuggestions(samples, {
       agentId: options.agentId,
       minScore: options.minScore,

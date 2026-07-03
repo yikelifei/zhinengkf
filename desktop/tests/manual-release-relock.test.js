@@ -12,6 +12,55 @@ require("ts-node").register({
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
+const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
+
+test("approved high-value budget design job stays in manual review after image approval", async () => {
+  const reviewLogs = [];
+  const notifications = [];
+  const job = {
+    id: "design_1",
+    requestId: "request_1",
+    status: "manual_review",
+    isHighValue: false,
+    budget: { totalAmount: 15000, perUnitAmount: 300 },
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getDesignJob: () => job,
+      updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+      createReviewLog: (payload) => {
+        reviewLogs.push(payload);
+        return payload;
+      },
+    },
+    {},
+    {},
+    {
+      create: async (...args) => {
+        notifications.push(args);
+        return {};
+      },
+    },
+  );
+
+  const result = await service.reviewDesignJob("design_1", {
+    decision: "approve_images",
+    reviewer: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(result.result.status, "manual_review");
+  assert.equal(result.result.manualQcRequired, true);
+  assert.equal(result.log.afterStatus, "manual_review");
+  assert.equal(reviewLogs[0].decision, "approve_images");
+  assert.equal(notifications.length, 1);
+});
 
 test("manual-approved design image send relocks conversation when queueing fails", async () => {
   const locks = [];
@@ -115,6 +164,7 @@ test("manual-approved quote send relocks conversation when queueing fails", asyn
         throw new Error("should not mark quote queued after queue failure");
       },
     },
+    {},
     {
       setConversationManualLock: async (conversationId, payload) => locks.push({ conversationId, payload }),
       enqueueQuoteMessage: async () => {
@@ -180,6 +230,54 @@ test("design image send refuses to release manual lock without explicit manual r
   );
 
   assert.equal(locks.length, 0);
+});
+
+test("automatic design image send refuses high-value budget before queueing", async () => {
+  let enqueueCalled = false;
+  const job = {
+    id: "design_1",
+    requestId: "request_1",
+    status: "quick_confirm",
+    isHighValue: false,
+    budget: { mode: "per_box", perUnitAmount: 10000, totalAmount: 9000 },
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    images: [
+      {
+        id: "image_1",
+        imageId: "candidate_1",
+        position: 1,
+        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
+      },
+    ],
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    {
+      getDesignJob: () => job,
+      updateDesignJob: () => {
+        throw new Error("should not mark sent for high-value automatic send");
+      },
+    },
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async () => {
+        enqueueCalled = true;
+        return { id: "send_1" };
+      },
+    },
+    {},
+    {},
+  );
+
+  await assert.rejects(
+    () => service.quickConfirmAndQueueSend("design_1"),
+    /manual approval: manual_review_required/,
+  );
+
+  assert.equal(enqueueCalled, false);
 });
 
 test("manual-approved design image send writes review log with send task id", async () => {
@@ -274,6 +372,7 @@ test("quote send refuses to release manual lock without explicit manual reason",
     {
       getQuoteDraft: () => quote,
     },
+    {},
     {
       setConversationManualLock: async (conversationId, payload) => locks.push({ conversationId, payload }),
       enqueueQuoteMessage: async () => ({ id: "send_1" }),
@@ -300,6 +399,8 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
     totalCost: 12000,
     profit: -2000,
     status: "manual_review",
+    paymentStatus: "unpaid",
+    customerNotes: "客户发送付款凭证，需要人工核验金额和收款账户。",
     sendTaskId: "send_1",
     customer: { id: "customer_1", name: "客户A" },
     designJob: {
@@ -321,6 +422,7 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
     {
       getQuoteDraft: () => quote,
     },
+    {},
     {
       setConversationManualLock: async () => ({}),
       enqueueQuoteMessage: async () => ({ id: "send_1" }),
@@ -331,12 +433,13 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
 
   assert.ok(preview.warnings.includes("报价已进入发送队列"));
   assert.ok(preview.warnings.includes("报价还没有选图"));
+  assert.ok(preview.warnings.includes("付款凭证需要先人工核验金额和收款账户"));
   assert.ok(preview.warnings.includes("报价正在等待人工审核"));
   assert.ok(preview.warnings.includes("报价利润为负，需要人工确认"));
   assert.doesNotMatch(preview.warnings.join(" "), /quote has no selected image|quote is waiting for manual review/);
   await assert.rejects(
     () => service.queueSend("quote_1", {}),
-    /报价还不能发送：/,
+    /付款凭证需要先人工核验金额和收款账户/,
   );
 });
 
@@ -386,6 +489,7 @@ test("manual-approved quote send writes review log with send task id", async () 
         return payload;
       },
     },
+    {},
     {
       setConversationManualLock: async () => ({}),
       enqueueQuoteMessage: async () => ({ id: "send_1" }),
@@ -403,6 +507,175 @@ test("manual-approved quote send writes review log with send task id", async () 
   assert.equal(reviewLogs[0].decision, "manual_approve_quote");
   assert.equal(reviewLogs[0].metadata.sendTaskId, "send_1");
   assert.equal(reviewLogs[0].metadata.conversationId, "conversation_1");
+});
+
+test("quote send refuses payment proof review quotes before payment verification", async () => {
+  let enqueueCalled = false;
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 180,
+    totalPrice: 9000,
+    totalCost: 6000,
+    profit: 3000,
+    status: "manual_review",
+    paymentStatus: "unpaid",
+    customerNotes: "客户文字说明已付款并发送凭证，需要人工核验金额和收款账户。",
+    selectedImage: {
+      id: "image_1",
+      designJobId: "design_1",
+    },
+    designJob: {
+      id: "design_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      scene: "企业礼盒",
+      bundle: { items: [] },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+    },
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      updateQuoteDraft: () => {
+        throw new Error("should not queue payment proof quote before verification");
+      },
+    },
+    {},
+    {
+      enqueueQuoteMessage: async () => {
+        enqueueCalled = true;
+        return { id: "send_1" };
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.queueSend("quote_1", {}),
+    /付款凭证需要先人工核验金额和收款账户/,
+  );
+  assert.equal(enqueueCalled, false);
+});
+
+test("verified quote payment proof creates confirmed order and queues safe confirmation", async () => {
+  const locks = [];
+  const queuedConfirmations = [];
+  const reviewLogs = [];
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 180,
+    totalPrice: 9000,
+    totalCost: 5000,
+    profit: 4000,
+    status: "sent",
+    paymentStatus: "unpaid",
+    owner: "Alice",
+    customer: { id: "customer_1", name: "客户A" },
+    selectedImage: { id: "image_1", designJobId: "design_1", position: 1 },
+    designJob: {
+      id: "design_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      scene: "企业礼盒",
+      bundle: { items: [{ name: "红金礼盒", salePrice: 180, costPrice: 100 }] },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+    },
+  };
+  let quoteRecord = quote;
+  let orderRecord = null;
+  const localStore = {
+    getQuoteDraft: () => quoteRecord,
+    updateQuoteDraft: (id, patch) => {
+      quoteRecord = { ...quoteRecord, id, ...patch };
+      return quoteRecord;
+    },
+    createReviewLog: (payload) => {
+      reviewLogs.push(payload);
+      return payload;
+    },
+  };
+  const orders = {
+    createFromQuote: async (quoteId, expected) => {
+      assert.equal(quoteId, quote.id);
+      assert.equal(expected.expectedConversationId, "conversation_1");
+      assert.equal(quoteRecord.status, "accepted");
+      assert.equal(quoteRecord.paymentStatus, "deposit_paid");
+      orderRecord = {
+        id: "order_1",
+        quoteDraftId: quote.id,
+        designJobId: "design_1",
+        customerId: "customer_1",
+        conversationId: "conversation_1",
+        wechatAccountId: "wechat_1",
+        selectedImageId: "image_1",
+        status: "draft",
+        paymentStatus: "deposit_paid",
+        quantity: 50,
+        unitPrice: 180,
+        totalPrice: 9000,
+        totalCost: 5000,
+        profit: 4000,
+        quoteDraft: quoteRecord,
+      };
+      return orderRecord;
+    },
+    update: async (id, patch) => {
+      assert.equal(id, "order_1");
+      orderRecord = { ...orderRecord, ...patch };
+      return orderRecord;
+    },
+  };
+  const wechat = {
+    setConversationManualLock: async (conversationId, payload) => {
+      locks.push({ conversationId, payload });
+      return { conversation: { id: conversationId, manualLocked: payload.locked } };
+    },
+    queueOrderConfirmation: async (orderId, payload) => {
+      queuedConfirmations.push({ orderId, payload });
+      return { orderDraft: orderRecord, sendTask: { id: "send_1", status: "queued" }, message: "订单确认" };
+    },
+  };
+  const service = new QuotesService({}, localStore, orders, wechat);
+
+  const result = await service.verifyPaymentProofAndQueueConfirmation("quote_1", {
+    paymentStatus: "deposit_paid",
+    owner: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(result.quote.status, "accepted");
+  assert.equal(result.orderDraft.status, "confirmed");
+  assert.equal(result.orderDraft.paymentStatus, "deposit_paid");
+  assert.equal(result.sendTask.status, "queued");
+  assert.deepEqual(
+    locks.map((item) => ({ conversationId: item.conversationId, locked: item.payload.locked, reason: item.payload.reason })),
+    [{ conversationId: "conversation_1", locked: false, reason: "manual_payment_proof_verified" }],
+  );
+  assert.equal(queuedConfirmations.length, 1);
+  assert.equal(queuedConfirmations[0].payload.reason, "manual_payment_proof_verified");
+  assert.equal(queuedConfirmations[0].payload.automation.source, "manual_payment_proof_verified");
+  assert.equal(reviewLogs[0].decision, "manual_payment_proof_verified");
+  assert.equal(reviewLogs[0].metadata.sendTaskId, "send_1");
 });
 
 test("queued quote selection cannot be changed by later customer image selection", async () => {
@@ -443,6 +716,7 @@ test("queued quote selection cannot be changed by later customer image selection
         throw new Error("should not update locked quote selection");
       },
     },
+    {},
     {},
   );
 
@@ -506,6 +780,7 @@ test("manual quote revision changes selected image and cancels queued send task"
         return payload;
       },
     },
+    {},
     {
       cancelSendTask: (id, payload) => {
         cancelled.push({ id, payload });
@@ -579,6 +854,7 @@ test("manual quote revision is blocked after order draft exists", async () => {
         throw new Error("should not create revision log with existing order draft");
       },
     },
+    {},
     {
       cancelSendTask: () => {
         cancelCount += 1;

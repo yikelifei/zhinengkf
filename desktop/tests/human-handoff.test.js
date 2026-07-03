@@ -28,6 +28,19 @@ test("skips non-high-value task", () => {
   assert.equal(decision.reason, "not_high_value");
 });
 
+test("routes high-value budget to manual review even when flag is stale", () => {
+  const decision = evaluateHighValueHandoff({
+    id: "design_1",
+    status: "draft",
+    isHighValue: false,
+    budget: { perUnitAmount: 12000, quantity: 1 },
+  });
+
+  assert.equal(decision.ok, true);
+  assert.equal(decision.action, "manual_review");
+  assert.equal(decision.reason, "high_value_customer");
+});
+
 test("skips task already in manual review", () => {
   const decision = evaluateHighValueHandoff({
     id: "design_1",

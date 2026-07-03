@@ -39,6 +39,21 @@ test("does not auto-send high-value design images", () => {
   assert.equal(decision.reason, "manual_review_required");
 });
 
+test("does not auto-send design images when budget is high value even if flag is stale", () => {
+  const decision = evaluateLowValueDesignImageSend({
+    id: "design_1",
+    status: "quick_confirm",
+    isHighValue: false,
+    budget: { mode: "per_box", perUnitAmount: 10000, totalAmount: 9000 },
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    images: [{ id: "image_1", localPath: "storage/results/1.png" }],
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
 test("does not auto-send design images when conversation is manually locked", () => {
   const decision = evaluateLowValueDesignImageSend({
     id: "design_1",
@@ -124,6 +139,44 @@ test("does not queue high-value quote automatically", () => {
     designJob: {
       id: "design_1",
       isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
+test("does not queue quote automatically when per-unit price is high value", () => {
+  const decision = evaluateLowValueQuoteSend({
+    id: "quote_1",
+    status: "auto_sent",
+    selectedImageId: "image_1",
+    unitPrice: 10000,
+    totalPrice: 9000,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
+test("does not queue quote automatically when design job budget is high value", () => {
+  const decision = evaluateLowValueQuoteSend({
+    id: "quote_1",
+    status: "auto_sent",
+    selectedImageId: "image_1",
+    totalPrice: 9000,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      budget: { totalAmount: 15000, quantity: 50 },
       wechatAccountId: "wechat_1",
       conversationId: "conversation_1",
     },
@@ -269,6 +322,48 @@ test("does not create order draft for high-value quote automatically", () => {
   assert.equal(decision.reason, "manual_review_required");
 });
 
+test("does not create order draft when quote per-unit price is high value", () => {
+  const decision = evaluateLowValueOrderDraftFromQuote({
+    id: "quote_1",
+    status: "sent",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_1",
+    unitPrice: 10000,
+    totalPrice: 9000,
+    profit: 5000,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
+test("does not create order draft when design job budget is high value", () => {
+  const decision = evaluateLowValueOrderDraftFromQuote({
+    id: "quote_1",
+    status: "sent",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_1",
+    totalPrice: 9000,
+    profit: 5000,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      budget: { perUnitAmount: 12000, quantity: 1 },
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
 test("does not create order draft automatically when conversation is manually locked", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
@@ -313,7 +408,7 @@ test("does not create duplicate order draft automatically", () => {
   assert.equal(decision.reason, "already_has_order_draft");
 });
 
-test("queues low-value order confirmation only after customer acceptance", () => {
+test("does not queue low-value order confirmation before payment is recorded", () => {
   const decision = evaluateLowValueOrderConfirmationSend({
     id: "order_1",
     status: "confirmed",
@@ -332,6 +427,32 @@ test("queues low-value order confirmation only after customer acceptance", () =>
       id: "quote_1",
       status: "accepted",
       paymentStatus: "unpaid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "payment_not_ready");
+});
+
+test("queues low-value order confirmation after payment is recorded", () => {
+  const decision = evaluateLowValueOrderConfirmationSend({
+    id: "order_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "deposit_paid",
     },
   });
 
@@ -406,6 +527,33 @@ test("does not queue high-value order confirmation automatically", () => {
     designJob: {
       id: "design_1",
       isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
+test("does not queue order confirmation when design job budget is high value", () => {
+  const decision = evaluateLowValueOrderConfirmationSend({
+    id: "order_1",
+    status: "confirmed",
+    paymentStatus: "paid",
+    selectedImageId: "image_1",
+    unitPrice: 120,
+    totalPrice: 9000,
+    profit: 5000,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      budget: { totalAmount: 15000, quantity: 50 },
     },
     quoteDraft: {
       id: "quote_1",
@@ -569,6 +717,33 @@ test("does not queue high-value order follow-up automatically", () => {
     designJob: {
       id: "design_1",
       isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
+test("does not queue order follow-up when design job budget is high value", () => {
+  const decision = evaluateLowValueOrderFollowupSend({
+    id: "order_1",
+    status: "processing",
+    paymentStatus: "paid",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 5000,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      budget: { totalAmount: 15000, quantity: 50 },
     },
     quoteDraft: {
       id: "quote_1",

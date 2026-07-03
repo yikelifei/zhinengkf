@@ -1,6 +1,6 @@
 "use strict";
 
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -51,6 +51,14 @@ function main() {
     return;
   }
 
+  const detachedSupervisorChild = spawnSupervisorChildDetached();
+  if (detachedSupervisorChild.pid) {
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${detachedSupervisorChild.pid}`);
+    return;
+  }
+
+  appendLog(launcherLog, `[supervisor] detached node supervisor skipped: ${detachedSupervisorChild.error || "failed"}`);
+
   const supervisorChildResult = startSupervisorChild();
   if (supervisorChildResult.status === 0) {
     const childPid = String(supervisorChildResult.stdout || "").trim().split(/\s+/).pop();
@@ -62,6 +70,38 @@ function main() {
     launcherLog,
     `[supervisor] Start-Process supervisor child skipped: ${String(
       supervisorChildResult.stderr || supervisorChildResult.stdout || supervisorChildResult.error || "failed",
+    ).trim()}`,
+  );
+
+  const supervisorCommandLine = `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
+    realDesignMode ? "--real-design" : "--mock-design",
+  )} ${cmdQuote("--supervisor-child")}`;
+  const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
+  if (supervisorCreateResult.status === 0) {
+    const pid = String(supervisorCreateResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] Win32_Process node supervisor skipped: ${String(
+      supervisorCreateResult.stderr || supervisorCreateResult.stdout || supervisorCreateResult.error || "failed",
+    ).trim()}`,
+  );
+
+  const launcherCommandLine = `cmd.exe /d /c ${cmdQuote(launcherCmd)}`;
+  const launcherCreateResult = createWindowsProcess(launcherCommandLine);
+  if (launcherCreateResult.status === 0) {
+    const launcherPid = String(launcherCreateResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] Win32_Process launcher skipped: ${String(
+      launcherCreateResult.stderr || launcherCreateResult.stdout || launcherCreateResult.error || "failed",
     ).trim()}`,
   );
 
@@ -88,25 +128,51 @@ function main() {
   }
 
   appendLog(launcherLog, `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`);
-  const commandLine = `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
-    realDesignMode ? "--real-design" : "--mock-design",
-  )} ${cmdQuote("--supervisor-child")}`;
+
+  throw new Error("failed to launch desktop services");
+}
+
+function spawnSupervisorChildDetached() {
+  let stdout;
+  let stderr;
+  try {
+    stdout = fs.openSync(launcherLog, "a");
+    stderr = fs.openSync(launcherLog, "a");
+    const child = spawn(
+      process.execPath,
+      ["tools/desktop-service-supervisor.js", realDesignMode ? "--real-design" : "--mock-design", "--supervisor-child"],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        detached: true,
+        stdio: ["ignore", stdout, stderr],
+        windowsHide: true,
+      },
+    );
+    child.unref();
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+    return { pid: child.pid };
+  } catch (error) {
+    if (stdout) fs.closeSync(stdout);
+    if (stderr) fs.closeSync(stderr);
+    return { pid: 0, error: error?.message || String(error) };
+  }
+}
+
+function createWindowsProcess(commandLine) {
   const script =
-    `$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(commandLine)}; CurrentDirectory = ${psQuote(process.cwd())} }; ` +
+    `$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(
+      commandLine,
+    )}; CurrentDirectory = ${psQuote(process.cwd())} }; ` +
     "if ($result.ReturnValue -ne 0) { throw \"Win32_Process.Create failed: $($result.ReturnValue)\" }; " +
     "$result.ProcessId";
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+  return spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
     cwd: process.cwd(),
     env: process.env,
     encoding: "utf8",
     windowsHide: true,
   });
-  if (result.status !== 0) {
-    appendLog(launcherLog, `[supervisor] Win32_Process.Create skipped: ${String(result.stderr || result.stdout || "failed").trim()}`);
-    throw new Error("failed to launch desktop services");
-  }
-  const pid = String(result.stdout || "").trim().split(/\s+/).pop();
-  console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
 }
 
 function startSupervisorChild() {
@@ -164,7 +230,6 @@ function setModeEnv() {
     process.env.ALLOW_REAL_DESIGN_START = "1";
     return;
   }
-  process.env.ALLOW_MOCK_DESIGN_START = "1";
   process.env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
   process.env.DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
 }
@@ -174,14 +239,19 @@ function assertModeSwitchAllowed() {
     !realDesignMode &&
     (fs.existsSync(realModeLockFile) ||
       findConflictingDesignLaunchers("real").length ||
-      ((runtimeConfigLooksRealDesignMode() || preferredDesignModeIsReal()) && process.env.ALLOW_MOCK_DESIGN_START !== "1"))
+      ((runtimeConfigLooksRealDesignMode() || preferredDesignModeIsReal()) && process.env.FORCE_MOCK_DESIGN_START !== "1"))
   ) {
     throw new Error(
-      `Mock design launch is blocked because real mode is active, preferred, or locked at ${realModeLockFile}. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+      `Mock design launch is blocked because real mode is active, preferred, or locked at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
     );
   }
   if (!realDesignMode) return;
   if (!fs.existsSync(mockModeLockFile)) return;
+  if (mockModeLockIsStaleForRealStart()) {
+    fs.rmSync(mockModeLockFile, { force: true });
+    appendLog(launcherLog, `[supervisor] removed stale mock mode lock before real design startup: ${mockModeLockFile}`);
+    return;
+  }
   throw new Error(
     `Real design launch is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
   );
@@ -249,6 +319,39 @@ function findConflictingDesignLaunchers(mode) {
   } catch {
     return [];
   }
+}
+
+function mockModeLockIsStaleForRealStart() {
+  if (!realDesignMode) return false;
+  return (
+    !findConflictingDesignLaunchers("mock").length &&
+    !getPortOwnerPids(numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)).length &&
+    !getPortOwnerPids(numberEnv("API_PORT", 3200)).length
+  );
+}
+
+function getPortOwnerPids(port) {
+  const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout) return [];
+  const suffix = `:${port}`;
+  const pids = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    if (String(parts[0]).toUpperCase() !== "TCP") continue;
+    const localAddress = parts[1] || "";
+    const state = parts[3] || "";
+    const pid = parts[4] || "";
+    if (!localAddress.endsWith(suffix)) continue;
+    if (!/LISTENING/i.test(state)) continue;
+    if (/^\d+$/.test(pid) && !pids.includes(pid)) pids.push(pid);
+  }
+  return pids;
+}
+
+function numberEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function runtimeConfigLooksRealDesignMode() {
@@ -342,7 +445,7 @@ function buildLauncherCmd() {
 
 function launcherEnvKeys() {
   const keys = [
-    "ALLOW_MOCK_DESIGN_START",
+    "FORCE_MOCK_DESIGN_START",
     "NEXT_TELEMETRY_DISABLED",
     "USE_LOCAL_STORE",
     "WEB_PORT",

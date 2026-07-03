@@ -5,7 +5,23 @@ import { DesignPlatformClient } from "../integrations/design-platform/design-pla
 import { LocalStoreService } from "../local-store/local-store.service";
 import { OrdersService } from "../orders/orders.service";
 import { appConfig } from "../shared/app-config";
+import { rules } from "../shared/rules";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
+
+const { isHighValueBudget } = rules;
+
+type IdentityFields = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
+};
+
+type AutomationIdentityAudit = {
+  status: "passed" | "warning";
+  identityCount: number;
+  identities: Array<IdentityFields & { key: string; count: number; steps: string[] }>;
+  warnings: Array<{ step: string; path: string; reason: string; fields?: string[] }>;
+};
 
 type AutomationRun = {
   trigger: "startup" | "interval" | "manual";
@@ -17,7 +33,128 @@ type AutomationRun = {
   steps: Array<{ step: string; status: "completed" | "failed"; durationMs: number; errorMessage?: string }>;
   errors: Array<{ step: string; errorMessage: string }>;
   results: Record<string, unknown>;
+  identityAudit?: AutomationIdentityAudit;
 };
+
+const AUTOMATION_IDENTITY_SOURCE_KEYS = new Set([
+  "submitted",
+  "queued",
+  "created",
+  "updated",
+  "processed",
+  "sent",
+  "timedOut",
+  "failed",
+  "skipped",
+]);
+
+function normalizeIdentityValue(value: unknown) {
+  return String(value || "").trim();
+}
+
+function collectIdentityValues(record: any, field: keyof IdentityFields) {
+  const values = new Set<string>();
+  const candidates = [
+    record?.[field],
+    record?.identityBinding?.[field],
+    record?.conversation?.[field],
+    record?.designJob?.[field],
+    record?.quoteDraft?.[field],
+    record?.orderDraft?.[field],
+    record?.sendTask?.[field],
+    record?.target?.[field],
+  ];
+  for (const candidate of candidates) {
+    const value = normalizeIdentityValue(candidate);
+    if (value) values.add(value);
+  }
+  return [...values];
+}
+
+function extractAutomationIdentity(record: any): IdentityFields {
+  const identity: IdentityFields = {};
+  for (const field of ["wechatAccountId", "conversationId", "customerId"] as const) {
+    const values = collectIdentityValues(record, field);
+    if (values.length === 1) identity[field] = values[0];
+  }
+  return identity;
+}
+
+function automationIdentityKey(identity: IdentityFields) {
+  return [
+    identity.wechatAccountId || "*",
+    identity.conversationId || "*",
+    identity.customerId || "*",
+  ].join("|");
+}
+
+function collectAutomationIdentityRecords(step: string, value: unknown, path: string, records: any[]) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectAutomationIdentityRecords(step, item, `${path}[${index}]`, records));
+    return;
+  }
+  const entry = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(entry)) {
+    if (AUTOMATION_IDENTITY_SOURCE_KEYS.has(key) && Array.isArray(child)) {
+      child.forEach((item, index) => {
+        records.push({ step, path: `${path}.${key}[${index}]`, item });
+      });
+      continue;
+    }
+    if (child && typeof child === "object") {
+      collectAutomationIdentityRecords(step, child, `${path}.${key}`, records);
+    }
+  }
+}
+
+function buildAutomationIdentityAudit(run: AutomationRun): AutomationIdentityAudit {
+  const records: Array<{ step: string; path: string; item: any }> = [];
+  for (const [step, result] of Object.entries(run.results || {})) {
+    if (step === "readiness") continue;
+    collectAutomationIdentityRecords(step, result, step, records);
+  }
+
+  const identityMap = new Map<string, IdentityFields & { key: string; count: number; steps: Set<string> }>();
+  const warnings: AutomationIdentityAudit["warnings"] = [];
+  for (const record of records) {
+    const conflictFields = (["wechatAccountId", "conversationId", "customerId"] as const).filter(
+      (field) => collectIdentityValues(record.item, field).length > 1,
+    );
+    if (conflictFields.length) {
+      warnings.push({ step: record.step, path: record.path, reason: "identity_field_conflict", fields: conflictFields });
+      continue;
+    }
+    const identity = extractAutomationIdentity(record.item);
+    if (!identity.wechatAccountId && !identity.conversationId && !identity.customerId) {
+      warnings.push({ step: record.step, path: record.path, reason: "missing_identity" });
+      continue;
+    }
+    const key = automationIdentityKey(identity);
+    const current = identityMap.get(key) || { ...identity, key, count: 0, steps: new Set<string>() };
+    current.count += 1;
+    current.steps.add(record.step);
+    identityMap.set(key, current);
+  }
+
+  const identities = [...identityMap.values()]
+    .map((item) => ({
+      key: item.key,
+      wechatAccountId: item.wechatAccountId,
+      conversationId: item.conversationId,
+      customerId: item.customerId,
+      count: item.count,
+      steps: [...item.steps].sort(),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  return {
+    status: warnings.length ? "warning" : "passed",
+    identityCount: identities.length,
+    identities,
+    warnings,
+  };
+}
 
 @Injectable()
 export class AutomationService implements OnModuleInit, OnModuleDestroy {
@@ -148,12 +285,32 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     const conversations = this.store?.listConversations?.() || [];
     const quoteDrafts = this.store?.listQuoteDrafts?.() || [];
     const orderDrafts = this.store?.listOrderDrafts?.() || [];
-    const lowValueDrafts = designJobs.filter((job: any) => job.status === "draft" && !job.isHighValue);
-    const quickConfirmJobs = designJobs.filter((job: any) => job.status === "quick_confirm" && !job.isHighValue);
+    const isLowValueDesignJob = (job: any) => !job.isHighValue && !isHighValueBudget(job.budget, appConfig.highValueAmountCny);
+    const isHighValueAmount = (total?: unknown, unit?: unknown) => {
+      const totalAmount = Number(total || 0);
+      const unitAmount = Number(unit || 0);
+      return (
+        (Number.isFinite(totalAmount) && totalAmount >= appConfig.highValueAmountCny) ||
+        (Number.isFinite(unitAmount) && unitAmount >= appConfig.highValueAmountCny)
+      );
+    };
+    const isLowValueQuote = (quote: any) =>
+      !quote.isHighValue &&
+      !quote.designJob?.isHighValue &&
+      !isHighValueBudget(quote.designJob?.budget, appConfig.highValueAmountCny) &&
+      !isHighValueAmount(quote.totalPrice, quote.unitPrice);
+    const isLowValueOrder = (order: any) =>
+      !order.isHighValue &&
+      !order.designJob?.isHighValue &&
+      !order.quoteDraft?.designJob?.isHighValue &&
+      !isHighValueBudget(order.designJob?.budget || order.quoteDraft?.designJob?.budget, appConfig.highValueAmountCny) &&
+      !isHighValueAmount(order.totalPrice ?? order.quoteDraft?.totalPrice, order.unitPrice ?? order.quoteDraft?.unitPrice);
+    const lowValueDrafts = designJobs.filter((job: any) => job.status === "draft" && isLowValueDesignJob(job));
+    const quickConfirmJobs = designJobs.filter((job: any) => job.status === "quick_confirm" && isLowValueDesignJob(job));
     const pendingSendTasks = sendTasks.filter((task: any) => ["queued", "sending", "pending_ack"].includes(String(task.status || "")));
     const manualLockedConversations = conversations.filter((conversation: any) => conversation.manualLocked || conversation.status === "manual_locked");
-    const lowValueQuotesReady = quoteDrafts.filter((quote: any) => !quote.isHighValue && ["draft", "auto_sent", "accepted"].includes(String(quote.status || "")));
-    const lowValueOrdersReady = orderDrafts.filter((order: any) => !order.isHighValue && ["confirmed", "paid", "processing", "fulfilled"].includes(String(order.status || "")));
+    const lowValueQuotesReady = quoteDrafts.filter((quote: any) => isLowValueQuote(quote) && ["draft", "auto_sent", "accepted"].includes(String(quote.status || "")));
+    const lowValueOrdersReady = orderDrafts.filter((order: any) => isLowValueOrder(order) && ["confirmed", "paid", "processing", "fulfilled"].includes(String(order.status || "")));
 
     checks.push({
       key: "manual_locks",
@@ -267,6 +424,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     } finally {
       run.completedAt = new Date().toISOString();
       run.durationMs = Date.now() - startedAt.getTime();
+      run.identityAudit = buildAutomationIdentityAudit(run);
       if (!run.skipped) this.runCount += 1;
       this.lastRun = run;
       this.recordRun(run);

@@ -17,6 +17,7 @@ module.exports = {
   ...require("./selectionMatcher"),
   ...require("./quoteMessage"),
   ...require("./quoteAcceptance"),
+  ...require("./quotePaymentProofReview"),
   ...require("./sendGuard"),
   ...require("./skillCompiler"),
   ...require("./skuImport"),

@@ -7,6 +7,7 @@ const {
   diagnoseWechatWindowSnapshot,
   evaluateTrainingSampleQuality,
   inspectBundleAutomationReadiness,
+  isHighValueBudget,
   isSceneClarificationReply,
   isTrainingSampleReady,
   normalizeTrainingSampleStatus,
@@ -75,6 +76,60 @@ function localStoreIsSceneClarificationDerivedBusinessSkill(data: StoreData, ski
 function localStoreIsSceneClarificationKnowledgeEntry(data: StoreData, entry: any) {
   const sample = entry?.sourceId ? data.trainingSamples.find((item) => item.id === entry.sourceId) : null;
   return Boolean(sample && isSceneClarificationReply(sample.idealReply));
+}
+
+function resolveSkillSuggestionSourceScope(data: StoreData, suggestion: any) {
+  const sampleIds = Array.isArray(suggestion?.sampleIds) ? suggestion.sampleIds.map(String).filter(Boolean) : [];
+  if (!sampleIds.length) return { ok: true, identityFields: {}, binding: null };
+  const samples = sampleIds.map((sampleId: string) => data.trainingSamples.find((sample) => sample.id === sampleId)).filter(Boolean);
+  if (samples.length !== sampleIds.length) return { ok: false, reason: "missing_source_sample", identityFields: {}, binding: null };
+  const identityFields = sharedIdentityFields(samples);
+  if (!identityFields) return { ok: false, reason: "mixed_source_identity", identityFields: {}, binding: null };
+  const hasIdentity = Boolean(identityFields.wechatAccountId || identityFields.conversationId || identityFields.customerId);
+  return {
+    ok: true,
+    identityFields,
+    binding: hasIdentity
+      ? {
+          status: "passed",
+          ...identityFields,
+          sourceSampleIds: sampleIds,
+        }
+      : null,
+  };
+}
+
+function sharedIdentityFields(records: any[]) {
+  const fields: IdentityListFilter = {};
+  for (const key of ["wechatAccountId", "conversationId", "customerId"] as const) {
+    const values = [
+      ...new Set(
+        records
+          .map((record) => String(record?.[key] || record?.identityBinding?.[key] || "").trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (values.length > 1) return null;
+    if (values.length === 1) fields[key] = values[0];
+  }
+  return fields;
+}
+
+function skillIdentityFields(data: StoreData, skill: any) {
+  const direct = sharedIdentityFields([skill]);
+  if (direct && (direct.wechatAccountId || direct.conversationId || direct.customerId)) return direct;
+  const sampleIds = Array.isArray(skill?.sourceSampleIds) ? skill.sourceSampleIds.map(String).filter(Boolean) : [];
+  if (!sampleIds.length) return {};
+  const samples = sampleIds.map((sampleId: string) => data.trainingSamples.find((sample) => sample.id === sampleId)).filter(Boolean);
+  return sharedIdentityFields(samples) || {};
+}
+
+function sameSkillIdentityScope(left: IdentityListFilter = {}, right: IdentityListFilter = {}) {
+  return (
+    String(left.wechatAccountId || "") === String(right.wechatAccountId || "") &&
+    String(left.conversationId || "") === String(right.conversationId || "") &&
+    String(left.customerId || "") === String(right.customerId || "")
+  );
 }
 
 @Injectable()
@@ -261,18 +316,19 @@ export class LocalStoreService {
     return this.hydrateDesignJob(data, data.designJobs[index]);
   }
 
-  listAgents() {
+  listAgents(filter: IdentityListFilter = {}) {
     const data = this.read();
     return data.agents
-      .map((agent) => this.hydrateAgent(data, agent))
+      .map((agent) => this.hydrateAgent(data, agent, filter))
       .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
   }
 
-  listAgentSkills(agentId?: string) {
+  listAgentSkills(agentId?: string, filter: IdentityListFilter = {}) {
     const data = this.read();
     return data.agentSkills
       .filter((skill) => !agentId || skill.agentId === agentId)
       .filter((skill) => !localStoreIsSceneClarificationDerivedBusinessSkill(data, skill))
+      .filter((skill) => this.matchesSkillIdentityFilter(data, skill, filter))
       .sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
   }
 
@@ -291,10 +347,16 @@ export class LocalStoreService {
         result.skipped.push({ ...suggestion, reason: "missing_agent_or_name" });
         continue;
       }
+      const sourceScope = resolveSkillSuggestionSourceScope(data, suggestion);
+      if (!sourceScope.ok) {
+        result.skipped.push({ ...suggestion, reason: sourceScope.reason });
+        continue;
+      }
       const existingIndex = data.agentSkills.findIndex(
         (skill) =>
           skill.agentId === suggestion.agentId &&
-          canonicalSkillName(skill.name) === canonicalSkillName(suggestion.name),
+          canonicalSkillName(skill.name) === canonicalSkillName(suggestion.name) &&
+          sameSkillIdentityScope(skillIdentityFields(data, skill), sourceScope.identityFields),
       );
       const nextPatch = {
         name: suggestion.name,
@@ -304,6 +366,8 @@ export class LocalStoreService {
         confidence: Number(suggestion.confidence || 0),
         sourceType: "training_compiler",
         sourceSampleIds: suggestion.sampleIds || [],
+        ...sourceScope.identityFields,
+        identityBinding: sourceScope.binding,
         lastCompiledAt: now,
         updatedAt: now,
       };
@@ -1557,7 +1621,7 @@ export class LocalStoreService {
       .map((task) => task.id);
   }
 
-  createQuoteFromDesignJob(designJobId: string, selectedImageId?: string) {
+  createQuoteFromDesignJob(designJobId: string, selectedImageId?: string, options: { highValueAmountCny?: number } = {}) {
     const data = this.read();
     const job = data.designJobs.find((item) => item.id === designJobId);
     if (!job) throw new Error(`local design job not found: ${designJobId}`);
@@ -1572,6 +1636,12 @@ export class LocalStoreService {
     const totalPrice = totals.salePrice * quantity;
     const totalCost = totals.cost * quantity;
     const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
+    const highValueAmount = Number(options.highValueAmountCny || 10000);
+    const highValueQuote =
+      job.isHighValue ||
+      isHighValueBudget(job.budget, highValueAmount) ||
+      (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
+      (Number.isFinite(totals.salePrice) && totals.salePrice >= highValueAmount);
     const quoteDraft = {
       designJobId,
       customerId: job.customerId,
@@ -1591,7 +1661,7 @@ export class LocalStoreService {
       totalPrice,
       totalCost,
       profit: totalPrice - totalCost,
-      status: job.isHighValue || !bundleAutomation.ok ? "manual_review" : "auto_sent",
+      status: highValueQuote || !bundleAutomation.ok ? "manual_review" : "auto_sent",
       paymentStatus: "unpaid",
       sendTaskId: null,
       identityBinding: identity,
@@ -1843,6 +1913,20 @@ export class LocalStoreService {
     return true;
   }
 
+  private matchesSkillIdentityFilter(data: StoreData, skill: any, filter: IdentityListFilter = {}) {
+    const expectedWechatAccountId = String(filter.wechatAccountId || "").trim();
+    const expectedConversationId = String(filter.conversationId || "").trim();
+    const expectedCustomerId = String(filter.customerId || "").trim();
+    if (!expectedWechatAccountId && !expectedConversationId && !expectedCustomerId) return true;
+    const sourceSampleIds = Array.isArray(skill?.sourceSampleIds) ? skill.sourceSampleIds.map(String).filter(Boolean) : [];
+    if (!sourceSampleIds.length) return true;
+    const samples = sourceSampleIds
+      .map((sampleId: string) => data.trainingSamples.find((sample) => sample.id === sampleId))
+      .filter(Boolean);
+    if (!samples.length) return false;
+    return samples.every((sample: any) => this.matchesIdentityFilter(sample, filter));
+  }
+
   private recordIdentity(record: any) {
     const designJob = record?.designJob || null;
     const quoteDraft = record?.quoteDraft || null;
@@ -1898,14 +1982,19 @@ export class LocalStoreService {
     };
   }
 
-  private hydrateAgent(data: StoreData, agent: any) {
-    const samples = data.trainingSamples.filter((sample) => sample.agentId === agent.id);
+  private hydrateAgent(data: StoreData, agent: any, filter: IdentityListFilter = {}) {
+    const samples = data.trainingSamples
+      .filter((sample) => sample.agentId === agent.id)
+      .filter((sample) => this.matchesIdentityFilter(sample, filter));
     const averageScore = samples.length
       ? round(samples.reduce((sum, sample) => sum + Number(sample.score || 0), 0) / samples.length)
       : 0;
     return {
       ...agent,
-      skills: data.agentSkills.filter((skill) => skill.agentId === agent.id),
+      skills: data.agentSkills
+        .filter((skill) => skill.agentId === agent.id)
+        .filter((skill) => !localStoreIsSceneClarificationDerivedBusinessSkill(data, skill))
+        .filter((skill) => this.matchesSkillIdentityFilter(data, skill, filter)),
       trainingSampleCount: samples.length,
       averageTrainingScore: averageScore,
     };
@@ -1941,12 +2030,23 @@ export class LocalStoreService {
       customer: data.customers.find((item) => item.id === job.customerId) || null,
       conversation: data.conversations.find((item) => item.id === job.conversationId) || null,
       wechatAccount: data.wechatAccounts.find((item) => item.id === job.wechatAccountId) || null,
-      assets: data.designAssets.filter((item) => (job.assetIds || []).includes(item.id)),
+      assets: data.designAssets
+        .filter((item) => (job.assetIds || []).includes(item.id))
+        .filter((item) => this.designAssetMatchesJobIdentity(item, job)),
       images: data.designImages.filter((item) => item.designJobId === job.id).sort((a, b) => a.position - b.position),
       revisions: data.designRevisions
         .filter((item) => item.designJobId === job.id)
         .sort((a, b) => Number(a.revisionNumber || 0) - Number(b.revisionNumber || 0)),
     };
+  }
+
+  private designAssetMatchesJobIdentity(asset: any, job: any) {
+    if (asset?.ownerType !== "customer") return false;
+    if (asset?.ownerId && job?.customerId && asset.ownerId !== job.customerId) return false;
+    if (asset?.customerId && job?.customerId && asset.customerId !== job.customerId) return false;
+    if (asset?.conversationId && job?.conversationId && asset.conversationId !== job.conversationId) return false;
+    if (asset?.wechatAccountId && job?.wechatAccountId && asset.wechatAccountId !== job.wechatAccountId) return false;
+    return Boolean(asset?.id && job?.id);
   }
 
   private hydrateSendTask(data: StoreData, task: any) {

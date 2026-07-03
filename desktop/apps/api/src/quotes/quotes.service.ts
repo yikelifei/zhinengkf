@@ -4,6 +4,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
+import { OrdersService } from "../orders/orders.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
 const {
@@ -11,6 +12,8 @@ const {
   calculateTotals,
   evaluateLowValueQuoteSend,
   inspectBundleAutomationReadiness,
+  isHighValueBudget,
+  quoteNeedsPaymentProofReview,
   validateQuoteDraftIdentity,
 } = rules;
 
@@ -19,6 +22,7 @@ export class QuotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly localStore: LocalStoreService,
+    private readonly orders: OrdersService,
     private readonly wechatDispatch: WechatDispatchService,
   ) {}
 
@@ -28,7 +32,11 @@ export class QuotesService {
       return this.syncExistingQuoteSelection(existing, selectedImageId);
     }
 
-    if (appConfig.useLocalStore) return this.localStore.createQuoteFromDesignJob(designJobId, selectedImageId);
+    if (appConfig.useLocalStore) {
+      return this.localStore.createQuoteFromDesignJob(designJobId, selectedImageId, {
+        highValueAmountCny: appConfig.highValueAmountCny,
+      });
+    }
     const job = await this.prisma.designJob.findUnique({
       where: { id: designJobId },
       include: { images: true, conversation: true },
@@ -46,7 +54,12 @@ export class QuotesService {
     const totalPrice = Number(totals.salePrice) * quantity;
     const totalCost = Number(totals.cost) * quantity;
     const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
-    const isAutoQuote = !job.isHighValue && bundleAutomation.ok;
+    const highValueQuote =
+      job.isHighValue ||
+      isHighValueBudget(job.budget, appConfig.highValueAmountCny) ||
+      (Number.isFinite(totalPrice) && totalPrice >= appConfig.highValueAmountCny) ||
+      (Number.isFinite(Number(totals.salePrice)) && Number(totals.salePrice) >= appConfig.highValueAmountCny);
+    const isAutoQuote = !highValueQuote && bundleAutomation.ok;
     const identity = validateQuoteDraftIdentity({
       quoteDraft: {
         designJobId: job.id,
@@ -295,6 +308,106 @@ export class QuotesService {
     return { quote: updated, sendTask };
   }
 
+  async verifyPaymentProofAndQueueConfirmation(
+    id: string,
+    payload: {
+      paymentStatus?: "deposit_paid" | "paid";
+      owner?: string;
+      note?: string;
+    } & ExpectedIdentityPayload = {},
+  ) {
+    const paymentStatus = normalizeVerifiedPaymentStatus(payload.paymentStatus);
+    const quote = await this.getQuoteForSend(id);
+    if (!quote) throw new BadRequestException(`quote draft not found: ${id}`);
+    this.ensureQuoteIdentity(quote);
+    assertExpectedIdentity(quote, payload, "quote draft");
+
+    const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
+    const reviewer = payload.owner || quote.owner || "人工客服";
+    const note = payload.note || `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`;
+    const quotePatch = {
+      status: "accepted",
+      paymentStatus,
+      owner: reviewer,
+      customerNotes: note,
+    };
+    const updatedQuote = await this.update(id, { ...payload, ...quotePatch });
+    const orderDraft = await this.orders.createFromQuote(id, {
+      expectedWechatAccountId: payload.expectedWechatAccountId,
+      expectedConversationId: payload.expectedConversationId,
+      expectedCustomerId: payload.expectedCustomerId,
+    });
+    const confirmedOrder = await this.orders.update(orderDraft.id, {
+      expectedWechatAccountId: payload.expectedWechatAccountId,
+      expectedConversationId: payload.expectedConversationId,
+      expectedCustomerId: payload.expectedCustomerId,
+      status: "confirmed",
+      paymentStatus,
+      owner: reviewer,
+      customerNotes: note,
+    });
+
+    const conversationId = confirmedOrder.conversationId || updatedQuote.designJob?.conversationId;
+    if (conversationId) {
+      await this.wechatDispatch.setConversationManualLock(conversationId, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
+        locked: false,
+        reviewer,
+        reason: "manual_payment_proof_verified",
+        note: `${note} 已解除人工接管，订单确认进入安全发送前校验。`,
+      });
+    }
+
+    try {
+      const confirmation = await this.wechatDispatch.queueOrderConfirmation(confirmedOrder.id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
+        owner: reviewer,
+        note: "订单确认已进入微信安全发送队列。",
+        reason: "manual_payment_proof_verified",
+        automation: {
+          source: "manual_payment_proof_verified",
+          quoteDraftId: id,
+          paymentStatus,
+        },
+      });
+      await this.createReviewLog({
+        targetType: "quote",
+        targetId: id,
+        decision: "manual_payment_proof_verified",
+        reviewer,
+        note,
+        beforeStatus: quote.status || "",
+        afterStatus: "accepted",
+        metadata: {
+          source: "manual_payment_proof_verified",
+          quoteDraftId: id,
+          orderDraftId: confirmedOrder.id,
+          designJobId: quote.designJobId,
+          paymentStatus,
+          sendTaskId: confirmation.sendTask?.id || null,
+        },
+      });
+      return { quote: updatedQuote, orderDraft: confirmation.orderDraft, sendTask: confirmation.sendTask, message: confirmation.message };
+    } catch (error) {
+      if (conversationId) {
+        await this.wechatDispatch.setConversationManualLock(conversationId, {
+          expectedWechatAccountId: payload.expectedWechatAccountId,
+          expectedConversationId: payload.expectedConversationId,
+          expectedCustomerId: payload.expectedCustomerId,
+          locked: true,
+          reviewer,
+          reason: "manual_payment_proof_queue_failed",
+          note: `付款凭证已核验，但订单确认未能入队，已重新人工接管：${error instanceof Error ? error.message : "unknown error"}`,
+        });
+      }
+      throw error;
+    }
+  }
+
   async scanLowValueAutoQuoteSends() {
     const quotes = await this.list();
     const result = {
@@ -449,6 +562,7 @@ export class QuotesService {
     if (!quote.selectedImageId) warnings.push("报价还没有选图");
     if (!quote.designJob?.wechatAccountId) warnings.push("报价缺少微信账号");
     if (!quote.designJob?.conversationId) warnings.push("报价缺少客户会话");
+    if (quoteNeedsPaymentProofReview(quote)) warnings.push("付款凭证需要先人工核验金额和收款账户");
     if (quote.status === "manual_review") warnings.push("报价正在等待人工审核");
     if (Number(quote.profit || 0) < 0) warnings.push("报价利润为负，需要人工确认");
     return warnings;
@@ -600,4 +714,9 @@ function assertManualReleaseReason(reason: unknown, context: string) {
   if (!text || !text.startsWith("manual_")) {
     throw new BadRequestException(`${context} 需要填写明确的人工处理原因，原因编码必须以 manual_ 开头。`);
   }
+}
+
+function normalizeVerifiedPaymentStatus(value: unknown): "deposit_paid" | "paid" {
+  if (value === "deposit_paid" || value === "paid") return value;
+  throw new BadRequestException("付款凭证核验只允许标记为定金已付或全款已付。");
 }

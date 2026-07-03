@@ -94,9 +94,9 @@ function startSupervisorChild() {
 
 function assertModeSwitchAllowed() {
   if (!realDesignMode) {
-    if (!fs.existsSync(realModeLockFile) && (!preferredDesignModeIsReal() || process.env.ALLOW_MOCK_DESIGN_START === "1")) return;
+    if (!fs.existsSync(realModeLockFile) && (!preferredDesignModeIsReal() || process.env.FORCE_MOCK_DESIGN_START === "1")) return;
     throw new Error(
-      `Mock design launch is blocked because real mode is preferred or locked at ${realModeLockFile}. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+      `Mock design launch is blocked because real mode is preferred or locked at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
     );
   }
   if (!fs.existsSync(mockModeLockFile)) return;
@@ -239,6 +239,7 @@ function launcherEnvKeys() {
     "API_PORT",
     "MOCK_DESIGN_PLATFORM_PORT",
     "START_MOCK_DESIGN_PLATFORM",
+    "FORCE_MOCK_DESIGN_START",
     "DESIGN_PLATFORM_RUNTIME_CONFIG",
   ];
   if (realDesignMode) {

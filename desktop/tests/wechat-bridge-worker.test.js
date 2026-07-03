@@ -433,6 +433,32 @@ test("builds bridge worker status without leaking payload content", () => {
   assert.equal(Object.hasOwn(status.result.processed[0], "payload"), false);
 });
 
+test("marks bridge worker status failed when scanned tasks fail", () => {
+  const status = buildWorkerStatus(
+    {
+      scanned: 1,
+      outboxDir: "outbox",
+      processed: [],
+      skipped: [],
+      failed: [{ taskId: "send_1", wechatAccountId: "wechat_1", errorMessage: "invalid outbox" }],
+    },
+    {
+      apiBase: "http://127.0.0.1:3200/api",
+      inboxDir: "inbox",
+      lockDir: "locks",
+      statusFile: "status.json",
+      mode: "noop",
+      ackTransport: "file_scan",
+    },
+    new Date().toISOString(),
+  );
+
+  assert.equal(status.ok, false);
+  assert.equal(status.status, "failed");
+  assert.equal(status.result.failedCount, 1);
+  assert.equal(status.result.failed[0].errorMessage, "invalid outbox");
+});
+
 test("writes bridge worker status json file", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-bridge-status-"));
   const statusFile = path.join(dir, "nested", "status.json");

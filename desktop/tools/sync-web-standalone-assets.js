@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, "..");
 const webRoot = path.join(root, "apps", "web");
 const nextRoot = path.join(webRoot, ".next");
 const standaloneWebRoot = path.join(nextRoot, "standalone", "apps", "web");
+const standaloneServer = path.join(standaloneWebRoot, "server.js");
 const excludedNextEntries = new Set(["cache", "dev", "diagnostics", "standalone", "trace"]);
 const transientFsErrorCodes = new Set(["EBUSY", "EMFILE", "ENFILE", "EPERM"]);
 
@@ -67,6 +68,9 @@ function syncStandaloneNextBuild() {
 
 if (!fs.existsSync(standaloneWebRoot)) {
   throw new Error("Missing standalone output. Run `next build apps/web` first.");
+}
+if (!fs.existsSync(standaloneServer)) {
+  throw new Error(`Missing standalone server entry: ${path.relative(root, standaloneServer)}`);
 }
 
 copyDirectory(path.join(webRoot, "public"), path.join(standaloneWebRoot, "public"));

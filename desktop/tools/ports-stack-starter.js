@@ -20,7 +20,7 @@ const realDesignMode =
   (!requestedMockDesignMode &&
     (fs.existsSync(realModeLockFile) || runtimeConfigLooksRealDesignMode() || preferredDesignMode === "real"));
 const mockDesignMode = !realDesignMode;
-const allowMockDesignStart = process.env.ALLOW_MOCK_DESIGN_START === "1" || requestedMockDesignMode;
+const allowMockDesignStart = process.env.FORCE_MOCK_DESIGN_START === "1";
 const modeArg = realDesignMode ? "--real-design" : "--mock-design";
 const supervisorMode = realDesignMode ? "real" : "mock";
 const supervisorScript = path.join(desktopRoot, "tools", "desktop-service-supervisor.ps1");
@@ -45,7 +45,7 @@ async function main() {
 
   if (mockDesignMode && (fs.existsSync(realModeLockFile) || runtimeConfigRealMode || preferredRealMode) && !allowMockDesignStart) {
     console.error(
-      `[launch] mock design launch is blocked because real design mode is locked, configured, or preferred at ${realModeLockFile}. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+      `[launch] mock design launch is blocked because real design mode is locked, configured, or preferred at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
     );
     process.exit(1);
   }
@@ -55,6 +55,11 @@ async function main() {
       "[launch] mock design launch is blocked because the active API is using the real design platform. Run npm.cmd run ports:stop before switching to mock design mode.",
     );
     process.exit(1);
+  }
+
+  if (await activeStackMatchesRequestedMode()) {
+    console.log(`[launch] ${realDesignMode ? "real" : "mock"} design stack is already running; skipping duplicate launch.`);
+    return;
   }
 
   if (realDesignMode) {
@@ -83,9 +88,14 @@ async function main() {
   }
 
   if (realDesignMode && fs.existsSync(mockModeLockFile)) {
+    if (mockModeLockIsStaleForRealStart()) {
+      fs.rmSync(mockModeLockFile, { force: true });
+      console.log(`[launch] removed stale mock mode lock before real design startup: ${mockModeLockFile}`);
+    } else {
     throw new Error(
       `Real design launch is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
     );
+    }
   }
   if (realDesignMode) {
     fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
@@ -101,7 +111,7 @@ async function main() {
   if (mockDesignMode) {
     env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
     env.DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
-    env.ALLOW_MOCK_DESIGN_START = "1";
+    if (allowMockDesignStart) env.FORCE_MOCK_DESIGN_START = "1";
   } else {
     env.DESIGN_PLATFORM_ADAPTER = "art_image_local";
     env.DESIGN_PLATFORM_BASE_URL = realDesignBaseUrl();
@@ -109,18 +119,16 @@ async function main() {
   }
 
   if (process.platform === "win32" && fs.existsSync(supervisorJs)) {
-    logStep(`spawn supervisor js ${modeArg}`);
-    const child = spawn(process.execPath, ["tools/desktop-service-supervisor.js", modeArg], {
+    logStep(`run supervisor js ${modeArg}`);
+    const result = spawnSync(process.execPath, ["tools/desktop-service-supervisor.js", modeArg], {
       cwd: desktopRoot,
       env,
-      detached: true,
-      stdio: "ignore",
+      stdio: "inherit",
       windowsHide: true,
     });
-    child.unref();
-    logStep(`spawned supervisor js pid=${child.pid}`);
-    console.log(`[launch] node tools/desktop-service-supervisor.js ${modeArg} pid=${child.pid}`);
-    process.exit(0);
+    logStep(`supervisor js exited status=${result.status ?? "unknown"} signal=${result.signal || ""}`);
+    if (result.status !== 0) process.exit(result.status || 1);
+    return;
   }
 
   if (process.platform === "win32" && fs.existsSync(supervisorScript)) {
@@ -138,6 +146,10 @@ async function main() {
     return;
   }
 
+  launchDirectKeepAlive(env);
+}
+
+function launchDirectKeepAlive(env) {
   fs.appendFileSync(launcherLog, `\n[${new Date().toISOString()}] launching ${modeArg} keep-alive stack\n`, "utf8");
   const stdout = fs.openSync(launcherLog, "a");
   const stderr = fs.openSync(launcherLog, "a");
@@ -149,6 +161,7 @@ async function main() {
     windowsHide: true,
   });
   child.unref();
+  logStep(`spawn direct keep-alive ${modeArg} pid=${child.pid || "unknown"}`);
   console.log(`[launch] node tools/start-dev-ports.js ${modeArg} --keep-alive pid=${child.pid}`);
   process.exit(0);
 }
@@ -280,6 +293,37 @@ function managedPortsAreFree() {
   return managedPorts.every((port) => getPortOwnerPids(port).length === 0);
 }
 
+function mockModeLockIsStaleForRealStart() {
+  if (!realDesignMode) return false;
+  return (
+    !findConflictingDesignLaunchers().length &&
+    !getPortOwnerPids(numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)).length &&
+    !getPortOwnerPids(numberEnv("API_PORT", 3200)).length
+  );
+}
+
+async function activeStackMatchesRequestedMode() {
+  const webPort = numberEnv("WEB_PORT", 3100);
+  const apiPort = numberEnv("API_PORT", 3200);
+  const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+  if (!getPortOwnerPids(webPort).length || !getPortOwnerPids(apiPort).length) return false;
+  if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) return false;
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealth?.ok) return false;
+  const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
+  if (!integrationHealth?.ok) return false;
+  if (realDesignMode) {
+    return (
+      integrationHealth.adapter === "art_image_local" &&
+      normalizeBaseUrl(integrationHealth.baseUrl) === normalizeBaseUrl(realDesignBaseUrl())
+    );
+  }
+  return (
+    integrationHealth.adapter === "standard_v1" &&
+    normalizeBaseUrl(integrationHealth.baseUrl) === `http://127.0.0.1:${mockPort}`
+  );
+}
+
 async function activeApiLooksRealDesignMode() {
   const apiPort = numberEnv("API_PORT", 3200);
   if (!getPortOwnerPids(apiPort).length) return false;
@@ -391,6 +435,17 @@ function getJson(url, timeoutMs = 1500) {
     });
     req.on("timeout", () => req.destroy(new Error("timeout")));
     req.on("error", () => resolve(null));
+  });
+}
+
+function httpOk(url, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 400));
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", () => resolve(false));
   });
 }
 

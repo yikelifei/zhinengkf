@@ -37,6 +37,22 @@ test("skips high-value draft", () => {
   assert.equal(decision.reason, "manual_review_required");
 });
 
+test("skips high-value budget draft even when flag is stale", () => {
+  const decision = evaluateDesignAutoSubmit({
+    id: "design_1",
+    status: "draft",
+    isHighValue: false,
+    budget: { totalAmount: 12000, quantity: 80 },
+    bundle: { items: [{ skuCode: "BOX-A", imageUrl: "https://example.test/box.png" }] },
+    designType: "bundle_render",
+    scene: "enterprise gift",
+    assets: [{ id: "asset_1", url: "https://example.test/logo.png" }],
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_review_required");
+});
+
 test("skips draft when conversation is manually locked", () => {
   const decision = evaluateDesignAutoSubmit({
     id: "design_1",

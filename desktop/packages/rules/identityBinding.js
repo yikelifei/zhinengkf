@@ -146,9 +146,36 @@ function validateDesignAssetBinding({ designJob, assets, requestedAssetIds }) {
       actual: asset?.ownerType === "customer" ? asset?.ownerId || "" : `${asset?.ownerType || ""}:${asset?.ownerId || ""}`,
       passed: Boolean(asset?.ownerType === "customer" && asset?.ownerId && designJob?.customerId && asset.ownerId === designJob.customerId),
     });
+    if (asset?.customerId || designJob?.customerId) {
+      checks.push({
+        key: `assetCustomerIdentityMatchesJob:${assetId}`,
+        label: "design asset customer identity matches design job",
+        expected: designJob?.customerId || "",
+        actual: asset?.customerId || asset?.ownerId || "",
+        passed: Boolean(designJob?.customerId && (asset?.customerId || asset?.ownerId) === designJob.customerId),
+      });
+    }
+    if (asset?.conversationId || designJob?.conversationId) {
+      checks.push({
+        key: `assetConversationMatchesJob:${assetId}`,
+        label: "design asset conversation matches design job",
+        expected: designJob?.conversationId || "",
+        actual: asset?.conversationId || "",
+        passed: Boolean(asset?.conversationId && designJob?.conversationId && asset.conversationId === designJob.conversationId),
+      });
+    }
+    if (asset?.wechatAccountId || designJob?.wechatAccountId) {
+      checks.push({
+        key: `assetWechatAccountMatchesJob:${assetId}`,
+        label: "design asset wechat account matches design job",
+        expected: designJob?.wechatAccountId || "",
+        actual: asset?.wechatAccountId || "",
+        passed: Boolean(asset?.wechatAccountId && designJob?.wechatAccountId && asset.wechatAccountId === designJob.wechatAccountId),
+      });
+    }
   }
 
-  return summarize(checks, "design assets match design job customer");
+  return summarize(checks, "design assets match design job identity");
 }
 
 function validateQuoteDraftIdentity({ quoteDraft, designJob, conversation, selectedImage }) {

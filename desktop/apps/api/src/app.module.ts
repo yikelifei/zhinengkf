@@ -59,7 +59,16 @@ import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
     NotificationsService,
     OrdersService,
     PrismaService,
-    QuotesService,
+    {
+      provide: QuotesService,
+      useFactory: (
+        prisma: PrismaService,
+        localStore: LocalStoreService,
+        orders: OrdersService,
+        wechatDispatch: WechatDispatchService,
+      ) => new QuotesService(prisma, localStore, orders, wechatDispatch),
+      inject: [PrismaService, LocalStoreService, OrdersService, WechatDispatchService],
+    },
     ReviewsService,
     RoutingService,
     StorageService,

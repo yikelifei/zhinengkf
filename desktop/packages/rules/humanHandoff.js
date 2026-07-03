@@ -1,5 +1,7 @@
 "use strict";
 
+const { isHighValueBudget } = require("./budget");
+
 const ACTIONABLE_HIGH_VALUE_STATUSES = new Set([
   "draft",
   "completed",
@@ -9,9 +11,10 @@ const ACTIONABLE_HIGH_VALUE_STATUSES = new Set([
   "timeout",
 ]);
 
-function evaluateHighValueHandoff(job = {}) {
+function evaluateHighValueHandoff(job = {}, options = {}) {
   if (!job || !job.id) return skip("invalid_job");
-  if (!job.isHighValue) return skip("not_high_value");
+  const highValueAmount = Number(options.highValueAmountCny || 10000);
+  if (!job.isHighValue && !isHighValueBudget(job.budget, highValueAmount)) return skip("not_high_value");
   if (job.status === "manual_review") return skip("already_manual_review");
   if (!ACTIONABLE_HIGH_VALUE_STATUSES.has(job.status)) return skip("status_not_actionable");
 

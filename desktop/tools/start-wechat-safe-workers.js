@@ -84,12 +84,12 @@ async function main() {
 }
 
 async function assertApiReadyForSafeWorkers() {
-  const health = await getJson(`${apiBase}/health`, 2500);
+  const health = await waitForStableJson(`${apiBase}/health`, 2500, "API health");
   if (!health.ok) {
     throw new Error(`API is not reachable at ${apiBase}/health. Start the desktop stack first with: npm.cmd run ports:start:mock`);
   }
 
-  const bridgeStatus = await getJson(`${apiBase}/wechat/bridge/status`, 2500);
+  const bridgeStatus = await waitForStableJson(`${apiBase}/wechat/bridge/status`, 2500, "WeChat bridge status");
   if (!bridgeStatus.ok) {
     throw new Error(`WeChat bridge status is not reachable at ${apiBase}/wechat/bridge/status.`);
   }
@@ -103,7 +103,7 @@ async function assertApiReadyForSafeWorkers() {
   const expectedBaseUrl = normalizeBaseUrl(runtimeConfig.designPlatformBaseUrl || "");
   if (!expectedAdapter && !expectedBaseUrl) return;
 
-  const integration = await getJson(`${apiBase}/integrations/design-platform/health`, 2500);
+  const integration = await waitForStableJson(`${apiBase}/integrations/design-platform/health`, 2500, "design platform integration");
   if (!integration.ok) return;
   const actualAdapter = String(integration.data?.adapter || "");
   const actualBaseUrl = normalizeBaseUrl(integration.data?.baseUrl || "");
@@ -113,6 +113,28 @@ async function assertApiReadyForSafeWorkers() {
   if (expectedBaseUrl && actualBaseUrl && expectedBaseUrl !== actualBaseUrl) {
     throw new Error(`Design platform config mismatch: runtime base=${expectedBaseUrl}, API base=${actualBaseUrl}. Run npm.cmd run ports:stop, then npm.cmd run ports:start:mock.`);
   }
+}
+
+async function waitForStableJson(url, timeoutMs, label) {
+  const deadline = Date.now() + numberEnv("WECHAT_SAFE_API_READY_TIMEOUT_MS", 30000);
+  let last = { ok: false, errorMessage: "not checked" };
+  let consecutiveOk = 0;
+  while (Date.now() < deadline) {
+    last = await getJson(url, timeoutMs);
+    if (last.ok) {
+      consecutiveOk += 1;
+      if (consecutiveOk >= 2) return last;
+      await sleep(500);
+      continue;
+    }
+    consecutiveOk = 0;
+    await sleep(1000);
+  }
+  return {
+    ...last,
+    ok: false,
+    errorMessage: `${label} was not stable before timeout${last.errorMessage ? `: ${last.errorMessage}` : ""}`,
+  };
 }
 
 function startWorker(service) {
@@ -145,37 +167,11 @@ function startWindowsWorker(service) {
   const launcherLogPath = path.join(logsDir, `${service.name}.launcher.log`);
   const wrapperPath = path.join(runtimeDir, `run-${service.name}.cmd`);
   fs.writeFileSync(wrapperPath, buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogPath), "utf8");
-
-  const commandLine = `cmd.exe /d /c ${cmdQuote(wrapperPath)}`;
-  const script =
-    `$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(commandLine)}; CurrentDirectory = ${psQuote(desktopRoot)} }; ` +
-    "if ($result.ReturnValue -ne 0) { throw \"Win32_Process.Create failed: $($result.ReturnValue)\" }; " +
-    "$result.ProcessId";
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
-    cwd: desktopRoot,
-    env: windowsSafeEnv(process.env),
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  if (result.status === 0) {
-    const startedPid = Number(String(result.stdout || "").trim().split(/\s+/).pop());
-    if (!Number.isFinite(startedPid)) throw new Error(`failed to read ${service.name} pid`);
-    return startedPid;
-  }
-
-  const fallbackPid = startWindowsWorkerWithSpawn(service, wrapperPath, result);
-  if (Number.isFinite(fallbackPid)) return fallbackPid;
-  throw new Error(`failed to start ${service.name}: ${String(result.stderr || result.stdout || "unknown error").trim()}`);
-}
-
-function startWindowsWorkerWithSpawn(service, wrapperPath, failedResult) {
-  const stdoutPath = path.join(logsDir, `${service.name}.out.log`);
-  const stderrPath = path.join(logsDir, `${service.name}.err.log`);
   const stdout = fs.openSync(stdoutPath, "a");
   const stderr = fs.openSync(stderrPath, "a");
   fs.appendFileSync(
-    path.join(logsDir, `${service.name}.launcher.log`),
-    `[${new Date().toISOString()}] Win32_Process.Create failed; falling back to direct detached worker spawn. wrapper=${wrapperPath} error=${String(failedResult.stderr || failedResult.stdout || "").trim()}\n`,
+    launcherLogPath,
+    `[${new Date().toISOString()}] launching ${service.name} via direct detached node process; wrapper kept at ${wrapperPath}\n`,
     "utf8",
   );
   const child = spawn(process.execPath, service.commandArgs, {
@@ -186,9 +182,20 @@ function startWindowsWorkerWithSpawn(service, wrapperPath, failedResult) {
     windowsHide: true,
   });
   child.unref();
+  closeFd(stdout);
+  closeFd(stderr);
   const startedPid = Number(child.pid);
   if (!Number.isFinite(startedPid)) throw new Error(`failed to read ${service.name} pid`);
   return startedPid;
+}
+
+function closeFd(value) {
+  if (typeof value !== "number") return;
+  try {
+    fs.closeSync(value);
+  } catch {
+    // Log descriptors are best-effort after the child has inherited them.
+  }
 }
 
 function buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogPath) {
@@ -297,6 +304,10 @@ function getJson(url, timeoutMs) {
       resolve({ ok: false, errorMessage: error.message });
     });
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readRecords() {

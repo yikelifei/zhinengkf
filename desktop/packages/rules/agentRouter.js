@@ -256,11 +256,13 @@ function textNgrams(text, size = 2) {
 }
 
 function normalizeSceneMemoryText(value) {
-  return String(value || "")
+  const compact = String(value || "")
     .toLowerCase()
-    .replace(/\s+/g, "")
+    .replace(/\s+/g, "");
+  const normalized = compact
     .replace(/[\p{P}\p{S}]/gu, "")
     .replace(/[锛屻€傦紒锛熴€?.!?;锛?锛?'鈥溾€濃€樷€橾]/g, "");
+  return normalized.length >= 4 ? normalized : compact;
 }
 
 const SCENE_META = {

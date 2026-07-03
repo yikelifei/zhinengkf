@@ -41,6 +41,21 @@ test("dry run execution is not mapped to real sent status", () => {
   assert.match(executeSection, /\?\s*"dry_run"\s*:\s*"sent"/);
 });
 
+test("execute send only starts queued tasks", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const executeSection = service.slice(
+    service.indexOf("  executeSend("),
+    service.indexOf("  acknowledgeBridgeSend("),
+  );
+
+  assert.match(executeSection, /taskBeforeValidation\.status !== "queued"/);
+  assert.match(executeSection, /send task is not queued/);
+  assert.ok(
+    executeSection.indexOf('taskBeforeValidation.status !== "queued"') < executeSection.indexOf("this.sendAdapter.execute"),
+    "queued status must be checked before adapter execution writes outbox",
+  );
+});
+
 test("bridge outbox list exposes preview instead of raw outbox data", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const listSection = sliceBetween(service, /\n  listBridgeOutbox\(/, /\n  private matchesBridgeEntryIdentity\(/);
@@ -83,6 +98,8 @@ test("frontend list APIs pass identity filters to multi-account resources", () =
   const api = readProjectFile("apps/web/src/lib/api.ts");
   assert.match(api, /export type IdentityFilters/);
   assert.match(api, /function identityQuery/);
+  assert.match(api, /getAgents\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/agents\$\{identityQuery\(filters\)\}/);
   assert.match(api, /getDesignJobs\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /\/design-jobs\$\{identityQuery\(filters\)\}/);
   assert.match(api, /getSendTasks\(filters: IdentityFilters = \{\}\)/);
@@ -99,6 +116,7 @@ test("frontend conversation picker reloads business lists with selected conversa
   const pickerSection = page.slice(page.indexOf("  function renderConversationSelect()"), page.indexOf("  const manualLockLogByConversationId"));
 
   assert.match(loadSection, /identityFilterOverride/);
+  assert.match(loadSection, /getAgents\(identityFilters\)/);
   assert.match(loadSection, /getDesignJobs\(identityFilters\)/);
   assert.match(loadSection, /getSendTasks\(identityFilters\)/);
   assert.match(loadSection, /getQuotes\(identityFilters\)/);
@@ -141,6 +159,7 @@ test("frontend conversation focus actions refresh scoped business lists", () => 
 
 test("notice center exposes manual selection targets for operator follow-up", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
+  const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const focusNoticeSection = page.slice(
     page.indexOf("async function focusNoticeTarget"),
@@ -167,15 +186,25 @@ test("notice center exposes manual selection targets for operator follow-up", ()
   assert.match(page, /payment_proof_needs_manual_verification: "客户发送了付款凭证，需要人工核验金额"/);
   assert.match(page, /result\.plan\.type === "quote_payment_proof_manual_review"/);
   assert.match(page, /付款凭证待人工核验/);
+  assert.match(page, /quotes\.filter\(quoteNeedsPaymentProofReview\)\.length/);
+  assert.match(page, /quoteNeedsPaymentProofReview\(activeQuote\) \? <span>/);
+  assert.match(page, /quoteNeedsPaymentProofReview\(quote\) \? <small>/);
+  assert.match(page, /quoteNeedsPaymentProofReview\(quote\) \? <span>/);
+  assert.match(page, /if \(quoteNeedsPaymentProofReview\(quote\)\) \{[\s\S]*不能直接通过并入队[\s\S]*return;/);
+  assert.match(page, /disabled=\{Boolean\(busy\) \|\| quoteNeedsPaymentProofReview\(quote\)\}/);
+  assert.match(page, /付款凭证单需要先核验收款/);
   assert.match(page, /async function verifyQuotePaymentProof\([\s\S]*quote: QuoteDraft,[\s\S]*paymentStatus: "deposit_paid" \| "paid"/);
   assert.match(page, /const existingOrder = orderDrafts\.find\(\(order\) => order\.quoteDraftId === quote\.id\) \|\| null/);
   assert.match(page, /updateOrderDraft\(existingOrder\.id, \{[\s\S]*paymentStatus,[\s\S]*status: "confirmed"/);
   assert.match(page, /updateQuote\(quote\.id, \{[\s\S]*paymentStatus,[\s\S]*status: "accepted"/);
   assert.match(page, /createOrderDraftFromQuote\(quote\.id, identityExpectation\(quote\)\)/);
   assert.match(page, /options: \{ queueConfirmation\?: boolean \} = \{\}/);
-  assert.match(page, /conversationForQuoteOrder\(quote, verifiedOrder\)/);
-  assert.match(page, /setConversationManualLock\(conversation\.id, \{[\s\S]*locked: false[\s\S]*manual_payment_proof_verified/);
-  assert.match(page, /queueOrderConfirmationAfterPreviewCheck\(verifiedOrder\)/);
+  assert.match(api, /function verifyQuotePaymentProofAndQueueConfirmation/);
+  assert.match(api, /\/quotes\/\$\{id\}\/verify-payment-proof/);
+  assert.match(page, /verifyQuotePaymentProofAndQueueConfirmation\([\s\S]*quote\.id,[\s\S]*paymentStatus,[\s\S]*identityExpectation\(quote\)/);
+  assert.match(page, /setOrderDrafts\(\(items\) =>[\s\S]*item\.id === result\.orderDraft\.id[\s\S]*\[result\.orderDraft, \.\.\.items\]/);
+  assert.match(page, /setSendTasks\(\(items\) =>[\s\S]*item\.id === result\.sendTask\.id[\s\S]*\[result\.sendTask, \.\.\.items\]/);
+  assert.match(page, /queuedConfirmation \? `\$\{paymentLabel\}已核验，订单确认已进入微信安全发送队列。` : `\$\{paymentLabel\}已核验，订单草稿已更新。`/);
   assert.match(page, /verifyQuotePaymentProof\(quote, "deposit_paid", \{ queueConfirmation: true \}\)/);
   assert.match(page, /verifyQuotePaymentProof\(quote, "paid", \{ queueConfirmation: true \}\)/);
   assert.match(page, /定金并确认/);
@@ -402,10 +431,22 @@ test("design job manual actions carry and enforce expected conversation identity
   assert.match(service, /async submit\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
   assert.match(service, /async quickConfirmAndQueueSend\([\s\S]*ExpectedIdentityPayload = \{\}/);
   assert.match(service, /async requestRevision\(id: string, payload: CreateDesignRevisionPayload & ExpectedIdentityPayload\)/);
+  assert.match(service, /decideRevisionPolicy\(\{[\s\S]*isHighValue: job\.isHighValue,[\s\S]*budget: job\.budget,[\s\S]*highValueAmountCny: appConfig\.highValueAmountCny/);
   assert.match(service, /private async retryDesignJob\([\s\S]*expected: ExpectedIdentityPayload = \{\}/);
   assert.match(service, /assertExpectedIdentity\(job, expected, "design job"\)/);
   assert.match(service, /assertExpectedIdentity\(job, payload, "design job"\)/);
   assert.match(service, /assertExpectedIdentity\(job, options, "design job"\)/);
+});
+
+test("design preflight panel exposes bundle automation readiness", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const preflightSection = page.slice(page.indexOf("function PreflightPanel"), page.indexOf("function CandidateImages"));
+
+  assert.match(preflightSection, /const bundleAutomation = job\.bundle\?\.automation \|\| null/);
+  assert.match(preflightSection, /const bundleAutomationBlocked = bundleAutomation\?\.ready === false/);
+  assert.match(preflightSection, /组合自动化：\{bundleAutomation\.ready \? "可自动" : "需人工"\}/);
+  assert.match(preflightSection, /商品组合自动化：/);
+  assert.match(preflightSection, /automationBlockerListLabel\(bundleAutomation\.blockers \|\| \[\]\)/);
 });
 
 test("design assets and conversation manual locks carry expected identity", () => {
@@ -414,6 +455,7 @@ test("design assets and conversation manual locks carry expected identity", () =
   const assetsController = readProjectFile("apps/api/src/assets/assets.controller.ts");
   const assetsService = readProjectFile("apps/api/src/assets/assets.service.ts");
   const localStore = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const identityBinding = readProjectFile("packages/rules/identityBinding.js");
   const designController = readProjectFile("apps/api/src/design-jobs/design-jobs.controller.ts");
   const designService = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
   const wechatController = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
@@ -461,6 +503,13 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(localStore, /wechatAccountId: payload\.wechatAccountId \|\| null/);
   assert.match(localStore, /conversationId: payload\.conversationId \|\| null/);
   assert.match(localStore, /customerId: payload\.customerId \|\| \(payload\.ownerType === "customer" \? payload\.ownerId : null\)/);
+  assert.match(localStore, /\.filter\(\(item\) => this\.designAssetMatchesJobIdentity\(item, job\)\)/);
+  assert.match(localStore, /private designAssetMatchesJobIdentity\(asset: any, job: any\)/);
+  assert.match(localStore, /asset\.conversationId !== job\.conversationId/);
+  assert.match(localStore, /asset\.wechatAccountId !== job\.wechatAccountId/);
+  assert.match(identityBinding, /assetConversationMatchesJob:\$\{assetId\}/);
+  assert.match(identityBinding, /assetWechatAccountMatchesJob:\$\{assetId\}/);
+  assert.match(identityBinding, /assetCustomerIdentityMatchesJob:\$\{assetId\}/);
   assert.match(designController, /attachAssets\(@Param\("id"\) id: string, @Body\(\) body: \{ assetIds: string\[\] \} & ExpectedIdentityPayload\)/);
   assert.match(designController, /this\.designJobs\.attachAssets\(id, body\?\.assetIds \|\| \[\], body \|\| \{\}\)/);
   assert.match(designService, /async attachAssets\(id: string, assetIds: string\[\], expected: ExpectedIdentityPayload = \{\}\)/);
@@ -792,7 +841,7 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /const orderDraftByQuoteId = new Map\(orderDrafts\.map\(\(order\) => \[order\.quoteDraftId, order\]\)\)/);
   assert.match(page, /const highValueManualQueueItems = \[/);
   assert.match(page, /job\.status === "manual_review"/);
-  assert.match(page, /job\.isHighValue && \["completed", "quick_confirm", "timeout", "failed"\]\.includes\(job\.status\)/);
+  assert.match(page, /isHighValueDesignJob\(job\) && \["completed", "quick_confirm", "timeout", "failed"\]\.includes\(job\.status\)/);
   assert.match(page, /reason: highValueDesignReason\(job\)/);
   assert.match(page, /nextAction: step\.nextAction/);
   assert.match(page, /!orderDraftByQuoteId\.has\(quote\.id\) && \(quote\.status === "manual_review" \|\| isHighValueQuote\(quote\)\)/);
@@ -826,7 +875,9 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(reviewSection, /toggleConversationManualLock\(conversation, false\)/);
   assert.match(page, /activeConversationId && visibleActiveConversationSendTaskCount/);
   assert.match(page, /className="send-focus-hint"/);
-  assert.match(page, /function designImageSendBlockReason\(job: DesignJob\)/);
+  assert.match(page, /function designImageSendBlockReason\(job: DesignJob, options: \{ allowHighValueManualApproval\?: boolean \} = \{\}\)/);
+  assert.match(page, /isHighValueDesignJob\(job\) && !options\.allowHighValueManualApproval/);
+  assert.match(page, /designImageSendBlockReason\(job, \{ allowHighValueManualApproval: true \}\)/);
   assert.match(page, /function confirmHighValueManualApproval/);
   assert.match(page, /确认人工批准/);
   assert.match(page, /不会把 A 客户内容发给 B 客户/);
@@ -838,7 +889,17 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /function highValueDesignReason\(job: DesignJob\)/);
   assert.match(page, /function highValueBudgetReason\(budget\?: DesignJob\["budget"\]\)/);
   assert.match(page, /function highValueAmountReason\(totalAmount: number, perUnitAmount: number, quantity\?: number\)/);
-  assert.match(page, /totalAmount >= 10000 \|\| perUnitAmount >= 10000/);
+  assert.match(page, /const HIGH_VALUE_AMOUNT_CNY = 10000/);
+  assert.match(page, /function isHighValueAmount\(totalAmount\?: number \| string \| null, perUnitAmount\?: number \| string \| null\)/);
+  assert.match(page, /total >= HIGH_VALUE_AMOUNT_CNY \|\| perUnit >= HIGH_VALUE_AMOUNT_CNY/);
+  assert.match(page, /function isHighValueBudget\(budget\?: DesignJob\["budget"\]\)/);
+  assert.match(page, /function isHighValueDesignJob\(job: DesignJob\)/);
+  assert.match(page, /isHighValueBudget\(quote\.designJob\?\.budget\)/);
+  assert.match(page, /isHighValueBudget\(order\.designJob\?\.budget \|\| order\.quoteDraft\?\.designJob\?\.budget\)/);
+  assert.match(page, /isHighValueAmount\(order\.totalPrice, order\.unitPrice\)/);
+  assert.match(page, /isHighValueAmount\(order\.quoteDraft\?\.totalPrice, order\.quoteDraft\?\.unitPrice\)/);
+  assert.match(page, /达到高价值线，需要人工批准/);
+  assert.match(page, /达到高价值线，需要人工确认订单/);
   assert.match(page, /priority: 10/);
   assert.match(page, /nextAction: "打开设计任务/);
   assert.match(page, /高价值客户不要自动发送/);

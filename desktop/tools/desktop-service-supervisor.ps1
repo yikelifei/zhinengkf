@@ -120,8 +120,8 @@ function Stop-ConflictingDesktopServices {
 }
 
 function Assert-ModeSwitchAllowed {
-  if (-not $IsReal -and ((Test-Path $RealModeLockFile) -or @(Find-ConflictingDesignLaunchers -TargetMode "real").Count -gt 0 -or (((Test-RuntimeConfigRealMode) -or (Test-PreferredDesignModeReal)) -and $env:ALLOW_MOCK_DESIGN_START -ne "1"))) {
-    throw "Mock design launch is blocked because real mode is active, preferred, or locked. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode."
+  if (-not $IsReal -and ((Test-Path $RealModeLockFile) -or @(Find-ConflictingDesignLaunchers -TargetMode "real").Count -gt 0 -or (((Test-RuntimeConfigRealMode) -or (Test-PreferredDesignModeReal)) -and $env:FORCE_MOCK_DESIGN_START -ne "1"))) {
+    throw "Mock design launch is blocked because real mode is active, preferred, or locked. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode."
   }
 
   if (-not $IsReal -or -not (Test-Path $MockModeLockFile)) { return }

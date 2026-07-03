@@ -99,7 +99,6 @@ export class DesignJobsService {
     const jobs = appConfig.useLocalStore
       ? this.localStore.listDesignJobs()
       : await this.prisma.designJob.findMany({
-          where: { isHighValue: true },
           include: { customer: true, conversation: true },
           orderBy: { updatedAt: "desc" },
           take: 300,
@@ -108,7 +107,7 @@ export class DesignJobsService {
     const skipped: any[] = [];
 
     for (const job of jobs as any[]) {
-      const decision = evaluateHighValueHandoff(job);
+      const decision = evaluateHighValueHandoff(job, { highValueAmountCny: appConfig.highValueAmountCny });
       if (!decision.ok) {
         skipped.push({
           designJobId: job.id,
@@ -148,7 +147,7 @@ export class DesignJobsService {
     const failed: any[] = [];
 
     for (const job of jobs as any[]) {
-      const decision = evaluateDesignAutoSubmit(job);
+      const decision = evaluateDesignAutoSubmit(job, { highValueAmountCny: appConfig.highValueAmountCny });
       if (!decision.ok) {
         skipped.push({
           designJobId: job.id,
@@ -834,6 +833,8 @@ export class DesignJobsService {
       instruction: payload.instruction,
       revisionCount: existingRevisions.length,
       isHighValue: job.isHighValue,
+      budget: job.budget,
+      highValueAmountCny: appConfig.highValueAmountCny,
     });
 
     if (!decision.ok) {
@@ -1148,6 +1149,8 @@ export class DesignJobsService {
 
     const nextStatus = nextStatusAfterDesignCompleted({
       isHighValue: job.isHighValue,
+      budget: job.budget,
+      highValueAmountCny: appConfig.highValueAmountCny,
       manualQcRequired: job.manualQcRequired,
     });
     await this.notifications.create("info", "设计图已生成", `已生成 ${images.length} 张候选图`, {
@@ -1207,6 +1210,12 @@ export class DesignJobsService {
       );
     }
     const imagePaths = images.map((image) => image.localPath).filter(Boolean) as string[];
+    if (!options.releaseManualLock) {
+      const decision = evaluateLowValueDesignImageSend({ ...job, images }, { highValueAmountCny: appConfig.highValueAmountCny });
+      if (!decision.ok) {
+        throw new BadRequestException(`design image send is not allowed without manual approval: ${decision.reason}`);
+      }
+    }
 
     if (options.releaseManualLock) {
       assertManualReleaseReason(options.releaseReason, "design send manual release");

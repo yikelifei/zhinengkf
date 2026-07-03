@@ -1502,9 +1502,9 @@ export async function getSkuChangeLogs(limit = 30, skuCode?: string): Promise<Sk
   return response.json();
 }
 
-export async function getAgents(): Promise<Agent[]> {
+export async function getAgents(filters: IdentityFilters = {}): Promise<Agent[]> {
   try {
-    const response = await fetch(`${API_BASE}/agents`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/agents${identityQuery(filters)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -2074,6 +2074,19 @@ export type AutomationRun = {
   }>;
   errors: Array<{ step: string; errorMessage: string }>;
   results: Record<string, unknown>;
+  identityAudit?: {
+    status: "passed" | "warning";
+    identityCount: number;
+    identities: Array<{
+      key: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      count: number;
+      steps: string[];
+    }>;
+    warnings: Array<{ step: string; path: string; reason: string; fields?: string[] }>;
+  };
 };
 
 export type AutomationStatus = {
@@ -2336,6 +2349,23 @@ export async function queueQuoteSend(id: string, expected: IdentityExpectation =
     owner: "人工客服",
     note: "报价已进入微信安全发送队列。",
   });
+}
+
+export async function verifyQuotePaymentProofAndQueueConfirmation(
+  id: string,
+  paymentStatus: "deposit_paid" | "paid",
+  expected: IdentityExpectation = {},
+): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+  const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
+  return postJson<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask: SendTask; message: string }>(
+    `/quotes/${id}/verify-payment-proof`,
+    {
+      ...expected,
+      paymentStatus,
+      owner: "人工客服",
+      note: `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`,
+    },
+  );
 }
 
 export async function getOrderDrafts(filters: IdentityFilters = {}): Promise<OrderDraft[]> {

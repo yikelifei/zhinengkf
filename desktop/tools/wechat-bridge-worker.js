@@ -39,7 +39,8 @@ async function main() {
       printRunSummary(result, config);
     } catch (error) {
       writeWorkerStatus(config.statusFile, buildWorkerStatus(null, config, startedAt, error));
-      throw error;
+      console.error(error?.stack || error);
+      if (!config.watch) throw error;
     }
     if (!config.watch) break;
     await delay(config.intervalMs);
@@ -413,10 +414,11 @@ function buildWorkerStatus(result, config, startedAt, error) {
   const processed = Array.isArray(result?.processed) ? result.processed : [];
   const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
   const failed = Array.isArray(result?.failed) ? result.failed : [];
+  const hasFailures = failed.length > 0;
 
   return {
-    ok: !error && failed.length === 0,
-    status: error ? "failed" : "completed",
+    ok: !error && !hasFailures,
+    status: error || hasFailures ? "failed" : "completed",
     pid: process.pid,
     mode: config.mode,
     ackTransport: config.ackTransport,
@@ -491,7 +493,7 @@ function removeStaleLock(lockPath, staleMs) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, { method: "GET" });
+  const response = await fetchWithContext(url, { method: "GET" });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `GET ${url} failed with ${response.status}`);
@@ -500,7 +502,7 @@ async function fetchJson(url) {
 }
 
 async function postJson(url, body) {
-  const response = await fetch(url, {
+  const response = await fetchWithContext(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
@@ -510,6 +512,16 @@ async function postJson(url, body) {
     throw new Error(text || `POST ${url} failed with ${response.status}`);
   }
   return response.json();
+}
+
+async function fetchWithContext(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const method = String(init?.method || "GET").toUpperCase();
+    const causeMessage = error?.cause?.message || error?.message || String(error);
+    throw new Error(`${method} ${url} failed: ${causeMessage}`);
+  }
 }
 
 function readConfig() {

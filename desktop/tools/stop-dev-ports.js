@@ -10,6 +10,7 @@ const pidFile = path.join(runtimeDir, "dev-ports.json");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const preserveRealModeLock = process.env.PRESERVE_REAL_MODE_LOCK === "1";
 const forceProcessSweep = process.env.FORCE_PORTS_SWEEP === "1";
 const skipStackStarterLaunchers = process.env.PORTS_STOP_SKIP_STACK_STARTERS === "1";
@@ -87,6 +88,7 @@ function cleanupRuntimeRecords() {
   fs.rmSync(pidFile, { force: true });
   fs.rmSync(mockModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(realModeLockFile, { force: true });
+  if (!preserveRealModeLock) fs.rmSync(preferredDesignModeFile, { force: true });
   clearRuntimeDesignModeConfig();
   console.log("Launcher records were cleaned.");
 }
@@ -318,13 +320,13 @@ function findManagedLauncherPids() {
       ) {
         return true;
       }
-      if (!commandLine.includes(normalizedRoot)) return false;
       const npmPortsMatch = commandLine.match(/npm(?:\.cmd|\/bin\/npm-cli\.js)"? run ports:(start|launch|keepalive|once)(:mock|:real)?/);
       if (npmPortsMatch) {
         if (skipStackStarterLaunchers && npmPortsMatch[1] === "launch") return false;
         const npmMode = npmPortsMatch[2] === ":real" ? "real" : npmPortsMatch[2] === ":mock" ? "mock" : "";
         return !protectedStarterMode || !npmMode || npmMode !== protectedStarterMode;
       }
+      if (!commandLine.includes(normalizedRoot)) return false;
       return /npm\.cmd"? run build:(api|web)/.test(commandLine) || /node_modules\/next\/dist\/bin\/next build apps\/web/.test(commandLine);
     })
     .map((item) => String(item.ProcessId || ""))

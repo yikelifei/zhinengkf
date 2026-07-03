@@ -48,7 +48,13 @@ export class RoutingService {
       sceneMemory,
     });
     const agent = this.localStore.getAgentByKey(result.agentKey);
-    const skills = agent?.id ? this.localStore.listAgentSkills(agent.id) : [];
+    const skills = agent?.id
+      ? this.localStore.listAgentSkills(agent.id, {
+          wechatAccountId: payload.wechatAccountId,
+          conversationId: payload.conversationId,
+          customerId: payload.customerId,
+        })
+      : [];
     const knowledgeEntries = agent?.id
       ? this.localStore.listKnowledgeEntries({
           agentId: agent.id,
@@ -57,6 +63,9 @@ export class RoutingService {
       : [];
     const draft = buildAgentReplyDraft(result, {
       agentId: agent?.id,
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
       skills,
       knowledgeEntries,
     });

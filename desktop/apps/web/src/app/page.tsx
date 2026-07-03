@@ -189,6 +189,7 @@ import {
   updateQuote,
   upsertSku,
   uploadAsset,
+  verifyQuotePaymentProofAndQueueConfirmation,
   validateSendTask,
   validateSendTaskCurrentWindow,
   WechatAccount,
@@ -600,6 +601,231 @@ function validateSkuFormReadiness(form: SkuForm): SkuFormReadinessWarning[] {
   return warnings;
 }
 
+function skuFormAutomationPreview(form: SkuForm, warnings: SkuFormReadinessWarning[]) {
+  if (!form.skuCode.trim() || !form.name.trim()) {
+    return {
+      tone: "draft",
+      label: "资料草稿",
+      detail: "先填写 SKU 编号和商品名称，再判断能否进入自动搭配。",
+      chips: ["待编号", "待命名"],
+    };
+  }
+  const errors = warnings.filter((warning) => warning.severity === "error");
+  if (errors.length) {
+    return {
+      tone: "blocked",
+      label: "不能自动",
+      detail: errors.slice(0, 2).map((warning) => warning.message).join("；"),
+      chips: [`严重 ${errors.length}`],
+    };
+  }
+  const warningsOnly = warnings.filter((warning) => warning.severity === "warning");
+  const infoOnly = warnings.filter((warning) => warning.severity === "info");
+  if (warningsOnly.length) {
+    return {
+      tone: "review",
+      label: "保存后需复核",
+      detail: warningsOnly.slice(0, 2).map((warning) => warning.message).join("；"),
+      chips: [`警告 ${warningsOnly.length}`, infoOnly.length ? `提醒 ${infoOnly.length}` : "可先保存"],
+    };
+  }
+  if (infoOnly.length) {
+    return {
+      tone: "partial",
+      label: "基本可用",
+      detail: "可参与销售流程，但尺寸、重量或成本等资料补齐后自动报价更稳。",
+      chips: [`提醒 ${infoOnly.length}`, "可先保存"],
+    };
+  }
+  return {
+    tone: "ready",
+    label: "可自动",
+    detail: "保存后可参与自动搭配、真实出图预检和报价利润核算。",
+    chips: ["可搭配", "可出图", "可报价"],
+  };
+}
+
+function skuFormPricingPreview(form: SkuForm) {
+  const salePrice = parseMoney(form.salePrice);
+  const costPrice = parseMoney(form.costPrice);
+  const profit = salePrice - costPrice;
+  const marginRate = salePrice > 0 ? profit / salePrice : 0;
+  if (salePrice <= 0) {
+    return {
+      tone: "draft",
+      label: "待填售价",
+      detail: "先填写售价，系统才能判断毛利和自动报价风险。",
+      salePrice,
+      costPrice,
+      profit,
+      marginRate,
+    };
+  }
+  if (costPrice <= 0) {
+    return {
+      tone: "review",
+      label: "缺成本",
+      detail: "没有成本价，报价能发但利润核算不完整。",
+      salePrice,
+      costPrice,
+      profit,
+      marginRate,
+    };
+  }
+  if (profit < 0) {
+    return {
+      tone: "blocked",
+      label: "亏损风险",
+      detail: "成本高于售价，自动报价前必须人工复核。",
+      salePrice,
+      costPrice,
+      profit,
+      marginRate,
+    };
+  }
+  if (marginRate < 0.15) {
+    return {
+      tone: "review",
+      label: "低毛利",
+      detail: "毛利率偏低，自动推荐时会更谨慎。",
+      salePrice,
+      costPrice,
+      profit,
+      marginRate,
+    };
+  }
+  return {
+    tone: "ready",
+    label: "利润健康",
+    detail: "售价、成本和毛利可以支撑自动报价判断。",
+    salePrice,
+    costPrice,
+    profit,
+    marginRate,
+  };
+}
+
+function skuFormSpecificationPreview(form: SkuForm) {
+  const dimensions = parseDimensionsText(form.dimensions);
+  const dimensionValues = [dimensions.lengthCm, dimensions.widthCm, dimensions.heightCm].filter((value) => Number(value || 0) > 0);
+  const weightGram = optionalInteger(form.weightGram) || 0;
+  const leadTimeDays = optionalInteger(form.leadTimeDays) || 0;
+  const hasSupplier = Boolean(form.supplier.trim());
+  const chips = [
+    dimensionValues.length === 3 ? `${dimensions.lengthCm}x${dimensions.widthCm}x${dimensions.heightCm}cm` : "尺寸待补",
+    weightGram > 0 ? `${weightGram}g` : "重量待补",
+    leadTimeDays > 0 ? `${leadTimeDays}天交期` : "交期待补",
+    hasSupplier ? "有供应商" : "缺供应商",
+  ];
+  if (form.dimensions.trim() && dimensionValues.length < 3) {
+    return {
+      tone: "blocked",
+      label: "规格不完整",
+      detail: "尺寸需要长、宽、高都填完整，否则礼盒装配和真实摆拍比例容易出错。",
+      chips,
+    };
+  }
+  if (form.weightGram.trim() && weightGram <= 0) {
+    return {
+      tone: "blocked",
+      label: "重量异常",
+      detail: "重量必须大于 0，物流成本和交付判断才可信。",
+      chips,
+    };
+  }
+  if (form.leadTimeDays.trim() && leadTimeDays <= 0) {
+    return {
+      tone: "blocked",
+      label: "交期异常",
+      detail: "交期必须大于 0 天，避免客服给客户承诺错误时间。",
+      chips,
+    };
+  }
+  if (!dimensionValues.length || weightGram <= 0 || leadTimeDays <= 0 || !hasSupplier) {
+    return {
+      tone: "review",
+      label: "交付资料待补",
+      detail: "补齐尺寸、重量、交期和供应商后，系统才能更稳地做装盒、物流和报价判断。",
+      chips,
+    };
+  }
+  if (leadTimeDays > 45) {
+    return {
+      tone: "review",
+      label: "交期偏长",
+      detail: "交期超过 45 天，自动报价或回复客户前建议人工确认能否接受。",
+      chips,
+    };
+  }
+  return {
+    tone: "ready",
+    label: "规格可用",
+    detail: "包装尺寸、物流重量、供应商和交期已具备真实业务判断基础。",
+    chips,
+  };
+}
+
+function skuImportRowReadiness(row: SkuPayload, issues: SkuCatalogAudit["issues"] = []) {
+  const issueMessages = issues.slice(0, 2).map((issue) => issue.message).filter(Boolean);
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.filter((issue) => issue.severity === "warning").length;
+  const salePrice = Number(row.salePrice || 0);
+  const costPrice = Number(row.costPrice || 0);
+  const profit = salePrice - costPrice;
+  const dimensions = row.dimensions || {};
+  const dimensionReady = [dimensions.lengthCm, dimensions.widthCm, dimensions.heightCm].every((value) => Number(value || 0) > 0);
+  const chips = [
+    row.mainImagePath ? "有主图" : "缺主图",
+    Number(row.stock || 0) > 0 ? `库存 ${row.stock}` : "无库存",
+    salePrice > 0 && costPrice > 0 && profit >= 0 ? `毛利 ${formatMoney(profit)}` : "利润待核",
+    dimensionReady ? "尺寸完整" : "尺寸待补",
+    Number(row.leadTimeDays || 0) > 0 ? `${row.leadTimeDays}天交期` : "交期待补",
+  ];
+  if (errorCount) {
+    return {
+      tone: "blocked",
+      label: "入库会阻塞",
+      detail: issueMessages.join("；") || "存在严重资料问题，先修正再入库。",
+      chips,
+    };
+  }
+  if (warningCount || salePrice <= 0 || costPrice <= 0 || profit < 0 || !row.mainImagePath || !dimensionReady) {
+    return {
+      tone: "review",
+      label: "入库后复核",
+      detail: issueMessages.join("；") || "价格、图片、库存或规格还不完整，入库后需要补齐。",
+      chips,
+    };
+  }
+  return {
+    tone: "ready",
+    label: "可入库自动用",
+    detail: "基础经营资料完整，入库后可进入自动搭配、出图和报价判断。",
+    chips,
+  };
+}
+
+function skuImportIssuesForRow(row: SkuPayload, issues: SkuCatalogAudit["issues"] = []) {
+  return issues.filter((issue) => (
+    (row.skuCode && issue.skuCode === row.skuCode) || (!row.skuCode && row.name && issue.name === row.name)
+  ));
+}
+
+function skuImportPreviewReadinessSummary(rows: SkuPayload[] = [], issues: SkuCatalogAudit["issues"] = []) {
+  const counts = { ready: 0, review: 0, blocked: 0 };
+  for (const row of rows) {
+    const readiness = skuImportRowReadiness(row, skuImportIssuesForRow(row, issues));
+    counts[readiness.tone as keyof typeof counts] += 1;
+  }
+  const total = rows.length;
+  const tone = counts.blocked ? "blocked" : counts.review ? "review" : total ? "ready" : "muted";
+  const label = counts.blocked ? "先修阻塞项" : counts.review ? "建议复核后入库" : total ? "可直接入库" : "暂无预览";
+  const detail = total
+    ? `本批 ${total} 个商品：可自动用 ${counts.ready} 个，需复核 ${counts.review} 个，阻塞 ${counts.blocked} 个。`
+    : "粘贴或选择商品表格后，系统会统计这批商品能否直接进入自动化。";
+  return { ...counts, total, tone, label, detail };
+}
+
 function imageReferenceProblem(value: string, label: string) {
   const pathValue = value.trim();
   if (!pathValue) return "";
@@ -657,6 +883,99 @@ function parseMatchingRulesText(value: string): Record<string, unknown> {
   }
 }
 
+function matchingRuleListText(value: string, key: "mustWith" | "preferWith" | "cannotWith") {
+  const rules = parseMatchingRulesText(value);
+  return unknownListToText(rules[key]);
+}
+
+function withMatchingRuleList(value: string, key: "mustWith" | "preferWith" | "cannotWith", nextText: string) {
+  const rules = parseMatchingRulesText(value);
+  const nextList = splitTextList(nextText);
+  if (nextList.length) {
+    rules[key] = nextList;
+  } else {
+    delete rules[key];
+  }
+  return matchingRulesToText(rules);
+}
+
+function appendSkuCodeTextList(value: string, skuCode: string) {
+  const nextCode = skuCode.trim();
+  if (!nextCode) return value;
+  const items = splitTextList(value);
+  if (!items.includes(nextCode)) items.push(nextCode);
+  return items.join("、");
+}
+
+function withAppendedMatchingRuleSku(value: string, key: "mustWith" | "preferWith" | "cannotWith", skuCode: string) {
+  return withMatchingRuleList(value, key, appendSkuCodeTextList(matchingRuleListText(value, key), skuCode));
+}
+
+function unknownListToText(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join("、");
+  if (typeof value === "string") return splitTextList(value).join("、");
+  return "";
+}
+
+function validateSkuFormReferences(form: SkuForm, knownSkuCodes: Set<string>) {
+  const currentSkuCode = form.skuCode.trim();
+  const warnings: Array<{ field: string; skuCode: string; message: string }> = [];
+  const checkCodes = (field: string, label: string, codes: string[]) => {
+    for (const skuCode of codes) {
+      if (!skuCode) continue;
+      if (currentSkuCode && skuCode === currentSkuCode) {
+        warnings.push({ field, skuCode, message: `${label}不能指向自己：${skuCode}` });
+      } else if (!knownSkuCodes.has(skuCode)) {
+        warnings.push({ field, skuCode, message: `${label}里找不到这个 SKU：${skuCode}` });
+      }
+    }
+  };
+  checkCodes("replacementSkuCodes", "替代 SKU", splitTextList(form.replacementSkuCodes));
+  checkCodes("mustWith", "必须同搭", splitTextList(matchingRuleListText(form.matchingRules, "mustWith")));
+  checkCodes("preferWith", "推荐同搭", splitTextList(matchingRuleListText(form.matchingRules, "preferWith")));
+  checkCodes("cannotWith", "禁止同搭", splitTextList(matchingRuleListText(form.matchingRules, "cannotWith")));
+  return warnings;
+}
+
+function skuFormReferenceSummary(form: SkuForm, skuNameByCode: Map<string, string>) {
+  const currentSkuCode = form.skuCode.trim();
+  const collect = (field: string, label: string, codes: string[]) =>
+    codes
+      .filter((skuCode) => skuCode && skuCode !== currentSkuCode && skuNameByCode.has(skuCode))
+      .map((skuCode) => ({
+        field,
+        skuCode,
+        label,
+        name: skuNameByCode.get(skuCode) || skuCode,
+      }));
+  return [
+    ...collect("replacementSkuCodes", "替代", splitTextList(form.replacementSkuCodes)),
+    ...collect("mustWith", "必须同搭", splitTextList(matchingRuleListText(form.matchingRules, "mustWith"))),
+    ...collect("preferWith", "推荐同搭", splitTextList(matchingRuleListText(form.matchingRules, "preferWith"))),
+    ...collect("cannotWith", "禁止同搭", splitTextList(matchingRuleListText(form.matchingRules, "cannotWith"))),
+  ];
+}
+
+function skuAutomationSummary(sku: Sku, issues: SkuCatalogAudit["issues"]) {
+  if (sku.isActive === false) {
+    return { tone: "muted", label: "已下架", detail: "不会参与自动搭配和报价" };
+  }
+  const blockingIssues = issues.filter((issue) => issue.severity === "error");
+  if (blockingIssues.length) {
+    return { tone: "blocked", label: "不能自动", detail: blockingIssues.slice(0, 2).map((issue) => issue.message).join("；") };
+  }
+  const warningIssues = issues.filter((issue) => issue.severity === "warning");
+  if (warningIssues.length) {
+    return { tone: "review", label: "需复核", detail: warningIssues.slice(0, 2).map((issue) => issue.message).join("；") };
+  }
+  const details = [
+    sku.mainImagePath ? "可出图" : "待补图",
+    Number(sku.stock || 0) > 0 ? `库存 ${sku.stock}` : "无库存",
+    Number(sku.salePrice || 0) > Number(sku.costPrice || 0) ? "有毛利" : "毛利待核",
+  ];
+  return { tone: "ready", label: "可自动", detail: details.join(" · ") };
+}
+
 function matchingRulesToText(value?: Record<string, unknown>) {
   if (!value || !Object.keys(value).length) return "";
   if (typeof value.notes === "string" && Object.keys(value).length === 1) return value.notes;
@@ -695,13 +1014,13 @@ function randomHexToken(byteLength: number) {
 }
 
 export default function HomePage() {
-  function designImageSendBlockReason(job: DesignJob) {
+  function designImageSendBlockReason(job: DesignJob, options: { allowHighValueManualApproval?: boolean } = {}) {
     const images = job.images || [];
     const localImageCount = images.filter((image) => Boolean(image.localPath)).length;
     if (!images.length) return "还没有候选图";
     if (localImageCount !== images.length) return `还有 ${images.length - localImageCount} 张图没有本地文件`;
     if (!job.wechatAccountId || !job.conversationId) return "缺少微信账号或客户会话";
-    if (job.isHighValue) return "高价值客户需要人工审核后再发送";
+    if (isHighValueDesignJob(job) && !options.allowHighValueManualApproval) return "高价值客户需要人工审核后再发送";
     if (["failed", "timeout", "cancelled"].includes(job.status)) return "任务状态不允许直接发图";
     return "";
   }
@@ -853,7 +1172,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       getSkus(includeInactiveSkus),
       getSkuCatalogAudit(),
       getSkuChangeLogs(30),
-      getAgents(),
+      getAgents(identityFilters),
       getChatImports(identityFilters),
       getTrainingSamples({
         ...identityFilters,
@@ -1679,7 +1998,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
     let importSummary = "";
     let sceneUncertainCount = 0;
+    let importReviewCount = 0;
     let importedChatId = "";
+    let importedChatFilter: TrainingSampleQualityFilter = "all";
     await runAction(
       "导入聊天记录",
       async () => {
@@ -1692,38 +2013,44 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         });
         importedChatId = result.id;
         sceneUncertainCount = (result.samples || []).filter((sample) => isSceneUncertainTrainingSample(sample)).length;
+        importReviewCount = chatImportReviewCount(result);
+        importedChatFilter = chatImportPreferredQualityFilter(result);
         importSummary = chatImportSceneSummary(result);
       },
       () => {
         setTrainingWorkbenchView("review");
-        if (sceneUncertainCount > 0) {
-          void changeTrainingSampleQualityFilter("scene_uncertain", importedChatId);
+        if (sceneUncertainCount > 0 || importReviewCount > 0 || importedChatId) {
+          void changeTrainingSampleQualityFilter(importedChatFilter, importedChatId);
         }
         setMessage(importSummary || "导入聊天记录完成。");
       },
     );
   }
 
-  async function compileTrainingSkills() {
+  async function compileTrainingSkills(explicitSuggestionKeys?: string[], scopeLabel = "已选") {
     const validKeys = new Set(skillSuggestions.map(skillSuggestionKey));
-    const suggestionKeys = selectedSkillSuggestionKeys.filter((key) => validKeys.has(key));
+    const sourceKeys = explicitSuggestionKeys || selectedSkillSuggestionKeys;
+    const suggestionKeys = [...new Set(sourceKeys.filter((key) => validKeys.has(key)))];
     if (!suggestionKeys.length) {
-      setMessage("请先勾选要应用的 Skill 建议。");
+      setMessage(`请先勾选要应用的${scopeLabel} Skill 建议。`);
       return;
     }
     const selectedSuggestions = skillSuggestions.filter((suggestion) => suggestionKeys.includes(skillSuggestionKey(suggestion)));
     const includeNeedsReview = selectedSuggestions.some((suggestion) => !isSkillSuggestionAutoSelected(suggestion));
     let summary = "";
     await runAction(
-      "应用已选 Agent Skill",
+      `应用${scopeLabel} Agent Skill`,
       async () => {
         const result = await applySkillSuggestions({ ...activeIdentityFilters(), minScore: 70, suggestionKeys, includeNeedsReview });
         const blockedText = result.requiresReview ? `，拦截 ${result.requiresReview} 条需复核建议` : "";
-        summary = `已选 ${result.selected ?? suggestionKeys.length} 条建议，实际应用 ${result.applied ?? result.selected ?? suggestionKeys.length} 条，新增 ${result.created.length} 个 Skill，更新 ${result.updated.length} 个 Skill，跳过 ${result.skipped.length} 个无变化项${blockedText}。`;
+        const detailText = skillApplyChangeSummary(result);
+        summary = `${scopeLabel} ${result.selected ?? suggestionKeys.length} 条建议，实际应用 ${result.applied ?? result.selected ?? suggestionKeys.length} 条，新增 ${result.created.length} 个 Skill，更新 ${result.updated.length} 个 Skill，跳过 ${result.skipped.length} 个无变化项${blockedText}。${detailText}`;
       },
       () => {
         setSkillApplySummary(summary);
         setMessage(summary || "Agent Skill 应用完成。");
+        const appliedKeySet = new Set(suggestionKeys);
+        setSelectedSkillSuggestionKeys((current) => current.filter((key) => !appliedKeySet.has(key)));
         getTrainingOverview(activeIdentityFilters()).then(setTrainingOverview).catch(() => setTrainingOverview(null));
       },
     );
@@ -1762,9 +2089,40 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     setSelectedSkillSuggestionKeys((current) => [...new Set([...current, ...keys])]);
   }
 
+  function selectSafeSkillSuggestions() {
+    const keys = filteredSkillSuggestions.filter(isSkillSuggestionAutoSelected).map(skillSuggestionKey);
+    setSelectedSkillSuggestionKeys((current) => [...new Set([...current, ...keys])]);
+  }
+
   function clearSkillSuggestions() {
     const keys = new Set(filteredSkillSuggestions.map(skillSuggestionKey));
     setSelectedSkillSuggestionKeys((current) => current.filter((key) => !keys.has(key)));
+  }
+
+  function clearHiddenSkillSuggestions() {
+    const keys = new Set(filteredSkillSuggestions.map(skillSuggestionKey));
+    setSelectedSkillSuggestionKeys((current) => current.filter((key) => keys.has(key)));
+  }
+
+  function compileFilteredTrainingSkills() {
+    const keys = filteredSkillSuggestions
+      .map(skillSuggestionKey)
+      .filter((key) => selectedSkillSuggestionKeySet.has(key));
+    void compileTrainingSkills(keys, "当前筛选已选");
+  }
+
+  function focusChatImportSkillSuggestions(item: ChatImport) {
+    const agentFilter = chatImportSkillSuggestionFilter(item, skillSuggestions);
+    const targetSuggestions =
+      agentFilter === "all"
+        ? skillSuggestions
+        : skillSuggestions.filter((suggestion) => skillSuggestionAgentFilterKey(suggestion) === agentFilter);
+    const safeKeys = targetSuggestions.filter(isSkillSuggestionAutoSelected).map(skillSuggestionKey);
+    setSkillSuggestionAgentFilter(agentFilter);
+    if (safeKeys.length) {
+      setSelectedSkillSuggestionKeys((current) => [...new Set([...current, ...safeKeys])]);
+    }
+    setTrainingWorkbenchView("skills");
   }
 
   function toggleTrainingSampleSelection(sampleId: string, checked: boolean) {
@@ -2423,7 +2781,29 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const existingOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
     const note = `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`;
+    let queuedOrder: OrderDraft | null = null;
+    let queuedConfirmation = false;
     await runAction(`核验${paymentLabel}付款`, async () => {
+      if (options.queueConfirmation) {
+        const result = await verifyQuotePaymentProofAndQueueConfirmation(
+          quote.id,
+          paymentStatus,
+          identityExpectation(quote),
+        );
+        setOrderDrafts((items) =>
+          items.some((item) => item.id === result.orderDraft.id)
+            ? items.map((item) => (item.id === result.orderDraft.id ? result.orderDraft : item))
+            : [result.orderDraft, ...items],
+        );
+        setSendTasks((items) =>
+          items.some((item) => item.id === result.sendTask.id)
+            ? items.map((item) => (item.id === result.sendTask.id ? result.sendTask : item))
+            : [result.sendTask, ...items],
+        );
+        queuedOrder = result.orderDraft;
+        queuedConfirmation = true;
+        return;
+      }
       let verifiedOrder: OrderDraft | null = null;
       if (existingOrder) {
         verifiedOrder = await updateOrderDraft(existingOrder.id, {
@@ -2443,18 +2823,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         });
         verifiedOrder = await createOrderDraftFromQuote(quote.id, identityExpectation(quote));
       }
-      if (!options.queueConfirmation || !verifiedOrder) return;
-      const conversation = conversationForQuoteOrder(quote, verifiedOrder);
-      if (conversation?.manualLocked) {
-        await setConversationManualLock(conversation.id, {
-          ...conversationIdentityExpectation(conversation),
-          locked: false,
-          reviewer: "人工客服",
-          reason: "manual_payment_proof_verified",
-          note: `${note} 已解除人工接管，订单确认进入安全发送前校验。`,
-        });
-      }
-      await queueOrderConfirmationAfterPreviewCheck(verifiedOrder);
+      if (!verifiedOrder) return;
+      queuedOrder = verifiedOrder;
+    }, () => {
+      if (!queuedOrder) return;
+      focusOrderDraft(queuedOrder);
+      setMessage(queuedConfirmation ? `${paymentLabel}已核验，订单确认已进入微信安全发送队列。` : `${paymentLabel}已核验，订单草稿已更新。`);
     });
   }
 
@@ -3107,7 +3481,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function reviewJob(job: DesignJob, decision: "approve_images" | "approve_send" | "request_revision" | "reject") {
     if (decision === "approve_send") {
-      const risk = designImageSendBlockReason(job);
+      const risk = designImageSendBlockReason(job, { allowHighValueManualApproval: true });
       if (risk) {
         setMessage(`批准发送前检查未通过：${risk}`);
         return;
@@ -3121,7 +3495,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     };
     if (
       ["approve_images", "approve_send"].includes(decision) &&
-      job.isHighValue &&
+      isHighValueDesignJob(job) &&
       !confirmHighValueManualApproval({
         title: job.customer?.name || job.customerId || "高价值客户",
         reason: highValueDesignReason(job),
@@ -3149,6 +3523,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       reject_quote: "报价需要重新核算后再发送。",
     };
     if (decision === "approve_quote") {
+      if (quoteNeedsPaymentProofReview(quote)) {
+        setMessage("这条报价带有付款凭证，不能直接通过并入队；请先人工核验金额和收款账户，再选择定金并确认或全款并确认。");
+        return;
+      }
       const result = await checkQuoteReadyForManualApproval(quote);
       if (result.preview && quoteCenterPreviewId === quote.id) setQuoteCenterPreview(result.preview);
       if (!result.ok) {
@@ -3805,7 +4183,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   const activeJob = useMemo(() => jobs.find((job) => job.id === activeId) || jobs[0], [jobs, activeId]);
   const pendingCount = jobs.filter((job) => ["quick_confirm", "manual_review", "timeout", "failed"].includes(job.status)).length;
-  const highValueCount = jobs.filter((job) => job.isHighValue).length;
+  const highValueCount = jobs.filter((job) => isHighValueDesignJob(job)).length;
   const stockWarning = skus.filter((sku) => Number(sku.stock) <= 10).length;
   const trainingSampleTotalCount = trainingOverview?.totalSamples ?? trainingSamples.length;
   const activeTrainingImport = trainingSampleImportFilterId
@@ -3842,7 +4220,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
   const autoSelectedSkillSuggestionCount = skillSuggestions.filter(isSkillSuggestionAutoSelected).length;
+  const filteredSafeSkillSuggestionCount = filteredSkillSuggestions.filter(isSkillSuggestionAutoSelected).length;
+  const filteredUnselectedSafeSkillSuggestionCount = filteredSkillSuggestions.filter(
+    (suggestion) => isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
+  ).length;
   const filteredNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion)).length;
+  const filteredUnselectedSkillSuggestionCount = Math.max(0, filteredSkillSuggestions.length - filteredSelectedSkillSuggestionCount);
+  const hiddenSelectedSkillSuggestionCount = Math.max(0, selectedSkillSuggestionCount - filteredSelectedSkillSuggestionCount);
   const trainingWorkbenchSummary =
     trainingWorkbenchView === "review"
       ? activeTrainingImport
@@ -4031,7 +4415,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   );
   const dealFlowAcceptedQuotesWithoutOrder = acceptedQuotesWithoutOrder.filter((quote) => !isHighValueQuote(quote));
   const dealFlowConfirmationCandidates = orderDrafts.filter((order) =>
-    !isHighValueOrder(order) && order.status === "confirmed" && !hasActiveOrderConfirmationTask(order),
+    !isHighValueOrder(order) &&
+    order.status === "confirmed" &&
+    orderPaymentReady(order) &&
+    !hasActiveOrderConfirmationTask(order),
   );
   const dealFlowQueuedSendCount = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status)).length;
   const dealFlowPreviewItems = [
@@ -4106,7 +4493,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       key: "confirm-send",
       label: "待发确认",
       value: orderDrafts.filter((order) =>
-        order.status === "confirmed" && !hasActiveOrderConfirmationTask(order),
+        order.status === "confirmed" && orderPaymentReady(order) && !hasActiveOrderConfirmationTask(order),
       ).length,
       note: "订单确认还没进入发送队列",
       tone: "blue",
@@ -4178,6 +4565,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => buildAutomationStepInsight(automationStatus?.lastRun),
     [automationStatus?.lastRun],
   );
+  const lowValueAutomationIdentityAudit = automationStatus?.lastRun?.identityAudit || null;
   const automationRunHistorySummary = useMemo(
     () => buildAutomationRunHistorySummary(automationStatus?.recentRuns),
     [automationStatus?.recentRuns],
@@ -4248,9 +4636,34 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
     return map;
   }, [catalogAudit]);
+  const skuImportReadinessSummary = useMemo(
+    () => skuImportPreview ? skuImportPreviewReadinessSummary(skuImportPreview.rows, skuImportPreview.audit?.issues || []) : null,
+    [skuImportPreview],
+  );
   const skuRepairQueue = useMemo(() => catalogAudit?.repairQueue || [], [catalogAudit]);
   const skuImageProblems = useMemo(() => catalogAudit?.imageProblems || [], [catalogAudit]);
+  const knownSkuCodeSet = useMemo(() => new Set(skus.map((sku) => sku.skuCode).filter(Boolean)), [skus]);
+  const skuNameByCode = useMemo(() => new Map(skus.map((sku) => [sku.skuCode, sku.name])), [skus]);
+  const skuReferenceOptions = useMemo(
+    () =>
+      skus
+        .filter((sku) => sku.skuCode)
+        .map((sku) => ({
+          skuCode: sku.skuCode,
+          label: [sku.name, sku.category || sku.type].filter(Boolean).join(" · "),
+        })),
+    [skus],
+  );
+  const skuReferenceQuickOptions = useMemo(
+    () => skuReferenceOptions.filter((option) => option.skuCode !== skuForm.skuCode.trim()).slice(0, 6),
+    [skuForm.skuCode, skuReferenceOptions],
+  );
+  const skuFormPricingStatus = useMemo(() => skuFormPricingPreview(skuForm), [skuForm]);
+  const skuFormSpecificationStatus = useMemo(() => skuFormSpecificationPreview(skuForm), [skuForm]);
   const skuFormReadinessWarnings = useMemo(() => validateSkuFormReadiness(skuForm), [skuForm]);
+  const skuFormAutomationStatus = useMemo(() => skuFormAutomationPreview(skuForm, skuFormReadinessWarnings), [skuForm, skuFormReadinessWarnings]);
+  const skuFormReferenceWarnings = useMemo(() => validateSkuFormReferences(skuForm, knownSkuCodeSet), [knownSkuCodeSet, skuForm]);
+  const skuFormReferenceMatches = useMemo(() => skuFormReferenceSummary(skuForm, skuNameByCode), [skuForm, skuNameByCode]);
   const visibleSkus = useMemo(() => {
     const query = skuSearch.trim().toLowerCase();
     return skus.filter((sku) => {
@@ -4474,7 +4887,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ...jobs
       .filter((job) =>
         job.status === "manual_review" ||
-        (job.isHighValue && ["completed", "quick_confirm", "timeout", "failed"].includes(job.status)),
+        (isHighValueDesignJob(job) && ["completed", "quick_confirm", "timeout", "failed"].includes(job.status)),
       )
       .map((job) => {
         const step = highValueDesignManualStep(job);
@@ -5677,6 +6090,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                       <div className="quote-tags compact">
                         <span>{paymentStatusLabel(activeQuote.paymentStatus)}</span>
+                        {quoteNeedsPaymentProofReview(activeQuote) ? <span>付款凭证待核验</span> : null}
                         <span>利润率 {Math.round(Number(activeQuote.profitRate || 0) * 100)}%</span>
                         {activeQuote.sendTaskId ? <span>已入发送队列</span> : null}
                         {activeOrderDraft ? <span>订单 {orderStatusLabel(activeOrderDraft.status)}</span> : null}
@@ -5992,7 +6406,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   onClick={() => setActiveId(job.id)}
                   type="button"
                 >
-                  <span className={`dot ${job.isHighValue ? "danger" : ""}`} />
+                  <span className={`dot ${isHighValueDesignJob(job) ? "danger" : ""}`} />
                   <div>
                     <strong>{job.customer?.name || "未命名客户"}</strong>
                     <small>{readableScene(job.scene, "未填写场景")} · {job.outputCount} 张候选</small>
@@ -6329,6 +6743,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 const issues = catalogIssuesBySku.get(sku.skuCode) || [];
                 const profit = Number(sku.salePrice || 0) - Number(sku.costPrice || 0);
                 const imageUrl = localAssetUrl(sku.mainImagePath);
+                const automationSummary = skuAutomationSummary(sku, issues);
                 return (
                   <div
                     aria-selected={selectedSkuCodes.includes(sku.skuCode)}
@@ -6365,7 +6780,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <span role="cell">{formatMoney(Number(sku.salePrice || 0))} 元 / 成本 {formatMoney(Number(sku.costPrice || 0))}</span>
                     <span role="cell">利润 {formatMoney(profit)} · 库存 {sku.stock}</span>
                     <span role="cell">{sku.supplier || "缺供应商"} · 交期 {sku.leadTimeDays || "-"} 天</span>
-                    <span role="cell">{sku.mainImagePath ? "有主图" : "缺主图"} · {(sku.sceneTags || []).slice(0, 2).join("、") || "缺场景"}</span>
+                    <span role="cell">
+                      {sku.mainImagePath ? "有主图" : "缺主图"} · {(sku.sceneTags || []).slice(0, 2).join("、") || "缺场景"}
+                      <small className={`sku-automation-pill ${automationSummary.tone}`}>{automationSummary.label} · {automationSummary.detail}</small>
+                    </span>
                     <span className="sku-action-cell" role="cell">
                       <button type="button" className="ghost compact-button" onClick={() => editSku(sku)} disabled={Boolean(busy)}><ClipboardList size={14} aria-hidden="true" />编辑</button>
                       {sku.isActive === false ? (
@@ -6434,6 +6852,66 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <RefreshCw size={16} aria-hidden="true" />清空表单
                 </button>
               </div>
+              <div className={`sku-form-automation-preview ${skuFormAutomationStatus.tone}`} role="status">
+                <div>
+                  <small>保存后自动化预估</small>
+                  <strong>{skuFormAutomationStatus.label}</strong>
+                  <span>{skuFormAutomationStatus.detail}</span>
+                </div>
+                <p>
+                  {skuFormAutomationStatus.chips.map((chip) => (
+                    <span key={chip}>{chip}</span>
+                  ))}
+                </p>
+              </div>
+              <div className={`sku-form-pricing-preview ${skuFormPricingStatus.tone}`} role="status">
+                <div>
+                  <small>价格利润预览</small>
+                  <strong>{skuFormPricingStatus.label}</strong>
+                  <span>{skuFormPricingStatus.detail}</span>
+                </div>
+                <p>
+                  <span>售价 {formatMoney(skuFormPricingStatus.salePrice)} 元</span>
+                  <span>成本 {formatMoney(skuFormPricingStatus.costPrice)} 元</span>
+                  <span>毛利 {formatMoney(skuFormPricingStatus.profit)} 元</span>
+                  <span>毛利率 {Math.round(skuFormPricingStatus.marginRate * 100)}%</span>
+                </p>
+              </div>
+              <div className={`sku-form-specification-preview ${skuFormSpecificationStatus.tone}`} role="status">
+                <div>
+                  <small>规格交付预览</small>
+                  <strong>{skuFormSpecificationStatus.label}</strong>
+                  <span>{skuFormSpecificationStatus.detail}</span>
+                </div>
+                <p>
+                  {skuFormSpecificationStatus.chips.map((chip) => (
+                    <span key={chip}>{chip}</span>
+                  ))}
+                </p>
+              </div>
+              {skuFormReferenceWarnings.length ? (
+                <div className="sku-form-reference-warning" role="status">
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <div>
+                    <strong>SKU 引用检查</strong>
+                    {skuFormReferenceWarnings.slice(0, 3).map((warning) => (
+                      <span key={`${warning.field}-${warning.skuCode}`}>{warning.message}</span>
+                    ))}
+                    {skuFormReferenceWarnings.length > 3 ? <small>还有 {skuFormReferenceWarnings.length - 3} 个引用问题，保存后商品体检也会继续提示。</small> : null}
+                  </div>
+                </div>
+              ) : null}
+              {skuFormReferenceMatches.length ? (
+                <div className="sku-form-reference-matches" role="status" aria-label="已识别 SKU 引用">
+                  <strong>已识别引用</strong>
+                  <p>
+                    {skuFormReferenceMatches.slice(0, 8).map((match) => (
+                      <span key={`${match.field}-${match.skuCode}`}>{match.label} · {match.skuCode} · {match.name}</span>
+                    ))}
+                  </p>
+                  {skuFormReferenceMatches.length > 8 ? <small>还有 {skuFormReferenceMatches.length - 8} 个引用已识别。</small> : null}
+                </div>
+              ) : null}
               {skuFormReadinessWarnings.length ? (
                 <div className="sku-form-readiness-warning sku-form-readiness-summary">
                   <AlertTriangle size={16} aria-hidden="true" />
@@ -6523,9 +7001,28 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </label>
                 <label className="field-control">
                   <span>替代 SKU</span>
-                  <input value={skuForm.replacementSkuCodes} onChange={(event) => setSkuForm({ ...skuForm, replacementSkuCodes: event.target.value })} placeholder="用顿号分隔" />
+                  <input list="sku-reference-options" value={skuForm.replacementSkuCodes} onChange={(event) => setSkuForm({ ...skuForm, replacementSkuCodes: event.target.value })} placeholder="用顿号分隔" />
+                  {skuReferenceQuickOptions.length ? (
+                    <div className="sku-reference-quick-picks" aria-label="快速追加替代 SKU">
+                      {skuReferenceQuickOptions.map((option) => (
+                        <button
+                          type="button"
+                          key={`replacement-${option.skuCode}`}
+                          onClick={() => setSkuForm({ ...skuForm, replacementSkuCodes: appendSkuCodeTextList(skuForm.replacementSkuCodes, option.skuCode) })}
+                          title={option.label}
+                        >
+                          {option.skuCode}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </label>
               </div>
+              <datalist id="sku-reference-options">
+                {skuReferenceOptions.map((option) => (
+                  <option key={option.skuCode} value={option.skuCode} label={option.label} />
+                ))}
+              </datalist>
               <div className="sku-image-tools">
                 <label className="file-button">
                   <ImageIcon size={16} aria-hidden="true" />上传主图
@@ -6551,14 +7048,106 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </label>
                 <small>图片保存到本地素材库，保存商品后会参与 SKU 搭配和设计出图。</small>
               </div>
-              <label className="field-control field-control-wide">
-                <span>搭配规则</span>
-                <textarea
-                  value={skuForm.matchingRules}
-                  onChange={(event) => setSkuForm({ ...skuForm, matchingRules: event.target.value })}
-                  placeholder='可写文字，也可写 JSON，例如 {"mustWith":["CARD-B"]}'
-                />
-              </label>
+              <div className="sku-matching-rule-editor">
+                <div className="sku-matching-rule-head">
+                  <strong>搭配规则</strong>
+                  <span>填写 SKU 编号，多个用顿号或逗号分隔；系统推荐礼盒组合时会按这些规则避坑。</span>
+                </div>
+                <div className="sku-matching-rule-grid">
+                  <label className="field-control">
+                    <span>必须同搭</span>
+                    <input
+                      list="sku-reference-options"
+                      value={matchingRuleListText(skuForm.matchingRules, "mustWith")}
+                      onChange={(event) =>
+                        setSkuForm({
+                          ...skuForm,
+                          matchingRules: withMatchingRuleList(skuForm.matchingRules, "mustWith", event.target.value),
+                        })
+                      }
+                      placeholder="例如 CARD-B"
+                    />
+                    {skuReferenceQuickOptions.length ? (
+                      <div className="sku-reference-quick-picks" aria-label="快速追加必须同搭 SKU">
+                        {skuReferenceQuickOptions.map((option) => (
+                          <button
+                            type="button"
+                            key={`mustWith-${option.skuCode}`}
+                            onClick={() => setSkuForm({ ...skuForm, matchingRules: withAppendedMatchingRuleSku(skuForm.matchingRules, "mustWith", option.skuCode) })}
+                            title={option.label}
+                          >
+                            {option.skuCode}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </label>
+                  <label className="field-control">
+                    <span>推荐同搭</span>
+                    <input
+                      list="sku-reference-options"
+                      value={matchingRuleListText(skuForm.matchingRules, "preferWith")}
+                      onChange={(event) =>
+                        setSkuForm({
+                          ...skuForm,
+                          matchingRules: withMatchingRuleList(skuForm.matchingRules, "preferWith", event.target.value),
+                        })
+                      }
+                      placeholder="例如 TEA-C"
+                    />
+                    {skuReferenceQuickOptions.length ? (
+                      <div className="sku-reference-quick-picks" aria-label="快速追加推荐同搭 SKU">
+                        {skuReferenceQuickOptions.map((option) => (
+                          <button
+                            type="button"
+                            key={`preferWith-${option.skuCode}`}
+                            onClick={() => setSkuForm({ ...skuForm, matchingRules: withAppendedMatchingRuleSku(skuForm.matchingRules, "preferWith", option.skuCode) })}
+                            title={option.label}
+                          >
+                            {option.skuCode}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </label>
+                  <label className="field-control">
+                    <span>禁止同搭</span>
+                    <input
+                      list="sku-reference-options"
+                      value={matchingRuleListText(skuForm.matchingRules, "cannotWith")}
+                      onChange={(event) =>
+                        setSkuForm({
+                          ...skuForm,
+                          matchingRules: withMatchingRuleList(skuForm.matchingRules, "cannotWith", event.target.value),
+                        })
+                      }
+                      placeholder="例如 SNACK-A"
+                    />
+                    {skuReferenceQuickOptions.length ? (
+                      <div className="sku-reference-quick-picks" aria-label="快速追加禁止同搭 SKU">
+                        {skuReferenceQuickOptions.map((option) => (
+                          <button
+                            type="button"
+                            key={`cannotWith-${option.skuCode}`}
+                            onClick={() => setSkuForm({ ...skuForm, matchingRules: withAppendedMatchingRuleSku(skuForm.matchingRules, "cannotWith", option.skuCode) })}
+                            title={option.label}
+                          >
+                            {option.skuCode}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </label>
+                </div>
+                <label className="field-control field-control-wide">
+                  <span>高级规则 / 备注</span>
+                  <textarea
+                    value={skuForm.matchingRules}
+                    onChange={(event) => setSkuForm({ ...skuForm, matchingRules: event.target.value })}
+                    placeholder='可写文字，也可写 JSON，例如 {"mustWith":["CARD-B"],"preferWith":["TEA-C"],"cannotWith":["SNACK-A"]}'
+                  />
+                </label>
+              </div>
             </div>
             ) : null}
           </section>
@@ -6737,6 +7326,33 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     </span>
                   </div>
                 ))}
+              </div>
+            ) : null}
+            {noticeWorkbenchView === "history" && lowValueAutomationIdentityAudit ? (
+              <div className={`automation-identity-audit ${lowValueAutomationIdentityAudit.status}`} aria-label="上一轮自动化身份审计">
+                <div>
+                  <strong>{lowValueAutomationIdentityAudit.status === "warning" ? "上一轮身份审计有警告" : "上一轮身份审计通过"}</strong>
+                  <span>
+                    涉及 {lowValueAutomationIdentityAudit.identityCount} 个客户会话，
+                    警告 {lowValueAutomationIdentityAudit.warnings.length} 个。
+                  </span>
+                </div>
+                <div className="automation-identity-grid">
+                  {lowValueAutomationIdentityAudit.warnings.slice(0, 3).map((warning) => (
+                    <span className="warning" key={`${warning.step}:${warning.path}:${warning.reason}`}>
+                      <small>{automationStepLabel(warning.step)}</small>
+                      <b>{automationIdentityWarningLabel(warning.reason, warning.fields)}</b>
+                    </span>
+                  ))}
+                  {!lowValueAutomationIdentityAudit.warnings.length
+                    ? lowValueAutomationIdentityAudit.identities.slice(0, 4).map((identity) => (
+                        <span className="ok" key={identity.key}>
+                          <small>{identity.wechatAccountId || "全局账号"}</small>
+                          <b>{identity.conversationId || identity.customerId || "未绑定会话"}</b>
+                        </span>
+                      ))
+                    : null}
+                </div>
               </div>
             ) : null}
             {noticeWorkbenchView === "automation" && lowValueAutomationSummary ? (
@@ -7113,14 +7729,76 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                     </div>
                   ) : null}
-                  <div className="import-preview-list">
-                    {skuImportPreview.rows.slice(0, 6).map((row, index) => (
-                      <div className="preview-row" key={`${row.skuCode || index}-${index}`}>
-                        <strong>{row.name || "未命名商品"}</strong>
-                        <span>{row.skuCode || "未编号"} · {row.category || row.type} · 售价 {formatMoney(Number(row.salePrice || 0))}</span>
-                        <small>{row.mainImagePath ? "有主图" : "缺主图"} · 库存 {row.stock || 0} · {row.supplier || "缺供应商"}</small>
+                  {skuImportPreview.audit?.commercialReadiness ? (
+                    <div className={`import-commercial-readiness ${skuImportPreview.audit.commercialReadiness.level}`} role="status">
+                      <div>
+                        <small>入库后自动化预估</small>
+                        <strong>{skuImportPreview.audit.commercialReadiness.score} 分</strong>
+                        <span>{skuImportPreview.audit.commercialReadiness.summary}</span>
                       </div>
-                    ))}
+                      <div className="import-commercial-flags" aria-label="导入后自动化能力">
+                        <span className={skuImportPreview.audit.commercialReadiness.canAutoBundle ? "ok" : "blocked"}>自动搭配</span>
+                        <span className={skuImportPreview.audit.commercialReadiness.canSubmitDesign ? "ok" : "blocked"}>设计出图</span>
+                        <span className={skuImportPreview.audit.commercialReadiness.canAutoQuote ? "ok" : "blocked"}>自动报价</span>
+                      </div>
+                      <p>
+                        <span>可用 {skuImportPreview.audit.readyCount}/{skuImportPreview.audit.total}</span>
+                        <span>基础容量 {skuImportPreview.audit.basicBundleCapacity || 0} 份</span>
+                        <span>最低成套 {skuImportPreview.audit.minBundleBudget || 0} 元</span>
+                        <span>图片问题 {skuImportPreview.audit.imageIssueCount ?? skuImportPreview.audit.missingImageCount}</span>
+                        <span>利润异常 {skuImportPreview.audit.negativeMarginCount || 0}</span>
+                        <span>交期异常 {skuImportPreview.audit.leadTimeIssueCount || 0}</span>
+                        <span>规格异常 {skuImportPreview.audit.specificationIssueCount || 0}</span>
+                      </p>
+                      {(skuImportPreview.audit.commercialReadiness.blockers?.length || skuImportPreview.audit.commercialReadiness.nextActions?.length) ? (
+                        <button
+                          type="button"
+                          className="ghost compact-button"
+                          onClick={() => setMessage([
+                            ...(skuImportPreview.audit?.commercialReadiness?.blockers || []),
+                            ...(skuImportPreview.audit?.commercialReadiness?.nextActions || []),
+                          ].join("；") || "这批商品导入后没有明确自动化阻塞项。")}
+                        >
+                          查看导入建议
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {skuImportReadinessSummary ? (
+                    <div className={`import-readiness-summary ${skuImportReadinessSummary.tone}`} role="status">
+                      <div>
+                        <small>本批入库风险</small>
+                        <strong>{skuImportReadinessSummary.label}</strong>
+                        <span>{skuImportReadinessSummary.detail}</span>
+                      </div>
+                      <p>
+                        <span className="ready">可自动用 {skuImportReadinessSummary.ready}</span>
+                        <span className="review">需复核 {skuImportReadinessSummary.review}</span>
+                        <span className="blocked">阻塞 {skuImportReadinessSummary.blocked}</span>
+                      </p>
+                    </div>
+                  ) : null}
+                  <div className="import-preview-list">
+                    {skuImportPreview.rows.slice(0, 6).map((row, index) => {
+                      const rowIssues = skuImportIssuesForRow(row, skuImportPreview.audit?.issues || []);
+                      const rowReadiness = skuImportRowReadiness(row, rowIssues);
+                      return (
+                        <div className={`preview-row ${rowReadiness.tone}`} key={`${row.skuCode || index}-${index}`}>
+                          <strong>{row.name || "未命名商品"}</strong>
+                          <span>{row.skuCode || "未编号"} · {row.category || row.type} · 售价 {formatMoney(Number(row.salePrice || 0))}</span>
+                          <small>{row.mainImagePath ? "有主图" : "缺主图"} · 库存 {row.stock || 0} · {row.supplier || "缺供应商"}</small>
+                          <div className={`preview-row-readiness ${rowReadiness.tone}`} title={rowReadiness.detail}>
+                            <strong>{rowReadiness.label}</strong>
+                            <span>{rowReadiness.detail}</span>
+                            <p>
+                              {rowReadiness.chips.map((chip) => (
+                                <em key={chip}>{chip}</em>
+                              ))}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
                     {skuImportPreview.rows.length > 6 ? <small>还有 {skuImportPreview.rows.length - 6} 个商品，确认入库时会一起保存。</small> : null}
                   </div>
                   <div className="import-preview-actions">
@@ -7382,8 +8060,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <FileUp size={16} aria-hidden="true" />导入训练
                 </button>
                 <span>已导入 {chatImports.length} 批，训练样本 {trainingSampleTotalCount} 条</span>
-                <button type="button" className="ghost" onClick={compileTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
-                  <Brain size={16} aria-hidden="true" />应用已选 Skill
+                <button type="button" className="ghost" onClick={() => compileTrainingSkills()} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
+                  <Brain size={16} aria-hidden="true" />应用全部已选 Skill
                 </button>
               </div>
               {chatImports.length ? (
@@ -7685,17 +8363,43 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </button>
                       ))}
                     </div>
-                    <button type="button" className="ghost compact" onClick={selectAllSkillSuggestions} disabled={Boolean(busy) || !filteredSkillSuggestions.length}>
+                    <button type="button" className="ghost compact" onClick={selectAllSkillSuggestions} disabled={Boolean(busy) || !filteredUnselectedSkillSuggestionCount}>
                       全选当前
+                    </button>
+                    <button type="button" className="ghost compact" onClick={selectSafeSkillSuggestions} disabled={Boolean(busy) || !filteredUnselectedSafeSkillSuggestionCount}>
+                      只选高可信
                     </button>
                     <button type="button" className="ghost compact" onClick={clearSkillSuggestions} disabled={Boolean(busy) || !filteredSelectedSkillSuggestionCount}>
                       清空当前
                     </button>
-                    <button type="button" className="primary compact" onClick={compileTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
-                      应用已选
+                    <button type="button" className="ghost compact" onClick={clearHiddenSkillSuggestions} disabled={Boolean(busy) || !hiddenSelectedSkillSuggestionCount}>
+                      清空其他已选
+                    </button>
+                    {hiddenSelectedSkillSuggestionCount && filteredSelectedSkillSuggestionCount ? (
+                      <button type="button" className="primary compact" onClick={compileFilteredTrainingSkills} disabled={Boolean(busy)}>
+                        只应用当前
+                      </button>
+                    ) : null}
+                    <button type="button" className="primary compact" onClick={() => compileTrainingSkills()} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
+                      应用全部已选
                     </button>
                   </div>
                 </div>
+                {hiddenSelectedSkillSuggestionCount ? (
+                  <div className="training-summary skill-suggestion-hint" role="status">
+                    <span>还有 {hiddenSelectedSkillSuggestionCount} 条其他 Agent 已选；点击“应用全部已选”会一起提交。</span>
+                  </div>
+                ) : filteredSkillSuggestions.length && !filteredSelectedSkillSuggestionCount ? (
+                  <div className="training-summary skill-suggestion-hint" role="status">
+                    <span>
+                      当前 Agent 没有已选建议；可先用“只选高可信”应用 {filteredUnselectedSafeSkillSuggestionCount} 条，剩余 {filteredNeedsReviewSkillSuggestionCount} 条需人工判断。
+                    </span>
+                  </div>
+                ) : filteredUnselectedSkillSuggestionCount ? (
+                  <div className="training-summary skill-suggestion-hint" role="status">
+                    <span>当前 Agent 还有 {filteredUnselectedSkillSuggestionCount} 条未选建议，未选项不会进入 Skill。</span>
+                  </div>
+                ) : null}
                 {visibleSkillSuggestions.length ? (
                   visibleSkillSuggestions.map((suggestion) => {
                     const safetyTone = skillSuggestionSafetyTone(suggestion);
@@ -7821,6 +8525,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         disabled={Boolean(busy)}
                       >
                         清除批次
+                      </button>
+                    ) : null}
+                    {activeTrainingImport && chatImportReadyForSkill(activeTrainingImport) ? (
+                      <button
+                        type="button"
+                        className="primary compact"
+                        onClick={() => focusChatImportSkillSuggestions(activeTrainingImport)}
+                        disabled={Boolean(busy)}
+                      >
+                        查看 Skill 进化
                       </button>
                     ) : null}
                     <button
@@ -8689,7 +9403,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <strong>{job.customer?.name || "未知客户"} · {readableScene(job.scene, "未填写场景")}</strong>
                           <p>
                             {statusLabel[job.status] || job.status} · {totalImages} 张图 · 本地可发 {localImageCount}/{totalImages} ·{" "}
-                            {job.isHighValue ? "高价值" : "普通"}
+                            {isHighValueDesignJob(job) ? "高价值" : "普通"}
                           </p>
                           {job.errorMessage ? (
                             <small title={job.errorMessage}>{operatorStatusMessage(job.errorMessage, job.errorMessage)}</small>
@@ -8764,6 +9478,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         >
                           <strong>{quote.customer?.name || "未知客户"} · {quote.totalPrice} 元</strong>
                           <p>{quote.quantity} 份 · 单价 {quote.unitPrice} 元 · 利润 {quote.profit} 元</p>
+                          {quoteNeedsPaymentProofReview(quote) ? <small>付款凭证待核验，先核对金额和收款账户</small> : null}
                           {quote.owner ? <small>跟进人 {quote.owner}</small> : null}
                           {quote.sendTaskId ? <small>发送任务 {quote.sendTaskId}</small> : null}
                         </button>
@@ -8776,7 +9491,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           >
                             <Search size={16} aria-hidden="true" />定位报价
                           </button>
-                          <button type="button" className="primary" onClick={() => reviewQuoteDraft(quote, "approve_quote")} disabled={Boolean(busy)}>
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() => reviewQuoteDraft(quote, "approve_quote")}
+                            disabled={Boolean(busy) || quoteNeedsPaymentProofReview(quote)}
+                            title={quoteNeedsPaymentProofReview(quote) ? "付款凭证单需要先核验收款，不能按普通报价通过" : "报价审核通过并进入微信安全发送队列"}
+                          >
                             <Check size={16} aria-hidden="true" />通过并入队
                           </button>
                           <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid", { queueConfirmation: true })} disabled={Boolean(busy)}>
@@ -8910,6 +9631,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   onClick={() => {
                     setQuoteWorkbenchView("quotes");
                     setQuotePaymentFilter("paid");
+                    scrollToWorkspaceSection("quote-center");
+                  }}
+                />
+                <Metric
+                  icon={<ShieldAlert size={20} aria-hidden="true" />}
+                  label="待核验凭证"
+                  value={quotes.filter(quoteNeedsPaymentProofReview).length}
+                  tone="red"
+                  ariaControls="quote-center"
+                  onClick={() => {
+                    setQuoteWorkbenchView("quotes");
+                    setQuoteStatusFilter("manual_review");
+                    setQuotePaymentFilter("unpaid");
                     scrollToWorkspaceSection("quote-center");
                   }}
                 />
@@ -9113,6 +9847,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <div className="quote-tags">
                         <span>{quoteStatusLabel(quote.status)}</span>
                         <span>{paymentStatusLabel(quote.paymentStatus)}</span>
+                        {quoteNeedsPaymentProofReview(quote) ? <span>付款凭证待核验</span> : null}
                         <span>利润率 {Math.round(Number(quote.profitRate || 0) * 100)}%</span>
                         {quote.owner ? <span>跟进人 {quote.owner}</span> : null}
                         {quote.sendTask ? <span>发送{sendStatusLabel(quote.sendTask.status)}</span> : null}
@@ -9448,6 +10183,8 @@ function PreflightPanel({
   const failedChecks = checks.filter((check) => !check.ok);
   const errors = failedChecks.filter((check) => check.severity === "error");
   const warnings = failedChecks.filter((check) => check.severity === "warning");
+  const bundleAutomation = job.bundle?.automation || null;
+  const bundleAutomationBlocked = bundleAutomation?.ready === false;
   const tone = preflight ? (errors.length ? "error" : warnings.length ? "warning" : "ok") : readinessMissing.length ? "warning" : "idle";
   const platformText = platformHealth?.ok
     ? `${designPlatformAdapterLabel(platformHealth.adapter)} ${platformHealth.latencyMs}ms`
@@ -9460,7 +10197,7 @@ function PreflightPanel({
         <div>
           <strong>{preflight ? (preflight.ok ? "出图预检通过" : "出图预检未通过") : "出图提交前预检"}</strong>
           <span title={`任务 ${job.requestId}`}>
-            任务 {compactRequestId} · {job.isHighValue ? "高价值人工审核" : "普通客户快速确认"}
+            任务 {compactRequestId} · {isHighValueDesignJob(job) ? "高价值人工审核" : "普通客户快速确认"}
           </span>
         </div>
         <button
@@ -9479,9 +10216,20 @@ function PreflightPanel({
         <span>任务状态：{statusLabel[job.status] || job.status}</span>
         <span>图片/素材：{preflight?.usableReferenceCount ?? referenceCount}</span>
         <span>本地可发：{localImageCount}/{totalImages}</span>
+        {bundleAutomation ? <span>组合自动化：{bundleAutomation.ready ? "可自动" : "需人工"}</span> : null}
         {remoteOnlyImageCount ? <span>待本地保存：{remoteOnlyImageCount}</span> : null}
         {preflight ? <span>不可用引用：{preflight.unusableReferenceCount}</span> : null}
       </div>
+      {bundleAutomation ? (
+        <div className="preflight-checks">
+          <span className={bundleAutomationBlocked ? "error" : "passed"}>
+            {bundleAutomationBlocked ? "错误" : "通过"} · 商品组合自动化：
+            {bundleAutomationBlocked
+              ? `阻塞项 ${automationBlockerListLabel(bundleAutomation.blockers || []) || "未说明"}`
+              : "利润、交期、规格和装盒尺寸满足自动出图/报价要求"}
+          </span>
+        </div>
+      ) : null}
       {preflight ? (
         <div className="preflight-checks">
           {checks.slice(0, 6).map((check) => (
@@ -9820,6 +10568,10 @@ function hasActiveOrderConfirmationTask(order: OrderDraft) {
   return Boolean(task && !["failed", "cancelled"].includes(task.status));
 }
 
+function orderPaymentReady(order: OrderDraft) {
+  return ["deposit_paid", "paid"].includes(order.paymentStatus || order.quoteDraft?.paymentStatus || "");
+}
+
 function orderRevisionBlockReason(order: OrderDraft) {
   if (!["draft", "confirmed"].includes(order.status)) {
     return "订单已进入生产、完成或取消阶段，不能直接修订选图。";
@@ -9865,12 +10617,14 @@ function orderConfirmationText(order: OrderDraft) {
 function orderConfirmationButtonLabel(order: OrderDraft) {
   if (order.status === "cancelled") return "已取消";
   if (canRequeueOrderConfirmationTask(order)) return "重发确认";
+  if (!orderPaymentReady(order)) return "待收款";
   if (!hasActiveOrderConfirmationTask(order)) return "发送确认";
   return order.confirmationSendTask?.status === "sent" ? "确认已发" : "确认已入队";
 }
 
 function orderConfirmationButtonTitle(order: OrderDraft) {
   if (order.status === "cancelled") return "订单已取消，不能发送确认";
+  if (!orderPaymentReady(order)) return "未记录定金或全款，先核验付款凭证后再发送订单确认";
   const task = order.confirmationSendTask;
   if (canRequeueOrderConfirmationTask(order)) return `订单确认任务${sendStatusLabel(task?.status || "")}，点击重新排队`;
   if (!task || ["failed", "cancelled"].includes(task.status)) return "生成订单确认话术并放入微信安全发送队列";
@@ -10236,6 +10990,23 @@ function automationStepLabel(step: string) {
     scanLowValueOrderFollowups: "订单跟进",
   };
   return labels[step] || step;
+}
+
+function automationIdentityWarningLabel(reason: string, fields: string[] = []) {
+  if (reason === "identity_field_conflict") {
+    return fields.length ? `身份字段冲突：${fields.map(identityFieldLabel).join("、")}` : "身份字段冲突";
+  }
+  if (reason === "missing_identity") return "缺少账号/会话身份";
+  return reason || "身份审计警告";
+}
+
+function identityFieldLabel(field: string) {
+  const labels: Record<string, string> = {
+    wechatAccountId: "微信账号",
+    conversationId: "客户会话",
+    customerId: "客户",
+  };
+  return labels[field] || field;
 }
 
 function formatStepDuration(durationMs?: number) {
@@ -10696,11 +11467,15 @@ function isSceneUncertainTrainingSample(sample: TrainingSample) {
 function chatImportSceneSummary(result: ChatImport) {
   const samples = result.samples || [];
   const sceneUncertainCount = samples.filter((sample) => isSceneUncertainTrainingSample(sample)).length;
+  const reviewCount = chatImportReviewCount(result);
   const clearSceneCount = samples.filter((sample) => sample.sceneCheck?.status === "clear").length;
   const base = `导入 ${result.pairCount || samples.length} 组对话，生成 ${samples.length} 条训练样本。`;
   const warningText = result.warnings?.length ? ` 解析提醒 ${result.warnings.length} 条。` : "";
   if (sceneUncertainCount > 0) {
     return `${base} ${sceneUncertainCount} 条场景待确认，已切到复核列表；确认前不会进入自动分流记忆。${warningText}`;
+  }
+  if (reviewCount > 0) {
+    return `${base} ${reviewCount} 条待复核，已切到本次导入列表；确认前不会进入训练。${warningText}`;
   }
   if (samples.length) {
     return `${base} 场景清晰 ${clearSceneCount} 条，可继续复核客服话术和 Skill。${warningText}`;
@@ -10723,8 +11498,29 @@ function chatImportRejectedCount(item: ChatImport) {
   return (item.samples || []).filter((sample) => String(sample.status || "ready") === "rejected").length;
 }
 
+function chatImportReadyCount(item: ChatImport) {
+  if (item.sceneSummary?.readyCount !== undefined) return Number(item.sceneSummary.readyCount || 0);
+  return (item.samples || []).filter((sample) => String(sample.status || "ready") === "ready").length;
+}
+
 function chatImportNeedsReview(item: ChatImport) {
   return chatImportSceneUncertainCount(item) > 0 || chatImportReviewCount(item) > 0;
+}
+
+function chatImportReadyForSkill(item: ChatImport) {
+  return !chatImportNeedsReview(item) && chatImportReadyCount(item) > 0;
+}
+
+function chatImportSkillSuggestionFilter(item: ChatImport, suggestions: SkillSuggestion[]) {
+  const readyAgentKeys = new Set(
+    (item.samples || [])
+      .filter((sample) => String(sample.status || "ready") === "ready")
+      .map((sample) => sample.agentId || sample.agentKey || "")
+      .filter(Boolean),
+  );
+  if (readyAgentKeys.size !== 1) return "all";
+  const [agentKey] = [...readyAgentKeys];
+  return suggestions.some((suggestion) => skillSuggestionAgentFilterKey(suggestion) === agentKey) ? agentKey : "all";
 }
 
 function chatImportPreferredQualityFilter(item: ChatImport): TrainingSampleQualityFilter {
@@ -10738,11 +11534,14 @@ function chatImportSceneSummaryLabel(item: ChatImport) {
   const uncertainCount = chatImportSceneUncertainCount(item);
   const reviewCount = chatImportReviewCount(item);
   const rejectedCount = chatImportRejectedCount(item);
+  const readyCount = chatImportReadyCount(item);
   const clearCount = Number(summary?.clearCount || 0);
   const sampleCount = Number(summary?.sampleCount || item.samples?.length || item.pairCount || 0);
   const warningCount = item.warnings?.length || 0;
   if (uncertainCount > 0) return `${uncertainCount} 条场景待确认 / ${sampleCount} 条样本`;
   if (reviewCount > 0) return `${reviewCount} 条待复核 / ${sampleCount} 条样本`;
+  if (readyCount > 0 && rejectedCount > 0) return `已确认 ${readyCount} 条 / 禁用 ${rejectedCount} 条`;
+  if (readyCount > 0) return `已确认 ${readyCount} 条，可生成 Skill`;
   if (rejectedCount > 0) return `已禁用 ${rejectedCount} 条 / ${sampleCount} 条样本`;
   if (warningCount > 0) return `${warningCount} 条解析提醒 / ${sampleCount} 条样本`;
   return `场景清晰 ${clearCount || sampleCount} 条`;
@@ -10984,6 +11783,25 @@ function skillSuggestionSafetyLabel(suggestion: SkillSuggestion) {
   if (isSkillSuggestionAutoSelected(suggestion)) return "高可信默认选中";
   if (Number(suggestion.sampleCount || 0) < AUTO_SELECT_SKILL_SUGGESTION_MIN_SAMPLES) return "样本少需复核";
   return "低置信需复核";
+}
+
+function skillApplyChangeSummary(result: { created?: Array<Record<string, unknown>>; updated?: Array<Record<string, unknown>>; skipped?: Array<Record<string, unknown>> }) {
+  const parts = [
+    skillApplyNamesLabel("新增", result.created || []),
+    skillApplyNamesLabel("更新", result.updated || []),
+    skillApplyNamesLabel("无变化", result.skipped || []),
+  ].filter(Boolean);
+  return parts.length ? ` 明细：${parts.join("；")}。` : "";
+}
+
+function skillApplyNamesLabel(label: string, rows: Array<Record<string, unknown>>) {
+  const names = rows
+    .map((row) => String(row?.name || row?.suggestionKey || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!names.length) return "";
+  const extraCount = Math.max(0, rows.length - names.length);
+  return `${label} ${names.join("、")}${extraCount ? ` 等 ${rows.length} 个` : ""}`;
 }
 
 function skillSuggestionKey(suggestion: SkillSuggestion) {
@@ -11887,13 +12705,16 @@ function orderDealNextStep(order: OrderDraft) {
   if (isHighValueOrder(order)) {
     return { tone: "amber", label: "人工处理", detail: "高价值订单需要人工确认收款、交付和客户承诺。", action: "none" };
   }
+  if (!orderPaymentReady(order)) {
+    return { tone: "blue", label: "下一步：收款", detail: "订单已建，先跟进定金或全款，人工核验付款凭证后再发订单确认。", action: "none" };
+  }
   if (!hasActiveOrderConfirmationTask(order)) {
     return { tone: "blue", label: "下一步：发订单确认", detail: "把订单明细放入微信安全发送队列，让客户确认数量、金额和效果图。", action: "queue_order_confirmation" };
   }
   if (order.confirmationSendTask?.status === "queued" || order.confirmationSendTask?.status === "sending") {
     return { tone: "blue", label: "等待确认发送", detail: "订单确认已入队，等待微信账号窗口校验后发送。", action: "none" };
   }
-  if (!["deposit_paid", "paid"].includes(order.paymentStatus)) {
+  if (!orderPaymentReady(order)) {
     return { tone: "blue", label: "下一步：收款", detail: "确认已发，继续跟进定金或全款。", action: "none" };
   }
   if (order.status === "draft" || order.status === "confirmed") {
@@ -11966,6 +12787,13 @@ function quoteStatusLabel(status: string) {
   return labels[status] || status;
 }
 
+function quoteNeedsPaymentProofReview(quote: QuoteDraft) {
+  if (!quote || quote.status !== "manual_review") return false;
+  if (["deposit_paid", "paid"].includes(quote.paymentStatus || "")) return false;
+  const notes = String(quote.customerNotes || "");
+  return /付款凭证|支付凭证|转账|打款|付款截图|收款截图|收款账户|收款状态|人工核验金额|deposit|payment|paid/i.test(notes);
+}
+
 function paymentStatusLabel(status: string) {
   const labels: Record<string, string> = {
     unpaid: "未付款",
@@ -11986,6 +12814,8 @@ function orderStatusLabel(status: string) {
   };
   return labels[status] || status;
 }
+
+const HIGH_VALUE_AMOUNT_CNY = 10000;
 
 function designImageSendBlockReason(job: DesignJob) {
   const images = job.images || [];
@@ -12024,6 +12854,7 @@ function quoteSendBlockReason(quote: QuoteDraft, previewWarnings: string[] = [],
     if (quote.sendTaskId) warnings.push("已进入发送队列");
     if (!quote.selectedImageId) warnings.push("还没有选图");
     if (quote.status === "manual_review" && !options.allowManualReview) warnings.push("正在等待人工审核");
+    if (isHighValueQuote(quote) && !options.allowManualReview) warnings.push("达到高价值线，需要人工批准");
     if (Number(quote.profit || 0) < 0) warnings.push("利润为负，需要人工确认");
     if (!designJob?.wechatAccountId || !designJob?.conversationId) warnings.push("缺少微信账号或客户会话");
   }
@@ -12036,22 +12867,34 @@ function orderConfirmationBlockReason(order: OrderDraft, previewWarnings: string
     if (order.status === "cancelled") warnings.push("订单已取消");
     if (hasActiveOrderConfirmationTask(order)) warnings.push(`订单确认${sendStatusLabel(order.confirmationSendTask?.status || "")}`);
     if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) warnings.push("订单还没有选图");
+    if (!orderPaymentReady(order)) warnings.push("未记录定金或全款，先核验付款凭证");
     if (!order.wechatAccountId || !order.conversationId) warnings.push("缺少微信账号或客户会话");
+    if (isHighValueOrder(order)) warnings.push("达到高价值线，需要人工确认订单");
     if (Number(order.profit || 0) < 0) warnings.push("利润为负，需要人工确认");
   }
   return warnings.join("；");
 }
 
 function isHighValueQuote(quote: QuoteDraft) {
-  return quote.designJob?.isHighValue === true;
+  return (
+    quote.designJob?.isHighValue === true ||
+    isHighValueBudget(quote.designJob?.budget) ||
+    isHighValueAmount(quote.totalPrice, quote.unitPrice)
+  );
 }
 
 function isHighValueOrder(order: OrderDraft) {
-  return order.designJob?.isHighValue === true || order.quoteDraft?.designJob?.isHighValue === true;
+  return (
+    order.designJob?.isHighValue === true ||
+    order.quoteDraft?.designJob?.isHighValue === true ||
+    isHighValueBudget(order.designJob?.budget || order.quoteDraft?.designJob?.budget) ||
+    isHighValueAmount(order.totalPrice, order.unitPrice) ||
+    isHighValueAmount(order.quoteDraft?.totalPrice, order.quoteDraft?.unitPrice)
+  );
 }
 
 function highValueDesignReason(job: DesignJob) {
-  if (job.isHighValue) return highValueBudgetReason(job.budget);
+  if (isHighValueDesignJob(job)) return highValueBudgetReason(job.budget);
   return "已进入人工审核状态";
 }
 
@@ -12094,10 +12937,24 @@ function highValueAmountReason(totalAmount: number, perUnitAmount: number, quant
     Number.isFinite(perUnitAmount) && perUnitAmount > 0 ? `单份 ${formatMoney(perUnitAmount)} 元` : "",
     Number.isFinite(Number(quantity)) && Number(quantity) > 0 ? `${formatMoney(Number(quantity))} 份` : "",
   ].filter(Boolean);
-  if (totalAmount >= 10000 || perUnitAmount >= 10000) {
+  if (isHighValueAmount(totalAmount, perUnitAmount)) {
     return `达到高价值线：${parts.join(" · ")}`;
   }
   return "";
+}
+
+function isHighValueAmount(totalAmount?: number | string | null, perUnitAmount?: number | string | null) {
+  const total = Number(totalAmount || 0);
+  const perUnit = Number(perUnitAmount || 0);
+  return total >= HIGH_VALUE_AMOUNT_CNY || perUnit >= HIGH_VALUE_AMOUNT_CNY;
+}
+
+function isHighValueBudget(budget?: DesignJob["budget"]) {
+  return isHighValueAmount(budget?.totalAmount, budget?.perUnitAmount);
+}
+
+function isHighValueDesignJob(job: DesignJob) {
+  return job.isHighValue === true || isHighValueBudget(job.budget);
 }
 
 function highValueDesignManualStep(job: DesignJob): HighValueManualStep {

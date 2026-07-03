@@ -20,6 +20,7 @@ function setupService(overrides = {}) {
   const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
   const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
   const { OrdersService } = require("../apps/api/src/orders/orders.service");
+  const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
   const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
   const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
   const { appConfig } = require("../apps/api/src/shared/app-config");
@@ -35,8 +36,9 @@ function setupService(overrides = {}) {
   const sendAdapter = new WechatSendAdapterService();
   const orders = overrides.orders || new OrdersService({}, localStore, notifications);
   const service = new WechatDispatchService({}, localStore, sendAdapter, notifications, orders);
+  const reviews = new ReviewsService({}, localStore, {}, {}, notifications);
 
-  return { tempDir, localStore, service };
+  return { tempDir, localStore, service, reviews };
 }
 
 test("wechat manual review copy stays readable Chinese", () => {
@@ -375,6 +377,64 @@ test("customer asset upload rejects mismatched account conversation identity", a
       customerId: primaryConversation.customerId,
     }).length,
     0,
+  );
+});
+
+test("design job asset binding rejects and hides cross conversation customer assets", () => {
+  const { localStore } = setupService();
+  const matchingAsset = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: "customer_demo_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    role: "customer_logo",
+    fileName: "matching-logo.png",
+    mimeType: "image/png",
+    localPath: "C:\\temp\\matching-logo.png",
+    source: "test",
+  });
+  const crossConversationAsset = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: "customer_demo_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_2",
+    wechatAccountId: "wechat_demo_2",
+    role: "customer_logo",
+    fileName: "wrong-conversation-logo.png",
+    mimeType: "image/png",
+    localPath: "C:\\temp\\wrong-conversation-logo.png",
+    source: "test",
+  });
+  const designJob = localStore.createDesignJob({
+    requestId: "asset_binding_identity_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [] },
+  });
+
+  assert.throws(
+    () => localStore.attachDesignAssetsToJob(designJob.id, [matchingAsset.id, crossConversationAsset.id]),
+    /design asset binding invalid/,
+  );
+
+  const dirtyJob = localStore.createDesignJob({
+    requestId: "dirty_asset_binding_identity_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    assetIds: [matchingAsset.id, crossConversationAsset.id],
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [] },
+  });
+
+  assert.deepEqual(
+    dirtyJob.assets.map((asset) => asset.id),
+    [matchingAsset.id],
   );
 });
 
@@ -1384,6 +1444,70 @@ test("external failed bridge ack still requires outbox proof while internal time
   assert.equal(fs.readdirSync(failedDir).some((fileName) => fileName.endsWith("external-failed-ack.json")), true);
 });
 
+test("send operation scan fails bridge task when pending outbox file is missing", async () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "pending bridge send should not hang forever" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "pending bridge send should not hang forever");
+
+  const execution = service.executeSend(task.id, { adapter: "windows_bridge" });
+  assert.equal(execution.task.status, "sending");
+  const outboxFile = execution.attempt.metadata.outboxFile;
+  assert.equal(fs.existsSync(outboxFile), true);
+
+  fs.unlinkSync(outboxFile);
+
+  const scan = await service.scanSendOperations();
+  const updated = localStore.getSendTask(task.id);
+  const updatedAttempt = localStore.getLatestSendAttempt(task.id, {
+    adapter: "windows_bridge",
+  });
+
+  assert.equal(scan.bridgeOutboxBroken, 1);
+  assert.equal(scan.tasks.bridgeOutboxBroken[0].id, task.id);
+  assert.equal(updated.status, "failed");
+  assert.match(updated.errorMessage, /outbox_file_missing/);
+  assert.equal(updatedAttempt.status, "failed");
+  assert.match(updatedAttempt.errorMessage, /outbox_file_missing/);
+  assert.equal(localStore.listNotifications().some((notice) => notice.target?.sendTaskId === task.id), true);
+});
+
+test("execute send rejects duplicate execution while bridge ack is pending", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "do not duplicate bridge outbox" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "do not duplicate bridge outbox");
+
+  const first = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const outboxBefore = fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json"));
+
+  assert.equal(first.task.status, "sending");
+  assert.equal(outboxBefore.length, 1);
+  assert.throws(() => service.executeSend(task.id, { adapter: "windows_bridge" }), /send task is not queued: sending/);
+
+  const outboxAfter = fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json"));
+  assert.deepEqual(outboxAfter, outboxBefore);
+  assert.equal(localStore.listSendAttempts({ sendTaskId: task.id }).length, 1);
+});
+
 test("inbound message rejects customer assets from another conversation", async () => {
   const { localStore, service } = setupService();
 
@@ -1874,6 +1998,56 @@ test("inbound customer image selection queues low-value quote safely", async () 
   assert.match(result.sendTask.payload.text, /报价|礼盒|9000/);
 });
 
+test("low value automation queue skips queued task when design budget became high value", async () => {
+  const { localStore, service } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "queued_high_value_budget_request_1",
+    status: "completed",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { totalAmount: 15000, quantity: 50 },
+    bundle: {
+      items: [{ skuCode: "BOX-A", name: "box", costPrice: 50, salePrice: 100 }],
+      automation: { ready: true },
+    },
+    isHighValue: false,
+  });
+  const quote = localStore.createQuoteFromDesignJob(designJob.id);
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "quote", text: "should not auto process high value budget" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: { valueLevel: "low", source: "low_value_automation" },
+    },
+  });
+
+  createPassingWechatWindowSnapshot(localStore, "ready to send");
+  const sendScan = await service.processSafeSendQueue({ adapter: "windows_bridge", automationOnly: true });
+  const freshTask = localStore.getSendTask(task.id);
+
+  assert.equal(sendScan.scanned, 0);
+  assert.equal(sendScan.processed.length, 0);
+  assert.equal(freshTask.status, "queued");
+
+  const manualQueueScan = await service.processSafeSendQueue({ adapter: "windows_bridge" });
+  const blockedTask = localStore.getSendTask(task.id);
+
+  assert.equal(manualQueueScan.processed.length, 0);
+  assert.equal(manualQueueScan.blocked.length, 1);
+  assert.equal(manualQueueScan.blocked[0].reason, "manual_review_required");
+  assert.equal(blockedTask.status, "blocked");
+  assert.equal(blockedTask.guardSnapshot.blockedByHighValueReview, true);
+});
+
 test("inbound customer image reselection after quote queueing goes to manual review", async () => {
   const { localStore, service } = setupService();
 
@@ -2007,6 +2181,59 @@ test("inbound high value image selection locks conversation and leaves human rev
   assert.match(lockLog.note, /高价值客户已选图/);
 });
 
+test("inbound high value budget image selection locks conversation even when flag is stale", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_high_value_budget_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { totalAmount: 15000, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "tea", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_high_value_budget_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      localPath: "C:\\storage\\design-jobs\\selection_high_value_budget_request_1\\candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
+    },
+  ]);
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "我选第2张，按这个报价",
+  });
+
+  const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  const updatedJob = localStore.getDesignJob(job.id);
+  const selectedImage = updatedJob.images.find((image) => image.selected);
+
+  assert.equal(result.plan.reason, "high_value_customer_selected_image");
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.quote, null);
+  assert.equal(result.sendTask, null);
+  assert.equal(updatedJob.status, "manual_review");
+  assert.equal(selectedImage.id, images[1].id);
+  assert.equal(conversation.manualLocked, true);
+});
+
 test("inbound image selection ignores design jobs with mismatched account identity", async () => {
   const { localStore, service } = setupService();
 
@@ -2093,7 +2320,7 @@ test("inbound quote acceptance ignores quotes whose design job identity no longe
   assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
 });
 
-test("sent low-value quote can become order confirmation after customer accepts", async () => {
+test("sent low-value quote becomes unpaid order draft after customer accepts without payment", async () => {
   const { localStore, service } = setupService();
 
   const job = localStore.createDesignJob({
@@ -2158,20 +2385,188 @@ test("sent low-value quote can become order confirmation after customer accepts"
 
   assert.equal(acceptance.plan.type, "quote_accepted");
   assert.equal(acceptance.plan.reason, "customer_quote_accepted");
-  assert.equal(acceptance.plan.shouldQueueReply, true);
+  assert.equal(acceptance.plan.shouldQueueReply, false);
   assert.equal(acceptance.quote.status, "accepted");
   assert.equal(acceptance.orderDraft.quoteDraftId, selection.quote.id);
-  assert.equal(acceptance.orderDraft.status, "confirmed");
+  assert.equal(acceptance.orderDraft.status, "draft");
   assert.equal(acceptance.orderDraft.paymentStatus, "unpaid");
+  assert.equal(acceptance.sendTask, null);
+  const notification = localStore
+    .listNotifications()
+    .find((item) => item.target?.quoteDraftId === selection.quote.id && item.target?.orderDraftId === acceptance.orderDraft.id);
+  assert.ok(notification);
+  assert.match(notification.body, /待付款订单草稿/);
+  assert.equal(notification.target.confirmationReason, "payment_not_ready");
+});
+
+test("sent low-value quote does not mark paid when customer asks how to pay deposit", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_quote_deposit_question_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_quote_deposit_question_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+
+  const acceptance = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "可以，就这套，定金怎么付",
+  });
+
+  assert.equal(acceptance.plan.type, "quote_accepted");
+  assert.equal(acceptance.plan.reason, "customer_quote_accepted");
+  assert.equal(acceptance.plan.shouldQueueReply, false);
+  assert.equal(acceptance.quote.status, "accepted");
+  assert.equal(acceptance.quote.paymentStatus, "unpaid");
+  assert.equal(acceptance.orderDraft.status, "draft");
+  assert.equal(acceptance.orderDraft.paymentStatus, "unpaid");
+  assert.equal(acceptance.sendTask, null);
+});
+
+test("sent low-value quote queues order confirmation after customer confirms deposit", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_quote_paid_order_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_quote_paid_order_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+
+  const acceptance = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "定金已经转账了，麻烦安排制作",
+  });
+
+  assert.equal(acceptance.plan.type, "quote_accepted");
+  assert.equal(acceptance.plan.reason, "customer_payment_confirmed");
+  assert.equal(acceptance.plan.shouldQueueReply, true);
+  assert.equal(acceptance.quote.status, "accepted");
+  assert.equal(acceptance.quote.paymentStatus, "deposit_paid");
+  assert.equal(acceptance.orderDraft.quoteDraftId, quote.id);
+  assert.equal(acceptance.orderDraft.status, "confirmed");
+  assert.equal(acceptance.orderDraft.paymentStatus, "deposit_paid");
   assert.equal(acceptance.sendTask.status, "queued");
-  assert.equal(acceptance.sendTask.quoteDraftId, selection.quote.id);
+  assert.equal(acceptance.sendTask.quoteDraftId, quote.id);
   assert.equal(acceptance.sendTask.guardSnapshot.automation.source, "low_value_quote_acceptance");
   assert.equal(acceptance.sendTask.guardSnapshot.automation.orderDraftId, acceptance.orderDraft.id);
   assert.match(acceptance.sendTask.payload.text, /订单|确认|9000/);
 });
 
+test("inbound payment proof attachment with paid wording still requires manual verification", async () => {
+  const { localStore, service, reviews } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "payment_proof_paid_text_manual_review_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\payment_proof_paid_text_manual_review_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "定金已经转账了，截图发你",
+    attachments: [{ role: "payment_proof", fileName: "定金转账截图.png" }],
+  });
+
+  const updatedQuote = localStore.getQuoteDraft(quote.id);
+  const notification = localStore
+    .listNotifications()
+    .find((item) => item.target?.quoteDraftId === quote.id && item.target?.reason === "payment_proof_needs_manual_verification");
+  const reviewCenter = await reviews.list({ conversationId: "conversation_demo_1" });
+
+  assert.equal(result.plan.type, "quote_payment_proof_manual_review");
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.quoteAcceptance.reason, "payment_proof_needs_manual_verification");
+  assert.equal(result.quoteAcceptance.originalReason, "customer_payment_confirmed");
+  assert.equal(result.sendTask, null);
+  assert.equal(updatedQuote.paymentStatus, "unpaid");
+  assert.equal(updatedQuote.status, "manual_review");
+  assert.equal(result.quote.status, "manual_review");
+  assert.match(updatedQuote.customerNotes, /人工核验金额和收款账户/);
+  assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
+  assert.ok(notification);
+  assert.match(notification.body, /人工核对金额和收款账户/);
+  assert.equal(reviewCenter.quoteDrafts.some((item) => item.id === quote.id), true);
+  await assert.rejects(
+    () =>
+      reviews.reviewQuote(quote.id, {
+        decision: "approve_quote",
+        reviewer: "人工客服",
+        expectedWechatAccountId: "wechat_demo_1",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
+      }),
+    /付款凭证报价需要先人工核验金额和收款账户/,
+  );
+});
+
 test("inbound payment proof attachment goes to manual verification without marking paid", async () => {
-  const { localStore, service } = setupService();
+  const { localStore, service, reviews } = setupService();
 
   const job = localStore.createDesignJob({
     requestId: "payment_proof_manual_review_request_1",
@@ -2214,6 +2609,7 @@ test("inbound payment proof attachment goes to manual verification without marki
   const reviewLog = localStore
     .listReviewLogs()
     .find((log) => log.targetType === "quote_draft" && log.targetId === quote.id && log.decision === "payment_proof_needs_manual_verification");
+  const reviewCenter = await reviews.list({ conversationId: "conversation_demo_1" });
 
   assert.equal(result.plan.type, "quote_payment_proof_manual_review");
   assert.equal(result.plan.shouldNotifyHuman, true);
@@ -2223,10 +2619,13 @@ test("inbound payment proof attachment goes to manual verification without marki
     /payment_proof_needs_manual_verification: "客户发送付款凭证，需要人工核验金额和收款状态"/,
   );
   assert.equal(updatedQuote.paymentStatus, "unpaid");
-  assert.equal(updatedQuote.status, "sent");
+  assert.equal(updatedQuote.status, "manual_review");
+  assert.equal(result.quote.status, "manual_review");
+  assert.match(updatedQuote.customerNotes, /人工核验金额和收款状态/);
   assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
   assert.ok(notification);
   assert.match(notification.body, /人工核对/);
   assert.ok(reviewLog);
   assert.match(reviewLog.note, /未自动改付款状态/);
+  assert.equal(reviewCenter.quoteDrafts.some((item) => item.id === quote.id), true);
 });

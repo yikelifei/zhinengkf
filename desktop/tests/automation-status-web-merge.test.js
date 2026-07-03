@@ -11,7 +11,9 @@ require("ts-node").register({
 });
 
 const { mergeAutomationStatusRun } = require("../apps/web/src/lib/api");
+const webApi = fs.readFileSync(path.join(__dirname, "../apps/web/src/lib/api.ts"), "utf8");
 const webPage = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/page.tsx"), "utf8");
+const webCss = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/globals.css"), "utf8");
 
 function baseStatus(overrides = {}) {
   return {
@@ -96,6 +98,21 @@ test("web automation readiness checks route to existing repair centers", () => {
   assert.match(webPage, /check\.key === "manual_locks"[\s\S]*const firstLockedConversation = prioritizedManualLockedConversations\[0\][\s\S]*changeActiveConversation\(firstLockedConversation\.id\)[\s\S]*scrollToWorkspaceSection\("review-center"\)/);
   assert.match(webPage, /check\.key === "send_queue"[\s\S]*const firstPendingTask = sendTasks\.find[\s\S]*changeActiveConversation\(firstPendingTask\.conversationId\)[\s\S]*scrollToWorkspaceSection\("send-center"\)/);
   assert.match(webPage, /id="design-platform-config"/);
+});
+
+test("web automation history renders identity audit from latest run", () => {
+  assert.match(webApi, /identityAudit\?: \{/);
+  assert.match(webApi, /status: "passed" \| "warning"/);
+  assert.match(webApi, /identities: Array<\{/);
+  assert.match(webApi, /warnings: Array<\{ step: string; path: string; reason: string; fields\?: string\[\] \}>/);
+  assert.match(webPage, /const lowValueAutomationIdentityAudit = automationStatus\?\.lastRun\?\.identityAudit \|\| null/);
+  assert.match(webPage, /aria-label="上一轮自动化身份审计"/);
+  assert.match(webPage, /上一轮身份审计有警告/);
+  assert.match(webPage, /automationIdentityWarningLabel\(warning\.reason, warning\.fields\)/);
+  assert.match(webPage, /identity\.wechatAccountId \|\| "全局账号"/);
+  assert.match(webPage, /function automationIdentityWarningLabel/);
+  assert.match(webCss, /\.automation-identity-audit/);
+  assert.match(webCss, /\.automation-identity-grid/);
 });
 
 test("web low value automation run is blocked by readiness blockers", () => {

@@ -1,11 +1,14 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { DesignJobsService } from "../design-jobs/design-jobs.service";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { QuotesService } from "../quotes/quotes.service";
+import { rules } from "../shared/rules";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+
+const { isHighValueBudget, quoteNeedsPaymentProofReview } = rules;
 
 type ReviewPayload = ExpectedIdentityPayload & {
   decision: string;
@@ -118,17 +121,18 @@ export class ReviewsService {
         designJobId: id,
       });
     } else {
+      const keepManualReview = isDesignJobHighValue(job);
       result = appConfig.useLocalStore
         ? this.localStore.updateDesignJob(id, {
-            status: "quick_confirm",
-            manualQcRequired: false,
+            status: keepManualReview ? "manual_review" : "quick_confirm",
+            manualQcRequired: keepManualReview,
             errorMessage: "",
           })
         : await this.prisma.designJob.update({
             where: { id },
             data: {
-              status: "quick_confirm",
-              manualQcRequired: false,
+              status: keepManualReview ? "manual_review" : "quick_confirm",
+              manualQcRequired: keepManualReview,
               errorMessage: "",
             },
           });
@@ -176,6 +180,9 @@ export class ReviewsService {
       });
     } else {
       customerNotes = payload.note || "人工审核通过，报价已进入微信安全发送队列";
+      if (quoteNeedsPaymentProofReview(quote)) {
+        throw new BadRequestException("付款凭证报价需要先人工核验金额和收款账户，再标记定金或全款，不能按普通报价通过。");
+      }
       result = await this.quotes.queueSend(id, {
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
@@ -219,4 +226,8 @@ export class ReviewsService {
     const prisma = this.prisma as any;
     return prisma.reviewLog.create({ data: payload });
   }
+}
+
+function isDesignJobHighValue(job: any) {
+  return Boolean(job?.isHighValue) || isHighValueBudget(job?.budget, Number(appConfig.highValueAmountCny || 10000));
 }

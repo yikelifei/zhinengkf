@@ -5,9 +5,15 @@ const DEFAULT_MAX_KNOWLEDGE = 3;
 
 function buildAgentReplyDraft(route = {}, context = {}) {
   const skills = selectSkills(context.skills || [], route, context.maxSkills || DEFAULT_MAX_SKILLS);
+  const identity = {
+    wechatAccountId: firstText(context.wechatAccountId, route.wechatAccountId),
+    conversationId: firstText(context.conversationId, route.conversationId),
+    customerId: firstText(context.customerId, route.customerId),
+  };
   const knowledgeMatches = matchKnowledge(route.text || "", context.knowledgeEntries || [], {
     agentId: context.agentId,
     max: context.maxKnowledge || DEFAULT_MAX_KNOWLEDGE,
+    ...identity,
   });
   const suggestedReply = composeReply(route, skills, knowledgeMatches);
   return {
@@ -77,6 +83,7 @@ function matchKnowledge(text, entries, options = {}) {
   const content = String(text || "");
   return [...entries]
     .filter((entry) => entry && (!options.agentId || entry.agentId === options.agentId))
+    .filter((entry) => knowledgeIdentityMatches(entry, options))
     .map((entry) => {
       const score = scoreKnowledge(content, entry);
       return {
@@ -91,6 +98,24 @@ function matchKnowledge(text, entries, options = {}) {
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || b.qualityScore - a.qualityScore)
     .slice(0, options.max || DEFAULT_MAX_KNOWLEDGE);
+}
+
+function knowledgeIdentityMatches(entry, options = {}) {
+  const checks = ["wechatAccountId", "conversationId", "customerId"];
+  for (const key of checks) {
+    const expected = firstText(options[key]);
+    const actual = firstText(entry?.[key]);
+    if (expected && actual && expected !== actual) return false;
+  }
+  return true;
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function scoreKnowledge(text, entry) {
@@ -264,6 +289,7 @@ function truncate(text, maxLength) {
 
 module.exports = {
   buildAgentReplyDraft,
+  knowledgeIdentityMatches,
   matchKnowledge,
   selectSkills,
 };

@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { isHighValueBudget } = require("./budget");
 
 const DESIGN_STATUSES = Object.freeze({
   DRAFT: "draft",
@@ -31,8 +32,8 @@ function validateDesignRequest(request) {
   };
 }
 
-function nextStatusAfterDesignCompleted({ isHighValue, manualQcRequired = true }) {
-  if (isHighValue) return DESIGN_STATUSES.MANUAL_REVIEW;
+function nextStatusAfterDesignCompleted({ isHighValue, budget, highValueAmountCny = 10000, manualQcRequired = true }) {
+  if (isHighValue || isHighValueBudget(budget, Number(highValueAmountCny || 10000))) return DESIGN_STATUSES.MANUAL_REVIEW;
   if (manualQcRequired) return DESIGN_STATUSES.QUICK_CONFIRM;
   return DESIGN_STATUSES.SENT;
 }
@@ -209,11 +210,14 @@ function decideRevisionPolicy({
   instruction = "",
   revisionCount = 0,
   isHighValue = false,
+  budget,
+  highValueAmountCny = 10000,
   maxLowValueFreeRevisions = 2,
   maxHighValueFreeRevisions = 5,
 } = {}) {
   const normalizedInstruction = String(instruction || "").trim();
   const revisionNumber = Math.max(0, Number(revisionCount || 0)) + 1;
+  const highValue = Boolean(isHighValue) || isHighValueBudget(budget, Number(highValueAmountCny || 10000));
 
   if (!normalizedInstruction) {
     return {
@@ -227,7 +231,7 @@ function decideRevisionPolicy({
     };
   }
 
-  if (isHighValue) {
+  if (highValue) {
     return {
       ok: true,
       action: revisionNumber > maxHighValueFreeRevisions ? "manual_review_charge" : "manual_review",

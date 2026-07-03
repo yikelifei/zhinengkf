@@ -201,6 +201,56 @@ test("prefers automation-ready bundle over cheaper risky skus", () => {
   assert.equal(result.status, "ready");
 });
 
+test("applies SKU matching rules when recommending bundle items", () => {
+  const base = {
+    costPrice: 10,
+    stock: 40,
+    sceneTags: ["vip"],
+    dimensions: { lengthCm: 8, widthCm: 6, heightCm: 2 },
+    weightGram: 100,
+    leadTimeDays: 3,
+  };
+  const result = recommendBundle({
+    budget: { perUnitAmount: 180, quantity: 10 },
+    scene: "vip",
+    maxItems: 2,
+    skus: [
+      { ...base, skuCode: "BOX-A", name: "Box A", type: "gift_box", salePrice: 60, costPrice: 30, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...base, skuCode: "TEA-A", name: "Tea A", type: "item", salePrice: 80, matchingRules: { mustWith: ["CARD-A"], cannotWith: ["SNACK-A"] } },
+      { ...base, skuCode: "CARD-A", name: "Card A", type: "accessory", salePrice: 10, matchingRules: { preferWith: ["TEA-A"] } },
+      { ...base, skuCode: "SNACK-A", name: "Snack A", type: "item", salePrice: 30 },
+    ],
+  });
+
+  assert.deepEqual(result.items.map((item) => item.skuCode), ["BOX-A", "TEA-A", "CARD-A"]);
+  assert.equal(result.items.some((item) => item.skuCode === "SNACK-A"), false);
+  assert.equal(result.totals.salePrice, 150);
+});
+
+test("skips SKU when required matching companion is unavailable", () => {
+  const base = {
+    costPrice: 10,
+    stock: 20,
+    sceneTags: ["vip"],
+    dimensions: { lengthCm: 8, widthCm: 6, heightCm: 2 },
+    weightGram: 100,
+    leadTimeDays: 3,
+  };
+  const result = recommendBundle({
+    budget: { perUnitAmount: 150, quantity: 10 },
+    scene: "vip",
+    maxItems: 2,
+    skus: [
+      { ...base, skuCode: "BOX-A", name: "Box A", type: "gift_box", salePrice: 50, costPrice: 25, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...base, skuCode: "TEA-NEEDS-CARD", name: "Tea needs card", type: "item", salePrice: 70, matchingRules: { mustWith: ["CARD-MISSING"] } },
+      { ...base, skuCode: "TEA-OK", name: "Tea ok", type: "item", salePrice: 60 },
+    ],
+  });
+
+  assert.equal(result.items.some((item) => item.skuCode === "TEA-NEEDS-CARD"), false);
+  assert.ok(result.items.some((item) => item.skuCode === "TEA-OK"));
+});
+
 test("validates design request required fields", () => {
   const result = validateDesignRequest({
     budget: { perUnitAmount: 200 },
@@ -221,6 +271,14 @@ test("routes generated jobs according to high value and manual qc", () => {
   assert.equal(
     nextStatusAfterDesignCompleted({ isHighValue: false, manualQcRequired: true }),
     DESIGN_STATUSES.QUICK_CONFIRM,
+  );
+  assert.equal(
+    nextStatusAfterDesignCompleted({
+      isHighValue: false,
+      budget: { totalAmount: 15000, perUnitAmount: 300 },
+      manualQcRequired: true,
+    }),
+    DESIGN_STATUSES.MANUAL_REVIEW,
   );
 });
 
@@ -402,6 +460,16 @@ test("decides revision policy by customer value and free revision limit", () => 
   assert.equal(highValue.action, "manual_review");
   assert.equal(highValue.submitAllowed, false);
   assert.equal(highValue.manualReviewRequired, true);
+
+  const staleHighValueBudget = decideRevisionPolicy({
+    instruction: "整体再稳重一点，适合大客户送礼",
+    revisionCount: 0,
+    isHighValue: false,
+    budget: { totalAmount: 15000, perUnitAmount: 300 },
+  });
+  assert.equal(staleHighValueBudget.action, "manual_review");
+  assert.equal(staleHighValueBudget.submitAllowed, false);
+  assert.equal(staleHighValueBudget.manualReviewRequired, true);
 
   const missingInstruction = decideRevisionPolicy({ instruction: "  " });
   assert.equal(missingInstruction.ok, false);

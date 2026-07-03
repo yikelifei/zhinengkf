@@ -83,6 +83,81 @@ test("automation run records last run and clears running marker", async () => {
   assert.equal(typeof run.steps[0].durationMs, "number");
 });
 
+test("automation run records identity audit for low value side effects", async () => {
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => ({
+        imageSend: {
+          queued: [
+            {
+              sendTaskId: "send_1",
+              wechatAccountId: "wechat_demo_1",
+              conversationId: "conversation_demo_1",
+              customerId: "customer_demo_1",
+            },
+          ],
+        },
+      }),
+    },
+    wechatDispatch: {
+      processSafeSendQueue: async () => ({
+        processed: [
+          {
+            taskId: "send_1",
+            sendTask: {
+              wechatAccountId: "wechat_demo_1",
+              conversationId: "conversation_demo_1",
+              customerId: "customer_demo_1",
+            },
+          },
+        ],
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+
+  assert.equal(run.identityAudit.status, "passed");
+  assert.equal(run.identityAudit.identityCount, 1);
+  assert.equal(run.identityAudit.identities[0].wechatAccountId, "wechat_demo_1");
+  assert.equal(run.identityAudit.identities[0].conversationId, "conversation_demo_1");
+  assert.equal(run.identityAudit.identities[0].customerId, "customer_demo_1");
+  assert.deepEqual(run.identityAudit.identities[0].steps, ["lowValueAutomation", "processLowValueSendQueue"]);
+  assert.deepEqual(run.identityAudit.warnings, []);
+});
+
+test("automation run identity audit warns on conflicting target identity", async () => {
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => ({
+        imageSend: {
+          queued: [
+            {
+              sendTaskId: "send_1",
+              wechatAccountId: "wechat_demo_1",
+              conversationId: "conversation_demo_1",
+              customerId: "customer_demo_1",
+              designJob: {
+                wechatAccountId: "wechat_demo_2",
+                conversationId: "conversation_demo_1",
+                customerId: "customer_demo_1",
+              },
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+
+  assert.equal(run.identityAudit.status, "warning");
+  assert.equal(run.identityAudit.identityCount, 0);
+  assert.equal(run.identityAudit.warnings[0].reason, "identity_field_conflict");
+  assert.equal(run.identityAudit.warnings[0].step, "lowValueAutomation");
+  assert.deepEqual(run.identityAudit.warnings[0].fields, ["wechatAccountId"]);
+});
+
 test("automation status keeps recent runs newest first with a cap", async () => {
   const service = createService();
 

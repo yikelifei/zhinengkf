@@ -61,4 +61,17 @@ export class QuotesController {
       releaseReason: "manual_quote_send",
     });
   }
+
+  @Post(":id/verify-payment-proof")
+  verifyPaymentProof(
+    @Param("id") id: string,
+    @Body()
+    payload: {
+      paymentStatus?: "deposit_paid" | "paid";
+      owner?: string;
+      note?: string;
+    } & ExpectedIdentityPayload,
+  ) {
+    return this.quotes.verifyPaymentProofAndQueueConfirmation(id, payload || {});
+  }
 }

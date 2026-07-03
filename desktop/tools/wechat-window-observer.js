@@ -34,7 +34,8 @@ async function main() {
       printRunSummary(result, config);
     } catch (error) {
       writeObserverStatus(config.statusFile, buildObserverStatus(null, config, startedAt, error));
-      throw error;
+      console.error(error?.stack || error);
+      if (!config.watch) throw error;
     }
     if (!config.watch) break;
     await delay(config.intervalMs);
@@ -257,7 +258,7 @@ function writeObserverStatus(statusFile, status) {
 }
 
 async function postJson(url, body) {
-  const response = await fetch(url, {
+  const response = await fetchWithContext(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
@@ -267,6 +268,16 @@ async function postJson(url, body) {
     throw new Error(text || `POST ${url} failed with ${response.status}`);
   }
   return response.json();
+}
+
+async function fetchWithContext(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const method = String(init?.method || "GET").toUpperCase();
+    const causeMessage = error?.cause?.message || error?.message || String(error);
+    throw new Error(`${method} ${url} failed: ${causeMessage}`);
+  }
 }
 
 function readConfig() {

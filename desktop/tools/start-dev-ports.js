@@ -34,7 +34,7 @@ const statusOnly = args.has("--status");
 const preflightOnly = args.has("--preflight");
 const keepAliveLauncher = args.has("--keep-alive");
 const requireFreePorts = args.has("--require-free-ports");
-const allowMockDesignStart = process.env.ALLOW_MOCK_DESIGN_START === "1";
+const allowMockDesignStart = process.env.FORCE_MOCK_DESIGN_START === "1";
 const requestedMockDesignMode = args.has("--mock-design");
 const forceMockDesignMode = requestedMockDesignMode;
 const requestedRealDesignMode = args.has("--real-design");
@@ -96,9 +96,10 @@ const keepAliveTimers = [];
 const keepAliveAnchors = [];
 const keepAliveServers = [];
 const serviceRestartGraceUntil = new Map();
+let webDevServerFallback = false;
 
 main().catch((error) => {
-  console.error(error?.stack || error);
+  logFatal("main", error, { exit: false });
   process.exitCode = 1;
 });
 
@@ -154,6 +155,7 @@ async function main() {
   assertRequiredCommands();
 
   const records = readPidFile();
+  let startedAnyService = false;
   await buildWebIfNeeded();
   await buildApiIfNeeded();
   for (const disabledService of services.filter((item) => !item.enabled)) {
@@ -239,6 +241,7 @@ async function main() {
 
     ensureServiceArtifactReady(service);
     const child = startService(service);
+    startedAnyService = true;
     records[service.name] = {
       name: service.name,
       label: service.label,
@@ -266,6 +269,10 @@ async function main() {
   }
 
   if (keepAliveLauncher) {
+    if (!startedAnyService && allReady) {
+      console.log("[keep-alive] Services are already owned by another launcher; exiting duplicate keep-alive.");
+      return;
+    }
     startModeLockHeartbeat();
     console.log("[keep-alive] Port services are running. Use npm.cmd run ports:stop to stop them.");
     await waitUntilStopped();
@@ -299,9 +306,15 @@ function startKeepAliveMonitor() {
 }
 
 function ensureServiceArtifactReady(service, launcherLogPath = "") {
+  if (service.name === "web" && webDevServerFallback) return;
   if (service.name === "web" && !fs.existsSync(webStandaloneServerPath)) {
     appendLauncherLine(launcherLogPath || path.join(logsDir, "web.launcher.log"), "web standalone server missing; rebuilding web before start");
-    runPackageScript("build:web");
+    try {
+      runPackageScript("build:web");
+    } catch (error) {
+      if (useWebDevServerFallback(error, "web standalone rebuild failed")) return;
+      throw error;
+    }
     return;
   }
   if (service.name === "api" && !fs.existsSync(apiBuildEntryPath)) {
@@ -327,7 +340,7 @@ function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wra
   const stdio = launchCommand.usesOwnRedirection ? ["ignore", "ignore", "ignore"] : ["ignore", stdout, stderr];
   const child = spawn(launchCommand.command, launchCommand.commandArgs, {
     cwd: serviceCwd(service),
-    env: serviceEnv(),
+    env: serviceEnv(service),
     detached: process.platform === "win32",
     stdio,
     windowsHide: true,
@@ -459,6 +472,7 @@ function apiBuildIsStale() {
 async function buildWebIfNeeded() {
   const webService = services.find((service) => service.name === "web");
   if (!webService?.enabled) return;
+  if (webDevServerFallback) return;
   if (await isServiceReadyForCurrentConfig(webService)) {
     console.log("[ok] Web workbench is already online, skip web rebuild.");
     return;
@@ -472,20 +486,48 @@ async function buildWebIfNeeded() {
 
   const hadExistingWebStandalone = fs.existsSync(webStandaloneServerPath);
   console.log("[build] Building web standalone assets before startup...");
+  waitForExistingWebBuild("before web build");
   try {
     runPackageScript("build:web");
   } catch (error) {
     if (useExistingWebStandaloneAfterBuildFailure(error, hadExistingWebStandalone)) return;
     console.log(`[warn] Web build failed once: ${error instanceof Error ? error.message : String(error)}`);
-    console.log("[build] Waiting 2 seconds, then retrying web build...");
-    sleepMs(2000);
+    console.log("[build] Waiting for any existing web build to finish, then retrying web build...");
+    waitForExistingWebBuild("before web build retry", { minWaitMs: 2000 });
     try {
       runPackageScript("build:web");
     } catch (retryError) {
       if (useExistingWebStandaloneAfterBuildFailure(retryError, hadExistingWebStandalone)) return;
+      if (useWebDevServerFallback(retryError, "web build retry failed")) return;
       throw retryError;
     }
   }
+}
+
+function useWebDevServerFallback(error, reason) {
+  if (!keepAliveLauncher) return false;
+  stopExistingWebBuildProcesses(reason);
+  configureWebDevServerFallback(`${reason}: ${error instanceof Error ? error.message : String(error)}`);
+  return true;
+}
+
+function configureWebDevServerFallback(reason) {
+  const webService = services.find((service) => service.name === "web");
+  if (!webService || webDevServerFallback) return;
+  webDevServerFallback = true;
+  webService.command = process.execPath;
+  webService.commandArgs = [
+    "node_modules/next/dist/bin/next",
+    "dev",
+    "apps/web",
+    "-H",
+    "127.0.0.1",
+    "-p",
+    String(webPort),
+    "--webpack",
+  ];
+  webService.cwd = desktopRoot;
+  console.log(`[warn] ${reason}. Using Next dev server for local startup.`);
 }
 
 function useExistingWebStandaloneAfterBuildFailure(error, hadExistingWebStandalone) {
@@ -505,6 +547,26 @@ function useExistingWebStandaloneAfterBuildFailure(error, hadExistingWebStandalo
   return false;
 }
 
+function waitForExistingWebBuild(reason, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs || 120000);
+  if (options.minWaitMs) sleepMs(options.minWaitMs);
+  let lastPids = [];
+  while (Date.now() < deadline) {
+    const pids = findProjectWebBuildPids();
+    if (!pids.length) {
+      if (lastPids.length) console.log(`[build] Existing web build finished (${reason}).`);
+      return;
+    }
+    if (pids.join(",") !== lastPids.join(",")) {
+      console.log(`[build] Waiting for existing web build PID ${pids.join(", ")} (${reason})...`);
+      lastPids = pids;
+    }
+    sleepMs(2000);
+  }
+  const pids = findProjectWebBuildPids();
+  if (pids.length) throw new Error(`Timed out waiting for existing web build PID ${pids.join(", ")} (${reason})`);
+}
+
 function webBuildIsStale() {
   if (!fs.existsSync(webStandaloneServerPath) || !fs.existsSync(webStandaloneBuildIdPath)) return true;
   if (process.env.FORCE_WEB_REBUILD === "1") return true;
@@ -516,6 +578,75 @@ function webBuildIsStale() {
     path.join(desktopRoot, "apps", "web", "next.config.js"),
     path.join(desktopRoot, "package.json"),
   ].some((item) => pathHasFileNewerThan(item, builtAt));
+}
+
+function findProjectWebBuildPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows])
+    .filter((item) => {
+      const pid = Number(item?.ProcessId);
+      if (!Number.isFinite(pid) || pid === process.pid) return false;
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      if (!commandLine.includes(normalizedRoot)) return false;
+      if (commandLine.includes("tools/build-web.js")) return true;
+      if (
+        commandLine.includes("node_modules/next/dist/bin/next") &&
+        commandLine.includes("build") &&
+        commandLine.includes("apps/web")
+      ) {
+        return true;
+      }
+      if (commandLine.includes("node_modules/next/dist/compiled/jest-worker/processchild.js")) return true;
+      return commandLine.includes("typescript/bin/tsc") && commandLine.includes("apps/web/tsconfig.json");
+    })
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function stopExistingWebBuildProcesses(reason) {
+  const pids = findProjectWebBuildPids();
+  if (!pids.length) return;
+  console.log(`[build] Stopping existing web build PID ${pids.join(", ")} (${reason})...`);
+  if (process.platform !== "win32") {
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), "SIGTERM");
+      } catch {
+        // The process may have exited between scan and termination.
+      }
+    }
+    return;
+  }
+  spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Stop-Process -Id ${pids.map((pid) => Number(pid)).join(",")} -Force -ErrorAction SilentlyContinue`,
+    ],
+    { encoding: "utf8" },
+  );
 }
 
 function pathHasFileNewerThan(itemPath, builtAt) {
@@ -635,7 +766,7 @@ function startService(service) {
   const stderr = fs.openSync(path.join(logsDir, `${service.name}.err.log`), "a");
   const child = spawn(service.command, service.commandArgs, {
     cwd: serviceCwd(service),
-    env: serviceEnv(),
+    env: serviceEnv(service),
     detached: true,
     stdio: ["ignore", stdout, stderr],
     windowsHide: true,
@@ -684,7 +815,7 @@ function buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLog
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(serviceCwd(service))}`,
-    ...Object.entries(serviceDefaultEnv()).map(([key, value]) => cmdSetEnv(key, value)),
+    ...Object.entries(serviceDefaultEnv(service)).map(([key, value]) => cmdSetEnv(key, value)),
     `echo [%date% %time%] launching ${service.name} >> ${cmdQuote(launcherLogPath)}`,
     runLine,
   ];
@@ -987,6 +1118,7 @@ function assertRequiredCommands() {
 }
 
 function commandExists(command) {
+  if (command === "node" && process.execPath && fs.existsSync(process.execPath)) return true;
   return Boolean(resolveCommandPath(command));
 }
 
@@ -1123,10 +1255,10 @@ function truncateText(value, maxLength) {
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
-function serviceEnv() {
+function serviceEnv(service) {
   return {
     ...process.env,
-    ...serviceDefaultEnv(),
+    ...serviceDefaultEnv(service),
   };
 }
 
@@ -1143,12 +1275,14 @@ function windowsSafeEnv(env) {
   return safe;
 }
 
-function serviceDefaultEnv() {
+function serviceDefaultEnv(service) {
   return {
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
     USE_LOCAL_STORE: process.env.USE_LOCAL_STORE || "true",
-    PORT: String(webPort),
+    LOW_VALUE_AUTOMATION_ENABLED: process.env.LOW_VALUE_AUTOMATION_ENABLED || "false",
+    LOW_VALUE_AUTOMATION_RUN_ON_START: process.env.LOW_VALUE_AUTOMATION_RUN_ON_START || "false",
+    PORT: String(service?.port || webPort),
     WEB_PORT: String(webPort),
     API_PORT: String(apiPort),
     MOCK_DESIGN_PLATFORM_PORT: String(mockPort),
@@ -1230,7 +1364,7 @@ function assertMockDesignStartAllowed() {
     return;
   }
   throw new Error(
-    `Mock design startup is blocked because real mode is active, preferred, or locked at ${realModeLockFile}. Set ALLOW_MOCK_DESIGN_START=1 before switching to mock design mode.`,
+    `Mock design startup is blocked because real mode is active, preferred, or locked at ${realModeLockFile}. Set FORCE_MOCK_DESIGN_START=1 before switching to mock design mode.`,
   );
 }
 

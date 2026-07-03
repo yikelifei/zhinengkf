@@ -1,11 +1,15 @@
 "use strict";
 
 const { inspectBundleAutomationReadiness, inspectRealDesignReferences, validateDesignRequest } = require("./designWorkflow");
+const { isHighValueBudget } = require("./budget");
 
-function evaluateDesignAutoSubmit(job = {}) {
+function evaluateDesignAutoSubmit(job = {}, options = {}) {
   if (!job || !job.id) return skip("invalid_job", ["job"]);
   if (job.status !== "draft") return skip("status_not_draft", ["status"]);
-  if (job.isHighValue || job.manualQcRequired === "force") return skip("manual_review_required", ["manualReview"]);
+  const highValueAmount = Number(options.highValueAmountCny || 10000);
+  if (job.isHighValue || isHighValueBudget(job.budget, highValueAmount) || job.manualQcRequired === "force") {
+    return skip("manual_review_required", ["manualReview"]);
+  }
   if (job.conversation?.manualLocked || job.manualLocked) return skip("conversation_manual_locked", ["manualLocked"]);
 
   const assets = Array.isArray(job.assets) ? job.assets : [];
