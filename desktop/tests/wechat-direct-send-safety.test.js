@@ -81,6 +81,14 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(styles, /\.wechat-config-sections/);
   assert.match(styles, /\.wechat-config-section:first-child/);
   assert.match(styles, /\.wechat-config-section-head/);
+  assert.match(styles, /WeChat mobile config pager/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-channel-summary[\s\S]*grid-auto-flow: column !important/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-channel-summary[\s\S]*max-height: 64px !important/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-config-list[\s\S]*display: flex !important/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-config-list[\s\S]*flex-wrap: nowrap !important/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-config-list[\s\S]*scroll-snap-type: x mandatory/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-config-card[\s\S]*flex: 0 0 100% !important/);
+  assert.match(styles, /#wechat-channel-center\.wechat-mode-config \.wechat-config-card[\s\S]*scroll-snap-align: start/);
   assert.match(styles, /\.wechat-action-group/);
   assert.match(styles, /\.wechat-action-buttons \.primary/);
   assert.match(styles, /\.wechat-visual-action-strip/);
