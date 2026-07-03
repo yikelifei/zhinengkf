@@ -6225,36 +6225,69 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             </span>
                           ))}
                         </div>
-                        <div className="wechat-channel-actions">
+                        <div className="wechat-channel-actions" aria-label={`${channel.label}操作矩阵`}>
                           {channel.key === "personal_wechat" ? (
                             <>
-                              <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
-                                <Search size={15} aria-hidden="true" />采集窗口
-                              </button>
-                              <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
-                                <RefreshCw size={15} aria-hidden="true" />扫描快照
-                              </button>
-                              <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
-                                <ShieldCheck size={15} aria-hidden="true" />处理队列
-                              </button>
+                              <div className="wechat-action-group">
+                                <small>采集</small>
+                                <div className="wechat-action-buttons">
+                                  <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                                    <Search size={15} aria-hidden="true" />采集窗口
+                                  </button>
+                                  <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+                                    <RefreshCw size={15} aria-hidden="true" />扫描快照
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="wechat-action-group">
+                                <small>发送</small>
+                                <div className="wechat-action-buttons">
+                                  <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
+                                    <ShieldCheck size={15} aria-hidden="true" />处理队列
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="wechat-action-group">
+                                <small>配置</small>
+                                <div className="wechat-action-buttons">
+                                  <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                                    <Check size={15} aria-hidden="true" />配置检查
+                                  </button>
+                                </div>
+                              </div>
                             </>
                           ) : (
                             <>
-                              <button type="button" className="primary" onClick={() => runWechatChannelInbound(channel.key)} disabled={Boolean(busy)}>
-                                <MessageCircle size={15} aria-hidden="true" />入站演练
-                              </button>
-                              <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("routing-center")} disabled={Boolean(busy)}>
-                                <Route size={15} aria-hidden="true" />查看路由
-                              </button>
-                              {channel.status === "needs_config" ? (
-                                <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
-                                  <Check size={15} aria-hidden="true" />配置检查
-                                </button>
-                              ) : (
-                                <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
-                                  <Send size={15} aria-hidden="true" />发送队列
-                                </button>
-                              )}
+                              <div className="wechat-action-group">
+                                <small>演练</small>
+                                <div className="wechat-action-buttons">
+                                  <button type="button" className="primary" onClick={() => runWechatChannelInbound(channel.key)} disabled={Boolean(busy)}>
+                                    <MessageCircle size={15} aria-hidden="true" />入站演练
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="wechat-action-group">
+                                <small>路由</small>
+                                <div className="wechat-action-buttons">
+                                  <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("routing-center")} disabled={Boolean(busy)}>
+                                    <Route size={15} aria-hidden="true" />查看路由
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="wechat-action-group">
+                                <small>{channel.status === "needs_config" ? "配置" : "发送"}</small>
+                                <div className="wechat-action-buttons">
+                                  {channel.status === "needs_config" ? (
+                                    <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                                      <Check size={15} aria-hidden="true" />配置检查
+                                    </button>
+                                  ) : (
+                                    <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
+                                      <Send size={15} aria-hidden="true" />发送队列
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
                             </>
                           )}
                         </div>

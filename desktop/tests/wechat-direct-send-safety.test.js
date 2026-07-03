@@ -57,8 +57,16 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /function wechatChannelNextStep/);
   assert.match(page, /WECHAT_SEND_ADAPTER=windows_bridge/);
   assert.match(page, /wechat-config-runbook/);
+  assert.match(page, /aria-label=\{`\$\{channel\.label\}操作矩阵`\}/);
+  assert.match(page, /className="wechat-action-group"/);
+  assert.match(page, /<small>采集<\/small>[\s\S]*captureCurrentWindowOnce[\s\S]*scanRealWindowSnapshots/);
+  assert.match(page, /<small>发送<\/small>[\s\S]*processSafeQueue/);
+  assert.match(page, /<small>演练<\/small>[\s\S]*runWechatChannelInbound\(channel\.key\)/);
+  assert.match(page, /<small>路由<\/small>[\s\S]*scrollToWorkspaceSection\("routing-center"\)/);
   assert.match(styles, /\.wechat-channel-card\.needs_send_adapter::before/);
   assert.match(styles, /\.wechat-channel-next-step\.needs_runtime,[\s\S]*\.wechat-channel-next-step\.needs_send_adapter/);
+  assert.match(styles, /\.wechat-action-group/);
+  assert.match(styles, /\.wechat-action-buttons \.primary/);
 });
 
 test("execute send only starts queued tasks", () => {
