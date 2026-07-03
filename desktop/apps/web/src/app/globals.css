@@ -120,6 +120,61 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   gap: 7px;
 }
 
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid rgba(0, 122, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(232, 242, 255, 0.36);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook > strong {
+  grid-column: 1 / -1;
+  color: #0a4f9f;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(60, 60, 67, 0.08);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook span.done {
+  border-color: rgba(52, 199, 89, 0.18);
+  background: var(--green-soft);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook span.todo {
+  border-color: rgba(255, 149, 0, 0.2);
+  background: var(--orange-soft);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook small,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-runbook code {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-config-entrypoints span {
   display: grid;
   gap: 4px;
@@ -5492,6 +5547,81 @@ input[type="checkbox"]:disabled {
   overflow-wrap: anywhere;
 }
 
+.automation-skip-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(0, 1.5fr);
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid rgba(255, 149, 0, 0.22);
+  border-radius: calc(var(--radius) - 1px);
+  background: rgba(255, 248, 236, 0.78);
+}
+
+.automation-skip-summary strong,
+.automation-skip-summary span,
+.automation-skip-summary small,
+.automation-skip-summary b,
+.automation-skip-summary em {
+  display: block;
+}
+
+.automation-skip-summary strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.automation-skip-summary > div > span,
+.automation-skip-grid small,
+.automation-skip-grid em {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.automation-skip-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.automation-skip-grid span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(60, 60, 67, 0.08);
+  border-radius: calc(var(--radius) - 3px);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.automation-skip-grid span.ok {
+  border-color: rgba(52, 199, 89, 0.18);
+}
+
+.automation-skip-grid span.warning {
+  border-color: rgba(255, 149, 0, 0.24);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.automation-skip-grid span.error {
+  border-color: rgba(255, 59, 48, 0.24);
+  background: rgba(255, 246, 245, 0.82);
+}
+
+.automation-skip-grid b {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.automation-skip-grid em {
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
 .automation-summary.ok {
   border-color: rgba(52, 199, 89, 0.22);
   background: var(--green-soft);
@@ -5974,11 +6104,13 @@ input[type="checkbox"]:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .automation-history-summary {
+  .automation-history-summary,
+  .automation-skip-summary {
     grid-template-columns: 1fr;
   }
 
-  .automation-history-grid {
+  .automation-history-grid,
+  .automation-skip-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -6555,9 +6687,78 @@ input[type="checkbox"]:disabled {
   gap: 10px;
 }
 
+.sku-change-log-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .sku-change-log-head span {
   color: var(--text-muted);
   font-size: 12.5px;
+}
+
+.sku-change-log-head .compact-button {
+  flex: 0 0 auto;
+}
+
+.sku-change-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sku-change-filter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--separator-soft);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.sku-change-filter button.selected {
+  border-color: rgba(0, 122, 255, 0.44);
+  background: rgba(0, 122, 255, 0.12);
+  color: #1455a7;
+}
+
+.sku-change-filter button strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.sku-change-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(120, 120, 128, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-muted);
+}
+
+.sku-change-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13px;
+}
+
+.sku-change-search input::placeholder {
+  color: var(--text-faint);
 }
 
 .sku-change-item {
@@ -8103,7 +8304,7 @@ input[type="checkbox"]:disabled {
 
 .wechat-channel-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -8168,6 +8369,10 @@ input[type="checkbox"]:disabled {
   background: var(--orange);
 }
 
+.wechat-channel-card.needs_send_adapter::before {
+  background: var(--orange);
+}
+
 .wechat-channel-card.needs_config::before {
   background: var(--red);
 }
@@ -8224,6 +8429,11 @@ input[type="checkbox"]:disabled {
   background: var(--orange-soft);
 }
 
+.wechat-channel-card.needs_send_adapter .wechat-channel-card-head em {
+  color: #8a4f00;
+  background: var(--orange-soft);
+}
+
 .wechat-channel-card.needs_config .wechat-channel-card-head em {
   color: #b42318;
   background: var(--red-soft);
@@ -8232,6 +8442,53 @@ input[type="checkbox"]:disabled {
 .wechat-channel-card p {
   margin: 0;
   line-height: 1.45;
+}
+
+.wechat-channel-next-step {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.13);
+  border-radius: 9px;
+  background: rgba(232, 242, 255, 0.46);
+}
+
+.wechat-channel-next-step strong,
+.wechat-channel-next-step span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wechat-channel-next-step strong {
+  color: #0a4f9f;
+  font-size: 12px;
+}
+
+.wechat-channel-next-step span {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.wechat-channel-next-step.needs_runtime,
+.wechat-channel-next-step.needs_send_adapter {
+  border-color: rgba(255, 149, 0, 0.22);
+  background: var(--orange-soft);
+}
+
+.wechat-channel-next-step.needs_runtime strong,
+.wechat-channel-next-step.needs_send_adapter strong {
+  color: #8a4f00;
+}
+
+.wechat-channel-next-step.needs_config {
+  border-color: rgba(255, 59, 48, 0.16);
+  background: var(--red-soft);
+}
+
+.wechat-channel-next-step.needs_config strong {
+  color: #b42318;
 }
 
 .wechat-channel-metrics {
@@ -9060,7 +9317,7 @@ input[type="checkbox"]:disabled {
 
 .review-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -9169,6 +9426,33 @@ input[type="checkbox"]:disabled {
 
 .review-card.quote::before {
   background: var(--blue);
+}
+
+.review-card.order.amber {
+  border-color: rgba(255, 149, 0, 0.24);
+  background: var(--orange-soft);
+}
+
+.review-card.order.amber::before {
+  background: var(--orange);
+}
+
+.review-card.order.red {
+  border-color: rgba(255, 59, 48, 0.24);
+  background: var(--red-soft);
+}
+
+.review-card.order.red::before {
+  background: var(--red);
+}
+
+.review-card.order.green {
+  border-color: rgba(52, 199, 89, 0.24);
+  background: var(--green-soft);
+}
+
+.review-card.order.green::before {
+  background: var(--green);
 }
 
 .review-card p,
@@ -23561,9 +23845,9 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
 
 body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness {
   display: grid;
-  grid-template-columns: repeat(3, minmax(70px, 1fr));
+  grid-template-columns: repeat(4, minmax(64px, 1fr));
   gap: 6px;
-  min-width: 250px;
+  min-width: 320px;
 }
 
 body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness span {
@@ -23697,6 +23981,11 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
 
 body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.needs_runtime {
   border-color: rgba(255, 149, 0, 0.28);
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.needs_send_adapter {
+  border-color: rgba(255, 149, 0, 0.28);
+  background: var(--orange-soft);
 }
 
 body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-lane-card.needs_config {
@@ -23916,7 +24205,7 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
   }
 
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-visual-readiness {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     min-width: 0 !important;
   }
 
@@ -24052,6 +24341,7 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .review-panel,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-panel,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-panel,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-panel,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-panel {
   grid-template-rows: auto minmax(0, 1fr) !important;
 }
@@ -24059,12 +24349,14 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff :is(.review-columns, .review-log-list),
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design :is(.manual-lock-review-list, .review-log-list),
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote :is(.manual-lock-review-list, .review-log-list),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order :is(.manual-lock-review-list, .review-log-list),
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs :is(.manual-lock-review-list, .review-columns) {
   display: none !important;
 }
 
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-columns,
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-columns {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) !important;
   min-height: 0 !important;
@@ -24073,13 +24365,18 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
 }
 
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-columns > .review-list:nth-child(2),
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns > .review-list:nth-child(1) {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-columns > .review-list:nth-child(3),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns > .review-list:nth-child(1),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-columns > .review-list:nth-child(3),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-columns > .review-list:nth-child(1),
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-columns > .review-list:nth-child(2) {
   display: none !important;
 }
 
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-list,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-list,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-list,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-list,
 body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-log-list {
   min-height: 0 !important;
   height: 100% !important;
@@ -24105,40 +24402,40 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
   gap: 8px !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-list {
   display: grid !important;
   grid-auto-rows: max-content !important;
   align-content: start !important;
   gap: 8px !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list h3 {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-list h3 {
   margin-bottom: 2px !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-card {
   gap: 7px !important;
   min-height: 0 !important;
   padding: 10px 10px 10px 14px !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card + .review-card {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-card + .review-card {
   margin-top: 0 !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card p,
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-card small {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-card p,
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-card small {
   margin-top: 3px !important;
   line-height: 1.34 !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-actions {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-actions {
   display: grid !important;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)) !important;
   gap: 7px !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-actions :is(button, .primary, .ghost) {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-actions :is(button, .primary, .ghost) {
   min-height: 32px !important;
   padding-block: 0 !important;
   width: 100% !important;
@@ -24185,7 +24482,7 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   line-height: 1.2 !important;
 }
 
-body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote) .review-list {
+body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center:is(.review-mode-design, .review-mode-quote, .review-mode-order) .review-list {
   overflow: hidden !important;
 }
 
@@ -24247,6 +24544,7 @@ body .apple-light-shell.shell .workspace[data-active-section="review-center"] #r
   body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-handoff .manual-lock-review-list,
   body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-design .review-list,
   body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-quote .review-list,
+  body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-order .review-list,
   body .apple-light-shell.shell .workspace[data-active-section="review-center"] #review-center.review-mode-logs .review-log-list {
     height: auto !important;
     max-height: none !important;

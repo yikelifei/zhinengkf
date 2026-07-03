@@ -753,6 +753,22 @@ export type BridgeInboxEntry = {
   };
 };
 
+export type BridgeDispatchEntry = {
+  fileName: string;
+  taskId?: string;
+  attemptId?: string;
+  wechatAccountId?: string;
+  conversationId?: string;
+  protocolVersion?: string;
+  payloadKind?: string;
+  actionCount?: number;
+  outboxFileName?: string;
+  createdAt?: string;
+  modifiedAt?: string;
+  ageSeconds?: number;
+  errorMessage?: string;
+};
+
 export type BridgeInboxScanResult = {
   scanned: number;
   processed: BridgeInboxEntry[];
@@ -829,6 +845,10 @@ export type BridgeStatusResult = {
     pendingCount: number;
     pending: BridgeInboxEntry[];
   };
+  dispatch?: {
+    pendingCount: number;
+    pending: BridgeDispatchEntry[];
+  };
   locks: {
     activeCount: number;
     staleCount: number;
@@ -842,7 +862,7 @@ export type WechatChannelStatusItem = {
   key: WechatChannelKey;
   label: string;
   kind: string;
-  status: "ready" | "needs_runtime" | "needs_config" | string;
+  status: "ready" | "needs_runtime" | "needs_send_adapter" | "needs_config" | string;
   ready: boolean;
   description: string;
   entrypoints: Record<string, string>;
@@ -861,6 +881,7 @@ export type WechatChannelStatus = {
     total: number;
     ready: number;
     degraded: number;
+    needsSendAdapter?: number;
     needsConfig: number;
     pendingSendTasks: number;
     manualLockedConversations: number;
@@ -2088,8 +2109,8 @@ export type LowValueOrderFollowupResult = {
   }>;
 };
 
-export async function autoProcessLowValue(): Promise<LowValueAutomationResult> {
-  return postJson<LowValueAutomationResult>("/design-jobs/auto-process-low-value");
+export async function autoProcessLowValue(filters: IdentityFilters = {}): Promise<LowValueAutomationResult> {
+  return postJson<LowValueAutomationResult>("/design-jobs/auto-process-low-value", filters);
 }
 
 export type AutomationRun = {
@@ -2219,8 +2240,8 @@ export async function getAutomationReadiness(): Promise<AutomationReadiness | nu
   }
 }
 
-export async function runAutomationOnce(): Promise<AutomationRun> {
-  return postJson<AutomationRun>("/automation/run-once", {});
+export async function runAutomationOnce(filters: IdentityFilters = {}): Promise<AutomationRun> {
+  return postJson<AutomationRun>("/automation/run-once", filters);
 }
 
 export async function startAutomation(): Promise<AutomationStatus> {

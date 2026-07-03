@@ -458,8 +458,8 @@ export class WechatDispatchService {
     return automation.source === "order_followup" || task?.guardSnapshot?.reason === "order-followup";
   }
 
-  async scanLowValueOrderConfirmations(params: { orderDrafts?: any[] } = {}) {
-    const orders = Array.isArray(params.orderDrafts) ? params.orderDrafts : await this.orders.list();
+  async scanLowValueOrderConfirmations(params: { orderDrafts?: any[] } & IdentityFilter = {}) {
+    const orders = Array.isArray(params.orderDrafts) ? params.orderDrafts : await this.orders.list(params);
     const result = {
       scanned: orders.length,
       queued: [] as any[],
@@ -505,8 +505,8 @@ export class WechatDispatchService {
     return result;
   }
 
-  async scanLowValueOrderFollowups(params: { orderDrafts?: any[] } = {}) {
-    const orders = Array.isArray(params.orderDrafts) ? params.orderDrafts : await this.orders.list();
+  async scanLowValueOrderFollowups(params: { orderDrafts?: any[] } & IdentityFilter = {}) {
+    const orders = Array.isArray(params.orderDrafts) ? params.orderDrafts : await this.orders.list(params);
     const result = {
       scanned: orders.length,
       queued: [] as any[],
@@ -1118,14 +1118,17 @@ export class WechatDispatchService {
       channelCheck("safe_send_queue", "人工/客服发送队列", true, "复用微信安全发送队列"),
     ];
 
+    const personalStatus = channelStatus(personalChecks);
+    const workStatus = channelStatus(workChecks);
+    const miniStatus = channelStatus(miniChecks);
     const channels = [
       {
         key: "personal_wechat",
         label: "个人微信",
         kind: "desktop_bridge",
-        status: channelStatus(personalChecks),
+        status: personalStatus,
         ready: checksReady(personalChecks),
-        description: "个人微信通过本机窗口观察、单账号锁和 Windows 文件桥接落地。",
+        description: "个人微信通过本机窗口观察、单账号锁和 Windows 文件桥接落地；真实发送必须等桥接发送器回执。",
         entrypoints: {
           inbound: "/api/wechat/inbound/messages",
           status: "/api/wechat/bridge/status",
@@ -1147,7 +1150,7 @@ export class WechatDispatchService {
         key: "work_wechat",
         label: "企业微信",
         kind: "official_account_callback",
-        status: channelStatus(workChecks),
+        status: workStatus,
         ready: checksReady(workChecks),
         description: "企业微信侧完成应用凭证和回调后，消息进入同一套智能客服入站管线。",
         entrypoints: {
@@ -1166,7 +1169,7 @@ export class WechatDispatchService {
         key: "mini_program",
         label: "微信小程序",
         kind: "mini_program_customer_message",
-        status: channelStatus(miniChecks),
+        status: miniStatus,
         ready: checksReady(miniChecks),
         description: "小程序客服消息完成 AppID 和 Token 配置后，统一进入会话、路由、审核和发送队列。",
         entrypoints: {
@@ -1188,7 +1191,8 @@ export class WechatDispatchService {
       summary: {
         total: channels.length,
         ready: channels.filter((channel) => channel.ready).length,
-        degraded: channels.filter((channel) => channel.status === "needs_runtime").length,
+        degraded: channels.filter((channel) => ["needs_runtime", "needs_send_adapter"].includes(channel.status)).length,
+        needsSendAdapter: channels.filter((channel) => channel.status === "needs_send_adapter").length,
         needsConfig: channels.filter((channel) => channel.status === "needs_config").length,
         pendingSendTasks: pendingSendCount,
         manualLockedConversations: manualLockedCount,
@@ -1251,6 +1255,10 @@ export class WechatDispatchService {
       .listBridgeInbox()
       .filter((entry) => this.matchesBridgeEntryIdentity(entry, null, filter))
       .map((entry) => this.buildBridgeInboxListItem(entry));
+    const dispatchPending = this.sendAdapter
+      .listBridgeDispatch()
+      .filter((entry) => this.matchesBridgeEntryIdentity(entry, null, filter))
+      .map((entry) => this.buildBridgeDispatchListItem(entry));
     const locks = this.sendAdapter
       .listBridgeLocks()
       .filter((lock) => !filter.wechatAccountId || String(lock.accountId || "") === String(filter.wechatAccountId));
@@ -1267,6 +1275,10 @@ export class WechatDispatchService {
       inbox: {
         pendingCount: inboxPending.length,
         pending: inboxPending,
+      },
+      dispatch: {
+        pendingCount: dispatchPending.length,
+        pending: dispatchPending,
       },
       locks: {
         activeCount: locks.length,
@@ -1387,6 +1399,27 @@ export class WechatDispatchService {
       hasAckToken: typeof data.ackToken === "string" && data.ackToken.length > 0,
       errorMessage: entry?.errorMessage || "",
       ...extras,
+    };
+  }
+
+  private buildBridgeDispatchListItem(entry: any) {
+    const data = isPlainObject(entry?.data) ? entry.data : {};
+    const sendPlan = isPlainObject(data.sendPlan) ? data.sendPlan : {};
+    const ack = isPlainObject(data.ack) ? data.ack : {};
+    return {
+      fileName: entry?.fileName || "",
+      taskId: String(data.taskId || entry?.taskId || ""),
+      attemptId: String(data.attemptId || ""),
+      wechatAccountId: String(data.wechatAccountId || entry?.wechatAccountId || ""),
+      conversationId: String(data.conversationId || entry?.conversationId || ""),
+      protocolVersion: String(data.version || ""),
+      payloadKind: String(sendPlan.kind || entry?.payloadKind || ""),
+      actionCount: Number.isFinite(Number(sendPlan.actionCount || entry?.actionCount)) ? Number(sendPlan.actionCount || entry.actionCount) : undefined,
+      outboxFileName: bridgeFileName(data.sourceOutboxFileName || ack.requiredOutboxFileName),
+      createdAt: entry?.createdAt,
+      modifiedAt: entry?.modifiedAt,
+      ageSeconds: entry?.ageSeconds,
+      errorMessage: entry?.errorMessage,
     };
   }
 
@@ -3403,8 +3436,13 @@ function checksReady(checks: Array<{ passed: boolean }>) {
 
 function channelStatus(checks: Array<{ key: string; passed: boolean }>) {
   if (checksReady(checks)) return "ready";
-  const runtimeKeys = new Set(["window_observer", "windows_bridge", "safe_send_queue"]);
-  return checks.some((check) => runtimeKeys.has(check.key) && !check.passed) ? "needs_runtime" : "needs_config";
+  const runtimeKeys = new Set(["window_observer", "windows_bridge"]);
+  const sendAdapterKeys = new Set(["safe_send_queue"]);
+  const failed = checks.filter((check) => !check.passed);
+  if (failed.some((check) => runtimeKeys.has(check.key))) return "needs_runtime";
+  if (failed.some((check) => !runtimeKeys.has(check.key) && !sendAdapterKeys.has(check.key))) return "needs_config";
+  if (failed.some((check) => sendAdapterKeys.has(check.key))) return "needs_send_adapter";
+  return "needs_config";
 }
 
 function maskSecret(value: unknown) {

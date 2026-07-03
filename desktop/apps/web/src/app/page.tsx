@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
@@ -195,6 +195,7 @@ import {
   WechatAccount,
   WechatChannelKey,
   WechatChannelStatus,
+  WechatChannelStatusItem,
   WechatWindowSnapshot,
   WindowObserverStatus,
   WindowSnapshotInboxScanResult,
@@ -284,6 +285,14 @@ const skuRepairFilterOptions = [
   { value: "price_stock", label: "价格库存" },
   { value: "spec_delivery", label: "规格交期" },
   { value: "rules", label: "搭配规则" },
+];
+
+const skuChangeImpactFilterOptions = [
+  { value: "all", label: "全部变更" },
+  { value: "commercial", label: "报价/搭配" },
+  { value: "image", label: "真实出图" },
+  { value: "specification", label: "包装物流" },
+  { value: "active", label: "上下架" },
 ];
 
 const quoteStatusOptions = [
@@ -1204,6 +1213,8 @@ export default function HomePage() {
   const [trainingSampleQualityFilter, setTrainingSampleQualityFilter] = useState<TrainingSampleQualityFilter>("all");
   const [trainingSampleImportFilterId, setTrainingSampleImportFilterId] = useState<string>("");
   const [trainingSampleLimit, setTrainingSampleLimit] = useState<number>(TRAINING_SAMPLE_PAGE_SIZE);
+  const [skuChangeImpactFilter, setSkuChangeImpactFilter] = useState<string>("all");
+  const [skuChangeSearch, setSkuChangeSearch] = useState<string>("");
   const [editingSampleId, setEditingSampleId] = useState<string>("");
   const [sampleEdit, setSampleEdit] = useState<TrainingSampleEdit | null>(null);
   const [selectedTrainingSampleIds, setSelectedTrainingSampleIds] = useState<string[]>([]);
@@ -1212,7 +1223,7 @@ export default function HomePage() {
   const [trainingWorkbenchView, setTrainingWorkbenchView] = useState<"import" | "review" | "skills">("import");
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
   const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
-  const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "logs">("handoff");
+  const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "order" | "logs">("handoff");
   const [quoteWorkbenchView, setQuoteWorkbenchView] = useState<"overview" | "actions" | "quotes" | "orders">("overview");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
@@ -1877,7 +1888,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       "低价值自动处理",
       async () => {
-        const result = await runAutomationOnce();
+        const result = await runAutomationOnce(activeIdentityFilters());
         const lowValue = result.results.lowValueAutomation as LowValueAutomationResult | undefined;
         const sendQueue = result.results.processLowValueSendQueue as SafeSendQueueResult | undefined;
         const orderDraft = result.results.scanLowValueOrderDrafts as LowValueOrderDraftResult | undefined;
@@ -1911,7 +1922,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       "后台自动化跑一轮",
       async () => {
-        const result = await runAutomationOnce();
+        const result = await runAutomationOnce(activeIdentityFilters());
         const lowValue = result.results.lowValueAutomation as LowValueAutomationResult | undefined;
         const sendQueue = result.results.processLowValueSendQueue as SafeSendQueueResult | undefined;
         const orderDraft = result.results.scanLowValueOrderDrafts as LowValueOrderDraftResult | undefined;
@@ -2209,11 +2220,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const validKeys = new Set(skillSuggestions.map(skillSuggestionKey));
     const sourceKeys = explicitSuggestionKeys || selectedSkillSuggestionKeys;
     const suggestionKeys = [...new Set(sourceKeys.filter((key) => validKeys.has(key)))];
+    const suggestionKeySet = new Set(suggestionKeys);
     if (!suggestionKeys.length) {
       setMessage(`请先勾选要应用的${scopeLabel} Skill 建议。`);
       return;
     }
-    const selectedSuggestions = skillSuggestions.filter((suggestion) => suggestionKeys.includes(skillSuggestionKey(suggestion)));
+    const selectedSuggestions = skillSuggestions.filter((suggestion) => suggestionKeySet.has(skillSuggestionKey(suggestion)));
     const includeNeedsReview = selectedSuggestions.some((suggestion) => !isSkillSuggestionAutoSelected(suggestion));
     let summary = "";
     await runAction(
@@ -2263,6 +2275,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function selectAllSkillSuggestions() {
+    if (
+      filteredUnselectedNeedsReviewSkillSuggestionCount > 0 &&
+      !window.confirm(`当前筛选有 ${filteredUnselectedNeedsReviewSkillSuggestionCount} 条需人工判断的 Skill 建议，确认一起选中吗？`)
+    ) {
+      return;
+    }
     const keys = filteredSkillSuggestions.map(skillSuggestionKey);
     setSelectedSkillSuggestionKeys((current) => [...new Set([...current, ...keys])]);
   }
@@ -2287,6 +2305,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       .map(skillSuggestionKey)
       .filter((key) => selectedSkillSuggestionKeySet.has(key));
     void compileTrainingSkills(keys, "当前筛选已选");
+  }
+
+  function compileAllSelectedTrainingSkills() {
+    if (
+      hiddenSelectedSkillSuggestionCount > 0 &&
+      !window.confirm(`还有 ${hiddenSelectedSkillSuggestionCount} 条其他 Agent 已选建议，确认一起应用到 Skill 吗？`)
+    ) {
+      return;
+    }
+    void compileTrainingSkills();
   }
 
   function focusChatImportSkillSuggestions(item: ChatImport) {
@@ -2918,7 +2946,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     unitPrice?: number | string;
     totalCost?: number | string;
   }) {
-    await runAction("更新报价", () => updateQuote(quote.id, { ...identityExpectation(quote), ...patch }));
+    const nextPatch = { ...identityExpectation(quote), ...patch };
+    await runAction("更新报价", () => updateQuote(quote.id, nextPatch));
   }
 
   function chooseQuoteRevisionImage(quote: QuoteDraft) {
@@ -2963,70 +2992,51 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction("生成订单草稿", () => createOrderDraftFromQuote(quote.id, identityExpectation(quote)));
   }
 
-  async function markPaidAndCreateOrder(quote: QuoteDraft) {
-    await runAction("已付成交并生成订单", async () => {
-      await updateQuote(quote.id, { ...identityExpectation(quote), paymentStatus: "paid", status: "accepted" });
-      await createOrderDraftFromQuote(quote.id, identityExpectation(quote));
-    });
-  }
-
   async function verifyQuotePaymentProof(
     quote: QuoteDraft,
     paymentStatus: "deposit_paid" | "paid",
-    options: { queueConfirmation?: boolean } = {},
   ) {
-    const existingOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
-    const note = `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`;
     let queuedOrder: OrderDraft | null = null;
-    let queuedConfirmation = false;
     await runAction(`核验${paymentLabel}付款`, async () => {
-      if (options.queueConfirmation) {
-        const result = await verifyQuotePaymentProofAndQueueConfirmation(
-          quote.id,
-          paymentStatus,
-          identityExpectation(quote),
-        );
-        setOrderDrafts((items) =>
-          items.some((item) => item.id === result.orderDraft.id)
-            ? items.map((item) => (item.id === result.orderDraft.id ? result.orderDraft : item))
-            : [result.orderDraft, ...items],
-        );
-        setSendTasks((items) =>
-          items.some((item) => item.id === result.sendTask.id)
-            ? items.map((item) => (item.id === result.sendTask.id ? result.sendTask : item))
-            : [result.sendTask, ...items],
-        );
-        queuedOrder = result.orderDraft;
-        queuedConfirmation = true;
-        return;
-      }
-      let verifiedOrder: OrderDraft | null = null;
-      if (existingOrder) {
-        verifiedOrder = await updateOrderDraft(existingOrder.id, {
-          ...identityExpectation(existingOrder),
-          paymentStatus,
-          status: "confirmed",
-          owner: existingOrder.owner || "人工客服",
-          customerNotes: note,
-        });
-      } else {
-        await updateQuote(quote.id, {
-          ...identityExpectation(quote),
-          paymentStatus,
-          status: "accepted",
-          owner: quote.owner || "人工客服",
-          customerNotes: note,
-        });
-        verifiedOrder = await createOrderDraftFromQuote(quote.id, identityExpectation(quote));
-      }
-      if (!verifiedOrder) return;
-      queuedOrder = verifiedOrder;
+      const result = await verifyQuotePaymentProofAndQueueConfirmation(
+        quote.id,
+        paymentStatus,
+        identityExpectation(quote),
+      );
+      setQuotes((items) =>
+        items.some((item) => item.id === result.quote.id)
+          ? items.map((item) => (item.id === result.quote.id ? result.quote : item))
+          : [result.quote, ...items],
+      );
+      setOrderDrafts((items) =>
+        items.some((item) => item.id === result.orderDraft.id)
+          ? items.map((item) => (item.id === result.orderDraft.id ? result.orderDraft : item))
+          : [result.orderDraft, ...items],
+      );
+      setSendTasks((items) =>
+        items.some((item) => item.id === result.sendTask.id)
+          ? items.map((item) => (item.id === result.sendTask.id ? result.sendTask : item))
+          : [result.sendTask, ...items],
+      );
+      queuedOrder = result.orderDraft;
     }, () => {
       if (!queuedOrder) return;
       focusOrderDraft(queuedOrder);
-      setMessage(queuedConfirmation ? `${paymentLabel}已核验，订单确认已进入微信安全发送队列。` : `${paymentLabel}已核验，订单草稿已更新。`);
+      setMessage(`${paymentLabel}已核验，订单确认已进入微信安全发送队列。`);
     });
+  }
+
+  async function verifyOrderPaymentProof(order: OrderDraft, paymentStatus: "deposit_paid" | "paid") {
+    const quote =
+      order.quoteDraft ||
+      quotes.find((item) => item.id === order.quoteDraftId) ||
+      null;
+    if (!quote) {
+      setMessage("这条订单没有绑定报价，不能直接标记收款；请先定位原报价或人工补齐报价绑定后再核验付款。");
+      return;
+    }
+    await verifyQuotePaymentProof(quote, paymentStatus);
   }
 
   function conversationForQuoteOrder(quote: QuoteDraft, order: OrderDraft) {
@@ -3046,6 +3056,42 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     owner?: string;
   }) {
     await runAction("更新订单草稿", () => updateOrderDraft(order.id, { ...identityExpectation(order), ...patch }));
+  }
+
+  async function recordHighValueOrderManualFollowup(order: OrderDraft) {
+    const step = highValueOrderManualStep(order);
+    const note = window.prompt(
+      `记录「${order.customer?.name || order.quoteDraft?.customer?.name || "客户"}」高价值订单人工处理结果。\n\n请写清楚客户答复、收款/交期/生产承诺和下一步动作。`,
+      step.nextAction,
+    );
+    if (note === null) return;
+    const cleanNote = note.trim();
+    if (!cleanNote) {
+      setMessage("请填写本次人工处理结果，空备注不会保存。");
+      return;
+    }
+    const nextFollowAt = window.prompt("下一次跟进时间，可填“今天18点”“明天上午”“7月5日前”，不确定可留空。", "");
+    if (nextFollowAt === null) return;
+    const reviewer = order.owner || "人工客服";
+    const manualNote = buildHighValueOrderManualNote({
+      note: cleanNote,
+      nextFollowAt: nextFollowAt.trim(),
+      reviewer,
+      stepLabel: step.label,
+    });
+    await runAction("记录订单跟进", async () => {
+      await updateOrderDraft(order.id, {
+        ...identityExpectation(order),
+        owner: reviewer,
+        customerNotes: appendOrderCustomerNotes(order.customerNotes, manualNote),
+      });
+      await reviewOrder(order.id, {
+        ...identityExpectation(order),
+        decision: "request_followup",
+        reviewer,
+        note: manualNote,
+      });
+    });
   }
 
   async function reviseOrderDraftSelection(order: OrderDraft) {
@@ -3932,6 +3978,39 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     setMessage(`已导出 ${skuImageProblems.length} 个图片问题，可交给运营逐条补图或确认移除路径。`);
   }
 
+  function exportSkuChangeLogs() {
+    const exportableSkuChangeLogs = visibleSkuChangeLogs;
+    if (!exportableSkuChangeLogs.length) {
+      setMessage("当前筛选下没有商品变更可导出。");
+      return;
+    }
+    const rows = [
+      ["变更时间", "SKU编号", "商品名称", "动作", "来源", "操作者", "影响类型", "影响说明", "建议下一步", "变更字段", "变更前", "变更后", "备注"],
+      ...exportableSkuChangeLogs.flatMap((log) => {
+        const impact = skuChangeImpactSummary(log);
+        const fields = log.changedFields.length ? log.changedFields : [{ field: "-", before: "", after: "" }];
+        return fields.map((field) => [
+          formatDateTime(log.createdAt),
+          log.skuCode || "",
+          log.name || "",
+          skuChangeActionLabel(log.action),
+          log.source || "",
+          log.operator || "system",
+          impact.label,
+          impact.detail,
+          impact.nextAction,
+          skuFieldLabel(field.field),
+          formatSkuFieldValue(field.before),
+          formatSkuFieldValue(field.after),
+          log.reason || "",
+        ]);
+      }),
+    ];
+    const fileName = `sku-change-logs-${formatDateForFile(new Date())}.csv`;
+    downloadTextFile(fileName, "text/csv;charset=utf-8", `\uFEFF${toCsv(rows)}`);
+    setMessage(`已导出 ${exportableSkuChangeLogs.length} 条商品变更记录，可用于价格、库存、图片和规格调整复盘。`);
+  }
+
   async function previewSkuImport() {
     if (!skuImportText.trim()) {
       setMessage("请先粘贴商品表格。");
@@ -4528,7 +4607,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       }
       if (
         sectionId === "review-center" &&
-        (detailView === "handoff" || detailView === "design" || detailView === "quote" || detailView === "logs")
+        (detailView === "handoff" || detailView === "design" || detailView === "quote" || detailView === "order" || detailView === "logs")
       ) {
         setReviewWorkbenchView((current) => (current === detailView ? current : detailView));
       }
@@ -4624,10 +4703,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const filteredSelectedSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) =>
     selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
-  const autoSelectedSkillSuggestionCount = skillSuggestions.filter(isSkillSuggestionAutoSelected).length;
   const filteredSafeSkillSuggestionCount = filteredSkillSuggestions.filter(isSkillSuggestionAutoSelected).length;
   const filteredUnselectedSafeSkillSuggestionCount = filteredSkillSuggestions.filter(
     (suggestion) => isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
+  ).length;
+  const filteredUnselectedNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter(
+    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
   const filteredNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion)).length;
   const filteredUnselectedSkillSuggestionCount = Math.max(0, filteredSkillSuggestions.length - filteredSelectedSkillSuggestionCount);
@@ -4703,6 +4784,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     : latestRoute || null;
   const wechatChannels = wechatChannelStatus?.channels || [];
   const wechatRuntimeIssueChannels = wechatChannels.filter((channel) => channel.status === "needs_runtime");
+  const wechatSendAdapterIssueChannels = wechatChannels.filter((channel) => channel.status === "needs_send_adapter");
   const wechatConfigIssueChannels = wechatChannels.filter((channel) => channel.status === "needs_config");
   const activeWechatChannelName = wechatConversationChannelLabel(activeConversation?.channel);
   const activeQuote = activeJob ? quotes.find((quote) => quote.designJobId === activeJob.id) || null : null;
@@ -4972,6 +5054,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     [automationStatus?.lastRun],
   );
   const lowValueAutomationIdentityAudit = automationStatus?.lastRun?.identityAudit || null;
+  const lowValueAutomationSkipSummary = useMemo(
+    () => buildAutomationSkipSummaryPanel(automationStatus?.lastRun),
+    [automationStatus?.lastRun],
+  );
   const automationRunHistorySummary = useMemo(
     () => buildAutomationRunHistorySummary(automationStatus?.recentRuns),
     [automationStatus?.recentRuns],
@@ -5058,6 +5144,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
     return counts;
   }, [skuRepairQueue]);
+  const visibleSkuChangeLogs = useMemo(
+    () =>
+      skuChangeLogs.filter(
+        (log) =>
+          skuChangeImpactMatchesFilter(log, skuChangeImpactFilter) &&
+          skuChangeMatchesSearch(log, skuChangeSearch),
+      ),
+    [skuChangeImpactFilter, skuChangeLogs, skuChangeSearch],
+  );
+  const skuChangeImpactFilterCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const option of skuChangeImpactFilterOptions) {
+      counts[option.value] = skuChangeLogs.filter((log) => skuChangeImpactMatchesFilter(log, option.value)).length;
+    }
+    return counts;
+  }, [skuChangeLogs]);
   const skuImageProblems = useMemo(() => catalogAudit?.imageProblems || [], [catalogAudit]);
   const knownSkuCodeSet = useMemo(() => new Set(skus.map((sku) => sku.skuCode).filter(Boolean)), [skus]);
   const skuNameByCode = useMemo(() => new Map(skus.map((sku) => [sku.skuCode, sku.name])), [skus]);
@@ -5161,7 +5263,6 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         .includes(query);
       });
   }, [catalogIssuesBySku, skuIssueFilter, skuSearch, skuTypeFilter, skus]);
-
   function setCatalogWorkbenchDetail(view: "import" | "preview" | "audit" | "bundle") {
     setCatalogWorkbenchView(view);
     if (typeof window === "undefined") return;
@@ -5340,6 +5441,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const hiddenManualLockedConversationCount = Math.max(0, prioritizedManualLockedConversations.length - 5);
   const orderDraftByQuoteId = new Map(orderDrafts.map((order) => [order.quoteDraftId, order]));
   const reviewOrderDrafts = dedupeOrdersById([...(reviewCenter.orderDrafts || []), ...orderDrafts]);
+  const highValueReviewOrderDrafts = reviewOrderDrafts.filter((order) => isHighValueOrder(order) && !["fulfilled", "cancelled"].includes(order.status));
   const highValueManualQueueItems = [
     ...jobs
       .filter((job) =>
@@ -5399,8 +5501,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           },
         };
       }),
-    ...reviewOrderDrafts
-      .filter((order) => isHighValueOrder(order) && !["fulfilled", "cancelled"].includes(order.status))
+    ...highValueReviewOrderDrafts
       .map((order) => {
         const step = highValueOrderManualStep(order);
         const action = highValueOrderManualPrimaryAction(order);
@@ -5501,17 +5602,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const automationStateText = automationStatus?.active ? "自动化运行中" : "自动化暂停";
   const queueStateText = pendingSendTaskCount ? `${pendingSendTaskCount} 个待校验发送` : "发送队列空闲";
   const reviewStateText =
-    manualReviewJobCount || manualLockedConversations.length
-      ? `${manualReviewJobCount} 个设计待人工审核 · ${manualLockedConversations.length} 个人工接管`
+    manualReviewJobCount || highValueReviewOrderDrafts.length || manualLockedConversations.length
+      ? `${manualReviewJobCount} 个设计待人工审核 · ${highValueReviewOrderDrafts.length} 个高价值订单 · ${manualLockedConversations.length} 个人工接管`
       : "审核中心空闲";
   const reviewWorkbenchSummary =
     reviewWorkbenchView === "design"
       ? `${reviewCenter.designJobs.length} 个设计待审`
       : reviewWorkbenchView === "quote"
         ? `${reviewCenter.quoteDrafts.length} 个报价待审`
-        : reviewWorkbenchView === "logs"
-          ? `${reviewCenter.logs.length} 条审核记录`
-          : `${manualLockedConversations.length} 个人工接管`;
+        : reviewWorkbenchView === "order"
+          ? `${highValueReviewOrderDrafts.length} 个高价值订单待处理`
+          : reviewWorkbenchView === "logs"
+            ? `${reviewCenter.logs.length} 条审核记录`
+            : `${manualLockedConversations.length} 个人工接管`;
   const automationReadinessPrimaryCheck = getAutomationReadinessPrimaryCheck(automationReadiness);
 
   return (
@@ -6076,6 +6179,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <span>待安全发送</span>
                 </div>
                 <div>
+                  <strong>{wechatChannelStatus?.summary.needsSendAdapter ?? wechatSendAdapterIssueChannels.length}</strong>
+                  <span>待发送器</span>
+                </div>
+                <div>
                   <strong>{wechatChannelStatus?.summary.manualLockedConversations ?? manualLockedConversations.length}</strong>
                   <span>人工接管</span>
                 </div>
@@ -6106,6 +6213,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <em>{wechatChannelStatusLabel(channel.status)}</em>
                         </div>
                         <p>{channel.description}</p>
+                        <div className={`wechat-channel-next-step ${channel.status}`}>
+                          <strong>{wechatChannelStatusLabel(channel.status)}</strong>
+                          <span>{wechatChannelNextStep(channel)}</span>
+                        </div>
                         <div className="wechat-channel-metrics" aria-label={`${channel.label}指标`}>
                           {Object.entries(channel.metrics).slice(0, 4).map(([key, value]) => (
                             <span key={key}>
@@ -6173,6 +6284,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <div className="wechat-visual-readiness" aria-label="通道运行摘要">
                       <span><strong>{wechatChannelStatus?.summary.ready ?? 0}</strong> 已就绪</span>
                       <span><strong>{wechatRuntimeIssueChannels.length}</strong> 待运行</span>
+                      <span><strong>{wechatChannelStatus?.summary.needsSendAdapter ?? wechatSendAdapterIssueChannels.length}</strong> 待发送器</span>
                       <span><strong>{wechatConfigIssueChannels.length}</strong> 待配置</span>
                     </div>
                   </div>
@@ -6192,7 +6304,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               type="button"
                               className={`wechat-lane-card ${channel.status}`}
                               key={channel.key}
-                              onClick={() => setWechatWorkbenchView(channel.status === "needs_config" ? "config" : "channels")}
+                              onClick={() => setWechatWorkbenchView(["needs_config", "needs_send_adapter"].includes(channel.status) ? "config" : "channels")}
                               disabled={Boolean(busy)}
                               aria-label={`${channel.label}：${wechatChannelStatusLabel(channel.status)}`}
                             >
@@ -6355,6 +6467,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
                               <strong>{check.label}</strong>
                               <small>{check.detail}</small>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="wechat-config-runbook" aria-label={`${channel.label}下一步配置`}>
+                          <strong>{wechatChannelNextStep(channel)}</strong>
+                          {wechatChannelSetupRows(channel).map((row) => (
+                            <span className={row.done ? "done" : "todo"} key={row.key}>
+                              <small>{row.label}</small>
+                              <code>{row.key}</code>
                             </span>
                           ))}
                         </div>
@@ -6807,11 +6928,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
-                          <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                            <CreditCard size={16} aria-hidden="true" />订单定金
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "deposit_paid")} disabled={Boolean(busy)}>
+                            <CreditCard size={16} aria-hidden="true" />核验定金并确认
                           </button>
-                            <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { paymentStatus: "paid", status: "confirmed" })} disabled={Boolean(busy)}>
-                              <Check size={16} aria-hidden="true" />订单已付
+                            <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "paid")} disabled={Boolean(busy)}>
+                              <Check size={16} aria-hidden="true" />核验全款并确认
                             </button>
                             <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(activeOrderDraft, { status: "processing" })} disabled={Boolean(busy)}>
                               <PackageSearch size={16} aria-hidden="true" />生产中
@@ -6842,7 +6963,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <Send size={16} aria-hidden="true" />发送报价
                         </button>
                         <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(activeQuote, "deposit_paid")} disabled={Boolean(busy)}>
-                          <CreditCard size={16} aria-hidden="true" />核验定金
+                          <CreditCard size={16} aria-hidden="true" />核验定金并确认
                         </button>
                         <button
                           type="button"
@@ -6863,7 +6984,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <ClipboardList size={16} aria-hidden="true" />{activeOrderDraft ? "更新订单" : "生成订单"}
                         </button>
                         <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(activeQuote, "paid")} disabled={Boolean(busy)}>
-                          <Check size={16} aria-hidden="true" />核验全款
+                          <Check size={16} aria-hidden="true" />核验全款并确认
                         </button>
                         <button type="button" className="ghost danger" onClick={() => updateQuoteDraft(activeQuote, { status: "manual_review", owner: "人工客服" })} disabled={Boolean(busy)}>
                           <ShieldAlert size={16} aria-hidden="true" />人工跟进
@@ -8029,6 +8150,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
               </div>
             ) : null}
+            {noticeWorkbenchView === "history" && lowValueAutomationSkipSummary ? (
+              <div className="automation-skip-summary" aria-label="上一轮自动化跳过原因汇总">
+                <div>
+                  <strong>{lowValueAutomationSkipSummary.title}</strong>
+                  <span>{lowValueAutomationSkipSummary.detail}</span>
+                </div>
+                <div className="automation-skip-grid">
+                  {lowValueAutomationSkipSummary.reasons.map((item) => (
+                    <span className={item.tone} key={item.reason}>
+                      <small>{item.steps}</small>
+                      <b>{item.label} · {item.count}</b>
+                      <em>{item.sampleTargets}</em>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {noticeWorkbenchView === "automation" && lowValueAutomationSummary ? (
               <div className={`automation-summary ${lowValueAutomationSummary.tone}`}>
                 <div>
@@ -8539,11 +8677,42 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               ) : null}
               <div className="sku-change-log">
                 <div className="sku-change-log-head">
-                  <strong>最近商品变更</strong>
-                  <span>记录库存、售价、成本、供应商和上下架变化</span>
+                  <div>
+                    <strong>最近商品变更</strong>
+                    <span>记录库存、售价、成本、供应商和上下架变化</span>
+                  </div>
+                  <button type="button" className="ghost compact-button" onClick={exportSkuChangeLogs} disabled={!visibleSkuChangeLogs.length || Boolean(busy)}>
+                    <Download size={14} aria-hidden="true" />导出变更
+                  </button>
                 </div>
                 {skuChangeLogs.length ? (
-                  skuChangeLogs.slice(0, 6).map((log) => {
+                  <>
+                    <div className="sku-change-filter" role="group" aria-label="商品变更影响筛选">
+                      {skuChangeImpactFilterOptions.map((option) => (
+                        <button
+                          type="button"
+                          className={skuChangeImpactFilter === option.value ? "selected" : ""}
+                          aria-pressed={skuChangeImpactFilter === option.value}
+                          onClick={() => setSkuChangeImpactFilter(option.value)}
+                          disabled={!skuChangeLogs.length}
+                          key={option.value}
+                        >
+                          <span>{option.label}</span>
+                          <strong>{skuChangeImpactFilterCounts[option.value] || 0}</strong>
+                        </button>
+                      ))}
+                    </div>
+                    <label className="sku-change-search">
+                      <Search size={14} aria-hidden="true" />
+                      <input
+                        aria-label="搜索商品变更"
+                        value={skuChangeSearch}
+                        onChange={(event) => setSkuChangeSearch(event.target.value)}
+                        placeholder="搜索 SKU / 商品 / 操作者 / 来源"
+                      />
+                    </label>
+                    {visibleSkuChangeLogs.length ? (
+                  visibleSkuChangeLogs.slice(0, 6).map((log) => {
                     const impact = skuChangeImpactSummary(log);
                     return (
                       <div className={`sku-change-item ${impact.tone}`} key={log.id}>
@@ -8568,6 +8737,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                     );
                   })
+                    ) : (
+                      <div className="empty compact" role="status">
+                        <strong>当前筛选下没有变更</strong>
+                        <span>{skuChangeSearch.trim() ? "换个关键词，或清空搜索查看全部变更。" : "切换筛选项查看其他商品变更影响。"}</span>
+                      </div>
+                    )}
+                  </>
                 ) : (
                 <div className="empty empty-cta compact" role="status">
                   <strong>还没有商品变更</strong>
@@ -8759,7 +8935,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <FileUp size={16} aria-hidden="true" />导入训练
                 </button>
                 <span>已导入 {chatImports.length} 批，训练样本 {trainingSampleTotalCount} 条</span>
-                <button type="button" className="ghost" onClick={() => compileTrainingSkills()} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
+                <button type="button" className="ghost" onClick={compileAllSelectedTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
                   <Brain size={16} aria-hidden="true" />应用全部已选 Skill
                 </button>
               </div>
@@ -9034,8 +9210,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <div>
                     <strong>Skill 进化预览</strong>
                     <span>
-                      当前 {filteredSelectedSkillSuggestionCount} / {filteredSkillSuggestions.length} 条已选，全部已选 {selectedSkillSuggestionCount} 条；
-                      默认高可信 {autoSelectedSkillSuggestionCount} 条，当前需复核 {filteredNeedsReviewSkillSuggestionCount} 条
+                      当前筛选 {filteredSelectedSkillSuggestionCount} / {filteredSkillSuggestions.length} 条已选，全部已选 {selectedSkillSuggestionCount} 条；
+                      当前筛选高可信 {filteredSafeSkillSuggestionCount} 条，当前筛选需复核 {filteredNeedsReviewSkillSuggestionCount} 条
                     </span>
                   </div>
                   <div className="skill-suggestion-controls">
@@ -9063,13 +9239,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       ))}
                     </div>
                     <button type="button" className="ghost compact" onClick={selectAllSkillSuggestions} disabled={Boolean(busy) || !filteredUnselectedSkillSuggestionCount}>
-                      全选当前
+                      全选当前筛选
                     </button>
                     <button type="button" className="ghost compact" onClick={selectSafeSkillSuggestions} disabled={Boolean(busy) || !filteredUnselectedSafeSkillSuggestionCount}>
-                      只选高可信
+                      只选当前筛选高可信
                     </button>
                     <button type="button" className="ghost compact" onClick={clearSkillSuggestions} disabled={Boolean(busy) || !filteredSelectedSkillSuggestionCount}>
-                      清空当前
+                      清空当前筛选
                     </button>
                     <button type="button" className="ghost compact" onClick={clearHiddenSkillSuggestions} disabled={Boolean(busy) || !hiddenSelectedSkillSuggestionCount}>
                       清空其他已选
@@ -9079,7 +9255,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         只应用当前
                       </button>
                     ) : null}
-                    <button type="button" className="primary compact" onClick={() => compileTrainingSkills()} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
+                    <button type="button" className="primary compact" onClick={compileAllSelectedTrainingSkills} disabled={Boolean(busy) || !selectedSkillSuggestionCount}>
                       应用全部已选
                     </button>
                   </div>
@@ -9091,12 +9267,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 ) : filteredSkillSuggestions.length && !filteredSelectedSkillSuggestionCount ? (
                   <div className="training-summary skill-suggestion-hint" role="status">
                     <span>
-                      当前 Agent 没有已选建议；可先用“只选高可信”应用 {filteredUnselectedSafeSkillSuggestionCount} 条，剩余 {filteredNeedsReviewSkillSuggestionCount} 条需人工判断。
+                      当前筛选没有已选建议；可先用“只选当前筛选高可信”应用 {filteredUnselectedSafeSkillSuggestionCount} 条，剩余 {filteredNeedsReviewSkillSuggestionCount} 条需人工判断。
                     </span>
                   </div>
                 ) : filteredUnselectedSkillSuggestionCount ? (
                   <div className="training-summary skill-suggestion-hint" role="status">
-                    <span>当前 Agent 还有 {filteredUnselectedSkillSuggestionCount} 条未选建议，未选项不会进入 Skill。</span>
+                    <span>当前筛选还有 {filteredUnselectedSkillSuggestionCount} 条未选建议，未选项不会进入 Skill。</span>
                   </div>
                 ) : null}
                 {visibleSkillSuggestions.length ? (
@@ -9158,7 +9334,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   </div>
                 )}
                 {filteredSkillSuggestions.length > visibleSkillSuggestions.length ? (
-                  <div className="empty small" role="status">当前 Agent 还有 {filteredSkillSuggestions.length - visibleSkillSuggestions.length} 条建议未展示，可继续分批确认。</div>
+                  <div className="empty small" role="status">当前筛选还有 {filteredSkillSuggestions.length - visibleSkillSuggestions.length} 条建议未展示；“全选当前筛选”会包含这些未展示建议。</div>
                 ) : null}
               </div>
               <div className="coverage-list">
@@ -9673,7 +9849,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   模式 {bridgeModeLabel(bridgeStatus?.worker?.mode)}，回执 {bridgeTransportLabel(bridgeStatus?.worker?.ackTransport)}，最后更新 {bridgeStatus?.worker?.ageSeconds ?? "-"} 秒前
                 </span>
                 <small>
-                  待发送 {bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} 个，回执待扫 {bridgeStatus?.inbox.pendingCount ?? 0} 个，账号锁 {bridgeStatus?.locks.activeCount ?? 0} 个
+                  待发送 {bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} 个，已生成桥接指令 {bridgeStatus?.dispatch?.pendingCount ?? 0} 个，回执待扫 {bridgeStatus?.inbox.pendingCount ?? 0} 个，账号锁 {bridgeStatus?.locks.activeCount ?? 0} 个
                   {bridgeStatus?.locks.staleCount ? `，疑似超时锁 ${bridgeStatus.locks.staleCount} 个` : ""}
                 </small>
                 {bridgeStatus?.worker?.errorMessage || bridgeStatus?.worker?.message ? (
@@ -9898,7 +10074,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <div className="panel-head">
               <div>
                 <h2><ShieldAlert size={17} aria-hidden="true" />人工审核中心</h2>
-                <span>高价值客户、失败任务、超时任务和待审核报价统一处理</span>
+                <span>高价值客户、失败任务、超时任务、待审核报价和订单统一处理</span>
               </div>
               <div className="segmented-control review-view-switcher" role="tablist" aria-label="人工审核中心视图">
                 <button
@@ -9924,6 +10100,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   onClick={() => setReviewWorkbenchView("quote")}
                 >
                   报价审核
+                </button>
+                <button
+                  type="button"
+                  className={reviewWorkbenchView === "order" ? "selected" : ""}
+                  aria-pressed={reviewWorkbenchView === "order"}
+                  onClick={() => setReviewWorkbenchView("order")}
+                >
+                  订单审核
                 </button>
                 <button
                   type="button"
@@ -9957,6 +10141,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   ariaControls="review-center"
                   onClick={() => {
                     setReviewWorkbenchView("quote");
+                    scrollToWorkspaceSection("review-center");
+                  }}
+                />
+                <Metric
+                  icon={<ClipboardList size={20} aria-hidden="true" />}
+                  label="待审订单"
+                  value={highValueReviewOrderDrafts.length}
+                  tone="amber"
+                  ariaControls="review-center"
+                  onClick={() => {
+                    setReviewWorkbenchView("order");
                     scrollToWorkspaceSection("review-center");
                   }}
                 />
@@ -10205,10 +10400,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           >
                             <Check size={16} aria-hidden="true" />通过并入队
                           </button>
-                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid", { queueConfirmation: true })} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy)}>
                             <CreditCard size={16} aria-hidden="true" />定金并确认
                           </button>
-                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "paid", { queueConfirmation: true })} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy)}>
                             <Check size={16} aria-hidden="true" />全款并确认
                           </button>
                           <button type="button" className="ghost" onClick={() => reviewQuoteDraft(quote, "request_followup")} disabled={Boolean(busy)}>
@@ -10241,6 +10436,99 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     </button>
                     <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("quote-center")} disabled={Boolean(busy)}>
                       <ReceiptText size={16} aria-hidden="true" />查看报价区
+                    </button>
+                  </div>
+                </div>
+                  )}
+                </div>
+                <div className="review-list">
+                  <h3><ClipboardList size={16} aria-hidden="true" />订单审核</h3>
+                  {highValueReviewOrderDrafts.length ? (
+                    <>
+                    {highValueReviewOrderDrafts.slice(0, 2).map((order) => {
+                      const action = highValueOrderManualPrimaryAction(order);
+                      const step = highValueOrderManualStep(order);
+                      const followupStatus = orderFollowupStatusText(order);
+                      const latestManualNote = latestHighValueOrderManualNote(order.customerNotes);
+                      return (
+                        <div className={`review-card order ${step.tone}`} key={order.id}>
+                          <button
+                            type="button"
+                            className="review-card-main"
+                            onClick={() => focusOrderDraft(order)}
+                            disabled={Boolean(busy)}
+                            title="定位到这条订单"
+                          >
+                            <strong>{order.customer?.name || order.quoteDraft?.customer?.name || "未知客户"} · {formatMoney(Number(order.totalPrice || 0))} 元</strong>
+                            <p>{order.quantity} 份 · 单价 {formatMoney(Number(order.unitPrice || 0))} 元 · {paymentStatusLabel(order.paymentStatus)} · {orderStatusLabel(order.status)}</p>
+                            <small>{highValueOrderReason(order)}</small>
+                            <small>{step.detail}</small>
+                            {order.owner ? <small>跟进人 {order.owner}</small> : null}
+                            {latestManualNote ? <small>{latestManualNote}</small> : null}
+                            {order.confirmationSendTask ? <small>确认发送 {sendStatusLabel(order.confirmationSendTask.status)}</small> : null}
+                            {followupStatus ? <small>{followupStatus}</small> : null}
+                          </button>
+                          <div className="review-actions">
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => focusOrderDraft(order)}
+                              disabled={Boolean(busy)}
+                            >
+                              <Search size={16} aria-hidden="true" />定位订单
+                            </button>
+                            <button
+                              type="button"
+                              className="primary"
+                              onClick={() => reviewOrderDraft(order, "approve_confirmation")}
+                              disabled={Boolean(busy) || action.type !== "queue_confirmation"}
+                              title={action.type !== "queue_confirmation" ? action.label : "人工审核订单确认并进入微信安全发送队列"}
+                            >
+                              <Check size={16} aria-hidden="true" />审核发确认
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => reviewOrderDraft(order, "approve_followup", "delivery")}
+                              disabled={Boolean(busy) || action.type !== "queue_delivery"}
+                              title={action.type !== "queue_delivery" ? action.label : "人工审核交期说明并进入微信安全发送队列"}
+                            >
+                              <MessageCircle size={16} aria-hidden="true" />审核发交期
+                            </button>
+                            <button type="button" className="ghost" onClick={() => reviewOrderDraft(order, "request_followup")} disabled={Boolean(busy)}>
+                              <ShieldAlert size={16} aria-hidden="true" />继续跟进
+                            </button>
+                            <button type="button" className="ghost" onClick={() => recordHighValueOrderManualFollowup(order)} disabled={Boolean(busy)}>
+                              <ClipboardList size={16} aria-hidden="true" />记录跟进
+                            </button>
+                            <button type="button" className="ghost danger" onClick={() => reviewOrderDraft(order, "reject_order")} disabled={Boolean(busy)}>
+                              <Ban size={16} aria-hidden="true" />驳回订单
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {highValueReviewOrderDrafts.length > 2 ? (
+                      <button
+                        type="button"
+                        className="review-list-more"
+                        onClick={() => scrollToWorkspaceSection("quote-center")}
+                        disabled={Boolean(busy)}
+                      >
+                        还有 {highValueReviewOrderDrafts.length - 2} 个高价值订单，请进入订单区连续处理
+                      </button>
+                    ) : null}
+                    </>
+                  ) : (
+                <div className="empty empty-cta" role="status">
+                  <strong>暂无待审核订单</strong>
+                  <span>客户选图并生成高价值订单草稿后，这里会出现可发确认、发交期、跟进或驳回的订单卡片。</span>
+                  <div className="empty-actions">
+                    <button type="button" className="primary" onClick={() => scrollToWorkspaceSection("quote-center")} disabled={Boolean(busy)}>
+                      <ClipboardList size={16} aria-hidden="true" />查看订单区
+                    </button>
+                    <button type="button" className="ghost" onClick={createDemo} disabled={Boolean(busy)}>
+                      <Boxes size={16} aria-hidden="true" />新建演示任务
                     </button>
                   </div>
                 </div>
@@ -10628,7 +10916,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <Send size={16} aria-hidden="true" />发送报价
                         </button>
                         <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy)}>
-                          <CreditCard size={16} aria-hidden="true" />核验定金
+                          <CreditCard size={16} aria-hidden="true" />核验定金并确认
                         </button>
                         {orderDraft ? (
                           <button type="button" className="ghost" onClick={() => focusOrderDraft(orderDraft)} disabled={Boolean(busy)} title="只显示这条报价和对应订单">
@@ -10639,7 +10927,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <ClipboardList size={16} aria-hidden="true" />{orderDraft ? "更新订单" : "生成订单"}
                         </button>
                         <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy)}>
-                          <Check size={16} aria-hidden="true" />核验全款
+                          <Check size={16} aria-hidden="true" />核验全款并确认
                         </button>
                         <button type="button" className="ghost danger" onClick={() => updateQuoteDraft(quote, { status: "manual_review", owner: "人工客服" })} disabled={Boolean(busy)}>
                           <ShieldAlert size={16} aria-hidden="true" />人工跟进
@@ -10797,11 +11085,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
-                          <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { paymentStatus: "deposit_paid" })} disabled={Boolean(busy)}>
-                            <CreditCard size={16} aria-hidden="true" />定金
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "deposit_paid")} disabled={Boolean(busy)}>
+                            <CreditCard size={16} aria-hidden="true" />核验定金并确认
                           </button>
-                          <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { paymentStatus: "paid", status: "confirmed" })} disabled={Boolean(busy)}>
-                            <Check size={16} aria-hidden="true" />已付
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "paid")} disabled={Boolean(busy)}>
+                            <Check size={16} aria-hidden="true" />核验全款并确认
                           </button>
                           <button type="button" className="ghost" onClick={() => updateOrderDraftStatus(order, { status: "processing" })} disabled={Boolean(busy)}>
                             <PackageSearch size={16} aria-hidden="true" />生产中
@@ -11489,6 +11777,20 @@ type AutomationRunHistoryItem = {
   tone: "ok" | "warning" | "error";
 };
 
+type AutomationSkipSummaryPanel = {
+  total: number;
+  title: string;
+  detail: string;
+  reasons: Array<{
+    reason: string;
+    label: string;
+    count: number;
+    steps: string;
+    sampleTargets: string;
+    tone: "ok" | "warning" | "error";
+  }>;
+};
+
 const LOW_VALUE_NORMAL_SKIP_REASONS = new Set([
   "already_queued",
   "already_has_order_draft",
@@ -11658,7 +11960,7 @@ function buildAutomationStepInsight(run?: AutomationRun | null): AutomationStepI
   const totalStepDuration = steps.reduce((sum, step) => sum + Math.max(0, step.durationMs), 0);
   const slowestLabel = automationStepLabel(slowestStep.step);
   const slowestDuration = formatDurationValue(slowestStep.durationMs);
-  const tone = failedSteps.length ? "error" : slowestStep.durationMs >= 3000 ? "warning" : "ok";
+  const tone: AutomationStepInsight["tone"] = failedSteps.length ? "error" : slowestStep.durationMs >= 3000 ? "warning" : "ok";
   const title = failedSteps.length
     ? `${automationStepLabel(failedSteps[0].step)}执行失败`
     : slowestStep.durationMs >= 3000
@@ -11703,6 +12005,26 @@ function automationIdentityWarningLabel(reason: string, fields: string[] = []) {
   }
   if (reason === "missing_identity") return "缺少账号/会话身份";
   return reason || "身份审计警告";
+}
+
+function buildAutomationSkipSummaryPanel(run?: AutomationRun | null): AutomationSkipSummaryPanel | null {
+  const summary = run?.skipSummary;
+  if (!summary || !summary.total || !summary.reasons?.length) return null;
+  const topReason = summary.reasons[0];
+  const reasons = summary.reasons.slice(0, 4).map((item) => ({
+    reason: item.reason,
+    label: lowValueReasonLabel(item.reason),
+    count: item.count,
+    steps: item.steps?.map(automationStepLabel).join("、") || "未定位步骤",
+    sampleTargets: item.sampleTargets?.slice(0, 3).join("、") || "无样例",
+    tone: (LOW_VALUE_NORMAL_SKIP_REASONS.has(item.reason) ? "ok" : lowValueIssueTone(item.reason)) as "error" | "warning" | "ok",
+  }));
+  return {
+    total: summary.total,
+    title: `上一轮跳过 ${summary.total} 项`,
+    detail: `主要原因：${lowValueReasonLabel(topReason.reason)} ${topReason.count} 项。`,
+    reasons,
+  };
 }
 
 function identityFieldLabel(field: string) {
@@ -12656,9 +12978,47 @@ function wechatChannelStatusLabel(status: string) {
   const labels: Record<string, string> = {
     ready: "已就绪",
     needs_runtime: "需运行",
+    needs_send_adapter: "待发送器",
     needs_config: "待配置",
   };
   return labels[status] || status;
+}
+
+function wechatChannelCheckPassed(channel: WechatChannelStatusItem, key: string) {
+  return Boolean(channel.checks.find((check) => check.key === key)?.passed);
+}
+
+function wechatChannelNextStep(channel: WechatChannelStatusItem) {
+  if (channel.status === "ready") return "通道已通过当前本地检查，继续在智能客服管线里处理消息、路由和发送队列。";
+  if (channel.status === "needs_runtime") return "先启动本机窗口观察器和 Windows 文件桥接 worker，再刷新通道状态。";
+  if (channel.status === "needs_send_adapter") return "观察和文件桥接已就绪；启用真实 Windows 发送桥接器并等待回执后，才能标记为真实发送。";
+  if (channel.key === "work_wechat") return "补齐企业微信应用凭证和回调 Token，再用入站演练验证消息进入同一套客服管线。";
+  if (channel.key === "mini_program") return "补齐微信小程序 AppID 和消息 Token，再用入站演练验证客服消息进入会话和路由。";
+  return "补齐账号、运行状态或凭证后刷新状态。";
+}
+
+function wechatChannelSetupRows(channel: WechatChannelStatusItem) {
+  if (channel.key === "personal_wechat") {
+    return [
+      { key: "npm.cmd run wechat:safe:start", label: "观察器/桥接 worker", done: wechatChannelCheckPassed(channel, "window_observer") && wechatChannelCheckPassed(channel, "windows_bridge") },
+      { key: "WECHAT_SEND_ADAPTER=windows_bridge", label: "真实发送适配器", done: wechatChannelCheckPassed(channel, "safe_send_queue") },
+      { key: channel.entrypoints.send || "/api/wechat/send-tasks/:id/execute", label: "安全发送入口", done: true },
+    ];
+  }
+  if (channel.key === "work_wechat") {
+    return [
+      { key: "WECHAT_WORK_CORP_ID", label: "企业 ID", done: wechatChannelCheckPassed(channel, "corp_id") },
+      { key: "WECHAT_WORK_AGENT_ID", label: "应用 Agent", done: wechatChannelCheckPassed(channel, "agent_id") },
+      { key: "WECHAT_WORK_TOKEN", label: "回调 Token", done: wechatChannelCheckPassed(channel, "callback_token") },
+      { key: channel.entrypoints.inbound || "/api/wechat/inbound/messages", label: "统一入站入口", done: wechatChannelCheckPassed(channel, "normalized_inbound") },
+    ];
+  }
+  return [
+    { key: "WECHAT_MINI_APP_ID", label: "小程序 AppID", done: wechatChannelCheckPassed(channel, "app_id") },
+    { key: "WECHAT_MINI_TOKEN", label: "消息 Token", done: wechatChannelCheckPassed(channel, "callback_token") },
+    { key: channel.entrypoints.inbound || "/api/wechat/inbound/messages", label: "统一入站入口", done: wechatChannelCheckPassed(channel, "normalized_inbound") },
+    { key: channel.entrypoints.safeSend || "/api/wechat/send-tasks", label: "客服发送队列", done: wechatChannelCheckPassed(channel, "safe_send_queue") },
+  ];
 }
 
 function wechatChannelKindLabel(kind: string) {
@@ -13262,6 +13622,45 @@ function skuChangeImpactSummary(log: SkuChangeLog) {
   };
 }
 
+function skuChangeImpactMatchesFilter(log: SkuChangeLog, filter: string) {
+  if (filter === "all") return true;
+  const impact = skuChangeImpactSummary(log);
+  if (filter === "active") return impact.tone === "active" || impact.tone === "inactive";
+  return impact.tone === filter;
+}
+
+function skuChangeMatchesSearch(log: SkuChangeLog, query: string) {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) return true;
+  const impact = skuChangeImpactSummary(log);
+  const changedFieldText = (log.changedFields || [])
+    .map((field) =>
+      [
+        field.field,
+        skuFieldLabel(field.field),
+        formatSkuFieldValue(field.before),
+        formatSkuFieldValue(field.after),
+      ].join(" "),
+    )
+    .join(" ");
+  return [
+    log.skuCode,
+    log.name,
+    log.action,
+    skuChangeActionLabel(log.action),
+    log.source,
+    log.operator,
+    log.reason,
+    impact.label,
+    impact.detail,
+    impact.nextAction,
+    changedFieldText,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(keyword);
+}
+
 function isStaleLocalDesignFileUrl(src?: string | null) {
   if (!src) return false;
   try {
@@ -13635,6 +14034,7 @@ function quoteSendBlockReason(quote: QuoteDraft, previewWarnings: string[] = [],
   if (!warnings.length) {
     if (quote.sendTaskId) warnings.push("已进入发送队列");
     if (!quote.selectedImageId) warnings.push("还没有选图");
+    if (quoteNeedsPaymentProofReview(quote)) warnings.push("付款凭证需要先人工核验金额和收款账户");
     if (quote.status === "manual_review" && !options.allowManualReview) warnings.push("正在等待人工审核");
     if (isHighValueQuote(quote) && !options.allowManualReview) warnings.push("达到高价值线，需要人工批准");
     if (Number(quote.profit || 0) < 0) warnings.push("利润为负，需要人工确认");
@@ -13903,6 +14303,30 @@ function highValueOrderManualPrimaryAction(order: OrderDraft): { type: "focus" |
   if (!hasActiveOrderConfirmationTask(order)) return { type: "queue_confirmation", label: "核验并发确认" };
   if (order.status === "processing") return { type: "queue_delivery", label: "发交期说明" };
   return { type: "focus", label: "跟订单" };
+}
+
+function buildHighValueOrderManualNote(input: { note: string; nextFollowAt?: string; reviewer: string; stepLabel: string }) {
+  const parts = [
+    `[高价值订单人工跟进] ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `处理人：${input.reviewer}`,
+    `阶段：${input.stepLabel}`,
+    `结果：${input.note}`,
+  ];
+  if (input.nextFollowAt) parts.push(`下次跟进：${input.nextFollowAt}`);
+  return parts.join("；");
+}
+
+function appendOrderCustomerNotes(current: string | undefined | null, entry: string) {
+  const existing = String(current || "").trim();
+  return existing ? `${existing}\n${entry}` : entry;
+}
+
+function latestHighValueOrderManualNote(notes?: string | null) {
+  const lines = String(notes || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return [...lines].reverse().find((line) => line.includes("[高价值订单人工跟进]")) || lines[lines.length - 1] || "";
 }
 
 function dedupeOrdersById(orders: OrderDraft[]) {
