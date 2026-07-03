@@ -76,6 +76,7 @@ async function main() {
       status: "starting",
       startedAt: new Date().toISOString(),
     };
+    writeWorkerStartingStatus(service, pid);
     writeRecords(records);
     console.log(`[start] ${service.label} pid=${pid}`);
   }
@@ -225,6 +226,7 @@ function windowsWorkerEnv(service) {
 
 function stopWorkers() {
   const records = readRecords();
+  const failures = [];
   for (const service of services) {
     const record = records[service.name];
     const pid = Number(record?.pid);
@@ -233,11 +235,19 @@ function stopWorkers() {
       console.log(`[skip] ${service.label} is not running`);
       continue;
     }
-    stopPid(pid);
-    delete records[service.name];
-    console.log(`[stop] ${service.label} pid=${pid}`);
+    try {
+      stopPid(pid);
+      delete records[service.name];
+      console.log(`[stop] ${service.label} pid=${pid}`);
+    } catch (error) {
+      failures.push(`${service.label} pid=${pid}: ${error.message}`);
+      console.log(`[warn] ${service.label} pid=${pid} stop failed: ${singleLine(error.message)}`);
+    }
   }
   writeRecords(records);
+  if (failures.length) {
+    throw new Error(`Some WeChat safe workers could not be stopped: ${failures.map(singleLine).join("; ")}`);
+  }
 }
 
 function printStatus() {
@@ -247,7 +257,16 @@ function printStatus() {
     const status = readJson(service.statusFile);
     const running = isProcessRunning(pid);
     const lastStatus = status.status || "no_status";
-    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}`);
+    const statusPid = Number(status.pid);
+    const ok = Object.hasOwn(status, "ok") ? ` ok=${status.ok === true}` : "";
+    const failedCount = Number(status.result?.failedCount);
+    const failed = Number.isFinite(failedCount) && failedCount > 0 ? ` failed=${failedCount}` : "";
+    const stale = running && Number.isFinite(statusPid) && statusPid > 0 && statusPid !== pid
+      ? ` staleStatusPid=${statusPid}`
+      : "";
+    const message = singleLine(status.errorMessage || status.message || "");
+    const detail = message ? ` message=${message.slice(0, 160)}` : "";
+    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}${ok}${failed}${stale}${detail}`);
   }
 }
 
@@ -319,12 +338,29 @@ function writeRecords(records) {
   fs.writeFileSync(pidFile, `${JSON.stringify(records, null, 2)}\n`, "utf8");
 }
 
+function writeWorkerStartingStatus(service, pid) {
+  if (!service.statusFile) return;
+  const status = {
+    ok: false,
+    status: "starting",
+    pid,
+    startedAt: new Date().toISOString(),
+    message: `${service.label} started and is waiting for the first successful cycle.`,
+  };
+  fs.mkdirSync(path.dirname(service.statusFile), { recursive: true });
+  fs.writeFileSync(service.statusFile, `${JSON.stringify(status, null, 2)}\n`, "utf8");
+}
+
 function readJson(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, ""));
   } catch {
     return {};
   }
+}
+
+function singleLine(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function numberEnv(name, fallback) {

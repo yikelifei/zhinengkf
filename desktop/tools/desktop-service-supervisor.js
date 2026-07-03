@@ -16,10 +16,12 @@ const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
+const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const launcherLog = path.join(logsDir, realDesignMode ? "launcher-real.log" : "launcher-mock.log");
 const launcherCmd = path.join(runtimeDir, realDesignMode ? "supervise-real.cmd" : "supervise-mock.cmd");
 const legacyLauncherCmd = path.join(runtimeDir, realDesignMode ? "launch-real.cmd" : "launch-mock.cmd");
 const stableLauncherCmd = path.join(runtimeDir, realDesignMode ? "stable-supervise-real.cmd" : "stable-supervise-mock.cmd");
+const supervisorChildCmd = path.join(runtimeDir, realDesignMode ? "supervisor-child-real.cmd" : "supervisor-child-mock.cmd");
 const conflictingLauncherCmd = path.join(runtimeDir, realDesignMode ? "supervise-mock.cmd" : "supervise-real.cmd");
 const legacyConflictingLauncherCmd = path.join(runtimeDir, realDesignMode ? "launch-mock.cmd" : "launch-real.cmd");
 const stableConflictingLauncherCmd = path.join(
@@ -51,13 +53,39 @@ function main() {
     return;
   }
 
-  const detachedSupervisorChild = spawnSupervisorChildDetached();
-  if (detachedSupervisorChild.pid) {
-    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${detachedSupervisorChild.pid}`);
+  const supervisorCommandLine = buildSupervisorCommandLine();
+  const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
+  if (supervisorCreateResult.status === 0) {
+    const pid = String(supervisorCreateResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
     return;
   }
 
-  appendLog(launcherLog, `[supervisor] detached node supervisor skipped: ${detachedSupervisorChild.error || "failed"}`);
+  appendLog(
+    launcherLog,
+    `[supervisor] Win32_Process node supervisor skipped: ${String(
+      supervisorCreateResult.stderr || supervisorCreateResult.stdout || supervisorCreateResult.error || "failed",
+    ).trim()}`,
+  );
+
+  const scheduledSupervisorResult = startSupervisorChildScheduled();
+  if (scheduledSupervisorResult.status === 0) {
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=scheduled`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] scheduled supervisor skipped: ${String(
+      scheduledSupervisorResult.stderr || scheduledSupervisorResult.stdout || scheduledSupervisorResult.error || "failed",
+    ).trim()}`,
+  );
+
+  if (!nonDurableSupervisorFallbackAllowed()) {
+    throw new Error(
+      "Durable Windows supervisor launch failed. Run run_desktop_real_design.bat for foreground mode, or set ALLOW_NON_DURABLE_SUPERVISOR_FALLBACK=1 only for local debugging.",
+    );
+  }
 
   const supervisorChildResult = startSupervisorChild();
   if (supervisorChildResult.status === 0) {
@@ -73,22 +101,14 @@ function main() {
     ).trim()}`,
   );
 
-  const supervisorCommandLine = `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
-    realDesignMode ? "--real-design" : "--mock-design",
-  )} ${cmdQuote("--supervisor-child")}`;
-  const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
-  if (supervisorCreateResult.status === 0) {
-    const pid = String(supervisorCreateResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
+  const launcherResult = startLauncherProcess(launcherCmd);
+  if (launcherResult.status === 0) {
+    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
     return;
   }
 
-  appendLog(
-    launcherLog,
-    `[supervisor] Win32_Process node supervisor skipped: ${String(
-      supervisorCreateResult.stderr || supervisorCreateResult.stdout || supervisorCreateResult.error || "failed",
-    ).trim()}`,
-  );
+  appendLog(launcherLog, `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`);
 
   const launcherCommandLine = `cmd.exe /d /c ${cmdQuote(launcherCmd)}`;
   const launcherCreateResult = createWindowsProcess(launcherCommandLine);
@@ -105,14 +125,26 @@ function main() {
     ).trim()}`,
   );
 
-  const launcherResult = spawnSync(
+  const detachedSupervisorChild = spawnSupervisorChildDetached();
+  if (detachedSupervisorChild.pid) {
+    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${detachedSupervisorChild.pid}`);
+    return;
+  }
+
+  appendLog(launcherLog, `[supervisor] detached node supervisor skipped: ${detachedSupervisorChild.error || "failed"}`);
+
+  throw new Error("failed to launch desktop services");
+}
+
+function startLauncherProcess(filePath) {
+  return spawnSync(
     "powershell.exe",
     [
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      `$process = Start-Process -FilePath ${psQuote(launcherCmd)} -WorkingDirectory ${psQuote(process.cwd())} -WindowStyle Hidden -PassThru; $process.Id`,
+      `$process = Start-Process -FilePath ${psQuote(filePath)} -WorkingDirectory ${psQuote(process.cwd())} -WindowStyle Hidden -PassThru; $process.Id`,
     ],
     {
       cwd: process.cwd(),
@@ -121,15 +153,6 @@ function main() {
       windowsHide: true,
     },
   );
-  if (launcherResult.status === 0) {
-    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
-    return;
-  }
-
-  appendLog(launcherLog, `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`);
-
-  throw new Error("failed to launch desktop services");
 }
 
 function spawnSupervisorChildDetached() {
@@ -175,6 +198,54 @@ function createWindowsProcess(commandLine) {
   });
 }
 
+function startSupervisorChildScheduled() {
+  writeSupervisorChildCmd();
+  const taskName = `zhinengkefu_desktop_supervisor_${realDesignMode ? "real" : "mock"}`;
+  const startTime = scheduledTaskStartTime();
+  const taskArgument = `/d /c \\"${supervisorChildCmd}\\"`;
+  const createScript = [
+    `$taskName = ${psQuote(taskName)}`,
+    `$action = New-ScheduledTaskAction -Execute ${psQuote("cmd.exe")} -Argument ${psQuote(taskArgument)}`,
+    `$trigger = New-ScheduledTaskTrigger -Once -At ${psQuote(startTime)}`,
+    "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force | Out-Null",
+  ].join("; ");
+  const createResult = spawnPowerShell(createScript);
+  if (createResult.status !== 0) {
+    createResult.stderr = `create failed taskArgument=${taskArgument}\n${createResult.stderr || createResult.stdout || ""}`;
+    return createResult;
+  }
+
+  const runResult = spawnPowerShell(`Start-ScheduledTask -TaskName ${psQuote(taskName)}`);
+  if (runResult.status === 0) sleep(2000);
+  if (runResult.status !== 0) {
+    runResult.stderr = `run failed taskArgument=${taskArgument}\n${runResult.stderr || runResult.stdout || ""}`;
+    return runResult;
+  }
+  const deleteResult = spawnPowerShell(`Unregister-ScheduledTask -TaskName ${psQuote(taskName)} -Confirm:$false`);
+  if (deleteResult.status !== 0) {
+    appendLog(launcherLog, `[supervisor] scheduled task cleanup skipped: ${String(deleteResult.stderr || deleteResult.stdout).trim()}`);
+  }
+  return runResult;
+}
+
+function spawnPowerShell(script) {
+  return spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+}
+
+function nonDurableSupervisorFallbackAllowed() {
+  return process.env.ALLOW_NON_DURABLE_SUPERVISOR_FALLBACK === "1";
+}
+
+function scheduledTaskStartTime() {
+  const date = new Date(Date.now() + 60_000);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function startSupervisorChild() {
   const childArgs = [
     "tools/desktop-service-supervisor.js",
@@ -201,6 +272,30 @@ function startSupervisorChild() {
   );
 }
 
+function buildSupervisorCommandLine() {
+  writeSupervisorChildCmd();
+  return `cmd.exe /d /c ${cmdQuote(supervisorChildCmd)}`;
+}
+
+function writeSupervisorChildCmd() {
+  const envLines = [
+    ...launcherModeEnv(),
+    ...launcherEnvKeys()
+      .filter((key) => process.env[key] !== undefined)
+      .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
+  ];
+  const lines = [
+    "@echo off",
+    "setlocal",
+    `cd /d ${cmdQuote(process.cwd())}`,
+    ...envLines,
+    `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
+      realDesignMode ? "--real-design" : "--mock-design",
+    )} ${cmdQuote("--supervisor-child")} >> ${cmdQuote(launcherLog)} 2>>&1`,
+  ];
+  fs.writeFileSync(supervisorChildCmd, `${lines.join("\r\n")}\r\n`, "utf8");
+}
+
 function runSupervisorLoop() {
   assertModeSwitchAllowed();
   updateMockModeLock();
@@ -210,16 +305,21 @@ function runSupervisorLoop() {
   appendLog(launcherLog, `[supervisor] persistent ${realDesignMode ? "real" : "mock"} supervisor started pid=${process.pid}`);
   for (;;) {
     assertModeSwitchAllowed();
-    const stdout = fs.openSync(launcherLog, "a");
-    const stderr = fs.openSync(launcherLog, "a");
+    const stdout = openLauncherLogForAppend("stdout");
+    const stderr = openLauncherLogForAppend("stderr");
     const result = spawnSync(process.execPath, modeArgs, {
       cwd: process.cwd(),
       env: process.env,
       stdio: ["ignore", stdout, stderr],
       windowsHide: true,
     });
-    fs.closeSync(stdout);
-    fs.closeSync(stderr);
+    closeLogFd(stdout);
+    closeLogFd(stderr);
+    if (result.status === 0) {
+      appendLog(launcherLog, `[${new Date().toISOString()}] start-dev-ports exited with 0, continuing supervision`);
+      sleep(2000);
+      continue;
+    }
     appendLog(launcherLog, `[${new Date().toISOString()}] start-dev-ports exited with ${result.status ?? "unknown"}, restarting`);
     sleep(2000);
   }
@@ -227,7 +327,20 @@ function runSupervisorLoop() {
 
 function setModeEnv() {
   if (realDesignMode) {
+    if (process.env.ALLOW_REAL_DESIGN_START !== "1" || process.env.CONFIRM_REAL_DESIGN_SWITCH !== "1") {
+      throw new Error(
+        "Real design supervisor must be launched through npm.cmd run ports:launch:real so stale real supervisors cannot steal the default mock startup.",
+      );
+    }
+    if (mockRepairLockIsFresh()) {
+      throw new Error("Real design supervisor is blocked because default mock startup repair is in progress.");
+    }
+    if (mockRuntimeStateIsActive()) {
+      throw new Error("Real design supervisor is blocked because mock design mode is active.");
+    }
     process.env.ALLOW_REAL_DESIGN_START = "1";
+    process.env.ALLOW_REAL_DESIGN_LAUNCH = "1";
+    process.env.CONFIRM_REAL_DESIGN_SWITCH = "1";
     return;
   }
   process.env.DESIGN_PLATFORM_ADAPTER = "standard_v1";
@@ -246,6 +359,9 @@ function assertModeSwitchAllowed() {
     );
   }
   if (!realDesignMode) return;
+  if (mockRuntimeStateIsActive()) {
+    throw new Error("Real design launch is blocked because mock design mode is active. Run npm.cmd run ports:stop before switching to real design mode.");
+  }
   if (!fs.existsSync(mockModeLockFile)) return;
   if (mockModeLockIsStaleForRealStart()) {
     fs.rmSync(mockModeLockFile, { force: true });
@@ -255,6 +371,27 @@ function assertModeSwitchAllowed() {
   throw new Error(
     `Real design launch is blocked because mock mode is locked at ${mockModeLockFile}. Run npm.cmd run ports:stop before switching to real design mode.`,
   );
+}
+
+function mockRuntimeStateIsActive() {
+  return fs.existsSync(mockModeLockFile) || runtimeConfigLooksMockDesignMode() || preferredDesignModeIsMock();
+}
+
+function runtimeConfigLooksMockDesignMode() {
+  try {
+    const config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
+    return config?.designPlatformAdapter === "standard_v1";
+  } catch {
+    return false;
+  }
+}
+
+function preferredDesignModeIsMock() {
+  try {
+    return JSON.parse(fs.readFileSync(preferredDesignModeFile, "utf8"))?.mode === "mock";
+  } catch {
+    return false;
+  }
 }
 
 function stopConflictingDesktopServices() {
@@ -271,6 +408,7 @@ function stopConflictingDesktopServices() {
       PORTS_STACK_STARTER_PARENT_PID: String(process.ppid),
       PORTS_STACK_STARTER_MODE: realDesignMode ? "real" : "mock",
       PRESERVE_REAL_MODE_LOCK: realDesignMode ? "1" : "",
+      PRESERVE_MOCK_REPAIR_LOCK: mockRepairLockIsFresh() ? "1" : "",
       FORCE_PORTS_SWEEP: "1",
     },
     encoding: "utf8",
@@ -371,6 +509,15 @@ function preferredDesignModeIsReal() {
   }
 }
 
+function mockRepairLockIsFresh() {
+  try {
+    const updatedAt = Date.parse(fs.readFileSync(mockRepairLockFile, "utf8").trim());
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= 10 * 60_000;
+  } catch {
+    return false;
+  }
+}
+
 function updateMockModeLock() {
   if (realDesignMode) return;
   fs.writeFileSync(mockModeLockFile, `${new Date().toISOString()}\n`, "utf8");
@@ -436,6 +583,7 @@ function buildLauncherCmd() {
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
     ":restart",
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
+    `if %ERRORLEVEL% EQU 0 echo [%date% %time%] start-dev-ports exited with 0, continuing supervision >> ${cmdQuote(launcherLog)}`,
     `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,
     "timeout /t 2 /nobreak >nul",
     "goto restart",
@@ -459,7 +607,13 @@ function launcherEnvKeys() {
 }
 
 function launcherModeEnv() {
-  if (realDesignMode) return [`set ${cmdSetArg("ALLOW_REAL_DESIGN_START", "1")}`];
+  if (realDesignMode) {
+    return [
+      `set ${cmdSetArg("ALLOW_REAL_DESIGN_START", "1")}`,
+      `set ${cmdSetArg("ALLOW_REAL_DESIGN_LAUNCH", "1")}`,
+      `set ${cmdSetArg("CONFIRM_REAL_DESIGN_SWITCH", "1")}`,
+    ];
+  }
   return [
     `set ${cmdSetArg("DESIGN_PLATFORM_ADAPTER", "standard_v1")}`,
     `set ${cmdSetArg("DESIGN_PLATFORM_BASE_URL", "http://127.0.0.1:3700")}`,
@@ -499,6 +653,33 @@ function appendLog(filePath, line) {
     fs.appendFileSync(filePath, `${line}\n`, "utf8");
   } catch {
     // Logging must not block service startup.
+  }
+}
+
+function openLauncherLogForAppend(streamName) {
+  try {
+    return fs.openSync(launcherLog, "a");
+  } catch (error) {
+    if (error?.code !== "EPERM" && error?.code !== "EBUSY") throw error;
+    const fallbackPath = path.join(
+      logsDir,
+      `${path.basename(launcherLog, ".log")}.supervisor-${process.pid}-${streamName}.log`,
+    );
+    appendLog(fallbackPath, `[supervisor] launcher log was locked; using fallback log for ${streamName}: ${launcherLog}`);
+    try {
+      return fs.openSync(fallbackPath, "a");
+    } catch {
+      return "ignore";
+    }
+  }
+}
+
+function closeLogFd(value) {
+  if (typeof value !== "number") return;
+  try {
+    fs.closeSync(value);
+  } catch {
+    // Closing a diagnostic log must not stop supervision.
   }
 }
 

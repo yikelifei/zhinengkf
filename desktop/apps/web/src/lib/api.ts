@@ -761,6 +761,9 @@ export type BridgeInboxScanResult = {
 
 export type WindowSnapshotInboxScanResult = {
   scanned: number;
+  total?: number;
+  pending?: number;
+  limit?: number;
   processed: Array<{
     fileName: string;
     modifiedAt: string;
@@ -886,8 +889,12 @@ export type WindowObserverStatus = {
     confidence?: number;
     processName?: string;
     processId?: number | null;
+    scanScanned?: number | null;
     scanProcessed?: number | null;
     scanFailed?: number | null;
+    scanPending?: number | null;
+    scanTotal?: number | null;
+    scanLimit?: number | null;
   } | null;
 };
 
@@ -1168,6 +1175,7 @@ export type ReviewLog = {
 export type ReviewCenter = {
   designJobs: DesignJob[];
   quoteDrafts: QuoteDraft[];
+  orderDrafts: OrderDraft[];
   logs: ReviewLog[];
 };
 
@@ -1305,7 +1313,7 @@ export type UploadAssetPayload = {
   url?: string;
 } & IdentityExpectation;
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:3200/api";
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "/api").replace(/\/$/, "");
 const WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS = [300, 700, 1200, 2000, 3200];
 
 export type IdentityFilters = {
@@ -1318,6 +1326,13 @@ export type IdentityExpectation = {
   expectedWechatAccountId?: string;
   expectedConversationId?: string;
   expectedCustomerId?: string;
+};
+
+export type ManualReleaseOptions = {
+  releaseManualLock?: boolean;
+  releaseReason?: string;
+  reason?: string;
+  note?: string;
 };
 
 function sleepApi(ms: number) {
@@ -1369,6 +1384,15 @@ function identityQuery(filters: IdentityFilters = {}) {
   if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
   if (filters.conversationId) params.set("conversationId", filters.conversationId);
   if (filters.customerId) params.set("customerId", filters.customerId);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function expectedIdentityQuery(expected: IdentityExpectation = {}) {
+  const params = new URLSearchParams();
+  if (expected.expectedWechatAccountId) params.set("wechatAccountId", expected.expectedWechatAccountId);
+  if (expected.expectedConversationId) params.set("conversationId", expected.expectedConversationId);
+  if (expected.expectedCustomerId) params.set("customerId", expected.expectedCustomerId);
   const query = params.toString();
   return query ? `?${query}` : "";
 }
@@ -1427,12 +1451,14 @@ export async function uploadAsset(payload: UploadAssetPayload): Promise<DesignAs
   return postJson<DesignAsset>("/assets/upload", payload);
 }
 
-export function localAssetUrl(localPath?: string): string {
+export function localAssetUrl(localPath?: string, expected: IdentityExpectation = {}): string {
   const value = String(localPath || "").trim();
   if (!value) return "";
   if (/^https?:\/\//i.test(value) || value.startsWith("data:")) return value;
   if (!/[\\/]storage[\\/]assets[\\/]/i.test(value)) return "";
-  return `${API_BASE}/assets/local-file?path=${encodeURIComponent(value)}`;
+  const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
+  params.set("path", value);
+  return `${API_BASE}/assets/local-file?${params.toString()}`;
 }
 
 export async function createDemoCustomerLogo(customerId: string, expected: IdentityExpectation = {}): Promise<DesignAsset> {
@@ -1691,7 +1717,7 @@ export async function testWechatChannelInbound(
     conversationId?: string;
     customerId?: string;
     text?: string;
-  },
+  } & IdentityExpectation,
 ): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>(`/wechat/channels/${channel}/inbound/test`, payload);
 }
@@ -1731,8 +1757,10 @@ export async function createDemoWindowSnapshot(
   mode: "correct" | "wrong_chat" | "offline",
   wechatAccountId: string,
   conversationId: string,
+  expected: IdentityExpectation = {},
 ): Promise<WechatWindowSnapshot> {
   return postJson<WechatWindowSnapshot>("/wechat/window-snapshots/demo", {
+    ...expected,
     mode,
     wechatAccountId,
     conversationId,
@@ -1743,16 +1771,20 @@ export async function scanWindowSnapshotInbox(): Promise<WindowSnapshotInboxScan
   return postJson<WindowSnapshotInboxScanResult>("/wechat/window-snapshots/inbox/scan", {});
 }
 
-export async function createDemoSendTask(conversationId: string, wechatAccountId?: string): Promise<SendTask> {
-  return postJson<SendTask>("/wechat/send-tasks/demo", { conversationId, wechatAccountId });
+export async function createDemoSendTask(
+  conversationId: string,
+  wechatAccountId?: string,
+  expected: IdentityExpectation = {},
+): Promise<SendTask> {
+  return postJson<SendTask>("/wechat/send-tasks/demo", { ...expected, conversationId, wechatAccountId });
 }
 
-export async function validateSendTask(id: string, mode: "correct" | "wrong_chat"): Promise<SendTask> {
-  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate`, { mode });
+export async function validateSendTask(id: string, mode: "correct" | "wrong_chat", expected: IdentityExpectation = {}): Promise<SendTask> {
+  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate`, { ...expected, mode });
 }
 
-export async function validateSendTaskCurrentWindow(id: string): Promise<SendTask> {
-  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate-current-window`, {});
+export async function validateSendTaskCurrentWindow(id: string, expected: IdentityExpectation = {}): Promise<SendTask> {
+  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate-current-window`, expected);
 }
 
 export async function executeDryRunSend(id: string, expected: IdentityExpectation = {}): Promise<{ task: SendTask; attempt: SendAttempt }> {
@@ -1777,8 +1809,8 @@ export async function cancelSendTask(id: string, payload: { reason?: string } & 
   });
 }
 
-export async function scanSendOperations(): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>("/wechat/send-tasks/scan-ops", {});
+export async function scanSendOperations(filters: IdentityFilters = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/wechat/send-tasks/scan-ops", filters);
 }
 
 export type SafeSendQueueResult = {
@@ -1805,8 +1837,8 @@ export type SafeSendQueueResult = {
   }>;
 };
 
-export async function processSafeSendQueue(): Promise<SafeSendQueueResult> {
-  return postJson<SafeSendQueueResult>("/wechat/send-tasks/process-safe-queue", {});
+export async function processSafeSendQueue(filters: IdentityFilters = {}): Promise<SafeSendQueueResult> {
+    return postJson<SafeSendQueueResult>("/wechat/send-tasks/process-safe-queue", filters);
 }
 
 export async function getRouteEvaluations(filters: IdentityFilters = {}): Promise<RouteEvaluation[]> {
@@ -1918,22 +1950,23 @@ export async function createDemoDesignJob(
   });
 }
 
-export async function createTimeoutDemoJob(conversationId: string): Promise<DesignJob> {
-  return postJson<DesignJob>("/design-jobs/demo-timeout", { conversationId });
+export async function createTimeoutDemoJob(conversationId: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
+    return postJson<DesignJob>("/design-jobs/demo-timeout", { ...expected, conversationId });
 }
 
-export async function createFailureDemoJob(conversationId: string): Promise<DesignJob> {
-  return postJson<DesignJob>("/design-jobs/demo-failure", { conversationId });
+export async function createFailureDemoJob(conversationId: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
+    return postJson<DesignJob>("/design-jobs/demo-failure", { ...expected, conversationId });
 }
 
-export async function scanDesignTimeouts(): Promise<{ scanned: number; timedOut: number; jobs: DesignJob[] }> {
-  return postJson<{ scanned: number; timedOut: number; jobs: DesignJob[] }>("/design-jobs/scan-timeouts");
+export async function scanDesignTimeouts(filters: IdentityFilters = {}): Promise<{ scanned: number; timedOut: number; jobs: DesignJob[] }> {
+    return postJson<{ scanned: number; timedOut: number; jobs: DesignJob[] }>("/design-jobs/scan-timeouts", filters);
 }
 
 export type DesignActivePollResult = {
   scanned: number;
   completed: DesignJob[];
   failed: DesignJob[];
+  retried: DesignJob[];
   generating: DesignJob[];
   cancelled: DesignJob[];
   errors: Array<{
@@ -1944,8 +1977,8 @@ export type DesignActivePollResult = {
   }>;
 };
 
-export async function pollActiveDesignResults(): Promise<DesignActivePollResult> {
-  return postJson<DesignActivePollResult>("/design-jobs/poll-active-results");
+export async function pollActiveDesignResults(filters: IdentityFilters = {}): Promise<DesignActivePollResult> {
+    return postJson<DesignActivePollResult>("/design-jobs/poll-active-results", filters);
 }
 
 export type DesignAutoSubmitResult = {
@@ -1964,8 +1997,8 @@ export type DesignAutoSubmitResult = {
   }>;
 };
 
-export async function autoSubmitDesignDrafts(): Promise<DesignAutoSubmitResult> {
-  return postJson<DesignAutoSubmitResult>("/design-jobs/auto-submit-drafts");
+export async function autoSubmitDesignDrafts(filters: IdentityFilters = {}): Promise<DesignAutoSubmitResult> {
+    return postJson<DesignAutoSubmitResult>("/design-jobs/auto-submit-drafts", filters);
 }
 
 export type LowValueAutomationResult = {
@@ -2087,6 +2120,15 @@ export type AutomationRun = {
     }>;
     warnings: Array<{ step: string; path: string; reason: string; fields?: string[] }>;
   };
+  skipSummary?: {
+    total: number;
+    reasons: Array<{
+      reason: string;
+      count: number;
+      steps: string[];
+      sampleTargets: string[];
+    }>;
+  };
 };
 
 export type AutomationStatus = {
@@ -2200,8 +2242,8 @@ export type HighValueHandoffResult = {
   }>;
 };
 
-export async function scanHighValueHandoffs(): Promise<HighValueHandoffResult> {
-  return postJson<HighValueHandoffResult>("/design-jobs/scan-high-value-handoffs");
+export async function scanHighValueHandoffs(filters: IdentityFilters = {}): Promise<HighValueHandoffResult> {
+    return postJson<HighValueHandoffResult>("/design-jobs/scan-high-value-handoffs", filters);
 }
 
 export async function getDesignPlatformHealth(): Promise<DesignPlatformHealth> {
@@ -2256,12 +2298,21 @@ export async function preflightDesignJob(id: string, expected: IdentityExpectati
   return postJson<DesignJobPreflightResult>(`/design-jobs/${id}/preflight`, expected);
 }
 
-export async function pollDesignJob(id: string, expected: IdentityExpectation = {}): Promise<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }> {
-  return postJson<{ remoteStatus: string; job: DesignJob; result: Record<string, unknown> }>(`/design-jobs/${id}/poll`, expected);
+export async function pollDesignJob(
+  id: string,
+  expected: IdentityExpectation = {},
+): Promise<{ remoteStatus: string; autoRetried?: boolean; job: DesignJob; result: Record<string, unknown> }> {
+  return postJson<{ remoteStatus: string; autoRetried?: boolean; job: DesignJob; result: Record<string, unknown> }>(`/design-jobs/${id}/poll`, expected);
 }
 
 export async function retryDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
   return postJson<DesignJob>(`/design-jobs/${id}/retry`, expected);
+}
+
+export async function getDesignJobRevisions(id: string, expected: IdentityExpectation = {}): Promise<DesignRevision[]> {
+  const response = await fetch(`${API_BASE}/design-jobs/${id}/revisions${expectedIdentityQuery(expected)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function requestDesignRevision(id: string, payload: {
@@ -2317,8 +2368,8 @@ export async function getQuotes(filters: IdentityFilters = {}): Promise<QuoteDra
   }
 }
 
-export async function getQuotePreview(id: string): Promise<QuotePreview> {
-  const response = await fetch(`${API_BASE}/quotes/${id}/preview`, { cache: "no-store" });
+export async function getQuotePreview(id: string, expected: IdentityExpectation = {}): Promise<QuotePreview> {
+  const response = await fetch(`${API_BASE}/quotes/${id}/preview${expectedIdentityQuery(expected)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
 }
@@ -2391,8 +2442,8 @@ export async function updateOrderDraft(id: string, patch: {
   return postJson<OrderDraft>(`/orders/${id}/update`, patch);
 }
 
-export async function getOrderConfirmationPreview(id: string): Promise<OrderConfirmationPreview> {
-  const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/confirmation-preview`, { cache: "no-store" });
+export async function getOrderConfirmationPreview(id: string, expected: IdentityExpectation = {}): Promise<OrderConfirmationPreview> {
+  const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/confirmation-preview${expectedIdentityQuery(expected)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
 }
@@ -2405,17 +2456,28 @@ export async function reviseOrderSelection(id: string, patch: {
   return postJson<OrderDraft>(`/orders/${id}/revise-selection`, patch);
 }
 
-export async function queueOrderConfirmation(id: string, expected: IdentityExpectation = {}): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+export async function queueOrderConfirmation(
+  id: string,
+  expected: IdentityExpectation = {},
+  manualRelease: ManualReleaseOptions = {},
+): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-confirmation`, {
     ...expected,
+    ...manualRelease,
     owner: "人工客服",
-    note: "订单确认已进入微信安全发送队列。",
+    note: manualRelease.note || "订单确认已进入微信安全发送队列。",
   });
 }
 
-export async function queueOrderFollowup(id: string, type: "production" | "delivery", expected: IdentityExpectation = {}): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
+export async function queueOrderFollowup(
+  id: string,
+  type: "production" | "delivery",
+  expected: IdentityExpectation = {},
+  manualRelease: ManualReleaseOptions = {},
+): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-followup`, {
     ...expected,
+    ...manualRelease,
     owner: "人工客服",
     type,
   });
@@ -2431,7 +2493,7 @@ export async function getReviewCenter(filters: IdentityFilters = {}): Promise<Re
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
-    return { designJobs: [], quoteDrafts: [], logs: [] };
+    return { designJobs: [], quoteDrafts: [], orderDrafts: [], logs: [] };
   }
 }
 
@@ -2449,6 +2511,15 @@ export async function reviewQuote(id: string, payload: {
   note?: string;
 } & IdentityExpectation): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>(`/reviews/quotes/${id}`, payload);
+}
+
+export async function reviewOrder(id: string, payload: {
+  decision: "approve_confirmation" | "approve_followup" | "request_followup" | "reject_order";
+  reviewer?: string;
+  note?: string;
+  followupType?: "production" | "delivery";
+} & IdentityExpectation): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/reviews/orders/${id}`, payload);
 }
 
 export async function getNotifications(unreadOnly = false, filters: IdentityFilters = {}): Promise<NotificationItem[]> {

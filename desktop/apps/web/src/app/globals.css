@@ -696,6 +696,10 @@ h3 {
   color: var(--red);
 }
 
+.job-row .job-next-action {
+  color: #8a4f00;
+}
+
 .top-actions,
 .action-row,
 .asset-actions,
@@ -1203,6 +1207,16 @@ textarea:focus-visible {
   color: var(--text-muted);
 }
 
+.readiness-banner.info {
+  border-color: rgba(0, 122, 255, 0.22);
+  background: rgba(231, 242, 255, 0.84);
+  color: #0b4f96;
+}
+
+.readiness-banner.info strong {
+  color: #063f7c;
+}
+
 .design-platform-config {
   display: grid;
   grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.6fr);
@@ -1273,6 +1287,41 @@ textarea:focus-visible {
   border-color: rgba(52, 199, 89, 0.24);
   background: rgba(52, 199, 89, 0.12);
   color: #19692c;
+}
+
+.config-mode-guide {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid rgba(60, 60, 67, 0.1);
+  border-radius: 12px;
+  background: rgba(242, 242, 247, 0.76);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.config-mode-guide.info {
+  border-color: rgba(0, 122, 255, 0.2);
+  background: rgba(0, 122, 255, 0.08);
+  color: #0b4f96;
+}
+
+.config-mode-guide.warning {
+  border-color: rgba(224, 130, 0, 0.24);
+  background: rgba(255, 242, 223, 0.82);
+  color: #7a4500;
+}
+
+.config-mode-guide strong {
+  font-size: 12.5px;
+  color: inherit;
+}
+
+.config-mode-guide span {
+  margin: 0;
+  color: inherit;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .config-form-grid {
@@ -3088,6 +3137,49 @@ input[type="checkbox"]:disabled {
   border-color: rgba(180, 35, 24, 0.28);
 }
 
+.design-escalation-notice {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 149, 0, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 248, 237, 0.9);
+}
+
+.design-escalation-notice.red {
+  border-color: rgba(255, 59, 48, 0.28);
+  background: rgba(255, 241, 240, 0.92);
+}
+
+.design-escalation-notice.amber {
+  border-color: rgba(255, 149, 0, 0.28);
+  background: rgba(255, 248, 237, 0.92);
+}
+
+.design-escalation-notice > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.design-escalation-notice strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.design-escalation-notice span,
+.design-escalation-notice small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.design-escalation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .quote-preview strong {
   font-size: 13px;
 }
@@ -3596,6 +3688,69 @@ input[type="checkbox"]:disabled {
   gap: 8px;
 }
 
+.sku-repair-filter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.sku-repair-filter button {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--separator-soft);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.sku-repair-filter button:hover {
+  background: var(--surface-hover);
+}
+
+.sku-repair-filter button.selected {
+  border-color: rgba(0, 122, 255, 0.4);
+  background: var(--blue);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 122, 255, 0.18);
+}
+
+.sku-repair-filter button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sku-repair-filter span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sku-repair-filter strong {
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.1);
+  color: #0a4f9f;
+  font-size: 12px;
+  text-align: center;
+}
+
+.sku-repair-filter button.selected strong {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
 .sku-commercial-readiness {
   display: grid;
   grid-template-columns: minmax(96px, 0.4fr) minmax(220px, 1.4fr) auto auto;
@@ -3865,6 +4020,193 @@ input[type="checkbox"]:disabled {
   border-radius: var(--radius);
   color: #167c34;
   background: var(--green-soft);
+}
+
+.sku-active-repair-brief {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 149, 0, 0.24);
+  border-radius: var(--radius);
+  background: rgba(255, 248, 235, 0.86);
+}
+
+.sku-active-repair-brief.error {
+  border-color: rgba(255, 59, 48, 0.26);
+  background: rgba(255, 241, 240, 0.88);
+}
+
+.sku-active-repair-brief.info {
+  border-color: rgba(0, 122, 255, 0.2);
+  background: rgba(235, 245, 255, 0.86);
+}
+
+.sku-active-repair-head,
+.sku-active-repair-impact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sku-active-repair-head small,
+.sku-active-repair-head span,
+.sku-active-repair-impact span,
+.sku-active-repair-issues small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sku-active-repair-head strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.sku-active-repair-head em {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 149, 0, 0.12);
+  color: #9a5a00;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.sku-active-repair-brief.error .sku-active-repair-head em {
+  background: rgba(255, 59, 48, 0.12);
+  color: #b42318;
+}
+
+.sku-active-repair-brief p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sku-active-repair-progress {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 149, 0, 0.2);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.sku-active-repair-progress.ready {
+  border-color: rgba(52, 199, 89, 0.24);
+  background: rgba(240, 253, 244, 0.86);
+}
+
+.sku-active-repair-progress.blocked {
+  border-color: rgba(255, 59, 48, 0.24);
+  background: rgba(255, 245, 244, 0.84);
+}
+
+.sku-active-repair-progress small,
+.sku-active-repair-progress span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sku-active-repair-progress strong {
+  display: block;
+  margin: 2px 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.sku-active-repair-progress p {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.sku-active-repair-progress p span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.1);
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.sku-active-repair-progress p span.done {
+  background: rgba(52, 199, 89, 0.12);
+  color: #1a7f37;
+}
+
+.sku-active-repair-progress p span.pending {
+  background: rgba(255, 149, 0, 0.14);
+  color: #9a5a00;
+}
+
+.sku-active-repair-fields,
+.sku-active-repair-issues {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.sku-active-repair-fields button,
+.sku-active-repair-issues span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px;
+  border: 1px solid var(--separator-soft);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.sku-active-repair-fields button {
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.sku-active-repair-fields button:hover,
+.sku-active-repair-fields button:focus-visible {
+  border-color: rgba(0, 122, 255, 0.34);
+  background: rgba(235, 245, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.08);
+  outline: none;
+}
+
+.sku-active-repair-fields button:active {
+  transform: translateY(1px);
+}
+
+.sku-active-repair-fields strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.sku-active-repair-fields small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sku-active-repair-issues span {
+  color: #9a5a00;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sku-active-repair-issues span.error {
+  color: #b42318;
+}
+
+.sku-active-repair-issues span.info {
+  color: #0a4f9f;
 }
 
 .sku-image-problem-list {
@@ -6242,7 +6584,24 @@ input[type="checkbox"]:disabled {
   background: rgba(0, 122, 255, 0.72);
 }
 
-.sku-change-item div {
+.sku-change-item.commercial::before {
+  background: rgba(255, 149, 0, 0.82);
+}
+
+.sku-change-item.image::before {
+  background: rgba(52, 199, 89, 0.82);
+}
+
+.sku-change-item.inactive::before {
+  background: rgba(255, 59, 48, 0.82);
+}
+
+.sku-change-item.specification::before {
+  background: rgba(0, 122, 255, 0.82);
+}
+
+.sku-change-item-head,
+.sku-change-impact-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -6250,9 +6609,50 @@ input[type="checkbox"]:disabled {
   gap: 8px;
 }
 
+.sku-change-impact-row {
+  justify-content: flex-start;
+}
+
+.sku-change-impact-row .compact-button {
+  margin-left: auto;
+  min-height: 28px;
+}
+
 .sku-change-item span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.sku-change-impact-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sku-change-impact {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.1);
+  color: #1455a7 !important;
+  font-weight: 800;
+}
+
+.sku-change-impact.commercial {
+  background: rgba(255, 149, 0, 0.14);
+  color: #9a5a00 !important;
+}
+
+.sku-change-impact.image {
+  background: rgba(52, 199, 89, 0.14);
+  color: #137238 !important;
+}
+
+.sku-change-impact.inactive {
+  background: rgba(255, 59, 48, 0.12);
+  color: #b42318 !important;
 }
 
 .sku-change-item p {
@@ -10089,6 +10489,7 @@ body {
 .apple-light-shell .design-center .panel-head,
 .apple-light-shell .config-summary,
 .apple-light-shell .config-form-grid,
+.apple-light-shell .config-mode-guide,
 .apple-light-shell .config-status-grid span,
 .apple-light-shell .asset-row,
 .apple-light-shell .job-row,
@@ -13028,6 +13429,7 @@ body:has(.apple-light-shell) {
 .apple-light-shell .platform-pill.offline,
 .apple-light-shell .current-section-pill,
 .apple-light-shell .readiness-banner,
+.apple-light-shell .config-mode-guide,
 .apple-light-shell .config-status-grid span,
 .apple-light-shell .preflight-panel.warning,
 .apple-light-shell .preflight-panel.error,
@@ -13133,6 +13535,7 @@ body:has(.apple-light-shell) {
 
 .apple-light-shell .platform-pill.warning,
 .apple-light-shell .readiness-banner,
+.apple-light-shell .config-mode-guide.warning,
 .apple-light-shell .preflight-panel.warning,
 .apple-light-shell .quote-preview-warnings span,
 .apple-light-shell .preflight-checks .warning,
@@ -13178,6 +13581,12 @@ body:has(.apple-light-shell) {
 
 .apple-light-shell .metric.blue > span {
   border-color: rgba(0, 122, 255, 0.3) !important;
+  color: var(--blue) !important;
+}
+
+.apple-light-shell .readiness-banner.info,
+.apple-light-shell .config-mode-guide.info {
+  border-color: rgba(0, 122, 255, 0.28) !important;
   color: var(--blue) !important;
 }
 
@@ -19629,18 +20038,19 @@ body .apple-light-shell.shell #notice-center :is(
 @media (max-width: 760px) {
   body .apple-light-shell.shell .workspace[data-active-section="design-platform-config"] #design-platform-config {
     display: grid !important;
-    grid-template-rows: 94px minmax(0, 1fr) !important;
+    grid-template-rows: minmax(94px, 156px) minmax(0, 1fr) !important;
     gap: 8px !important;
     padding: 8px !important;
     overflow: hidden !important;
   }
 
   body .apple-light-shell.shell .workspace[data-active-section="design-platform-config"] #design-platform-config .config-summary {
-    height: 94px !important;
+    height: auto !important;
+    max-height: 156px !important;
     min-height: 0 !important;
     margin: 0 !important;
     padding: 10px 12px !important;
-    overflow: hidden !important;
+    overflow: auto !important;
   }
 
   body .apple-light-shell.shell .workspace[data-active-section="design-platform-config"] #design-platform-config .config-status-grid {
@@ -25259,4 +25669,111 @@ body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #
   body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-result {
     overflow: visible !important;
   }
+}
+
+/* Iteration 64 WeChat flow compact app viewport: no clipped lane actions in desktop height. */
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-visual-panel {
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  gap: 10px !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-service-canvas {
+  grid-template-columns: minmax(190px, 0.44fr) minmax(340px, 0.84fr) minmax(260px, 0.52fr) !important;
+  gap: 10px !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow :is(.wechat-intake-lane, .wechat-flow-lane, .wechat-live-lane) {
+  gap: 8px !important;
+  padding: 10px !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-lane-card-list,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-service-canvas .wechat-flow,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-service-canvas .wechat-agent-live {
+  min-height: 0 !important;
+  max-height: 100% !important;
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-lane-card {
+  min-height: 48px !important;
+  padding: 8px 9px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-lane-actions button,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-live-action-buttons button {
+  min-height: 32px !important;
+  padding-inline: 7px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-live-action-card {
+  gap: 4px !important;
+  padding: 8px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-live-action-card > p {
+  display: -webkit-box !important;
+  overflow: hidden !important;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 1080px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-service-canvas {
+    grid-template-columns: minmax(180px, 0.48fr) minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-live-lane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-visual-panel,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow .wechat-service-canvas,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-flow :is(.wechat-intake-lane, .wechat-flow-lane, .wechat-live-lane) {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}
+
+/* Iteration 65 WeChat topbar: keep the customer switcher readable instead of horizontally clipped. */
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .toolbar-group:has(.conversation-picker) {
+  flex: 1 1 500px !important;
+  max-width: 560px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .conversation-picker {
+  display: grid !important;
+  grid-template-columns: minmax(104px, 0.68fr) repeat(2, minmax(0, 1fr));
+  align-items: stretch !important;
+  width: 100% !important;
+  max-width: none !important;
+  overflow: visible !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .conversation-picker button {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  justify-self: stretch !important;
+  box-sizing: border-box !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .conversation-picker button span,
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .conversation-picker button strong {
+  min-width: 0 !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
 }

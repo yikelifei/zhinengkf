@@ -82,6 +82,7 @@ export const appConfig = {
   wechatWindowSnapshotInboxDir: path.resolve(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR || "./.runtime/wechat-window-snapshots"),
   wechatWindowObserverStatusFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || "./.runtime/wechat-window-observer-status.json"),
   wechatWindowSnapshotMaxAgeSeconds: numberEnv("WECHAT_WINDOW_SNAPSHOT_MAX_AGE_SECONDS", 30),
+  wechatWindowSnapshotScanLimit: numberEnv("WECHAT_WINDOW_SNAPSHOT_SCAN_LIMIT", 5),
   wechatWorkCorpId: process.env.WECHAT_WORK_CORP_ID || "",
   wechatWorkAgentId: process.env.WECHAT_WORK_AGENT_ID || "",
   wechatWorkToken: process.env.WECHAT_WORK_TOKEN || "",

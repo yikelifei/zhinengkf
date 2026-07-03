@@ -48,7 +48,7 @@ async function runOnce(config = readConfig(), capture = captureForegroundWindow)
   const snapshot = buildSnapshotFromWindow(windowInfo, config);
   const snapshotFile = config.dryRun ? "" : writeSnapshotFile(config.inboxDir, snapshot);
   const scanResult = config.scan && !config.dryRun
-    ? await postJson(`${config.apiBase}/wechat/window-snapshots/inbox/scan`, {})
+    ? await postJson(`${config.apiBase}/wechat/window-snapshots/inbox/scan`, {}, config)
     : null;
 
   return {
@@ -243,8 +243,12 @@ function buildObserverStatus(result, config, startedAt, error) {
           confidence: snapshot.confidence || 0,
           processName: result.windowSummary?.processName || "",
           processId: result.windowSummary?.processId || null,
+          scanScanned: typeof result.scanResult?.scanned === "number" ? result.scanResult.scanned : null,
           scanProcessed: Array.isArray(result.scanResult?.processed) ? result.scanResult.processed.length : null,
           scanFailed: Array.isArray(result.scanResult?.failed) ? result.scanResult.failed.length : null,
+          scanPending: typeof result.scanResult?.pending === "number" ? result.scanResult.pending : null,
+          scanTotal: typeof result.scanResult?.total === "number" ? result.scanResult.total : null,
+          scanLimit: typeof result.scanResult?.limit === "number" ? result.scanResult.limit : null,
         }
       : null,
     errorMessage: error instanceof Error ? error.message : error ? String(error) : "",
@@ -257,12 +261,12 @@ function writeObserverStatus(statusFile, status) {
   return statusFile;
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, config = {}) {
   const response = await fetchWithContext(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
-  });
+  }, config.requestTimeoutMs);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `POST ${url} failed with ${response.status}`);
@@ -270,13 +274,17 @@ async function postJson(url, body) {
   return response.json();
 }
 
-async function fetchWithContext(url, init) {
+async function fetchWithContext(url, init, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), numberValue(timeoutMs, 5000, 500, 30000));
   try {
-    return await fetch(url, init);
+    return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
     const method = String(init?.method || "GET").toUpperCase();
-    const causeMessage = error?.cause?.message || error?.message || String(error);
+    const causeMessage = error?.name === "AbortError" ? "request timeout" : error?.cause?.message || error?.message || String(error);
     throw new Error(`${method} ${url} failed: ${causeMessage}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -294,6 +302,12 @@ function readConfig() {
       valueArg("--status-file") || process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || fileConfig.statusFile || defaultStatusFile,
     ),
     intervalMs: numberValue(valueArg("--interval-ms") || process.env.WECHAT_WINDOW_OBSERVER_INTERVAL_MS || fileConfig.intervalMs, 3000, 500, 60000),
+    requestTimeoutMs: numberValue(
+      valueArg("--request-timeout-ms") || process.env.WECHAT_WINDOW_OBSERVER_REQUEST_TIMEOUT_MS || fileConfig.requestTimeoutMs,
+      5000,
+      500,
+      30000,
+    ),
     scan: hasArg("--scan") || String(process.env.WECHAT_WINDOW_OBSERVER_SCAN || fileConfig.scan || "").toLowerCase() === "true",
     dryRun: hasArg("--dry-run"),
     watch: hasArg("--watch"),

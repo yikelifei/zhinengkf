@@ -51,7 +51,6 @@ import {
   Agent,
   applySkillSuggestions,
   AutomationStatus,
-  autoProcessLowValue,
   attachDesignJobAssets,
   autoSubmitDesignDrafts,
   batchReviewTrainingSamples,
@@ -150,6 +149,7 @@ import {
   reviewTrainingSample,
   ReviewCenter,
   ReviewLog,
+  reviewOrder,
   reviewQuote,
   retryDesignJob,
   restoreSku,
@@ -197,6 +197,7 @@ import {
   WechatChannelStatus,
   WechatWindowSnapshot,
   WindowObserverStatus,
+  WindowSnapshotInboxScanResult,
 } from "../lib/api";
 
 const WINDOW_SNAPSHOT_MAX_AGE_SECONDS = 30;
@@ -204,6 +205,15 @@ const AUTO_SELECT_SKILL_SUGGESTION_MIN_SAMPLES = 2;
 const AUTO_SELECT_SKILL_SUGGESTION_MIN_CONFIDENCE = 80;
 const TRAINING_SAMPLE_PAGE_SIZE = 12;
 const TRAINING_SAMPLE_BATCH_REVIEW_LIMIT = 100;
+
+function windowSnapshotScanSummary(result: WindowSnapshotInboxScanResult) {
+  const pending = Number(result.pending || 0);
+  const total = Number(result.total || result.scanned || 0);
+  const limit = Number(result.limit || 0);
+  const batchText = limit && total > result.scanned ? `本轮最多 ${limit} 个，` : "";
+  const pendingText = pending > 0 ? `，剩余 ${pending} 个排队分批扫描` : "";
+  return `${batchText}扫描 ${result.scanned} 个文件，成功 ${result.processed.length} 个，失败 ${result.failed.length} 个${pendingText}`;
+}
 
 function isSkillSuggestionAutoSelected(suggestion: SkillSuggestion) {
   if (suggestion.quality) return !suggestion.quality.needsReview;
@@ -264,6 +274,16 @@ const skuIssueOptions = [
   { value: "matching_rule", label: "搭配异常" },
   { value: "lead_time", label: "交期异常" },
   { value: "specification", label: "规格异常" },
+];
+
+const skuRepairFilterOptions = [
+  { value: "all", label: "全部待补" },
+  { value: "blocking", label: "影响自动化" },
+  { value: "review", label: "待复核" },
+  { value: "image", label: "图片" },
+  { value: "price_stock", label: "价格库存" },
+  { value: "spec_delivery", label: "规格交期" },
+  { value: "rules", label: "搭配规则" },
 ];
 
 const quoteStatusOptions = [
@@ -435,9 +455,12 @@ const emptySkuForm: SkuForm = {
   matchingRules: "",
 };
 
+const ART_IMAGE_LOCAL_DEFAULT_BASE_URL = "http://127.0.0.1:3000";
+const STANDARD_V1_DEFAULT_BASE_URL = "http://127.0.0.1:3700";
+
 const emptyDesignPlatformConfigForm: DesignPlatformConfigForm = {
   adapter: "art_image_local",
-  baseUrl: "http://127.0.0.1:3000",
+  baseUrl: ART_IMAGE_LOCAL_DEFAULT_BASE_URL,
   accessToken: "",
   cookie: "",
   deviceId: "",
@@ -462,7 +485,7 @@ function designPlatformConfigSummaryToForm(
   const adapter = config.adapter === "standard_v1" ? "standard_v1" : "art_image_local";
   return {
     adapter,
-    baseUrl: config.baseUrl || (adapter === "art_image_local" ? "http://127.0.0.1:3000" : "http://127.0.0.1:3700"),
+    baseUrl: config.baseUrl || designPlatformDefaultBaseUrl(adapter),
     accessToken: current.accessToken,
     cookie: current.cookie,
     deviceId: current.deviceId,
@@ -643,6 +666,29 @@ function skuFormAutomationPreview(form: SkuForm, warnings: SkuFormReadinessWarni
     detail: "保存后可参与自动搭配、真实出图预检和报价利润核算。",
     chips: ["可搭配", "可出图", "可报价"],
   };
+}
+
+function skuSavedOutcomeMessage(
+  skuCode: string,
+  automationStatus: ReturnType<typeof skuFormAutomationPreview>,
+  warnings: SkuFormReadinessWarning[],
+) {
+  const nextActions = warnings
+    .filter((warning) => warning.severity !== "error")
+    .slice(0, 3)
+    .map((warning) => warning.message);
+  const nextActionText = nextActions.length ? nextActions.join("；") : automationStatus.detail;
+
+  if (automationStatus.tone === "ready") {
+    return `商品 ${skuCode} 已保存。保存后状态：${automationStatus.label}，可进入自动搭配、真实出图预检和报价利润核算。`;
+  }
+  if (automationStatus.tone === "review") {
+    return `商品 ${skuCode} 已保存，已标记为需复核。下一步处理：${nextActionText}`;
+  }
+  if (automationStatus.tone === "partial") {
+    return `商品 ${skuCode} 已保存。保存后状态：${automationStatus.label}；下一步补齐：${nextActionText}`;
+  }
+  return `商品 ${skuCode} 已保存。保存后状态：${automationStatus.label}；${automationStatus.detail}`;
 }
 
 function skuFormPricingPreview(form: SkuForm) {
@@ -976,6 +1022,67 @@ function skuAutomationSummary(sku: Sku, issues: SkuCatalogAudit["issues"]) {
   return { tone: "ready", label: "可自动", detail: details.join(" · ") };
 }
 
+function skuRepairItemMatchesFilter(item: SkuRepairQueueItem, filter: string) {
+  if (filter === "all") return true;
+  if (filter === "blocking") return item.blocking || item.severity === "error";
+  if (filter === "review") return !item.blocking && item.severity !== "error";
+  const issueCodes = new Set(item.issues.map((issue) => issue.code));
+  const missingFields = new Set(item.missingFields.map((field) => field.field));
+  if (filter === "image") {
+    return ["mainImagePath", "angleImages"].some((field) => missingFields.has(field)) ||
+      item.issues.some((issue) => Boolean(issue.imageRole) || issue.code.includes("image"));
+  }
+  if (filter === "price_stock") {
+    return ["costPrice", "salePrice", "stock"].some((field) => missingFields.has(field)) ||
+      ["invalid_cost_price", "negative_margin", "low_margin_rate", "low_stock", "out_of_stock"].some((code) => issueCodes.has(code));
+  }
+  if (filter === "spec_delivery") {
+    return ["dimensions", "weightGram", "supplier", "leadTimeDays"].some((field) => missingFields.has(field)) ||
+      ["missing_dimensions", "incomplete_dimensions", "invalid_dimensions", "missing_weight", "invalid_weight", "invalid_lead_time", "long_lead_time"].some((code) => issueCodes.has(code));
+  }
+  if (filter === "rules") {
+    return ["replacementSkuCodes", "matchingRules", "type", "skuCode", "name"].some((field) => missingFields.has(field)) ||
+      ["invalid_replacement_sku", "self_replacement_sku", "invalid_matching_rule_sku", "self_matching_rule_sku", "missing_sku_type", "invalid_sku_type", "duplicate_sku_code", "duplicate_name", "unsafe_sku_code", "sku_code_whitespace"].some((code) => issueCodes.has(code));
+  }
+  return true;
+}
+
+function skuFormFieldTargetId(field: string) {
+  const normalized = field.trim();
+  const aliases: Record<string, string> = {
+    type: "sku-form-type",
+    matchingRules: "sku-form-matching-rules",
+    mustWith: "sku-form-matching-must-with",
+    preferWith: "sku-form-matching-prefer-with",
+    cannotWith: "sku-form-matching-cannot-with",
+  };
+  return aliases[normalized] || `sku-form-${normalized}`;
+}
+
+function skuFormFieldHasUsableValue(form: SkuForm, field: string) {
+  if (field === "skuCode") return Boolean(form.skuCode.trim());
+  if (field === "name") return Boolean(form.name.trim());
+  if (field === "type") return Boolean(form.type);
+  if (field === "category") return Boolean(form.category.trim());
+  if (field === "salePrice") return parseMoney(form.salePrice) > 0;
+  if (field === "costPrice") return parseMoney(form.costPrice) > 0;
+  if (field === "stock") return parseInteger(form.stock) > 0;
+  if (field === "sceneTags") return splitTextList(form.sceneTags).length > 0;
+  if (field === "mainImagePath") return Boolean(form.mainImagePath.trim());
+  if (field === "angleImages") return splitTextList(form.angleImages).length > 0;
+  if (field === "dimensions") return Object.keys(parseDimensionsText(form.dimensions)).length > 0;
+  if (field === "weightGram") return (optionalInteger(form.weightGram) || 0) > 0;
+  if (field === "material") return Boolean(form.material.trim());
+  if (field === "supplier") return Boolean(form.supplier.trim());
+  if (field === "leadTimeDays") return (optionalInteger(form.leadTimeDays) || 0) > 0;
+  if (field === "replacementSkuCodes") return true;
+  if (field === "matchingRules") return true;
+  if (field === "mustWith") return true;
+  if (field === "preferWith") return true;
+  if (field === "cannotWith") return true;
+  return true;
+}
+
 function matchingRulesToText(value?: Record<string, unknown>) {
   if (!value || !Object.keys(value).length) return "";
   if (typeof value.notes === "string" && Object.keys(value).length === 1) return value.notes;
@@ -987,6 +1094,62 @@ function designPlatformAdapterLabel(adapter?: string) {
   if (adapter === "standard_v1") return "标准接口/mock";
   if (adapter === "unknown") return "未知配置";
   return adapter || "未配置";
+}
+
+function designPlatformDefaultBaseUrl(adapter?: string) {
+  return adapter === "art_image_local" ? ART_IMAGE_LOCAL_DEFAULT_BASE_URL : STANDARD_V1_DEFAULT_BASE_URL;
+}
+
+function shouldUseDesignPlatformDefaultBaseUrl(baseUrl: string) {
+  const normalized = baseUrl.trim();
+  return !normalized || normalized === ART_IMAGE_LOCAL_DEFAULT_BASE_URL || normalized === STANDARD_V1_DEFAULT_BASE_URL;
+}
+
+function buildDesignPlatformOperationGuide(options: {
+  config?: DesignPlatformConfigSummary | null;
+  form: DesignPlatformConfigForm;
+  health?: DesignPlatformHealth | null;
+  readiness?: DesignPlatformReadiness | null;
+}): { tone: "info" | "warning"; title: string; detail: string; meta: string } | null {
+  const adapter = options.readiness?.adapter || options.config?.adapter || options.form.adapter;
+  const baseUrl =
+    options.readiness?.baseUrl ||
+    options.health?.baseUrl ||
+    options.config?.baseUrl ||
+    options.form.baseUrl ||
+    designPlatformDefaultBaseUrl(adapter);
+  if (adapter === "standard_v1") {
+    return {
+      tone: "info",
+      title: "当前是流程联调模式",
+      detail:
+        `现在连接 ${baseUrl}，可以验证客服平台出图流程，但不会调用真实设计平台。要真实出图，请先启动 run_desktop_real_design.bat，或在 desktop 目录执行 npm.cmd run ports:launch:real:confirmed。`,
+      meta: "Mock 模式不需要设计平台登录、设备激活和真实图片账号。",
+    };
+  }
+  if (options.readiness && !options.readiness.canSubmitFormalGeneration) {
+    const nextStep =
+      options.readiness.nextSteps[0] ||
+      options.health?.errorMessage ||
+      "设计平台没有通过登录态、设备激活或健康检查。";
+    return {
+      tone: "warning",
+      title: "真实出图还没就绪",
+      detail:
+        `先确认真实设计平台已在 ${baseUrl} 打开，再运行 run_desktop_real_design.bat；如果只想用命令行启动，在 desktop 目录执行 npm.cmd run ports:launch:real:confirmed。`,
+      meta: nextStep,
+    };
+  }
+  if (options.health && !options.health.ok) {
+    return {
+      tone: "warning",
+      title: "设计平台连接失败",
+      detail:
+        `当前真实平台地址是 ${baseUrl}。请先启动真实设计平台，再运行 run_desktop_real_design.bat 或 npm.cmd run ports:launch:real:confirmed 后重新检测。`,
+      meta: options.health.errorMessage || "健康检查失败。",
+    };
+  }
+  return null;
 }
 
 function runtimeConfigDisplayName(path?: string) {
@@ -1074,7 +1237,7 @@ export default function HomePage() {
     customerNotes: "",
   });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [reviewCenter, setReviewCenter] = useState<ReviewCenter>({ designJobs: [], quoteDrafts: [], logs: [] });
+  const [reviewCenter, setReviewCenter] = useState<ReviewCenter>({ designJobs: [], quoteDrafts: [], orderDrafts: [], logs: [] });
   const [designAssets, setDesignAssets] = useState<DesignAsset[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [platformHealth, setPlatformHealth] = useState<DesignPlatformHealth | null>(null);
@@ -1103,6 +1266,7 @@ export default function HomePage() {
   const [skuSearch, setSkuSearch] = useState<string>("");
   const [skuTypeFilter, setSkuTypeFilter] = useState<string>("all");
   const [skuIssueFilter, setSkuIssueFilter] = useState<string>("all");
+  const [skuRepairFilter, setSkuRepairFilter] = useState<string>("all");
   const [skuForm, setSkuForm] = useState<SkuForm>(emptySkuForm);
   const [skuWorkbenchView, setSkuWorkbenchView] = useState<"catalog" | "repair" | "editor">("catalog");
   const [catalogWorkbenchView, setCatalogWorkbenchView] = useState<"import" | "preview" | "audit" | "bundle">("import");
@@ -1184,7 +1348,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       getTrainingOverview(identityFilters),
       getSkillSuggestions(identityFilters),
       getWechatAccounts(),
-      getWechatChannelStatus(identityFilters),
+      getWechatChannelStatus(identityFilters).catch(() => null as WechatChannelStatus | null),
       getWechatConversations(),
       getSendTasks(identityFilters),
       getSendAttempts(undefined, identityFilters),
@@ -1269,7 +1433,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return kept.length ? kept : safeKeys;
     });
     setWechatAccounts(accountRows);
-    setWechatChannelStatus(channelStatusRows);
+    if (channelStatusRows) setWechatChannelStatus(channelStatusRows);
     setConversations(conversationRows);
     setSendTasks(sendRows);
     setSendAttempts(attemptRows);
@@ -1307,6 +1471,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           customerId: conversation.customerId,
         }
       : {};
+  }
+
+  async function loadWechatChannelStatusOnly(
+    identityFilterOverride?: { wechatAccountId?: string; conversationId?: string; customerId?: string } | null,
+  ) {
+    const identityFilters = identityFilterOverride === null ? {} : identityFilterOverride || activeIdentityFilters();
+    const status = await getWechatChannelStatus(identityFilters);
+    setWechatChannelStatus(status);
+    return status;
   }
 
   function conversationIdentityExpectation(conversation: Conversation) {
@@ -1498,23 +1671,25 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function createTimeoutDemo() {
-    if (!activeConversationId) {
+    const targetConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+    if (!targetConversation) {
       setMessage("请先选择要创建演示任务的客户会话。");
       return;
     }
     await runAction("创建超时演示任务", async () => {
-      const job = await createTimeoutDemoJob(activeConversationId);
+      const job = await createTimeoutDemoJob(targetConversation.id, conversationIdentityExpectation(targetConversation));
       setActiveId(job.id);
     });
   }
 
   async function createFailureDemo() {
-    if (!activeConversationId) {
+    const targetConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+    if (!targetConversation) {
       setMessage("请先选择要创建演示任务的客户会话。");
       return;
     }
     await runAction("创建失败演示任务", async () => {
-      const job = await createFailureDemoJob(activeConversationId);
+      const job = await createFailureDemoJob(targetConversation.id, conversationIdentityExpectation(targetConversation));
       setActiveId(job.id);
     });
   }
@@ -1659,23 +1834,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
-  async function scanTimeouts() {
-    await runAction("扫描出图超时", async () => {
-      const result = await scanDesignTimeouts();
-      setMessage(`扫描完成：检查 ${result.scanned} 个任务，超时 ${result.timedOut} 个。`);
-    });
-  }
+    async function scanTimeouts() {
+      await runAction("扫描出图超时", async () => {
+        const result = await scanDesignTimeouts(activeIdentityFilters());
+        setMessage(`扫描完成：检查 ${result.scanned} 个任务，超时 ${result.timedOut} 个。`);
+      });
+    }
 
   async function autoSubmitDrafts() {
     let firstSubmittedId = "";
     let summary = "";
     await runAction(
-      "自动提交设计草稿",
-      async () => {
-        const result = await autoSubmitDesignDrafts();
-        firstSubmittedId = result.submitted[0]?.id || "";
-        summary = `检查 ${result.scanned} 个草稿，提交 ${result.submitted.length} 个，跳过 ${result.skipped.length} 个，失败 ${result.failed.length} 个。`;
-      },
+        "自动提交设计草稿",
+        async () => {
+          const result = await autoSubmitDesignDrafts(activeIdentityFilters());
+          firstSubmittedId = result.submitted[0]?.id || "";
+          summary = `检查 ${result.scanned} 个草稿，提交 ${result.submitted.length} 个，跳过 ${result.skipped.length} 个，失败 ${result.failed.length} 个。`;
+        },
       () => {
         if (firstSubmittedId) setActiveId(firstSubmittedId);
         setMessage(summary || "自动提交设计草稿完成。");
@@ -1699,30 +1874,33 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return;
     }
     let summary = "";
-    let diagnosticRun: AutomationRun | null = null;
     await runAction(
       "低价值自动处理",
       async () => {
-        const startedAt = new Date().toISOString();
-        const startedMs = Date.now();
-        const result = await autoProcessLowValue();
-        const orderConfirmationQueued = result.orderConfirmation?.queued.length || 0;
-        const orderFollowupQueued = result.orderFollowup?.queued.length || 0;
-        summary = `草稿提交 ${result.autoSubmit.submitted.length} 个，跳过 ${result.autoSubmit.skipped.length} 个；出图发送入队 ${result.imageSend.queued.length} 个；报价入队 ${result.quoteSend?.queued.length || 0} 个；订单草稿 ${result.orderDraft?.created.length || 0} 个；订单确认 ${orderConfirmationQueued} 个，订单跟进 ${orderFollowupQueued} 个，失败 ${(result.imageSend.failed.length || 0) + (result.quoteSend?.failed.length || 0) + (result.orderDraft?.failed.length || 0)} 个。`;
-        diagnosticRun = {
-          trigger: "manual",
-          startedAt,
-          completedAt: new Date().toISOString(),
-          durationMs: Date.now() - startedMs,
-          steps: [{ step: "lowValueAutomation", status: "completed", durationMs: Date.now() - startedMs }],
-          errors: [],
-          results: { lowValueAutomation: result },
-        };
+        const result = await runAutomationOnce();
+        const lowValue = result.results.lowValueAutomation as LowValueAutomationResult | undefined;
+        const sendQueue = result.results.processLowValueSendQueue as SafeSendQueueResult | undefined;
+        const orderDraft = result.results.scanLowValueOrderDrafts as LowValueOrderDraftResult | undefined;
+        const orderConfirmation =
+          result.results.scanLowValueOrderConfirmations as LowValueOrderSendResult | undefined;
+        const orderFollowup =
+          result.results.scanLowValueOrderFollowups as LowValueOrderFollowupResult | undefined;
+        const orderCreated = (lowValue?.orderDraft?.created.length || 0) + (orderDraft?.created.length || 0);
+        const orderConfirmationQueued =
+          (lowValue?.orderConfirmation?.queued.length || 0) + (orderConfirmation?.queued.length || 0);
+        const orderFollowupQueued =
+          (lowValue?.orderFollowup?.queued.length || 0) + (orderFollowup?.queued.length || 0);
+        const failedCount =
+          (lowValue?.imageSend.failed.length || 0) +
+          (lowValue?.quoteSend?.failed.length || 0) +
+          (lowValue?.orderDraft?.failed.length || 0) +
+          (orderDraft?.failed.length || 0) +
+          (orderConfirmation?.failed.length || 0) +
+          (orderFollowup?.failed.length || 0);
+        summary = `低价值自动处理完成：草稿提交 ${lowValue?.autoSubmit.submitted.length || 0} 个，跳过 ${lowValue?.autoSubmit.skipped.length || 0} 个；出图发送入队 ${lowValue?.imageSend.queued.length || 0} 个；报价入队 ${lowValue?.quoteSend?.queued.length || 0} 个；安全发送处理 ${sendQueue?.processed.length || 0} 个；订单草稿 ${orderCreated} 个；订单确认 ${orderConfirmationQueued} 个，订单跟进 ${orderFollowupQueued} 个，失败 ${failedCount} 个。`;
+        setAutomationStatus((current) => mergeAutomationStatusRun(current, result, { incrementRunCount: !result.skipped }));
       },
       () => {
-        if (diagnosticRun) {
-          setAutomationStatus((current) => mergeAutomationStatusRun(current, diagnosticRun));
-        }
         setMessage(summary || "低价值自动处理完成。");
       },
     );
@@ -1779,12 +1957,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     let firstHandedOffId = "";
     let summary = "";
     await runAction(
-      "高价值转人工",
-      async () => {
-        const result = await scanHighValueHandoffs();
-        firstHandedOffId = result.handedOff[0]?.id || "";
-        summary = `检查 ${result.scanned} 个高价值任务，转人工 ${result.handedOff.length} 个，跳过 ${result.skipped.length} 个。`;
-      },
+        "高价值转人工",
+        async () => {
+          const result = await scanHighValueHandoffs(activeIdentityFilters());
+          firstHandedOffId = result.handedOff[0]?.id || "";
+          summary = `检查 ${result.scanned} 个高价值任务，转人工 ${result.handedOff.length} 个，跳过 ${result.skipped.length} 个。`;
+        },
       () => {
         if (firstHandedOffId) setActiveId(firstHandedOffId);
         setMessage(summary || "高价值转人工扫描完成。");
@@ -1945,18 +2123,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (!activeJob) return;
     await runAction("轮询设计结果", async () => {
       const result = await pollDesignJob(activeJob.id, identityExpectation(activeJob));
-      setMessage(`设计平台状态：${result.remoteStatus}`);
+      setMessage(result.autoRetried ? "设计平台状态：已自动重试，正在重新出图。" : `设计平台状态：${result.remoteStatus}`);
     });
   }
 
   async function pollAllActiveDesignResults() {
     let summary = "";
     await runAction(
-      "批量轮询设计结果",
-      async () => {
-        const result = await pollActiveDesignResults();
-        summary = `轮询 ${result.scanned} 个出图中任务：完成 ${result.completed.length} 个，失败 ${result.failed.length} 个，仍在生成 ${result.generating.length} 个，取消 ${result.cancelled.length} 个，错误 ${result.errors.length} 个。`;
-      },
+        "批量轮询设计结果",
+        async () => {
+          const result = await pollActiveDesignResults(activeIdentityFilters());
+          summary = `轮询 ${result.scanned} 个出图中任务：完成 ${result.completed.length} 个，失败 ${result.failed.length} 个，自动重试 ${result.retried?.length || 0} 个，仍在生成 ${result.generating.length} 个，取消 ${result.cancelled.length} 个，错误 ${result.errors.length} 个。`;
+        },
       () => {
         load();
         setMessage(summary || "已批量轮询设计结果。");
@@ -2301,7 +2479,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage("该会话已人工接管，先解除接管后再创建演示发送任务。");
       return;
     }
-    await runAction("创建发送任务", () => createDemoSendTask(targetConversation.id, targetConversation.wechatAccountId));
+    await runAction("创建发送任务", () =>
+      createDemoSendTask(targetConversation.id, targetConversation.wechatAccountId, conversationIdentityExpectation(targetConversation)),
+    );
   }
 
   async function captureDemoWindow(account: WechatAccount, mode: "correct" | "wrong_chat" | "offline") {
@@ -2319,7 +2499,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       wrong_chat: "模拟错聊微信窗口",
       offline: "模拟微信离线窗口",
     };
-    await runAction(labels[mode], () => createDemoWindowSnapshot(mode, account.id, targetConversation.id));
+    await runAction(labels[mode], () =>
+      createDemoWindowSnapshot(mode, account.id, targetConversation.id, conversationIdentityExpectation(targetConversation)),
+    );
   }
 
   async function scanRealWindowSnapshots() {
@@ -2328,7 +2510,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       "扫描真实微信窗口快照",
       async () => {
         const result = await scanWindowSnapshotInbox();
-        summary = `扫描 ${result.scanned} 个文件，成功 ${result.processed.length} 个，失败 ${result.failed.length} 个`;
+        summary = windowSnapshotScanSummary(result);
         return result;
       },
       () => setMessage(summary || "真实微信窗口快照扫描完成。"),
@@ -2342,7 +2524,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       async () => {
         const result = await captureWindowObserverOnce();
         const status = result.status;
-        summary = `观察器 ${status.status}，扫描 ${result.scan.scanned} 个文件，成功 ${result.scan.processed.length} 个，失败 ${result.scan.failed.length} 个`;
+        summary = `观察器 ${status.status}，${windowSnapshotScanSummary(result.scan)}`;
         return result;
       },
       () => setMessage(summary || "当前窗口采集完成。"),
@@ -2383,15 +2565,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function validateWrong(task: SendTask) {
-    await runAction("错误窗口校验", () => validateSendTask(task.id, "wrong_chat"));
+    await runAction("错误窗口校验", () => validateSendTask(task.id, "wrong_chat", identityExpectation(task)));
   }
 
   async function validateCorrect(task: SendTask) {
-    await runAction("正确窗口校验", () => validateSendTask(task.id, "correct"));
+    await runAction("正确窗口校验", () => validateSendTask(task.id, "correct", identityExpectation(task)));
   }
 
   async function validateCurrentWindow(task: SendTask) {
-    await runAction("当前窗口快照校验", () => validateSendTaskCurrentWindow(task.id));
+    await runAction("当前窗口快照校验", () => validateSendTaskCurrentWindow(task.id, identityExpectation(task)));
   }
 
   async function executeDryRun(task: SendTask) {
@@ -2480,7 +2662,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function scanSendOps() {
-    await runAction("扫描发送异常", () => scanSendOperations());
+    await runAction("扫描发送异常", () => scanSendOperations(activeIdentityFilters()));
   }
 
   async function refreshBridgeOutbox() {
@@ -2527,7 +2709,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       "安全处理发送队列",
       async () => {
-        const result = await processSafeSendQueue();
+          const result = await processSafeSendQueue(activeIdentityFilters());
         const queueHeadBlocked = result.skipped.filter((item) => item.reason === "not_account_queue_head").length;
         const queueAdvice = queueHeadBlocked ? `其中 ${queueHeadBlocked} 个被前序发送任务卡住。` : "";
         summary = `检查 ${result.scanned} 个待发任务，处理 ${result.processed.length} 个，拦截 ${result.blocked.length} 个，跳过 ${result.skipped.length} 个，失败 ${result.failed.length} 个。${queueAdvice}`;
@@ -2583,7 +2765,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           }
         }
 
-        const sendResult = await processSafeSendQueue();
+        const sendResult = await processSafeSendQueue(activeIdentityFilters());
         summary.sendProcessed = sendResult.processed.length;
         summary.blocked = sendResult.blocked.length;
         summary.skipped = sendResult.skipped.length;
@@ -2699,10 +2881,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       `${wechatChannelLabel(channel)}入站演练`,
       async () => {
-        const result = (await testWechatChannelInbound(channel, {
-          wechatAccountId: conversation.wechatAccountId,
-          conversationId: conversation.id,
-          customerId: conversation.customerId,
+          const result = (await testWechatChannelInbound(channel, {
+            ...conversationIdentityExpectation(conversation),
+            wechatAccountId: conversation.wechatAccountId,
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
           text,
         })) as any;
         const route = result?.result?.route;
@@ -2883,6 +3066,36 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  function confirmHighValueOrderManualRelease(
+    order: OrderDraft,
+    action: "confirmation" | "production_followup" | "delivery_followup",
+  ) {
+    if (!isHighValueOrder(order)) return {};
+    const labels = {
+      confirmation: "发送订单确认",
+      production_followup: "发送生产进度",
+      delivery_followup: "发送交期说明",
+    };
+    const releaseReasons = {
+      confirmation: "manual_approve_order_confirmation",
+      production_followup: "manual_approve_order_followup",
+      delivery_followup: "manual_approve_order_followup",
+    };
+    const confirmed = window.confirm(
+      `这是高价值订单，${labels[action]}前请确认：客户、微信账号、金额、付款状态、效果图和交付承诺都已人工核对。确认继续入队吗？`,
+    );
+    if (!confirmed) {
+      setMessage("已取消高价值订单发送，请人工核对后再处理。");
+      return null;
+    }
+    return {
+      releaseManualLock: true,
+      releaseReason: releaseReasons[action],
+      reason: releaseReasons[action],
+      note: `高价值订单已人工核对，${labels[action]}已进入微信安全发送队列。`,
+    };
+  }
+
   async function queueOrderDraftConfirmation(order: OrderDraft) {
     if (order.status === "cancelled") {
       setMessage("订单已取消，不能发送确认。");
@@ -2905,7 +3118,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`订单确认发送前检查未通过：${result.reason}`);
       return;
     }
-    await runAction("订单确认进入发送队列", () => queueOrderConfirmation(order.id, identityExpectation(order)));
+    const manualRelease = confirmHighValueOrderManualRelease(order, "confirmation");
+    if (manualRelease === null) return;
+    await runAction("订单确认进入发送队列", () => queueOrderConfirmation(order.id, identityExpectation(order), manualRelease));
   }
 
   function showOrderConfirmationMessage(order: OrderDraft) {
@@ -2963,8 +3178,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(blocker);
       return;
     }
+    const manualRelease = confirmHighValueOrderManualRelease(order, type === "delivery" ? "delivery_followup" : "production_followup");
+    if (manualRelease === null) return;
     await runAction(type === "delivery" ? "交期说明进入发送队列" : "生产通知进入发送队列", () =>
-      queueOrderFollowup(order.id, type, identityExpectation(order)),
+      queueOrderFollowup(order.id, type, identityExpectation(order), manualRelease),
     );
   }
 
@@ -3231,7 +3448,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           ? activeQuotePreview
           : quoteCenterPreview?.quote.id === quote.id
             ? quoteCenterPreview
-            : await getQuotePreview(quote.id);
+            : await getQuotePreview(quote.id, identityExpectation(quote));
       const previewRisk = quoteSendBlockReason(preview.quote, preview.warnings);
       if (previewRisk) return { ok: false, reason: previewRisk, preview };
       return { ok: true, preview };
@@ -3259,7 +3476,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           ? activeQuotePreview
           : quoteCenterPreview?.quote.id === quote.id
             ? quoteCenterPreview
-            : await getQuotePreview(quote.id);
+            : await getQuotePreview(quote.id, identityExpectation(quote));
       const previewRisk = quoteSendBlockReason(preview.quote, preview.warnings, { allowManualReview: true });
       if (previewRisk) return { ok: false, reason: previewRisk, preview };
       return { ok: true, preview };
@@ -3273,7 +3490,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   ): Promise<{ ok: true; preview: OrderConfirmationPreview } | { ok: false; reason: string; preview?: OrderConfirmationPreview }> {
     try {
       const preview =
-        orderConfirmationPreview?.orderDraft.id === order.id ? orderConfirmationPreview : await getOrderConfirmationPreview(order.id);
+        orderConfirmationPreview?.orderDraft.id === order.id
+          ? orderConfirmationPreview
+          : await getOrderConfirmationPreview(order.id, identityExpectation(order));
       const previewRisk = orderConfirmationBlockReason(preview.orderDraft, preview.warnings);
       if (previewRisk) return { ok: false, reason: previewRisk, preview };
       return { ok: true, preview };
@@ -3289,7 +3508,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`订单确认发送前检查未通过：${result.reason}`);
       throw new Error(result.reason);
     }
-    return queueOrderConfirmation(order.id, identityExpectation(order));
+    const manualRelease = confirmHighValueOrderManualRelease(order, "confirmation");
+    if (manualRelease === null) throw new Error("高价值订单需要人工确认后才能发送。");
+    return queueOrderConfirmation(order.id, identityExpectation(order), manualRelease);
   }
 
   async function toggleQuoteCenterPreview(quote: QuoteDraft) {
@@ -3301,7 +3522,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     try {
       setBusy("生成报价话术预览");
       setMessage("正在生成报价话术预览...");
-      const preview = await getQuotePreview(quote.id);
+      const preview = await getQuotePreview(quote.id, identityExpectation(quote));
       setQuoteCenterPreviewId(quote.id);
       setQuoteCenterPreview(preview);
       setMessage("报价话术预览已生成。");
@@ -3340,7 +3561,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     try {
       setBusy("生成订单确认预览");
       setMessage("正在生成订单确认话术...");
-      const preview = await getOrderConfirmationPreview(order.id);
+      const preview = await getOrderConfirmationPreview(order.id, identityExpectation(order));
       setOrderConfirmationPreviewId(order.id);
       setOrderConfirmationPreview(preview);
       setMessage("订单确认话术预览已生成。");
@@ -3570,6 +3791,52 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  async function reviewOrderDraft(
+    order: OrderDraft,
+    decision: "approve_confirmation" | "approve_followup" | "request_followup" | "reject_order",
+    followupType: "production" | "delivery" = "delivery",
+  ) {
+    const notes: Record<typeof decision, string> = {
+      approve_confirmation: "高价值订单已人工核对，订单确认可以进入微信安全发送队列。",
+      approve_followup: followupType === "delivery" ? "高价值订单已人工核对，交期说明可以发送。" : "高价值订单已人工核对，生产进度可以发送。",
+      request_followup: "高价值订单需要客服继续跟进收款、交期和客户需求。",
+      reject_order: "高价值订单暂不适合继续自动发送，请重新核对订单信息。",
+    };
+    if (decision === "approve_confirmation") {
+      if (hasActiveOrderConfirmationTask(order)) {
+        setMessage(`订单确认已在发送队列中：${sendStatusLabel(order.confirmationSendTask?.status || "")}`);
+        return;
+      }
+      const result = await checkOrderReadyForConfirmation(order);
+      if (result.preview) {
+        setOrderConfirmationPreviewId(order.id);
+        setOrderConfirmationPreview(result.preview);
+      }
+      if (!result.ok) {
+        setMessage(`订单确认发送前检查未通过：${result.reason}`);
+        return;
+      }
+      if (confirmHighValueOrderManualRelease(order, "confirmation") === null) return;
+    }
+    if (decision === "approve_followup") {
+      const blocker = orderFollowupBlockReason(order, followupType);
+      if (blocker) {
+        setMessage(blocker);
+        return;
+      }
+      if (confirmHighValueOrderManualRelease(order, followupType === "delivery" ? "delivery_followup" : "production_followup") === null) return;
+    }
+    await runAction("处理订单审核", () =>
+      reviewOrder(order.id, {
+        ...identityExpectation(order),
+        decision,
+        followupType,
+        reviewer: "人工客服",
+        note: notes[decision],
+      }),
+    );
+  }
+
   async function downloadSkuTemplate() {
     let fileName = "";
     await runAction(
@@ -3712,6 +3979,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage("请先预览并确认有可导入的商品。");
       return;
     }
+    if ((skuImportReadinessSummary?.blocked || 0) > 0) {
+      setMessage(`这批商品还有 ${skuImportReadinessSummary?.blocked || 0} 个阻塞项，先修正图片、价格、库存、规格或交期后再入库。`);
+      return;
+    }
 
     let summary = "";
     await runAction(
@@ -3728,10 +3999,99 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  function exportSkuImportBlockedRows() {
+    const rows = skuImportPreview?.rows || [];
+    if (!rows.length) {
+      setMessage("请先预览商品表格，再导出阻塞清单。");
+      return;
+    }
+    const blockedRows = rows
+      .map((row, index) => {
+        const issues = skuImportIssuesForRow(row, skuImportPreview?.audit?.issues || []);
+        const readiness = skuImportRowReadiness(row, issues);
+        return { row, index, issues, readiness };
+      })
+      .filter((item) => item.readiness.tone === "blocked");
+    if (!blockedRows.length) {
+      setMessage("这批商品没有阻塞项，可以确认入库或继续复核提醒项。");
+      return;
+    }
+    const csvRows = [
+      ["预览行", "SKU编号", "商品名称", "类型", "分类", "阻塞判断", "阻塞原因", "体检问题", "成本价", "售价", "库存", "主图", "尺寸", "重量g", "供应商", "交期天数", "场景标签"],
+      ...blockedRows.map(({ row, index, issues, readiness }) => [
+        String(index + 1),
+        row.skuCode || "",
+        row.name || "",
+        row.type || "",
+        row.category || "",
+        readiness.label,
+        readiness.detail,
+        issues.map((issue) => `${skuSeverityLabel(issue.severity)}:${issue.message}`).join("；"),
+        String(row.costPrice ?? ""),
+        String(row.salePrice ?? ""),
+        String(row.stock ?? ""),
+        row.mainImagePath || "",
+        dimensionsToText(row.dimensions),
+        String(row.weightGram ?? ""),
+        row.supplier || "",
+        String(row.leadTimeDays ?? ""),
+        (row.sceneTags || []).join("、"),
+      ]),
+    ];
+    const fileName = `sku-import-blocked-${formatDateForFile(new Date())}.csv`;
+    downloadTextFile(fileName, "text/csv;charset=utf-8", `\uFEFF${toCsv(csvRows)}`);
+    setMessage(`已导出 ${blockedRows.length} 个导入阻塞商品，请修正后重新预览。`);
+  }
+
   function editSku(sku: Sku) {
     setSkuForm(skuToForm(sku));
     setSkuWorkbenchView("editor");
     setMessage(`正在编辑商品 ${sku.skuCode}`);
+  }
+
+  function handleSkuChangeImpact(log: SkuChangeLog, impact: ReturnType<typeof skuChangeImpactSummary>) {
+    const sku = skus.find((row) => row.skuCode === log.skuCode);
+    if (!sku) {
+      setSkuSearch(log.skuCode);
+      setSkuWorkbenchView("catalog");
+      setMessage(`没有在当前商品列表找到 ${log.skuCode}，已按 SKU 编号搜索。`);
+      return;
+    }
+    setSkuSearch(sku.skuCode);
+    setSelectedSkuCodes([sku.skuCode]);
+    if (impact.repairFilter) {
+      setSkuWorkbenchView("repair");
+      setSkuRepairFilter(impact.repairFilter);
+      setSkuIssueFilter(impact.repairFilter === "image" ? "missing_image" : "problem");
+      scrollToWorkspaceSection("sku-library");
+      setMessage(`正在处理 ${sku.skuCode}：${impact.nextAction}`);
+      return;
+    }
+    editSku(sku);
+    scrollToWorkspaceSection("sku-library");
+    setMessage(`正在查看 ${sku.skuCode}：${impact.nextAction}`);
+  }
+
+  function focusSkuFormField(field: string, label?: string) {
+    if (typeof document === "undefined") return;
+    const element = document.getElementById(skuFormFieldTargetId(field));
+    if (!element) {
+      setMessage(`没有找到字段 ${label || skuFieldLabel(field)} 的输入位置。`);
+      return;
+    }
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => {
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        element.focus();
+        element.select();
+      } else if (element instanceof HTMLSelectElement) {
+        element.focus();
+      } else {
+        const focusable = element.querySelector<HTMLElement>("input, textarea, select, button");
+        focusable?.focus();
+      }
+    }, 180);
+    setMessage(`已定位到 ${label || skuFieldLabel(field)}，补齐后点击保存商品。`);
   }
 
   function openSkuFromRow(event: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>, sku: Sku) {
@@ -3827,12 +4187,35 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`图片资料还不能保存：${imageErrors[0].message}`);
       return;
     }
+    const readinessWarnings = validateSkuFormReadiness(skuForm);
+    const blockingWarnings = readinessWarnings.filter((warning) => warning.severity === "error");
+    if (blockingWarnings.length) {
+      setMessage(`商品还不能保存：${blockingWarnings[0].message}`);
+      return;
+    }
+    const referenceWarnings = validateSkuFormReferences(skuForm, knownSkuCodeSet);
+    if (referenceWarnings.length) {
+      setMessage(`SKU 引用还不能保存：${referenceWarnings[0].message}`);
+      return;
+    }
+    const reviewWarnings = readinessWarnings.filter((warning) => warning.severity === "warning");
+    if (reviewWarnings.length) {
+      const confirmed = window.confirm(
+        `这个商品保存后需要人工复核：${reviewWarnings.slice(0, 3).map((warning) => warning.message).join("；")}。确认先保存吗？`,
+      );
+      if (!confirmed) {
+        setMessage("已取消保存，请先补齐会影响自动搭配、报价或采购追踪的资料。");
+        return;
+      }
+    }
+    const automationStatus = skuFormAutomationPreview(skuForm, readinessWarnings);
+    const saveOutcomeMessage = skuSavedOutcomeMessage(payload.skuCode, automationStatus, readinessWarnings);
 
     await runAction(
       "保存商品",
       () => upsertSku(payload),
       () => {
-        setMessage(`商品 ${payload.skuCode} 已保存。`);
+        setMessage(saveOutcomeMessage);
         setSkuForm(emptySkuForm);
         setSkuWorkbenchView("catalog");
       },
@@ -3993,6 +4376,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         .finally(() => {
           loadInFlight = false;
         });
+      loadWechatChannelStatusOnly(null).catch(() => {
+        // Keep the WeChat center usable even when unrelated startup data is unavailable.
+      });
     };
     runStartupLoad();
     getSkuImportFields().then(setSkuImportFields).catch(() => setSkuImportFields([]));
@@ -4325,6 +4711,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const activeJobImages = activeJob?.images || [];
   const activeJobLocalImageCount = activeJobImages.filter((image) => Boolean(image.localPath)).length;
   const activeDesignImageSendRisk = activeJob ? designImageSendBlockReason(activeJob) : "";
+  const activeDesignEscalationNotice = activeJob ? designJobEscalationNotice(activeJob) : null;
   const quoteCenterSearchTerm = quoteCenterSearch.trim().toLowerCase();
   const filteredQuotes = quotes.filter((quote) => {
     if (quoteStatusFilter !== "all" && quote.status !== quoteStatusFilter) return false;
@@ -4618,7 +5005,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return;
     }
     setActiveQuotePreview(null);
-    getQuotePreview(activeQuote.id)
+    getQuotePreview(activeQuote.id, identityExpectation(activeQuote))
       .then((preview) => {
         if (!cancelled) setActiveQuotePreview(preview);
       })
@@ -4660,6 +5047,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     [skuImportPreview],
   );
   const skuRepairQueue = useMemo(() => catalogAudit?.repairQueue || [], [catalogAudit]);
+  const visibleSkuRepairQueue = useMemo(
+    () => skuRepairQueue.filter((item) => skuRepairItemMatchesFilter(item, skuRepairFilter)),
+    [skuRepairFilter, skuRepairQueue],
+  );
+  const skuRepairFilterCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const option of skuRepairFilterOptions) {
+      counts[option.value] = skuRepairQueue.filter((item) => skuRepairItemMatchesFilter(item, option.value)).length;
+    }
+    return counts;
+  }, [skuRepairQueue]);
   const skuImageProblems = useMemo(() => catalogAudit?.imageProblems || [], [catalogAudit]);
   const knownSkuCodeSet = useMemo(() => new Set(skus.map((sku) => sku.skuCode).filter(Boolean)), [skus]);
   const skuNameByCode = useMemo(() => new Map(skus.map((sku) => [sku.skuCode, sku.name])), [skus]);
@@ -4683,6 +5081,44 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const skuFormAutomationStatus = useMemo(() => skuFormAutomationPreview(skuForm, skuFormReadinessWarnings), [skuForm, skuFormReadinessWarnings]);
   const skuFormReferenceWarnings = useMemo(() => validateSkuFormReferences(skuForm, knownSkuCodeSet), [knownSkuCodeSet, skuForm]);
   const skuFormReferenceMatches = useMemo(() => skuFormReferenceSummary(skuForm, skuNameByCode), [skuForm, skuNameByCode]);
+  const activeSkuRepairItem = useMemo(() => {
+    const skuCode = skuForm.skuCode.trim();
+    const name = skuForm.name.trim();
+    if (!skuCode && !name) return null;
+    return skuRepairQueue.find((item) =>
+      (skuCode && item.skuCode === skuCode) || (name && item.name === name),
+    ) || null;
+  }, [skuForm.name, skuForm.skuCode, skuRepairQueue]);
+  const activeSkuRepairProgress = useMemo(() => {
+    if (!activeSkuRepairItem) return null;
+    const warningFields = new Set(skuFormReadinessWarnings.map((warning) => warning.field));
+    for (const warning of skuFormReferenceWarnings) {
+      warningFields.add(warning.field);
+    }
+    const resolvedFields = activeSkuRepairItem.missingFields.filter((field) =>
+      !warningFields.has(field.field) && skuFormFieldHasUsableValue(skuForm, field.field),
+    );
+    const unresolvedFields = activeSkuRepairItem.missingFields.filter((field) =>
+      warningFields.has(field.field) || !skuFormFieldHasUsableValue(skuForm, field.field),
+    );
+    const tone =
+      skuFormAutomationStatus.tone === "ready"
+        ? "ready"
+        : skuFormAutomationStatus.tone === "blocked" || skuFormAutomationStatus.tone === "draft"
+          ? "blocked"
+          : "review";
+    const label = unresolvedFields.length
+      ? `仍有 ${unresolvedFields.length} 项待补`
+      : tone === "ready"
+        ? "补齐后可自动"
+        : tone === "blocked"
+          ? "仍会阻塞"
+          : "补齐后需复核";
+    const detail = unresolvedFields.length
+      ? `优先处理：${unresolvedFields.slice(0, 3).map((field) => field.label || skuFieldLabel(field.field)).join("、")}`
+      : skuFormAutomationStatus.detail;
+    return { tone, label, detail, resolvedFields, unresolvedFields };
+  }, [activeSkuRepairItem, skuForm, skuFormAutomationStatus, skuFormReadinessWarnings, skuFormReferenceWarnings]);
   const visibleSkus = useMemo(() => {
     const query = skuSearch.trim().toLowerCase();
     return skus.filter((sku) => {
@@ -4758,6 +5194,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           ".training-panel",
           ".send-panel",
           ".config-status-grid",
+          ".config-mode-guide",
           ".config-form-grid",
           ".config-actions",
           ".config-activation-panel",
@@ -4902,6 +5339,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   );
   const hiddenManualLockedConversationCount = Math.max(0, prioritizedManualLockedConversations.length - 5);
   const orderDraftByQuoteId = new Map(orderDrafts.map((order) => [order.quoteDraftId, order]));
+  const reviewOrderDrafts = dedupeOrdersById([...(reviewCenter.orderDrafts || []), ...orderDrafts]);
   const highValueManualQueueItems = [
     ...jobs
       .filter((job) =>
@@ -4923,6 +5361,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           priority: step.priority,
           primaryLabel: "审设计",
           focus: () => {
+            setActiveId(job.id);
+            setReviewWorkbenchView("design");
+            scrollToWorkspaceSection("review-center");
+          },
+          run: () => {
             setActiveId(job.id);
             setReviewWorkbenchView("design");
             scrollToWorkspaceSection("review-center");
@@ -4950,12 +5393,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             setReviewWorkbenchView("quote");
             focusQuoteCenter(quote.id);
           },
+          run: () => {
+            setReviewWorkbenchView("quote");
+            focusQuoteCenter(quote.id);
+          },
         };
       }),
-    ...orderDrafts
+    ...reviewOrderDrafts
       .filter((order) => isHighValueOrder(order) && !["fulfilled", "cancelled"].includes(order.status))
       .map((order) => {
         const step = highValueOrderManualStep(order);
+        const action = highValueOrderManualPrimaryAction(order);
         return {
           id: `order-${order.id}`,
           kind: "订单",
@@ -4967,9 +5415,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           nextAction: step.nextAction,
           tone: step.tone,
           priority: step.priority,
-          primaryLabel: "跟订单",
+          primaryLabel: action.label,
           focus: () => {
             setReviewWorkbenchView("handoff");
+            focusOrderDraft(order);
+          },
+          run: () => {
+            setReviewWorkbenchView("handoff");
+            if (action.type === "queue_confirmation") {
+              void reviewOrderDraft(order, "approve_confirmation");
+              return;
+            }
+            if (action.type === "queue_delivery") {
+              void reviewOrderDraft(order, "approve_followup", "delivery");
+              return;
+            }
             focusOrderDraft(order);
           },
         };
@@ -4991,6 +5451,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         priority: blockedSendCount ? 15 : 80,
         primaryLabel: "看会话",
         focus: () => void focusConversation(conversation.id, "conversation-center"),
+        run: () => void focusConversation(conversation.id, blockedSendCount ? "send-center" : "conversation-center"),
       };
     }),
   ].sort((left, right) => left.priority - right.priority).slice(0, 8);
@@ -4998,6 +5459,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     platformReadiness?.checks.find((check) => !check.ok && check.severity === "error")?.label ||
     platformReadiness?.nextSteps[0] ||
     "";
+  const designPlatformOperationGuide = buildDesignPlatformOperationGuide({
+    config: platformConfig,
+    form: platformConfigForm,
+    health: platformHealth,
+    readiness: platformReadiness,
+  });
+  const showStandaloneDesignPlatformGuide =
+    Boolean(designPlatformOperationGuide) && !(platformReadiness && !platformReadiness.canSubmitFormalGeneration);
   const platformPillTone = platformReadiness
     ? platformReadiness.canSubmitFormalGeneration
       ? "online"
@@ -5169,12 +5638,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         {platformReadiness && !platformReadiness.canSubmitFormalGeneration ? (
           <div className="readiness-banner warning">
             <ShieldAlert size={17} aria-hidden="true" />
-            <strong>真实出图暂不可提交</strong>
-            <span>{platformReadiness.nextSteps[0] || "设计平台登录态或设备激活还没有通过。"}</span>
+            <strong>{designPlatformOperationGuide?.title || "真实出图暂不可提交"}</strong>
+            <span>{designPlatformOperationGuide?.detail || platformReadiness.nextSteps[0] || "设计平台登录态或设备激活还没有通过。"}</span>
             <small>
-              凭证 {platformReadiness.config.hasAccessToken || platformReadiness.config.hasCookie ? "已配置" : "未配置"} · 设备ID{" "}
+              {designPlatformOperationGuide?.meta ? `${designPlatformOperationGuide.meta} · ` : ""}凭证{" "}
+              {platformReadiness.config.hasAccessToken || platformReadiness.config.hasCookie ? "已配置" : "未配置"} · 设备ID{" "}
               {platformReadiness.config.hasDeviceId ? "已配置" : "未配置"}
             </small>
+          </div>
+        ) : null}
+        {showStandaloneDesignPlatformGuide && designPlatformOperationGuide ? (
+          <div className={`readiness-banner platform-mode-guide ${designPlatformOperationGuide.tone}`}>
+            <Settings2 size={17} aria-hidden="true" />
+            <strong>{designPlatformOperationGuide.title}</strong>
+            <span>{designPlatformOperationGuide.detail}</span>
+            <small>{designPlatformOperationGuide.meta}</small>
           </div>
         ) : null}
 
@@ -5197,6 +5675,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 设备 {platformConfig?.hasDeviceId ? `已绑定${platformConfig.deviceIdSuffix ? ` · ${platformConfig.deviceIdSuffix}` : ""}` : "未绑定"}
               </span>
             </div>
+            {designPlatformOperationGuide ? (
+              <div className={`config-mode-guide ${designPlatformOperationGuide.tone}`}>
+                <strong>{designPlatformOperationGuide.title}</strong>
+                <span>{designPlatformOperationGuide.detail}</span>
+              </div>
+            ) : null}
           </div>
           <div className="config-form-grid">
             <div className="field-control field-control-inline">
@@ -5215,9 +5699,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       setPlatformConfigForm((current) => ({
                         ...current,
                         adapter: option.value,
-                        baseUrl:
-                          current.baseUrl ||
-                          (option.value === "art_image_local" ? "http://127.0.0.1:3000" : "http://127.0.0.1:3700"),
+                        baseUrl: shouldUseDesignPlatformDefaultBaseUrl(current.baseUrl)
+                          ? designPlatformDefaultBaseUrl(option.value)
+                          : current.baseUrl,
                       }))
                     }
                     type="button"
@@ -5233,7 +5717,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 autoComplete="off"
                 value={platformConfigForm.baseUrl}
                 onChange={(event) => setPlatformConfigForm({ ...platformConfigForm, baseUrl: event.target.value })}
-                placeholder="http://127.0.0.1:3000"
+                placeholder={designPlatformDefaultBaseUrl(platformConfigForm.adapter)}
               />
             </label>
             <label className="field-control">
@@ -5576,7 +6060,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </button>
               </div>
               <div className="panel-actions">
-                <button type="button" className="ghost compact-button" onClick={() => void load()} disabled={Boolean(busy)}>
+                <button type="button" className="ghost compact-button" onClick={() => void loadWechatChannelStatusOnly()} disabled={Boolean(busy)}>
                   <RefreshCw size={14} aria-hidden="true" />刷新状态
                 </button>
               </div>
@@ -5670,7 +6154,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <strong>微信通道状态暂不可用</strong>
                       <span>刷新后会读取后端真实通道状态；接入状态不再由前端静态假设。</span>
                       <div className="empty-actions">
-                        <button type="button" className="primary" onClick={() => void load()} disabled={Boolean(busy)}>
+                        <button type="button" className="primary" onClick={() => void loadWechatChannelStatusOnly()} disabled={Boolean(busy)}>
                           <RefreshCw size={16} aria-hidden="true" />刷新状态
                         </button>
                       </div>
@@ -5889,7 +6373,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <strong>还没有通道配置状态</strong>
                       <span>刷新后会读取个人微信、企业微信和小程序的真实后端配置检查结果。</span>
                       <div className="empty-actions">
-                        <button type="button" className="primary" onClick={() => void load()} disabled={Boolean(busy)}>
+                        <button type="button" className="primary" onClick={() => void loadWechatChannelStatusOnly()} disabled={Boolean(busy)}>
                           <RefreshCw size={16} aria-hidden="true" />刷新状态
                         </button>
                       </div>
@@ -5908,7 +6392,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <h2><MessageCircle size={17} aria-hidden="true" />聊天侧栏</h2>
                 <span>{activeJob?.conversation?.title || "未选择会话"}</span>
               </div>
-              {activeJob?.isHighValue ? <strong className="tag danger">高价值</strong> : <strong className="tag">低预算快审</strong>}
+              {activeJob && isHighValueDesignJob(activeJob) ? <strong className="tag danger">高价值</strong> : <strong className="tag">低预算快审</strong>}
             </div>
 
             {activeJob ? (
@@ -6044,6 +6528,40 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   onPreflight={preflightActiveJob}
                   disabled={Boolean(busy)}
                 />
+                {activeDesignEscalationNotice ? (
+                  <div
+                    className={`design-escalation-notice ${activeDesignEscalationNotice.tone}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <div>
+                      <strong>{activeDesignEscalationNotice.label}</strong>
+                      <span>{activeDesignEscalationNotice.detail}</span>
+                      <small>下一步：{activeDesignEscalationNotice.nextAction}</small>
+                    </div>
+                    <div className="design-escalation-actions">
+                      <button type="button" className="ghost compact-button" onClick={preflightActiveJob} disabled={Boolean(busy)}>
+                        <ShieldCheck size={14} aria-hidden="true" />预检
+                      </button>
+                      {canRetryDesignJobFromUi(activeJob) ? (
+                        <button type="button" className="primary compact-button" onClick={retryActiveJob} disabled={Boolean(busy)}>
+                          <RefreshCw size={14} aria-hidden="true" />重新提交
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="ghost compact-button"
+                        onClick={() => {
+                          setReviewWorkbenchView("design");
+                          scrollToWorkspaceSection("review-center");
+                        }}
+                        disabled={Boolean(busy)}
+                      >
+                        <ShieldAlert size={14} aria-hidden="true" />去人工审核
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="image-strip">
                   {(activeJob.images || []).length ? (
                     activeJob.images?.map((image) => (
@@ -6367,7 +6885,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <button type="button" className="ghost" onClick={selectByScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ImageIcon size={16} aria-hidden="true" />截图匹配</button>
                   <button type="button" className="ghost danger" onClick={selectByUnclearScreenshot} disabled={!activeJob.images?.length || Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />截图不确定</button>
                   <button type="button" className="ghost" onClick={pollActiveJob} disabled={!activeJob.externalJobId || Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />轮询结果</button>
-                  <button type="button" className="ghost" onClick={retryActiveJob} disabled={!["failed", "timeout"].includes(activeJob.status) || Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />重试</button>
+                  <button type="button" className="ghost" onClick={retryActiveJob} disabled={!canRetryDesignJobFromUi(activeJob) || Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />重试</button>
                   <button
                     type="button"
                     className="primary"
@@ -6453,28 +6971,32 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
             </div>
             <div className="job-list">
-              {jobs.length ? jobs.map((job) => (
-                <button
-                  aria-pressed={job.id === activeJob?.id}
-                  className={`job-row ${job.status} ${job.id === activeJob?.id ? "selected" : ""}`}
-                  key={job.id}
-                  onClick={() => setActiveId(job.id)}
-                  type="button"
-                >
-                  <span className={`dot ${isHighValueDesignJob(job) ? "danger" : ""}`} />
-                  <div>
-                    <strong>{job.customer?.name || "未命名客户"}</strong>
-                    <small>{readableScene(job.scene, "未填写场景")} · {job.outputCount} 张候选</small>
-                    {job.retryCount ? <small>已重试 {job.retryCount} 次</small> : null}
-                    {job.errorMessage ? (
-                      <small className="error-text" title={job.errorMessage}>
-                        {operatorStatusMessage(job.errorMessage, job.errorMessage)}
-                      </small>
-                    ) : null}
-                  </div>
-                  <em>{statusLabel[job.status] || job.status}</em>
-                </button>
-              )) : (
+              {jobs.length ? jobs.map((job) => {
+                const escalation = designJobEscalationNotice(job);
+                return (
+                  <button
+                    aria-pressed={job.id === activeJob?.id}
+                    className={`job-row ${job.status} ${job.id === activeJob?.id ? "selected" : ""}`}
+                    key={job.id}
+                    onClick={() => setActiveId(job.id)}
+                    type="button"
+                  >
+                    <span className={`dot ${isHighValueDesignJob(job) ? "danger" : ""}`} />
+                    <div>
+                      <strong>{job.customer?.name || "未命名客户"}</strong>
+                      <small>{readableScene(job.scene, "未填写场景")} · {job.outputCount} 张候选</small>
+                      {job.retryCount ? <small>已重试 {job.retryCount} 次</small> : null}
+                      {job.errorMessage ? (
+                        <small className="error-text" title={job.errorMessage}>
+                          {operatorStatusMessage(job.errorMessage, job.errorMessage)}
+                        </small>
+                      ) : null}
+                      {escalation ? <small className="job-next-action">下一步：{escalation.nextAction}</small> : null}
+                    </div>
+                    <em>{statusLabel[job.status] || job.status}</em>
+                  </button>
+                );
+              }) : (
                 <div className="empty empty-cta" role="status">
                   <strong>设计中心为空</strong>
                   <span>创建演示任务后，这里会变成可点击任务列表，支持切换当前任务。</span>
@@ -6572,14 +7094,30 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <div>
                   <strong>商品资料补齐向导</strong>
                   <span>
-                    待补齐 {skuRepairQueue.length} 个 · 影响自动搭配/出图 {catalogAudit?.blockingRepairCount || 0} 个
+                    待补齐 {skuRepairQueue.length} 个 · 当前筛选 {visibleSkuRepairQueue.length} 个 · 影响自动搭配/出图 {catalogAudit?.blockingRepairCount || 0} 个
                   </span>
                 </div>
                 <div className="sku-repair-actions">
-                  <button type="button" className="ghost compact-button" onClick={() => setSkuIssueFilter("problem")} disabled={!skuRepairQueue.length}>
+                  <button
+                    type="button"
+                    className="ghost compact-button"
+                    onClick={() => {
+                      setSkuIssueFilter("problem");
+                      setSkuRepairFilter("blocking");
+                    }}
+                    disabled={!skuRepairQueue.length}
+                  >
                     <AlertTriangle size={14} aria-hidden="true" />只看关键问题
                   </button>
-                  <button type="button" className="ghost compact-button" onClick={() => setSkuIssueFilter("missing_image")} disabled={!skuRepairQueue.length}>
+                  <button
+                    type="button"
+                    className="ghost compact-button"
+                    onClick={() => {
+                      setSkuIssueFilter("missing_image");
+                      setSkuRepairFilter("image");
+                    }}
+                    disabled={!skuRepairQueue.length}
+                  >
                     <ImageIcon size={14} aria-hidden="true" />只看图片问题
                   </button>
                   <button type="button" className="ghost compact-button" onClick={exportSkuRepairQueue} disabled={!skuRepairQueue.length || Boolean(busy)}>
@@ -6589,6 +7127,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <Download size={14} aria-hidden="true" />导出体检明细
                   </button>
                 </div>
+              </div>
+              <div className="sku-repair-filter" role="group" aria-label="商品补齐任务筛选">
+                {skuRepairFilterOptions.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    className={skuRepairFilter === option.value ? "selected" : ""}
+                    aria-pressed={skuRepairFilter === option.value}
+                    onClick={() => setSkuRepairFilter(option.value)}
+                    disabled={!skuRepairQueue.length}
+                  >
+                    <span>{option.label}</span>
+                    <strong>{skuRepairFilterCounts[option.value] || 0}</strong>
+                  </button>
+                ))}
               </div>
               {catalogAudit ? (
                 <>
@@ -6699,9 +7252,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
                 </>
               ) : null}
-              {skuRepairQueue.length ? (
+              {visibleSkuRepairQueue.length ? (
                 <div className="sku-repair-list">
-                  {skuRepairQueue.slice(0, 5).map((item) => (
+                  {visibleSkuRepairQueue.slice(0, 8).map((item) => (
                     <div className={`sku-repair-item ${item.severity}`} key={`${item.skuCode || item.name}-${item.priority}`}>
                       <div>
                         <strong>{item.name || "未命名商品"}</strong>
@@ -6718,11 +7271,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </button>
                     </div>
                   ))}
+                  {visibleSkuRepairQueue.length > 8 ? <small>当前筛选还有 {visibleSkuRepairQueue.length - 8} 个待补齐商品，可导出补齐表后批量处理。</small> : null}
                 </div>
               ) : (
                 <div className="sku-repair-empty">
                   <Check size={16} aria-hidden="true" />
-                  <span>当前商品资料没有发现待补齐项，可以继续用于搭配和出图。</span>
+                  <span>{skuRepairQueue.length ? "当前筛选下没有待补齐商品，可以切换其它补齐类型。" : "当前商品资料没有发现待补齐项，可以继续用于搭配和出图。"}</span>
                 </div>
               )}
               {skuImageProblems.length ? (
@@ -6907,6 +7461,67 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <RefreshCw size={16} aria-hidden="true" />清空表单
                 </button>
               </div>
+              {activeSkuRepairItem ? (
+                <div className={`sku-active-repair-brief ${activeSkuRepairItem.severity}`} role="status" aria-label="当前商品补齐说明">
+                  <div className="sku-active-repair-head">
+                    <div>
+                      <small>当前商品补齐</small>
+                      <strong>{activeSkuRepairItem.name || skuForm.name || "未命名商品"}</strong>
+                      <span>
+                        {activeSkuRepairItem.skuCode || skuForm.skuCode || "缺 SKU 编号"} · {skuSeverityLabel(activeSkuRepairItem.severity)}
+                        · 优先级 {activeSkuRepairItem.priority} · {activeSkuRepairItem.issueCount} 个问题
+                      </span>
+                    </div>
+                    <em>{activeSkuRepairItem.blocking ? "会阻塞自动化" : "保存后复核"}</em>
+                  </div>
+                  <p>{activeSkuRepairItem.recommendedAction}</p>
+                  <div className="sku-active-repair-impact">
+                    <span>{activeSkuRepairItem.blocking ? "补齐后才建议进入自动搭配、真实出图和自动报价。" : "补齐后商品会更适合自动搭配和客服报价。"}</span>
+                    <button type="button" className="ghost compact-button" onClick={() => setSkuWorkbenchView("repair")}>
+                      <Search size={14} aria-hidden="true" />回到补齐队列
+                    </button>
+                  </div>
+                  {activeSkuRepairProgress ? (
+                    <div className={`sku-active-repair-progress ${activeSkuRepairProgress.tone}`} role="status" aria-label="补齐进度判断">
+                      <div>
+                        <small>当前填写后判断</small>
+                        <strong>{activeSkuRepairProgress.label}</strong>
+                        <span>{activeSkuRepairProgress.detail}</span>
+                      </div>
+                      <p>
+                        <span className="done">已补 {activeSkuRepairProgress.resolvedFields.length}</span>
+                        <span className="pending">待补 {activeSkuRepairProgress.unresolvedFields.length}</span>
+                        <span>保存后 {skuFormAutomationStatus.label}</span>
+                      </p>
+                    </div>
+                  ) : null}
+                  {activeSkuRepairItem.missingFields.length ? (
+                    <div className="sku-active-repair-fields" aria-label="需要补齐的字段">
+                      {activeSkuRepairItem.missingFields.slice(0, 6).map((field) => (
+                        <button
+                          type="button"
+                          key={field.field}
+                          onClick={() => focusSkuFormField(field.field, field.label)}
+                          title={`定位到${field.label || skuFieldLabel(field.field)}`}
+                        >
+                          <strong>{field.label || skuFieldLabel(field.field)}</strong>
+                          <small>{field.action || "补齐这个字段后保存商品。"}</small>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {activeSkuRepairItem.issues.length ? (
+                    <div className="sku-active-repair-issues" aria-label="当前商品体检问题">
+                      {activeSkuRepairItem.issues.slice(0, 4).map((issue, index) => (
+                        <span className={issue.severity} key={`${issue.code}-${issue.field || "field"}-${index}`}>
+                          {skuSeverityLabel(issue.severity)} · {skuFieldLabel(issue.field || "")} · {issue.message}
+                        </span>
+                      ))}
+                      {activeSkuRepairItem.issues.length > 4 ? <small>还有 {activeSkuRepairItem.issues.length - 4} 个体检问题，保存后会重新计算。</small> : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className={`sku-form-automation-preview ${skuFormAutomationStatus.tone}`} role="status">
                 <div>
                   <small>保存后自动化预估</small>
@@ -6984,13 +7599,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <div className="sku-form-grid">
                 <label className="field-control">
                   <span>SKU 编号</span>
-                  <input value={skuForm.skuCode} onChange={(event) => setSkuForm({ ...skuForm, skuCode: event.target.value })} placeholder="BOX-001" />
+                  <input id="sku-form-skuCode" value={skuForm.skuCode} onChange={(event) => setSkuForm({ ...skuForm, skuCode: event.target.value })} placeholder="BOX-001" />
                 </label>
                 <label className="field-control">
                   <span>商品名称</span>
-                  <input value={skuForm.name} onChange={(event) => setSkuForm({ ...skuForm, name: event.target.value })} placeholder="端午茶礼盒" />
+                  <input id="sku-form-name" value={skuForm.name} onChange={(event) => setSkuForm({ ...skuForm, name: event.target.value })} placeholder="端午茶礼盒" />
                 </label>
-                <div className="field-control field-control-inline">
+                <div className="field-control field-control-inline" id="sku-form-type">
                   <span>商品类型</span>
                   <div className="segmented-control sku-type-picker" role="group" aria-label="商品类型">
                     {skuFormTypeOptions.map((option) => (
@@ -7008,55 +7623,55 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
                 <label className="field-control">
                   <span>分类</span>
-                  <input value={skuForm.category} onChange={(event) => setSkuForm({ ...skuForm, category: event.target.value })} placeholder="茶叶 / 贺卡" />
+                  <input id="sku-form-category" value={skuForm.category} onChange={(event) => setSkuForm({ ...skuForm, category: event.target.value })} placeholder="茶叶 / 贺卡" />
                 </label>
                 <label className="field-control">
                   <span>售价</span>
-                  <input value={skuForm.salePrice} onChange={(event) => setSkuForm({ ...skuForm, salePrice: event.target.value })} placeholder="180" inputMode="decimal" />
+                  <input id="sku-form-salePrice" value={skuForm.salePrice} onChange={(event) => setSkuForm({ ...skuForm, salePrice: event.target.value })} placeholder="180" inputMode="decimal" />
                 </label>
                 <label className="field-control">
                   <span>成本价</span>
-                  <input value={skuForm.costPrice} onChange={(event) => setSkuForm({ ...skuForm, costPrice: event.target.value })} placeholder="120" inputMode="decimal" />
+                  <input id="sku-form-costPrice" value={skuForm.costPrice} onChange={(event) => setSkuForm({ ...skuForm, costPrice: event.target.value })} placeholder="120" inputMode="decimal" />
                 </label>
                 <label className="field-control">
                   <span>库存</span>
-                  <input value={skuForm.stock} onChange={(event) => setSkuForm({ ...skuForm, stock: event.target.value })} placeholder="300" inputMode="numeric" />
+                  <input id="sku-form-stock" value={skuForm.stock} onChange={(event) => setSkuForm({ ...skuForm, stock: event.target.value })} placeholder="300" inputMode="numeric" />
                 </label>
                 <label className="field-control">
                   <span>场景标签</span>
-                  <input value={skuForm.sceneTags} onChange={(event) => setSkuForm({ ...skuForm, sceneTags: event.target.value })} placeholder="端午、员工福利" />
+                  <input id="sku-form-sceneTags" value={skuForm.sceneTags} onChange={(event) => setSkuForm({ ...skuForm, sceneTags: event.target.value })} placeholder="端午、员工福利" />
                 </label>
                 <label className="field-control">
                   <span>主图路径</span>
-                  <input value={skuForm.mainImagePath} onChange={(event) => setSkuForm({ ...skuForm, mainImagePath: event.target.value })} placeholder="本地路径或 URL" />
+                  <input id="sku-form-mainImagePath" value={skuForm.mainImagePath} onChange={(event) => setSkuForm({ ...skuForm, mainImagePath: event.target.value })} placeholder="本地路径或 URL" />
                 </label>
                 <label className="field-control">
                   <span>多角度图</span>
-                  <input value={skuForm.angleImages} onChange={(event) => setSkuForm({ ...skuForm, angleImages: event.target.value })} placeholder="用顿号分隔" />
+                  <input id="sku-form-angleImages" value={skuForm.angleImages} onChange={(event) => setSkuForm({ ...skuForm, angleImages: event.target.value })} placeholder="用顿号分隔" />
                 </label>
                 <label className="field-control">
                   <span>尺寸</span>
-                  <input value={skuForm.dimensions} onChange={(event) => setSkuForm({ ...skuForm, dimensions: event.target.value })} placeholder="30*22*9" />
+                  <input id="sku-form-dimensions" value={skuForm.dimensions} onChange={(event) => setSkuForm({ ...skuForm, dimensions: event.target.value })} placeholder="30*22*9" />
                 </label>
                 <label className="field-control">
                   <span>重量</span>
-                  <input value={skuForm.weightGram} onChange={(event) => setSkuForm({ ...skuForm, weightGram: event.target.value })} placeholder="克" inputMode="numeric" />
+                  <input id="sku-form-weightGram" value={skuForm.weightGram} onChange={(event) => setSkuForm({ ...skuForm, weightGram: event.target.value })} placeholder="克" inputMode="numeric" />
                 </label>
                 <label className="field-control">
                   <span>材质</span>
-                  <input value={skuForm.material} onChange={(event) => setSkuForm({ ...skuForm, material: event.target.value })} placeholder="纸盒 / 棉麻 / 金属" />
+                  <input id="sku-form-material" value={skuForm.material} onChange={(event) => setSkuForm({ ...skuForm, material: event.target.value })} placeholder="纸盒 / 棉麻 / 金属" />
                 </label>
                 <label className="field-control">
                   <span>供应商</span>
-                  <input value={skuForm.supplier} onChange={(event) => setSkuForm({ ...skuForm, supplier: event.target.value })} placeholder="供应商名称" />
+                  <input id="sku-form-supplier" value={skuForm.supplier} onChange={(event) => setSkuForm({ ...skuForm, supplier: event.target.value })} placeholder="供应商名称" />
                 </label>
                 <label className="field-control">
                   <span>交期</span>
-                  <input value={skuForm.leadTimeDays} onChange={(event) => setSkuForm({ ...skuForm, leadTimeDays: event.target.value })} placeholder="天数" inputMode="numeric" />
+                  <input id="sku-form-leadTimeDays" value={skuForm.leadTimeDays} onChange={(event) => setSkuForm({ ...skuForm, leadTimeDays: event.target.value })} placeholder="天数" inputMode="numeric" />
                 </label>
                 <label className="field-control">
                   <span>替代 SKU</span>
-                  <input list="sku-reference-options" value={skuForm.replacementSkuCodes} onChange={(event) => setSkuForm({ ...skuForm, replacementSkuCodes: event.target.value })} placeholder="用顿号分隔" />
+                  <input id="sku-form-replacementSkuCodes" list="sku-reference-options" value={skuForm.replacementSkuCodes} onChange={(event) => setSkuForm({ ...skuForm, replacementSkuCodes: event.target.value })} placeholder="用顿号分隔" />
                   {skuReferenceQuickOptions.length ? (
                     <div className="sku-reference-quick-picks" aria-label="快速追加替代 SKU">
                       {skuReferenceQuickOptions.map((option) => (
@@ -7112,6 +7727,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <label className="field-control">
                     <span>必须同搭</span>
                     <input
+                      id="sku-form-matching-must-with"
                       list="sku-reference-options"
                       value={matchingRuleListText(skuForm.matchingRules, "mustWith")}
                       onChange={(event) =>
@@ -7140,6 +7756,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <label className="field-control">
                     <span>推荐同搭</span>
                     <input
+                      id="sku-form-matching-prefer-with"
                       list="sku-reference-options"
                       value={matchingRuleListText(skuForm.matchingRules, "preferWith")}
                       onChange={(event) =>
@@ -7168,6 +7785,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <label className="field-control">
                     <span>禁止同搭</span>
                     <input
+                      id="sku-form-matching-cannot-with"
                       list="sku-reference-options"
                       value={matchingRuleListText(skuForm.matchingRules, "cannotWith")}
                       onChange={(event) =>
@@ -7197,6 +7815,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <label className="field-control field-control-wide">
                   <span>高级规则 / 备注</span>
                   <textarea
+                    id="sku-form-matching-rules"
                     value={skuForm.matchingRules}
                     onChange={(event) => setSkuForm({ ...skuForm, matchingRules: event.target.value })}
                     placeholder='可写文字，也可写 JSON，例如 {"mustWith":["CARD-B"],"preferWith":["TEA-C"],"cannotWith":["SNACK-A"]}'
@@ -7857,11 +8476,26 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     {skuImportPreview.rows.length > 6 ? <small>还有 {skuImportPreview.rows.length - 6} 个商品，确认入库时会一起保存。</small> : null}
                   </div>
                   <div className="import-preview-actions">
-                    <button type="button" className="primary" onClick={confirmImportSkus} disabled={Boolean(busy) || !skuImportPreview.rows.length}>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={confirmImportSkus}
+                      disabled={Boolean(busy) || !skuImportPreview.rows.length || Boolean(skuImportReadinessSummary?.blocked)}
+                      title={skuImportReadinessSummary?.blocked ? `还有 ${skuImportReadinessSummary.blocked} 个阻塞项，先修正后再入库` : "确认把这批商品写入商品库"}
+                    >
                       <Check size={16} aria-hidden="true" />确认入库
                     </button>
                     <button type="button" className="ghost" onClick={() => setCatalogWorkbenchDetail("audit")}>
                       <AlertTriangle size={16} aria-hidden="true" />查看体检
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={exportSkuImportBlockedRows}
+                      disabled={Boolean(busy) || !skuImportReadinessSummary?.blocked}
+                      title={skuImportReadinessSummary?.blocked ? "导出本批不能直接入库的商品清单" : "当前没有导入阻塞项"}
+                    >
+                      <Download size={16} aria-hidden="true" />导出阻塞清单
                     </button>
                   </div>
                   {skuImportPreview.errors.length ? (
@@ -7909,21 +8543,31 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <span>记录库存、售价、成本、供应商和上下架变化</span>
                 </div>
                 {skuChangeLogs.length ? (
-                  skuChangeLogs.slice(0, 6).map((log) => (
-                    <div className="sku-change-item" key={log.id}>
-                      <div>
-                        <strong>{log.skuCode} · {log.name || "未命名商品"}</strong>
-                        <span>{skuChangeActionLabel(log.action)} · {log.operator || "system"} · {formatDateTime(log.createdAt)}</span>
+                  skuChangeLogs.slice(0, 6).map((log) => {
+                    const impact = skuChangeImpactSummary(log);
+                    return (
+                      <div className={`sku-change-item ${impact.tone}`} key={log.id}>
+                        <div className="sku-change-item-head">
+                          <strong>{log.skuCode} · {log.name || "未命名商品"}</strong>
+                          <span>{skuChangeActionLabel(log.action)} · {log.operator || "system"} · {formatDateTime(log.createdAt)}</span>
+                        </div>
+                        <div className="sku-change-impact-row">
+                          <span className={`sku-change-impact ${impact.tone}`}>{impact.label}</span>
+                          <small>{impact.detail}</small>
+                          <button type="button" className="ghost compact-button" onClick={() => handleSkuChangeImpact(log, impact)}>
+                            <Search size={14} aria-hidden="true" />{impact.nextAction}
+                          </button>
+                        </div>
+                        <p>
+                          {log.changedFields.slice(0, 4).map((field) => (
+                            <span key={`${log.id}-${field.field}`}>
+                              {skuFieldLabel(field.field)}：{formatSkuFieldValue(field.before)} → {formatSkuFieldValue(field.after)}
+                            </span>
+                          ))}
+                        </p>
                       </div>
-                      <p>
-                        {log.changedFields.slice(0, 4).map((field) => (
-                          <span key={`${log.id}-${field.field}`}>
-                            {skuFieldLabel(field.field)}：{formatSkuFieldValue(field.before)} → {formatSkuFieldValue(field.after)}
-                          </span>
-                        ))}
-                      </p>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                 <div className="empty empty-cta compact" role="status">
                   <strong>还没有商品变更</strong>
@@ -9351,7 +9995,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <button
                       type="button"
                       className="primary"
-                      onClick={() => highValueManualQueueItems[0]?.focus()}
+                      onClick={() => highValueManualQueueItems[0]?.run()}
                       disabled={Boolean(busy) || !highValueManualQueueItems.length}
                       title={highValueManualQueueItems[0]?.detail || "暂无高价值人工事项"}
                     >
@@ -9379,7 +10023,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <p>下一步：{item.nextAction}</p>
                         </button>
                         <div className="deal-attention-actions">
-                          <button type="button" className="primary" onClick={item.focus} disabled={Boolean(busy)}>
+                          <button type="button" className="primary" onClick={item.run} disabled={Boolean(busy)}>
                             <Search size={14} aria-hidden="true" />{item.primaryLabel}
                           </button>
                         </div>
@@ -12553,6 +13197,71 @@ function formatSkuFieldValue(value: unknown): string {
   return String(value);
 }
 
+function skuChangeImpactSummary(log: SkuChangeLog) {
+  const changedFields = log.changedFields || [];
+  const fieldNames = changedFields.map((field) => field.field);
+  const commercialFields = ["salePrice", "costPrice", "stock", "supplier", "leadTimeDays", "sceneTags", "matchingRules", "replacementSkuCodes"];
+  const imageFields = ["mainImagePath", "angleImages"];
+  const specificationFields = ["dimensions", "weightGram", "material", "category", "type"];
+  const commercialHits = fieldNames.filter((field) => commercialFields.includes(field));
+  const imageHits = fieldNames.filter((field) => imageFields.includes(field));
+  const specificationHits = fieldNames.filter((field) => specificationFields.includes(field));
+  const isActiveChange = changedFields.find((field) => field.field === "isActive");
+
+  if (log.action === "create" || log.action === "manual_create") {
+    return {
+      tone: "create",
+      label: "新增入库",
+      detail: "新商品已进入商品库，下一步看自动化预估和图片资料是否完整。",
+      nextAction: "检查资料",
+      repairFilter: "all",
+    };
+  }
+  if (isActiveChange) {
+    return {
+      tone: isActiveChange.after === false ? "inactive" : "active",
+      label: isActiveChange.after === false ? "已下架" : "已上架",
+      detail: isActiveChange.after === false ? "该商品不会继续参与自动搭配和报价。" : "该商品恢复参与自动搭配、出图预检和报价。",
+      nextAction: isActiveChange.after === false ? "查看商品" : "复核资料",
+      repairFilter: isActiveChange.after === false ? "" : "all",
+    };
+  }
+  if (commercialHits.length) {
+    return {
+      tone: "commercial",
+      label: "影响报价/搭配",
+      detail: `改动了 ${commercialHits.slice(0, 3).map(skuFieldLabel).join("、")}，需要关注自动报价、库存承接和利润判断。`,
+      nextAction: "处理报价风险",
+      repairFilter: "price_stock",
+    };
+  }
+  if (imageHits.length) {
+    return {
+      tone: "image",
+      label: "影响真实出图",
+      detail: `改动了 ${imageHits.map(skuFieldLabel).join("、")}，需要确认设计平台使用的是真实商品图片。`,
+      nextAction: "处理图片",
+      repairFilter: "image",
+    };
+  }
+  if (specificationHits.length) {
+    return {
+      tone: "specification",
+      label: "影响包装/物流",
+      detail: `改动了 ${specificationHits.slice(0, 3).map(skuFieldLabel).join("、")}，会影响礼盒装箱、重量和物流估算。`,
+      nextAction: "处理规格交期",
+      repairFilter: "spec_delivery",
+    };
+  }
+  return {
+    tone: "routine",
+    label: "资料更新",
+    detail: changedFields.length ? "这次变更已留痕，可在需要时回查字段前后值。" : "这次保存没有检测到关键字段变化。",
+    nextAction: "查看商品",
+    repairFilter: "",
+  };
+}
+
 function isStaleLocalDesignFileUrl(src?: string | null) {
   if (!src) return false;
   try {
@@ -13030,6 +13739,45 @@ function isHighValueDesignJob(job: DesignJob) {
   return job.isHighValue === true || isHighValueBudget(job.budget);
 }
 
+function canRetryDesignJobFromUi(job: DesignJob) {
+  return ["failed", "timeout"].includes(job.status) || (job.status === "manual_review" && Boolean(job.errorMessage));
+}
+
+function designJobEscalationNotice(job: DesignJob): HighValueManualStep | null {
+  const readableError = job.errorMessage ? operatorStatusMessage(job.errorMessage, job.errorMessage) : "";
+  if (job.status === "manual_review" && readableError) {
+    return {
+      tone: "red",
+      label: "提交失败已转人工",
+      detail: `失败原因：${readableError}`,
+      nextAction: "先预检设计平台和素材，修好后重新提交；如果客户在等图，先人工解释正在处理。",
+      priority: 8,
+    };
+  }
+  if (job.status === "failed") {
+    return {
+      tone: "red",
+      label: "出图失败",
+      detail: readableError ? `失败原因：${readableError}` : "设计平台返回失败，不能继续自动发图或报价。",
+      nextAction: "先预检设计平台和素材，确认无误后重新提交；仍失败就保持人工跟进。",
+      priority: 10,
+    };
+  }
+  if (job.status === "timeout") {
+    return {
+      tone: "red",
+      label: "出图超时",
+      detail: readableError ? `超时原因：${readableError}` : "出图等待时间过长，客户侧需要温和解释。",
+      nextAction: "先轮询结果或重新提交，同时人工告知客户正在处理，避免长时间无回应。",
+      priority: 12,
+    };
+  }
+  if (job.status === "manual_review") {
+    return highValueDesignManualStep(job);
+  }
+  return null;
+}
+
 function highValueDesignManualStep(job: DesignJob): HighValueManualStep {
   if (job.status === "failed") {
     return {
@@ -13148,6 +13896,13 @@ function highValueOrderManualStep(order: OrderDraft): HighValueManualStep {
     nextAction: "检查订单当前状态，补齐下一次人工跟进动作和负责人。",
     priority: 50,
   };
+}
+
+function highValueOrderManualPrimaryAction(order: OrderDraft): { type: "focus" | "queue_confirmation" | "queue_delivery"; label: string } {
+  if (!orderPaymentReady(order)) return { type: "focus", label: "去收款" };
+  if (!hasActiveOrderConfirmationTask(order)) return { type: "queue_confirmation", label: "核验并发确认" };
+  if (order.status === "processing") return { type: "queue_delivery", label: "发交期说明" };
+  return { type: "focus", label: "跟订单" };
 }
 
 function dedupeOrdersById(orders: OrderDraft[]) {

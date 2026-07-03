@@ -48,9 +48,9 @@ function main() {
     return;
   }
   if (!standaloneServerExists() && productionBuildReady()) {
-    writeStandaloneFallbackServer();
+    writeStableStandaloneServer();
     run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
-    buildDiagnostic("after standalone fallback sync");
+    buildDiagnostic("after stable standalone sync");
     return;
   }
   if (fs.existsSync(nextDir) && !productionBuildReady()) {
@@ -130,29 +130,29 @@ function buildDiagnostic(label) {
 function runNextBuild() {
   const args = ["node_modules/next/dist/bin/next", "build", "apps/web", "--webpack"];
   buildDiagnostic("before next build");
-  const result = runWithInheritedOutput(process.execPath, args);
+  const result = runWithCapturedOutput(process.execPath, args);
   waitForProjectNextBuildPidsToExit(90);
   waitForBuildOutputReady(60);
   buildDiagnostic("after next build command");
-  if (result.status === 0 && standaloneServerExists()) return;
-  if (productionBuildReady()) {
-    writeStandaloneFallbackServer();
+  if (result.status === 0 && !hasNextBuildErrorOutput(result) && standaloneServerExists()) return;
+  if (productionBuildReady() && !hasNextBuildErrorOutput(result)) {
+    writeStableStandaloneServer();
     return;
   }
-  if (result.status !== 0 && !isRetryableNextBuildRace(result)) process.exit(result.status || 1);
+  if (result.status !== 0 && !isRetryableNextBuildRace(result) && !hasNextBuildErrorOutput(result)) process.exit(result.status || 1);
   console.log("[warn] Next build failed or exited before standalone output was complete; retrying once with a clean build state.");
   terminateProjectNextBuildPids();
   waitForProjectNextBuildPidsToExit();
   removeStaleNextBuildLock();
   resetNextBuildState({ force: true });
   buildDiagnostic("before next build retry");
-  const retry = runWithInheritedOutput(process.execPath, args);
+  const retry = runWithCapturedOutput(process.execPath, args);
   waitForProjectNextBuildPidsToExit(90);
   waitForBuildOutputReady(60);
   buildDiagnostic("after next build retry command");
-  if (retry.status === 0 && standaloneServerExists()) return;
-  if (productionBuildReady()) {
-    writeStandaloneFallbackServer();
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && standaloneServerExists()) return;
+  if (productionBuildReady() && !hasNextBuildErrorOutput(retry)) {
+    writeStableStandaloneServer();
     return;
   }
   process.exit(retry.status || 1);
@@ -215,29 +215,6 @@ function pathHasFileNewerThan(target, timestamp) {
   return false;
 }
 
-function writeStandaloneFallbackServer() {
-  const standaloneWebRoot = path.join(nextDir, "standalone", "apps", "web");
-  const serverPath = path.join(standaloneWebRoot, "server.js");
-  fs.mkdirSync(standaloneWebRoot, { recursive: true });
-  fs.writeFileSync(
-    serverPath,
-    `"use strict";\n` +
-      `const { spawn } = require("node:child_process");\n` +
-      `const http = require("node:http");\n` +
-      `const path = require("node:path");\n` +
-      `const root = path.resolve(__dirname, "..", "..", "..", "..", "..", "..");\n` +
-      `const port = process.env.PORT || "3100";\n` +
-      `const next = require(path.join(root, "node_modules", "next"));\n` +
-      `const app = next({ dev: false, dir: path.join(root, "apps", "web"), hostname: "127.0.0.1", port: Number(port) });\n` +
-      `const handle = app.getRequestHandler();\n` +
-      `app.prepare().then(() => {\n` +
-      `  http.createServer((req, res) => handle(req, res)).listen(Number(port), "127.0.0.1", () => console.log("ready - started server on 127.0.0.1:" + port));\n` +
-      `}).catch((error) => { console.error(error); process.exit(1); });\n`,
-    "utf8",
-  );
-  console.log(`[warn] Native Next standalone output was not created; wrote local next-start fallback: ${path.relative(root, serverPath)}`);
-}
-
 function removeStaleNextBuildLock() {
   if (!fs.existsSync(nextLockFile)) return;
   if (findProjectNextBuildPids().length) return;
@@ -251,6 +228,36 @@ function resetNextBuildState(options = {}) {
   buildDiagnostic(`removing ${path.relative(root, nextDir)}`);
   removeDirectoryWithRetry(nextDir);
   console.log(`[build] Removed previous Next build directory: ${path.relative(root, nextDir)}`);
+}
+
+function writeStableStandaloneServer() {
+  const standaloneWebRoot = path.join(nextDir, "standalone", "apps", "web");
+  const serverPath = path.join(standaloneWebRoot, "server.js");
+  fs.mkdirSync(standaloneWebRoot, { recursive: true });
+  fs.writeFileSync(
+    serverPath,
+    `"use strict";\n` +
+      `const path = require("node:path");\n` +
+      `const root = path.resolve(__dirname, "..", "..", "..", "..", "..", "..");\n` +
+      `const requiredServerFiles = require(path.join(root, "apps", "web", ".next", "required-server-files.json"));\n` +
+      `const dir = __dirname;\n` +
+      `const currentPort = parseInt(process.env.PORT, 10) || 3100;\n` +
+      `const hostname = process.env.HOSTNAME || "127.0.0.1";\n` +
+      `let keepAliveTimeout = parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10);\n` +
+      `const keepAlive = setInterval(() => undefined, 60000);\n` +
+      `keepAlive.ref();\n` +
+      `process.env.NODE_ENV = "production";\n` +
+      `process.chdir(__dirname);\n` +
+      `const nextConfig = { ...requiredServerFiles.config, distDir: "./.next" };\n` +
+      `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(nextConfig);\n` +
+      `require("next");\n` +
+      `const { startServer } = require("next/dist/server/lib/start-server");\n` +
+      `if (Number.isNaN(keepAliveTimeout) || !Number.isFinite(keepAliveTimeout) || keepAliveTimeout < 0) keepAliveTimeout = undefined;\n` +
+      `startServer({ dir, isDev: false, config: nextConfig, hostname, port: currentPort, allowRetry: false, keepAliveTimeout })\n` +
+      `  .catch((error) => { console.error(error); clearInterval(keepAlive); process.exit(1); });\n`,
+    "utf8",
+  );
+  console.log(`[warn] Native Next standalone output was not emitted; wrote stable startServer wrapper: ${path.relative(root, serverPath)}`);
 }
 
 function removeDirectoryWithRetry(target) {
@@ -282,7 +289,7 @@ function waitForProjectNextBuildPidsToExit(timeoutSeconds = 60) {
 function waitForBuildOutputReady(timeoutSeconds = 60) {
   const attempts = Math.max(1, Math.round(Number(timeoutSeconds || 60) * 2));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (standaloneServerExists() || productionBuildReady()) return;
+    if (standaloneServerExists()) return;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
 }
@@ -359,6 +366,11 @@ function isRetryableNextBuildRace(result) {
     /\.next/.test(output) &&
     /(manifest|_ssgManifest|\.nft\.json|diagnostics[\\\/]build-diagnostics\.json|lock)/.test(output)
   );
+}
+
+function hasNextBuildErrorOutput(result) {
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  return /Build error occurred|Error:\s+(ENOENT|MODULE_NOT_FOUND)|Cannot find module/.test(output);
 }
 
 function getPortOwnerPids(port) {
