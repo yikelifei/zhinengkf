@@ -3968,18 +3968,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   );
 
   useEffect(() => {
-    load().catch((error) => {
-      setMessage(error instanceof Error ? `数据服务暂不可用：${error.message}` : "数据服务暂不可用。");
-    });
+    let loadInFlight = false;
+    const runStartupLoad = () => {
+      if (loadInFlight) return;
+      loadInFlight = true;
+      load()
+        .catch((error) => {
+          setMessage(error instanceof Error ? `数据服务暂不可用：${error.message}` : "数据服务暂不可用。");
+        })
+        .finally(() => {
+          loadInFlight = false;
+        });
+    };
+    runStartupLoad();
     getSkuImportFields().then(setSkuImportFields).catch(() => setSkuImportFields([]));
-  }, []);
-
-  useEffect(() => {
     const timers = [1800, 4200, 8500].map((delayMs) =>
       window.setTimeout(() => {
-        load().catch(() => {
-          // Startup recovery is best-effort; the visible refresh controls remain available.
-        });
+        runStartupLoad();
       }, delayMs),
     );
     return () => timers.forEach((timer) => window.clearTimeout(timer));
@@ -5632,9 +5637,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("routing-center")} disabled={Boolean(busy)}>
                                 <Route size={15} aria-hidden="true" />查看路由
                               </button>
-                              <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
-                                <Send size={15} aria-hidden="true" />发送队列
-                              </button>
+                              {channel.status === "needs_config" ? (
+                                <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                                  <Check size={15} aria-hidden="true" />配置检查
+                                </button>
+                              ) : (
+                                <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("send-center")} disabled={Boolean(busy)}>
+                                  <Send size={15} aria-hidden="true" />发送队列
+                                </button>
+                              )}
                             </>
                           )}
                         </div>
@@ -5704,6 +5715,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <div className="wechat-lane-empty">等待后端通道状态</div>
                         )}
                       </div>
+                      <div className="wechat-lane-actions" aria-label="接入通道操作">
+                        <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                          <Search size={14} aria-hidden="true" />采集微信
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                          <Check size={14} aria-hidden="true" />配置检查
+                        </button>
+                      </div>
                     </div>
                     <div className="wechat-flow-lane" aria-label="智能客服处理链路">
                       <div className="wechat-lane-title">
@@ -5763,29 +5782,51 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <strong>{inboundSummary || "等待客户消息进入"}</strong>
                         </div>
                       </div>
+                      <div className="wechat-live-action-card" aria-label="当前客服推荐动作">
+                        <span>当前建议</span>
+                        <strong>{activeConversation ? (activeConversationRoute ? "核对当前客服现场" : "先处理客户消息") : "先选择客户会话"}</strong>
+                        <p>
+                          {activeConversation
+                            ? activeConversationRoute
+                              ? "已匹配客服路由，继续核对设计、报价、人工接管和发送队列。"
+                              : "不会默认处理第一个客户，请在当前会话上执行消息处理。"
+                            : "从消息中心选定客户后，这里会显示实时路由和下一步动作。"}
+                        </p>
+                        <div className="wechat-live-action-buttons">
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={activeConversation ? processRouteInbound : () => scrollToWorkspaceSection("conversation-center")}
+                            disabled={Boolean(busy)}
+                          >
+                            {activeConversation ? <Bot size={15} aria-hidden="true" /> : <MessageCircle size={15} aria-hidden="true" />}
+                            {activeConversation ? "处理当前消息" : "选择会话"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              setReviewWorkbenchView("handoff");
+                              scrollToWorkspaceSection("review-center");
+                            }}
+                            disabled={Boolean(busy)}
+                          >
+                            <ShieldAlert size={15} aria-hidden="true" />人工接管
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              setSendWorkbenchView("queue");
+                              scrollToWorkspaceSection("send-center");
+                            }}
+                            disabled={Boolean(busy)}
+                          >
+                            <Send size={15} aria-hidden="true" />发送队列
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="wechat-visual-actions">
-                    <button type="button" className="primary" onClick={processRouteInbound} disabled={Boolean(busy)}>
-                      <Bot size={15} aria-hidden="true" />处理当前消息
-                    </button>
-                    <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
-                      <Check size={15} aria-hidden="true" />配置检查
-                    </button>
-                    <button type="button" className="ghost" onClick={() => scrollToWorkspaceSection("review-center")} disabled={Boolean(busy)}>
-                      <ShieldAlert size={15} aria-hidden="true" />人工审核
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        setSendWorkbenchView("queue");
-                        scrollToWorkspaceSection("send-center");
-                      }}
-                      disabled={Boolean(busy)}
-                    >
-                      <Send size={15} aria-hidden="true" />安全发送
-                    </button>
                   </div>
                 </div>
               ) : null}

@@ -586,11 +586,17 @@ export class LocalStoreService {
   listWechatWindowSnapshots(filter: (IdentityListFilter & { limit?: number }) | number = {}) {
     const data = this.read();
     const options = typeof filter === "number" ? { limit: filter } : filter;
-    return data.wechatWindowSnapshots
-      .map((snapshot) => this.hydrateWechatWindowSnapshot(data, snapshot))
-      .filter((snapshot) => this.matchesIdentityFilter(snapshot, options))
-      .sort((a, b) => String(b.capturedAt || b.createdAt).localeCompare(String(a.capturedAt || a.createdAt)))
-      .slice(0, Math.max(1, Math.min(Number(options.limit || 50), 200)));
+    const limit = Math.max(1, Math.min(Number(options.limit || 50), 200));
+    const sortedSnapshots = data.wechatWindowSnapshots
+      .filter((snapshot) => !options.wechatAccountId || snapshot.wechatAccountId === options.wechatAccountId)
+      .sort((a, b) => String(b.capturedAt || b.createdAt).localeCompare(String(a.capturedAt || a.createdAt)));
+    if (options.conversationId || options.customerId) {
+      return sortedSnapshots
+        .map((snapshot) => this.hydrateWechatWindowSnapshot(data, snapshot))
+        .filter((snapshot) => this.matchesIdentityFilter(snapshot, options))
+        .slice(0, limit);
+    }
+    return sortedSnapshots.slice(0, limit).map((snapshot) => this.hydrateWechatWindowSnapshot(data, snapshot));
   }
 
   createWechatWindowSnapshot(payload: any) {

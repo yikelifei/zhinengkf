@@ -55,6 +55,7 @@ function main() {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const attemptedBefore = attemptedPids.size;
     const stoppedBefore = stoppedPids.size;
+    stopRecordedDescendantProcesses(stoppedPids, attemptedPids, recordedPids);
     stopManagedProcessSweep(stoppedPids, attemptedPids, recordedPids);
     if (attemptedPids.size === attemptedBefore && stoppedPids.size === stoppedBefore) break;
     waitForNoManagedPortOwners(attempt === 3 ? 8000 : 2500);
@@ -81,6 +82,7 @@ function hasManagedRuntimeState() {
   if (findManagedLauncherPids().length) return true;
   if (findManagedKeeperPids().length) return true;
   if (findManagedDirectShellPids().length) return true;
+  if (findManagedWechatWorkerPids().length) return true;
   return false;
 }
 
@@ -126,8 +128,39 @@ function stopManagedProcessSweep(stoppedPids, attemptedPids, recordedPids) {
   stopManagedLauncherProcesses(stoppedPids, attemptedPids);
   stopManagedKeeperProcesses(stoppedPids, attemptedPids);
   stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
+  stopManagedWechatWorkerProcesses(stoppedPids, attemptedPids);
   sleep(500);
   stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids);
+}
+
+function stopRecordedDescendantProcesses(stoppedPids, attemptedPids, recordedPids) {
+  if (!recordedPids.size) return;
+  for (const pid of findDescendantPids(recordedPids)) {
+    if (protectedPids.has(pid)) continue;
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    if (!isManagedProcess(pid)) continue;
+    console.log(`[stop:child] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function findDescendantPids(rootPids) {
+  if (process.platform !== "win32") return [];
+  const parentByPid = getParentPidMap();
+  const descendants = [];
+  for (const pid of parentByPid.keys()) {
+    let current = parentByPid.get(pid);
+    for (let depth = 0; depth < 12; depth += 1) {
+      if (!current) break;
+      if (rootPids.has(current)) {
+        descendants.push(pid);
+        break;
+      }
+      current = parentByPid.get(current);
+    }
+  }
+  return descendants;
 }
 
 function stopManagedWrapperProcesses(stoppedPids, attemptedPids) {
@@ -165,6 +198,16 @@ function stopManagedDirectShellProcesses(stoppedPids, attemptedPids) {
     if (protectedPids.has(pid)) continue;
     if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
     console.log(`[stop:direct] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
+function stopManagedWechatWorkerProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedWechatWorkerPids()) {
+    if (protectedPids.has(pid)) continue;
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:wechat-worker] pid=${pid}`);
     attemptedPids.add(pid);
     if (stopPid(pid)) stoppedPids.add(pid);
   }
@@ -270,6 +313,42 @@ function findManagedDirectShellPids() {
   }
   const processes = Array.isArray(rows) ? rows : [rows];
   return processes
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function findManagedWechatWorkerPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !result.stdout) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .filter((item) => {
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      if (!commandLine.includes(normalizedRoot)) return false;
+      return (
+        commandLine.includes("tools/wechat-window-observer.js") ||
+        commandLine.includes("tools/wechat-bridge-worker.js") ||
+        commandLine.includes("tools/start-wechat-safe-workers.js")
+      );
+    })
     .map((item) => String(item.ProcessId || ""))
     .filter((pid) => /^\d+$/.test(pid));
 }
