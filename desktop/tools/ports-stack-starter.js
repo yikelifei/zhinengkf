@@ -125,7 +125,8 @@ async function main() {
         if (!managedPortsAreFree()) {
           console.log(`[launch] stop failed with status ${stopResult.status || 1}; managed ports are still occupied.`);
           if (realDesignMode) fs.rmSync(realModeLockFile, { force: true });
-          process.exit(stopResult.status || 1);
+          process.exitCode = stopResult.status || 1;
+          return;
         }
         console.log("[launch] stop reported a stale process race, but managed ports are free; continuing startup.");
       }
@@ -176,7 +177,10 @@ async function main() {
         windowsHide: true,
       });
       logStep(`supervisor js exited status=${result.status ?? "unknown"} signal=${result.signal || ""}`);
-      if (result.status !== 0) process.exit(result.status || 1);
+      if (result.status !== 0) {
+        process.exitCode = result.status || 1;
+        return;
+      }
       await waitForStartedStack();
       return;
     }
@@ -192,7 +196,10 @@ async function main() {
           windowsHide: true,
         },
       );
-      if (result.status !== 0) process.exit(result.status || 1);
+      if (result.status !== 0) {
+        process.exitCode = result.status || 1;
+        return;
+      }
       return;
     }
 
@@ -216,7 +223,6 @@ function launchDirectKeepAlive(env) {
   child.unref();
   logStep(`spawn direct keep-alive ${modeArg} pid=${child.pid || "unknown"}`);
   console.log(`[launch] node tools/start-dev-ports.js ${modeArg} --keep-alive pid=${child.pid}`);
-  process.exit(0);
 }
 
 async function waitForStartedStack() {
@@ -557,6 +563,8 @@ async function activeStackReadiness() {
   if (!apiPids.length) return { ok: false, reason: `api port ${apiPort} is not listening` };
   const webOwnerMismatch = workspacePortOwnerMismatchReason("web", webPids);
   if (webOwnerMismatch) return { ok: false, reason: webOwnerMismatch };
+  const webRuntimeMismatch = webPortRuntimeMismatchReason(webPids);
+  if (webRuntimeMismatch) return { ok: false, reason: webRuntimeMismatch };
   const apiOwnerMismatch = workspacePortOwnerMismatchReason("api", apiPids);
   if (apiOwnerMismatch) return { ok: false, reason: apiOwnerMismatch };
   if (mockDesignMode) {
@@ -571,6 +579,9 @@ async function activeStackReadiness() {
   const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
   if (!apiHealth?.ok) {
     return { ok: false, reason: `api health check failed on port ${apiPort} (pids ${apiPids.join(",")})` };
+  }
+  if (!apiHealthUsesRuntimeDir(apiHealth)) {
+    return { ok: false, reason: `api local store is outside current runtime: ${apiHealth?.localStore?.path || "unknown"}` };
   }
   const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
   if (realDesignMode) {
@@ -784,6 +795,24 @@ function workspacePortOwnerMismatchReason(label, pids) {
   });
   if (!mismatched.length) return "";
   return `${label} port is owned by non-current workspace PID ${mismatched.join(",")}`;
+}
+
+function webPortRuntimeMismatchReason(pids) {
+  if (process.platform !== "win32" || !pids.length) return "";
+  const commandLines = getProcessCommandLinesByPid(pids);
+  const normalizedRuntime = normalizePathText(runtimeDir);
+  const mismatched = pids.filter((pid) => {
+    const commandLine = normalizePathText(commandLines.get(String(pid)) || "");
+    return commandLine.includes("web-standalone-server.js") && !commandLine.includes(normalizedRuntime);
+  });
+  if (!mismatched.length) return "";
+  return `web port is running from a different runtime PID ${mismatched.join(",")}`;
+}
+
+function apiHealthUsesRuntimeDir(apiHealth) {
+  const storePath = apiHealth?.localStore?.path;
+  if (!storePath) return true;
+  return normalizePathText(storePath).startsWith(normalizePathText(runtimeDir));
 }
 
 function getProcessCommandLinesByPid(pids) {

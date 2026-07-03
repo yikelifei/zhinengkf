@@ -40,6 +40,7 @@ const includeApi = !args.has("--no-api");
 const statusOnly = args.has("--status");
 const preflightOnly = args.has("--preflight");
 const keepAliveLauncher = args.has("--keep-alive");
+const startServicesThroughWrappers = process.env.START_SERVICES_THROUGH_WRAPPERS === "1";
 const requireFreePorts = args.has("--require-free-ports");
 const allowMockDesignStart = process.env.FORCE_MOCK_DESIGN_START === "1";
 const requestedMockDesignMode = args.has("--mock-design");
@@ -929,13 +930,19 @@ function startWindowsService(service) {
   }
 
   fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] launching ${service.name}\n`, "utf8");
-  if (keepAliveLauncher) {
+  if (keepAliveLauncher && !startServicesThroughWrappers) {
     appendLauncherLine(
       launcherLogPath,
       `wrapper prepared at ${wrapperPath}; launching direct service process for keep-alive supervision`,
     );
   }
-  const launchCommand = keepAliveLauncher
+  if (keepAliveLauncher && startServicesThroughWrappers) {
+    appendLauncherLine(
+      launcherLogPath,
+      `wrapper prepared at ${wrapperPath}; launching detached Windows service wrapper for keep-alive supervision`,
+    );
+  }
+  const launchCommand = keepAliveLauncher && !startServicesThroughWrappers
     ? { command: service.command, commandArgs: service.commandArgs, usesOwnRedirection: false }
     : windowsServiceLaunchCommand(service, wrapperPath);
   return startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath, launchCommand);
@@ -979,16 +986,17 @@ function windowsServiceLaunchCommand(service, wrapperPath) {
   if (process.platform === "win32" && wrapperPath) {
     appendLauncherLine(
       path.join(logsDir, `${service.name}.launcher.log`),
-      `wrapper prepared at ${wrapperPath}; launching detached Windows service wrapper through cmd.exe for stable supervision`,
+      `wrapper prepared at ${wrapperPath}; launching detached Windows service wrapper through PowerShell Start-Process for stable supervision`,
     );
   }
   return {
-    command: "cmd.exe",
+    command: "powershell.exe",
     commandArgs: [
-      "/d",
-      "/s",
-      "/c",
-      `start "" /min cmd.exe /d /s /c ${cmdQuote(wrapperPath)}`,
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Start-Process -FilePath ${psQuote(wrapperPath)} -WorkingDirectory ${psQuote(desktopRoot)} -WindowStyle Minimized`,
     ],
     usesOwnRedirection: true,
   };
@@ -1039,6 +1047,7 @@ async function printStatus() {
   const records = readPidFile();
   const apiHealthUrl = `http://127.0.0.1:${apiPort}/api/health`;
   const apiReachable = await isHealthyWithRetry(apiHealthUrl, 2, 250);
+  const apiHealth = apiReachable ? await getJsonWithRetry(apiHealthUrl, 2, 250) : null;
   const integrationHealth = apiReachable ? await getJsonWithRetry(integrationHealthUrl, 10, 500) : null;
   const effectiveServices =
     designPlatformAdapter === "art_image_local"
@@ -1053,12 +1062,24 @@ async function printStatus() {
     const reachable = await isHealthyWithRetry(service.url, 10, 500);
     const configMismatch =
       service.name === "api" && reachable && integrationHealth && !integrationMatchesCurrentConfig(integrationHealth);
+    const runtimeMismatch = service.name === "api" && reachable && !apiHealthUsesRuntimeDir(apiHealth);
     const portOwners = getPortOwnerPids(service.port);
     const ownerMismatch = workspacePortOwnerMismatchReason(service.name, portOwners);
-    const ok = reachable && !configMismatch && !ownerMismatch;
+    const webRuntimeMismatch = service.name === "web" ? webPortRuntimeMismatchReason(portOwners) : "";
+    const ok = reachable && !configMismatch && !runtimeMismatch && !ownerMismatch && !webRuntimeMismatch;
     const portText = portOwners.length ? ` port=${service.port} pid=${portOwners.join(",")}` : "";
-    const statusLabel = ok ? "[ready]" : configMismatch ? "[wrong-mode]" : ownerMismatch ? "[blocked]" : "[down] ";
+    const statusLabel = ok
+      ? "[ready]"
+      : configMismatch
+        ? "[wrong-mode]"
+        : runtimeMismatch || webRuntimeMismatch
+          ? "[wrong-runtime]"
+          : ownerMismatch
+            ? "[blocked]"
+            : "[down] ";
     console.log(`${statusLabel} ${service.label} ${service.url}${portText}`);
+    if (runtimeMismatch) console.log(`          API local store is outside current runtime: ${apiHealth?.localStore?.path || "unknown"}`);
+    if (webRuntimeMismatch) console.log(`          ${webRuntimeMismatch}`);
     if (ownerMismatch) console.log(`          ${ownerMismatch}`);
     records[service.name] = {
       ...records[service.name],
@@ -1068,7 +1089,7 @@ async function printStatus() {
       url: service.url,
       pid: ok || portOwners.length ? numberOrUndefined(portOwners[0]) || records[service.name]?.pid : undefined,
       portOwnerPids: portOwners,
-      status: ok ? "running" : configMismatch ? "wrong_mode" : "down",
+      status: ok ? "running" : configMismatch ? "wrong_mode" : runtimeMismatch || webRuntimeMismatch ? "wrong_runtime" : "down",
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1084,7 +1105,6 @@ async function printStatus() {
       console.log("       Run npm.cmd run ports:stop, then start with the matching mode.");
     }
   }
-  writePidFile(records);
   console.log(`pid file: ${pidFile}`);
   console.log(`logs: ${logsDir}`);
 }
@@ -1148,9 +1168,12 @@ async function printPreflight() {
 async function isServiceReadyForCurrentConfig(service) {
   const portOwners = getPortOwnerPids(service.port);
   if (workspacePortOwnerMismatchReason(service.name, portOwners)) return false;
+  if (service.name === "web" && webPortRuntimeMismatchReason(portOwners)) return false;
   if (!(await isHealthy(service.url))) return false;
   if (service.name !== "api") return true;
 
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealthUsesRuntimeDir(apiHealth)) return false;
   const integrationHealth = await getJson(integrationHealthUrl);
   return integrationMatchesCurrentConfig(integrationHealth);
 }
@@ -1158,8 +1181,16 @@ async function isServiceReadyForCurrentConfig(service) {
 async function isApiIntegrationReadyForCurrentConfig() {
   if (!(await isHealthy(`http://127.0.0.1:${apiPort}/api/health`))) return false;
 
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealthUsesRuntimeDir(apiHealth)) return false;
   const integrationHealth = await getJson(integrationHealthUrl);
   return integrationMatchesCurrentConfig(integrationHealth);
+}
+
+function apiHealthUsesRuntimeDir(apiHealth) {
+  const storePath = apiHealth?.localStore?.path;
+  if (!storePath) return true;
+  return normalizePathText(storePath).startsWith(normalizePathText(runtimeDir));
 }
 
 function integrationMatchesCurrentConfig(integrationHealth) {
@@ -1341,6 +1372,18 @@ function workspacePortOwnerMismatchReason(label, pids) {
   return `${label} port is owned by non-current workspace PID ${mismatched.join(",")}`;
 }
 
+function webPortRuntimeMismatchReason(pids) {
+  if (process.platform !== "win32" || !pids.length) return "";
+  const commandLines = getProcessCommandLinesByPid(pids);
+  const normalizedRuntime = normalizePathText(runtimeDir);
+  const mismatched = pids.filter((pid) => {
+    const commandLine = normalizePathText(commandLines.get(String(pid)) || "");
+    return commandLine.includes("web-standalone-server.js") && !commandLine.includes(normalizedRuntime);
+  });
+  if (!mismatched.length) return "";
+  return `web port is running from a different runtime PID ${mismatched.join(",")}`;
+}
+
 function getProcessCommandLinesByPid(pids) {
   const ids = [...new Set(pids.map((pid) => String(pid)).filter((pid) => /^\d+$/.test(pid)))];
   if (!ids.length) return new Map();
@@ -1410,7 +1453,15 @@ function readPidFile() {
 }
 
 function writePidFile(records) {
-  fs.writeFileSync(pidFile, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+  try {
+    fs.writeFileSync(pidFile, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+  } catch (error) {
+    if (statusOnly && (error?.code === "EPERM" || error?.code === "EACCES")) {
+      console.warn(`[warn] status could not update pid file ${pidFile}: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
 }
 
 function assertNoConflictingDesignLauncher() {

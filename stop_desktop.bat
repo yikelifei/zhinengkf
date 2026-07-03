@@ -18,6 +18,8 @@ if not exist "%DESKTOP_DIR%\package.json" (
 )
 
 cd /d "%DESKTOP_DIR%"
+set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+set "FORCE_PORTS_SWEEP=1"
 call npm.cmd run ports:stop
 if errorlevel 1 (
   echo.
@@ -26,5 +28,5 @@ if errorlevel 1 (
 )
 echo.
 echo [status] Service status after stop:
-call npm.cmd run ports:status
+call npm.cmd run stable:doctor
 pause

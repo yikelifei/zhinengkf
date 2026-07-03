@@ -1489,8 +1489,7 @@ export class WechatDispatchService {
         continue;
       }
 
-      try {
-        const result = this.acknowledgeBridgeSend(taskId, {
+      const ackPayload = {
           status: status as "sent" | "failed",
           version: typeof data.version === "string" ? data.version : undefined,
           protocolVersion: typeof data.protocolVersion === "string" ? data.protocolVersion : undefined,
@@ -1509,7 +1508,10 @@ export class WechatDispatchService {
             fileName: entry.fileName,
           },
           sentAt: typeof data.sentAt === "string" ? data.sentAt : undefined,
-        });
+        };
+
+      try {
+        const result = this.acknowledgeBridgeSend(taskId, ackPayload);
         const archivedPath = this.sendAdapter.moveBridgeInboxFile(entry.filePath, "processed");
         processed.push(this.buildBridgeInboxListItem(entry, {
           archivedPath,
@@ -1522,8 +1524,20 @@ export class WechatDispatchService {
         }));
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown bridge inbox error";
+        const recovery = this.failTaskForRejectedTrustedBridgeAck(taskId, ackPayload, entry, errorMessage);
         const archivedPath = this.sendAdapter.moveBridgeInboxFile(entry.filePath, "failed");
-        failed.push(this.buildBridgeInboxListItem(entry, { archivedPath, errorMessage }));
+        failed.push(this.buildBridgeInboxListItem(entry, {
+          archivedPath,
+          errorMessage,
+          result: recovery
+            ? {
+                taskId: recovery.task?.id || "",
+                taskStatus: recovery.task?.status || "",
+                attemptId: recovery.attempt?.id || "",
+                attemptStatus: recovery.attempt?.status || "",
+              }
+            : undefined,
+        }));
       }
     }
 
@@ -2164,6 +2178,11 @@ export class WechatDispatchService {
       throw new BadRequestException("bridge ack rejected: no active bridge send attempt is waiting for ack");
     }
     const dispatchState = this.findPendingBridgeDispatchForTask(task, pendingAttempt);
+    const bridgeAttemptMetadata = isPlainObject(pendingAttempt?.metadata) ? pendingAttempt.metadata : {};
+    const requiresBridgeDispatch = pendingAttempt.adapter === "windows_bridge" || bridgeAttemptMetadata.requiresBridge === true;
+    if (status === "sent" && requiresBridgeDispatch && !dispatchState) {
+      throw new BadRequestException("bridge ack rejected: dispatch instruction is required before marking sent");
+    }
     if (status === "sent" && dispatchState?.expired) {
       throw new BadRequestException(`bridge ack rejected: dispatch instruction expired (${dispatchState.expiresAt || dispatchState.fileName || "unknown"})`);
     }
@@ -3319,6 +3338,68 @@ export class WechatDispatchService {
         entry.wechatAccountId === task.wechatAccountId &&
         entry.conversationId === task.conversationId,
       ) || null;
+  }
+
+  private failTaskForRejectedTrustedBridgeAck(taskId: string, payload: any, entry: any, errorMessage: string) {
+    const task = this.localStore.getSendTask(taskId);
+    if (!task || task.status !== "sending") return null;
+    if (payload?.status !== "sent") return null;
+    const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
+    if (!pendingAttempt || pendingAttempt.status !== "started") return null;
+    const binding = validateBridgeAckBinding({ task, attempt: pendingAttempt, payload });
+    if (!binding.ok) return null;
+    const currentBinding = this.validateExistingSendTaskBinding(task);
+    if (!currentBinding.ok) return null;
+
+    const outboxFileName = this.resolveBridgeAckOutboxFileName(payload, pendingAttempt);
+    const outboxPayloadValidation = this.validateBridgeAckOutboxPayload(task, pendingAttempt, payload, outboxFileName);
+    const now = new Date().toISOString();
+    const archivedOutboxPath = outboxFileName ? this.archiveBridgeOutboxFile(outboxFileName, "failed") : null;
+    const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingAttempt, "failed");
+    const failureReason = `Bridge ack rejected after trusted validation: ${errorMessage}`;
+    const attempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
+      status: "failed",
+      errorMessage: failureReason,
+      metadata: {
+        ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
+        bridgeAckRejected: {
+          source: "bridge_inbox",
+          fileName: entry?.fileName || "",
+          reason: errorMessage,
+          rejectedAt: now,
+        },
+        bridgeAck: sanitizeBridgeAckMetadata(payload.metadata),
+        bridgeAckIdentity: {
+          wechatAccountId: payload.wechatAccountId || "",
+          conversationId: payload.conversationId || "",
+        },
+        bridgeAckAt: now,
+        bridgeAckOutboxFileName: outboxFileName,
+        bridgeOutboxPayloadValidation: {
+          ok: outboxPayloadValidation.ok,
+          fileName: outboxFileName,
+          checkedAt: now,
+        },
+        archivedOutboxPath,
+        archivedDispatchPath,
+      },
+      completedAt: now,
+    });
+    const updatedTask = this.localStore.updateSendTask(task.id, {
+      status: "failed",
+      sentAt: null,
+      errorMessage: failureReason,
+      guardSnapshot: {
+        ...(task.guardSnapshot || {}),
+        status: "failed",
+        reason: "bridge_ack_rejected_after_trusted_validation",
+        bridgeAckRejectedAt: now,
+        bridgeAckRejectedFileName: entry?.fileName || "",
+        bridgeAckRejectedReason: errorMessage,
+      },
+    });
+    this.markLinkedQuoteFailed(updatedTask, failureReason);
+    return { task: this.localStore.getSendTask(task.id), attempt, binding, currentBinding };
   }
 
   private validateBridgeAckOutboxPayload(task: any, attempt: any, payload: any, outboxFileName: string) {

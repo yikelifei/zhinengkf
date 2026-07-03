@@ -1160,14 +1160,17 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /reason: highValueOrderReason\(order\)/);
   assert.match(page, /const action = highValueOrderManualPrimaryAction\(order\)/);
   assert.match(page, /const reviewFilter = highValueOrderReviewFilterForOrder\(order\)/);
+  assert.match(page, /const nextFollowLabel = highValueOrderNextFollowLabel\(order\)/);
   assert.match(page, /primaryLabel: action\.label/);
   assert.match(page, /reviewFilterLabel: highValueOrderReviewFilterOptionLabel\(reviewFilter\)/);
+  assert.match(page, /nextFollowLabel,/);
   assert.match(page, /action\.type === "queue_confirmation"[\s\S]*reviewOrderDraft\(order, "approve_confirmation"\)/);
   assert.match(page, /action\.type === "queue_delivery"[\s\S]*reviewOrderDraft\(order, "approve_followup", "delivery"\)/);
   assert.match(page, /focus: \(\) => \{[\s\S]*focusHighValueOrderReview\(order\);[\s\S]*\}/);
   assert.match(page, /run: \(\) => \{[\s\S]*setReviewWorkbenchView\("order"\);[\s\S]*setHighValueOrderReviewFilter\(highValueOrderReviewFilterForOrder\(order\)\)/);
   assert.match(page, /highValueManualQueueItems\[0\]\?\.run\(\)/);
   assert.match(page, /item\.reviewFilterLabel \? <small>订单阶段：\{item\.reviewFilterLabel\}<\/small> : null/);
+  assert.match(page, /item\.nextFollowLabel \? <small>\{item\.nextFollowLabel\}<\/small> : null/);
   assert.match(page, /setReviewWorkbenchView\("order"\)/);
   assert.match(page, /label="待审订单"/);
   assert.match(page, /highValueReviewOrderDrafts\.length/);
@@ -1214,6 +1217,9 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /highValueOrderMatchesReviewFilter\(order, "overdue"\)[\s\S]*return "overdue"/);
   assert.match(page, /function highValueOrderReviewFilterOptionLabel\(filter:/);
   assert.match(page, /highValueOrderReviewFilterOptions\.find\(\(option\) => option\.value === filter\)\?\.label \|\| "全部"/);
+  assert.match(page, /function highValueOrderNextFollowLabel\(order: OrderDraft\)/);
+  assert.match(page, /const nextFollowAt = highValueOrderNextFollowTime\(order\)/);
+  assert.match(page, /nextFollowAt <= Date\.now\(\) \? `已到跟进：\$\{label\}` : `下次跟进：\$\{label\}`/);
   assert.match(page, /function buildHighValueOrderManualNote/);
   assert.match(page, /function appendOrderCustomerNotes/);
   assert.match(page, /function latestHighValueOrderManualNote/);
@@ -1738,8 +1744,15 @@ test("bridge acknowledgement rejects sent ack after dispatch instruction expires
   );
 
   assert.match(ackSection, /const dispatchState = this\.findPendingBridgeDispatchForTask\(task, pendingAttempt\)/);
+  assert.match(ackSection, /const requiresBridgeDispatch = pendingAttempt\.adapter === "windows_bridge" \|\| bridgeAttemptMetadata\.requiresBridge === true/);
+  assert.match(ackSection, /status === "sent" && requiresBridgeDispatch && !dispatchState/);
+  assert.match(ackSection, /bridge ack rejected: dispatch instruction is required before marking sent/);
   assert.match(ackSection, /status === "sent" && dispatchState\?\.expired/);
   assert.match(ackSection, /bridge ack rejected: dispatch instruction expired/);
+  assert.ok(
+    ackSection.indexOf("!dispatchState") < ackSection.indexOf("validateBridgeAckBinding"),
+    "missing dispatch sent ack must be rejected before binding and persistence",
+  );
   assert.ok(
     ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("validateBridgeAckBinding"),
     "expired dispatch sent ack must be rejected before binding and persistence",
@@ -1900,4 +1913,34 @@ test("bridge inbox scan keeps system provenance after external ack metadata", ()
   assert.ok(externalMetadataIndex >= 0);
   assert.ok(sourceIndex > externalMetadataIndex);
   assert.ok(fileNameIndex > externalMetadataIndex);
+});
+
+test("bridge inbox scan fails trusted rejected sent acknowledgements without bypassing validation", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const scanSection = service.slice(
+    service.indexOf("  scanBridgeInbox()"),
+    service.indexOf("  scanSendOperations()"),
+  );
+  const recoverySection = service.slice(
+    service.indexOf("  private failTaskForRejectedTrustedBridgeAck("),
+    service.indexOf("  private validateBridgeAckOutboxPayload("),
+  );
+
+  assert.match(scanSection, /const ackPayload = \{/);
+  assert.match(scanSection, /acknowledgeBridgeSend\(taskId, ackPayload\)/);
+  assert.match(scanSection, /failTaskForRejectedTrustedBridgeAck\(taskId, ackPayload, entry, errorMessage\)/);
+  assert.match(recoverySection, /payload\?\.status !== "sent"/);
+  assert.match(recoverySection, /resolveBridgeAckAttempt\(task, payload\)/);
+  assert.match(recoverySection, /validateBridgeAckBinding\(\{ task, attempt: pendingAttempt, payload \}\)/);
+  assert.match(recoverySection, /validateExistingSendTaskBinding\(task\)/);
+  assert.match(recoverySection, /validateBridgeAckOutboxPayload\(task, pendingAttempt, payload, outboxFileName\)/);
+  assert.match(recoverySection, /archiveBridgeOutboxFile\(outboxFileName, "failed"\)/);
+  assert.match(recoverySection, /archiveBridgeDispatchFile\(task, pendingAttempt, "failed"\)/);
+  assert.match(recoverySection, /status: "failed"/);
+  assert.match(recoverySection, /reason: "bridge_ack_rejected_after_trusted_validation"/);
+  assert.match(recoverySection, /markLinkedQuoteFailed\(updatedTask, failureReason\)/);
+  assert.ok(
+    recoverySection.indexOf("validateBridgeAckOutboxPayload") < recoverySection.indexOf("updateSendTask"),
+    "rejected sent ack recovery must validate the outbox body before failing the task",
+  );
 });

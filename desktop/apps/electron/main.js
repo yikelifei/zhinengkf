@@ -24,7 +24,7 @@ function startupErrorHtml(message) {
   <h2>${APP_TITLE} 启动失败</h2>
   <p>无法打开 ${escapeHtml(WEB_URL)}</p>
   <pre style="white-space:pre-wrap;background:#fff;border:1px solid #d2d2d7;border-radius:8px;padding:16px">${escapeHtml(message)}</pre>
-  <p>请先运行 start-stable-desktop.cmd，再重新打开桌面端。</p>
+  <p>请先运行 C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd，并保持服务窗口打开，再重新打开桌面端。</p>
 </body>
 </html>`,
   )}`;

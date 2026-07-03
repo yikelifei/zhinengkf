@@ -237,6 +237,7 @@ function findManagedWrapperPids() {
   const normalizedRoot = normalizePathText(desktopRoot);
   const launcherPattern = /(launch|supervise|stable-supervise)-(mock|real)\.cmd/;
   const serviceWrapperPattern = /run-[^" ]+(-worker)?\.cmd/;
+  const stableRuntimeWrapperPattern = /(keepalive-stable-desktop|start-stable-desktop(?:-foreground)?)\.cmd/;
   const persistWrapperPattern = /(web|api|mock)-persist\.(out|err)\.log/;
   const directWrapperPattern =
     /node (node_modules\/next\/dist\/bin\/next dev apps\/web -p \d+|dist\/apps\/api\/main\.js|tools\/mock-design-platform\.js).*\.runtime\/logs\/(web|api|mock)-direct\./;
@@ -274,7 +275,7 @@ function findManagedWrapperPids() {
         : "";
       const runtimeWrapper =
         (commandLine.includes(normalizedRuntime) || commandLine.includes(normalizedRoot)) &&
-        (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine));
+        (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine) || stableRuntimeWrapperPattern.test(commandLine));
       const projectWebDevWrapper = commandLine.includes(normalizedRoot) && projectWebDevWrapperPattern.test(commandLine);
       const projectWebBuildWrapper = commandLine.includes(normalizedRoot) && projectWebBuildWrapperPattern.test(commandLine);
       const projectStandaloneWebServer =
@@ -412,6 +413,12 @@ function findManagedLauncherPids() {
       ) {
         return true;
       }
+      if (commandLine.includes("tools/stable-runtime-launcher.js")) {
+        return true;
+      }
+      if (commandLine.includes("keepalive-stable-desktop.cmd")) {
+        return true;
+      }
       if (
         commandLine.includes("tools/desktop-service-supervisor.js") &&
         commandLine.includes("--supervisor-child") &&
@@ -480,11 +487,52 @@ function stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids) {
         console.log(`[warn] port=${port} pid=${pid} does not look like this desktop app. It was not stopped automatically.`);
         continue;
       }
+      if (forceProcessSweep) {
+        for (const ancestorPid of findStoppablePortOwnerAncestorPids(pid)) {
+          if (protectedPids.has(ancestorPid)) continue;
+          if (attemptedPids.has(ancestorPid) || stoppedPids.has(ancestorPid)) continue;
+          console.log(`[stop:port-parent] port=${port} pid=${ancestorPid}`);
+          attemptedPids.add(ancestorPid);
+          if (stopPid(ancestorPid)) stoppedPids.add(ancestorPid);
+        }
+        if (stoppedPids.has(pid)) continue;
+      }
       console.log(`[stop:port] port=${port} pid=${pid}`);
       attemptedPids.add(pid);
       if (stopPid(pid)) stoppedPids.add(pid);
     }
   }
+}
+
+function findStoppablePortOwnerAncestorPids(pid) {
+  const ancestors = [];
+  let current = String(pid || "");
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = getParentPid(current);
+    if (!parent) break;
+    if (isStoppablePortOwnerAncestor(parent)) ancestors.push(parent);
+    current = parent;
+  }
+  return ancestors;
+}
+
+function isStoppablePortOwnerAncestor(pid) {
+  const commandLine = normalizePathText(getCommandLine(pid));
+  if (!commandLine.includes("zhinengkefu")) return false;
+  return [
+    "run-web.cmd",
+    "run-api.cmd",
+    "run-design-platform-mock.cmd",
+    "keepalive-stable-desktop.cmd",
+    "tools/stable-runtime-launcher.js",
+    "tools/start-dev-ports.js",
+    "launch-mock.cmd",
+    "launch-real.cmd",
+    "supervise-mock.cmd",
+    "supervise-real.cmd",
+    "stable-supervise-mock.cmd",
+    "stable-supervise-real.cmd",
+  ].some((marker) => commandLine.includes(marker));
 }
 
 function stopPid(pid) {
@@ -652,6 +700,7 @@ function isManagedCommandLine(pid) {
     "tools/desktop-service-supervisor.js",
     "tools/ports-stack-starter.js",
     "tools/start-dev-ports.js",
+    "tools/stable-runtime-launcher.js",
     "tools/mock-design-platform.js",
     "dist/apps/api/main.js",
     ".runtime/web-standalone-server.js",

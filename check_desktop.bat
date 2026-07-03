@@ -25,6 +25,7 @@ if errorlevel 1 (
 )
 
 cd /d "%DESKTOP_DIR%"
-call npm.cmd run ports:doctor:mock
+set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+call npm.cmd run stable:doctor
 echo.
 pause

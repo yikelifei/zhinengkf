@@ -11,7 +11,7 @@ const intervalMs = numberArg("--interval-ms", 2000);
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
-  : path.join(desktopRoot, ".runtime");
+  : path.join(desktopRoot, ".runtime-stable");
 const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
@@ -78,7 +78,7 @@ async function collectReport() {
     });
   }
   checks.push(checkWebRuntimeOwner(portOwners.get(webPort) || []));
-  checks.push(checkKeepAliveHeartbeat());
+  checks.push(checkKeepAliveHeartbeat(portOwners));
 
   for (const [label, url, isOk] of endpoints) {
     const result = await requestJson(url, 3000);
@@ -103,10 +103,16 @@ function printReport(report) {
   console.log(`[doctor] desktopRoot=${report.desktopRoot}`);
   console.log(`[doctor] runtimeDir=${report.runtimeDir}`);
   for (const check of report.checks) {
-    const prefix = check.ok ? "[ok]" : check.severity === "warn" ? "[warn]" : "[fail]";
+    const prefix = check.severity === "warn" ? "[warn]" : check.ok ? "[ok]" : "[fail]";
     console.log(`${prefix} ${check.label}: ${check.detail}`);
   }
   console.log(report.ok ? "[doctor] stable desktop stack is healthy." : "[doctor] stable desktop stack is not healthy.");
+  if (!report.ok) {
+    console.log("[doctor] easiest fix: run C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd and keep that window open.");
+    console.log("[doctor] next step: run C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop-foreground.cmd and keep that window open.");
+    console.log("[doctor] if ports are occupied by old services, run C:\\Users\\27808\\Desktop\\zhinengkefu\\stop-stable-desktop.cmd first.");
+    console.log(`[doctor] logs: ${path.join(report.runtimeDir, "logs")}`);
+  }
 }
 
 function checkDirectory(label, dirPath) {
@@ -162,12 +168,37 @@ function checkWebRuntimeOwner(webOwners) {
   };
 }
 
-function checkKeepAliveHeartbeat() {
+function checkKeepAliveHeartbeat(portOwners) {
   try {
     const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
     const updatedAtMs = Date.parse(String(heartbeat.updatedAt || ""));
     const ageMs = Date.now() - updatedAtMs;
+    const missingPorts = [webPort, apiPort, mockPort].filter((port) => !(portOwners.get(port) || []).length);
     const ok = heartbeat.mode === "mock" && Number.isFinite(updatedAtMs) && ageMs <= 15000;
+    if (ok && missingPorts.length) {
+      return {
+        ok: true,
+        severity: "warn",
+        label: "Keep-alive heartbeat",
+        detail: `supervisor heartbeat is fresh pid=${heartbeat.pid} ageMs=${ageMs}, but service ports are not ready: ${missingPorts.join(",")}`,
+      };
+    }
+    if (!ok && missingPorts.length) {
+      return {
+        ok: true,
+        severity: "warn",
+        label: "Keep-alive heartbeat",
+        detail: `stale or wrong heartbeat and service ports are not ready: ${missingPorts.join(",")}; ${JSON.stringify(heartbeat)}`,
+      };
+    }
+    if (ok && heartbeat.pid && !processIsRunning(heartbeat.pid)) {
+      return {
+        ok: true,
+        severity: "warn",
+        label: "Keep-alive heartbeat",
+        detail: `fresh heartbeat pid=${heartbeat.pid} is not running; ${JSON.stringify(heartbeat)}`,
+      };
+    }
     return {
       ok: true,
       label: "Keep-alive heartbeat",
@@ -176,6 +207,15 @@ function checkKeepAliveHeartbeat() {
         : `direct service mode; stale or wrong heartbeat ignored: ${JSON.stringify(heartbeat)}`,
     };
   } catch (error) {
+    const missingPorts = [webPort, apiPort, mockPort].filter((port) => !(portOwners.get(port) || []).length);
+    if (missingPorts.length) {
+      return {
+        ok: true,
+        severity: "warn",
+        label: "Keep-alive heartbeat",
+        detail: `heartbeat unavailable and service ports are not ready: ${missingPorts.join(",")}; ${error?.message || String(error)}`,
+      };
+    }
     return { ok: true, label: "Keep-alive heartbeat", detail: `direct service mode: ${error?.message || String(error)}` };
   }
 }
@@ -241,6 +281,17 @@ function getCommandLine(pid) {
     windowsHide: true,
   });
   return result.status === 0 ? String(result.stdout || "").trim() : "";
+}
+
+function processIsRunning(pid) {
+  const safePid = Number(pid);
+  if (!Number.isFinite(safePid) || safePid <= 0) return false;
+  try {
+    process.kill(safePid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizePathText(value) {

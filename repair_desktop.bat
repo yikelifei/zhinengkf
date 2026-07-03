@@ -48,7 +48,7 @@ if not exist node_modules (
 )
 
 echo [repair] Repairing default desktop startup...
-call npm.cmd run ports:repair
+call "%DESKTOP_DIR%\repair-stable-desktop.cmd"
 if errorlevel 1 (
   echo.
   echo [error] Repair failed. Read the messages above, then run check_desktop.bat.

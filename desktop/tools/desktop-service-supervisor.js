@@ -55,18 +55,6 @@ function main() {
     return;
   }
 
-  const launcherResult = startLauncherProcess(launcherCmd);
-  if (launcherResult.status === 0) {
-    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
-    return;
-  }
-
-  appendLog(
-    launcherLog,
-    `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`,
-  );
-
   const supervisorCommandLine = buildSupervisorCommandLine();
   const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
   if (supervisorCreateResult.status === 0) {
@@ -80,6 +68,18 @@ function main() {
     `[supervisor] Win32_Process node supervisor skipped: ${String(
       supervisorCreateResult.stderr || supervisorCreateResult.stdout || supervisorCreateResult.error || "failed",
     ).trim()}`,
+  );
+
+  const launcherResult = startLauncherProcess(launcherCmd);
+  if (launcherResult.status === 0) {
+    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
+    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
+    return;
+  }
+
+  appendLog(
+    launcherLog,
+    `[supervisor] Start-Process launcher skipped: ${String(launcherResult.stderr || launcherResult.stdout || "failed").trim()}`,
   );
 
   const scheduledSupervisorResult = startSupervisorChildScheduled();

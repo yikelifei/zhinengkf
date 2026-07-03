@@ -5753,6 +5753,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     priority: number;
     primaryLabel: string;
     reviewFilterLabel?: string;
+    nextFollowLabel?: string;
     focus: () => void;
     run: () => void;
   };
@@ -5820,6 +5821,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         const step = highValueOrderManualStep(order);
         const action = highValueOrderManualPrimaryAction(order);
         const reviewFilter = highValueOrderReviewFilterForOrder(order);
+        const nextFollowLabel = highValueOrderNextFollowLabel(order);
         return {
           id: `order-${order.id}`,
           kind: "订单",
@@ -5833,6 +5835,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           priority: step.priority,
           primaryLabel: action.label,
           reviewFilterLabel: highValueOrderReviewFilterOptionLabel(reviewFilter),
+          nextFollowLabel,
           focus: () => {
             focusHighValueOrderReview(order);
           },
@@ -10729,6 +10732,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <small>{item.subtitle}</small>
                           <small>{item.reason}</small>
                           {item.reviewFilterLabel ? <small>订单阶段：{item.reviewFilterLabel}</small> : null}
+                          {item.nextFollowLabel ? <small>{item.nextFollowLabel}</small> : null}
                           <em>{item.label}</em>
                           <p>{item.detail}</p>
                           <p>下一步：{item.nextAction}</p>
@@ -14953,6 +14957,13 @@ function highValueOrderReviewFilterForOrder(order: OrderDraft): (typeof highValu
 
 function highValueOrderReviewFilterOptionLabel(filter: (typeof highValueOrderReviewFilterOptions)[number]["value"]) {
   return highValueOrderReviewFilterOptions.find((option) => option.value === filter)?.label || "全部";
+}
+
+function highValueOrderNextFollowLabel(order: OrderDraft) {
+  const nextFollowAt = highValueOrderNextFollowTime(order);
+  if (!nextFollowAt) return "";
+  const label = formatDateTime(new Date(nextFollowAt).toISOString());
+  return nextFollowAt <= Date.now() ? `已到跟进：${label}` : `下次跟进：${label}`;
 }
 
 function highValueOrderManualPrimaryAction(order: OrderDraft): { type: "focus" | "queue_confirmation" | "queue_delivery"; label: string } {

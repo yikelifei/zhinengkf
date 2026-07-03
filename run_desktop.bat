@@ -33,7 +33,8 @@ set "USE_LOCAL_STORE=true"
 set "START_MOCK_DESIGN_PLATFORM=true"
 set "DESIGN_PLATFORM_ADAPTER=standard_v1"
 set "DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3700"
-set "DESIGN_PLATFORM_RUNTIME_CONFIG=%DESKTOP_DIR%\.runtime\design-platform-config.json"
+set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+set "DESIGN_PLATFORM_RUNTIME_CONFIG=%DESKTOP_RUNTIME_DIR%\design-platform-config.json"
 
 if not exist node_modules (
   echo [setup] Installing desktop dependencies. This may take a while...
@@ -45,36 +46,15 @@ if not exist node_modules (
   )
 )
 
-echo [stop] Cleaning old desktop services before startup...
-call npm.cmd run ports:stop
-echo.
-
-echo [check] Running startup preflight...
-call npm.cmd run ports:preflight:mock:free
-if errorlevel 1 (
-  echo.
-  echo [repair] Preflight failed. Trying one automatic cleanup, then checking again...
-  call npm.cmd run ports:stop
-  echo.
-  echo [check] Running startup preflight again...
-  call npm.cmd run ports:preflight:mock:free
-  if errorlevel 1 (
-    echo [error] Startup preflight still failed. Read the messages above.
-    echo Run stop_desktop.bat, approve the Administrator prompt, then run this file again.
-    pause
-    exit /b 1
-  )
-)
-
 echo.
 echo [start] Starting desktop services in stable foreground mode...
 echo Open workbench: http://127.0.0.1:3100/
-echo Keep this window open while using the app. Close it after running stop_desktop.bat.
+echo Keep this window open while using the app.
 echo.
-call npm.cmd run ports:keepalive:mock
+call "%DESKTOP_DIR%\start-stable-desktop-foreground.cmd"
 if errorlevel 1 (
-  echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime\logs.
-  echo You can also run repair_desktop.bat to reset default startup.
+  echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime-stable\logs.
+  echo You can also run C:\Users\27808\Desktop\zhinengkefu\repair-stable-desktop.cmd.
   pause
   exit /b 1
 )

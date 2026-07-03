@@ -25,11 +25,13 @@ function setupService(overrides = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manual-lock-send-"));
   process.env.WECHAT_BRIDGE_OUTBOX_DIR = path.join(tempDir, "outbox");
   process.env.WECHAT_BRIDGE_INBOX_DIR = path.join(tempDir, "inbox");
+  process.env.WECHAT_BRIDGE_DISPATCH_DIR = path.join(tempDir, "dispatch");
   process.env.WECHAT_BRIDGE_LOCK_DIR = path.join(tempDir, "locks");
   process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE = path.join(tempDir, "worker-status.json");
 
   appConfig.wechatBridgeOutboxDir = process.env.WECHAT_BRIDGE_OUTBOX_DIR;
   appConfig.wechatBridgeInboxDir = process.env.WECHAT_BRIDGE_INBOX_DIR;
+  appConfig.wechatBridgeDispatchDir = process.env.WECHAT_BRIDGE_DISPATCH_DIR;
   appConfig.wechatBridgeLockDir = process.env.WECHAT_BRIDGE_LOCK_DIR;
   appConfig.wechatBridgeWorkerStatusFile = process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE;
 
@@ -122,6 +124,61 @@ function createPassingWechatWindowSnapshot(localStore, recentMessageText = "") {
   });
 }
 
+function safeBridgeFileSegment(value) {
+  return String(value || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function writeDispatchInstructionForStartedBridgeSend(localStore, taskId) {
+  const task = localStore.getSendTask(taskId);
+  const attempt = localStore.getLatestSendAttempt(taskId, {
+    adapter: "windows_bridge",
+    status: "started",
+  });
+  assert.ok(task, "send task should exist before bridge dispatch instruction");
+  assert.ok(attempt, "started bridge attempt should exist before bridge dispatch instruction");
+  fs.mkdirSync(appConfig.wechatBridgeDispatchDir, { recursive: true });
+
+  const outboxFileName = path.basename(String(attempt.metadata?.outboxFile || attempt.metadata?.outboxFileName || ""));
+  const fileName = `${safeBridgeFileSegment(task.wechatAccountId)}-${safeBridgeFileSegment(task.id)}-${safeBridgeFileSegment(
+    attempt.id,
+  )}.dispatch.json`;
+  const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  const text = String(task.payload?.textBeforeImages || task.payload?.text || "test bridge send").trim();
+  const actions = text ? [{ type: "text", text }] : [{ type: "text", text: "test bridge send" }];
+  fs.writeFileSync(
+    path.join(appConfig.wechatBridgeDispatchDir, fileName),
+    `${JSON.stringify(
+      {
+        version: "wechat_bridge_dispatch_v1",
+        taskId: task.id,
+        attemptId: attempt.id,
+        wechatAccountId: task.wechatAccountId,
+        conversationId: task.conversationId,
+        sourceOutboxFileName: outboxFileName,
+        sendPlan: {
+          kind: task.payload?.kind || "text",
+          actionCount: actions.length,
+          actions,
+          constraints: { doNotSendAfter: expiresAt },
+        },
+        ack: {
+          requiredAttemptId: attempt.id,
+          requiredOutboxFileName: outboxFileName,
+          fileNameHint: `${safeBridgeFileSegment(task.wechatAccountId)}-${safeBridgeFileSegment(task.id)}-${safeBridgeFileSegment(
+            attempt.id,
+          )}-sent.ack.json`,
+        },
+        createdAt: new Date().toISOString(),
+        expiresAt,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return fileName;
+}
+
 function acknowledgeStartedBridgeSend(service, localStore, taskId) {
   const task = localStore.getSendTask(taskId);
   const attempt = localStore.getLatestSendAttempt(taskId, {
@@ -130,6 +187,7 @@ function acknowledgeStartedBridgeSend(service, localStore, taskId) {
   });
   assert.ok(task, "send task should exist before bridge ack");
   assert.ok(attempt, "started bridge attempt should exist before bridge ack");
+  writeDispatchInstructionForStartedBridgeSend(localStore, taskId);
   const outboxFile = attempt.metadata.outboxFile;
   const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
   return service.acknowledgeBridgeSend(taskId, {
@@ -1771,6 +1829,7 @@ test("bridge sent ack rejects task after its design binding becomes invalid", ()
     status: "started",
     metadata: { outboxFile },
   });
+  writeDispatchInstructionForStartedBridgeSend(localStore, task.id);
 
   assert.throws(
     () =>

@@ -54,6 +54,8 @@ desktop/.runtime/
 desktop/uploads/
 desktop/generated/
 desktop/*.tsbuildinfo
+desktop/.runtime-stable/
+.runtime-d-repo/
 
 # OS
 .DS_Store
