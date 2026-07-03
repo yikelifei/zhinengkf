@@ -6518,31 +6518,51 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           </div>
                           <em>{wechatChannelStatusLabel(channel.status)}</em>
                         </div>
-                        <div className="wechat-channel-checks" aria-label={`${channel.label}检查项`}>
-                          {channel.checks.map((check) => (
-                            <span className={check.passed ? "ok" : "warn"} key={check.key} title={check.detail || check.label}>
-                              {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
-                              <strong>{check.label}</strong>
-                              <small>{check.detail}</small>
-                            </span>
-                          ))}
-                        </div>
-                        <div className="wechat-config-runbook" aria-label={`${channel.label}下一步配置`}>
-                          <strong>{wechatChannelNextStep(channel)}</strong>
-                          {wechatChannelSetupRows(channel).map((row) => (
-                            <span className={row.done ? "done" : "todo"} key={row.key}>
-                              <small>{row.label}</small>
-                              <code>{row.key}</code>
-                            </span>
-                          ))}
-                        </div>
-                        <div className="wechat-config-entrypoints">
-                          {Object.entries(channel.entrypoints).map(([key, value]) => (
-                            <span key={key}>
-                              <small>{wechatChannelMetricLabel(key)}</small>
-                              <code>{String(value)}</code>
-                            </span>
-                          ))}
+                        <div className="wechat-config-sections" aria-label={`${channel.label}真实接入配置分区`}>
+                          <section className="wechat-config-section" aria-label={`${channel.label}检查结果`}>
+                            <div className="wechat-config-section-head">
+                              <strong>检查结果</strong>
+                              <small>只展示后端读取到的运行、凭证和发送器状态</small>
+                            </div>
+                            <div className="wechat-channel-checks" aria-label={`${channel.label}检查项`}>
+                              {channel.checks.map((check) => (
+                                <span className={check.passed ? "ok" : "warn"} key={check.key} title={check.detail || check.label}>
+                                  {check.passed ? <Check size={13} aria-hidden="true" /> : <AlertTriangle size={13} aria-hidden="true" />}
+                                  <strong>{check.label}</strong>
+                                  <small>{check.detail}</small>
+                                </span>
+                              ))}
+                            </div>
+                          </section>
+                          <section className="wechat-config-section" aria-label={`${channel.label}落地配置`}>
+                            <div className="wechat-config-section-head">
+                              <strong>落地配置</strong>
+                              <small>按当前通道类型补齐真实接入条件</small>
+                            </div>
+                            <div className="wechat-config-runbook" aria-label={`${channel.label}下一步配置`}>
+                              <strong>{wechatChannelNextStep(channel)}</strong>
+                              {wechatChannelSetupRows(channel).map((row) => (
+                                <span className={row.done ? "done" : "todo"} key={row.key}>
+                                  <small>{row.label}</small>
+                                  <code>{row.key}</code>
+                                </span>
+                              ))}
+                            </div>
+                          </section>
+                          <section className="wechat-config-section" aria-label={`${channel.label}真实入口`}>
+                            <div className="wechat-config-section-head">
+                              <strong>真实入口</strong>
+                              <small>复用现有后端入口和本机桥接脚本，不新增假接口</small>
+                            </div>
+                            <div className="wechat-config-entrypoints" aria-label={`${channel.label}真实接入入口`}>
+                              {Object.entries(channel.entrypoints).map(([key, value]) => (
+                                <span key={key}>
+                                  <small>{wechatChannelMetricLabel(key)}</small>
+                                  <code>{String(value)}</code>
+                                </span>
+                              ))}
+                            </div>
+                          </section>
                         </div>
                       </article>
                     ))

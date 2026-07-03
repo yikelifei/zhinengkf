@@ -57,6 +57,12 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /function wechatChannelNextStep/);
   assert.match(page, /WECHAT_SEND_ADAPTER=windows_bridge/);
   assert.match(page, /wechat-config-runbook/);
+  assert.match(page, /className="wechat-config-sections"/);
+  assert.match(page, /aria-label=\{`\$\{channel\.label\}真实接入配置分区`\}/);
+  assert.match(page, /className="wechat-config-section"[\s\S]*className="wechat-config-section-head"[\s\S]*channel\.checks\.map/);
+  assert.match(page, /className="wechat-config-section"[\s\S]*wechatChannelSetupRows\(channel\)/);
+  assert.match(page, /className="wechat-config-section"[\s\S]*Object\.entries\(channel\.entrypoints\)/);
+  assert.match(page, /不新增假接口/);
   assert.match(page, /aria-label=\{`\$\{channel\.label\}操作矩阵`\}/);
   assert.match(page, /className="wechat-action-group"/);
   assert.match(page, /<small>采集<\/small>[\s\S]*captureCurrentWindowOnce[\s\S]*scanRealWindowSnapshots/);
@@ -72,6 +78,9 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /aria-label="审核发送"[\s\S]*setReviewWorkbenchView\("handoff"\)[\s\S]*setSendWorkbenchView\("queue"\)/);
   assert.match(styles, /\.wechat-channel-card\.needs_send_adapter::before/);
   assert.match(styles, /\.wechat-channel-next-step\.needs_runtime,[\s\S]*\.wechat-channel-next-step\.needs_send_adapter/);
+  assert.match(styles, /\.wechat-config-sections/);
+  assert.match(styles, /\.wechat-config-section:first-child/);
+  assert.match(styles, /\.wechat-config-section-head/);
   assert.match(styles, /\.wechat-action-group/);
   assert.match(styles, /\.wechat-action-buttons \.primary/);
   assert.match(styles, /\.wechat-visual-action-strip/);
