@@ -63,10 +63,24 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /<small>发送<\/small>[\s\S]*processSafeQueue/);
   assert.match(page, /<small>演练<\/small>[\s\S]*runWechatChannelInbound\(channel\.key\)/);
   assert.match(page, /<small>路由<\/small>[\s\S]*scrollToWorkspaceSection\("routing-center"\)/);
+  assert.doesNotMatch(page, /className="wechat-lane-actions" aria-label="接入通道操作"/);
+  assert.match(page, /className="wechat-visual-action-strip"/);
+  assert.match(page, /aria-label="个人微信采集"[\s\S]*captureCurrentWindowOnce[\s\S]*scanRealWindowSnapshots/);
+  assert.match(page, /aria-label="通道配置"[\s\S]*setWechatWorkbenchView\("config"\)[\s\S]*loadWechatChannelStatusOnly/);
+  assert.match(page, /className="wechat-live-action-groups"/);
+  assert.match(page, /aria-label="会话处理"[\s\S]*processRouteInbound/);
+  assert.match(page, /aria-label="审核发送"[\s\S]*setReviewWorkbenchView\("handoff"\)[\s\S]*setSendWorkbenchView\("queue"\)/);
   assert.match(styles, /\.wechat-channel-card\.needs_send_adapter::before/);
   assert.match(styles, /\.wechat-channel-next-step\.needs_runtime,[\s\S]*\.wechat-channel-next-step\.needs_send_adapter/);
   assert.match(styles, /\.wechat-action-group/);
   assert.match(styles, /\.wechat-action-buttons \.primary/);
+  assert.match(styles, /\.wechat-visual-action-strip/);
+  assert.match(styles, /\.wechat-visual-action-group/);
+  assert.match(styles, /\.wechat-live-action-groups/);
+  assert.match(styles, /\.wechat-live-secondary-actions/);
+  assert.match(styles, /\.readiness-banner\.platform-mode-guide[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) !important/);
+  assert.match(styles, /\.readiness-banner\.platform-mode-guide span,[\s\S]*\.readiness-banner\.platform-mode-guide small[\s\S]*overflow-wrap: anywhere !important/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*#wechat-channel-center\.wechat-mode-flow \.wechat-service-canvas \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) !important/);
 });
 
 test("execute send only starts queued tasks", () => {

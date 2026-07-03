@@ -6358,13 +6358,29 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <div className="wechat-lane-empty">等待后端通道状态</div>
                         )}
                       </div>
-                      <div className="wechat-lane-actions" aria-label="接入通道操作">
-                        <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
-                          <Search size={14} aria-hidden="true" />采集微信
-                        </button>
-                        <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
-                          <Check size={14} aria-hidden="true" />配置检查
-                        </button>
+                      <div className="wechat-visual-action-strip" aria-label="接入通道操作分组">
+                        <div className="wechat-visual-action-group" aria-label="个人微信采集">
+                          <small>个人微信采集</small>
+                          <div className="wechat-visual-action-buttons">
+                            <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                              <Search size={14} aria-hidden="true" />采集微信
+                            </button>
+                            <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+                              <RefreshCw size={14} aria-hidden="true" />扫描快照
+                            </button>
+                          </div>
+                        </div>
+                        <div className="wechat-visual-action-group" aria-label="通道配置">
+                          <small>通道配置</small>
+                          <div className="wechat-visual-action-buttons">
+                            <button type="button" className="ghost" onClick={() => setWechatWorkbenchView("config")} disabled={Boolean(busy)}>
+                              <Check size={14} aria-hidden="true" />配置检查
+                            </button>
+                            <button type="button" className="ghost" onClick={() => void loadWechatChannelStatusOnly()} disabled={Boolean(busy)}>
+                              <RefreshCw size={14} aria-hidden="true" />刷新状态
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <div className="wechat-flow-lane" aria-label="智能客服处理链路">
@@ -6435,38 +6451,46 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               : "不会默认处理第一个客户，请在当前会话上执行消息处理。"
                             : "从消息中心选定客户后，这里会显示实时路由和下一步动作。"}
                         </p>
-                        <div className="wechat-live-action-buttons">
-                          <button
-                            type="button"
-                            className="primary"
-                            onClick={activeConversation ? processRouteInbound : () => scrollToWorkspaceSection("conversation-center")}
-                            disabled={Boolean(busy)}
-                          >
-                            {activeConversation ? <Bot size={15} aria-hidden="true" /> : <MessageCircle size={15} aria-hidden="true" />}
-                            {activeConversation ? "处理当前消息" : "选择会话"}
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => {
-                              setReviewWorkbenchView("handoff");
-                              scrollToWorkspaceSection("review-center");
-                            }}
-                            disabled={Boolean(busy)}
-                          >
-                            <ShieldAlert size={15} aria-hidden="true" />人工接管
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => {
-                              setSendWorkbenchView("queue");
-                              scrollToWorkspaceSection("send-center");
-                            }}
-                            disabled={Boolean(busy)}
-                          >
-                            <Send size={15} aria-hidden="true" />发送队列
-                          </button>
+                        <div className="wechat-live-action-groups" aria-label="当前客服动作分组">
+                          <div className="wechat-live-action-group primary-action" aria-label="会话处理">
+                            <small>会话处理</small>
+                            <button
+                              type="button"
+                              className="primary"
+                              onClick={activeConversation ? processRouteInbound : () => scrollToWorkspaceSection("conversation-center")}
+                              disabled={Boolean(busy)}
+                            >
+                              {activeConversation ? <Bot size={15} aria-hidden="true" /> : <MessageCircle size={15} aria-hidden="true" />}
+                              {activeConversation ? "处理当前消息" : "选择会话"}
+                            </button>
+                          </div>
+                          <div className="wechat-live-action-group" aria-label="审核发送">
+                            <small>审核发送</small>
+                            <div className="wechat-live-secondary-actions">
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => {
+                                  setReviewWorkbenchView("handoff");
+                                  scrollToWorkspaceSection("review-center");
+                                }}
+                                disabled={Boolean(busy)}
+                              >
+                                <ShieldAlert size={15} aria-hidden="true" />人工接管
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => {
+                                  setSendWorkbenchView("queue");
+                                  scrollToWorkspaceSection("send-center");
+                                }}
+                                disabled={Boolean(busy)}
+                              >
+                                <Send size={15} aria-hidden="true" />发送队列
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
