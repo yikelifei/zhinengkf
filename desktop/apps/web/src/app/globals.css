@@ -25023,3 +25023,240 @@ body .apple-light-shell.shell .workspace[data-active-section="catalog-center"] #
   white-space: normal !important;
   text-align: left !important;
 }
+
+/* Iteration 119 Routing workbench: split input, execution, decision, and evidence into bounded app panes. */
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-panel {
+  display: block !important;
+  height: clamp(520px, calc(100dvh - 286px), 664px) !important;
+  max-height: clamp(520px, calc(100dvh - 286px), 664px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding: 12px !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-workbench {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 1fr) !important;
+  gap: 12px !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center :is(.routing-composer-card, .routing-decision-card) {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 16px !important;
+  background: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 10px 26px rgba(15, 23, 42, 0.06) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card {
+  display: grid !important;
+  grid-template-rows: auto minmax(150px, 0.58fr) auto auto !important;
+  align-content: start !important;
+  gap: 10px !important;
+  padding: 12px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card textarea {
+  height: auto !important;
+  min-height: 150px !important;
+  max-height: none !important;
+  resize: none !important;
+  overflow: auto !important;
+  background: #fbfbfd !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card .routing-actions {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card .routing-runbar {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-rows: auto !important;
+  align-items: center !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card .routing-runbar > span {
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+  color: var(--text-muted) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-decision-card {
+  display: grid !important;
+  padding: 10px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-decision-card > .empty.empty-cta {
+  align-self: center !important;
+  justify-self: center !important;
+  max-width: 460px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-result {
+  display: grid !important;
+  grid-template-columns: minmax(0, 0.94fr) minmax(260px, 0.72fr) !important;
+  align-items: stretch !important;
+  gap: 10px !important;
+  height: 100% !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  padding: 10px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-result::before {
+  top: 10px !important;
+  bottom: 10px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center :is(.route-primary-decision, .route-evidence-stack) {
+  display: grid !important;
+  align-content: start !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-primary-decision {
+  grid-template-rows: auto auto minmax(0, 1fr) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-stack {
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-summary {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-summary > div {
+  min-height: 54px !important;
+  padding: 8px 9px !important;
+  background: #f8f8fb !important;
+  border-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center :is(.route-tags, .route-evidence-tags) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-content: flex-start !important;
+  gap: 6px !important;
+  max-height: none !important;
+  overflow: visible !important;
+  margin: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .suggested-reply {
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: #f8f8fb !important;
+  border-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .suggested-reply p {
+  margin: 4px 0 0 !important;
+  line-height: 1.42 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 8 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence {
+  margin-top: 0 !important;
+  padding: 8px 9px !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence p {
+  margin: 4px 0 0 !important;
+  line-height: 1.35 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer {
+  display: grid !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 8px 9px !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-radius: 12px !important;
+  background: #f8f8fb !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer summary {
+  cursor: pointer !important;
+  color: var(--text-strong) !important;
+  font-size: 12px !important;
+  font-weight: 760 !important;
+  line-height: 1.25 !important;
+  list-style: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer summary::-webkit-details-marker {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer summary::after {
+  content: "展开";
+  float: right;
+  color: var(--blue);
+  font-weight: 700;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer[open] {
+  overflow: auto !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-evidence-drawer[open] summary::after {
+  content: "收起";
+}
+
+@media (max-width: 1080px) {
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-panel {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-workbench,
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-result {
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-composer-card,
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .routing-decision-card,
+  body .apple-light-shell.shell .workspace[data-active-section="routing-center"] #routing-center .route-result {
+    overflow: visible !important;
+  }
+}

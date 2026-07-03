@@ -2602,7 +2602,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage("请先输入客户消息。");
       return;
     }
-    await runAction("路由决策", () => evaluateRoute(routeText, activeIdentityFilters()));
+    const filters = activeIdentityFilters();
+    try {
+      setBusy("路由决策");
+      setMessage("路由决策中...");
+      const route = await evaluateRoute(routeText, activeIdentityFilters());
+      setRouteEvaluations((rows) => [route, ...rows.filter((item) => item.id !== route.id)]);
+      setMessage("路由决策完成。");
+      void getRouteEvaluations(filters)
+        .then((rows) => setRouteEvaluations(rows))
+        .catch(() => undefined);
+    } catch (error) {
+      setMessage(`路由决策失败：${error instanceof Error ? error.message : "未知错误"}`);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function correctLatestRoute(route: RouteEvaluation, agent: Agent) {
@@ -9190,41 +9204,47 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <Route size={20} aria-hidden="true" />
             </div>
             <div className="routing-panel">
-              <div className="routing-actions">
-                {renderConversationSelect()}
-                <button type="button" className="ghost" onClick={processRouteInbound} disabled={Boolean(busy)}>
-                  <MessageCircle size={16} aria-hidden="true" />处理客户消息
-                </button>
-              </div>
-              <textarea
-                aria-label="客户最新消息"
-                value={routeText}
-                onChange={(event) => setRouteText(event.target.value)}
-                placeholder="粘贴客户最新一句话，例如：端午礼盒每盒180元，做50份，想看效果图"
-              />
-              <div className="routing-actions">
-                <button type="button" className="primary" onClick={evaluateCustomerRoute} disabled={Boolean(busy)}>
-                  <Route size={16} aria-hidden="true" />判断谁来处理
-                </button>
-                <span>已评估 {routeEvaluations.length} 次</span>
-              </div>
-              {latestRoute ? (
-                <RouteResult route={latestRoute} agents={agents} onCorrect={correctLatestRoute} />
-              ) : (
-                <div className="empty empty-cta" role="status">
-                  <strong>还没有路由评估</strong>
-                  <span>输入客户最新消息后，可以判断应该由哪个 Agent 处理，并生成建议回复。</span>
-                  <div className="empty-actions">
-                    <button type="button" className="primary" onClick={evaluateCustomerRoute} disabled={Boolean(busy)}>
-                      <Route size={16} aria-hidden="true" />判断谁来处理
-                    </button>
+              <div className="routing-workbench" aria-label="路由决策工作台">
+                <div className="routing-composer-card" aria-label="客户消息与执行">
+                  <div className="routing-actions">
+                    {renderConversationSelect()}
                     <button type="button" className="ghost" onClick={processRouteInbound} disabled={Boolean(busy)}>
                       <MessageCircle size={16} aria-hidden="true" />处理客户消息
                     </button>
                   </div>
+                  <textarea
+                    aria-label="客户最新消息"
+                    value={routeText}
+                    onChange={(event) => setRouteText(event.target.value)}
+                    placeholder="粘贴客户最新一句话，例如：端午礼盒每盒180元，做50份，想看效果图"
+                  />
+                  <div className="routing-actions routing-runbar">
+                    <button type="button" className="primary" onClick={evaluateCustomerRoute} disabled={Boolean(busy)}>
+                      <Route size={16} aria-hidden="true" />判断谁来处理
+                    </button>
+                    <span>已评估 {routeEvaluations.length} 次</span>
+                  </div>
+                  {inboundSummary ? <div className="training-summary">{inboundSummary}</div> : null}
                 </div>
-              )}
-              {inboundSummary ? <div className="training-summary">{inboundSummary}</div> : null}
+                <div className="routing-decision-card" aria-label="路由判断结果">
+                  {latestRoute ? (
+                    <RouteResult route={latestRoute} agents={agents} onCorrect={correctLatestRoute} />
+                  ) : (
+                    <div className="empty empty-cta" role="status">
+                      <strong>还没有路由评估</strong>
+                      <span>输入客户最新消息后，可以判断应该由哪个 Agent 处理，并生成建议回复。</span>
+                      <div className="empty-actions">
+                        <button type="button" className="primary" onClick={evaluateCustomerRoute} disabled={Boolean(busy)}>
+                          <Route size={16} aria-hidden="true" />判断谁来处理
+                        </button>
+                        <button type="button" className="ghost" onClick={processRouteInbound} disabled={Boolean(busy)}>
+                          <MessageCircle size={16} aria-hidden="true" />处理客户消息
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
         </section>
@@ -12132,160 +12152,172 @@ function RouteResult({
 }) {
   const rankedScenes = (route.sceneScores || []).filter((item) => item.score > 0).slice(0, 4);
   const correctionAgents = agents.filter((agent) => agent.enabled !== false && agent.key !== route.agentKey);
+  const hasTrainingEvidence = Boolean(
+    route.appliedSkills?.length || route.knowledgeMatches?.length || route.replyDraft?.safetyChecks?.length,
+  );
   return (
     <div className={`route-result ${route.action}`}>
-      <div className="route-summary">
-        <div>
-          <small>匹配 Agent</small>
-          <strong>{route.agent?.name || route.agentKey}</strong>
-        </div>
-        <div>
-          <small>处理方式</small>
-          <strong>{routeActionLabel(route.action)}</strong>
-        </div>
-        <div>
-          <small>置信度</small>
-          <strong>{route.confidence}</strong>
-        </div>
-        <div>
-          <small>客户价值</small>
-          <strong>{route.isHighValue ? "高价值" : "普通"}</strong>
-        </div>
-      </div>
-      <div className="route-tags">
-        <span>{route.scene}</span>
-        {route.sceneDecision ? <span>{sceneDecisionLabel(route.sceneDecision.status)}</span> : null}
-        {route.sceneScore ? <span>场景分 {route.sceneScore}</span> : null}
-        {route.budget?.perUnitAmount ? <span>{route.budget.perUnitAmount} 元/份</span> : null}
-        {route.budget?.totalAmount ? <span>总额 {route.budget.totalAmount} 元</span> : null}
-        {route.matchedKeywords?.slice(0, 8).map((keyword) => <span key={keyword}>命中 {keyword}</span>)}
-        {route.missingFields.map((field) => <span className="warn" key={field}>缺 {fieldLabel(field)}</span>)}
-        {route.riskFlags.map((flag) => <span className="danger" key={flag}>{flag}</span>)}
-      </div>
-      {route.sceneAudit ? (
-        <div className={`route-evidence compact scene-audit ${route.sceneAudit.level || "review"}`}>
-          <small>场景判断审计 · {route.sceneAudit.label || "待确认"}</small>
-          {route.sceneAudit.summary ? <p>{route.sceneAudit.summary}</p> : null}
-          {route.sceneAudit.nextStep ? <p><strong>下一步</strong><span>{route.sceneAudit.nextStep}</span></p> : null}
-          {route.sceneAudit.evidence?.length ? (
-            <div className="route-evidence-tags">
-              {route.sceneAudit.evidence.slice(0, 5).map((item) => (
-                <span className="pass" key={item}>{item}</span>
-              ))}
-            </div>
-          ) : null}
-          {route.sceneAudit.warnings?.length ? (
-            <div className="route-evidence-tags">
-              {route.sceneAudit.warnings.slice(0, 5).map((item) => (
-                <span className="warn" key={item}>{item}</span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="suggested-reply">
-        <small>建议回复</small>
-        <p>{route.suggestedReply}</p>
-      </div>
-      {route.correction?.corrected ? (
-        <div className="route-evidence compact">
-          <small>人工已纠正</small>
-          <p>
-            原判「{route.correction.before?.scene || route.correction.before?.agentKey || "未知"}」，已由
-            {route.correction.reviewer || "人工客服"}纠正为「{route.scene}」。
-          </p>
-        </div>
-      ) : correctionAgents.length && onCorrect ? (
-        <div className="route-evidence compact">
-          <small>人工纠正场景</small>
-          <div className="route-evidence-tags">
-            {correctionAgents.slice(0, 6).map((agent) => (
-              <button type="button" className="ghost compact-button" key={agent.key} onClick={() => onCorrect(route, agent)}>
-                <Route size={14} aria-hidden="true" />改为 {agent.name}
-              </button>
-            ))}
+      <div className="route-primary-decision">
+        <div className="route-summary">
+          <div>
+            <small>匹配 Agent</small>
+            <strong>{route.agent?.name || route.agentKey}</strong>
+          </div>
+          <div>
+            <small>处理方式</small>
+            <strong>{routeActionLabel(route.action)}</strong>
+          </div>
+          <div>
+            <small>置信度</small>
+            <strong>{route.confidence}</strong>
+          </div>
+          <div>
+            <small>客户价值</small>
+            <strong>{route.isHighValue ? "高价值" : "普通"}</strong>
           </div>
         </div>
-      ) : null}
-      {route.clarificationResolution ? (
-        <div className="route-evidence compact">
-          <small>客户已澄清场景</small>
-          <p>已按「{route.clarificationResolution.label || route.clarificationResolution.scene || route.clarificationResolution.agentKey}」继续处理。</p>
-          {route.clarificationResolution.matchedKeywords?.length ? (
+        <div className="route-tags">
+          <span>{route.scene}</span>
+          {route.sceneDecision ? <span>{sceneDecisionLabel(route.sceneDecision.status)}</span> : null}
+          {route.sceneScore ? <span>场景分 {route.sceneScore}</span> : null}
+          {route.budget?.perUnitAmount ? <span>{route.budget.perUnitAmount} 元/份</span> : null}
+          {route.budget?.totalAmount ? <span>总额 {route.budget.totalAmount} 元</span> : null}
+          {route.matchedKeywords?.slice(0, 8).map((keyword) => <span key={keyword}>命中 {keyword}</span>)}
+          {route.missingFields.map((field) => <span className="warn" key={field}>缺 {fieldLabel(field)}</span>)}
+          {route.riskFlags.map((flag) => <span className="danger" key={flag}>{flag}</span>)}
+        </div>
+        <div className="suggested-reply">
+          <small>建议回复</small>
+          <p>{route.suggestedReply}</p>
+        </div>
+      </div>
+      <div className="route-evidence-stack">
+        {route.sceneAudit ? (
+          <div className={`route-evidence compact scene-audit ${route.sceneAudit.level || "review"}`}>
+            <small>场景判断审计 · {route.sceneAudit.label || "待确认"}</small>
+            {route.sceneAudit.summary ? <p>{route.sceneAudit.summary}</p> : null}
+            {route.sceneAudit.nextStep ? <p><strong>下一步</strong><span>{route.sceneAudit.nextStep}</span></p> : null}
+            {route.sceneAudit.evidence?.length ? (
+              <div className="route-evidence-tags">
+                {route.sceneAudit.evidence.slice(0, 5).map((item) => (
+                  <span className="pass" key={item}>{item}</span>
+                ))}
+              </div>
+            ) : null}
+            {route.sceneAudit.warnings?.length ? (
+              <div className="route-evidence-tags">
+                {route.sceneAudit.warnings.slice(0, 5).map((item) => (
+                  <span className="warn" key={item}>{item}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {route.correction?.corrected ? (
+          <div className="route-evidence compact">
+            <small>人工已纠正</small>
+            <p>
+              原判「{route.correction.before?.scene || route.correction.before?.agentKey || "未知"}」，已由
+              {route.correction.reviewer || "人工客服"}纠正为「{route.scene}」。
+            </p>
+          </div>
+        ) : correctionAgents.length && onCorrect ? (
+          <div className="route-evidence compact">
+            <small>人工纠正场景</small>
             <div className="route-evidence-tags">
-              {route.clarificationResolution.matchedKeywords.slice(0, 6).map((keyword) => (
-                <span key={keyword}>澄清词 {keyword}</span>
+              {correctionAgents.slice(0, 6).map((agent) => (
+                <button type="button" className="ghost compact-button" key={agent.key} onClick={() => onCorrect(route, agent)}>
+                  <Route size={14} aria-hidden="true" />改为 {agent.name}
+                </button>
               ))}
             </div>
-          ) : null}
-        </div>
-      ) : null}
-      {route.sceneClarification?.question ? (
-        <div className="route-evidence compact">
-          <small>场景确认</small>
-          <p>{route.sceneClarification.question}</p>
-          {route.sceneClarification.options?.length ? (
+          </div>
+        ) : null}
+        {route.clarificationResolution ? (
+          <div className="route-evidence compact">
+            <small>客户已澄清场景</small>
+            <p>已按「{route.clarificationResolution.label || route.clarificationResolution.scene || route.clarificationResolution.agentKey}」继续处理。</p>
+            {route.clarificationResolution.matchedKeywords?.length ? (
+              <div className="route-evidence-tags">
+                {route.clarificationResolution.matchedKeywords.slice(0, 6).map((keyword) => (
+                  <span key={keyword}>澄清词 {keyword}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {route.sceneClarification?.question ? (
+          <div className="route-evidence compact">
+            <small>场景确认</small>
+            <p>{route.sceneClarification.question}</p>
+            {route.sceneClarification.options?.length ? (
+              <div className="route-evidence-tags">
+                {route.sceneClarification.options.map((option) => (
+                  <span key={option.agentKey}>
+                    {option.label || option.scene}
+                    {option.score ? ` · ${option.score}` : ""}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {rankedScenes.length ? (
+          <div className="route-evidence compact">
+            <small>
+              候选场景判断
+              {route.sceneDecision ? ` · ${sceneDecisionReasonLabel(route.sceneDecision.reason)} · 分差 ${route.sceneDecision.scoreGap}` : ""}
+            </small>
             <div className="route-evidence-tags">
-              {route.sceneClarification.options.map((option) => (
-                <span key={option.agentKey}>
-                  {option.label || option.scene}
-                  {option.score ? ` · ${option.score}` : ""}
+              {rankedScenes.map((item) => (
+                <span key={item.agentKey}>
+                  {item.scene} · {item.score}
+                  {item.matchedKeywords.length ? ` · ${item.matchedKeywords.slice(0, 3).join("/")}` : ""}
                 </span>
               ))}
             </div>
-          ) : null}
-        </div>
-      ) : null}
-      {rankedScenes.length ? (
-        <div className="route-evidence compact">
-          <small>
-            候选场景判断
-            {route.sceneDecision ? ` · ${sceneDecisionReasonLabel(route.sceneDecision.reason)} · 分差 ${route.sceneDecision.scoreGap}` : ""}
-          </small>
-          <div className="route-evidence-tags">
-            {rankedScenes.map((item) => (
-              <span key={item.agentKey}>
-                {item.scene} · {item.score}
-                {item.matchedKeywords.length ? ` · ${item.matchedKeywords.slice(0, 3).join("/")}` : ""}
-              </span>
-            ))}
           </div>
-        </div>
-      ) : null}
-      {route.appliedSkills?.length ? (
-        <div className="route-evidence">
-          <small>命中的 Skill</small>
-          <div className="route-evidence-tags">
-            {route.appliedSkills.slice(0, 5).map((skill) => (
-              <span key={skill.id || skill.name}>
-                {skill.name}
-                {skill.sampleCount ? ` · ${skill.sampleCount} 样本` : ""}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {route.knowledgeMatches?.length ? (
-        <div className="route-evidence">
-          <small>参考训练样本</small>
-          {route.knowledgeMatches.slice(0, 2).map((item) => (
-            <p key={item.id || item.title}>
-              <strong>{item.title}</strong>
-              {item.excerpt ? <span>{item.excerpt}</span> : null}
-            </p>
-          ))}
-        </div>
-      ) : null}
-      {route.replyDraft?.safetyChecks?.length ? (
-        <div className="route-evidence compact">
-          <small>回复安全检查</small>
-          <div className="route-evidence-tags">
-            {route.replyDraft.safetyChecks.map((check) => (
-              <span className={check.passed ? "pass" : "warn"} key={check.key}>{check.label}</span>
-            ))}
-          </div>
-        </div>
-      ) : null}
+        ) : null}
+        {hasTrainingEvidence ? (
+          <details className="route-evidence-drawer">
+            <summary>训练与安全依据</summary>
+            {route.appliedSkills?.length ? (
+              <div className="route-evidence compact">
+                <small>命中的 Skill</small>
+                <div className="route-evidence-tags">
+                  {route.appliedSkills.slice(0, 5).map((skill) => (
+                    <span key={skill.id || skill.name}>
+                      {skill.name}
+                      {skill.sampleCount ? ` · ${skill.sampleCount} 样本` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {route.knowledgeMatches?.length ? (
+              <div className="route-evidence compact">
+                <small>参考训练样本</small>
+                {route.knowledgeMatches.slice(0, 2).map((item) => (
+                  <p key={item.id || item.title}>
+                    <strong>{item.title}</strong>
+                    {item.excerpt ? <span>{item.excerpt}</span> : null}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {route.replyDraft?.safetyChecks?.length ? (
+              <div className="route-evidence compact">
+                <small>回复安全检查</small>
+                <div className="route-evidence-tags">
+                  {route.replyDraft.safetyChecks.map((check) => (
+                    <span className={check.passed ? "pass" : "warn"} key={check.key}>{check.label}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </details>
+        ) : null}
+      </div>
     </div>
   );
 }
