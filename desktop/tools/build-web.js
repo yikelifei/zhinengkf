@@ -404,7 +404,7 @@ function readFreshestHeartbeat(files) {
 function stableStartingLockIsFresh() {
   try {
     const stat = fs.statSync(stableStartingLockFile);
-    return Date.now() - stat.mtimeMs <= 600000;
+    return Date.now() - stat.mtimeMs <= 3600000;
   } catch {
     return false;
   }
@@ -414,7 +414,7 @@ function stableRuntimeHeartbeatIsFresh() {
     const heartbeat = readFreshestHeartbeat([keepAliveHeartbeatFile, stableKeepAliveHeartbeatFile]);
     const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
     if (!Number.isFinite(updatedAt)) return false;
-    if (Date.now() - updatedAt > 600000) return false;
+    if (Date.now() - updatedAt > 3600000) return false;
     return true;
   } catch {
     return false;

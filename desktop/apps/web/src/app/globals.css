@@ -177,6 +177,22 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   }
 }
 
+/* Iteration 82 Mobile topbar status final containment: never clip independent runtime states. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 7px !important;
+  }
+
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group .platform-pill {
+    justify-content: center !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.18 !important;
+  }
+}
+
 /* Iteration 74 Mobile topbar containment: all app chrome must fit 390px without clipped pills. */
 @media (max-width: 760px) {
   body .apple-light-shell.shell .topbar {
@@ -7468,6 +7484,22 @@ input[type="checkbox"]:disabled {
   font-size: 12.5px;
 }
 
+.catalog-audit-refresh-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 113, 227, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 113, 227, 0.05);
+}
+
+.catalog-audit-refresh-note strong {
+  color: var(--blue);
+  font-size: 12.5px;
+}
+
 .sku-change-log {
   position: relative;
   overflow: hidden;
@@ -8953,6 +8985,27 @@ input[type="checkbox"]:disabled {
   font-style: normal;
   font-weight: 650;
 }
+
+.sample-edit-risk-tags.blocking em {
+  border-color: rgba(255, 59, 48, 0.24);
+  color: var(--danger);
+}
+
+/* Iteration 78 mobile status containment: status pills are independent states, not a clipped button group. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 7px !important;
+  }
+
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group .platform-pill {
+    justify-content: center !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.18 !important;
+  }
+}
 .sample-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -9827,6 +9880,27 @@ input[type="checkbox"]:disabled {
 .attempt-summary.failed span {
   color: #b42318;
   background: var(--red-soft);
+}
+
+.attempt-audit-note {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 59, 48, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 245, 245, 0.78);
+  color: #9f1f18;
+}
+
+.attempt-audit-note strong,
+.attempt-audit-note small {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.attempt-audit-note strong {
+  font-weight: 700;
 }
 
 .bridge-preview {
@@ -28446,5 +28520,34 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .top-actions .toolbar-group.context-toolbar,
   body .apple-light-shell.shell .workspace[data-active-section="send-center"] .topbar .top-actions .toolbar-group.context-toolbar {
     min-height: 0 !important;
+  }
+}
+
+/* Iteration 83 Mobile app chrome: status pills are stacked states, never clipped columns. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .topbar .top-actions {
+    box-sizing: border-box !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    overflow: visible !important;
+  }
+
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    gap: 7px !important;
+  }
+
+  body .apple-light-shell.shell .topbar .top-actions .toolbar-group.status-group .platform-pill {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    justify-content: center !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+    line-height: 1.18 !important;
   }
 }

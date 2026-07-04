@@ -14,6 +14,9 @@ const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
+const stableRuntimeDir = path.join(desktopRoot, ".runtime-stable");
+const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const args = new Set(process.argv.slice(2));
 const requestedRealDesignMode = args.has("--real-design");
 const requestedMockDesignMode = args.has("--mock-design");
@@ -45,6 +48,11 @@ main().catch((error) => {
 async function main() {
   fs.mkdirSync(path.dirname(launcherLog), { recursive: true });
   logStep(`start mode=${realDesignMode ? "real" : "mock"} ppid=${process.ppid}`);
+  if (stableDesktopGuardActive()) {
+    logStep("blocked because stable desktop startup/runtime is active");
+    console.log("[launch] stable desktop runtime is active; legacy port stack start skipped.");
+    return;
+  }
   const activeApiRealMode = mockDesignMode ? await activeApiLooksRealDesignMode() : false;
   const runtimeConfigRealMode = runtimeConfigLooksRealDesignMode();
   const preferredRealMode = preferredDesignMode === "real";
@@ -851,4 +859,27 @@ function psQuote(value) {
 
 function normalizePathText(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function stableDesktopGuardActive() {
+  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
+}
+
+function fileFresh(file, maxAgeMs) {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function heartbeatFresh(file, maxAgeMs) {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+  } catch {
+    return false;
+  }
 }

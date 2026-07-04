@@ -13,6 +13,9 @@ const modeArgs = realDesignMode
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(process.cwd(), ".runtime");
+const stableRuntimeDir = path.join(process.cwd(), ".runtime-stable");
+const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const logsDir = path.join(runtimeDir, "logs");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
@@ -758,4 +761,27 @@ function closeLogFd(value) {
 
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function stableDesktopGuardActive() {
+  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
+}
+
+function fileFresh(file, maxAgeMs) {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function heartbeatFresh(file, maxAgeMs) {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+  } catch {
+    return false;
+  }
 }

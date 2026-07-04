@@ -221,6 +221,11 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(actionSection, /reasons\.push\("缺少 Skill 提示"\)/);
   assert.match(actionSection, /const blockingReasons = trainingSampleReadyBlockingReasons\(sample\)/);
   assert.match(actionSection, /window\.alert\(`这条训练样本还不能进入训练：\$\{blockingReasons\.join\("、"\)\}。请补齐后再确认。`\)/);
+  assert.match(actionSection, /function trainingSampleBatchBlockingSummary\(samples: TrainingSample\[\]\)/);
+  assert.match(actionSection, /const blockedSamples = samples/);
+  assert.match(actionSection, /trainingSampleReadyBlockingReasons\(sample\)/);
+  assert.match(actionSection, /本批有 \$\{blockedSamples\.length\} 条训练样本缺少必填信息/);
+  assert.match(actionSection, /缺项预览/);
   assert.match(actionSection, /function confirmTrainingSampleReady\(sample: TrainingSample\)/);
   assert.match(actionSection, /const needsAttention = isTrainingSampleNeedingManualReview\(sample\)/);
   assert.match(actionSection, /const sceneUncertain = isSceneUncertainTrainingSample\(sample\)/);
@@ -230,6 +235,9 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(actionSection, /status === "ready" && !confirmTrainingSampleReady\(sample\)/);
   assert.match(actionSection, /batchUpdateTrainingSampleStatus\(status: "ready" \| "review" \| "rejected", scope: "selected" \| "visible"\)/);
   assert.match(actionSection, /batchReviewTrainingSamples/);
+  assert.match(actionSection, /const blockingSummary = status === "ready" \? trainingSampleBatchBlockingSummary\(candidates\) : ""/);
+  assert.match(actionSection, /window\.alert\(blockingSummary\)/);
+  assert.match(actionSection, /已拦截批量确认：请先补齐缺少必填信息的训练样本/);
   assert.match(actionSection, /const needsAttentionSamples = candidates\.filter\(isTrainingSampleNeedingManualReview\)/);
   assert.match(actionSection, /trainingSampleNeedsAttentionBatchWarning\(needsAttentionSamples\.length, needsAttentionSamples\)/);
   assert.match(actionSection, /const sceneUncertainSamples = candidates\.filter\(isSceneUncertainTrainingSample\)/);
@@ -348,6 +356,12 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(page, /先确认客户原话、客服回复、Agent 和场景都对应同一个客户问题/);
   assert.match(page, /attentionReasons\.slice\(0, 3\)\.map/);
   assert.match(page, /sampleSceneCheckLabel\(sample\)/);
+  assert.match(rowSection, /const editingPreviewSample = isEditingSample && sampleEdit \? editedTrainingSampleForConfirm\(sample, sampleEdit, "ready"\) : null/);
+  assert.match(rowSection, /const editingBlockingReasons = editingPreviewSample \? trainingSampleReadyBlockingReasons\(editingPreviewSample\) : \[\]/);
+  assert.match(rowSection, /补齐后才能训练/);
+  assert.match(rowSection, /sample-edit-risk-tags blocking/);
+  assert.match(rowSection, /disabled=\{Boolean\(busy\) \|\| editingBlockingReasons\.length > 0\}/);
+  assert.match(rowSection, /请先补齐：\$\{editingBlockingReasons\.join\("、"\)\}/);
   assert.match(saveEditSection, /function editedTrainingSampleForConfirm\(sample: TrainingSample, edit: TrainingSampleEdit, status: "ready" \| "review"\): TrainingSample/);
   assert.match(saveEditSection, /agentKey: edit\.agentKey/);
   assert.match(saveEditSection, /scene: edit\.scene/);
@@ -367,6 +381,7 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(css, /\.sample-check input/);
   assert.match(css, /\.sample-edit-risk-note/);
   assert.match(css, /\.sample-edit-risk-tags/);
+  assert.match(css, /\.sample-edit-risk-tags\.blocking em/);
   assert.match(css, /\.training-attention-reasons/);
   assert.match(css, /\.training-summary-action/);
   assert.match(css, /\.training-summary-action:disabled/);

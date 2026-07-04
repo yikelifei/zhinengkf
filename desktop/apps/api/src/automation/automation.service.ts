@@ -411,6 +411,7 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
   const blocked = stages.reduce((sum, stage) => sum + stage.blocked, 0);
   const failed = run.errors.length + stages.reduce((sum, stage) => sum + stage.failed, 0);
   const firstProblem = stages.find((stage) => stage.failed || stage.blocked);
+  const needsManualSendAttention = run.skipSummary?.reasons?.some((item) => item.reason === "manual_send_attention_required");
 
   return {
     progressed,
@@ -418,6 +419,8 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     failed,
     nextAction: failed
       ? "先处理失败步骤，再重新跑一轮低价值自动化。"
+      : needsManualSendAttention
+        ? "先打开订单和发送中心，核对失败/拦截原因；确认客户、微信窗口和付款状态后，由人工重排或继续人工跟进。"
       : firstProblem
         ? firstProblem.action
         : progressed

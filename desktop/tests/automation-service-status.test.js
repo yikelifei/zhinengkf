@@ -418,6 +418,41 @@ test("automation run summarizes low value stage progress and next action", async
   );
 });
 
+test("automation run next action prioritizes manual send attention", async () => {
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => ({
+        autoSubmit: { submitted: [], skipped: [], failed: [] },
+        imageSend: { queued: [], skipped: [], failed: [] },
+        quoteSend: { queued: [], skipped: [], failed: [] },
+        orderDraft: { created: [], skipped: [], failed: [] },
+        orderConfirmation: {
+          queued: [],
+          skipped: [
+            {
+              orderDraftId: "order_manual_attention_1",
+              reason: "manual_send_attention_required",
+              missing: ["confirmationSendTask"],
+            },
+          ],
+          failed: [],
+        },
+        orderFollowup: { queued: [], skipped: [], failed: [] },
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+
+  assert.equal(run.stageSummary.failed, 0);
+  assert.equal(run.stageSummary.blocked, 1);
+  assert.equal(run.skipSummary.reasons[0].reason, "manual_send_attention_required");
+  assert.equal(
+    run.stageSummary.nextAction,
+    "先打开订单和发送中心，核对失败/拦截原因；确认客户、微信窗口和付款状态后，由人工重排或继续人工跟进。",
+  );
+});
+
 test("automation skipped run includes stage summary for blocked readiness", async () => {
   const service = createService({
     catalog: {

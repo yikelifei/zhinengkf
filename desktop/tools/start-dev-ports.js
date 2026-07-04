@@ -10,6 +10,9 @@ const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(desktopRoot, ".runtime");
+const stableRuntimeDir = path.join(desktopRoot, ".runtime-stable");
+const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
@@ -1857,4 +1860,27 @@ function normalizePathText(value) {
 
 function normalizeBaseUrl(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+function stableDesktopGuardActive() {
+  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
+}
+
+function fileFresh(file, maxAgeMs) {
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function heartbeatFresh(file, maxAgeMs) {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+  } catch {
+    return false;
+  }
 }

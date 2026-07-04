@@ -217,6 +217,23 @@ test("web send task cards show dispatch instruction state", () => {
   assert.match(dispatchMatcherSection, /entry\.attemptId === latestAttempt\.id/);
 });
 
+test("web send task cards expose trusted bridge ack rejection audit", () => {
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const styles = readProjectFile("apps/web/src/app/globals.css");
+  const attemptSummarySection = sliceBetween(page, /\nfunction SendAttemptSummary\(/, /\nfunction BridgeOutboxPreview\(/);
+  const ackAuditSection = sliceBetween(page, /\nfunction sendAttemptBridgeAckRejected\(/, /\nfunction windowSnapshotStatus\(/);
+
+  assert.match(attemptSummarySection, /sendAttemptBridgeAckRejected\(attempt\)/);
+  assert.match(attemptSummarySection, /回执被拒绝/);
+  assert.match(attemptSummarySection, /rejectedAck\.sourceLabel/);
+  assert.match(attemptSummarySection, /rejectedAck\.fileName/);
+  assert.match(attemptSummarySection, /rejectedAck\.reason/);
+  assert.match(ackAuditSection, /attempt\?\.metadata\?\.bridgeAckRejected/);
+  assert.match(ackAuditSection, /direct_ack:\s*"直接回执"/);
+  assert.match(ackAuditSection, /bridge_inbox:\s*"回执文件"/);
+  assert.match(styles, /\.attempt-audit-note/);
+});
+
 test("bridge status and inbox scan expose sanitized inbox summaries only", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const statusSection = sliceBetween(service, /\n  getBridgeStatus\(/, /\n  listBridgeOutbox\(/);
@@ -658,6 +675,8 @@ test("notifications and review center are scoped by selected conversation identi
   assert.match(reviewsService, /\.listQuoteDrafts\(filter\)/);
   assert.match(reviewsService, /\.listOrderDrafts\(filter\)/);
   assert.match(reviewsService, /function isOrderReviewVisible\(order: any\)/);
+  assert.match(reviewsService, /return isOrderHighValue\(order\) \|\| orderNeedsManualSendAttention\(order\)/);
+  assert.match(reviewsService, /function orderNeedsManualSendAttention\(order: any\)/);
   assert.match(reviewsService, /function isOrderHighValue\(order: any\)/);
   assert.match(reviewsService, /listReviewLogs\(\{ \.\.\.filter, limit: 80 \}\)/);
   assert.match(reviewsService, /prisma\.reviewLog\.findMany\(\{ orderBy: \{ createdAt: "desc" \}, take: hasIdentityFilter\(filter\) \? 240 : 80 \}\)/);
@@ -1213,6 +1232,12 @@ test("send diagnostics view exposes live worker readiness without changing send 
   assert.match(styles, /#send-center \.segmented-control button:nth-child\(3\)[\s\S]*grid-column: 1 \/ -1/);
   assert.match(styles, /Iteration 81 Mobile topbar final pass/);
   assert.match(styles, /\.topbar \.top-actions \.conversation-toolbar[\s\S]*display: none !important/);
+  assert.match(styles, /Iteration 82 Mobile topbar status final containment/);
+  assert.match(styles, /\.toolbar-group\.status-group \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(styles, /\.toolbar-group\.status-group \.platform-pill \{[\s\S]*white-space: normal !important/);
+  assert.match(styles, /Iteration 83 Mobile app chrome/);
+  assert.match(styles, /Iteration 83 Mobile app chrome[\s\S]*\.toolbar-group\.status-group \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(styles, /Iteration 83 Mobile app chrome[\s\S]*\.toolbar-group\.status-group \.platform-pill \{[\s\S]*overflow-wrap: anywhere !important/);
 });
 
 test("web client no longer exposes or renders direct mark-sent actions", () => {
@@ -1234,7 +1259,9 @@ test("web client cannot manually forge bridge acknowledgements", () => {
   assert.doesNotMatch(apiClient, /acknowledgeBridgeSend/);
   assert.doesNotMatch(apiClient, /\/bridge-ack/);
   assert.doesNotMatch(page, /acknowledgeBridgeSend/);
-  assert.doesNotMatch(page, /bridgeAck/);
+  assert.doesNotMatch(page, /bridgeAck(?!Rejected)/);
+  assert.doesNotMatch(page, /ackToken/);
+  assert.doesNotMatch(page, /\/bridge-ack/);
   assert.doesNotMatch(page, /桥接成功回执/);
   assert.doesNotMatch(page, /桥接失败回执/);
 });
@@ -1455,8 +1482,9 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /!orderDraftByQuoteId\.has\(quote\.id\) && \(quote\.status === "manual_review" \|\| isHighValueQuote\(quote\)\)/);
   assert.match(page, /reason: highValueQuoteReason\(quote\)/);
   assert.match(page, /const highValueReviewOrderDrafts = sortHighValueReviewOrderDrafts\(/);
-  assert.match(page, /reviewOrderDrafts\.filter\(\(order\) => isHighValueOrder\(order\) && !\["fulfilled", "cancelled"\]\.includes\(order\.status\)\)/);
+  assert.match(page, /reviewOrderDrafts\.filter\([\s\S]*isHighValueOrder\(order\) \|\| orderNeedsManualSendAttention\(order\)[\s\S]*!\["fulfilled", "cancelled"\]\.includes\(order\.status\)/);
   assert.match(page, /const highValueOrderReviewFilterOptions = \[/);
+  assert.match(page, /\{ value: "send_attention", label: "发送异常" \}/);
   assert.match(page, /\{ value: "payment", label: "待收款" \}/);
   assert.match(page, /\{ value: "confirmation", label: "待发确认" \}/);
   assert.match(page, /\{ value: "delivery", label: "交付跟进" \}/);
@@ -1467,7 +1495,7 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /function focusHighValueOrderReview\(order: OrderDraft\)/);
   assert.match(page, /setReviewWorkbenchView\("order"\)[\s\S]*setHighValueOrderReviewFilter\(highValueOrderReviewFilterForOrder\(order\)\)[\s\S]*focusOrderDraft\(order\)/);
   assert.match(page, /const highValueOrderReviewFilterLabel = highValueOrderReviewFilterOptionLabel\(highValueOrderReviewFilter\)/);
-  assert.match(page, /`\$\{filteredHighValueReviewOrderDrafts\.length\}\/\$\{highValueReviewOrderDrafts\.length\} 个高价值订单 · \$\{highValueOrderReviewFilterLabel\}`/);
+  assert.match(page, /`\$\{filteredHighValueReviewOrderDrafts\.length\}\/\$\{highValueReviewOrderDrafts\.length\} 个待人工订单 · \$\{highValueOrderReviewFilterLabel\}`/);
   assert.match(page, /\.\.\.highValueReviewOrderDrafts/);
   assert.match(page, /reason: highValueOrderReason\(order\)/);
   assert.match(page, /const action = highValueOrderManualPrimaryAction\(order\)/);
@@ -1488,12 +1516,12 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /highValueReviewOrderDrafts\.length/);
   assert.match(page, /const visibleHighValueReviewOrderDrafts =[\s\S]*reviewWorkbenchView === "order" \? filteredHighValueReviewOrderDrafts : filteredHighValueReviewOrderDrafts\.slice\(0, 2\)/);
   assert.match(page, /className="segmented-control filter-segment high-value-order-filter"/);
-  assert.match(page, /aria-label="高价值订单处理筛选"/);
+  assert.match(page, /aria-label="人工订单处理筛选"/);
   assert.match(page, /setHighValueOrderReviewFilter\(option\.value\)/);
   assert.match(page, /\{option\.label\}<span>\{highValueOrderReviewFilterCounts\[option\.value\] \|\| 0\}<\/span>/);
   assert.match(page, /visibleHighValueReviewOrderDrafts\.map/);
   assert.match(page, /reviewWorkbenchView !== "order" && filteredHighValueReviewOrderDrafts\.length > visibleHighValueReviewOrderDrafts\.length/);
-  assert.match(page, /当前筛选下没有高价值订单/);
+  assert.match(page, /当前筛选下没有待人工订单/);
   assert.match(page, /setHighValueOrderReviewFilter\("all"\)/);
   assert.match(page, /const followupStatus = orderFollowupStatusText\(order\)/);
   assert.match(page, /paymentStatusLabel\(order\.paymentStatus\)/);
@@ -1533,11 +1561,13 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /function highValueOrderNextFollowTime\(order: OrderDraft\)/);
   assert.match(page, /line\.match\(\/下次跟进：\(\[\^；\\n\]\+\)\/\)/);
   assert.match(page, /function highValueOrderMatchesReviewFilter\(order: OrderDraft, filter:/);
+  assert.match(page, /filter === "send_attention"[\s\S]*orderNeedsManualSendAttention\(order\)/);
   assert.match(page, /filter === "payment"[\s\S]*!orderPaymentReady\(order\)/);
   assert.match(page, /filter === "confirmation"[\s\S]*orderPaymentReady\(order\) && !hasActiveOrderConfirmationTask\(order\)/);
   assert.match(page, /filter === "delivery"[\s\S]*order\.status === "processing"/);
   assert.match(page, /filter === "overdue"[\s\S]*nextFollowAt > 0 && nextFollowAt <= Date\.now\(\)/);
   assert.match(page, /function highValueOrderReviewFilterForOrder\(order: OrderDraft\)/);
+  assert.match(page, /highValueOrderMatchesReviewFilter\(order, "send_attention"\)[\s\S]*return "send_attention"/);
   assert.match(page, /highValueOrderMatchesReviewFilter\(order, "payment"\)[\s\S]*return "payment"/);
   assert.match(page, /highValueOrderMatchesReviewFilter\(order, "confirmation"\)[\s\S]*return "confirmation"/);
   assert.match(page, /highValueOrderMatchesReviewFilter\(order, "delivery"\)[\s\S]*return "delivery"/);
@@ -1599,12 +1629,12 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(reviewSection, /item\.identityMissing \? <mark className="danger">身份缺失<\/mark> : null/);
   assert.match(reviewSection, /item\.isActiveConversation \? <mark className="active">当前会话<\/mark> : null/);
   assert.match(reviewSection, /label="人工接管"/);
-  assert.match(reviewSection, /aria-label="高价值人工跟进队列"/);
-  assert.match(reviewSection, /高价值人工跟进/);
+  assert.match(reviewSection, /aria-label="人工跟进队列"/);
+  assert.match(reviewSection, /高价值 \/ 发送异常人工跟进/);
   assert.match(reviewSection, /处理第一项/);
   assert.match(reviewSection, /审设计/);
   assert.match(reviewSection, /审报价/);
-  assert.match(reviewSection, /跟订单/);
+  assert.match(reviewSection, /item\.primaryLabel/);
   assert.match(reviewSection, /manual-lock-review-list/);
   assert.match(reviewSection, /prioritizedManualLockedConversations\.slice\(0, 5\)/);
   assert.match(reviewSection, /manualLockLogByConversationId\.get\(conversation\.id\)/);
@@ -1663,6 +1693,9 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /nextAction: "先调整成本、售价或组合/);
   assert.match(page, /高价值报价先确认数量、单价、利润、话术和发送对象/);
   assert.match(page, /function highValueOrderManualStep\(order: OrderDraft\)/);
+  assert.match(page, /function orderNeedsManualSendAttention\(order: OrderDraft\)/);
+  assert.match(page, /orderNeedsManualSendAttention\(order\)[\s\S]*label: "发送异常"/);
+  assert.match(page, /function highValueOrderManualPrimaryAction\(order: OrderDraft\)[\s\S]*orderNeedsManualSendAttention\(order\)[\s\S]*label: "查发送"/);
   assert.match(page, /function highValueOrderManualPrimaryAction\(order: OrderDraft\)/);
   assert.match(page, /async function reviewOrderDraft\(/);
   assert.match(page, /reviewOrder\(order\.id, \{[\s\S]*decision,[\s\S]*followupType,[\s\S]*reviewer: "人工客服"/);
@@ -2089,6 +2122,16 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(wechatDispatchService, /this\.assertOrderPaymentReadyForSend\(order, "order follow-up"\)/);
   assert.match(wechatDispatchService, /function assertOrderPaymentReadyForSend|private assertOrderPaymentReadyForSend/);
   assert.match(wechatDispatchService, /paymentStatus === "deposit_paid" \|\| paymentStatus === "paid"/);
+  assert.match(wechatDispatchService, /this\.assertOrderSendTaskStillQueueable\(task\)/);
+  assert.match(wechatDispatchService, /private assertOrderSendTaskStillQueueable\(task: any\)/);
+  assert.match(wechatDispatchService, /source !== "order_confirmation" && source !== "order_followup"/);
+  assert.match(wechatDispatchService, /order draft not found for send task requeue/);
+  assert.match(wechatDispatchService, /this\.assertOrderConversationUnlocked\(order, context\)[\s\S]*this\.assertOrderPaymentReadyForSend\(order, context\)/);
+  assert.match(wechatDispatchService, /order send task requeue binding invalid/);
+  assert.match(wechatDispatchService, /private markLinkedOrderSendFailed\(task: any, reason: string\)/);
+  assert.match(wechatDispatchService, /source !== "order_confirmation" && source !== "order_followup"/);
+  assert.match(wechatDispatchService, /customerNotes: appendCustomerNote\(order\.customerNotes, note\)/);
+  assert.match(wechatDispatchService, /this\.markLinkedOrderSendFailed\(updated, reason\)/);
   assert.match(page, /async function confirmAndUpdateOrderDraftStatus\(order: OrderDraft, status: "fulfilled" \| "cancelled"\)/);
   assert.match(page, /confirmAndUpdateOrderDraftStatus\([\s\S]*status === "fulfilled" && !orderPaymentReady\(order\)/);
   assert.match(page, /confirmAndUpdateOrderDraftStatus\([\s\S]*不能标记完成/);
@@ -2107,6 +2150,11 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /onClick=\{\(\) => confirmAndUpdateOrderDraftStatus\(activeOrderDraft, "cancelled"\)\}/);
   assert.match(page, /activeOrderDraft\.status === "cancelled"[\s\S]*!orderPaymentReady\(activeOrderDraft\)[\s\S]*hasActiveOrderConfirmationTask\(activeOrderDraft\)/);
   assert.match(page, /order\.status === "cancelled"[\s\S]*!orderPaymentReady\(order\)[\s\S]*hasActiveOrderConfirmationTask\(order\)/);
+  assert.match(page, /function orderSendFailureStep\(order: OrderDraft\)/);
+  assert.match(page, /const failedSendStep = orderSendFailureStep\(order\)/);
+  assert.match(page, /if \(failedSendStep\) return failedSendStep/);
+  assert.match(page, /订单确认发送\$\{sendStatusLabel\(failedConfirmation\.status\)\}/);
+  assert.match(page, /订单跟进发送\$\{sendStatusLabel\(failedFollowup\.status\)\}/);
   assert.match(page, /async function queueOrderDraftConfirmation\([\s\S]*const result = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
   assert.match(page, /async function queueOrderFollowupDraft\([\s\S]*const result = await queueOrderFollowup\(order\.id, type, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
   assert.match(page, /async function queueOrderConfirmationAfterPreviewCheck\([\s\S]*const confirmation = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(confirmation\.orderDraft\)[\s\S]*upsertSendTaskState\(confirmation\.sendTask\)/);
@@ -2307,6 +2355,12 @@ test("external bridge acknowledgement validates local outbox file body before ar
   assert.match(ackSection, /status === "sent" \|\| !options\.internal/);
   assert.match(ackSection, /validateBridgeAckOutboxPayload/);
   assert.match(ackSection, /bridgeOutboxPayloadValidation/);
+  assert.match(ackSection, /status === "sent"[\s\S]*const orderState = this\.validateQueuedOrderSendState\(task\)/);
+  assert.match(ackSection, /bridge ack order state invalid/);
+  assert.ok(
+    ackSection.indexOf("validateQueuedOrderSendState") < ackSection.indexOf("archiveBridgeOutboxFile"),
+    "sent bridge ack must re-check order state before archiving outbox or marking the task sent",
+  );
 });
 
 test("bridge acknowledgement rejects late ack after task leaves sending state", () => {
@@ -2354,6 +2408,24 @@ test("bridge acknowledgement rejects sent ack after dispatch instruction expires
   assert.ok(
     ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("archiveBridgeOutboxFile"),
     "expired dispatch sent ack must be rejected before archiving files",
+  );
+});
+
+test("bridge acknowledgement fails trusted sent ack when queued order state changed", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const ackSection = service.slice(
+    service.indexOf("  acknowledgeBridgeSend("),
+    service.indexOf("  requeueSendTask("),
+  );
+
+  assert.match(ackSection, /const orderState = this\.validateQueuedOrderSendState\(task\)/);
+  assert.match(ackSection, /bridge ack order state invalid/);
+  assert.match(ackSection, /this\.failTaskForRejectedTrustedBridgeAck\(id, payload, \{ fileName: "direct-bridge-ack", source: "direct_ack" \}, errorMessage\)/);
+  assert.match(service, /const rejectionSource = entry\?\.source \|\| \(entry\?\.filePath \? "bridge_inbox" : "direct_ack"\)/);
+  assert.match(service, /bridgeAckRejected: \{[\s\S]*source: rejectionSource/);
+  assert.ok(
+    ackSection.indexOf("this.failTaskForRejectedTrustedBridgeAck") < ackSection.indexOf("throw new BadRequestException(errorMessage)"),
+    "trusted sent ack rejected by order state must fail the task before throwing",
   );
 });
 
@@ -2550,6 +2622,8 @@ test("bridge inbox scan fails trusted rejected sent acknowledgements without byp
   assert.match(recoverySection, /status: "failed"/);
   assert.match(recoverySection, /reason: "bridge_ack_rejected_after_trusted_validation"/);
   assert.match(recoverySection, /markLinkedQuoteFailed\(updatedTask, failureReason\)/);
+  assert.match(service, /private markLinkedOrderSendFailed\(task: any, reason: string\)/);
+  assert.match(service, /\[发送任务:\$\{task\.id\}\]/);
   assert.ok(
     recoverySection.indexOf("validateBridgeAckOutboxPayload") < recoverySection.indexOf("updateSendTask"),
     "rejected sent ack recovery must validate the outbox body before failing the task",

@@ -125,6 +125,8 @@ test("web automation history renders skipped reason summary from latest run", ()
   assert.match(webPage, /lowValueAutomationSkipSummary\.reasons\.map/);
   assert.match(webPage, /function buildAutomationSkipSummaryPanel/);
   assert.match(webPage, /LOW_VALUE_NORMAL_SKIP_REASONS\.has\(item\.reason\) \? "ok" : lowValueIssueTone\(item\.reason\)/);
+  assert.match(webPage, /manual_send_attention_required: "发送异常需人工处理"/);
+  assert.match(webPage, /打开订单和发送中心，先核对失败\/拦截原因/);
   assert.match(webCss, /\.automation-skip-summary/);
   assert.match(webCss, /\.automation-skip-grid/);
 });

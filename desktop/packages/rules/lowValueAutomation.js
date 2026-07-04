@@ -105,7 +105,11 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
 
 function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
   if (!order || !order.id) return skip("invalid_order_draft", ["orderDraft"]);
-  if (order.confirmationSendTaskId || order.confirmationSendTask) {
+  const confirmationTask = order.confirmationSendTask || (order.confirmationSendTaskId ? { id: order.confirmationSendTaskId } : null);
+  if (sendTaskNeedsManualAttention(confirmationTask)) {
+    return skip("manual_send_attention_required", ["confirmationSendTask"]);
+  }
+  if (sendTaskCountsAsHandled(confirmationTask)) {
     return skip("already_queued", ["confirmationSendTask"]);
   }
   if (order.status === "cancelled") return skip("order_cancelled", ["status"]);
@@ -173,10 +177,26 @@ function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
   }
 
   const existingFollowupTypes = new Set(
-    (Array.isArray(options.existingFollowupTypes) ? options.existingFollowupTypes : existingOrderFollowupTypes(order))
+    (
+      Array.isArray(options.existingFollowupTypes)
+        ? options.existingFollowupTypes
+        : existingOrderHandledFollowupTypes(order)
+    )
       .filter(Boolean)
       .map(String),
   );
+  const attentionFollowupTypes = new Set(
+    (
+      Array.isArray(options.attentionFollowupTypes)
+        ? options.attentionFollowupTypes
+        : existingOrderAttentionFollowupTypes(order)
+    )
+      .filter(Boolean)
+      .map(String),
+  );
+  if (attentionFollowupTypes.has(followupType) || attentionFollowupTypes.has("any")) {
+    return skip("manual_send_attention_required", [`${followupType}FollowupSendTask`]);
+  }
   if (existingFollowupTypes.has(followupType) || existingFollowupTypes.has("any")) {
     return skip("already_queued", [`${followupType}FollowupSendTask`]);
   }
@@ -229,12 +249,44 @@ function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
   };
 }
 
-function existingOrderFollowupTypes(order = {}) {
+function existingOrderHandledFollowupTypes(order = {}) {
   const tasks = [
     ...(Array.isArray(order.followupSendTasks) ? order.followupSendTasks : []),
     order.followupSendTask,
+    order.productionFollowupSendTask,
+    order.deliveryFollowupSendTask,
   ].filter(Boolean);
-  return tasks.map((task) => task?.guardSnapshot?.automation?.followupType || "any");
+  return tasks
+    .filter(sendTaskCountsAsHandled)
+    .map((task) => taskFollowupType(task));
+}
+
+function existingOrderAttentionFollowupTypes(order = {}) {
+  const tasks = [
+    ...(Array.isArray(order.followupSendTasks) ? order.followupSendTasks : []),
+    order.followupSendTask,
+    order.productionFollowupSendTask,
+    order.deliveryFollowupSendTask,
+  ].filter(Boolean);
+  return tasks
+    .filter(sendTaskNeedsManualAttention)
+    .map((task) => taskFollowupType(task));
+}
+
+function taskFollowupType(task = {}) {
+  const type = task?.guardSnapshot?.automation?.followupType || task?.payload?.followupType;
+  return type === "production" || type === "delivery" ? type : "any";
+}
+
+function sendTaskNeedsManualAttention(task) {
+  if (!task) return false;
+  return ["failed", "blocked", "cancelled", "dry_run"].includes(String(task.status || ""));
+}
+
+function sendTaskCountsAsHandled(task) {
+  if (!task) return false;
+  if (!task.status) return Boolean(task.id);
+  return ["queued", "sending", "sent"].includes(String(task.status));
 }
 
 function isHighValueAmount({ totalPrice = 0, unitPrice = 0, highValueAmount = 10000 } = {}) {

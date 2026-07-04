@@ -442,6 +442,48 @@ export class WechatDispatchService {
     throw new BadRequestException(`${context} blocked: 会话已人工接管，自动发送暂停。请先解除人工接管后再排队订单发送。`);
   }
 
+  private assertOrderSendTaskStillQueueable(task: any) {
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const source = String(automation.source || "");
+    if (source !== "order_confirmation" && source !== "order_followup") return;
+
+    const orderDraftId = String(automation.orderDraftId || "");
+    if (!orderDraftId) {
+      throw new BadRequestException("order send task is missing orderDraftId and cannot be requeued");
+    }
+
+    const order = this.localStore.getOrderDraft(orderDraftId);
+    if (!order) {
+      throw new BadRequestException(`order draft not found for send task requeue: ${orderDraftId}`);
+    }
+
+    const context = source === "order_confirmation" ? "order confirmation requeue" : "order follow-up requeue";
+    assertExpectedIdentity(
+      order,
+      {
+        expectedWechatAccountId: task.wechatAccountId,
+        expectedConversationId: task.conversationId,
+        expectedCustomerId: task.conversation?.customerId || task.customerId || order.customerId,
+      },
+      "order draft",
+    );
+    this.assertOrderConversationUnlocked(order, context);
+    this.assertOrderPaymentReadyForSend(order, context);
+    this.assertOrderHasCompleteSendIdentity(order);
+
+    const designJob = order.designJob || order.quoteDraft?.designJob || null;
+    const binding = validateOrderDraftQuoteBinding({
+      orderDraft: order,
+      quoteDraft: order.quoteDraft,
+      designJob,
+      conversation: order.conversation || designJob?.conversation,
+      selectedImage: this.orderSelectedImage(order),
+    });
+    if (!binding.ok) {
+      throw new BadRequestException(`order send task requeue binding invalid: ${binding.reason}`);
+    }
+  }
+
   private expectedIdentityFromOrder(order: any): ExpectedIdentityPayload {
     const designJob = order?.designJob || order?.quoteDraft?.designJob || {};
     return {
@@ -478,11 +520,36 @@ export class WechatDispatchService {
       ...new Set(
         tasks
           .filter((task: any) => this.isOrderFollowupTask(task, order))
+          .filter((task: any) => this.sendTaskCountsAsHandledForAutomation(task))
           .map((task: any) => task?.guardSnapshot?.automation?.followupType || "any")
           .filter(Boolean)
           .map(String),
       ),
     ];
+  }
+
+  private async listOrderAttentionFollowupTypes(order: any) {
+    const tasks = await this.listOrderRelatedSendTasks(order);
+    return [
+      ...new Set(
+        tasks
+          .filter((task: any) => this.isOrderFollowupTask(task, order))
+          .filter((task: any) => this.sendTaskNeedsManualAttentionForAutomation(task))
+          .map((task: any) => task?.guardSnapshot?.automation?.followupType || "any")
+          .filter(Boolean)
+          .map(String),
+      ),
+    ];
+  }
+
+  private sendTaskNeedsManualAttentionForAutomation(task: any) {
+    return ["failed", "blocked", "cancelled", "dry_run"].includes(String(task?.status || ""));
+  }
+
+  private sendTaskCountsAsHandledForAutomation(task: any) {
+    if (!task) return false;
+    if (!task.status) return Boolean(task.id);
+    return ["queued", "sending", "sent"].includes(String(task.status));
   }
 
   private async listOrderRelatedSendTasks(order: any) {
@@ -582,9 +649,11 @@ export class WechatDispatchService {
 
     for (const order of orders as any[]) {
       const existingFollowupTypes = await this.listOrderFollowupTypes(order);
+      const attentionFollowupTypes = await this.listOrderAttentionFollowupTypes(order);
       const decision = evaluateLowValueOrderFollowupSend(order, {
         highValueAmountCny: appConfig.highValueAmountCny,
         existingFollowupTypes,
+        attentionFollowupTypes,
       });
       if (!decision.ok) {
         result.skipped.push({
@@ -2395,6 +2464,14 @@ export class WechatDispatchService {
     if (!currentBinding.ok) {
       throw new BadRequestException(`bridge ack send task binding invalid: ${currentBinding.reason}`);
     }
+    if (status === "sent") {
+      const orderState = this.validateQueuedOrderSendState(task);
+      if (!orderState.ok) {
+        const errorMessage = `bridge ack order state invalid: ${orderState.message}`;
+        this.failTaskForRejectedTrustedBridgeAck(id, payload, { fileName: "direct-bridge-ack", source: "direct_ack" }, errorMessage);
+        throw new BadRequestException(errorMessage);
+      }
+    }
 
     const now = new Date().toISOString();
     const outboxFileName = this.resolveBridgeAckOutboxFileName(payload, pendingAttempt);
@@ -2462,6 +2539,7 @@ export class WechatDispatchService {
       designJobId: task.designJobId,
       quoteDraftId: task.quoteDraftId,
     });
+    this.assertOrderSendTaskStillQueueable(task);
     const now = new Date().toISOString();
     const previousGuardSnapshot = isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {};
     const updated = this.localStore.updateSendTask(id, {
@@ -2556,7 +2634,7 @@ export class WechatDispatchService {
   private blockSendTask(id: string, reason: string, guardSnapshot: Record<string, unknown>) {
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
-    return this.localStore.updateSendTask(id, {
+    const updated = this.localStore.updateSendTask(id, {
       status: "blocked",
       errorMessage: reason,
       guardSnapshot: {
@@ -2567,6 +2645,8 @@ export class WechatDispatchService {
         validatedAt: new Date().toISOString(),
       },
     });
+    this.markLinkedOrderSendFailed(updated, reason);
+    return updated;
   }
 
   private async alertLowValueQueueBlocked(task: any, queueHeadTask: any, advice: any) {
@@ -3469,13 +3549,33 @@ export class WechatDispatchService {
 
   private markLinkedQuoteFailed(task: any, reason: string) {
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
-    if (!quoteDraftId) return;
-    if (appConfig.useLocalStore) {
+    if (quoteDraftId && appConfig.useLocalStore) {
       this.localStore.updateQuoteDraft(quoteDraftId, {
         status: "manual_review",
         customerNotes: `报价发送失败，需要人工处理：${reason}`,
       });
     }
+    this.markLinkedOrderSendFailed(task, reason);
+  }
+
+  private markLinkedOrderSendFailed(task: any, reason: string) {
+    if (!appConfig.useLocalStore) return;
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const source = String(automation.source || task?.payload?.source || "");
+    if (source !== "order_confirmation" && source !== "order_followup") return;
+    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    if (!orderDraftId) return;
+    const order = this.localStore.getOrderDraft(orderDraftId);
+    if (!order) return;
+    const stage = source === "order_followup" ? "订单跟进发送" : "订单确认发送";
+    const marker = `[发送任务:${task.id}]`;
+    const currentNotes = String(order.customerNotes || "");
+    if (currentNotes.includes(marker)) return;
+    const note = `${marker}${stage}失败，需要人工处理：${reason}`;
+    this.localStore.updateOrderDraft(orderDraftId, {
+      owner: order.owner && order.owner !== "low_value_automation" ? order.owner : "人工客服",
+      customerNotes: appendCustomerNote(order.customerNotes, note),
+    });
   }
 
   private markLinkedQuoteRequeued(task: any, reason: string) {
@@ -3572,13 +3672,14 @@ export class WechatDispatchService {
     const archivedOutboxPath = outboxFileName ? this.archiveBridgeOutboxFile(outboxFileName, "failed") : null;
     const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingAttempt, "failed");
     const failureReason = `Bridge ack rejected after trusted validation: ${errorMessage}`;
+    const rejectionSource = entry?.source || (entry?.filePath ? "bridge_inbox" : "direct_ack");
     const attempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
       status: "failed",
       errorMessage: failureReason,
       metadata: {
         ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
         bridgeAckRejected: {
-          source: "bridge_inbox",
+          source: rejectionSource,
           fileName: entry?.fileName || "",
           reason: errorMessage,
           rejectedAt: now,

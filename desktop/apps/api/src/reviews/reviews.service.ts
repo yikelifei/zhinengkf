@@ -467,7 +467,7 @@ function isQuoteHighValue(quote: any) {
 function isOrderReviewVisible(order: any) {
   const status = String(order?.status || "");
   if (["fulfilled", "cancelled"].includes(status)) return false;
-  return isOrderHighValue(order);
+  return isOrderHighValue(order) || orderNeedsManualSendAttention(order);
 }
 
 function isOrderHighValue(order: any) {
@@ -481,6 +481,17 @@ function isOrderHighValue(order: any) {
     isDesignJobHighValue(order?.designJob || quote?.designJob || {}) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
+  );
+}
+
+function orderNeedsManualSendAttention(order: any) {
+  const owner = String(order?.owner || "").trim();
+  const customerNotes = String(order?.customerNotes || "");
+  return (
+    owner === "\u4eba\u5de5\u5ba2\u670d" &&
+    customerNotes.includes("[\u53d1\u9001\u4efb\u52a1:") &&
+    customerNotes.includes("\u53d1\u9001\u5931\u8d25") &&
+    customerNotes.includes("\u9700\u8981\u4eba\u5de5\u5904\u7406")
   );
 }
 

@@ -210,6 +210,52 @@ test("review list includes active high-value order drafts", async () => {
   );
 });
 
+test("review list includes low-value order drafts that need manual send attention", async () => {
+  const manualSendAttentionOrder = {
+    id: "order_attention",
+    status: "confirmed",
+    totalPrice: 3000,
+    unitPrice: 150,
+    owner: "人工客服",
+    customerNotes: "[发送任务:send_1]订单确认发送失败，需要人工处理：bridge ack rejected",
+    quoteDraft: { id: "quote_attention", totalPrice: 3000, unitPrice: 150 },
+  };
+  const lowValueOrder = {
+    id: "order_low",
+    status: "confirmed",
+    totalPrice: 3000,
+    unitPrice: 150,
+    owner: "low_value_automation",
+    customerNotes: "低价值订单确认已自动进入微信安全发送队列。",
+    quoteDraft: { id: "quote_low", totalPrice: 3000, unitPrice: 150 },
+  };
+  const fulfilledAttentionOrder = {
+    ...manualSendAttentionOrder,
+    id: "order_done_attention",
+    status: "fulfilled",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      listDesignJobs: () => [],
+      listQuoteDrafts: () => [],
+      listOrderDrafts: () => [lowValueOrder, manualSendAttentionOrder, fulfilledAttentionOrder],
+      listReviewLogs: () => [],
+    },
+    {},
+    {},
+    {},
+    {},
+  );
+
+  const result = await service.list();
+
+  assert.deepEqual(
+    result.orderDrafts.map((order) => order.id),
+    ["order_attention"],
+  );
+});
+
 test("manual-approved order review queues confirmation and records audit log", async () => {
   const reviewLogs = [];
   let queuedPayload = null;

@@ -539,6 +539,38 @@ test("does not queue duplicate order confirmation", () => {
   assert.equal(decision.reason, "already_queued");
 });
 
+test("does not auto-requeue order confirmation that needs manual send attention", () => {
+  const decision = evaluateLowValueOrderConfirmationSend({
+    id: "order_1",
+    status: "confirmed",
+    paymentStatus: "paid",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    confirmationSendTask: {
+      id: "send_failed_1",
+      status: "failed",
+      guardSnapshot: { automation: { source: "order_confirmation", orderDraftId: "order_1" } },
+    },
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_send_attention_required");
+  assert.deepEqual(decision.missing, ["confirmationSendTask"]);
+});
+
 test("does not queue high-value order confirmation automatically", () => {
   const decision = evaluateLowValueOrderConfirmationSend({
     id: "order_1",
@@ -724,6 +756,73 @@ test("does not queue duplicate order follow-up for the same stage", () => {
 
   assert.equal(decision.ok, false);
   assert.equal(decision.reason, "already_queued");
+});
+
+test("does not auto-requeue order follow-up that needs manual send attention", () => {
+  const decision = evaluateLowValueOrderFollowupSend({
+    id: "order_1",
+    status: "processing",
+    paymentStatus: "paid",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    followupSendTasks: [
+      {
+        id: "send_followup_failed_1",
+        status: "blocked",
+        guardSnapshot: { automation: { source: "order_followup", followupType: "production", orderDraftId: "order_1" } },
+      },
+    ],
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "manual_send_attention_required");
+  assert.deepEqual(decision.missing, ["productionFollowupSendTask"]);
+});
+
+test("failed production follow-up does not block later delivery follow-up stage", () => {
+  const decision = evaluateLowValueOrderFollowupSend({
+    id: "order_1",
+    status: "fulfilled",
+    paymentStatus: "paid",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    followupSendTasks: [
+      {
+        id: "send_production_failed_1",
+        status: "failed",
+        guardSnapshot: { automation: { source: "order_followup", followupType: "production", orderDraftId: "order_1" } },
+      },
+    ],
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "paid",
+    },
+  });
+
+  assert.equal(decision.ok, true);
+  assert.equal(decision.followupType, "delivery");
 });
 
 test("allows delivery follow-up after a previous production follow-up", () => {
