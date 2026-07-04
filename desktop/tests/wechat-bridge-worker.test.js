@@ -29,6 +29,7 @@ function validOutboxEntry(overrides = {}) {
     attemptId: "attempt_1",
     wechatAccountId: "wechat_1",
     conversationId: "conv_1",
+    customerId: "customer_1",
     fileName: "outbox.json",
     preview: {
       protocolVersion: "wechat_bridge_outbox_v1",
@@ -36,6 +37,7 @@ function validOutboxEntry(overrides = {}) {
       attemptId: "attempt_1",
       wechatAccountId: "wechat_1",
       conversationId: "conv_1",
+      customerId: "customer_1",
     },
     ...overrides,
   };
@@ -48,6 +50,7 @@ function validOutboxPayload(overrides = {}) {
     taskId: "send_1",
     wechatAccountId: "wechat_1",
     conversationId: "conv_1",
+    customerId: "customer_1",
     target: {
       wechatAccountId: "wechat_1",
       conversationId: "conv_1",
@@ -201,6 +204,7 @@ test("validates bridge outbox identity before building a sent ack", () => {
     attemptId: "attempt_1",
     wechatAccountId: "wechat_1",
     conversationId: "conv_1",
+    customerId: "customer_1",
     fileName: "outbox.json",
     preview: {
       protocolVersion: "wechat_bridge_outbox_v1",
@@ -208,10 +212,25 @@ test("validates bridge outbox identity before building a sent ack", () => {
       attemptId: "attempt_1",
       wechatAccountId: "wechat_1",
       conversationId: "conv_1",
+      customerId: "customer_1",
     },
   });
 
   assert.equal(result.ok, true);
+});
+
+test("rejects bridge outbox entries without customer identity", () => {
+  const result = validateOutboxEntry({
+    ...validOutboxEntry(),
+    customerId: "",
+    preview: {
+      ...validOutboxEntry().preview,
+      customerId: "",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("customerId"), true);
 });
 
 test("rejects bridge outbox entries without protocol identity", () => {
@@ -254,6 +273,18 @@ test("rejects bridge outbox file body with mismatched identity", () => {
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("wechatAccountId"), true);
   assert.equal(result.failedKeys.includes("targetIdentity"), true);
+});
+
+test("rejects bridge outbox file body when top-level customer identity is mismatched", () => {
+  const result = validateOutboxPayload(
+    validOutboxEntry(),
+    validOutboxPayload({
+      customerId: "customer_2",
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("customerId"), true);
 });
 
 test("rejects bridge outbox file body without strict send constraints", () => {

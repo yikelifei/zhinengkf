@@ -274,6 +274,7 @@ test("manual-approved design image send relocks conversation when queueing fails
     requestId: "request_1",
     status: "draft",
     wechatAccountId: "wechat_1",
+    customerId: "customer_1",
     conversationId: "conversation_1",
     images: [
       {
@@ -408,6 +409,7 @@ test("design image send refuses to release manual lock without explicit manual r
         id: "design_1",
         requestId: "request_1",
         wechatAccountId: "wechat_1",
+        customerId: "customer_1",
         conversationId: "conversation_1",
         images: [
           {
@@ -446,6 +448,7 @@ test("automatic design image send refuses high-value budget before queueing", as
     isHighValue: false,
     budget: { mode: "per_box", perUnitAmount: 10000, totalAmount: 9000 },
     wechatAccountId: "wechat_1",
+    customerId: "customer_1",
     conversationId: "conversation_1",
     images: [
       {
@@ -492,6 +495,7 @@ test("manual-approved design image send writes review log with send task id", as
     requestId: "request_1",
     status: "manual_review",
     wechatAccountId: "wechat_1",
+    customerId: "customer_1",
     conversationId: "conversation_1",
     images: [
       {

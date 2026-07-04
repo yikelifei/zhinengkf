@@ -13,6 +13,7 @@ const {
   evaluateLowValueQuoteSend,
   inspectBundleAutomationReadiness,
   isHighValueBudget,
+  latestCandidateRound,
   quoteNeedsPaymentProofReview,
   validateQuoteDraftIdentity,
 } = rules;
@@ -47,9 +48,10 @@ export class QuotesService {
     const totals = calculateTotals(bundle.items || []);
     const budget = job.budget as { quantity?: number | null };
     const quantity = Number(budget.quantity || 1);
+    const latestImages = latestCandidateRound(job.images || []);
     const selectedImage = selectedImageId
       ? job.images.find((item) => item.id === selectedImageId || item.imageId === selectedImageId)
-      : job.images.find((item) => item.selected) || job.images[0];
+      : latestImages.find((item: any) => item.selected) || null;
 
     const totalPrice = Number(totals.salePrice) * quantity;
     const totalCost = Number(totals.cost) * quantity;
@@ -199,6 +201,9 @@ export class QuotesService {
         source: "manual_quote_revision",
         quoteDraftId: id,
         designJobId: current.designJobId,
+        wechatAccountId: current.designJob?.wechatAccountId,
+        conversationId: current.designJob?.conversationId,
+        customerId: current.customerId || current.designJob?.customerId,
         previousSelectedImageId: current.selectedImageId || null,
         selectedImageId: selectedImage.id,
         cancelledSendTaskId: cancelledSendTask?.id || null,
@@ -235,6 +240,7 @@ export class QuotesService {
     if (!designJob) throw new Error(`quote draft has no design job: ${id}`);
     this.ensureQuoteIdentity(quote);
     assertExpectedIdentity(quote, options, "quote draft");
+    this.assertQuoteHasCompleteSendIdentity(quote);
     this.assertQuoteReadyForSend(quote);
     this.assertHighValueQuoteHasManualRelease(quote, options);
 
@@ -300,6 +306,7 @@ export class QuotesService {
           source: "manual_release_quote_send",
           conversationId: designJob.conversationId,
           wechatAccountId: designJob.wechatAccountId,
+          customerId: quote.customerId || designJob.customerId,
           designJobId: designJob.id,
           quoteDraftId: quote.id,
           sendTaskId: sendTask.id,
@@ -390,6 +397,9 @@ export class QuotesService {
           quoteDraftId: id,
           orderDraftId: confirmedOrder.id,
           designJobId: quote.designJobId,
+          wechatAccountId: confirmedOrder.wechatAccountId || quote.designJob?.wechatAccountId,
+          conversationId: confirmedOrder.conversationId || quote.designJob?.conversationId,
+          customerId: confirmedOrder.customerId || quote.customerId || quote.designJob?.customerId,
           paymentStatus,
           sendTaskId: confirmation.sendTask?.id || null,
         },
@@ -587,6 +597,7 @@ export class QuotesService {
     if (quote.sendTaskId) warnings.push("报价已进入发送队列");
     if (!quote.selectedImageId) warnings.push("报价还没有选图");
     if (!quote.designJob?.wechatAccountId) warnings.push("报价缺少微信账号");
+    if (!quote.customerId && !quote.designJob?.customerId) warnings.push("报价缺少客户绑定");
     if (!quote.designJob?.conversationId) warnings.push("报价缺少客户会话");
     if (quoteNeedsPaymentProofReview(quote)) warnings.push("付款凭证需要先人工核验金额和收款账户");
     if (quote.status === "manual_review") warnings.push("报价正在等待人工审核");
@@ -599,6 +610,14 @@ export class QuotesService {
     if (warnings.length) {
       throw new BadRequestException(`报价还不能发送：${warnings.join("；")}`);
     }
+  }
+
+  private assertQuoteHasCompleteSendIdentity(quote: any) {
+    const wechatAccountId = String(quote?.designJob?.wechatAccountId || "").trim();
+    const customerId = String(quote?.customerId || quote?.designJob?.customerId || "").trim();
+    const conversationId = String(quote?.designJob?.conversationId || "").trim();
+    if (wechatAccountId && customerId && conversationId) return;
+    throw new BadRequestException("报价缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
   }
 
   private assertHighValueQuoteHasManualRelease(

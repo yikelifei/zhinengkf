@@ -144,11 +144,11 @@ test("manual automation run forwards selected conversation identity to each side
       "pollActiveResults",
       "runLowValueAutomation",
       "scanTimeouts",
-      "scanSendOperations",
-      "processSafeSendQueue",
       "scanLowValueAutoOrderDrafts",
       "scanLowValueOrderConfirmations",
       "scanLowValueOrderFollowups",
+      "scanSendOperations",
+      "processSafeSendQueue",
     ],
   );
 });
@@ -170,6 +170,20 @@ test("automation run records identity audit for low value side effects", async (
       }),
     },
     wechatDispatch: {
+      scanSendOperations: async () => ({
+        scanned: 1,
+        autoRetriedLowValue: 1,
+        tasks: {
+          autoRetriedLowValue: [
+            {
+              id: "send_retry_1",
+              wechatAccountId: "wechat_demo_1",
+              conversationId: "conversation_demo_1",
+              customerId: "customer_demo_1",
+            },
+          ],
+        },
+      }),
       processSafeSendQueue: async () => ({
         processed: [
           {
@@ -192,7 +206,7 @@ test("automation run records identity audit for low value side effects", async (
   assert.equal(run.identityAudit.identities[0].wechatAccountId, "wechat_demo_1");
   assert.equal(run.identityAudit.identities[0].conversationId, "conversation_demo_1");
   assert.equal(run.identityAudit.identities[0].customerId, "customer_demo_1");
-  assert.deepEqual(run.identityAudit.identities[0].steps, ["lowValueAutomation", "processLowValueSendQueue"]);
+  assert.deepEqual(run.identityAudit.identities[0].steps, ["lowValueAutomation", "processLowValueSendQueue", "scanSendOperations"]);
   assert.deepEqual(run.identityAudit.warnings, []);
 });
 
@@ -361,11 +375,20 @@ test("automation run summarizes low value stage progress and next action", async
           skipped: [],
           failed: [],
         },
-        orderConfirmation: { queued: [], skipped: [], failed: [] },
-        orderFollowup: { queued: [], skipped: [], failed: [] },
+        orderConfirmation: { queued: [{ orderDraftId: "order_confirmation_1" }], skipped: [], failed: [] },
+        orderFollowup: { queued: [], skipped: [{ orderDraftId: "order_followup_skip_1", reason: "payment_not_ready" }], failed: [] },
       }),
     },
     wechatDispatch: {
+      scanSendOperations: async () => ({
+        scanned: 3,
+        autoRetriedLowValue: 1,
+        staleQueued: 1,
+        bridgeTimedOut: 1,
+        bridgeOutboxBroken: 0,
+        bridgeDispatchExpired: 0,
+        alerted: 0,
+      }),
       processSafeSendQueue: async () => ({
         processed: [{ taskId: "send_image_1", sendTask: { wechatAccountId: "wechat_1", conversationId: "conversation_1" } }],
         blocked: [{ taskId: "send_blocked_1", reason: "window_guard_failed" }],
@@ -376,10 +399,10 @@ test("automation run summarizes low value stage progress and next action", async
 
   const run = await service.runOnce("manual");
 
-  assert.equal(run.stageSummary.progressed, 5);
-  assert.equal(run.stageSummary.blocked, 2);
-  assert.equal(run.stageSummary.failed, 0);
-  assert.equal(run.stageSummary.nextAction, "草稿被跳过时，优先补预算、搭配、素材和客户用途。");
+  assert.equal(run.stageSummary.progressed, 7);
+  assert.equal(run.stageSummary.blocked, 4);
+  assert.equal(run.stageSummary.failed, 1);
+  assert.equal(run.stageSummary.nextAction, "先处理失败步骤，再重新跑一轮低价值自动化。");
   assert.deepEqual(
     run.stageSummary.stages.map((stage) => [stage.key, stage.completed, stage.blocked, stage.failed, stage.tone]),
     [
@@ -387,8 +410,9 @@ test("automation run summarizes low value stage progress and next action", async
       ["imageSend", 1, 0, 0, "ok"],
       ["quote", 1, 0, 0, "ok"],
       ["order", 1, 0, 0, "ok"],
-      ["orderSend", 0, 0, 0, "idle"],
-      ["safeSend", 1, 1, 0, "warning"],
+      ["orderConfirmation", 1, 0, 0, "ok"],
+      ["orderFollowup", 0, 1, 0, "warning"],
+      ["safeSend", 2, 2, 1, "error"],
       ["timeout", 0, 0, 0, "idle"],
     ],
   );

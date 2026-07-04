@@ -5,7 +5,7 @@ const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
 const defaultLocalStorageRoot = path.join(desktopRoot, "storage");
 const defaultApiBase = `http://127.0.0.1:${process.env.API_PORT || "3200"}/api`;
 const defaultOutboxDir = path.join(runtimeDir, "wechat-outbox");
@@ -184,6 +184,16 @@ function buildDispatchPayload(entry, outbox, config = {}) {
   const payload = outbox?.payload || {};
   const sendPlan = payload && typeof payload.sendPlan === "object" && payload.sendPlan ? payload.sendPlan : {};
   const target = payload && typeof payload.target === "object" && payload.target ? payload.target : {};
+  const dispatchTarget = {
+    wechatAccountId: String(target.wechatAccountId || entry.wechatAccountId || ""),
+    accountDisplayName: String(target.accountDisplayName || ""),
+    conversationId: String(target.conversationId || entry.conversationId || ""),
+    conversationTitle: String(target.conversationTitle || ""),
+    customerId: String(target.customerId || ""),
+    customerName: String(target.customerName || ""),
+    windowSnapshotId: target.windowSnapshotId || null,
+    requiredChecks: Array.isArray(target.requiredChecks) ? target.requiredChecks : [],
+  };
   const createdAt = new Date();
   const dispatchTtlMs = numberValue(config.dispatchTtlMs, config.lockStaleMs || 5 * 60 * 1000, 1000, 60 * 60 * 1000);
   const expiresAt = new Date(createdAt.getTime() + dispatchTtlMs).toISOString();
@@ -195,15 +205,25 @@ function buildDispatchPayload(entry, outbox, config = {}) {
     conversationId: String(entry.conversationId || ""),
     sourceOutboxFileName: String(entry.fileName || ""),
     sourceOutboxFilePath: outbox.filePath,
-    target: {
-      wechatAccountId: String(target.wechatAccountId || entry.wechatAccountId || ""),
-      accountDisplayName: String(target.accountDisplayName || ""),
-      conversationId: String(target.conversationId || entry.conversationId || ""),
-      conversationTitle: String(target.conversationTitle || ""),
-      customerId: String(target.customerId || ""),
-      customerName: String(target.customerName || ""),
-      windowSnapshotId: target.windowSnapshotId || null,
-      requiredChecks: Array.isArray(target.requiredChecks) ? target.requiredChecks : [],
+    target: dispatchTarget,
+    preflight: {
+      requiredBeforeSend: [
+        "wechatAccountId",
+        "activeChatTitle",
+        "recentMessageOrCustomerId",
+        "dispatchNotExpired",
+        "sourceOutboxFileStillPresent",
+      ],
+      expectedWechatAccountId: dispatchTarget.wechatAccountId,
+      expectedConversationId: dispatchTarget.conversationId,
+      expectedConversationTitle: dispatchTarget.conversationTitle,
+      expectedCustomerId: dispatchTarget.customerId,
+      expectedCustomerName: dispatchTarget.customerName,
+      expectedWindowSnapshotId: dispatchTarget.windowSnapshotId,
+      rejectIfAnyCheckFails: true,
+      rejectIfWindowChanged: true,
+      rejectIfExpired: true,
+      rejectIfOutboxMissing: true,
     },
     sendPlan: {
       kind: String(sendPlan.kind || entry.payloadKind || "unknown"),
@@ -228,6 +248,7 @@ function buildDispatchPayload(entry, outbox, config = {}) {
       requiredAttemptId: entry.attemptId || undefined,
       requiredWechatAccountId: String(entry.wechatAccountId || ""),
       requiredConversationId: String(entry.conversationId || ""),
+      requiredCustomerId: dispatchTarget.customerId,
       note: "真实发送完成后，外部桥接程序必须从 sourceOutboxFilePath 读取发送凭证，并写入 wechat_bridge_ack_v1；本 dispatch 文件不包含发送凭证。",
     },
     createdAt: createdAt.toISOString(),
@@ -256,6 +277,7 @@ function writeDispatchFile(dispatchDir, entry, outbox, config = {}) {
 
 function buildAckPayload(entry, mode, outboxPayload = {}) {
   const status = mode === "simulate_failed" ? "failed" : "sent";
+  const target = outboxPayload && typeof outboxPayload.target === "object" && outboxPayload.target ? outboxPayload.target : {};
   return {
     version: BRIDGE_ACK_VERSION,
     ackToken: typeof outboxPayload.ackToken === "string" ? outboxPayload.ackToken : undefined,
@@ -263,6 +285,7 @@ function buildAckPayload(entry, mode, outboxPayload = {}) {
     attemptId: entry.attemptId || undefined,
     wechatAccountId: String(entry.wechatAccountId || ""),
     conversationId: String(entry.conversationId || ""),
+    customerId: String(entry.customerId || target.customerId || ""),
     outboxFileName: String(entry.fileName || ""),
     status,
     errorMessage: status === "failed" ? "桥接 worker 模拟失败，需人工检查发送环境" : "",
@@ -287,12 +310,14 @@ function validateOutboxEntry(entry = {}) {
     { key: "attemptId", passed: Boolean(entry.attemptId) },
     { key: "wechatAccountId", passed: Boolean(entry.wechatAccountId) },
     { key: "conversationId", passed: Boolean(entry.conversationId) },
+    { key: "customerId", passed: Boolean(entry.customerId) },
     { key: "fileName", passed: Boolean(entry.fileName) },
     {
       key: "previewIdentityMatches",
       passed:
         (!preview.wechatAccountId || preview.wechatAccountId === entry.wechatAccountId) &&
         (!preview.conversationId || preview.conversationId === entry.conversationId) &&
+        (!preview.customerId || preview.customerId === entry.customerId) &&
         (!preview.outboxFileName || preview.outboxFileName === entry.fileName) &&
         (!preview.attemptId || preview.attemptId === entry.attemptId),
     },
@@ -373,6 +398,7 @@ function validateOutboxPayload(entry = {}, payload = {}) {
   const entryTaskId = String(entry.taskId || "");
   const entryWechatAccountId = String(entry.wechatAccountId || "");
   const entryConversationId = String(entry.conversationId || "");
+  const entryCustomerId = String(entry.customerId || "");
   const hasPassedGuard = guardSnapshot.status === "passed" || guardSnapshot.ok === true || context.guardStatus === "passed";
 
   const checks = [
@@ -397,16 +423,24 @@ function validateOutboxPayload(entry = {}, payload = {}) {
       passed: Boolean(entryConversationId) && String(payload.conversationId || "") === entryConversationId,
     },
     {
+      key: "customerId",
+      passed: !payload.customerId || String(payload.customerId || "") === entryCustomerId,
+    },
+    {
       key: "targetIdentity",
       passed:
         String(target.wechatAccountId || "") === entryWechatAccountId &&
-        String(target.conversationId || "") === entryConversationId,
+        String(target.conversationId || "") === entryConversationId &&
+        Boolean(entryCustomerId) &&
+        String(target.customerId || "") === entryCustomerId,
     },
     {
       key: "sendPlanTargetIdentity",
       passed:
         String(sendPlanTarget.wechatAccountId || "") === entryWechatAccountId &&
-        String(sendPlanTarget.conversationId || "") === entryConversationId,
+        String(sendPlanTarget.conversationId || "") === entryConversationId &&
+        Boolean(entryCustomerId) &&
+        String(sendPlanTarget.customerId || "") === entryCustomerId,
     },
     {
       key: "sendPlanActions",

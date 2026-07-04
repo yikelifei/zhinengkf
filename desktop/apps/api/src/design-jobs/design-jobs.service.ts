@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DesignPlatformClient } from "../integrations/design-platform/design-platform.client";
 import {
@@ -16,6 +17,27 @@ import { QuotesService } from "../quotes/quotes.service";
 import { OrdersService } from "../orders/orders.service";
 import { rules } from "../shared/rules";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+
+const SMOKE_TEST_PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function assertSmokeContract(
+  checks: DesignPlatformSmokeContractCheck[],
+  check: DesignPlatformSmokeContractCheck,
+  errorMessage: string,
+) {
+  checks.push(check);
+  if (!check.ok) {
+    throw new Error(check.detail || errorMessage);
+  }
+}
+
 const {
   buildWaitingMessage,
   decideRevisionPolicy,
@@ -29,6 +51,7 @@ const {
   inspectBundleReferences,
   inspectRealDesignReferences,
   isHighValueBudget,
+  latestCandidateRound,
   nextStatusAfterDesignCompleted,
   planCustomerImageSelection,
   shouldTimeout,
@@ -77,6 +100,37 @@ type IdentityFilter = {
   customerId?: string;
 };
 
+type DesignPlatformSmokeStep = {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail?: string;
+};
+
+type DesignPlatformSmokeContractCheck = DesignPlatformSmokeStep & {
+  expected?: string | number;
+  actual?: string | number;
+};
+
+type DesignPlatformSmokeTestResult = {
+  ok: boolean;
+  adapter: string;
+  baseUrl: string;
+  latencyMs: number;
+  requestId: string;
+  externalJobId?: string;
+  status: string;
+  expectedCandidateCount: number;
+  assetUploadCount: number;
+  candidateCount: number;
+  savedImageCount: number;
+  savedImagePaths: string[];
+  savedImagePreviews: Array<{ imageId: string; dataUrl: string }>;
+  contractChecks: DesignPlatformSmokeContractCheck[];
+  steps: DesignPlatformSmokeStep[];
+  errorMessage?: string;
+};
+
 @Injectable()
 export class DesignJobsService {
   private readonly activeResultPolls = new Set<string>();
@@ -100,6 +154,226 @@ export class DesignJobsService {
       orderBy: { updatedAt: "desc" },
       take: 200,
     });
+  }
+
+  async runDesignPlatformSmokeTest(): Promise<DesignPlatformSmokeTestResult> {
+    const startedAt = Date.now();
+    const requestId = `smoke_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const steps: DesignPlatformSmokeStep[] = [];
+    const contractChecks: DesignPlatformSmokeContractCheck[] = [];
+    const expectedCandidateCount = 1;
+    let externalJobId = "";
+    let status = "created";
+    let assetUploadCount = 0;
+    let candidateCount = 0;
+    const savedImagePaths: string[] = [];
+    const savedImagePreviews: Array<{ imageId: string; dataUrl: string }> = [];
+
+    try {
+      await this.designPlatform.health();
+      steps.push({
+        key: "health",
+        label: "设计平台连通",
+        ok: true,
+        detail: `${appConfig.designPlatformAdapter} ${appConfig.designPlatformBaseUrl}`,
+      });
+
+      const smokeAssets = await this.prepareSmokeAssets(requestId);
+      const uploadedAssets = [];
+      for (const asset of smokeAssets.assets) {
+        const remote = await this.designPlatform.uploadAsset(asset);
+        uploadedAssets.push({
+          assetId: asset.assetId,
+          remoteAssetId: remote.assetId || remote.remoteAssetId || remote.id || remote.url,
+          url: remote.url,
+          fileName: asset.fileName,
+          mimeType: asset.mimeType,
+          role: asset.role,
+          source: asset.source,
+          skuCode: asset.skuCode,
+          name: asset.name,
+        });
+      }
+      assetUploadCount = uploadedAssets.length;
+      assertSmokeContract(
+        contractChecks,
+        {
+          key: "asset_remote_reference",
+          label: "素材可被设计平台引用",
+          ok: uploadedAssets.every((asset) => Boolean(asset.remoteAssetId || asset.url)),
+          expected: smokeAssets.assets.length,
+          actual: uploadedAssets.filter((asset) => Boolean(asset.remoteAssetId || asset.url)).length,
+          detail: `上传 ${smokeAssets.assets.length} 个素材，${uploadedAssets.filter((asset) => Boolean(asset.remoteAssetId || asset.url)).length} 个返回可引用 ID 或 URL。`,
+        },
+        "design platform asset upload did not return remoteAssetId or url for every asset",
+      );
+      steps.push({
+        key: "asset_upload",
+        label: "试跑素材上传",
+        ok: true,
+        detail: `已上传 ${assetUploadCount} 个测试素材`,
+      });
+
+      const remote = await this.designPlatform.createDesignJob({
+        requestId,
+        wechatAccountId: null,
+        customerId: "smoke_customer",
+        conversationId: "smoke_conversation",
+        orderId: null,
+        budget: { mode: "per_box", amount: 200, quantity: 20, totalAmount: 4000 },
+        scene: "员工福利礼盒试跑",
+        bundle: smokeAssets.bundle,
+        assets: uploadedAssets,
+        outputCount: 1,
+        renderStyle: "真实产品摆拍",
+        requirements: {
+          useRealSkuImages: true,
+          showAllItems: true,
+          noWatermark: true,
+          highResolution: true,
+        },
+        customerText: "客服平台联调试跑：请生成一张包含礼盒、内搭商品和客户 Logo 的真实摆拍效果图。",
+      });
+      externalJobId = String(remote.externalJobId || remote.jobId || remote.id || "");
+      assertSmokeContract(
+        contractChecks,
+        {
+          key: "external_job_id",
+          label: "任务 ID 返回",
+          ok: Boolean(externalJobId),
+          expected: "externalJobId/jobId/id",
+          actual: externalJobId || "",
+          detail: externalJobId || "创建设计任务接口必须返回 externalJobId、jobId 或 id。",
+        },
+        "design platform did not return externalJobId",
+      );
+      status = String(remote.status || "submitted");
+      steps.push({
+        key: "job_submit",
+        label: "试跑任务提交",
+        ok: true,
+        detail: externalJobId,
+      });
+
+      const completed = await this.waitForSmokeDesignResult(externalJobId);
+      status = String(completed.status || "completed");
+      const images = Array.isArray(completed.images) ? completed.images : [];
+      candidateCount = images.length;
+      assertSmokeContract(
+        contractChecks,
+        {
+          key: "candidate_count",
+          label: "候选图数量",
+          ok: candidateCount >= expectedCandidateCount,
+          expected: expectedCandidateCount,
+          actual: candidateCount,
+          detail: `需要至少 ${expectedCandidateCount} 张候选图，实际返回 ${candidateCount} 张。`,
+        },
+        "design platform completed but returned no images",
+      );
+      const invalidImages: Array<{ index: number; imageId: string; downloadUrl: string }> = images
+        .map((image: any, index: number) => ({
+          index,
+          imageId: String(image?.imageId || ""),
+          downloadUrl: String(image?.downloadUrl || ""),
+        }))
+        .filter((image: { imageId: string; downloadUrl: string }) => !image.imageId || !image.downloadUrl);
+      assertSmokeContract(
+        contractChecks,
+        {
+          key: "image_metadata",
+          label: "图片元数据完整",
+          ok: invalidImages.length === 0,
+          expected: "imageId + downloadUrl",
+          actual: invalidImages.length ? `${invalidImages.length} invalid` : "valid",
+          detail: invalidImages.length
+            ? `第 ${invalidImages.map((image) => image.index + 1).join("、")} 张缺少 imageId 或 downloadUrl。`
+            : "每张候选图都有 imageId 和 downloadUrl。",
+        },
+        `design platform returned invalid candidate image metadata: ${invalidImages
+          .map((image) => `#${image.index + 1}`)
+          .join(", ")}`,
+      );
+      steps.push({
+        key: "job_result",
+        label: "候选图返回",
+        ok: true,
+        detail: `收到 ${candidateCount} 张候选图`,
+      });
+
+      for (const image of images) {
+        const imageId = String(image.imageId || `candidate_${savedImagePaths.length + 1}`);
+        const downloadUrl = String(image.downloadUrl || "");
+        if (!downloadUrl) throw new Error(`candidate image ${imageId} has no downloadUrl`);
+        const localPath = await this.storage.saveDesignImage(requestId, imageId, downloadUrl);
+        savedImagePaths.push(localPath);
+        const preview = await localImagePreviewDataUrl(localPath);
+        if (preview) savedImagePreviews.push({ imageId, dataUrl: preview });
+      }
+      steps.push({
+        key: "image_save",
+        label: "候选图保存",
+        ok: true,
+        detail: `已保存 ${savedImagePaths.length} 张本地图片`,
+      });
+      assertSmokeContract(
+        contractChecks,
+        {
+          key: "local_image_save_count",
+          label: "候选图本地保存完整",
+          ok: savedImagePaths.length === candidateCount,
+          expected: candidateCount,
+          actual: savedImagePaths.length,
+          detail: `返回 ${candidateCount} 张候选图，本地保存 ${savedImagePaths.length} 张。`,
+        },
+        "design platform smoke test did not save every candidate image locally",
+      );
+
+      return {
+        ok: true,
+        adapter: appConfig.designPlatformAdapter,
+        baseUrl: appConfig.designPlatformBaseUrl,
+        latencyMs: Date.now() - startedAt,
+        requestId,
+        externalJobId,
+        status,
+        expectedCandidateCount,
+        assetUploadCount,
+        candidateCount,
+        savedImageCount: savedImagePaths.length,
+        savedImagePaths,
+        savedImagePreviews,
+        contractChecks,
+        steps,
+        errorMessage: "",
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "unknown design platform smoke test error";
+      steps.push({
+        key: "error",
+        label: "试跑失败",
+        ok: false,
+        detail: errorMessage,
+      });
+      return {
+        ok: false,
+        adapter: appConfig.designPlatformAdapter,
+        baseUrl: appConfig.designPlatformBaseUrl,
+        latencyMs: Date.now() - startedAt,
+        requestId,
+        externalJobId: externalJobId || undefined,
+        status: status === "created" ? "failed" : status,
+        expectedCandidateCount,
+        assetUploadCount,
+        candidateCount,
+        savedImageCount: savedImagePaths.length,
+        savedImagePaths,
+        savedImagePreviews,
+        contractChecks,
+        steps,
+        errorMessage,
+      };
+    }
   }
 
   async scanHighValueHandoffs(filter: IdentityFilter = {}) {
@@ -842,6 +1116,23 @@ export class DesignJobsService {
     });
   }
 
+  async readLocalDesignImage(id: string, imageId: string, expected: ExpectedIdentityPayload = {}) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({
+          where: { id },
+          include: { images: true },
+        });
+    if (!job) throw new BadRequestException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job image");
+
+    const image = (job.images || []).find((item: any) => item.id === imageId || item.imageId === imageId);
+    if (!image) throw new BadRequestException(`design image not found in design job: ${imageId}`);
+    if (!image.localPath) throw new BadRequestException("design image has no local file");
+    this.assertDesignImageLocalPathBelongsToJob(job, image.localPath);
+    return this.storage.readLocalAsset(image.localPath);
+  }
+
   async listRevisions(id: string, expected: ExpectedIdentityPayload = {}) {
     if (appConfig.useLocalStore) {
       const job = this.localStore.getDesignJob(id);
@@ -974,7 +1265,9 @@ export class DesignJobsService {
         metadata: {
           source: "design_revision_policy",
           designJobId: job.id,
+          wechatAccountId: job.wechatAccountId,
           conversationId: job.conversationId,
+          customerId: job.customerId,
           revisionId: revision.id,
           revisionNumber: decision.revisionNumber,
           chargeRequired: decision.chargeRequired,
@@ -1378,10 +1671,12 @@ export class DesignJobsService {
     });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, options, "design job");
-    if (!job.wechatAccountId) throw new Error("design job has no wechatAccountId");
-    if (!job.conversationId) throw new Error("design job has no conversationId");
+    this.assertDesignJobHasCompleteSendIdentity(job);
 
-    const images = [...((job.images || []) as DesignImageCandidateLike[])].sort((a, b) => a.position - b.position);
+    const allImages = [...((job.images || []) as DesignImageCandidateLike[])].sort((a, b) => a.position - b.position);
+    const images: DesignImageCandidateLike[] = latestCandidateRound(allImages).sort(
+      (a: DesignImageCandidateLike, b: DesignImageCandidateLike) => a.position - b.position,
+    );
     if (!images.length) throw new BadRequestException("design job has no sendable images");
     const remoteOnlyImages = images.filter((image) => !image.localPath && image.downloadUrl);
     const missingLocalImages = images.filter((image) => !image.localPath);
@@ -1447,6 +1742,7 @@ export class DesignJobsService {
             source: "manual_release_design_send",
             conversationId: job.conversationId,
             wechatAccountId: job.wechatAccountId,
+            customerId: job.customerId,
             requestId: job.requestId,
             sendTaskId: sendTask.id,
             releaseReason: options.releaseReason,
@@ -1718,6 +2014,7 @@ export class DesignJobsService {
     if (job.requestId) metadata.requestId = job.requestId;
     if (job.conversationId) metadata.conversationId = job.conversationId;
     if (job.wechatAccountId) metadata.wechatAccountId = job.wechatAccountId;
+    if (job.customerId) metadata.customerId = job.customerId;
     if (options.selectedImageId) metadata.selectedImageId = options.selectedImageId;
     return metadata;
   }
@@ -1995,6 +2292,81 @@ export class DesignJobsService {
     return path.resolve(value).toLowerCase();
   }
 
+  private async prepareSmokeAssets(requestId: string) {
+    const dir = path.join(appConfig.localStorageRoot, "smoke", "design-platform", requestId);
+    await fs.mkdir(dir, { recursive: true });
+
+    const files = [
+      { key: "customer_logo", fileName: "customer-logo.png", role: "customer_logo", source: "smoke_customer", skuCode: "", name: "测试客户 Logo" },
+      { key: "gift_box", fileName: "gift-box.png", role: "gift_box", source: "smoke_bundle", skuCode: "SMOKE-BOX", name: "试跑礼盒" },
+      { key: "sku_image", fileName: "tea-sku.png", role: "sku_image", source: "smoke_bundle", skuCode: "SMOKE-TEA", name: "试跑内搭商品" },
+    ];
+
+    const assets = [];
+    const paths: Record<string, string> = {};
+    for (const file of files) {
+      const localPath = path.join(dir, file.fileName);
+      await fs.writeFile(localPath, SMOKE_TEST_PNG_BYTES);
+      paths[file.key] = localPath;
+      assets.push({
+        assetId: `${requestId}_${file.key}`,
+        fileName: file.fileName,
+        mimeType: "image/png",
+        localPath,
+        sizeBytes: SMOKE_TEST_PNG_BYTES.length,
+        role: file.role,
+        ownerType: "smoke",
+        ownerId: requestId,
+        source: file.source,
+        skuCode: file.skuCode || undefined,
+        name: file.name,
+      });
+    }
+
+    return {
+      assets,
+      bundle: {
+        giftBox: {
+          skuCode: "SMOKE-BOX",
+          name: "试跑礼盒",
+          localPath: paths.gift_box,
+          salePrice: 60,
+          cost: 30,
+          stock: 999,
+        },
+        items: [
+          {
+            skuCode: "SMOKE-TEA",
+            name: "试跑内搭商品",
+            localPath: paths.sku_image,
+            salePrice: 80,
+            cost: 40,
+            stock: 999,
+          },
+        ],
+      },
+    };
+  }
+
+  private async waitForSmokeDesignResult(externalJobId: string): Promise<any> {
+    const timeoutMs = Math.min(Math.max(Number(appConfig.designPlatformTimeoutMs || 0), 5000), 90_000);
+    const intervalMs = Math.min(Math.max(Number(appConfig.designResultPollIntervalMs || 0), 500), 3000);
+    const deadline = Date.now() + timeoutMs;
+    let lastResult: any = null;
+
+    while (Date.now() < deadline) {
+      lastResult = await this.designPlatform.getDesignJobResults(externalJobId);
+      const status = String(lastResult?.status || "");
+      if (status === "completed") return lastResult;
+      if (status === "failed" || status === "cancelled") {
+        throw new Error(String(lastResult?.errorMessage || `design platform returned ${status}`));
+      }
+      await sleep(intervalMs);
+    }
+
+    throw new Error(`design platform smoke test timed out after ${timeoutMs}ms: ${String(lastResult?.status || "unknown")}`);
+  }
+
   private async validateCreateIdentity(payload: CreateDesignJobPayload) {
     const conversation = appConfig.useLocalStore
       ? this.localStore.listConversations().find((item: any) => item.id === payload.conversationId) || null
@@ -2022,6 +2394,25 @@ export class DesignJobsService {
   private normalizeRequestedAssets(payload: CreateDesignJobPayload) {
     const assetIds = Array.isArray(payload.assetIds) ? payload.assetIds.map((assetId) => ({ assetId })) : [];
     return [...(payload.assets || []), ...assetIds];
+  }
+
+  private assertDesignImageLocalPathBelongsToJob(job: any, localPath: string) {
+    const resolved = path.resolve(String(localPath || ""));
+    const root = path.resolve(appConfig.localStorageRoot);
+    const relativeToRoot = path.relative(root, resolved);
+    if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
+      throw new BadRequestException("design image file is outside local storage");
+    }
+
+    const allowedDirs = [job.id, job.requestId]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .map((value) => path.resolve(root, "design-jobs", value));
+    const belongsToJob = allowedDirs.some((dir) => {
+      const relative = path.relative(dir, resolved);
+      return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+    });
+    if (!belongsToJob) throw new BadRequestException("design image file is not bound to this design job");
   }
 
   private scheduleResultPoll(requestId: string, externalJobId: string) {
@@ -2115,6 +2506,14 @@ export class DesignJobsService {
     return Boolean(job?.isHighValue) || isHighValueBudget(job?.budget, Number(appConfig.highValueAmountCny || 10000));
   }
 
+  private assertDesignJobHasCompleteSendIdentity(job: any) {
+    const wechatAccountId = String(job?.wechatAccountId || "").trim();
+    const customerId = String(job?.customerId || "").trim();
+    const conversationId = String(job?.conversationId || "").trim();
+    if (wechatAccountId && customerId && conversationId) return;
+    throw new BadRequestException("设计任务缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
+  }
+
   private wasAutoRetried(before: any, after: any) {
     const beforeRetryCount = Number(before?.retryCount || 0);
     const afterRetryCount = Number(after?.retryCount || 0);
@@ -2139,6 +2538,17 @@ function mimeTypeFromImagePath(filePath: string) {
   if (extension === ".gif") return "image/gif";
   if (extension === ".bmp") return "image/bmp";
   return "image/png";
+}
+
+async function localImagePreviewDataUrl(filePath: string) {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile() || stat.size > 5 * 1024 * 1024) return "";
+    const data = await fs.readFile(filePath);
+    return `data:${mimeTypeFromImagePath(filePath)};base64,${data.toString("base64")}`;
+  } catch {
+    return "";
+  }
 }
 
 function cleanIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {

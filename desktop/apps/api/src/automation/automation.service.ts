@@ -71,6 +71,7 @@ const AUTOMATION_IDENTITY_SOURCE_KEYS = new Set([
   "created",
   "updated",
   "processed",
+  "autoRetriedLowValue",
   "sent",
   "timedOut",
   "failed",
@@ -260,6 +261,13 @@ function countArray(record: any, key: string) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function countArrayOrNumber(record: any, key: string) {
+  const value = record?.[key];
+  if (Array.isArray(value)) return value.length;
+  const count = Number(value || 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
 function countNestedArray(record: any, path: string[]) {
   let current = record;
   for (const key of path) current = current?.[key];
@@ -338,33 +346,47 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
       tone: "idle",
     },
     {
-      key: "orderSend",
-      label: "确认跟进",
+      key: "orderConfirmation",
+      label: "订单确认",
       completed:
         countNestedArray(lowValue, ["orderConfirmation", "queued"]) +
-        countNestedArray(lowValue, ["orderFollowup", "queued"]) +
-        countArray(directOrderConfirmation, "queued") +
-        countArray(directOrderFollowup, "queued"),
+        countArray(directOrderConfirmation, "queued"),
       blocked:
         countNestedArray(lowValue, ["orderConfirmation", "skipped"]) +
-        countNestedArray(lowValue, ["orderFollowup", "skipped"]) +
-        countArray(directOrderConfirmation, "skipped") +
-        countArray(directOrderFollowup, "skipped"),
+        countArray(directOrderConfirmation, "skipped"),
       failed:
         countNestedArray(lowValue, ["orderConfirmation", "failed"]) +
+        countArray(directOrderConfirmation, "failed"),
+      detail: "给已付款或已确认的低价值订单排队发送订单确认。",
+      action: "订单确认未入队时，检查付款状态、选图、人工锁和高价值规则。",
+      tone: "idle",
+    },
+    {
+      key: "orderFollowup",
+      label: "订单跟进",
+      completed:
+        countNestedArray(lowValue, ["orderFollowup", "queued"]) +
+        countArray(directOrderFollowup, "queued"),
+      blocked:
+        countNestedArray(lowValue, ["orderFollowup", "skipped"]) +
+        countArray(directOrderFollowup, "skipped"),
+      failed:
         countNestedArray(lowValue, ["orderFollowup", "failed"]) +
-        countArray(directOrderConfirmation, "failed") +
         countArray(directOrderFollowup, "failed"),
-      detail: "给低价值订单排队发送确认和跟进提醒。",
-      action: "确认/跟进未入队时，检查订单状态、人工锁和高价值规则。",
+      detail: "给生产中或已完成的低价值订单排队发送生产/交付跟进。",
+      action: "订单跟进未入队时，检查订单阶段、付款状态、重复跟进和人工锁。",
       tone: "idle",
     },
     {
       key: "safeSend",
       label: "安全发送",
-      completed: countArray(sendQueue, "processed"),
-      blocked: countArray(sendQueue, "blocked") + countArray(sendOperations, "blocked"),
-      failed: countArray(sendQueue, "failed") + countArray(sendOperations, "failed"),
+      completed: countArray(sendQueue, "processed") + countArrayOrNumber(sendOperations, "autoRetriedLowValue"),
+      blocked: countArray(sendQueue, "blocked") + countArrayOrNumber(sendOperations, "staleQueued"),
+      failed:
+        countArray(sendQueue, "failed") +
+        countArrayOrNumber(sendOperations, "bridgeTimedOut") +
+        countArrayOrNumber(sendOperations, "bridgeOutboxBroken") +
+        countArrayOrNumber(sendOperations, "bridgeDispatchExpired"),
       detail: "按微信账号和会话身份校验后，再推进发送任务。",
       action: "发送被拦截时，先检查微信账号、当前聊天对象、最近消息和人工锁。",
       tone: "idle",
@@ -655,6 +677,13 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       );
       await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation(filter));
       await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
+      await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
+      await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
+        this.wechatDispatch.scanLowValueOrderConfirmations(filter),
+      );
+      await this.captureStep(run, "scanLowValueOrderFollowups", () =>
+        this.wechatDispatch.scanLowValueOrderFollowups(filter),
+      );
       await this.captureStep(run, "scanSendOperations", () => this.wechatDispatch.scanSendOperations(filter));
       if (appConfig.lowValueAutomationProcessSendQueue) {
         await this.captureStep(run, "processLowValueSendQueue", () =>
@@ -665,13 +694,6 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
           }),
         );
       }
-      await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
-      await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
-        this.wechatDispatch.scanLowValueOrderConfirmations(filter),
-      );
-      await this.captureStep(run, "scanLowValueOrderFollowups", () =>
-        this.wechatDispatch.scanLowValueOrderFollowups(filter),
-      );
     } finally {
       run.completedAt = new Date().toISOString();
       run.durationMs = Date.now() - startedAt.getTime();

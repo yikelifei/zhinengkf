@@ -8,6 +8,12 @@ const test = require("node:test");
 const desktopRoot = path.resolve(__dirname, "..");
 const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/page.tsx"), "utf8");
 const cssSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/globals.css"), "utf8");
+const apiSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/lib/api.ts"), "utf8");
+const controllerSource = fs.readFileSync(
+  path.join(desktopRoot, "apps/api/src/integrations/design-platform/design-platform.controller.ts"),
+  "utf8",
+);
+const serviceSource = fs.readFileSync(path.join(desktopRoot, "apps/api/src/design-jobs/design-jobs.service.ts"), "utf8");
 
 test("design platform UI explains mock mode and real startup path", () => {
   assert.match(pageSource, /当前是流程联调模式/);
@@ -46,4 +52,29 @@ test("design task failure guidance is visible and supports safe retry", () => {
   assert.match(cssSource, /\.design-escalation-notice/);
   assert.match(cssSource, /\.design-escalation-actions/);
   assert.match(cssSource, /\.job-row \.job-next-action/);
+});
+
+test("design platform config exposes a real one-click smoke test path", () => {
+  assert.match(pageSource, /smokeTestDesignPlatform/);
+  assert.match(pageSource, /试跑出图/);
+  assert.match(pageSource, /platform-smoke-result/);
+  assert.match(pageSource, /platform-smoke-gallery/);
+  assert.match(pageSource, /platform-smoke-contract/);
+  assert.match(pageSource, /设计平台接口契约检查/);
+  assert.match(pageSource, /expectedCandidateCount/);
+  assert.match(pageSource, /savedImagePreviews/);
+  assert.match(apiSource, /runDesignPlatformSmokeTest/);
+  assert.match(apiSource, /savedImagePreviews/);
+  assert.match(apiSource, /contractChecks/);
+  assert.match(apiSource, /expectedCandidateCount/);
+  assert.match(apiSource, /\/integrations\/design-platform\/smoke-test/);
+  assert.match(controllerSource, /@Post\("smoke-test"\)/);
+  assert.match(controllerSource, /runDesignPlatformSmokeTest/);
+  assert.match(serviceSource, /prepareSmokeAssets/);
+  assert.match(serviceSource, /waitForSmokeDesignResult/);
+  assert.match(serviceSource, /assertSmokeContract/);
+  assert.match(serviceSource, /image_metadata/);
+  assert.match(serviceSource, /localImagePreviewDataUrl/);
+  assert.match(cssSource, /\.platform-smoke-gallery/);
+  assert.match(cssSource, /\.platform-smoke-contract/);
 });

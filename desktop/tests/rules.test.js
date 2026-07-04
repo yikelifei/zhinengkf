@@ -357,6 +357,31 @@ test("plans inbound image selection only for explicit selection intent", () => {
   assert.equal(missingCandidates.reviewRequired, true);
 });
 
+test("text image selection uses the latest revision round by default", () => {
+  const candidates = [
+    { id: "initial-1", imageId: "candidate_1", position: 1 },
+    { id: "initial-2", imageId: "candidate_2", position: 2 },
+    { id: "revision-1", imageId: "r1-candidate_1", position: 101 },
+    { id: "revision-2", imageId: "r1-candidate_2", position: 102 },
+  ];
+
+  const selected = planCustomerImageSelection({
+    text: "就第1张，按这个报价",
+    candidates,
+  });
+
+  assert.equal(selected.ok, true);
+  assert.equal(selected.result.imageId, "r1-candidate_1");
+  assert.equal(selected.result.candidate.id, "revision-1");
+
+  const referencedOldImage = planCustomerImageSelection({
+    referencedImageId: "initial-2",
+    candidates,
+  });
+  assert.equal(referencedOldImage.ok, true);
+  assert.equal(referencedOldImage.result.candidate.id, "initial-2");
+});
+
 test("recognizes common numbered customer image choices without treating bare numbers as selection", () => {
   const candidates = [
     { id: "candidate-1", imageId: "img-1" },

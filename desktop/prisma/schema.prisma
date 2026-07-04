@@ -170,16 +170,22 @@ model Sku {
 }
 
 model DesignAsset {
-  id             String    @id @default(cuid())
-  ownerType      String
-  ownerId        String
-  fileName       String
-  mimeType       String
-  localPath      String
-  sizeBytes      Int?
-  source         String
-  createdAt      DateTime  @default(now())
-  designJobs     DesignJob[] @relation("DesignJobAssets")
+  id              String      @id @default(cuid())
+  ownerType       String
+  ownerId         String
+  fileName        String
+  mimeType        String
+  localPath       String
+  sizeBytes       Int?
+  source          String
+  wechatAccountId String?
+  conversationId  String?
+  customerId      String?
+  createdAt       DateTime    @default(now())
+  designJobs      DesignJob[] @relation("DesignJobAssets")
+
+  @@index([ownerType, ownerId])
+  @@index([wechatAccountId, conversationId, customerId])
 }
 
 model DesignJob {

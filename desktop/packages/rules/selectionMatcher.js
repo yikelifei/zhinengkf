@@ -91,9 +91,24 @@ function matchCustomerSelection(input = {}) {
   }
 
   return {
-    ...matchTextSelection(input.text, candidates),
+    ...matchTextSelection(input.text, latestCandidateRound(candidates)),
     source: "text",
   };
+}
+
+function candidateRevisionRound(candidate = {}) {
+  const imageId = String(candidate.imageId || candidate.id || "");
+  const imageIdMatch = /^r(\d+)-/.exec(imageId);
+  if (imageIdMatch) return Number(imageIdMatch[1]) || 0;
+  const position = Number(candidate.position || 0);
+  if (Number.isFinite(position) && position >= 100) return Math.floor(position / 100);
+  return Number(candidate.revisionNumber || candidate.round || 0) || 0;
+}
+
+function latestCandidateRound(candidates = []) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const latestRound = list.reduce((max, candidate) => Math.max(max, candidateRevisionRound(candidate)), 0);
+  return list.filter((candidate) => candidateRevisionRound(candidate) === latestRound);
 }
 
 function hasSelectionIntent(input = {}) {
@@ -213,4 +228,6 @@ module.exports = {
   planCustomerImageSelection,
   matchImageFingerprint,
   needsManualSelectionReview,
+  candidateRevisionRound,
+  latestCandidateRound,
 };

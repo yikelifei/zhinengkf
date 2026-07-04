@@ -190,6 +190,7 @@ function acknowledgeStartedBridgeSend(service, localStore, taskId) {
   writeDispatchInstructionForStartedBridgeSend(localStore, taskId);
   const outboxFile = attempt.metadata.outboxFile;
   const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+  const outboxCustomerId = outbox.target?.customerId || outbox.sendPlan?.target?.customerId || "";
   return service.acknowledgeBridgeSend(taskId, {
     status: "sent",
     version: "wechat_bridge_ack_v1",
@@ -198,6 +199,7 @@ function acknowledgeStartedBridgeSend(service, localStore, taskId) {
     attemptId: attempt.id,
     wechatAccountId: task.wechatAccountId,
     conversationId: task.conversationId,
+    customerId: task.customerId || outboxCustomerId,
     outboxFileName: path.basename(outboxFile),
     sentAt: new Date().toISOString(),
   });
@@ -714,6 +716,12 @@ test("requeue records explicit manual audit reason", async () => {
     guardSnapshot: {
       requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
       policy: "single-account-serial-queue",
+      automation: {
+        source: "order_followup",
+        valueLevel: "low",
+        followupType: "production",
+        orderDraftId: "order_demo_1",
+      },
       history: [{ action: "manual_lock_block", fromStatus: "queued", reason: "manual takeover" }],
     },
   });
@@ -724,8 +732,119 @@ test("requeue records explicit manual audit reason", async () => {
 
   assert.equal(updated.status, "queued");
   assert.equal(updated.guardSnapshot.requeueReason, "manual_resolution_before_send_requeue");
+  assert.equal(updated.guardSnapshot.automation.valueLevel, "low");
+  assert.equal(updated.guardSnapshot.automation.source, "order_followup");
+  assert.equal(updated.guardSnapshot.automation.followupType, "production");
+  assert.equal(updated.guardSnapshot.opsAlertedStatus, "requeued");
   assert.equal(updated.guardSnapshot.history.at(-1).action, "requeue");
   assert.equal(updated.guardSnapshot.history.at(-1).reason, "manual_resolution_before_send_requeue");
+});
+
+test("low-value failed send task retries once before human alert", async () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "failed",
+    payload: { kind: "text", text: "low value automation should retry once" },
+    errorMessage: "bridge temporary failure",
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_followup",
+        valueLevel: "low",
+        followupType: "production",
+        orderDraftId: "order_demo_1",
+      },
+    },
+  });
+
+  const firstScan = await service.scanSendOperations();
+  const retried = localStore.getSendTask(task.id);
+
+  assert.equal(firstScan.autoRetriedLowValue, 1);
+  assert.equal(firstScan.alerted, 0);
+  assert.equal(firstScan.tasks.autoRetriedLowValue[0].id, task.id);
+  assert.equal(retried.status, "queued");
+  assert.equal(retried.guardSnapshot.lowValueAutoRetryCount, 1);
+  assert.equal(retried.guardSnapshot.automation.valueLevel, "low");
+  assert.equal(retried.guardSnapshot.automation.source, "order_followup");
+  assert.equal(retried.guardSnapshot.opsAlertedStatus, "auto_retried");
+  const retryNotice = localStore
+    .listNotifications({ conversationId: "conversation_demo_1", customerId: "customer_demo_1" })
+    .find((notice) => notice.target?.sendTaskId === task.id && notice.title === "低价值自动发送已重试");
+  assert.ok(retryNotice);
+  assert.equal(retryNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(retryNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(retryNotice.target.customerId, "customer_demo_1");
+
+  localStore.updateSendTask(task.id, {
+    status: "failed",
+    errorMessage: "second bridge failure",
+  });
+  const secondScan = await service.scanSendOperations();
+  const failedAgain = localStore.getSendTask(task.id);
+
+  assert.equal(secondScan.autoRetriedLowValue, 0);
+  assert.equal(secondScan.alerted, 1);
+  assert.equal(secondScan.tasks.alerted[0].id, task.id);
+  assert.equal(failedAgain.status, "failed");
+  assert.equal(failedAgain.guardSnapshot.lowValueAutoRetryCount, 1);
+  assert.equal(failedAgain.guardSnapshot.opsAlertedStatus, "failed");
+});
+
+test("low-value auto retry failure keeps retry error for manual triage", async () => {
+  const { localStore, service } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "low_value_retry_bad_binding_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [{ name: "礼盒", salePrice: 100, costPrice: 60 }] },
+    requirements: {},
+    status: "completed",
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    status: "failed",
+    payload: { kind: "text", text: "low value retry should keep failed reason" },
+    errorMessage: "bridge temporary failure",
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_confirmation",
+        valueLevel: "low",
+        orderDraftId: "order_demo_1",
+      },
+    },
+  });
+  localStore.updateDesignJob(designJob.id, { conversationId: "conversation_demo_2" }, { skipIdentityValidation: true });
+
+  const scan = await service.scanSendOperations();
+  const updated = localStore.getSendTask(task.id);
+
+  assert.equal(scan.autoRetriedLowValue, 0);
+  assert.equal(scan.alerted, 1);
+  assert.equal(scan.tasks.alerted[0].id, task.id);
+  assert.equal(updated.status, "failed");
+  assert.match(updated.guardSnapshot.lowValueAutoRetryError, /send task binding invalid/);
+  assert.equal(updated.guardSnapshot.opsAlertedStatus, "failed");
+  assert.equal(updated.guardSnapshot.automation.valueLevel, "low");
+  const retryFailureNotice = localStore
+    .listNotifications({ conversationId: "conversation_demo_1", customerId: "customer_demo_1" })
+    .find((notice) => notice.target?.sendTaskId === task.id && notice.title === "低价值自动发送重试失败");
+  assert.ok(retryFailureNotice);
+  assert.equal(retryFailureNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(retryFailureNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(retryFailureNotice.target.customerId, "customer_demo_1");
 });
 
 test("cancel records explicit manual audit reason", () => {
@@ -848,6 +967,143 @@ test("execute send blocks task after its design binding becomes invalid", () => 
   assert.equal(attempts.length, 1);
   assert.equal(attempts[0].status, "blocked");
   assert.equal(attempts[0].guardStatus, "binding_failed");
+});
+
+test("execute send blocks queued order task when payment is refunded before send", () => {
+  const { localStore, service } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "execute_refunded_order_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [{ name: "保温杯", salePrice: 100, costPrice: 60 }] },
+    requirements: {},
+    status: "completed",
+  });
+  const images = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "execute_refunded_order_candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\execute_refunded_order_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/execute_refunded_order_candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, images[0].id);
+  const order = localStore.upsertOrderDraftFromQuote(quote.id, {
+    designJobId: designJob.id,
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    selectedImageId: images[0].id,
+    quantity: 10,
+    unitPrice: 100,
+    totalPrice: 1000,
+    totalCost: 600,
+    profit: 400,
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+    bundleSnapshot: designJob.bundle,
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "text", text: "订单确认发送前必须重新校验付款状态" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_confirmation",
+        valueLevel: "low",
+        orderDraftId: order.id,
+      },
+    },
+  });
+  localStore.updateOrderDraft(order.id, { paymentStatus: "refunded" });
+
+  const result = service.executeDryRunSend(task.id);
+  const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
+
+  assert.equal(result.task.status, "blocked");
+  assert.match(result.task.errorMessage, /payment is no longer verified/);
+  assert.equal(result.task.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].status, "blocked");
+  assert.equal(attempts[0].guardStatus, "orderPaymentNotReadyBeforeSend");
+});
+
+test("execute send blocks queued order follow-up when order is cancelled before send", () => {
+  const { localStore, service } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "execute_cancelled_order_followup_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [{ name: "保温杯", salePrice: 100, costPrice: 60 }] },
+    requirements: {},
+    status: "completed",
+  });
+  const images = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "execute_cancelled_order_followup_candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\execute_cancelled_order_followup_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/execute_cancelled_order_followup_candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, images[0].id);
+  const order = localStore.upsertOrderDraftFromQuote(quote.id, {
+    designJobId: designJob.id,
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    selectedImageId: images[0].id,
+    quantity: 10,
+    unitPrice: 100,
+    totalPrice: 1000,
+    totalCost: 600,
+    profit: 400,
+    status: "processing",
+    paymentStatus: "paid",
+    bundleSnapshot: designJob.bundle,
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "text", text: "生产跟进发送前必须重新校验订单状态" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_followup",
+        valueLevel: "low",
+        followupType: "production",
+        orderDraftId: order.id,
+      },
+    },
+  });
+  localStore.updateOrderDraft(order.id, { status: "cancelled" });
+
+  const result = service.executeDryRunSend(task.id);
+  const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
+
+  assert.equal(result.task.status, "blocked");
+  assert.match(result.task.errorMessage, /order was cancelled/);
+  assert.equal(result.task.guardSnapshot.orderSendState.reason, "orderCancelledBeforeSend");
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].status, "blocked");
+  assert.equal(attempts[0].guardStatus, "orderCancelledBeforeSend");
 });
 
 test("send task validation requires matching account conversation identity", () => {
@@ -1841,6 +2097,7 @@ test("bridge sent ack rejects task after its design binding becomes invalid", ()
         attemptId: attempt.id,
         wechatAccountId: task.wechatAccountId,
         conversationId: task.conversationId,
+        customerId: designJob.customerId,
         outboxFileName: path.basename(outboxFile),
       }),
     /bridge ack send task binding invalid/,
@@ -1851,7 +2108,7 @@ test("bridge sent ack rejects task after its design binding becomes invalid", ()
 });
 
 test("manual lock blocks order confirmation queueing before order state changes", async () => {
-  const order = buildOrderDraft();
+  const order = buildOrderDraft({ paymentStatus: "deposit_paid" });
   let updateCalled = false;
   const { localStore, service } = setupService({
     orders: {
@@ -1901,6 +2158,74 @@ test("manual lock blocks order follow-up queueing before notification is created
 
   assert.equal(localStore.listNotifications().length, notificationsAfterLock);
   assert.equal(notificationsAfterLock, notificationsBefore + 1);
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("embedded manual lock blocks order confirmation before payment and binding side effects", async () => {
+  const order = buildOrderDraft({
+    paymentStatus: "paid",
+    conversation: {
+      id: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      wechatAccountId: "wechat_demo_1",
+      manualLocked: true,
+    },
+  });
+  let updateCalled = false;
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+      update: async () => {
+        updateCalled = true;
+        return order;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderConfirmation(order.id, { owner: "low_value_automation" }),
+    /会话已人工接管/,
+  );
+
+  assert.equal(updateCalled, false);
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("order confirmation queue rejects refunded order before send task creation", async () => {
+  const order = buildOrderDraft({ status: "confirmed", paymentStatus: "refunded" });
+  let updateCalled = false;
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+      update: async () => {
+        updateCalled = true;
+        return order;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderConfirmation(order.id, { owner: "low_value_automation" }),
+    /verified deposit|full payment|payment/i,
+  );
+
+  assert.equal(updateCalled, false);
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("order follow-up queue rejects refunded order before send task creation", async () => {
+  const order = buildOrderDraft({ status: "processing", paymentStatus: "refunded" });
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderFollowup(order.id, { owner: "low_value_automation", type: "production" }),
+    /verified deposit|full payment|payment/i,
+  );
+
   assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
 });
 
@@ -1993,7 +2318,7 @@ test("order follow-up rejects order bound to another design conversation", async
 });
 
 test("order confirmation rejects order bound to another design conversation", async () => {
-  const order = buildOrderDraft();
+  const order = buildOrderDraft({ paymentStatus: "deposit_paid" });
   order.designJob = {
     ...order.designJob,
     conversationId: "conversation_demo_2",
@@ -2896,6 +3221,65 @@ test("inbound customer image reselection after quote queueing goes to manual rev
   assert.match(manualLockLog.note, /已转人工处理/);
   assert.match(manualLockLog.note, /客户在报价进入发送流程后又修改选择/);
   assert.doesNotMatch(manualLockLog.note, /Manual review is required/);
+});
+
+test("inbound text image selection binds the latest revision round", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_latest_revision_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "tea", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\selection_latest_revision_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      localPath: "C:\\storage\\design-jobs\\selection_latest_revision_request_1\\candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
+    },
+    {
+      imageId: "r1-candidate_1",
+      position: 101,
+      localPath: "C:\\storage\\design-jobs\\selection_latest_revision_request_1\\r1-candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/r1-candidate_1.png",
+    },
+    {
+      imageId: "r1-candidate_2",
+      position: 102,
+      localPath: "C:\\storage\\design-jobs\\selection_latest_revision_request_1\\r1-candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/r1-candidate_2.png",
+    },
+  ]);
+
+  const result = await service.processInboundMessage({
+    text: "就第1张，按这个报价",
+    conversationId: "conversation_demo_1",
+  });
+
+  const updatedJob = localStore.getDesignJob(job.id);
+  const selectedImage = updatedJob.images.find((image) => image.selected);
+
+  assert.equal(result.plan.reason, "low_value_customer_selected_image_quote_queued");
+  assert.equal(result.quote.selectedImageId, images[2].id);
+  assert.equal(selectedImage.id, images[2].id);
 });
 
 test("inbound high value image selection locks conversation and leaves human review note", async () => {

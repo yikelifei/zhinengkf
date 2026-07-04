@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -9,11 +9,13 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DE
 const logsDir = path.join(runtimeDir, "logs");
 const heartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const lockFile = path.join(runtimeDir, "stable-runtime-launcher.pid");
+const stopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const localStoreFile = path.join(runtimeDir, "local-store.json");
 const storageRoot = path.join(runtimeDir, "storage");
 const designConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
+const webNextDir = path.join(root, "apps", "web", ".next");
 const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
 
 const ports = {
@@ -26,15 +28,28 @@ const specs = [
   webServiceSpec(),
   { name: "design-platform-mock", command: process.execPath, args: [path.join(root, "tools", "mock-design-platform.js")], port: ports.mock, expected: normalize(path.join(root, "tools", "mock-design-platform.js")) },
   { name: "api", command: process.execPath, args: [path.join(root, "dist", "apps", "api", "main.js")], port: ports.api, expected: normalize(path.join(root, "dist", "apps", "api", "main.js")) },
+  processServiceSpec("wechat-window-observer", [path.join(root, "tools", "wechat-window-observer.js"), "--watch", "--scan"], {
+    WECHAT_WINDOW_OBSERVER_API_BASE: `http://127.0.0.1:${ports.api}/api`,
+    WECHAT_WINDOW_OBSERVER_SCAN: "true",
+  }),
+  processServiceSpec("wechat-bridge-worker", [path.join(root, "tools", "wechat-bridge-worker.js"), "--watch"], {
+    BRIDGE_API_BASE: `http://127.0.0.1:${ports.api}/api`,
+    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "noop",
+    BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
+  }),
 ];
 
 const children = new Map();
 fs.mkdirSync(logsDir, { recursive: true });
+if (fs.existsSync(stopRequestFile)) {
+  append("stable-runtime", `stop request exists; exiting pid=${process.pid}`);
+  process.exit(0);
+}
 acquireSingleInstanceLock();
 if (specs[0].args[0] === webRuntimeServerPath) {
   writeWebRuntimeServer();
 } else {
-  append("web", "web standalone build missing; using Next dev server fallback");
+  append("web", "web standalone build incomplete; using Next dev server fallback");
 }
 writeDesignConfig();
 writeHeartbeat();
@@ -43,6 +58,13 @@ setInterval(writeHeartbeat, 5000);
 killStaleRuntimeProcesses();
 for (const spec of specs) ensureService(spec);
 setInterval(() => {
+  if (fs.existsSync(stopRequestFile)) {
+    append("stable-runtime", `stop request received; stopping pid=${process.pid}`);
+    for (const child of children.values()) {
+      try { child.kill(); } catch {}
+    }
+    process.exit(0);
+  }
   killStaleRuntimeProcesses();
   for (const spec of specs) ensureService(spec);
 }, 5000);
@@ -50,7 +72,7 @@ setInterval(() => {
 console.log(`[stable-runtime] running runtime=${runtimeDir}`);
 append("stable-runtime", `running pid=${process.pid} runtime=${runtimeDir}`);
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
+for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"]) {
   process.once(signal, () => {
     append("stable-runtime", `received ${signal}; stopping children`);
     for (const child of children.values()) {
@@ -62,9 +84,14 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 process.on("uncaughtException", (error) => append("stable-runtime", `uncaughtException ${error.stack || error.message || error}`));
 process.on("unhandledRejection", (error) => append("stable-runtime", `unhandledRejection ${error?.stack || error?.message || error}`));
+process.on("beforeExit", (code) => append("stable-runtime", `beforeExit code=${code}`));
 process.on("exit", (code) => append("stable-runtime", `exit code=${code}`));
 
 function ensureService(spec) {
+  if (spec.type === "process") {
+    ensureProcessService(spec);
+    return;
+  }
   const owners = getPortOwnerPids(spec.port);
   const existing = children.get(spec.name);
   if (existing && owners.includes(existing.pid)) return;
@@ -97,19 +124,26 @@ function ensureService(spec) {
   startService(spec);
 }
 
+function ensureProcessService(spec) {
+  const existing = children.get(spec.name);
+  if (existing && isPidAlive(existing.pid)) return;
+  startService(spec);
+}
+
 function startService(spec) {
   const out = fs.openSync(path.join(logsDir, `${spec.name}.out.log`), "a");
   const err = fs.openSync(path.join(logsDir, `${spec.name}.err.log`), "a");
   append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
   const child = spawn(spec.command, spec.args, {
     cwd: root,
-    env: serviceEnv(spec.port),
-    detached: false,
+    env: { ...serviceEnv(spec.port || ports.api), ...(spec.env || {}) },
+    detached: process.platform === "win32",
     stdio: ["ignore", out, err],
     windowsHide: true,
   });
   children.set(spec.name, child);
   append(spec.name, `pid=${child.pid}`);
+  if (process.platform === "win32") child.unref();
   child.once("exit", (code, signal) => {
     const current = children.get(spec.name);
     if (current === child) children.delete(spec.name);
@@ -117,17 +151,30 @@ function startService(spec) {
   });
 }
 
+function processServiceSpec(name, args, env = {}) {
+  return { name, type: "process", command: process.execPath, args, expected: normalize(args[0]), env };
+}
+
 function webServiceSpec() {
-  if (fs.existsSync(webStandaloneServerPath)) {
-    return { name: "web", command: process.execPath, args: [webRuntimeServerPath], port: ports.web, expected: normalize(webRuntimeServerPath) };
+  if (!webStandaloneBuildReady()) {
+    return {
+      name: "web",
+      command: process.execPath,
+      args: [nextCliPath, "dev", "apps/web", "-H", "127.0.0.1", "-p", String(ports.web), "--webpack"],
+      port: ports.web,
+      expected: [normalize(nextCliPath), "next/dist/server/lib/start-server.js"],
+    };
   }
-  return {
-    name: "web",
-    command: process.execPath,
-    args: [nextCliPath, "dev", "apps/web", "-H", "127.0.0.1", "-p", String(ports.web), "--webpack"],
-    port: ports.web,
-    expected: [normalize(nextCliPath), "next/dist/server/lib/start-server.js"],
-  };
+  return { name: "web", command: process.execPath, args: [webRuntimeServerPath], port: ports.web, expected: normalize(webRuntimeServerPath) };
+}
+
+function webStandaloneBuildReady() {
+  return [
+    webStandaloneServerPath,
+    path.join(webNextDir, "BUILD_ID"),
+    path.join(webNextDir, "required-server-files.json"),
+    path.join(webNextDir, "routes-manifest.json"),
+  ].every((filePath) => fs.existsSync(filePath));
 }
 
 function serviceEnv(port) {
@@ -162,7 +209,7 @@ function acquireSingleInstanceLock() {
   fs.mkdirSync(runtimeDir, { recursive: true });
   try {
     const existingPid = Number(fs.readFileSync(lockFile, "utf8").trim());
-    if (Number.isFinite(existingPid) && existingPid > 0 && isPidAlive(existingPid)) {
+    if (Number.isFinite(existingPid) && existingPid > 0 && isStableRuntimeLauncherPid(existingPid)) {
       console.log(`[stable-runtime] existing launcher pid=${existingPid}; exiting`);
       process.exit(0);
     }
@@ -175,6 +222,11 @@ function acquireSingleInstanceLock() {
   });
 }
 
+
+function isStableRuntimeLauncherPid(pid) {
+  const commandLine = normalize(commandLineForPid(pid));
+  return Boolean(commandLine && commandLine.includes("stable-runtime-launcher.js"));
+}
 function getPortOwnerPids(port) {
   const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return [];
@@ -264,22 +316,8 @@ function killPid(pid) {
 }
 
 function killStaleRuntimeProcesses() {
-  if (process.platform !== "win32") return;
-  const script = [
-    "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'cmd.exe'\"",
-    "$items | Where-Object { $_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo|[.]runtime[\\\\/](supervisor-child|stable-supervise|supervise|launch|web-standalone-server)|tools[\\\\/](start-dev-ports|desktop-service-supervisor)[.]js.*(--keep-alive|--supervisor-child)|supervisor-child-mock[.]cmd' } | ForEach-Object { $_.ProcessId }",
-  ].join("; ");
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  const pids = String(result.stdout || "")
-    .split(/\r?\n/)
-    .map((line) => Number(line.trim()))
-    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
-  if (!pids.length) return;
-  append("stable-runtime", `killing stale runtime process pid(s) ${pids.join(",")}`);
-  for (const pid of pids) killPid(pid);
+  // Disabled in stable mode: stale process cleanup is handled by stop-stable-desktop.cmd.
+  // Keeping this as a no-op prevents the supervisor from killing its own service children.
 }
 
 function isPidAlive(pid) {
@@ -303,7 +341,30 @@ function writeDesignConfig() {
 
 function writeWebRuntimeServer() {
   fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(webRuntimeServerPath, `"use strict";\nconst path = require("node:path");\nconst { createRequire } = require("node:module");\nconst root = ${JSON.stringify(root)};\nconst rootRequire = createRequire(path.join(root, "package.json"));\nconst serverPath = ${JSON.stringify(webStandaloneServerPath)};\nprocess.chdir(path.join(root, "apps", "web"));\nrootRequire(serverPath);\n`, "utf8");
+  const requiredServerFilesPath = path.join(root, "apps", "web", ".next", "required-server-files.json");
+  fs.writeFileSync(
+    webRuntimeServerPath,
+    `"use strict";\n` +
+      `const path = require("node:path");\n` +
+      `const root = ${JSON.stringify(root)};\n` +
+      `const requiredServerFiles = require(${JSON.stringify(requiredServerFilesPath)});\n` +
+      `const dir = path.join(root, "apps", "web");\n` +
+      `const currentPort = parseInt(process.env.PORT, 10) || 3100;\n` +
+      `const hostname = process.env.HOSTNAME || "127.0.0.1";\n` +
+      `let keepAliveTimeout = parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10);\n` +
+      `const keepAlive = setInterval(() => undefined, 60000);\n` +
+      `keepAlive.ref();\n` +
+      `process.env.NODE_ENV = "production";\n` +
+      `process.chdir(dir);\n` +
+      `const nextConfig = { ...requiredServerFiles.config, distDir: ".next" };\n` +
+      `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(nextConfig);\n` +
+      `require("next");\n` +
+      `const { startServer } = require("next/dist/server/lib/start-server");\n` +
+      `if (Number.isNaN(keepAliveTimeout) || !Number.isFinite(keepAliveTimeout) || keepAliveTimeout < 0) keepAliveTimeout = undefined;\n` +
+      `startServer({ dir, isDev: false, config: nextConfig, hostname, port: currentPort, allowRetry: false, keepAliveTimeout })\n` +
+      `  .catch((error) => { console.error(error); clearInterval(keepAlive); process.exit(1); });\n`,
+    "utf8",
+  );
 }
 
 function append(name, message) {

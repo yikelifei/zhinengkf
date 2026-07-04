@@ -345,13 +345,16 @@ function startKeepAliveMonitor() {
 function ensureServiceArtifactReady(service, launcherLogPath = "") {
   if (service.name === "web" && webDevServerFallback) return;
   if (service.name === "web" && (!fs.existsSync(webRuntimeServerPath) || !webProductionBuildReadyForStartup())) {
-    if (process.env.SKIP_EXISTING_WEB_BUILD === "1" && webProductionBuildReadyForStartup()) {
-      appendLauncherLine(
-        launcherLogPath || path.join(logsDir, "web.launcher.log"),
-        "web runtime wrapper missing; reusing existing web production build",
-      );
-      writeRuntimeWebStandaloneServer();
-      return;
+    if (process.env.SKIP_EXISTING_WEB_BUILD === "1") {
+      if (webProductionBuildReadyForStartup()) {
+        appendLauncherLine(
+          launcherLogPath || path.join(logsDir, "web.launcher.log"),
+          "web runtime wrapper missing; reusing existing web production build",
+        );
+        writeRuntimeWebStandaloneServer();
+        return;
+      }
+      if (useWebDevServerFallback(new Error("web production build is unavailable"), "web rebuild skipped for stable startup")) return;
     }
     appendLauncherLine(launcherLogPath || path.join(logsDir, "web.launcher.log"), "web standalone build incomplete; rebuilding web before start");
     try {
@@ -582,10 +585,13 @@ async function buildWebIfNeeded() {
     console.log(`[blocked] Web port ${webService.port} is used by PID ${portOwners.join(", ")}. Skip web rebuild.`);
     return;
   }
-  if (process.env.SKIP_EXISTING_WEB_BUILD === "1" && webProductionBuildReadyForStartup()) {
-    writeRuntimeWebStandaloneServer();
-    console.log("[ok] Web production build exists, skip web rebuild.");
-    return;
+  if (process.env.SKIP_EXISTING_WEB_BUILD === "1") {
+    if (webProductionBuildReadyForStartup()) {
+      writeRuntimeWebStandaloneServer();
+      console.log("[ok] Web production build exists, skip web rebuild.");
+      return;
+    }
+    if (useWebDevServerFallback(new Error("web production build is unavailable"), "web rebuild skipped for stable startup")) return;
   }
   if (!webBuildIsStale()) return;
 

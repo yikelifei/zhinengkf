@@ -46,6 +46,7 @@ function copyDirectory(source, target) {
 }
 
 function copyFile(source, target) {
+  if (!fs.existsSync(source)) return;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(source, target);
 }

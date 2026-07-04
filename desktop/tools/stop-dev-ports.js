@@ -14,6 +14,9 @@ const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
+const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
+const stableRuntimeTaskName = "zhinengkefu_stable_runtime";
 const stackStarterRealLockFile = path.join(runtimeDir, "ports-stack-starter-real.lock");
 const stackStarterMockLockFile = path.join(runtimeDir, "ports-stack-starter-mock.lock");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
@@ -21,6 +24,7 @@ const preserveRealModeLock = process.env.PRESERVE_REAL_MODE_LOCK === "1";
 const preserveMockRepairLock = process.env.PRESERVE_MOCK_REPAIR_LOCK === "1";
 const forceProcessSweep = process.env.FORCE_PORTS_SWEEP === "1";
 const skipStackStarterLaunchers = process.env.PORTS_STOP_SKIP_STACK_STARTERS === "1";
+const skipStableServiceWrappers = process.env.PORTS_STOP_SKIP_STABLE_SERVICE_WRAPPERS === "1";
 const protectedStarterMode = /^(mock|real)$/.test(process.env.PORTS_STACK_STARTER_MODE || "")
   ? process.env.PORTS_STACK_STARTER_MODE
   : "";
@@ -40,6 +44,7 @@ function main() {
   const stoppedPids = new Set();
   const attemptedPids = new Set();
 
+  stopStableScheduledTask();
   stopManagedLauncherProcesses(stoppedPids, attemptedPids);
   stopManagedWrapperProcesses(stoppedPids, attemptedPids);
   stopManagedKeeperProcesses(stoppedPids, attemptedPids);
@@ -88,6 +93,13 @@ function main() {
   cleanupRuntimeRecords();
 }
 
+function stopStableScheduledTask() {
+  if (process.platform !== "win32") return;
+  const schtasks = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "schtasks.exe");
+  spawnSync(schtasks, ["/End", "/TN", stableRuntimeTaskName], { encoding: "utf8", windowsHide: true });
+  spawnSync(schtasks, ["/Delete", "/TN", stableRuntimeTaskName, "/F"], { encoding: "utf8", windowsHide: true });
+}
+
 function hasManagedRuntimeState() {
   if (fs.existsSync(mockModeLockFile) || fs.existsSync(realModeLockFile)) return true;
   if (fs.existsSync(stackStarterRealLockFile) || fs.existsSync(stackStarterMockLockFile)) return true;
@@ -101,6 +113,7 @@ function hasManagedRuntimeState() {
 }
 
 function cleanupRuntimeRecords() {
+  markWechatWorkerStatusesStopped();
   fs.rmSync(pidFile, { force: true });
   fs.rmSync(keepAliveHeartbeatFile, { force: true });
   fs.rmSync(stackStarterRealLockFile, { force: true });
@@ -111,6 +124,39 @@ function cleanupRuntimeRecords() {
   if (!preserveRealModeLock) fs.rmSync(preferredDesignModeFile, { force: true });
   clearRuntimeDesignModeConfig();
   console.log("Launcher records were cleaned.");
+}
+
+function markWechatWorkerStatusesStopped() {
+  writeStoppedStatus(wechatBridgeWorkerStatusFile, "WeChat bridge worker");
+  writeStoppedStatus(wechatWindowObserverStatusFile, "WeChat window observer");
+}
+
+function writeStoppedStatus(statusFile, label) {
+  try {
+    fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+    const previous = readJsonFile(statusFile);
+    const now = new Date().toISOString();
+    const status = {
+      ok: false,
+      status: "stopped",
+      pid: previous.pid || null,
+      mode: previous.mode || "",
+      stoppedAt: now,
+      updatedAt: now,
+      message: `${label} was stopped by ports:stop.`,
+    };
+    fs.writeFileSync(statusFile, `${JSON.stringify(status, null, 2)}\n`, "utf8");
+  } catch (error) {
+    console.log(`[warn] could not mark ${label} stopped: ${error?.message || String(error)}`);
+  }
+}
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
 function clearRuntimeDesignModeConfig() {
@@ -237,7 +283,8 @@ function findManagedWrapperPids() {
   const normalizedRoot = normalizePathText(desktopRoot);
   const launcherPattern = /(launch|supervise|stable-supervise)-(mock|real)\.cmd/;
   const serviceWrapperPattern = /run-[^" ]+(-worker)?\.cmd/;
-  const stableRuntimeWrapperPattern = /(keepalive-stable-desktop|start-stable-desktop(?:-foreground)?)\.cmd/;
+  const stableRuntimeWrapperPattern = /(keepalive-stable-desktop|run-stable-service-window|start-stable-desktop(?:-foreground)?)\.cmd/;
+  const stableServiceWrapperPattern = /(run-stable-service-window|start-stable-desktop(?:-foreground)?)\.cmd/;
   const persistWrapperPattern = /(web|api|mock)-persist\.(out|err)\.log/;
   const directWrapperPattern =
     /node (node_modules\/next\/dist\/bin\/next dev apps\/web -p \d+|dist\/apps\/api\/main\.js|tools\/mock-design-platform\.js).*\.runtime\/logs\/(web|api|mock)-direct\./;
@@ -270,6 +317,7 @@ function findManagedWrapperPids() {
       const pid = String(item?.ProcessId || "");
       if (protectedPids.has(pid)) return false;
       const commandLine = normalizePathText(item?.CommandLine || "");
+      if (skipStableServiceWrappers && stableServiceWrapperPattern.test(commandLine)) return false;
       const parentCommandLine = /"?node(?:\.exe)?"?\s+server\.js\b/.test(commandLine)
         ? normalizePathText(getParentCommandLine(pid))
         : "";
@@ -398,6 +446,8 @@ function findManagedLauncherPids() {
   const processes = Array.isArray(rows) ? rows : [rows];
   return processes
     .filter((item) => {
+      const pid = String(item?.ProcessId || "");
+      if (protectedPids.has(pid)) return false;
       const commandLine = normalizePathText(item?.CommandLine || "");
       if (commandLine.includes("tools/stop-dev-ports.js")) return false;
       const stackStarterMode = commandLine.includes("tools/ports-stack-starter.js") && commandLine.includes("--mock-design")
@@ -413,10 +463,14 @@ function findManagedLauncherPids() {
       ) {
         return true;
       }
-      if (commandLine.includes("tools/stable-runtime-launcher.js")) {
+      if (commandLine.includes("tools/stable-runtime-launcher.js") || commandLine.includes("stable-runtime-launcher-local.js")) {
         return true;
       }
       if (commandLine.includes("keepalive-stable-desktop.cmd")) {
+        return true;
+      }
+      if (commandLine.includes("run-stable-service-window.cmd") || commandLine.includes("start-stable-desktop.cmd")) {
+        if (skipStableServiceWrappers) return false;
         return true;
       }
       if (
@@ -525,6 +579,7 @@ function isStoppablePortOwnerAncestor(pid) {
     "run-design-platform-mock.cmd",
     "keepalive-stable-desktop.cmd",
     "tools/stable-runtime-launcher.js",
+    "stable-runtime-launcher-local.js",
     "tools/start-dev-ports.js",
     "launch-mock.cmd",
     "launch-real.cmd",
@@ -560,8 +615,9 @@ function buildProtectedPids() {
     .filter((value) => /^\d+$/.test(value));
   const pids = new Set(seeds);
   const parentByPid = getParentPidMap();
+  const processTree = parentByPid.size ? parentByPid : null;
   for (const seed of seeds) {
-    for (const ancestor of collectAncestorPids(seed, parentByPid)) {
+    for (const ancestor of collectAncestorPids(seed, processTree)) {
       pids.add(ancestor);
     }
   }
@@ -701,6 +757,7 @@ function isManagedCommandLine(pid) {
     "tools/ports-stack-starter.js",
     "tools/start-dev-ports.js",
     "tools/stable-runtime-launcher.js",
+    "stable-runtime-launcher-local.js",
     "tools/mock-design-platform.js",
     "dist/apps/api/main.js",
     ".runtime/web-standalone-server.js",

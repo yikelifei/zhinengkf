@@ -10,6 +10,7 @@ const {
   isHighValueBudget,
   isSceneClarificationReply,
   isTrainingSampleReady,
+  latestCandidateRound,
   normalizeTrainingSampleStatus,
   trainingSampleReviewNote,
   validateDesignAssetBinding,
@@ -1356,8 +1357,10 @@ export class LocalStoreService {
     const data = this.read();
     const now = new Date().toISOString();
     const binding = this.validateSendTaskBinding(data, payload);
+    const conversation = data.conversations.find((item) => item.id === payload.conversationId) || null;
     const normalizedPayload = {
       ...payload,
+      customerId: payload.customerId || conversation?.customerId || null,
       designJobId: payload.designJobId || binding.designJobId,
     };
     const record = {
@@ -1416,6 +1419,8 @@ export class LocalStoreService {
     );
     if (bindingChanged && !options.skipBindingValidation) {
       const binding = this.validateSendTaskBinding(data, next);
+      const conversation = data.conversations.find((item) => item.id === next.conversationId) || null;
+      next.customerId = next.customerId || conversation?.customerId || null;
       next.designJobId = next.designJobId || binding.designJobId;
       next.guardSnapshot = {
         ...(next.guardSnapshot && typeof next.guardSnapshot === "object" ? next.guardSnapshot : {}),
@@ -1655,10 +1660,11 @@ export class LocalStoreService {
     const items = Array.isArray(job.bundle?.items) ? job.bundle.items : [];
     const totals = calculateTotals(items);
     const quantity = Number(job.budget?.quantity || 1);
-    const selectedImage =
-      data.designImages.find((image) => image.designJobId === designJobId && (image.id === selectedImageId || image.imageId === selectedImageId)) ||
-      data.designImages.find((image) => image.designJobId === designJobId && image.selected) ||
-      data.designImages.find((image) => image.designJobId === designJobId);
+    const designImages = data.designImages.filter((image) => image.designJobId === designJobId);
+    const latestImages = latestCandidateRound(designImages);
+    const selectedImage = selectedImageId
+      ? designImages.find((image) => image.id === selectedImageId || image.imageId === selectedImageId)
+      : latestImages.find((image: any) => image.selected) || null;
     const totalPrice = totals.salePrice * quantity;
     const totalCost = totals.cost * quantity;
     const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});

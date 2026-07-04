@@ -486,6 +486,32 @@ test("does not queue order confirmation for a merely sent quote", () => {
   assert.equal(decision.reason, "quote_not_accepted");
 });
 
+test("does not queue order confirmation after refund", () => {
+  const decision = evaluateLowValueOrderConfirmationSend({
+    id: "order_1",
+    status: "confirmed",
+    paymentStatus: "refunded",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "refunded",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "payment_not_ready");
+});
+
 test("does not queue duplicate order confirmation", () => {
   const decision = evaluateLowValueOrderConfirmationSend({
     id: "order_1",
@@ -638,6 +664,32 @@ test("does not queue order follow-up before payment is ready", () => {
       id: "quote_1",
       status: "accepted",
       paymentStatus: "unpaid",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "payment_not_ready");
+});
+
+test("does not queue order follow-up after refund", () => {
+  const decision = evaluateLowValueOrderFollowupSend({
+    id: "order_1",
+    status: "processing",
+    paymentStatus: "refunded",
+    selectedImageId: "image_1",
+    unitPrice: 180,
+    totalPrice: 9000,
+    profit: 3600,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+    },
+    quoteDraft: {
+      id: "quote_1",
+      status: "accepted",
+      paymentStatus: "refunded",
     },
   });
 

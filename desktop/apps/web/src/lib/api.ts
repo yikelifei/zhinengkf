@@ -36,7 +36,7 @@ export type DesignJob = {
   }>;
   assets?: DesignAsset[];
   revisions?: DesignRevision[];
-  customer?: { name: string };
+  customer?: { id?: string | null; name: string };
   conversation?: {
     id?: string | null;
     title?: string | null;
@@ -695,6 +695,7 @@ export type BridgeOutboxEntry = {
   taskId?: string;
   wechatAccountId?: string;
   conversationId?: string;
+  customerId?: string;
   payloadKind?: string;
   actionCount?: number;
   createdAt?: string;
@@ -765,6 +766,19 @@ export type BridgeDispatchEntry = {
   outboxFileName?: string;
   ackFileNameHint?: string;
   failedAckFileNameHint?: string;
+  preflight?: {
+    requiredBeforeSend?: string[];
+    expectedWechatAccountId?: string;
+    expectedConversationId?: string;
+    expectedConversationTitle?: string;
+    expectedCustomerId?: string;
+    expectedCustomerName?: string;
+    expectedWindowSnapshotId?: string | null;
+    rejectIfAnyCheckFails?: boolean;
+    rejectIfWindowChanged?: boolean;
+    rejectIfExpired?: boolean;
+    rejectIfOutboxMissing?: boolean;
+  };
   createdAt?: string;
   expiresAt?: string;
   modifiedAt?: string;
@@ -1210,16 +1224,43 @@ export type ReviewCenter = {
   logs: ReviewLog[];
 };
 
+export type ReviewDesignJobResult = {
+  result?:
+    | {
+        designJob?: DesignJob | null;
+        sendTask?: SendTask | null;
+      }
+    | DesignJob
+    | null;
+  log?: ReviewLog;
+  notification?: NotificationItem | null;
+};
+
+export type ReviewQuoteResult = {
+  result?:
+    | {
+        quote?: QuoteDraft | null;
+        sendTask?: SendTask | null;
+        notification?: NotificationItem | null;
+      }
+    | QuoteDraft
+    | null;
+  log?: ReviewLog;
+  notification?: NotificationItem | null;
+};
+
 export type ReviewOrderResult = {
   result?:
     | {
         orderDraft?: OrderDraft | null;
         order?: OrderDraft | null;
         sendTask?: SendTask | null;
+        notification?: NotificationItem | null;
       }
     | OrderDraft
     | null;
   log?: ReviewLog;
+  notification?: NotificationItem | null;
 };
 
 export type DesignPlatformHealth = {
@@ -1280,6 +1321,40 @@ export type DesignPlatformLoginResponse = DesignPlatformConfigResponse & {
 
 export type DesignPlatformActivationResponse = DesignPlatformConfigResponse & {
   activation?: Record<string, unknown>;
+};
+
+export type DesignPlatformSmokeTestResult = {
+  ok: boolean;
+  adapter: string;
+  baseUrl: string;
+  latencyMs: number;
+  requestId: string;
+  externalJobId?: string;
+  status: string;
+  expectedCandidateCount: number;
+  assetUploadCount: number;
+  candidateCount: number;
+  savedImageCount: number;
+  savedImagePaths: string[];
+  savedImagePreviews: Array<{
+    imageId: string;
+    dataUrl: string;
+  }>;
+  steps: Array<{
+    key: string;
+    label: string;
+    ok: boolean;
+    detail?: string;
+  }>;
+  contractChecks?: Array<{
+    key: string;
+    label: string;
+    ok: boolean;
+    detail?: string;
+    expected?: string | number;
+    actual?: string | number;
+  }>;
+  errorMessage?: string;
 };
 
 export type DesignJobPreflightResult = {
@@ -1502,6 +1577,18 @@ export function localAssetUrl(localPath?: string, expected: IdentityExpectation 
   const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
   params.set("path", value);
   return `${API_BASE}/assets/local-file?${params.toString()}`;
+}
+
+export function localDesignImageUrl(
+  designJobId: string,
+  image?: NonNullable<DesignJob["images"]>[number],
+  expected: IdentityExpectation = {},
+): string {
+  const jobId = String(designJobId || "").trim();
+  const imageKey = String(image?.id || image?.imageId || "").trim();
+  if (!jobId || !imageKey || !image?.localPath) return "";
+  const query = expectedIdentityQuery(expected);
+  return `${API_BASE}/design-jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageKey)}/local-file${query}`;
 }
 
 export async function createDemoCustomerLogo(customerId: string, expected: IdentityExpectation = {}): Promise<DesignAsset> {
@@ -1863,6 +1950,7 @@ export type SendOperationsScanResult = {
   bridgeTimedOut: number;
   bridgeOutboxBroken: number;
   bridgeDispatchExpired?: number;
+  autoRetriedLowValue?: number;
   staleQueued: number;
   alerted: number;
   tasks?: Record<string, unknown>;
@@ -2365,6 +2453,10 @@ export async function redeemDesignPlatformActivation(payload: {
   return postJson<DesignPlatformActivationResponse>("/integrations/design-platform/activation/redeem", payload);
 }
 
+export async function runDesignPlatformSmokeTest(): Promise<DesignPlatformSmokeTestResult> {
+  return postJson<DesignPlatformSmokeTestResult>("/integrations/design-platform/smoke-test", {});
+}
+
 export async function submitDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
   return postJson<DesignJob>(`/design-jobs/${id}/submit`, expected);
 }
@@ -2424,9 +2516,27 @@ export type SelectImagePayload =
       attachmentFingerprint?: string;
     };
 
-export async function selectDesignImage(id: string, input: SelectImagePayload, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
+export type DesignImageSelectionResult = {
+  matched: boolean;
+  reviewRequired?: boolean;
+  autoQuoteCreated?: boolean;
+  quote?: QuoteDraft | null;
+  nextStatus?: string;
+  reason?: string;
+  errorMessage?: string;
+  result?: {
+    candidate?: NonNullable<DesignJob["images"]>[number] & Record<string, unknown>;
+    imageId?: string;
+    position?: number;
+    reason?: string;
+    [key: string]: unknown;
+  } | null;
+  plan?: Record<string, unknown> | null;
+};
+
+export async function selectDesignImage(id: string, input: SelectImagePayload, expected: IdentityExpectation = {}): Promise<DesignImageSelectionResult> {
   const payload = typeof input === "string" ? { ...expected, text: input } : { ...expected, ...input };
-  return postJson<Record<string, unknown>>(`/design-jobs/${id}/select-image`, payload);
+  return postJson<DesignImageSelectionResult>(`/design-jobs/${id}/select-image`, payload);
 }
 
 export async function createQuote(id: string, expected: IdentityExpectation = {}): Promise<QuoteDraft> {
@@ -2576,16 +2686,16 @@ export async function reviewDesignJob(id: string, payload: {
   decision: "approve_images" | "approve_send" | "request_revision" | "reject";
   reviewer?: string;
   note?: string;
-} & IdentityExpectation): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/reviews/design-jobs/${id}`, payload);
+} & IdentityExpectation): Promise<ReviewDesignJobResult> {
+  return postJson<ReviewDesignJobResult>(`/reviews/design-jobs/${id}`, payload);
 }
 
 export async function reviewQuote(id: string, payload: {
   decision: "approve_quote" | "request_followup" | "reject_quote";
   reviewer?: string;
   note?: string;
-} & IdentityExpectation): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/reviews/quotes/${id}`, payload);
+} & IdentityExpectation): Promise<ReviewQuoteResult> {
+  return postJson<ReviewQuoteResult>(`/reviews/quotes/${id}`, payload);
 }
 
 export async function reviewOrder(id: string, payload: {

@@ -9,7 +9,7 @@ The bridge program may read outbox files and write acknowledgement files. It mus
 - Only process `pending` entries returned by `GET /api/wechat/bridge/outbox`.
 - Hold one local lock per WeChat account, so one account only handles one send task at a time.
 - Before sending, re-check the WeChat account, current chat target, and latest customer identifier.
-- A `sent` acknowledgement must include protocol version, task identity, account identity, conversation identity, outbox file identity, and the one-time `ackToken`.
+- A `sent` acknowledgement must include protocol version, task identity, account identity, conversation identity, customer identity, outbox file identity, and the one-time `ackToken`.
 - An external `failed` acknowledgement must include the same identity and `ackToken` proof as `sent`.
 - Simplified failed acknowledgements are only allowed for platform-internal timeout handling.
 
@@ -28,11 +28,13 @@ The bridge program must only process `pending` entries. A pending entry must inc
 - `attemptId`
 - `wechatAccountId`
 - `conversationId`
+- `customerId`
 - `fileName`
 - `preview.outboxFileName` matching `fileName`
 - `preview.attemptId` matching `attemptId`
 - `preview.wechatAccountId` matching `wechatAccountId`
 - `preview.conversationId` matching `conversationId`
+- `preview.customerId` matching `customerId`
 
 The outbox response includes `outboxDir` plus each entry `fileName`, so a local bridge worker can read the matching JSON file without exposing per-entry absolute `filePath`. The outbox list only exposes a sanitized `preview`. The raw payload, `ackToken`, message text, customer display name, WeChat display name, chat title, and local image file names are not returned by the status/list API.
 
@@ -90,6 +92,7 @@ Successful ack example:
   "attemptId": "attempt_xxx",
   "wechatAccountId": "wechat_demo_1",
   "conversationId": "conversation_demo_1",
+  "customerId": "customer_demo_1",
   "outboxFileName": "1780000000000-send_xxx.json",
   "status": "sent",
   "sentAt": "2026-06-27T00:00:00.000Z",
@@ -110,6 +113,7 @@ External failed ack example:
   "attemptId": "attempt_xxx",
   "wechatAccountId": "wechat_demo_1",
   "conversationId": "conversation_demo_1",
+  "customerId": "customer_demo_1",
   "outboxFileName": "1780000000000-send_xxx.json",
   "status": "failed",
   "errorMessage": "bridge stopped before sending"
@@ -127,6 +131,7 @@ For external acknowledgements, the platform checks:
 - Ack protocol version is `wechat_bridge_ack_v1`.
 - Ack account matches the send task.
 - Ack conversation matches the send task.
+- Ack customer matches the send task.
 - Ack outbox file matches the pending attempt.
 - Ack token matches the local outbox file.
 - Local outbox body passes the validation rules above.

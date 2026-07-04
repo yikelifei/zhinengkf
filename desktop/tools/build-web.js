@@ -5,11 +5,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const webPort = numberEnv("WEB_PORT", 3100);
-const root = process.cwd();
+const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(root, ".runtime");
 const buildLockFile = path.join(runtimeDir, "web-build.lock");
+const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const stableKeepAliveHeartbeatFile = path.join(root, ".runtime-stable", "keep-alive.json");
+const stableStartingLockFile = path.join(root, ".runtime-stable", "stable-starting.lock");
 const nextDir = path.join(root, "apps", "web", ".next");
 const nextLockFile = path.join(root, "apps", "web", ".next", "lock");
 
@@ -19,11 +22,23 @@ function main() {
   buildDiagnostic("start");
   const releaseBuildLock = acquireBuildLock();
   process.on("exit", releaseBuildLock);
+  if (stableStartingLockIsFresh() && process.env.ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT !== "1") {
+    console.log("[blocked] Stable desktop startup is in progress; refusing to rebuild web assets.");
+    console.log("          Wait for startup to finish, or run npm.cmd run ports:stop first.");
+    process.exitCode = 1;
+    return;
+  }
   const owners = getPortOwnerPids(webPort);
   if (owners.length) {
     console.log(`[blocked] Web port ${webPort} is currently used by PID ${owners.join(", ")}.`);
     console.log("          Stop the desktop services before building web assets:");
     console.log("          npm.cmd run ports:stop");
+    process.exitCode = 1;
+    return;
+  }
+  if (stableRuntimeHeartbeatIsFresh() && process.env.ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT !== "1") {
+    console.log("[blocked] Stable desktop heartbeat is fresh; refusing to rebuild web assets while the runtime may be restarting.");
+    console.log("          Run npm.cmd run ports:stop first, or use start-stable-desktop.cmd which stops the stack before rebuilding.");
     process.exitCode = 1;
     return;
   }
@@ -375,6 +390,45 @@ function hasNextBuildErrorOutput(result) {
   return /Build error occurred|Error:\s+(ENOENT|MODULE_NOT_FOUND)|Cannot find module/.test(output);
 }
 
+function readFreshestHeartbeat(files) {
+  const heartbeats = [];
+  for (const file of files) {
+    try {
+      heartbeats.push(JSON.parse(fs.readFileSync(file, "utf8")));
+    } catch {}
+  }
+  return heartbeats
+    .filter((heartbeat) => heartbeat && heartbeat.updatedAt)
+    .sort((left, right) => Date.parse(String(right.updatedAt)) - Date.parse(String(left.updatedAt)))[0] || null;
+}
+function stableStartingLockIsFresh() {
+  try {
+    const stat = fs.statSync(stableStartingLockFile);
+    return Date.now() - stat.mtimeMs <= 600000;
+  } catch {
+    return false;
+  }
+}
+function stableRuntimeHeartbeatIsFresh() {
+  try {
+    const heartbeat = readFreshestHeartbeat([keepAliveHeartbeatFile, stableKeepAliveHeartbeatFile]);
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    if (!Number.isFinite(updatedAt)) return false;
+    if (Date.now() - updatedAt > 600000) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function getPortOwnerPids(port) {
   const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return [];

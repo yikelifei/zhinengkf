@@ -78,12 +78,12 @@ export class ReviewsService {
         orderBy: { updatedAt: "desc" },
         take: 120,
       }),
-      prisma.reviewLog.findMany({ orderBy: { createdAt: "desc" }, take: 80 }),
+      prisma.reviewLog.findMany({ orderBy: { createdAt: "desc" }, take: hasIdentityFilter(filter) ? 240 : 80 }),
     ]);
     const designJobs = designJobCandidates.filter((job: any) => isDesignJobReviewVisible(job)).slice(0, 80);
     const quoteDrafts = quoteCandidates.filter((quote: any) => isQuoteReviewVisible(quote)).slice(0, 80);
     const orderDrafts = orderCandidates.filter((order: any) => isOrderReviewVisible(order)).slice(0, 80);
-    return { designJobs, quoteDrafts, orderDrafts, logs };
+    return { designJobs, quoteDrafts, orderDrafts, logs: logs.filter((log: any) => matchesReviewLogIdentity(log, filter)).slice(0, 80) };
   }
 
   async reviewDesignJob(id: string, payload: ReviewPayload) {
@@ -94,10 +94,17 @@ export class ReviewsService {
     assertExpectedIdentity(job, payload, "design job");
     const beforeStatus = job.status;
     const decision = payload.decision || "approve_images";
+    const designJobTarget = {
+      designJobId: id,
+      wechatAccountId: job.wechatAccountId,
+      conversationId: job.conversationId,
+      customerId: job.customerId,
+    };
     let result: any;
+    let notification: any = null;
 
     if (decision === "approve_send") {
-      result = await this.designJobs.quickConfirmAndQueueSend(id, {
+      const sendTask = await this.designJobs.quickConfirmAndQueueSend(id, {
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -105,8 +112,13 @@ export class ReviewsService {
         reviewer: payload.reviewer || "人工客服",
         releaseReason: "manual_approve_send",
       });
-      await this.notifications.create("info", "人工审核已批准发送", payload.note || "图片已通过人工审核，已进入安全发送队列。", {
-        designJobId: id,
+      const designJob = appConfig.useLocalStore
+        ? this.localStore.getDesignJob(id)
+        : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
+      result = { designJob, sendTask };
+      notification = await this.notifications.create("info", "人工审核已批准发送", payload.note || "图片已通过人工审核，已进入安全发送队列。", {
+        ...designJobTarget,
+        sendTaskId: sendTask?.id,
       });
     } else if (decision === "request_revision") {
       result = appConfig.useLocalStore
@@ -123,8 +135,8 @@ export class ReviewsService {
               errorMessage: payload.note || "人工审核要求继续改图",
             },
           });
-      await this.notifications.create("warning", "人工审核要求改图", payload.note || "需要继续调整效果图。", {
-        designJobId: id,
+      notification = await this.notifications.create("warning", "人工审核要求改图", payload.note || "需要继续调整效果图。", {
+        ...designJobTarget,
       });
     } else if (decision === "reject") {
       result = appConfig.useLocalStore
@@ -141,8 +153,8 @@ export class ReviewsService {
               errorMessage: payload.note || "人工审核未通过",
             },
           });
-      await this.notifications.create("error", "人工审核未通过", payload.note || "该设计任务仍需人工处理。", {
-        designJobId: id,
+      notification = await this.notifications.create("error", "人工审核未通过", payload.note || "该设计任务仍需人工处理。", {
+        ...designJobTarget,
       });
     } else {
       const keepManualReview = isDesignJobHighValue(job);
@@ -160,8 +172,8 @@ export class ReviewsService {
               errorMessage: "",
             },
           });
-      await this.notifications.create("info", "人工审核已通过", payload.note || "图片可进入快速确认或发送。", {
-        designJobId: id,
+      notification = await this.notifications.create("info", "人工审核已通过", payload.note || "图片可进入快速确认或发送。", {
+        ...designJobTarget,
       });
     }
 
@@ -174,8 +186,11 @@ export class ReviewsService {
       note: payload.note,
       beforeStatus,
       afterStatus,
+      metadata: {
+        ...designJobTarget,
+      },
     });
-    return { result, log };
+    return { result, log, notification };
   }
 
   async reviewQuote(id: string, payload: ReviewPayload) {
@@ -186,7 +201,15 @@ export class ReviewsService {
     assertExpectedIdentity(quote, payload, "quote draft");
     const beforeStatus = quote.status;
     const decision = payload.decision || "approve_quote";
+    const quoteTarget = {
+      quoteDraftId: id,
+      designJobId: quote.designJobId || quote.designJob?.id,
+      wechatAccountId: quote.designJob?.wechatAccountId,
+      conversationId: quote.designJob?.conversationId,
+      customerId: quote.customerId || quote.designJob?.customerId,
+    };
     let result: any;
+    let notification: any = null;
     let customerNotes: string;
     if (decision === "reject_quote") {
       customerNotes = payload.note || "人工审核驳回报价";
@@ -218,11 +241,11 @@ export class ReviewsService {
       });
     }
     const resultQuote = result?.quote || result;
-    await this.notifications.create(
+    notification = await this.notifications.create(
       decision === "reject_quote" ? "warning" : "info",
       decision === "reject_quote" ? "报价审核未通过" : "报价审核已处理",
       customerNotes,
-      { quoteDraftId: id, sendTaskId: result?.sendTask?.id },
+      { ...quoteTarget, sendTaskId: result?.sendTask?.id },
     );
     const log = await this.createLog({
       targetType: "quote",
@@ -232,8 +255,12 @@ export class ReviewsService {
       note: payload.note,
       beforeStatus,
       afterStatus: resultQuote.status,
+      metadata: {
+        ...quoteTarget,
+        sendTaskId: result?.sendTask?.id,
+      },
     });
-    return { result, log };
+    return { result, log, notification };
   }
 
   async reviewOrder(id: string, payload: ReviewPayload) {
@@ -255,8 +282,10 @@ export class ReviewsService {
 
     const beforeStatus = order.status;
     const decision = payload.decision || "request_followup";
+    assertHighValueOrderHasCompleteIdentity(order, decision);
     const reviewer = payload.reviewer || "人工客服";
     let result: any = { orderDraft: order };
+    let notification: any = null;
 
     if (decision === "approve_confirmation") {
       result = await this.wechat.queueOrderConfirmation(id, {
@@ -312,11 +341,18 @@ export class ReviewsService {
         customerNotes: note,
         ...(decision === "reject_order" ? { status: "cancelled" } : {}),
       });
-      await this.notifications.create(
+      notification = await this.notifications.create(
         decision === "reject_order" ? "warning" : "info",
         decision === "reject_order" ? "高价值订单审核未通过" : "高价值订单继续人工跟进",
         payload.note || "该订单已保留在人工处理队列，请客服继续核对客户需求、收款、交期和话术。",
-        { orderDraftId: id },
+        {
+          orderDraftId: id,
+          quoteDraftId: order.quoteDraftId || order.quoteDraft?.id,
+          designJobId: order.designJobId || order.designJob?.id || order.quoteDraft?.designJobId || order.quoteDraft?.designJob?.id,
+          wechatAccountId: order.wechatAccountId,
+          conversationId: order.conversationId,
+          customerId: order.customerId || order.quoteDraft?.customerId || order.designJob?.customerId,
+        },
       );
     }
 
@@ -335,10 +371,13 @@ export class ReviewsService {
         designJobId: order.designJobId || order.designJob?.id || order.quoteDraft?.designJobId || order.quoteDraft?.designJob?.id,
         sendTaskId: result?.sendTask?.id,
         followupType: payload.followupType,
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        customerId: order.customerId || order.quoteDraft?.customerId || order.designJob?.customerId,
         source: "manual_order_review",
       },
     });
-    return { result, log };
+    return { result, log, notification: result?.notification || notification || null };
   }
 
   private async updateReviewedOrder(id: string, data: { owner?: string; customerNotes?: string; status?: string }) {
@@ -386,6 +425,19 @@ function appendCustomerNote(current: unknown, next: string) {
   return `${existing} ${note}`;
 }
 
+function hasIdentityFilter(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string }) {
+  return Boolean(filter.wechatAccountId || filter.conversationId || filter.customerId);
+}
+
+function matchesReviewLogIdentity(log: any, filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  if (!hasIdentityFilter(filter)) return true;
+  const metadata = log?.metadata || {};
+  if (filter.wechatAccountId && String(metadata.wechatAccountId || "") !== String(filter.wechatAccountId)) return false;
+  if (filter.conversationId && String(metadata.conversationId || "") !== String(filter.conversationId)) return false;
+  if (filter.customerId && String(metadata.customerId || "") !== String(filter.customerId)) return false;
+  return true;
+}
+
 function isDesignJobReviewVisible(job: any) {
   return (
     ["manual_review", "failed", "timeout"].includes(String(job?.status || "")) ||
@@ -430,4 +482,14 @@ function isOrderHighValue(order: any) {
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
   );
+}
+
+function assertHighValueOrderHasCompleteIdentity(order: any, decision: string) {
+  if (!["approve_confirmation", "approve_followup"].includes(decision)) return;
+  if (!isOrderHighValue(order)) return;
+  const wechatAccountId = String(order?.wechatAccountId || "").trim();
+  const conversationId = String(order?.conversationId || "").trim();
+  const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
+  if (wechatAccountId && conversationId && customerId) return;
+  throw new BadRequestException("高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。");
 }

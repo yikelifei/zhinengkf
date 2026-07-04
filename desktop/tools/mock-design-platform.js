@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("node:http");
+const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 
 const port = Number(process.env.MOCK_DESIGN_PLATFORM_PORT || 3700);
@@ -40,12 +41,21 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/v1/assets/upload") {
     const body = await readJson(req);
     const assetId = `mock-asset-${randomUUID()}`;
+    const fileName = String(body.fileName || `${assetId}.png`);
     const asset = {
       assetId,
       sourceAssetId: body.assetId,
-      fileName: body.fileName,
-      mimeType: body.mimeType,
+      remoteAssetId: assetId,
+      fileName,
+      mimeType: body.mimeType || "image/png",
       role: body.role || "reference",
+      source: body.source,
+      sourceRef: body.sourceRef,
+      skuCode: body.skuCode,
+      name: body.name,
+      localPath: body.localPath,
+      sizeBytes: body.sizeBytes,
+      url: `http://127.0.0.1:${port}/assets/${assetId}/${encodeURIComponent(fileName)}`,
       createdAt: new Date().toISOString(),
     };
     assets.set(assetId, asset);
@@ -72,12 +82,19 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname.startsWith("/files/")) {
-    const png1x1 = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-      "base64",
-    );
-    res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png1x1.length });
-    return res.end(png1x1);
+    return image(res);
+  }
+
+  const assetMatch = url.pathname.match(/^\/assets\/([^/]+)\//);
+  if (req.method === "GET" && assetMatch) {
+    const asset = assets.get(decodeURIComponent(assetMatch[1]));
+    if (!asset) return json(res, { error: "asset not found" }, 404);
+    if (asset.localPath && fs.existsSync(asset.localPath)) {
+      const data = fs.readFileSync(asset.localPath);
+      res.writeHead(200, { "Content-Type": asset.mimeType || "application/octet-stream", "Content-Length": data.length });
+      return res.end(data);
+    }
+    return image(res);
   }
 
   return json(res, { error: "not found" }, 404);
@@ -127,6 +144,15 @@ function json(res, payload, status = 200) {
     "Content-Length": body.length,
   });
   res.end(body);
+}
+
+function image(res, mimeType = "image/png") {
+  const png1x1 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  res.writeHead(200, { "Content-Type": mimeType, "Content-Length": png1x1.length });
+  res.end(png1x1);
 }
 
 function readJson(req) {

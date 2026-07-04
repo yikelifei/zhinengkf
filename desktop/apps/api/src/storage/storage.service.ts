@@ -13,7 +13,7 @@ export class StorageService {
     await fs.mkdir(dir, { recursive: true });
     const ext = extensionFromUrl(sourceUrl) || ".png";
     const localPath = path.join(dir, `${safeName(imageId)}${ext}`);
-    const response = await axios.get<ArrayBuffer>(sourceUrl, { responseType: "arraybuffer" });
+    const response = await axios.get<ArrayBuffer>(sourceUrl, designImageDownloadOptions(sourceUrl));
     await fs.writeFile(localPath, Buffer.from(response.data));
     return localPath;
   }
@@ -114,6 +114,35 @@ function normalizeDownloadUrl(url: string): string {
     return `${appConfig.designPlatformBaseUrl.replace(/\/+$/, "")}${value}`;
   }
   throw new BadRequestException("downloadUrl must be http(s) or design-platform relative path");
+}
+
+function designImageDownloadOptions(sourceUrl: string) {
+  const headers = designPlatformDownloadHeaders(sourceUrl);
+  return {
+    responseType: "arraybuffer" as const,
+    timeout: appConfig.designPlatformTimeoutMs,
+    ...(Object.keys(headers).length ? { headers } : {}),
+  };
+}
+
+function designPlatformDownloadHeaders(sourceUrl: string): Record<string, string> {
+  if (!isDesignPlatformUrl(sourceUrl)) return {};
+  const headers: Record<string, string> = {};
+  const token = appConfig.designPlatformAccessToken || appConfig.designPlatformApiKey;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (appConfig.designPlatformCookie) headers.Cookie = appConfig.designPlatformCookie;
+  if (appConfig.designPlatformDeviceId) headers["x-art-device-id"] = appConfig.designPlatformDeviceId;
+  return headers;
+}
+
+function isDesignPlatformUrl(sourceUrl: string): boolean {
+  try {
+    const source = new URL(sourceUrl);
+    const base = new URL(appConfig.designPlatformBaseUrl);
+    return source.protocol === base.protocol && source.host === base.host;
+  } catch {
+    return false;
+  }
 }
 
 function safeName(value: string): string {

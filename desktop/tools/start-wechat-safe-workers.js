@@ -6,7 +6,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "wechat-safe-workers.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
@@ -255,12 +255,14 @@ function stopWorkers() {
     const pid = Number(record?.pid);
     if (!isProcessRunning(pid)) {
       delete records[service.name];
+      writeWorkerStoppedStatus(service, pid || Number(readJson(service.statusFile).pid) || null);
       console.log(`[skip] ${service.label} is not running`);
       continue;
     }
     try {
       stopPid(pid);
       delete records[service.name];
+      writeWorkerStoppedStatus(service, pid);
       console.log(`[stop] ${service.label} pid=${pid}`);
     } catch (error) {
       failures.push(`${service.label} pid=${pid}: ${error.message}`);
@@ -270,6 +272,27 @@ function stopWorkers() {
   writeRecords(records);
   if (failures.length) {
     throw new Error(`Some WeChat safe workers could not be stopped: ${failures.map(singleLine).join("; ")}`);
+  }
+}
+
+function writeWorkerStoppedStatus(service, pid) {
+  if (!service.statusFile) return;
+  try {
+    const previous = readJson(service.statusFile);
+    const now = new Date().toISOString();
+    const status = {
+      ok: false,
+      status: "stopped",
+      pid: pid || previous.pid || null,
+      mode: previous.mode || service.env.BRIDGE_MODE || "",
+      stoppedAt: now,
+      updatedAt: now,
+      message: `${service.label} was stopped by wechat:safe:stop.`,
+    };
+    fs.mkdirSync(path.dirname(service.statusFile), { recursive: true });
+    fs.writeFileSync(service.statusFile, `${JSON.stringify(status, null, 2)}\n`, "utf8");
+  } catch (error) {
+    console.log(`[warn] could not mark ${service.label} stopped: ${singleLine(error?.message || String(error))}`);
   }
 }
 

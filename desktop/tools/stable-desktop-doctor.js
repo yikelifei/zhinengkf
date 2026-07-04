@@ -16,9 +16,12 @@ const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
+const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(desktopRoot, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const nextCliPath = path.join(desktopRoot, "node_modules", "next", "dist", "bin", "next");
+const nextStartServerPath = path.join(desktopRoot, "node_modules", "next", "dist", "server", "lib", "start-server.js");
 
 const requiredFiles = [
   ["package.json", path.join(desktopRoot, "package.json")],
@@ -69,6 +72,7 @@ async function collectReport() {
   checks.push(checkRuntimeWritable());
   checks.push(checkStaleScheduledTasks());
   checks.push(checkStaleRuntimeProcesses());
+  checks.push(checkStableRuntimeVersion());
   for (const [label, filePath] of requiredFiles) checks.push(checkFile(label, filePath));
   checks.push(checkWebStartable());
 
@@ -83,6 +87,11 @@ async function collectReport() {
   }
   checks.push(checkWebRuntimeOwner(portOwners.get(webPort) || []));
   checks.push(checkKeepAliveHeartbeat(portOwners));
+  checks.push(checkWechatWorkerStatus("WeChat bridge worker", wechatBridgeWorkerStatusFile, "tools/wechat-bridge-worker.js", (status) => {
+    const mode = String(status.mode || "");
+    return mode === "noop" || mode === "dispatch";
+  }));
+  checks.push(checkWechatWorkerStatus("WeChat window observer", wechatWindowObserverStatusFile, "tools/wechat-window-observer.js"));
 
   for (const [label, url, isOk] of endpoints) {
     const result = await requestJson(url, 3000);
@@ -197,6 +206,87 @@ function staleScheduledTaskXmlLooksEnabled(taskName) {
   }
 }
 
+function checkStableRuntimeVersion() {
+  if (process.platform !== "win32") {
+    return { ok: true, severity: "warn", label: "Stable runtime version", detail: "not checked on non-Windows platform" };
+  }
+  let launchers = stableRuntimeLauncherFromHeartbeat();
+  if (!launchers.length) launchers = findStableRuntimeLauncherProcesses();
+  if (!launchers.length) {
+    return { ok: true, severity: "warn", label: "Stable runtime version", detail: "no stable runtime launcher process found" };
+  }
+  const launcherPath = path.join(desktopRoot, "tools", "stable-runtime-launcher.js");
+  let launcherMtimeMs = 0;
+  try {
+    launcherMtimeMs = fs.statSync(launcherPath).mtimeMs;
+  } catch (error) {
+    return { ok: false, label: "Stable runtime version", detail: `cannot stat ${launcherPath}: ${error?.message || String(error)}` };
+  }
+  const stale = launchers.filter((item) => Number.isFinite(item.createdAtMs) && item.createdAtMs + 2000 < launcherMtimeMs);
+  if (!stale.length) {
+    return {
+      ok: true,
+      label: "Stable runtime version",
+      detail: `launcher pid=${launchers.map((item) => item.pid).join(",")} is current`,
+    };
+  }
+  return {
+    ok: true,
+    severity: "warn",
+    label: "Stable runtime version",
+    detail: `old launcher process is still running (${stale.map((item) => `pid=${item.pid}`).join(", ")}); close the Smart Kefu Services window once, then start C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop.cmd again`,
+  };
+}
+
+function stableRuntimeLauncherFromHeartbeat() {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
+    const pid = Number(heartbeat?.pid);
+    const ageMs = Date.now() - Date.parse(String(heartbeat?.updatedAt || ""));
+    const heartbeatIsFresh = Number.isFinite(ageMs) && ageMs <= 30000;
+    if (!Number.isFinite(pid) || pid <= 0) return [];
+    const commandLine = getCommandLine(pid);
+    const normalizedCommandLine = normalizePathText(commandLine);
+    if (normalizedCommandLine && !normalizedCommandLine.includes("stable-runtime-launcher.js")) return [];
+    if (!normalizedCommandLine && !(heartbeatIsFresh && processIsRunning(pid))) return [];
+    return [{ pid, createdAtMs: NaN, commandLine: commandLine || "heartbeat pid is alive; command line unavailable" }];
+  } catch {
+    return [];
+  }
+}
+function findStableRuntimeLauncherProcesses() {
+  const script = [
+    "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\"",
+    "$items | Where-Object { $_.CommandLine -like '*stable-runtime-launcher*' } | Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: desktopRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  try {
+    const parsed = JSON.parse(String(result.stdout || "[]"));
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return items
+      .map((item) => ({
+        pid: Number(item.ProcessId),
+        createdAtMs: parsePowerShellJsonDate(item.CreationDate),
+        commandLine: String(item.CommandLine || ""),
+      }))
+      .filter((item) => Number.isFinite(item.pid) && item.pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+function parsePowerShellJsonDate(value) {
+  const raw = String(value || "");
+  const match = raw.match(/\/Date\((\d+)\)\//);
+  if (match) return Number(match[1]);
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
 function checkStaleRuntimeProcesses() {
   if (process.platform !== "win32") {
     return { ok: true, severity: "warn", label: "Stale runtime processes", detail: "not checked on non-Windows platform" };
@@ -241,7 +331,7 @@ function checkWebRuntimeOwner(webOwners) {
   if (!webOwners.length) {
     return { ok: false, label: "Web runtime owner", detail: "web port has no owner" };
   }
-  const expected = [webRuntimeServerPath, nextCliPath].map(normalizePathText);
+  const expected = [webRuntimeServerPath, nextCliPath, nextStartServerPath].map(normalizePathText);
   const commandLines = webOwners.map((pid) => ({ pid, commandLine: getCommandLine(pid) }));
   const readableCommandLines = commandLines.filter((item) => item.commandLine);
   if (!readableCommandLines.length) {
@@ -256,7 +346,7 @@ function checkWebRuntimeOwner(webOwners) {
   return {
     ok,
     label: "Web runtime owner",
-    detail: ok ? `uses ${webRuntimeServerPath} or ${nextCliPath}` : `expected ${webRuntimeServerPath} or ${nextCliPath}; actual ${details.join(" | ")}`,
+    detail: ok ? `uses ${webRuntimeServerPath}, ${nextCliPath}, or ${nextStartServerPath}` : `expected ${webRuntimeServerPath}, ${nextCliPath}, or ${nextStartServerPath}; actual ${details.join(" | ")}`,
   };
 }
 
@@ -312,6 +402,28 @@ function checkKeepAliveHeartbeat(portOwners) {
   }
 }
 
+function checkWechatWorkerStatus(label, statusFile, commandMarker, isSafeStatus = null) {
+  try {
+    const status = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+    const updatedAtMs = Date.parse(String(status.completedAt || status.updatedAt || status.startedAt || ""));
+    const ageMs = Date.now() - updatedAtMs;
+    const pid = Number(status.pid);
+    const running = processIsRunning(pid);
+    const commandLine = running ? getCommandLine(pid) : "";
+    const commandMatches = !commandLine || normalizePathText(commandLine).includes(commandMarker);
+    const statusSafe = typeof isSafeStatus === "function" ? isSafeStatus(status) : true;
+    const ok = status.ok === true && running && commandMatches && Number.isFinite(updatedAtMs) && ageMs <= 30000 && statusSafe;
+    return {
+      ok,
+      label,
+      detail: ok
+        ? `pid=${pid} status=${status.status || "unknown"} ageMs=${ageMs}${status.mode ? ` mode=${status.mode}` : ""}`
+        : `status=${JSON.stringify({ ok: status.ok, status: status.status, pid: status.pid, mode: status.mode, ageMs, running, commandMatches, statusSafe, errorMessage: status.errorMessage || "" })}`,
+    };
+  } catch (error) {
+    return { ok: false, label, detail: `${statusFile}: ${error?.message || String(error)}` };
+  }
+}
 function getPortOwners(ports) {
   const owners = new Map(ports.map((port) => [port, []]));
   if (process.platform !== "win32") return owners;

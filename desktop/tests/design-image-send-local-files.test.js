@@ -53,6 +53,7 @@ test("quick confirm refuses design images that only have remote URLs", async () 
       requestId: "request_1",
       status: "quick_confirm",
       wechatAccountId: "wechat_1",
+      customerId: "customer_1",
       conversationId: "conversation_1",
       images: [
         {
@@ -81,6 +82,7 @@ test("quick confirm queues only local design image files", async () => {
     requestId: "request_1",
     status: "quick_confirm",
     wechatAccountId: "wechat_1",
+    customerId: "customer_1",
     conversationId: "conversation_1",
     images: [
       {
@@ -130,6 +132,69 @@ test("quick confirm queues only local design image files", async () => {
     "C:\\storage\\design-jobs\\design_1\\candidate_2.png",
   ]);
   assert.deepEqual(updatedPatch, { status: "sent", sendTaskId: "send_1" });
+});
+
+test("quick confirm sends only the latest revision round images", async () => {
+  const captured = [];
+  const job = {
+    id: "design_revision_send_1",
+    requestId: "request_revision_send_1",
+    status: "quick_confirm",
+    wechatAccountId: "wechat_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    images: [
+      {
+        id: "initial_image_1",
+        imageId: "candidate_1",
+        position: 1,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\candidate_1.png",
+      },
+      {
+        id: "initial_image_2",
+        imageId: "candidate_2",
+        position: 2,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\candidate_2.png",
+      },
+      {
+        id: "revision_image_1",
+        imageId: "r1-candidate_1",
+        position: 101,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_1.png",
+      },
+      {
+        id: "revision_image_2",
+        imageId: "r1-candidate_2",
+        position: 102,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_2.png",
+      },
+    ],
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    {
+      getDesignJob: () => job,
+      updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+    },
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async (payload) => {
+        captured.push(payload);
+        return { id: "send_revision_1", payload };
+      },
+    },
+    {},
+    {},
+  );
+
+  await service.quickConfirmAndQueueSend(job.id);
+
+  assert.deepEqual(captured[0].imagePaths, [
+    "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_1.png",
+    "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_2.png",
+  ]);
 });
 
 test("design platform callback with wrong external job id does not write images", async () => {

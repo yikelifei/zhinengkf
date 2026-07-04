@@ -33,6 +33,46 @@ GET /v1/health
 }
 ```
 
+### 上传素材
+
+```http
+POST /v1/assets/upload
+```
+
+请求：
+
+```json
+{
+  "assetId": "客服平台素材ID",
+  "fileName": "customer-logo.png",
+  "mimeType": "image/png",
+  "localPath": "C:\\storage\\assets\\customer-logo.png",
+  "sizeBytes": 1024,
+  "role": "customer_logo",
+  "ownerType": "customer",
+  "ownerId": "customer-001",
+  "source": "customer_upload",
+  "sourceRef": "wechat-message-001",
+  "skuCode": "SKU-001",
+  "name": "客户Logo"
+}
+```
+
+返回：
+
+```json
+{
+  "assetId": "design-asset-001",
+  "remoteAssetId": "design-asset-001",
+  "url": "http://127.0.0.1:3700/assets/design-asset-001/customer-logo.png",
+  "fileName": "customer-logo.png",
+  "mimeType": "image/png",
+  "role": "customer_logo"
+}
+```
+
+客服平台会把返回的 `remoteAssetId` 和 `url` 放入创建设计任务的 `assets`，设计平台必须用这些素材作为真实 SKU 图、客户 Logo 或参考图来源。
+
 ### 创建设计任务
 
 ```http

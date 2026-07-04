@@ -550,7 +550,7 @@ function mockModeLockIsStaleForRealStart() {
 }
 
 async function activeStackMatchesRequestedMode() {
-  return (await activeStackReadiness()).ok;
+  return (await activeStackReadiness()).ok && keepAliveHeartbeatIsFresh();
 }
 
 async function activeStackReadiness() {

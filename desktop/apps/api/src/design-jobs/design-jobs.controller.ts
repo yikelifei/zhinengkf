@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Res } from "@nestjs/common";
+import type { FastifyReply } from "fastify";
 import { DesignJobsService } from "./design-jobs.service";
 import { CreateDesignJobPayload, CreateDesignRevisionPayload, SelectDesignImagePayload } from "./design-jobs.types";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
@@ -79,6 +80,26 @@ export class DesignJobsController {
   @Post(":id/assets")
   attachAssets(@Param("id") id: string, @Body() body: { assetIds: string[] } & ExpectedIdentityPayload) {
     return this.designJobs.attachAssets(id, body?.assetIds || [], body || {});
+  }
+
+  @Get(":id/images/:imageId/local-file")
+  async localImageFile(
+    @Param("id") id: string,
+    @Param("imageId") imageId: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("conversationId") conversationId: string,
+    @Query("customerId") customerId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const file = await this.designJobs.readLocalDesignImage(id, imageId, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+    reply.header("Content-Type", file.mimeType);
+    reply.header("Content-Length", String(file.sizeBytes));
+    reply.header("Cache-Control", "private, max-age=3600");
+    return reply.send(file.stream);
   }
 
   @Get(":id/revisions")

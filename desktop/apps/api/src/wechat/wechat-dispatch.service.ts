@@ -230,9 +230,9 @@ export class WechatDispatchService {
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue confirmation");
     }
-    if (!order.wechatAccountId || !order.conversationId) {
-      throw new BadRequestException("order draft has no wechat account or conversation");
-    }
+    this.assertOrderConversationUnlocked(order, "order confirmation");
+    this.assertOrderPaymentReadyForSend(order, "order confirmation");
+    this.assertOrderHasCompleteSendIdentity(order);
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -286,7 +286,7 @@ export class WechatDispatchService {
       owner: payload.owner || order.owner || "人工客服",
       customerNotes: payload.note || order.customerNotes || "订单确认已进入微信安全发送队列。",
     });
-    await this.notifications.create(
+    const notification = await this.notifications.create(
       "info",
       "订单确认已入队",
       "系统已根据订单草稿生成客户确认话术，并放入微信安全发送队列。",
@@ -295,10 +295,13 @@ export class WechatDispatchService {
         quoteDraftId: order.quoteDraftId,
         designJobId: order.designJobId,
         sendTaskId: sendTask.id,
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        customerId: order.customerId,
       },
     );
 
-    return { orderDraft: updatedOrder, sendTask, message };
+    return { orderDraft: updatedOrder, sendTask, message, notification };
   }
 
   async queueOrderFollowup(
@@ -318,9 +321,9 @@ export class WechatDispatchService {
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue follow-up");
     }
-    if (!order.wechatAccountId || !order.conversationId) {
-      throw new BadRequestException("order draft has no wechat account or conversation");
-    }
+    this.assertOrderConversationUnlocked(order, "order follow-up");
+    this.assertOrderPaymentReadyForSend(order, "order follow-up");
+    this.assertOrderHasCompleteSendIdentity(order);
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -364,7 +367,7 @@ export class WechatDispatchService {
         ...(payload.automation || {}),
       },
     });
-    await this.notifications.create(
+    const notification = await this.notifications.create(
       "info",
       followupType === "delivery" ? "订单交期说明已入队" : "订单生产通知已入队",
       "系统已根据订单草稿生成客户跟进话术，并放入微信安全发送队列。",
@@ -374,10 +377,13 @@ export class WechatDispatchService {
         designJobId: order.designJobId,
         sendTaskId: sendTask.id,
         followupType,
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        customerId: order.customerId,
       },
     );
 
-    return { orderDraft: await this.orders.getById(order.id), sendTask, message };
+    return { orderDraft: await this.orders.getById(order.id), sendTask, message, notification };
   }
 
   private buildOrderMessageContext(order: any) {
@@ -404,6 +410,36 @@ export class WechatDispatchService {
 
   private orderSelectedImage(order: any) {
     return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
+  }
+
+  private assertOrderHasCompleteSendIdentity(order: any) {
+    const wechatAccountId = String(order?.wechatAccountId || "").trim();
+    const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
+    const conversationId = String(order?.conversationId || "").trim();
+    if (wechatAccountId && customerId && conversationId) return;
+    throw new BadRequestException("订单缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
+  }
+
+  private assertOrderPaymentReadyForSend(order: any, context: string) {
+    const paymentStatus = String(order?.paymentStatus || order?.quoteDraft?.paymentStatus || "");
+    if (paymentStatus === "deposit_paid" || paymentStatus === "paid") return;
+    throw new BadRequestException(`${context} requires verified deposit or full payment before queueing`);
+  }
+
+  private assertOrderConversationUnlocked(order: any, context: string) {
+    const conversationId = String(order?.conversationId || order?.conversation?.id || order?.designJob?.conversationId || "");
+    const currentConversation =
+      appConfig.useLocalStore && conversationId
+        ? this.localStore.listConversations().find((conversation: any) => String(conversation.id || "") === conversationId)
+        : null;
+    const manualLocked = Boolean(
+      currentConversation?.manualLocked ||
+        order?.conversation?.manualLocked ||
+        order?.designJob?.conversation?.manualLocked ||
+        order?.quoteDraft?.designJob?.conversation?.manualLocked,
+    );
+    if (!manualLocked) return;
+    throw new BadRequestException(`${context} blocked: 会话已人工接管，自动发送暂停。请先解除人工接管后再排队订单发送。`);
   }
 
   private expectedIdentityFromOrder(order: any): ExpectedIdentityPayload {
@@ -1442,6 +1478,7 @@ export class WechatDispatchService {
     const data = isPlainObject(entry?.data) ? entry.data : {};
     const sendPlan = isPlainObject(data.sendPlan) ? data.sendPlan : {};
     const ack = isPlainObject(data.ack) ? data.ack : {};
+    const preflight = isPlainObject(data.preflight) ? data.preflight : {};
     return {
       fileName: entry?.fileName || "",
       taskId: String(data.taskId || entry?.taskId || ""),
@@ -1454,6 +1491,19 @@ export class WechatDispatchService {
       outboxFileName: bridgeFileName(data.sourceOutboxFileName || ack.requiredOutboxFileName),
       ackFileNameHint: bridgeFileName(ack.fileNameHint),
       failedAckFileNameHint: bridgeFileName(ack.failedFileNameHint),
+      preflight: {
+        requiredBeforeSend: Array.isArray(preflight.requiredBeforeSend) ? preflight.requiredBeforeSend.map(String) : [],
+        expectedWechatAccountId: typeof preflight.expectedWechatAccountId === "string" ? preflight.expectedWechatAccountId : "",
+        expectedConversationId: typeof preflight.expectedConversationId === "string" ? preflight.expectedConversationId : "",
+        expectedConversationTitle: typeof preflight.expectedConversationTitle === "string" ? preflight.expectedConversationTitle : "",
+        expectedCustomerId: typeof preflight.expectedCustomerId === "string" ? preflight.expectedCustomerId : "",
+        expectedCustomerName: typeof preflight.expectedCustomerName === "string" ? preflight.expectedCustomerName : "",
+        expectedWindowSnapshotId: typeof preflight.expectedWindowSnapshotId === "string" ? preflight.expectedWindowSnapshotId : null,
+        rejectIfAnyCheckFails: preflight.rejectIfAnyCheckFails === true,
+        rejectIfWindowChanged: preflight.rejectIfWindowChanged === true,
+        rejectIfExpired: preflight.rejectIfExpired === true,
+        rejectIfOutboxMissing: preflight.rejectIfOutboxMissing === true,
+      },
       createdAt: entry?.createdAt,
       expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : "",
       modifiedAt: entry?.modifiedAt,
@@ -1499,6 +1549,7 @@ export class WechatDispatchService {
           attemptId: typeof data.attemptId === "string" ? data.attemptId : undefined,
           wechatAccountId: typeof data.wechatAccountId === "string" ? data.wechatAccountId : undefined,
           conversationId: typeof data.conversationId === "string" ? data.conversationId : undefined,
+          customerId: typeof data.customerId === "string" ? data.customerId : undefined,
           outboxFileName: typeof data.outboxFileName === "string" ? data.outboxFileName : undefined,
           outboxFile: typeof data.outboxFile === "string" ? data.outboxFile : undefined,
           errorMessage: typeof data.errorMessage === "string" ? data.errorMessage : "",
@@ -1555,6 +1606,7 @@ export class WechatDispatchService {
     const bridgeTimedOut: any[] = [];
     const bridgeOutboxBroken: any[] = [];
     const bridgeDispatchExpired: any[] = [];
+    const autoRetriedLowValue: any[] = [];
     const alerted: any[] = [];
     const staleQueued: any[] = [];
 
@@ -1659,6 +1711,65 @@ export class WechatDispatchService {
         }
       }
 
+      if (task.status === "failed" && isLowValueAutomationTask(task)) {
+        const retryCount = Number(task.guardSnapshot?.lowValueAutoRetryCount || 0);
+        if (Number.isFinite(retryCount) && retryCount < 1) {
+          const reason = task.errorMessage
+            ? `低价值自动发送失败后自动重试：${task.errorMessage}`
+            : "低价值自动发送失败后自动重试";
+          try {
+            const requeued = await this.requeueSendTask(task.id, {
+              expectedWechatAccountId: task.wechatAccountId,
+              expectedConversationId: task.conversationId,
+              expectedCustomerId: task.conversation?.customerId || task.customerId,
+              reason,
+            });
+            const updated = this.localStore.updateSendTask(requeued.id, {
+              guardSnapshot: {
+                ...(requeued.guardSnapshot || {}),
+                lowValueAutoRetryCount: retryCount + 1,
+                lowValueAutoRetriedAt: now.toISOString(),
+                lowValueAutoRetryReason: reason,
+                opsAlertedStatus: "auto_retried",
+                opsAlertedAt: now.toISOString(),
+              },
+            });
+            autoRetriedLowValue.push(updated);
+            await this.notifications.create("warning", "低价值自动发送已重试", reason, {
+              sendTaskId: task.id,
+              wechatAccountId: task.wechatAccountId,
+              conversationId: task.conversationId,
+              customerId: task.conversation?.customerId || task.customerId,
+            });
+            continue;
+          } catch (error) {
+            const retryError = error instanceof Error ? error.message : String(error);
+            const updated = this.localStore.updateSendTask(task.id, {
+              guardSnapshot: {
+                ...(task.guardSnapshot || {}),
+                lowValueAutoRetryError: retryError,
+                lowValueAutoRetryErrorAt: now.toISOString(),
+                opsAlertedStatus: task.status,
+                opsAlertedAt: now.toISOString(),
+              },
+            });
+            await this.notifications.create(
+              "error",
+              "低价值自动发送重试失败",
+              retryError || task.errorMessage || "自动重试前的发送任务绑定校验失败，需要人工处理。",
+              {
+                sendTaskId: task.id,
+                wechatAccountId: task.wechatAccountId,
+                conversationId: task.conversationId,
+                customerId: task.conversation?.customerId || task.customerId,
+              },
+            );
+            alerted.push(updated);
+            continue;
+          }
+        }
+      }
+
       if (["blocked", "failed"].includes(task.status) && task.guardSnapshot?.opsAlertedStatus !== task.status) {
         this.localStore.updateSendTask(task.id, {
           guardSnapshot: {
@@ -1686,12 +1797,14 @@ export class WechatDispatchService {
       bridgeTimedOut: bridgeTimedOut.length,
       bridgeOutboxBroken: bridgeOutboxBroken.length,
       bridgeDispatchExpired: bridgeDispatchExpired.length,
+      autoRetriedLowValue: autoRetriedLowValue.length,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
       tasks: {
         bridgeTimedOut,
         bridgeOutboxBroken,
         bridgeDispatchExpired,
+        autoRetriedLowValue,
         staleQueued,
         alerted,
       },
@@ -2046,6 +2159,31 @@ export class WechatDispatchService {
     if (taskBeforeValidation.status !== "queued") {
       throw new BadRequestException(`send task is not queued: ${taskBeforeValidation.status || "unknown"}`);
     }
+    const orderState = this.validateQueuedOrderSendState(taskBeforeValidation);
+    if (!orderState.ok) {
+      const startedAt = new Date().toISOString();
+      const blockedTask = this.blockSendTask(id, orderState.message, {
+        failedKeys: [orderState.reason],
+        orderDraftId: orderState.orderDraftId,
+        orderSendState: orderState,
+        blockedAt: startedAt,
+      });
+      const attempt = this.localStore.createSendAttempt({
+        sendTaskId: id,
+        adapter: adapter.name,
+        status: "blocked",
+        guardStatus: orderState.reason,
+        payloadSummary: this.summarizePayload(taskBeforeValidation.payload),
+        errorMessage: blockedTask.errorMessage,
+        metadata: {
+          adapter,
+          orderSendState: orderState,
+        },
+        startedAt,
+        completedAt: new Date().toISOString(),
+      });
+      return { task: blockedTask, attempt, adapter };
+    }
     const binding = this.validateExistingSendTaskBinding(taskBeforeValidation);
     if (!binding.ok) {
       const startedAt = new Date().toISOString();
@@ -2150,6 +2288,68 @@ export class WechatDispatchService {
     });
   }
 
+  private validateQueuedOrderSendState(task: any) {
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const orderDraftId = String(automation.orderDraftId || "");
+    if (!orderDraftId) return { ok: true as const };
+    const order = this.localStore.getOrderDraft(orderDraftId);
+    if (!order) {
+      return {
+        ok: false as const,
+        reason: "orderDraftMissing",
+        message: `order draft not found before send: ${orderDraftId}`,
+        orderDraftId,
+      };
+    }
+    if (String(order.wechatAccountId || "") !== String(task.wechatAccountId || "")) {
+      return {
+        ok: false as const,
+        reason: "orderWechatAccountMismatch",
+        message: "order send blocked: wechat account changed before send",
+        orderDraftId,
+        expectedWechatAccountId: task.wechatAccountId,
+        actualWechatAccountId: order.wechatAccountId,
+      };
+    }
+    if (String(order.conversationId || "") !== String(task.conversationId || "")) {
+      return {
+        ok: false as const,
+        reason: "orderConversationMismatch",
+        message: "order send blocked: conversation changed before send",
+        orderDraftId,
+        expectedConversationId: task.conversationId,
+        actualConversationId: order.conversationId,
+      };
+    }
+    const paymentStatus = String(order.paymentStatus || order.quoteDraft?.paymentStatus || "");
+    if (String(order.status || "") === "cancelled") {
+      return {
+        ok: false as const,
+        reason: "orderCancelledBeforeSend",
+        message: "order send blocked: order was cancelled before send",
+        orderDraftId,
+        orderStatus: order.status,
+        paymentStatus,
+      };
+    }
+    if (paymentStatus !== "deposit_paid" && paymentStatus !== "paid") {
+      return {
+        ok: false as const,
+        reason: "orderPaymentNotReadyBeforeSend",
+        message: "order send blocked: payment is no longer verified before send",
+        orderDraftId,
+        orderStatus: order.status,
+        paymentStatus,
+      };
+    }
+    return {
+      ok: true as const,
+      orderDraftId,
+      orderStatus: order.status,
+      paymentStatus,
+    };
+  }
+
   acknowledgeBridgeSend(id: string, payload: {
     status: "sent" | "failed";
     version?: string;
@@ -2160,6 +2360,7 @@ export class WechatDispatchService {
     attemptId?: string;
     wechatAccountId?: string;
     conversationId?: string;
+    customerId?: string;
     outboxFileName?: string;
     outboxFile?: string;
     errorMessage?: string;
@@ -2218,6 +2419,7 @@ export class WechatDispatchService {
         bridgeAckIdentity: {
           wechatAccountId: payload.wechatAccountId || "",
           conversationId: payload.conversationId || "",
+          customerId: payload.customerId || "",
         },
         bridgeAckAt: now,
         bridgeAckOutboxFileName: outboxFileName,
@@ -2261,18 +2463,22 @@ export class WechatDispatchService {
       quoteDraftId: task.quoteDraftId,
     });
     const now = new Date().toISOString();
+    const previousGuardSnapshot = isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {};
     const updated = this.localStore.updateSendTask(id, {
       status: "queued",
       queuedAt: now,
       sentAt: null,
       errorMessage: "",
       guardSnapshot: {
+        ...previousGuardSnapshot,
         requiredChecks: task.guardSnapshot?.requiredChecks || ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
         policy: task.guardSnapshot?.policy || "single-account-serial-queue",
         status: "pending",
         checks: [],
         binding,
         requeuedAt: now,
+        opsAlertedStatus: "requeued",
+        opsAlertedAt: now,
         requeueReason: payload.reason || "人工重新排队",
         history: [
           ...this.guardHistory(task),
@@ -2569,7 +2775,9 @@ export class WechatDispatchService {
           source: "inbound_image_selection",
           selectedImageId,
           routeId: params.route.id,
+          wechatAccountId: params.conversation.wechatAccountId,
           conversationId: params.conversation.id,
+          customerId: params.conversation.customerId,
           blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
           inFlightSendTaskIds: result.manualLock.inFlightSendTasks.map((task: any) => task.id),
         },
@@ -2582,6 +2790,7 @@ export class WechatDispatchService {
         {
           designJobId: job.id,
           selectedImageId,
+          wechatAccountId: params.conversation.wechatAccountId,
           conversationId: params.conversation.id,
           customerId: params.conversation.customerId,
           blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
@@ -2956,7 +3165,9 @@ export class WechatDispatchService {
       metadata: {
         source: "inbound_quote_acceptance",
         routeId: route.id,
+        wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
+        customerId: conversation.customerId,
         quoteDraftId: quote?.id || null,
         blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
         inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
@@ -2971,6 +3182,7 @@ export class WechatDispatchService {
       {
       quoteDraftId: quote?.id,
       designJobId: quote?.designJobId,
+      wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
       customerId: conversation.customerId,
       routeId: route.id,
@@ -3090,7 +3302,9 @@ export class WechatDispatchService {
       metadata: {
         source: "inbound_image_selection",
         routeId: route.id,
+        wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
+        customerId: conversation.customerId,
         selectedImageId: options.selectedImageId || null,
         blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
         inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
@@ -3105,6 +3319,7 @@ export class WechatDispatchService {
       {
       designJobId: options.designJobId,
       selectedImageId: options.selectedImageId,
+      wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
       customerId: conversation.customerId,
       routeId: route.id,
@@ -3372,6 +3587,7 @@ export class WechatDispatchService {
         bridgeAckIdentity: {
           wechatAccountId: payload.wechatAccountId || "",
           conversationId: payload.conversationId || "",
+          customerId: payload.customerId || "",
         },
         bridgeAckAt: now,
         bridgeAckOutboxFileName: outboxFileName,
@@ -3460,6 +3676,7 @@ export class WechatDispatchService {
       : typeof payload?.protocolVersion === "string"
         ? payload.protocolVersion
         : "";
+    const taskCustomerId = String(task?.conversation?.customerId || task?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "");
 
     const checks = [
       {
@@ -3495,6 +3712,10 @@ export class WechatDispatchService {
         passed: String(payload?.conversationId || "") === String(task?.conversationId || ""),
       },
       {
+        key: "ackCustomerId",
+        passed: Boolean(taskCustomerId) && String(payload?.customerId || "") === taskCustomerId,
+      },
+      {
         key: "taskId",
         passed: String(data.taskId || "") === String(task?.id || ""),
       },
@@ -3518,13 +3739,17 @@ export class WechatDispatchService {
         key: "targetIdentity",
         passed:
           String(target.wechatAccountId || "") === String(task?.wechatAccountId || "") &&
-          String(target.conversationId || "") === String(task?.conversationId || ""),
+          String(target.conversationId || "") === String(task?.conversationId || "") &&
+          Boolean(taskCustomerId) &&
+          String(target.customerId || "") === taskCustomerId,
       },
       {
         key: "sendPlanTargetIdentity",
         passed:
           String(sendPlanTarget.wechatAccountId || "") === String(task?.wechatAccountId || "") &&
-          String(sendPlanTarget.conversationId || "") === String(task?.conversationId || ""),
+          String(sendPlanTarget.conversationId || "") === String(task?.conversationId || "") &&
+          Boolean(taskCustomerId) &&
+          String(sendPlanTarget.customerId || "") === taskCustomerId,
       },
       {
         key: "sendPlanActions",

@@ -22,6 +22,9 @@ export class AssetsService {
       where: {
         ownerType: filter.ownerType,
         ownerId: filter.ownerId,
+        ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+        ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
       },
       orderBy: { createdAt: "desc" },
       take: 200,
@@ -55,6 +58,9 @@ export class AssetsService {
         localPath: record.localPath,
         sizeBytes: record.sizeBytes,
         source: record.source,
+        wechatAccountId: record.wechatAccountId,
+        conversationId: record.conversationId,
+        customerId: record.customerId,
       },
     });
   }

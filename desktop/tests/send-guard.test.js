@@ -13,7 +13,7 @@ const {
   validateSendTaskBinding,
 } = require("../packages/rules");
 
-const task = { id: "send-1", wechatAccountId: "wechat-1", conversationId: "conv-1" };
+const task = { id: "send-1", wechatAccountId: "wechat-1", conversationId: "conv-1", customerId: "customer-1" };
 const account = { id: "wechat-1", displayName: "微信客服1号" };
 const conversation = { id: "conv-1", title: "王总-端午礼盒", customerId: "customer-1" };
 const customer = { id: "customer-1", name: "王总" };
@@ -371,6 +371,7 @@ test("passes bridge ack binding when outbox file matches pending attempt", () =>
       version: "wechat_bridge_ack_v1",
       wechatAccountId: "wechat-1",
       conversationId: "conv-1",
+      customerId: "customer-1",
       outboxFileName: "123-send-1.json",
     },
   });
@@ -387,6 +388,7 @@ test("blocks bridge ack binding when outbox file does not match pending attempt"
       version: "wechat_bridge_ack_v1",
       wechatAccountId: "wechat-1",
       conversationId: "conv-1",
+      customerId: "customer-1",
       outboxFileName: "another-send.json",
     },
   });
@@ -409,6 +411,7 @@ test("blocks sent bridge ack when required ack identity is missing", () => {
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("ackAccountPresent"), true);
   assert.equal(result.failedKeys.includes("ackConversationPresent"), true);
+  assert.equal(result.failedKeys.includes("ackCustomerPresent"), true);
 });
 
 test("blocks sent bridge ack when outbox binding is missing", () => {
@@ -420,6 +423,7 @@ test("blocks sent bridge ack when outbox binding is missing", () => {
       version: "wechat_bridge_ack_v1",
       wechatAccountId: "wechat-1",
       conversationId: "conv-1",
+      customerId: "customer-1",
     },
   });
 
@@ -436,6 +440,7 @@ test("blocks sent bridge ack when protocol version is missing", () => {
       status: "sent",
       wechatAccountId: "wechat-1",
       conversationId: "conv-1",
+      customerId: "customer-1",
       outboxFileName: "123-send-1.json",
     },
   });
@@ -466,6 +471,24 @@ test("blocks bridge ack binding when ack account belongs to another wechat", () 
 
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("ackAccountMatches"), true);
+});
+
+test("blocks sent bridge ack when ack customer belongs to another customer", () => {
+  const result = validateBridgeAckBinding({
+    task: { ...task, status: "sending" },
+    attempt: bridgeAttemptWithOutbox,
+    payload: {
+      status: "sent",
+      version: "wechat_bridge_ack_v1",
+      wechatAccountId: "wechat-1",
+      conversationId: "conv-1",
+      customerId: "customer-2",
+      outboxFileName: "123-send-1.json",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("ackCustomerMatches"), true);
 });
 
 test("blocks bridge ack binding when attempt belongs to another send task", () => {

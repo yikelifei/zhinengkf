@@ -26,6 +26,15 @@ export class NotificationsService {
   list(options: { unreadOnly?: boolean; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     const limit = Math.max(1, Math.min(Number(options.limit || 100), 300));
     if (appConfig.useLocalStore) return this.localStore.listNotifications({ ...options, limit });
+    if (options.wechatAccountId || options.conversationId || options.customerId) {
+      return this.prisma.notification
+        .findMany({
+          where: options.unreadOnly ? { readAt: null } : undefined,
+          orderBy: { createdAt: "desc" },
+          take: Math.min(limit * 5, 1000),
+        })
+        .then((rows) => rows.filter((row) => this.matchesTargetIdentity(row.target, options)).slice(0, limit));
+    }
     return this.prisma.notification.findMany({
       where: options.unreadOnly ? { readAt: null } : undefined,
       orderBy: { createdAt: "desc" },

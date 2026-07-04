@@ -25,6 +25,7 @@ type BridgeFileEntry = {
   taskId?: string;
   wechatAccountId?: string;
   conversationId?: string;
+  customerId?: string;
   payloadKind?: string;
   actionCount?: number;
   createdAt?: string;
@@ -237,7 +238,7 @@ export class WechatSendAdapterService {
       accountDisplayName: task?.wechatAccount?.displayName || "",
       conversationId: task?.conversationId || "",
       conversationTitle: task?.conversation?.title || "",
-      customerId: task?.conversation?.customerId || "",
+      customerId: task?.conversation?.customerId || task?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "",
       customerName: task?.conversation?.customer?.name || "",
       windowSnapshotId: context.windowSnapshotId || null,
       requiredChecks: task?.guardSnapshot?.requiredChecks || ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
@@ -292,6 +293,7 @@ export class WechatSendAdapterService {
         taskId: data.taskId || data.sendTaskId,
         wechatAccountId: data.wechatAccountId,
         conversationId: data.conversationId,
+        customerId: data.target?.customerId || data.sendPlan?.target?.customerId || data.customerId,
         payloadKind: data.sendPlan?.kind || data.payload?.kind || data.payloadKind,
         actionCount: Number.isFinite(Number(data.sendPlan?.actionCount)) ? Number(data.sendPlan.actionCount) : undefined,
         createdAt: data.createdAt || data.completedAt || data.sentAt,

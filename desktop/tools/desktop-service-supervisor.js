@@ -19,6 +19,7 @@ const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
+const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const launcherLog = path.join(logsDir, realDesignMode ? "launcher-real.log" : "launcher-mock.log");
 const launcherCmd = path.join(runtimeDir, realDesignMode ? "supervise-real.cmd" : "supervise-mock.cmd");
 const legacyLauncherCmd = path.join(runtimeDir, realDesignMode ? "launch-real.cmd" : "launch-mock.cmd");
@@ -58,9 +59,15 @@ function main() {
   const supervisorCommandLine = buildSupervisorCommandLine();
   const supervisorCreateResult = createWindowsProcess(supervisorCommandLine);
   if (supervisorCreateResult.status === 0) {
-    const pid = String(supervisorCreateResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
-    return;
+    const pid = processIdFromResult(supervisorCreateResult);
+    if (waitForDurableSupervisorPid(pid)) {
+      console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${pid}`);
+      return;
+    }
+    appendLog(
+      launcherLog,
+      `[supervisor] Win32_Process node supervisor pid=${pid || "unknown"} exited before durable startup; trying fallback`,
+    );
   }
 
   appendLog(
@@ -72,9 +79,15 @@ function main() {
 
   const launcherResult = startLauncherProcess(launcherCmd);
   if (launcherResult.status === 0) {
-    const launcherPid = String(launcherResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
-    return;
+    const launcherPid = processIdFromResult(launcherResult);
+    if (waitForDurableSupervisorPid(launcherPid)) {
+      console.log(`[supervisor] ${path.basename(launcherCmd)} pid=${launcherPid}`);
+      return;
+    }
+    appendLog(
+      launcherLog,
+      `[supervisor] Start-Process launcher pid=${launcherPid || "unknown"} exited before durable startup; trying fallback`,
+    );
   }
 
   appendLog(
@@ -97,9 +110,15 @@ function main() {
 
   const supervisorChildResult = startSupervisorChild();
   if (supervisorChildResult.status === 0) {
-    const childPid = String(supervisorChildResult.stdout || "").trim().split(/\s+/).pop();
-    console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${childPid}`);
-    return;
+    const childPid = processIdFromResult(supervisorChildResult);
+    if (waitForDurableSupervisorPid(childPid)) {
+      console.log(`[supervisor] node ${modeArgs.join(" ")} pid=${childPid}`);
+      return;
+    }
+    appendLog(
+      launcherLog,
+      `[supervisor] Start-Process supervisor child pid=${childPid || "unknown"} exited before durable startup; trying fallback`,
+    );
   }
 
   appendLog(
@@ -244,6 +263,48 @@ function spawnPowerShell(script) {
     encoding: "utf8",
     windowsHide: true,
   });
+}
+
+function processIdFromResult(result) {
+  return String(result.stdout || "").trim().split(/\s+/).pop() || "";
+}
+
+function waitForDurableSupervisorPid(pid) {
+  if (!pid) return false;
+  const deadline = Date.now() + numberEnv("SUPERVISOR_DURABILITY_CHECK_MS", 10000);
+  while (Date.now() < deadline) {
+    if (keepAliveHeartbeatIsFresh()) return true;
+    if (!processIsRunning(pid)) return false;
+    sleep(500);
+  }
+  return keepAliveHeartbeatIsFresh();
+}
+
+function processIsRunning(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0) return false;
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function numberEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function keepAliveHeartbeatIsFresh() {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
+    const expectedMode = realDesignMode ? "real" : "mock";
+    const updatedAt = Date.parse(String(heartbeat.updatedAt || ""));
+    return heartbeat.mode === expectedMode && Number.isFinite(updatedAt) && Date.now() - updatedAt <= 30_000;
+  } catch {
+    return false;
+  }
 }
 
 function nonDurableSupervisorFallbackAllowed() {

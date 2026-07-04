@@ -6,7 +6,7 @@ const { spawnSync } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const runtimeDir = path.join(desktopRoot, ".runtime");
+const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
 const defaultInboxDir = path.join(runtimeDir, "wechat-window-snapshots");
 const defaultStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
 const defaultApiBase = `http://127.0.0.1:${process.env.API_PORT || "3200"}/api`;

@@ -88,6 +88,7 @@ export class OrdersService {
     if (!Object.keys(data).length) {
       throw new BadRequestException("订单草稿没有可更新的字段，请至少修改状态、付款状态、备注或跟进人。");
     }
+    assertOrderStatusPaymentReady(current, data);
 
     const quotePatch = quotePatchForOrderDraft(current, data);
     if (current.quoteDraftId && Object.keys(quotePatch).length) {
@@ -328,6 +329,7 @@ export class OrdersService {
     if (order.confirmationSendTaskId || order.confirmationSendTask) warnings.push("订单确认消息已进入发送队列");
     if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) warnings.push("订单还没有选图");
     if (!order.wechatAccountId) warnings.push("订单缺少微信账号");
+    if (!order.customerId && !order.quoteDraft?.customerId && !order.designJob?.customerId) warnings.push("订单缺少客户绑定");
     if (!order.conversationId) warnings.push("订单缺少客户会话");
     if (Number(order.profit || 0) < 0) warnings.push("订单利润为负，需要人工确认");
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
@@ -654,6 +656,15 @@ function orderBindingReasonLabel(reason: string) {
     selected_image_design_job_mismatch: "效果图不属于当前设计任务",
   };
   return labels[reason] || reason || "绑定关系不一致";
+}
+
+function assertOrderStatusPaymentReady(current: any, patch: OrderDraftUpdatePatch) {
+  const nextStatus = patch.status || current?.status || "";
+  if (!["processing", "fulfilled"].includes(nextStatus)) return;
+  const nextPaymentStatus = patch.paymentStatus || current?.paymentStatus || current?.quoteDraft?.paymentStatus || "";
+  if (["deposit_paid", "paid"].includes(nextPaymentStatus)) return;
+  const actionLabel = nextStatus === "processing" ? "生产中" : "完成";
+  throw new BadRequestException(`订单未记录定金或全款，不能标记为${actionLabel}；请先人工核验付款凭证。`);
 }
 
 type OrderDraftUpdatePatch = {

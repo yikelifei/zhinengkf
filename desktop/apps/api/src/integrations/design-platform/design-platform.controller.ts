@@ -232,6 +232,11 @@ export class DesignPlatformController {
     }
   }
 
+  @Post("smoke-test")
+  async smokeTest() {
+    return this.designJobs.runDesignPlatformSmokeTest();
+  }
+
   @Post("callback")
   async callback(
     @Headers("authorization") authorization: string | undefined,

@@ -129,6 +129,92 @@ test("web automation history renders skipped reason summary from latest run", ()
   assert.match(webCss, /\.automation-skip-grid/);
 });
 
+test("web automation summary renders split order confirmation and follow-up stages", () => {
+  const summarySection = webPage.slice(
+    webPage.indexOf("function buildLowValueAutomationSummary"),
+    webPage.indexOf("function lowValueRunSubtitle"),
+  );
+
+  assert.match(summarySection, /stageByKey\.get\("orderConfirmation"\)/);
+  assert.match(summarySection, /stageByKey\.get\("orderFollowup"\)/);
+  assert.match(summarySection, /label: "订单确认"/);
+  assert.match(summarySection, /label: "订单跟进"/);
+  assert.doesNotMatch(summarySection, /stageByKey\.get\("orderSend"\)/);
+  assert.doesNotMatch(summarySection, /label: "确认\/跟进"/);
+});
+
+test("web automation send operations summary renders low value auto retry count", () => {
+  assert.match(webApi, /autoRetriedLowValue\?: number/);
+  assert.match(webPage, /row\.autoRetriedLowValue \|\| 0/);
+  assert.match(webPage, /自动重试/);
+});
+
+test("web automation step list matches backend queue before send order", () => {
+  const stepSection = webPage.slice(
+    webPage.indexOf("function buildAutomationStepItems"),
+    webPage.indexOf("return stepDefs.map", webPage.indexOf("function buildAutomationStepItems")),
+  );
+  const orderDraftIndex = stepSection.indexOf('key: "scanLowValueOrderDrafts"');
+  const orderConfirmationIndex = stepSection.indexOf('key: "scanLowValueOrderConfirmations"');
+  const orderFollowupIndex = stepSection.indexOf('key: "scanLowValueOrderFollowups"');
+  const sendOpsIndex = stepSection.indexOf('key: "scanSendOperations"');
+  const safeSendIndex = stepSection.indexOf('key: "processLowValueSendQueue"');
+
+  assert.ok(orderDraftIndex > 0);
+  assert.ok(orderConfirmationIndex > orderDraftIndex);
+  assert.ok(orderFollowupIndex > orderConfirmationIndex);
+  assert.ok(sendOpsIndex > orderFollowupIndex);
+  assert.ok(safeSendIndex > sendOpsIndex);
+});
+
+test("web automation safe send step detail exposes skipped queue head blocks", () => {
+  const detailSection = webPage.slice(
+    webPage.indexOf("function describeSafeSendQueueStep"),
+    webPage.indexOf("function describeOrderDraftStep"),
+  );
+
+  assert.match(detailSection, /row\.skipped\?\.filter\(\(item\) => item\.reason === "not_account_queue_head"\)/);
+  assert.match(detailSection, /跳过 \$\{row\.skipped\?\.length \|\| 0\}/);
+  assert.match(detailSection, /前序任务卡住 \$\{queueHeadBlocked\}/);
+});
+
+test("web manual automation summaries expose safe send skipped queue blocks", () => {
+  const lowValueRunSection = webPage.slice(
+    webPage.indexOf("async function runLowValueAutomation"),
+    webPage.indexOf("async function runAutomationCycle"),
+  );
+  const automationCycleSection = webPage.slice(
+    webPage.indexOf("async function runAutomationCycle"),
+    webPage.indexOf("async function toggleAutomationActive"),
+  );
+  const dealFlowSection = webPage.slice(
+    webPage.indexOf("async function progressQuoteDealFlow"),
+    webPage.indexOf("async function evaluateCustomerRoute"),
+  );
+
+  assert.match(lowValueRunSection, /sendQueue\?\.skipped\.filter\(\(item\) => item\.reason === "not_account_queue_head"\)/);
+  assert.match(lowValueRunSection, /安全发送处理 \$\{sendQueue\?\.processed\.length \|\| 0\} 个，跳过 \$\{sendQueue\?\.skipped\.length \|\| 0\} 个/);
+  assert.match(lowValueRunSection, /被前序发送任务卡住/);
+  assert.match(automationCycleSection, /安全发送处理 \$\{sendQueue\?\.processed\.length \|\| 0\} 个，跳过 \$\{sendQueue\?\.skipped\.length \|\| 0\} 个/);
+  assert.match(automationCycleSection, /被前序发送任务卡住/);
+  assert.match(dealFlowSection, /queueHeadBlocked: 0/);
+  assert.match(dealFlowSection, /sendResult\.skipped\.filter\(\(item\) => item\.reason === "not_account_queue_head"\)\.length/);
+  assert.match(dealFlowSection, /其中 \$\{summary\.queueHeadBlocked\} 个被前序发送任务卡住/);
+});
+
+test("web automation summary metric actions route split order stages", () => {
+  const metricHandlerSection = webPage.slice(
+    webPage.indexOf("function handleLowValueAutomationSummaryMetric"),
+    webPage.indexOf("function handleAutomationStepItem"),
+  );
+
+  assert.match(metricHandlerSection, /label === "订单草稿"/);
+  assert.match(metricHandlerSection, /label === "订单确认"/);
+  assert.match(metricHandlerSection, /label === "订单跟进"/);
+  assert.match(metricHandlerSection, /progressQuoteDealFlow\(\)/);
+  assert.doesNotMatch(metricHandlerSection, /确认\/跟进/);
+});
+
 test("web low value automation run is blocked by readiness blockers", () => {
   const runSection = webPage.slice(
     webPage.indexOf("async function runLowValueAutomation"),

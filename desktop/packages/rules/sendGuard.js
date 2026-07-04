@@ -239,6 +239,13 @@ function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) 
 function validateBridgeAckBinding({ task, attempt, payload = {} }) {
   const checks = [];
   const isSentAck = payload.status === "sent";
+  const expectedCustomerId = String(
+    task?.conversation?.customerId ||
+      task?.customerId ||
+      task?.designJob?.customerId ||
+      task?.quoteDraft?.customerId ||
+      "",
+  );
   const ackOutboxFileName = bridgeOutboxFileName(
     payload.outboxFileName ||
       payload.outboxFile ||
@@ -317,6 +324,13 @@ function validateBridgeAckBinding({ task, attempt, payload = {} }) {
       passed: Boolean(payload.conversationId),
     });
     checks.push({
+      key: "ackCustomerPresent",
+      label: "sent bridge ack includes customer",
+      expected: "present",
+      actual: payload.customerId || "",
+      passed: Boolean(payload.customerId),
+    });
+    checks.push({
       key: "attemptOutboxFilePresent",
       label: "bridge attempt has outbox file",
       expected: "present",
@@ -359,6 +373,16 @@ function validateBridgeAckBinding({ task, attempt, payload = {} }) {
       expected: task?.conversationId || "",
       actual: payload.conversationId || "",
       passed: Boolean(task?.conversationId && payload.conversationId === task.conversationId),
+    });
+  }
+
+  if (payload.customerId) {
+    checks.push({
+      key: "ackCustomerMatches",
+      label: "bridge ack customer matches send task",
+      expected: expectedCustomerId,
+      actual: payload.customerId || "",
+      passed: Boolean(expectedCustomerId && payload.customerId === expectedCustomerId),
     });
   }
 
