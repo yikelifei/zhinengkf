@@ -2995,6 +2995,28 @@ input[type="checkbox"]:disabled {
   color: #b42318;
 }
 
+.deal-progress.compact {
+  grid-template-columns: repeat(6, minmax(86px, 1fr));
+  gap: 5px;
+}
+
+.deal-progress.compact span {
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 5px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.deal-progress.compact i {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+
+.deal-progress.compact b {
+  font-size: 11px;
+}
+
 .quote-actions.compact .primary,
 .quote-actions.compact .ghost,
 .notice-actions .ghost,
@@ -26586,6 +26608,39 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
 
 /* Iteration 68 WeChat mobile empty state: keep the first app screen complete while data loads. */
 @media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-channels .wechat-channel-list:has(> .empty.empty-cta) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    height: clamp(210px, calc(100dvh - 620px), 300px) !important;
+    max-height: 300px !important;
+    overflow: visible !important;
+    place-items: stretch !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-channels .wechat-channel-list > .empty.empty-cta {
+    align-content: center !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    padding: 18px 14px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-channels .wechat-channel-list > .empty.empty-cta::before {
+    width: 42px !important;
+    height: 32px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-channels .wechat-channel-list > .empty.empty-cta .empty-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: min(158px, 100%) !important;
+    justify-self: center !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-channels .wechat-channel-list > .empty.empty-cta .empty-actions .primary {
+    width: 100% !important;
+  }
+
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list:has(> .empty.empty-cta) {
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) !important;
@@ -26604,7 +26659,14 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   }
 
   body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list > .empty.empty-cta .empty-actions {
-    width: min(280px, 100%) !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: min(158px, 100%) !important;
+    justify-self: center !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] #wechat-channel-center.wechat-mode-config .wechat-config-list > .empty.empty-cta .empty-actions .primary {
+    width: 100% !important;
   }
 }
 
@@ -26636,5 +26698,160 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     line-height: 1.12 !important;
     overflow-wrap: anywhere !important;
     white-space: normal !important;
+  }
+}
+
+/* Iteration 71 WeChat mobile toolbar: no clipped status fragments in app chrome. */
+@media (max-width: 760px) {
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: calc(100vw - 44px) !important;
+    max-width: calc(100vw - 44px) !important;
+    margin-inline: 6px !important;
+    overflow: visible !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.status-group,
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .conversation-toolbar {
+    display: none !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar {
+    display: grid !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .view-context-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .command-context-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar .primary,
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar .ghost {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding-inline: 8px !important;
+    white-space: nowrap !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .top-actions {
+    width: min(100%, calc(100vw - 80px)) !important;
+    max-width: min(100%, calc(100vw - 80px)) !important;
+    margin-inline: 0 !important;
+    justify-self: start !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .top-actions .toolbar-group.context-toolbar {
+    box-sizing: border-box !important;
+    padding: 3px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .top-actions .toolbar-group.context-toolbar .primary,
+  body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .topbar .top-actions .toolbar-group.context-toolbar .ghost {
+    min-height: 32px !important;
+    padding-inline: 6px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* Iteration 70 Context toolbar: active app module owns its own commands. */
+.apple-light-shell .top-actions .toolbar-group.context-toolbar {
+  flex: 0 1 auto;
+  max-width: 100%;
+  align-content: center;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.apple-light-shell .top-actions .toolbar-group.context-toolbar[data-toolbar-scope] {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(247, 247, 249, 0.62)),
+    rgba(255, 255, 255, 0.72);
+}
+
+.apple-light-shell .top-actions .toolbar-group.context-toolbar .ghost.selected {
+  border-color: rgba(0, 122, 255, 0.34);
+  background: var(--blue-soft);
+  color: #0a4f9f;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.82);
+}
+
+.apple-light-shell .top-actions .toolbar-group.context-toolbar .primary,
+.apple-light-shell .top-actions .toolbar-group.context-toolbar .ghost {
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.status-group {
+  flex: 0 1 390px;
+}
+
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .conversation-toolbar {
+  flex: 1 1 430px;
+}
+
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .view-context-toolbar {
+  flex: 0 0 auto;
+}
+
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .command-context-toolbar {
+  flex: 1 1 440px;
+}
+
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .readiness-banner.platform-mode-guide,
+.apple-light-shell .workspace[data-active-section="wechat-channel-center"] .readiness-banner.warning {
+  display: none !important;
+}
+
+@media (max-width: 1180px) {
+  .apple-light-shell .top-actions .toolbar-group.context-toolbar {
+    justify-content: flex-start;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .command-context-toolbar {
+    flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .apple-light-shell .top-actions .toolbar-group.context-toolbar,
+  .apple-light-shell .top-actions .toolbar-group.context-toolbar:nth-of-type(3),
+  .apple-light-shell .top-actions .toolbar-group.context-toolbar:nth-of-type(4) {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: max-content !important;
+    overflow: visible !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions {
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar {
+    flex-wrap: nowrap !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar .primary,
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.context-toolbar .ghost {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 34px !important;
+    padding-inline: 9px !important;
+    white-space: nowrap !important;
+  }
+
+  .apple-light-shell .workspace[data-active-section="wechat-channel-center"] .top-actions .toolbar-group.status-group .queue-health-pill {
+    display: none !important;
   }
 }

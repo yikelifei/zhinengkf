@@ -13,6 +13,8 @@ const localStoreFile = path.join(runtimeDir, "local-store.json");
 const storageRoot = path.join(runtimeDir, "storage");
 const designConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
+const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
+const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
 
 const ports = {
   web: Number(process.env.WEB_PORT || 3100),
@@ -21,7 +23,7 @@ const ports = {
 };
 
 const specs = [
-  { name: "web", command: process.execPath, args: [webRuntimeServerPath], port: ports.web, expected: normalize(webRuntimeServerPath) },
+  webServiceSpec(),
   { name: "design-platform-mock", command: process.execPath, args: [path.join(root, "tools", "mock-design-platform.js")], port: ports.mock, expected: normalize(path.join(root, "tools", "mock-design-platform.js")) },
   { name: "api", command: process.execPath, args: [path.join(root, "dist", "apps", "api", "main.js")], port: ports.api, expected: normalize(path.join(root, "dist", "apps", "api", "main.js")) },
 ];
@@ -29,13 +31,19 @@ const specs = [
 const children = new Map();
 fs.mkdirSync(logsDir, { recursive: true });
 acquireSingleInstanceLock();
-writeWebRuntimeServer();
+if (specs[0].args[0] === webRuntimeServerPath) {
+  writeWebRuntimeServer();
+} else {
+  append("web", "web standalone build missing; using Next dev server fallback");
+}
 writeDesignConfig();
 writeHeartbeat();
 setInterval(writeHeartbeat, 5000);
 
+killStaleRuntimeProcesses();
 for (const spec of specs) ensureService(spec);
 setInterval(() => {
+  killStaleRuntimeProcesses();
   for (const spec of specs) ensureService(spec);
 }, 5000);
 
@@ -58,14 +66,33 @@ process.on("exit", (code) => append("stable-runtime", `exit code=${code}`));
 
 function ensureService(spec) {
   const owners = getPortOwnerPids(spec.port);
-  const wrongOwners = owners.filter((pid) => !ownerMatches(pid, spec.expected));
+  const existing = children.get(spec.name);
+  if (existing && owners.includes(existing.pid)) return;
+  const wrongOwners = owners.filter((pid) => {
+    if (existing && pid === existing.pid) return false;
+    const match = ownerMatches(pid, spec.expected);
+    if (match === true) return false;
+    if (match === "unknown" && portHealthMatches(spec)) {
+      append(spec.name, `port ${spec.port} owner ${pid} command unavailable; accepted by health check`);
+      return false;
+    }
+    return true;
+  });
   if (wrongOwners.length) {
     append(spec.name, `port ${spec.port} owned by wrong pid(s) ${wrongOwners.join(",")}; killing`);
     for (const pid of wrongOwners) killPid(pid);
     return;
   }
-  if (owners.length) return;
-  const existing = children.get(spec.name);
+  const unmanagedOwners = owners.filter((pid) => {
+    if (!existing) return true;
+    if (pid === existing.pid) return false;
+    return !(ownerMatches(pid, spec.expected) === true && isDescendantPid(pid, existing.pid));
+  });
+  if (unmanagedOwners.length) {
+    append(spec.name, `port ${spec.port} owned by unmanaged matching pid(s) ${unmanagedOwners.join(",")}; killing for runtime isolation`);
+    for (const pid of unmanagedOwners) killPid(pid);
+    return;
+  }
   if (existing && isPidAlive(existing.pid)) return;
   startService(spec);
 }
@@ -88,6 +115,19 @@ function startService(spec) {
     if (current === child) children.delete(spec.name);
     append(spec.name, `exited code=${code ?? ""} signal=${signal ?? ""}`);
   });
+}
+
+function webServiceSpec() {
+  if (fs.existsSync(webStandaloneServerPath)) {
+    return { name: "web", command: process.execPath, args: [webRuntimeServerPath], port: ports.web, expected: normalize(webRuntimeServerPath) };
+  }
+  return {
+    name: "web",
+    command: process.execPath,
+    args: [nextCliPath, "dev", "apps/web", "-H", "127.0.0.1", "-p", String(ports.web), "--webpack"],
+    port: ports.web,
+    expected: [normalize(nextCliPath), "next/dist/server/lib/start-server.js"],
+  };
 }
 
 function serviceEnv(port) {
@@ -152,7 +192,42 @@ function getPortOwnerPids(port) {
 
 function ownerMatches(pid, expected) {
   const commandLine = normalize(commandLineForPid(pid));
-  return commandLine.includes(expected);
+  if (!commandLine) return "unknown";
+  const expectedMarkers = Array.isArray(expected) ? expected : [expected];
+  return expectedMarkers.some((marker) => commandLine.includes(marker));
+}
+
+function portHealthMatches(spec) {
+  if (spec.name === "api") {
+    const json = requestJson(`http://127.0.0.1:${spec.port}/api/health`);
+    return normalize(json?.localStore?.path) === normalize(localStoreFile);
+  }
+  if (spec.name === "design-platform-mock") {
+    const json = requestJson(`http://127.0.0.1:${spec.port}/v1/health`);
+    return json?.ok === true && json?.service === "mock-design-platform";
+  }
+  if (spec.name === "web") {
+    return requestOk(`http://127.0.0.1:${spec.port}/`);
+  }
+  return false;
+}
+
+function requestJson(url) {
+  try {
+    const result = spawnSync("curl.exe", ["-s", "--max-time", "2", url], { encoding: "utf8", windowsHide: true });
+    if (result.status !== 0 || !result.stdout) return null;
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function requestOk(url) {
+  const result = spawnSync("curl.exe", ["-s", "-o", "NUL", "-w", "%{http_code}", "--max-time", "2", url], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return result.status === 0 && Number(result.stdout) >= 200 && Number(result.stdout) < 500;
 }
 
 function commandLineForPid(pid) {
@@ -161,10 +236,50 @@ function commandLineForPid(pid) {
   return result.stdout || "";
 }
 
+function isDescendantPid(pid, ancestorPid) {
+  const ancestor = Number(ancestorPid);
+  let current = Number(pid);
+  const seen = new Set();
+  for (let depth = 0; depth < 12; depth += 1) {
+    const parent = parentPidForPid(current);
+    if (!parent || seen.has(parent)) return false;
+    if (parent === ancestor) return true;
+    seen.add(parent);
+    current = parent;
+  }
+  return false;
+}
+
+function parentPidForPid(pid) {
+  const script = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty ParentProcessId`;
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const parentPid = Number(String(result.stdout || "").trim());
+  return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : null;
+}
+
 function killPid(pid) {
   try { process.kill(Number(pid), "SIGTERM"); } catch {}
   const script = `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`;
   spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true });
+}
+
+function killStaleRuntimeProcesses() {
+  if (process.platform !== "win32") return;
+  const script = [
+    "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'cmd.exe'\"",
+    "$items | Where-Object { $_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo|[.]runtime[\\\\/](supervisor-child|stable-supervise|supervise|launch|web-standalone-server)|tools[\\\\/](start-dev-ports|desktop-service-supervisor)[.]js.*(--keep-alive|--supervisor-child)|supervisor-child-mock[.]cmd' } | ForEach-Object { $_.ProcessId }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  const pids = String(result.stdout || "")
+    .split(/\r?\n/)
+    .map((line) => Number(line.trim()))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+  if (!pids.length) return;
+  append("stable-runtime", `killing stale runtime process pid(s) ${pids.join(",")}`);
+  for (const pid of pids) killPid(pid);
 }
 
 function isPidAlive(pid) {
@@ -188,7 +303,7 @@ function writeDesignConfig() {
 
 function writeWebRuntimeServer() {
   fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(webRuntimeServerPath, `"use strict";\nconst path = require("node:path");\nconst { createRequire } = require("node:module");\nconst root = ${JSON.stringify(root)};\nconst rootRequire = createRequire(path.join(root, "package.json"));\nconst serverPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");\nprocess.chdir(path.join(root, "apps", "web"));\nrootRequire(serverPath);\n`, "utf8");
+  fs.writeFileSync(webRuntimeServerPath, `"use strict";\nconst path = require("node:path");\nconst { createRequire } = require("node:module");\nconst root = ${JSON.stringify(root)};\nconst rootRequire = createRequire(path.join(root, "package.json"));\nconst serverPath = ${JSON.stringify(webStandaloneServerPath)};\nprocess.chdir(path.join(root, "apps", "web"));\nrootRequire(serverPath);\n`, "utf8");
 }
 
 function append(name, message) {

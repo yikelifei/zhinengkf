@@ -337,6 +337,84 @@ test("automation run summarizes skipped reasons for operator triage", async () =
   );
 });
 
+test("automation run summarizes low value stage progress and next action", async () => {
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => ({
+        autoSubmit: {
+          submitted: [{ designJobId: "design_submit_1", wechatAccountId: "wechat_1", conversationId: "conversation_1" }],
+          skipped: [{ designJobId: "design_skip_1", reason: "missing_required_info" }],
+          failed: [],
+        },
+        imageSend: {
+          queued: [{ id: "send_image_1", wechatAccountId: "wechat_1", conversationId: "conversation_1" }],
+          skipped: [],
+          failed: [],
+        },
+        quoteSend: {
+          queued: [{ id: "send_quote_1", wechatAccountId: "wechat_1", conversationId: "conversation_1" }],
+          skipped: [],
+          failed: [],
+        },
+        orderDraft: {
+          created: [{ id: "order_1", wechatAccountId: "wechat_1", conversationId: "conversation_1" }],
+          skipped: [],
+          failed: [],
+        },
+        orderConfirmation: { queued: [], skipped: [], failed: [] },
+        orderFollowup: { queued: [], skipped: [], failed: [] },
+      }),
+    },
+    wechatDispatch: {
+      processSafeSendQueue: async () => ({
+        processed: [{ taskId: "send_image_1", sendTask: { wechatAccountId: "wechat_1", conversationId: "conversation_1" } }],
+        blocked: [{ taskId: "send_blocked_1", reason: "window_guard_failed" }],
+        failed: [],
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+
+  assert.equal(run.stageSummary.progressed, 5);
+  assert.equal(run.stageSummary.blocked, 2);
+  assert.equal(run.stageSummary.failed, 0);
+  assert.equal(run.stageSummary.nextAction, "草稿被跳过时，优先补预算、搭配、素材和客户用途。");
+  assert.deepEqual(
+    run.stageSummary.stages.map((stage) => [stage.key, stage.completed, stage.blocked, stage.failed, stage.tone]),
+    [
+      ["design", 1, 1, 0, "warning"],
+      ["imageSend", 1, 0, 0, "ok"],
+      ["quote", 1, 0, 0, "ok"],
+      ["order", 1, 0, 0, "ok"],
+      ["orderSend", 0, 0, 0, "idle"],
+      ["safeSend", 1, 1, 0, "warning"],
+      ["timeout", 0, 0, 0, "idle"],
+    ],
+  );
+});
+
+test("automation skipped run includes stage summary for blocked readiness", async () => {
+  const service = createService({
+    catalog: {
+      auditSkus: async () => ({
+        total: 1,
+        readyCount: 0,
+        catalogStructureIssueCount: 1,
+        blockingRepairCount: 2,
+      }),
+    },
+  });
+
+  const run = await service.runOnce("manual");
+
+  assert.equal(run.skipped, true);
+  assert.equal(run.stageSummary.progressed, 0);
+  assert.equal(run.stageSummary.blocked, 1);
+  assert.equal(run.stageSummary.stages[0].key, "run");
+  assert.equal(run.stageSummary.nextAction, "先处理开机检查阻塞项，再重新跑低价值自动化。");
+});
+
 test("automation status keeps recent runs newest first with a cap", async () => {
   const service = createService();
 

@@ -47,6 +47,7 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const statusSection = sliceBetween(service, /function channelStatus\(/, /function maskSecret/);
+  const topbarSection = sliceBetween(page, /<div className="top-actions">/, /<\/header>/);
 
   assert.match(statusSection, /const runtimeKeys = new Set\(\["window_observer", "windows_bridge"\]\)/);
   assert.match(statusSection, /const sendAdapterKeys = new Set\(\["safe_send_queue"\]\)/);
@@ -80,6 +81,14 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /className="wechat-live-action-groups"/);
   assert.match(page, /aria-label="会话处理"[\s\S]*processRouteInbound/);
   assert.match(page, /aria-label="审核发送"[\s\S]*setReviewWorkbenchView\("handoff"\)[\s\S]*setSendWorkbenchView\("queue"\)/);
+  assert.match(page, /async function refreshWechatWorkspaceStatus/);
+  assert.match(page, /function renderTopStatusPills/);
+  assert.match(page, /function renderTopContextActions/);
+  assert.match(page, /data-toolbar-scope="wechat-actions"/);
+  assert.match(page, /isDesignWorkspace && platformReadiness && !platformReadiness\.canSubmitFormalGeneration/);
+  assert.match(topbarSection, /renderTopStatusPills\(\)/);
+  assert.match(topbarSection, /renderTopContextActions\(\)/);
+  assert.doesNotMatch(topbarSection, /checkDesignPlatform|createDemo|preflightActiveJob|submitActiveJob/);
   assert.match(styles, /\.wechat-channel-card\.needs_send_adapter::before/);
   assert.match(styles, /\.wechat-channel-next-step\.needs_runtime,[\s\S]*\.wechat-channel-next-step\.needs_send_adapter/);
   assert.match(styles, /\.wechat-config-sections/);
@@ -102,6 +111,14 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(styles, /\.readiness-banner\.platform-mode-guide[\s\S]*grid-template-columns: auto minmax\(0, 1fr\) !important/);
   assert.match(styles, /\.readiness-banner\.platform-mode-guide span,[\s\S]*\.readiness-banner\.platform-mode-guide small[\s\S]*overflow-wrap: anywhere !important/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*#wechat-channel-center\.wechat-mode-flow \.wechat-service-canvas \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(styles, /Context toolbar: active app module owns its own commands/);
+  assert.match(styles, /\.top-actions \.toolbar-group\.context-toolbar/);
+  assert.match(styles, /\.workspace\[data-active-section="wechat-channel-center"\] \.top-actions \.command-context-toolbar/);
+  assert.match(styles, /\.workspace\[data-active-section="wechat-channel-center"\] \.readiness-banner\.platform-mode-guide/);
+  assert.match(styles, /WeChat mobile toolbar: no clipped status fragments/);
+  assert.match(styles, /\.workspace\[data-active-section="wechat-channel-center"\] \.top-actions \.toolbar-group\.status-group,[\s\S]*\.workspace\[data-active-section="wechat-channel-center"\] \.top-actions \.conversation-toolbar \{[\s\S]*display: none !important/);
+  assert.match(styles, /\.workspace\[data-active-section="wechat-channel-center"\] \.top-actions \.view-context-toolbar \{[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) !important/);
+  assert.match(styles, /\.workspace\[data-active-section="wechat-channel-center"\] \.top-actions \.command-context-toolbar \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) !important/);
 });
 
 test("execute send only starts queued tasks", () => {
@@ -299,7 +316,8 @@ test("notice center exposes manual selection targets for operator follow-up", ()
   assert.match(api, /\/quotes\/\$\{id\}\/verify-payment-proof/);
   assert.match(api, /sendTask\?: SendTask \| null/);
   assert.match(verifyPaymentProofSection, /verifyQuotePaymentProofAndQueueConfirmation\([\s\S]*quote\.id,[\s\S]*paymentStatus,[\s\S]*identityExpectation\(quote\)/);
-  assert.match(verifyPaymentProofSection, /setQuotes\(\(items\) =>[\s\S]*item\.id === result\.quote\.id[\s\S]*\[result\.quote, \.\.\.items\]/);
+  assert.match(verifyPaymentProofSection, /upsertQuoteState\(result\.quote\)/);
+  assert.match(verifyPaymentProofSection, /function upsertQuoteState\(quote: QuoteDraft \| null \| undefined\)/);
   assert.match(verifyPaymentProofSection, /upsertOrderDraftState\(result\.orderDraft\)/);
   assert.match(verifyPaymentProofSection, /function upsertOrderDraftState\(order: OrderDraft \| null \| undefined\)/);
   assert.match(verifyPaymentProofSection, /setOrderDrafts\(\(items\) =>[\s\S]*item\.id === order\.id[\s\S]*\[order, \.\.\.items\]/);
@@ -344,6 +362,7 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const quoteService = readProjectFile("apps/api/src/quotes/quotes.service.ts");
   const orderService = readProjectFile("apps/api/src/orders/orders.service.ts");
+  const reviewsService = readProjectFile("apps/api/src/reviews/reviews.service.ts");
   const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const identityHelper = readProjectFile("apps/api/src/shared/identity-expectation.ts");
   const lowValueOrderConfirmationSection = sliceBetween(
@@ -381,6 +400,11 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order confirmation"\)/);
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order follow-up"\)/);
   assert.match(wechatService, /this\.orders\.update\(order\.id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId/);
+  assert.match(reviewsService, /private async updateReviewedOrder/);
+  assert.match(reviewsService, /function appendCustomerNote\(current: unknown, next: string\)/);
+  assert.match(reviewsService, /approve_confirmation[\s\S]*result\.orderDraft = await this\.updateReviewedOrder\(id, \{[\s\S]*customerNotes: appendCustomerNote/);
+  assert.match(reviewsService, /approve_followup[\s\S]*result\.orderDraft = await this\.updateReviewedOrder\(id, \{[\s\S]*customerNotes: appendCustomerNote/);
+  assert.match(reviewsService, /decision === "reject_order" \? \{ status: "cancelled" \} : \{\}/);
   assert.match(wechatService, /queueOrderFollowup\([\s\S]*selectedImage: this\.orderSelectedImage\(order\)/);
   assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload/);
   assert.match(wechatService, /expectedWechatAccountId: order\?\.wechatAccountId \|\| designJob\?\.wechatAccountId/);
@@ -1107,6 +1131,7 @@ test("review center renders manual lock audit details", () => {
 
 test("review center exposes current manual locked conversations", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
+  const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const reviewCenterIdIndex = page.indexOf("id=\"review-center\"");
   const reviewSection = page.slice(
@@ -1195,6 +1220,12 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /appendOrderCustomerNotes\(order\.customerNotes, manualNote\)/);
   assert.match(page, /updateOrderDraft\(order\.id, \{[\s\S]*owner: reviewer,[\s\S]*customerNotes:/);
   assert.match(page, /reviewOrder\(order\.id, \{[\s\S]*decision: "request_followup"[\s\S]*note: manualNote/);
+  assert.match(api, /export type ReviewOrderResult = \{/);
+  assert.match(api, /export async function reviewOrder[\s\S]*Promise<ReviewOrderResult>/);
+  assert.match(page, /function applyReviewOrderResultState\(result: ReviewOrderResult \| null \| undefined\)/);
+  assert.match(page, /applyReviewOrderResultState\(reviewed\)/);
+  assert.match(page, /upsertOrderDraftState\(reviewResult\.orderDraft \|\| reviewResult\.order/);
+  assert.match(page, /upsertSendTaskState\(reviewResult\.sendTask\)/);
   assert.match(page, /latestHighValueOrderManualNote\(order\.customerNotes\)/);
   assert.match(page, /recordHighValueOrderManualFollowup\(order\)/);
   assert.match(page, /function sortHighValueReviewOrderDrafts\(orders: OrderDraft\[\]\)/);
@@ -1521,7 +1552,10 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(quoteListSection, /const rowPreviewWarnings = rowPreview\?\.warnings \|\| \[\]/);
   assert.match(quoteListSection, /const rowSendRisk = quoteSendBlockReason\(quote, rowPreviewWarnings\)/);
   assert.match(quoteListSection, /quoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
+  assert.match(quoteListSection, /const rowProgressSteps = dealProgressSteps\(quote, orderDraft\)/);
   assert.match(quoteListSection, /selectedImage \? `选中第 \$\{selectedImage\.position \|\| "-"\} 张` : "未选图"/);
+  assert.match(quoteListSection, /aria-label="报价成交进度"/);
+  assert.match(quoteListSection, /rowProgressSteps\.map\(\(step\) =>/);
   assert.match(quoteListSection, /发送检查 \{rowSendRisk\}/);
   assert.match(quoteListSection, /Boolean\(rowSendRisk\)/);
   assert.match(quoteListSection, /title=\{rowSendRisk \|\| "发送报价"\}/);
@@ -1529,10 +1563,19 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(quoteListSection, /toggleQuoteCenterPreview\(quote\)/);
   assert.match(quoteListSection, /copyQuoteCenterPreviewMessage\(rowPreview\)/);
   assert.match(orderListSection, /orderDealNextStep\(order\)/);
+  assert.match(orderListSection, /const linkedQuote = order\.quoteDraft \|\| quotes\.find\(\(quote\) => quote\.id === order\.quoteDraftId\) \|\| null/);
+  assert.match(orderListSection, /const rowProgressSteps = linkedQuote \? dealProgressSteps\(linkedQuote, order\) : \[\]/);
   assert.match(orderListSection, /selectedImage \? `选中第 \$\{selectedImage\.position \|\| "-"\} 张` : "未选图"/);
+  assert.match(orderListSection, /aria-label="订单成交进度"/);
+  assert.match(orderListSection, /rowProgressSteps\.map\(\(step\) =>/);
   assert.match(orderSelectedImageSection, /function snapshotDesignImage/);
   assert.match(orderSelectedImageSection, /snapshotDesignImage\(order\.selectedImageSnapshot\)/);
   assert.match(orderSelectedImageSection, /order\.quoteDraft\?\.designJob\?\.images\?\.find/);
+  assert.match(page, /function dealProgressSteps\(quote: QuoteDraft, order: OrderDraft \| null\)/);
+  assert.match(page, /quoteSent[\s\S]*paid[\s\S]*orderCreated[\s\S]*processing[\s\S]*fulfilled/);
+  assert.match(page, /key: "payment"[\s\S]*current: orderCreated && !paid/);
+  assert.match(page, /key: "order"[\s\S]*current: quote\.status === "accepted" && !orderCreated/);
+  assert.match(css, /\.deal-progress\.compact/);
   assert.match(page, /className=\{`deal-next-step inline \$\{nextStep\.tone\}`\}/);
   assert.match(quoteListSection, /runQuoteDealNextStep\(quote, orderDraft, rowSendRisk\)/);
   assert.match(orderListSection, /runOrderDealNextStep\(order\)/);
@@ -1544,6 +1587,7 @@ test("web quote center renders guarded next-step guidance", () => {
 
 test("web quote center can filter records by next-step actionability", () => {
   const page = readProjectFile("apps/web/src/app/page.tsx");
+  const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const quoteFilterSection = page.slice(
     page.indexOf("const filteredQuotes = quotes.filter"),
@@ -1559,9 +1603,19 @@ test("web quote center can filter records by next-step actionability", () => {
   );
 
   assert.match(page, /const dealNextStepFilterOptions = \[/);
+  assert.match(page, /const dealProgressFilterOptions = \[/);
   assert.match(page, /const \[dealNextStepFilter, setDealNextStepFilter\] = useState<string>\("all"\)/);
+  assert.match(page, /const \[dealProgressFilter, setDealProgressFilter\] = useState<string>\("all"\)/);
   assert.match(page, /function upsertOrderDraftState\(order: OrderDraft \| null \| undefined\)/);
   assert.match(page, /function upsertSendTaskState\(task: SendTask \| null \| undefined\)/);
+  assert.match(page, /function upsertQuoteState\(quote: QuoteDraft \| null \| undefined\)/);
+  assert.match(api, /export async function createQuote\(id: string, expected: IdentityExpectation = \{\}\): Promise<QuoteDraft>/);
+  assert.match(page, /async function quoteActiveJob\(\)[\s\S]*const quote = await createQuote\(activeJob\.id, identityExpectation\(activeJob\)\)[\s\S]*upsertQuoteState\(quote\)/);
+  assert.match(page, /async function updateQuoteDraft\([\s\S]*const updated = await updateQuote\(quote\.id, nextPatch\)[\s\S]*upsertQuoteState\(updated\)/);
+  assert.match(page, /async function reviseQuoteDraftSelection\([\s\S]*const updated = await reviseQuoteSelection\(quote\.id,[\s\S]*upsertQuoteState\(updated\)/);
+  assert.match(page, /async function saveActiveQuoteEdit\([\s\S]*const updated = await updateQuote\(activeQuote\.id,[\s\S]*upsertQuoteState\(updated\)/);
+  assert.match(page, /async function queueQuoteDraft\([\s\S]*const queued = await queueQuoteSend\(quote\.id, identityExpectation\(quote\)\)[\s\S]*upsertQuoteState\(queued\.quote\)[\s\S]*upsertSendTaskState\(queued\.sendTask\)/);
+  assert.match(page, /async function queueQuoteAfterPreviewCheck\([\s\S]*const queued = await queueQuoteSend\(quote\.id, identityExpectation\(quote\)\)[\s\S]*upsertQuoteState\(queued\.quote\)[\s\S]*upsertSendTaskState\(queued\.sendTask\)/);
   assert.match(page, /async function createOrderDraft\(quote: QuoteDraft\)[\s\S]*const orderDraft = await createOrderDraftFromQuote\(quote\.id, identityExpectation\(quote\)\)[\s\S]*upsertOrderDraftState\(orderDraft\)/);
   assert.match(page, /async function updateOrderDraftStatus\([\s\S]*const updated = await updateOrderDraft\(order\.id,[\s\S]*upsertOrderDraftState\(updated\)/);
   assert.match(page, /async function queueOrderDraftConfirmation\([\s\S]*const result = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(result\.orderDraft\)[\s\S]*upsertSendTaskState\(result\.sendTask\)/);
@@ -1569,11 +1623,20 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /async function queueOrderConfirmationAfterPreviewCheck\([\s\S]*const confirmation = await queueOrderConfirmation\(order\.id, identityExpectation\(order\), manualRelease\)[\s\S]*upsertOrderDraftState\(confirmation\.orderDraft\)[\s\S]*upsertSendTaskState\(confirmation\.sendTask\)/);
   assert.match(quoteFilterSection, /quoteDealNextStep\(quote, orderDraft, quoteSendBlockReason\(quote\)\)/);
   assert.match(quoteFilterSection, /orderDealNextStep\(order\)/);
+  assert.match(quoteFilterSection, /matchesDealProgressFilter\(dealProgressSteps\(quote, orderDraft\), dealProgressFilter\)/);
+  assert.match(quoteFilterSection, /const linkedQuote = order\.quoteDraft \|\| quotes\.find\(\(quote\) => quote\.id === order\.quoteDraftId\) \|\| null/);
+  assert.match(quoteFilterSection, /matchesDealProgressFilter\(dealProgressSteps\(linkedQuote, order\), dealProgressFilter\)/);
   assert.match(quoteFilterSection, /matchesDealNextStepFilter\(step, dealNextStepFilter, quote\.status\)/);
   assert.match(quoteFilterSection, /matchesDealNextStepFilter\(step, dealNextStepFilter, order\.status\)/);
+  assert.match(helperSection, /function matchesDealProgressFilter/);
+  assert.match(helperSection, /filter === "finish"[\s\S]*step\.state === "done" \|\| step\.state === "current"/);
   assert.match(helperSection, /filter === "actionable"[\s\S]*step\.action !== "none"/);
   assert.match(helperSection, /filter === "blocked"[\s\S]*step\.action === "none"/);
+  assert.match(controlsSection, /renderFilterSegment\("成交阶段", dealProgressFilterOptions, dealProgressFilter, setDealProgressFilter\)/);
   assert.match(controlsSection, /renderFilterSegment\("下一步", dealNextStepFilterOptions, dealNextStepFilter, setDealNextStepFilter\)/);
+  assert.match(page, /setDealProgressFilter\("confirm"\)/);
+  assert.match(page, /setDealProgressFilter\("payment"\)/);
+  assert.match(page, /setDealProgressFilter\("order"\)/);
   assert.match(page, /const quoteNextStepCounts = calculateDealNextStepCounts\(quotes, orderDrafts\)/);
   assert.match(page, /const orderNextStepCounts = calculateOrderNextStepCounts\(orderDrafts\)/);
   assert.match(page, /className="deal-next-summary"/);
@@ -1586,7 +1649,7 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /window\.confirm\(`将按顺序执行前 \$\{items\.length\} 个可执行成交事项/);
   assert.match(page, /item\.action === "queue_quote" && item\.quote/);
   assert.match(page, /await queueQuoteAfterPreviewCheck\(item\.quote\)/);
-  assert.match(page, /const orderDraft = await createOrderDraftFromQuote\(item\.quote\.id, identityExpectation\(item\.quote\)\)[\s\S]*upsertOrderDraftState\(orderDraft\)/);
+  assert.match(page, /const updatedQuote = await updateQuote\(item\.quote\.id, \{ \.\.\.identityExpectation\(item\.quote\), status: "accepted" \}\)[\s\S]*upsertQuoteState\(updatedQuote\)[\s\S]*const orderDraft = await createOrderDraftFromQuote\(item\.quote\.id, identityExpectation\(item\.quote\)\)[\s\S]*upsertOrderDraftState\(orderDraft\)/);
   assert.match(page, /item\.action === "queue_order_confirmation" && item\.order/);
   assert.match(page, /queueOrderConfirmationAfterPreviewCheck\(item\.order\)/);
   assert.match(page, /const updated = await updateOrderDraft\(item\.order\.id, \{ \.\.\.identityExpectation\(item\.order\), status: "processing" \}\)[\s\S]*upsertOrderDraftState\(updated\)/);

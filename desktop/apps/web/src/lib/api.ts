@@ -1210,6 +1210,18 @@ export type ReviewCenter = {
   logs: ReviewLog[];
 };
 
+export type ReviewOrderResult = {
+  result?:
+    | {
+        orderDraft?: OrderDraft | null;
+        order?: OrderDraft | null;
+        sendTask?: SendTask | null;
+      }
+    | OrderDraft
+    | null;
+  log?: ReviewLog;
+};
+
 export type DesignPlatformHealth = {
   ok: boolean;
   latencyMs: number;
@@ -2176,6 +2188,22 @@ export type AutomationRun = {
       sampleTargets: string[];
     }>;
   };
+  stageSummary?: {
+    progressed: number;
+    blocked: number;
+    failed: number;
+    nextAction: string;
+    stages: Array<{
+      key: string;
+      label: string;
+      completed: number;
+      blocked: number;
+      failed: number;
+      detail: string;
+      action: string;
+      tone: "ok" | "warning" | "error" | "idle";
+    }>;
+  };
 };
 
 export type AutomationStatus = {
@@ -2401,8 +2429,8 @@ export async function selectDesignImage(id: string, input: SelectImagePayload, e
   return postJson<Record<string, unknown>>(`/design-jobs/${id}/select-image`, payload);
 }
 
-export async function createQuote(id: string, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quote`, expected);
+export async function createQuote(id: string, expected: IdentityExpectation = {}): Promise<QuoteDraft> {
+  return postJson<QuoteDraft>(`/design-jobs/${id}/quote`, expected);
 }
 
 export async function getQuotes(filters: IdentityFilters = {}): Promise<QuoteDraft[]> {
@@ -2565,8 +2593,8 @@ export async function reviewOrder(id: string, payload: {
   reviewer?: string;
   note?: string;
   followupType?: "production" | "delivery";
-} & IdentityExpectation): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/reviews/orders/${id}`, payload);
+} & IdentityExpectation): Promise<ReviewOrderResult> {
+  return postJson<ReviewOrderResult>(`/reviews/orders/${id}`, payload);
 }
 
 export async function getNotifications(unreadOnly = false, filters: IdentityFilters = {}): Promise<NotificationItem[]> {

@@ -228,6 +228,7 @@ test("manual-approved order review queues confirmation and records audit log", a
     {},
     {
       getOrderDraft: () => order,
+      updateOrderDraft: (id, patch) => ({ ...order, ...patch, id }),
       createReviewLog: (payload) => {
         reviewLogs.push(payload);
         return payload;

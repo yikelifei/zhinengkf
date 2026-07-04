@@ -269,6 +269,13 @@ export class ReviewsService {
         releaseReason: "manual_approve_order_confirmation",
         automation: { source: "manual_order_review", valueLevel: "high" },
       });
+      result.orderDraft = await this.updateReviewedOrder(id, {
+        owner: reviewer,
+        customerNotes: appendCustomerNote(
+          order.customerNotes,
+          payload.note || "高价值订单已人工审核，订单确认已进入微信安全发送队列。",
+        ),
+      });
     } else if (decision === "approve_followup") {
       const followupType = payload.followupType || "delivery";
       result = await this.wechat.queueOrderFollowup(id, {
@@ -282,7 +289,29 @@ export class ReviewsService {
         releaseReason: "manual_approve_order_followup",
         automation: { source: "manual_order_review", valueLevel: "high", followupType },
       });
+      result.orderDraft = await this.updateReviewedOrder(id, {
+        owner: reviewer,
+        customerNotes: appendCustomerNote(
+          order.customerNotes,
+          payload.note ||
+            (followupType === "delivery"
+              ? "高价值订单已人工审核，交期说明已进入微信安全发送队列。"
+              : "高价值订单已人工审核，生产进度已进入微信安全发送队列。"),
+        ),
+      });
     } else {
+      const note = appendCustomerNote(
+        order.customerNotes,
+        payload.note ||
+          (decision === "reject_order"
+            ? "高价值订单审核未通过，已停止自动推进。"
+            : "高价值订单已保留在人工处理队列，请客服继续核对客户需求、收款、交期和话术。"),
+      );
+      result.orderDraft = await this.updateReviewedOrder(id, {
+        owner: reviewer,
+        customerNotes: note,
+        ...(decision === "reject_order" ? { status: "cancelled" } : {}),
+      });
       await this.notifications.create(
         decision === "reject_order" ? "warning" : "info",
         decision === "reject_order" ? "高价值订单审核未通过" : "高价值订单继续人工跟进",
@@ -312,6 +341,22 @@ export class ReviewsService {
     return { result, log };
   }
 
+  private async updateReviewedOrder(id: string, data: { owner?: string; customerNotes?: string; status?: string }) {
+    if (appConfig.useLocalStore) return this.localStore.updateOrderDraft(id, data);
+    return (this.prisma as any).orderDraft.update({
+      where: { id },
+      data,
+      include: {
+        customer: true,
+        conversation: true,
+        wechatAccount: true,
+        designJob: true,
+        quoteDraft: { include: { designJob: true, customer: true, selectedImage: true } },
+        selectedImage: true,
+      },
+    });
+  }
+
   private async createLog(payload: {
     targetType: string;
     targetId: string;
@@ -330,6 +375,15 @@ export class ReviewsService {
 
 function isDesignJobHighValue(job: any) {
   return Boolean(job?.isHighValue) || isHighValueBudget(job?.budget, Number(appConfig.highValueAmountCny || 10000));
+}
+
+function appendCustomerNote(current: unknown, next: string) {
+  const existing = String(current || "").trim();
+  const note = String(next || "").trim();
+  if (!note) return existing;
+  if (!existing) return note;
+  if (existing.includes(note)) return existing;
+  return `${existing} ${note}`;
 }
 
 function isDesignJobReviewVisible(job: any) {

@@ -33,6 +33,23 @@ type AutomationSkipSummary = {
   }>;
 };
 
+type AutomationStageSummary = {
+  progressed: number;
+  blocked: number;
+  failed: number;
+  nextAction: string;
+  stages: Array<{
+    key: string;
+    label: string;
+    completed: number;
+    blocked: number;
+    failed: number;
+    detail: string;
+    action: string;
+    tone: "ok" | "warning" | "error" | "idle";
+  }>;
+};
+
 type AutomationRun = {
   trigger: "startup" | "interval" | "manual";
   startedAt: string;
@@ -45,6 +62,7 @@ type AutomationRun = {
   results: Record<string, unknown>;
   identityAudit?: AutomationIdentityAudit;
   skipSummary?: AutomationSkipSummary;
+  stageSummary?: AutomationStageSummary;
 };
 
 const AUTOMATION_IDENTITY_SOURCE_KEYS = new Set([
@@ -234,6 +252,156 @@ function buildAutomationSkipSummary(run: AutomationRun): AutomationSkipSummary {
   return {
     total: records.length,
     reasons,
+  };
+}
+
+function countArray(record: any, key: string) {
+  const value = record?.[key];
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function countNestedArray(record: any, path: string[]) {
+  let current = record;
+  for (const key of path) current = current?.[key];
+  return Array.isArray(current) ? current.length : 0;
+}
+
+function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary {
+  if (run.skipped) {
+    return {
+      progressed: 0,
+      blocked: 1,
+      failed: run.errors.length,
+      nextAction: run.reason === "automation_readiness_blocked" ? "先处理开机检查阻塞项，再重新跑低价值自动化。" : "稍后重新运行自动化。",
+      stages: [
+        {
+          key: "run",
+          label: "本轮执行",
+          completed: 0,
+          blocked: 1,
+          failed: run.errors.length,
+          detail: run.reason || "已跳过",
+          action: run.reason === "automation_readiness_blocked" ? "处理 readiness.blockers 里的第一项。" : "等待当前自动化结束后重试。",
+          tone: run.errors.length ? "error" : "warning",
+        },
+      ],
+    };
+  }
+
+  const lowValue = (run.results.lowValueAutomation || {}) as any;
+  const sendQueue = (run.results.processLowValueSendQueue || {}) as any;
+  const directOrderDraft = (run.results.scanLowValueOrderDrafts || {}) as any;
+  const directOrderConfirmation = (run.results.scanLowValueOrderConfirmations || {}) as any;
+  const directOrderFollowup = (run.results.scanLowValueOrderFollowups || {}) as any;
+  const sendOperations = (run.results.scanSendOperations || {}) as any;
+  const timeouts = (run.results.scanTimeouts || {}) as any;
+
+  const stages: AutomationStageSummary["stages"] = [
+    {
+      key: "design",
+      label: "出图推进",
+      completed: countNestedArray(lowValue, ["autoSubmit", "submitted"]),
+      blocked: countNestedArray(lowValue, ["autoSubmit", "skipped"]),
+      failed: countNestedArray(lowValue, ["autoSubmit", "failed"]),
+      detail: "把资料完整的低价值草稿提交给设计平台。",
+      action: "草稿被跳过时，优先补预算、搭配、素材和客户用途。",
+      tone: "idle",
+    },
+    {
+      key: "imageSend",
+      label: "图片发送",
+      completed: countNestedArray(lowValue, ["imageSend", "queued"]),
+      blocked: countNestedArray(lowValue, ["imageSend", "skipped"]),
+      failed: countNestedArray(lowValue, ["imageSend", "failed"]),
+      detail: "把已完成且低价值的候选图放入安全发送队列。",
+      action: "图片未入队时，检查客户是否已人工接管、候选图是否完整、任务是否变高价值。",
+      tone: "idle",
+    },
+    {
+      key: "quote",
+      label: "报价发送",
+      completed: countNestedArray(lowValue, ["quoteSend", "queued"]),
+      blocked: countNestedArray(lowValue, ["quoteSend", "skipped"]),
+      failed: countNestedArray(lowValue, ["quoteSend", "failed"]),
+      detail: "客户选图后，把低价值报价话术放入安全发送队列。",
+      action: "报价被跳过时，检查选图、数量、单价、利润和会话身份。",
+      tone: "idle",
+    },
+    {
+      key: "order",
+      label: "订单草稿",
+      completed: countNestedArray(lowValue, ["orderDraft", "created"]) + countArray(directOrderDraft, "created"),
+      blocked: countNestedArray(lowValue, ["orderDraft", "skipped"]) + countArray(directOrderDraft, "skipped"),
+      failed: countNestedArray(lowValue, ["orderDraft", "failed"]) + countArray(directOrderDraft, "failed"),
+      detail: "客户接受报价后生成订单草稿，不自动标记收款。",
+      action: "订单未生成时，检查报价状态、客户确认语义和付款证明规则。",
+      tone: "idle",
+    },
+    {
+      key: "orderSend",
+      label: "确认跟进",
+      completed:
+        countNestedArray(lowValue, ["orderConfirmation", "queued"]) +
+        countNestedArray(lowValue, ["orderFollowup", "queued"]) +
+        countArray(directOrderConfirmation, "queued") +
+        countArray(directOrderFollowup, "queued"),
+      blocked:
+        countNestedArray(lowValue, ["orderConfirmation", "skipped"]) +
+        countNestedArray(lowValue, ["orderFollowup", "skipped"]) +
+        countArray(directOrderConfirmation, "skipped") +
+        countArray(directOrderFollowup, "skipped"),
+      failed:
+        countNestedArray(lowValue, ["orderConfirmation", "failed"]) +
+        countNestedArray(lowValue, ["orderFollowup", "failed"]) +
+        countArray(directOrderConfirmation, "failed") +
+        countArray(directOrderFollowup, "failed"),
+      detail: "给低价值订单排队发送确认和跟进提醒。",
+      action: "确认/跟进未入队时，检查订单状态、人工锁和高价值规则。",
+      tone: "idle",
+    },
+    {
+      key: "safeSend",
+      label: "安全发送",
+      completed: countArray(sendQueue, "processed"),
+      blocked: countArray(sendQueue, "blocked") + countArray(sendOperations, "blocked"),
+      failed: countArray(sendQueue, "failed") + countArray(sendOperations, "failed"),
+      detail: "按微信账号和会话身份校验后，再推进发送任务。",
+      action: "发送被拦截时，先检查微信账号、当前聊天对象、最近消息和人工锁。",
+      tone: "idle",
+    },
+    {
+      key: "timeout",
+      label: "超时兜底",
+      completed: countArray(timeouts, "timedOut") + countArray(sendOperations, "timedOut"),
+      blocked: 0,
+      failed: countArray(timeouts, "failed"),
+      detail: "把出图或发送超时的任务转提醒或人工处理。",
+      action: "超时数量增加时，检查设计平台、微信桥接和发送回执扫描。",
+      tone: "idle",
+    },
+  ];
+
+  for (const stage of stages) {
+    stage.tone = stage.failed ? "error" : stage.blocked ? "warning" : stage.completed ? "ok" : "idle";
+  }
+
+  const progressed = stages.reduce((sum, stage) => sum + stage.completed, 0);
+  const blocked = stages.reduce((sum, stage) => sum + stage.blocked, 0);
+  const failed = run.errors.length + stages.reduce((sum, stage) => sum + stage.failed, 0);
+  const firstProblem = stages.find((stage) => stage.failed || stage.blocked);
+
+  return {
+    progressed,
+    blocked,
+    failed,
+    nextAction: failed
+      ? "先处理失败步骤，再重新跑一轮低价值自动化。"
+      : firstProblem
+        ? firstProblem.action
+        : progressed
+          ? "本轮已推进，等待客户回复或继续处理发送回执。"
+          : "没有可推进任务，先补商品库、客户需求、候选图或报价状态。",
+    stages,
   };
 }
 
@@ -509,6 +677,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       run.durationMs = Date.now() - startedAt.getTime();
       run.identityAudit = buildAutomationIdentityAudit(run);
       run.skipSummary = buildAutomationSkipSummary(run);
+      run.stageSummary = buildAutomationStageSummary(run);
       if (!run.skipped) this.runCount += 1;
       this.lastRun = run;
       this.recordRun(run);

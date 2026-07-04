@@ -17,11 +17,12 @@ const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
+const webStandaloneServerPath = path.join(desktopRoot, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
+const nextCliPath = path.join(desktopRoot, "node_modules", "next", "dist", "bin", "next");
 
 const requiredFiles = [
   ["package.json", path.join(desktopRoot, "package.json")],
   ["API build", path.join(desktopRoot, "dist", "apps", "api", "main.js")],
-  ["Web standalone build", path.join(desktopRoot, "apps", "web", ".next", "standalone", "apps", "web", "server.js")],
 ];
 
 const endpoints = [
@@ -66,7 +67,10 @@ async function collectReport() {
   checks.push(checkDirectory("Desktop source", desktopRoot));
   checks.push(checkDirectory("Runtime directory", runtimeDir));
   checks.push(checkRuntimeWritable());
+  checks.push(checkStaleScheduledTasks());
+  checks.push(checkStaleRuntimeProcesses());
   for (const [label, filePath] of requiredFiles) checks.push(checkFile(label, filePath));
+  checks.push(checkWebStartable());
 
   const portOwners = getPortOwners([webPort, apiPort, mockPort]);
   for (const port of [webPort, apiPort, mockPort]) {
@@ -125,6 +129,21 @@ function checkFile(label, filePath) {
   return { ok, label, detail: ok ? filePath : `missing: ${filePath}` };
 }
 
+function checkWebStartable() {
+  if (fs.existsSync(webStandaloneServerPath) && fs.statSync(webStandaloneServerPath).isFile()) {
+    return { ok: true, label: "Web startable", detail: `standalone build: ${webStandaloneServerPath}` };
+  }
+  const ok = fs.existsSync(nextCliPath) && fs.statSync(nextCliPath).isFile();
+  return {
+    ok,
+    severity: ok ? "warn" : undefined,
+    label: "Web startable",
+    detail: ok
+      ? `standalone build missing; Next dev fallback available: ${nextCliPath}`
+      : `missing standalone build and Next CLI fallback: ${webStandaloneServerPath}; ${nextCliPath}`,
+  };
+}
+
 function checkRuntimeWritable() {
   const testFile = path.join(runtimeDir, ".stable-doctor-write-test");
   try {
@@ -145,11 +164,84 @@ function checkRuntimeWritable() {
   }
 }
 
+function checkStaleScheduledTasks() {
+  if (process.platform !== "win32") {
+    return { ok: true, severity: "warn", label: "Stale scheduled tasks", detail: "not checked on non-Windows platform" };
+  }
+  const staleNames = [
+    "zhinengkefu_desktop_supervisor_keep_mock_4219d0b8",
+    "zhinengkefu_desktop_supervisor_keep_mock_4219d0b8_it",
+  ];
+  const enabled = staleNames.filter((name) => staleScheduledTaskXmlLooksEnabled(name));
+  return {
+    ok: enabled.length === 0,
+    label: "Stale scheduled tasks",
+    detail: enabled.length
+      ? `disable old desktop supervisor tasks: ${enabled.join(", ")}`
+      : "old desktop supervisor tasks are absent or disabled",
+  };
+}
+
+function staleScheduledTaskXmlLooksEnabled(taskName) {
+  const taskFile = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "Tasks", taskName);
+  if (!fs.existsSync(taskFile)) return false;
+  try {
+    const xml = fs.readFileSync(taskFile, "utf8");
+    const referencesOldRuntime =
+      xml.includes("zhinengkefu_restore_work") ||
+      xml.includes("runtime-d-repo") ||
+      xml.includes("stable-supervise-mock.cmd");
+    return referencesOldRuntime && /<Enabled>\s*true\s*<\/Enabled>/i.test(xml);
+  } catch {
+    return false;
+  }
+}
+
+function checkStaleRuntimeProcesses() {
+  if (process.platform !== "win32") {
+    return { ok: true, severity: "warn", label: "Stale runtime processes", detail: "not checked on non-Windows platform" };
+  }
+  const staleProcesses = findStaleRuntimeProcesses();
+  return {
+    ok: staleProcesses.length === 0,
+    label: "Stale runtime processes",
+    detail: staleProcesses.length
+      ? `stop old runtime processes: ${staleProcesses.map((item) => `pid=${item.pid}`).join(", ")}`
+      : "old restore/runtime-d-repo processes are not running",
+  };
+}
+
+function findStaleRuntimeProcesses() {
+  const script = [
+    "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'cmd.exe'\"",
+    "$items | Where-Object { $_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo' } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: desktopRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  try {
+    const parsed = JSON.parse(String(result.stdout || "[]"));
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    return items
+      .map((item) => ({
+        pid: Number(item.ProcessId),
+        parentPid: Number(item.ParentProcessId),
+        commandLine: String(item.CommandLine || ""),
+      }))
+      .filter((item) => Number.isFinite(item.pid) && item.pid > 0);
+  } catch {
+    return [];
+  }
+}
+
 function checkWebRuntimeOwner(webOwners) {
   if (!webOwners.length) {
     return { ok: false, label: "Web runtime owner", detail: "web port has no owner" };
   }
-  const expected = normalizePathText(webRuntimeServerPath);
+  const expected = [webRuntimeServerPath, nextCliPath].map(normalizePathText);
   const commandLines = webOwners.map((pid) => ({ pid, commandLine: getCommandLine(pid) }));
   const readableCommandLines = commandLines.filter((item) => item.commandLine);
   if (!readableCommandLines.length) {
@@ -160,11 +252,11 @@ function checkWebRuntimeOwner(webOwners) {
     };
   }
   const details = commandLines.map((item) => `pid=${item.pid} ${item.commandLine || "command unavailable"}`);
-  const ok = readableCommandLines.some((item) => normalizePathText(item.commandLine).includes(expected));
+  const ok = readableCommandLines.some((item) => expected.some((expectedPath) => normalizePathText(item.commandLine).includes(expectedPath)));
   return {
     ok,
     label: "Web runtime owner",
-    detail: ok ? `uses ${webRuntimeServerPath}` : `expected ${webRuntimeServerPath}; actual ${details.join(" | ")}`,
+    detail: ok ? `uses ${webRuntimeServerPath} or ${nextCliPath}` : `expected ${webRuntimeServerPath} or ${nextCliPath}; actual ${details.join(" | ")}`,
   };
 }
 
