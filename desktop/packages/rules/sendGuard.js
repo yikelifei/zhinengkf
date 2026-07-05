@@ -69,9 +69,19 @@ function validateSendGuard({
     ok: failed.length === 0,
     status: failed.length === 0 ? "passed" : "blocked",
     checks,
-    failedKeys: failed.map((item) => item.key),
+    failedKeys: expandSendGuardFailedKeys(failed.map((item) => item.key)),
     reason: failed.length ? failed.map((item) => item.label).join("、") : "所有发送校验通过",
   };
+}
+
+function expandSendGuardFailedKeys(keys) {
+  const expanded = [];
+  for (const key of keys || []) {
+    if (!key) continue;
+    expanded.push(key);
+    if (key === "conversationManualUnlocked") expanded.push("conversationManualLocked");
+  }
+  return [...new Set(expanded)];
 }
 
 function windowSnapshotFreshness(windowState, now = new Date()) {
@@ -231,7 +241,7 @@ function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) 
     ok: failed.length === 0,
     status: failed.length === 0 ? "passed" : "blocked",
     checks,
-    failedKeys: failed.map((item) => item.key),
+    failedKeys: expandSendGuardFailedKeys(failed.map((item) => item.key)),
     reason: failed.length ? failed.map((item) => item.label).join("、") : "发送任务绑定关系正确",
   };
 }
@@ -442,7 +452,7 @@ function evaluateSendTaskRequeue({ task } = {}) {
       ok: false,
       action: "reject_requeue",
       reason: "conversation_manual_locked",
-      failedKeys: ["conversationManualUnlocked"],
+      failedKeys: ["conversationManualUnlocked", "conversationManualLocked"],
       message: "会话已人工接管，解除锁定后才能重新排队发送任务。",
     };
   }

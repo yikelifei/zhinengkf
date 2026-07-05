@@ -262,6 +262,7 @@ model DesignRevision {
   sourceText           String?               @db.Text
   policyAction         String
   status               String                @default("requested")
+  retryCount           Int                   @default(0)
   chargeRequired       Boolean               @default(false)
   manualReviewRequired Boolean               @default(false)
   externalJobId        String?

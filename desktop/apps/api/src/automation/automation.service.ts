@@ -667,6 +667,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     };
 
     try {
+      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
       const readiness = await this.readiness();
       run.results.readiness = readiness;
       if (!readiness.ready) {
@@ -679,7 +680,6 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
         this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit, filter),
       );
       await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation(filter));
-      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
       await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
       await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
         this.wechatDispatch.scanLowValueOrderConfirmations(filter),

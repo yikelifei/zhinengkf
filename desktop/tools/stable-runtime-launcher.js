@@ -41,6 +41,7 @@ const specs = [
 
 const children = new Map();
 fs.mkdirSync(logsDir, { recursive: true });
+installProcessHandlers();
 if (fs.existsSync(stopRequestFile)) {
   append("stable-runtime", `stop request exists; exiting pid=${process.pid}`);
   process.exit(0);
@@ -72,20 +73,22 @@ setInterval(() => {
 console.log(`[stable-runtime] running runtime=${runtimeDir}`);
 append("stable-runtime", `running pid=${process.pid} runtime=${runtimeDir}`);
 
-for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"]) {
-  process.once(signal, () => {
-    append("stable-runtime", `received ${signal}; stopping children`);
-    for (const child of children.values()) {
-      try { child.kill(); } catch {}
-    }
-    process.exit(0);
-  });
-}
+function installProcessHandlers() {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"]) {
+    process.once(signal, () => {
+      append("stable-runtime", `received ${signal}; stopping children`);
+      for (const child of children.values()) {
+        try { child.kill(); } catch {}
+      }
+      process.exit(0);
+    });
+  }
 
-process.on("uncaughtException", (error) => append("stable-runtime", `uncaughtException ${error.stack || error.message || error}`));
-process.on("unhandledRejection", (error) => append("stable-runtime", `unhandledRejection ${error?.stack || error?.message || error}`));
-process.on("beforeExit", (code) => append("stable-runtime", `beforeExit code=${code}`));
-process.on("exit", (code) => append("stable-runtime", `exit code=${code}`));
+  process.on("uncaughtException", (error) => append("stable-runtime", `uncaughtException ${error.stack || error.message || error}`));
+  process.on("unhandledRejection", (error) => append("stable-runtime", `unhandledRejection ${error?.stack || error?.message || error}`));
+  process.on("beforeExit", (code) => append("stable-runtime", `beforeExit code=${code}`));
+  process.on("exit", (code) => append("stable-runtime", `exit code=${code}`));
+}
 
 function ensureService(spec) {
   if (spec.type === "process") {
@@ -110,6 +113,10 @@ function ensureService(spec) {
     for (const pid of wrongOwners) killPid(pid);
     return;
   }
+  if (!existing && owners.length && portHealthMatches(spec)) {
+    append(spec.name, `port ${spec.port} already owned by matching healthy pid(s) ${owners.join(",")}; adopting externally managed service`);
+    return;
+  }
   const unmanagedOwners = owners.filter((pid) => {
     if (!existing) return true;
     if (pid === existing.pid) return false;
@@ -131,24 +138,32 @@ function ensureProcessService(spec) {
 }
 
 function startService(spec) {
-  const out = fs.openSync(path.join(logsDir, `${spec.name}.out.log`), "a");
-  const err = fs.openSync(path.join(logsDir, `${spec.name}.err.log`), "a");
-  append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
-  const child = spawn(spec.command, spec.args, {
-    cwd: root,
-    env: { ...serviceEnv(spec.port || ports.api), ...(spec.env || {}) },
-    detached: process.platform === "win32",
-    stdio: ["ignore", out, err],
-    windowsHide: true,
-  });
-  children.set(spec.name, child);
-  append(spec.name, `pid=${child.pid}`);
-  if (process.platform === "win32") child.unref();
-  child.once("exit", (code, signal) => {
-    const current = children.get(spec.name);
-    if (current === child) children.delete(spec.name);
-    append(spec.name, `exited code=${code ?? ""} signal=${signal ?? ""}`);
-  });
+  let out = "ignore";
+  let err = "ignore";
+  try {
+    out = fs.openSync(path.join(logsDir, `${spec.name}.out.log`), "a");
+    err = fs.openSync(path.join(logsDir, `${spec.name}.err.log`), "a");
+    append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
+    const child = spawn(spec.command, spec.args, {
+      cwd: root,
+      env: { ...serviceEnv(spec.port || ports.api), ...(spec.env || {}) },
+      detached: process.platform === "win32",
+      stdio: ["ignore", out, err],
+      windowsHide: true,
+    });
+    children.set(spec.name, child);
+    append(spec.name, `pid=${child.pid}`);
+    if (process.platform === "win32") child.unref();
+    child.once("exit", (code, signal) => {
+      const current = children.get(spec.name);
+      if (current === child) children.delete(spec.name);
+      append(spec.name, `exited code=${code ?? ""} signal=${signal ?? ""}`);
+    });
+  } catch (error) {
+    append(spec.name, `start failed: ${error?.stack || error?.message || error}`);
+    closeFd(out);
+    closeFd(err);
+  }
 }
 
 function processServiceSpec(name, args, env = {}) {
@@ -313,6 +328,11 @@ function killPid(pid) {
   try { process.kill(Number(pid), "SIGTERM"); } catch {}
   const script = `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`;
   spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true });
+}
+
+function closeFd(value) {
+  if (typeof value !== "number") return;
+  try { fs.closeSync(value); } catch {}
 }
 
 function killStaleRuntimeProcesses() {

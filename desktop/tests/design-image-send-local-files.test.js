@@ -906,3 +906,68 @@ test("revision callback saves local files with versioned image ids", async () =>
   assert.match(upsertedImages[0].localPath, /r1-candidate_1\.png$/);
   assert.equal(updated.images[0].imageId, "r1-candidate_1");
 });
+
+test("revision callback does not double-prefix already versioned image ids", async () => {
+  const saved = [];
+  let upsertedImages = [];
+  const job = {
+    id: "design_1",
+    requestId: "request_1",
+    externalJobId: "external_1",
+    status: "submitted",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 0,
+    revisionCount: 1,
+    budget: { mode: "per_box", perUnitAmount: 100, quantity: 10, totalAmount: 1000 },
+    images: [],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => ({
+      id: "revision_1",
+      designJobId: "design_1",
+      status: "submitted",
+    }),
+    updateDesignRevision: (id, patch) => ({ id, ...patch }),
+    updateDesignJob: (id, patch) => ({ ...job, id, ...patch, images: upsertedImages }),
+    upsertDesignImages: (designJobId, images) => {
+      upsertedImages = images.map((image) => ({ ...image, designJobId }));
+      return upsertedImages;
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    localStore,
+    { create: async () => ({}) },
+    {
+      saveDesignImage: async (jobId, imageId, downloadUrl) => {
+        saved.push({ jobId, imageId, downloadUrl });
+        return `C:\\storage\\design-jobs\\${jobId}\\${imageId}.png`;
+      },
+    },
+    {},
+    {},
+    {},
+  );
+
+  const updated = await service.handleDesignPlatformCallback({
+    requestId: "request_1",
+    externalJobId: "external_1",
+    status: "completed",
+    images: [
+      {
+        imageId: "r1-candidate_1",
+        downloadUrl: "https://example.test/revision-candidate-1.png",
+        width: 1024,
+        height: 1024,
+      },
+    ],
+  });
+
+  assert.equal(saved[0].imageId, "r1-candidate_1");
+  assert.equal(upsertedImages[0].imageId, "r1-candidate_1");
+  assert.match(upsertedImages[0].localPath, /r1-candidate_1\.png$/);
+  assert.equal(updated.images[0].imageId, "r1-candidate_1");
+});

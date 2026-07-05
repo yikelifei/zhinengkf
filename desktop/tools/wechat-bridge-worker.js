@@ -394,6 +394,10 @@ function validateOutboxPayload(entry = {}, payload = {}) {
   const actionValidation = validateSendPlanActions(actions || []);
   const guardSnapshot = payload && typeof payload.guardSnapshot === "object" && payload.guardSnapshot ? payload.guardSnapshot : {};
   const context = payload && typeof payload.context === "object" && payload.context ? payload.context : {};
+  const preflight = payload && typeof payload.preflight === "object" && payload.preflight ? payload.preflight : {};
+  const hasPreflightWindowPolicy = Boolean(preflight.expectedWindowSnapshotId || preflight.rejectIfAnyCheckFails || preflight.rejectIfWindowChanged);
+  const expectedWindowSnapshotId = String(preflight.expectedWindowSnapshotId || target.windowSnapshotId || "");
+  const actualWindowSnapshotId = String(context.windowSnapshotId || "");
 
   const entryTaskId = String(entry.taskId || "");
   const entryWechatAccountId = String(entry.wechatAccountId || "");
@@ -461,6 +465,14 @@ function validateOutboxPayload(entry = {}, payload = {}) {
         constraints.requireActiveWindowMatch === true &&
         constraints.requireRecentCustomerMatch === true &&
         constraints.doNotMarkSentWithoutAck === true,
+    },
+    {
+      key: "preflightWindowChangePolicy",
+      passed: !hasPreflightWindowPolicy || (preflight.rejectIfAnyCheckFails === true && preflight.rejectIfWindowChanged === true),
+    },
+    {
+      key: "preflightWindowSnapshot",
+      passed: Boolean(expectedWindowSnapshotId && actualWindowSnapshotId && expectedWindowSnapshotId === actualWindowSnapshotId),
     },
     {
       key: "guardSnapshot",

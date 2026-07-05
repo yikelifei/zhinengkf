@@ -56,8 +56,13 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(checkDevStartup, /function printWechatWorkerProcesses\(\)/);
   assert.match(checkDevStartup, /function findKeepAliveSupervisorProcesses\(\)/);
   assert.match(checkDevStartup, /const keepAliveHeartbeatFile = path\.join\(runtimeDir, "keep-alive\.json"\);/);
+  assert.match(checkDevStartup, /const stableRuntimeDir = path\.join\(desktopRoot, "\.runtime-stable"\);/);
+  assert.match(checkDevStartup, /const stableKeepAliveHeartbeatFile = path\.join\(stableRuntimeDir, "keep-alive\.json"\);/);
   assert.match(checkDevStartup, /waitForKeepAliveSupervisorProcesses\(45, 1000\)/);
   assert.match(checkDevStartup, /async function waitForKeepAliveSupervisorProcesses\(attempts, delayMs\)/);
+  assert.match(checkDevStartup, /function findStableRuntimeHeartbeatProcess\(\)/);
+  assert.match(checkDevStartup, /findStableRuntimeHeartbeatProcess\(\)/);
+  assert.match(checkDevStartup, /tools\/stable-runtime-launcher\.js/);
   assert.match(checkDevStartup, /function findKeepAliveHeartbeatProcess\(\)/);
   assert.match(checkDevStartup, /Date\.now\(\) - updatedAt > 30_000/);
   assert.match(checkDevStartup, /Keep-alive supervisor/);
@@ -113,10 +118,14 @@ test("developer startup scripts default to the current design mode", () => {
 test("startup tools keep explicit design mode and preserve current real mode for raw starts", () => {
   const startDevPorts = readText("tools/start-dev-ports.js");
   const portsStackStarter = readText("tools/ports-stack-starter.js");
+  const desktopServiceSupervisor = readText("tools/desktop-service-supervisor.js");
   const repairDevStartupSource = readText("tools/repair-dev-startup.js");
   assert.match(startDevPorts, /const requestedMockDesignMode = args\.has\("--mock-design"\);/);
   assert.match(startDevPorts, /const requestedRealDesignMode = args\.has\("--real-design"\);/);
   assert.match(startDevPorts, /main\(\)\.catch\(\(error\) => \{\s+logFatal\("main", error, \{ exit: false \}\);/);
+  assert.match(startDevPorts, /stableDesktopGuardActive/);
+  assert.match(startDevPorts, /stable desktop runtime is active; legacy start-dev-ports skipped/);
+  assert.match(startDevPorts, /stableKeepAliveHeartbeatFile/);
   assert.match(
     startDevPorts,
     /process\.on\("uncaughtException", \(error\) => \{\s+if \(isBrokenPipeError\(error\)\) return;\s+logFatal\("uncaughtException", error\);/,
@@ -159,6 +168,12 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /return findMockRepairProcesses\(\)\.length > 0;/);
   assert.match(portsStackStarter, /function findMockRepairProcesses\(\)/);
   assert.match(portsStackStarter, /return findMockRepairProcesses\(\)\.length > 0;/);
+  assert.match(desktopServiceSupervisor, /const stableRuntimeDir = path\.join\(process\.cwd\(\), "\.runtime-stable"\);/);
+  assert.match(desktopServiceSupervisor, /stableDesktopGuardActive\(\)/);
+  assert.match(desktopServiceSupervisor, /legacy supervisor skipped/);
+  assert.match(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableStartingLockFile\)\} exit \/b 0/);
+  assert.match(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableKeepAliveHeartbeatFile\)\} exit \/b 0/);
+  assert.doesNotMatch(desktopServiceSupervisor, /"ALLOW_LEGACY_START_WITH_STABLE"/);
   assert.match(repairDevStartupSource, /clearMockRepairLock\(\);/);
   assert.match(repairDevStartupSource, /function clearMockRepairLock\(\)/);
   assert.match(startDevPorts, /default mock startup repair is in progress/);
@@ -420,7 +435,6 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(repairDevStartup, /DESIGN_PLATFORM_BASE_URL: "http:\/\/127\.0\.0\.1:3700"/);
   assert.match(repairDevStartup, /START_MOCK_DESIGN_PLATFORM: "true"/);
 
-  const desktopServiceSupervisor = readText("tools/desktop-service-supervisor.js");
   assert.match(desktopServiceSupervisor, /\["tools\/start-dev-ports\.js", "--real-design", "--keep-alive"\]/);
   assert.match(desktopServiceSupervisor, /\["tools\/start-dev-ports\.js", "--mock-design", "--keep-alive"\]/);
   assert.match(desktopServiceSupervisor, /--supervisor-child/);
@@ -700,6 +714,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableStart, /start-stable-keepalive\.ps1/);
   assert.match(stableStart, /stable-service-window\.log/);
   assert.match(stableStart, /stable-starting\.lock/);
+  assert.match(stableStart, /stable-runtime-stop-request/);
   assert.match(stableStart, /service window entered/);
   assert.match(stableStart, /entering keepalive/);
   assert.match(stableStart, /set PORTS_STOP_SKIP_STABLE_SERVICE_WRAPPERS=1/);
@@ -740,11 +755,11 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableKeepalive, /ports:keepalive:mock/);
   const stableKeepalivePs1 = readText("tools/start-stable-keepalive.ps1");
   assert.match(stableKeepalivePs1, /keepalive-stable-desktop\.cmd/);
+  assert.match(stableKeepalivePs1, /\$StopRequestFile = Join-Path \$RuntimeDir "stable-runtime-stop-request"/);
+  assert.match(stableKeepalivePs1, /Remove-Item -Force -ErrorAction SilentlyContinue -Path \$StopRequestFile/);
   assert.match(stableKeepalivePs1, /Start-Process -FilePath "cmd\.exe"/);
   assert.match(stableKeepalivePs1, /-ArgumentList @\("\/d", "\/k"/);
   assert.match(stableKeepalivePs1, /-WindowStyle Minimized -PassThru/);
-  assert.doesNotMatch(stableKeepalivePs1, /System32\\schtasks\.exe/);
-  assert.doesNotMatch(stableKeepalivePs1, /\$Schtasks/);
   assert.match(stableKeepalivePs1, /stable-start\.log/);
   assert.match(stableKeepalivePs1, /\$StableStartingLock = Join-Path \$RuntimeDir "stable-starting\.lock"/);
   assert.match(stableKeepalivePs1, /Set-Content -Path \$StableStartingLock/);
@@ -764,6 +779,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   const stableStop = readText("stop-stable-desktop.cmd");
   assert.match(stableStop, /DESKTOP_RUNTIME_DIR=D:\\zhinengkefu\\desktop\\.runtime-stable/);
   assert.match(stableStop, /FORCE_PORTS_SWEEP=1/);
+  assert.match(stableStop, /schtasks\.exe \/Delete \/TN zhinengkefu_stable_runtime \/F/);
   assert.match(stableStop, /ports:stop/);
   const stableRepair = readText("repair-stable-desktop.cmd");
   assert.match(stableRepair, /stop-stable-desktop\.cmd/);
@@ -806,6 +822,9 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /const heartbeatFile = path\.join\(runtimeDir, "keep-alive\.json"\)/);
   assert.match(stableRuntime, /stable-runtime-stop-request/);
   assert.match(stableRuntime, /stop request exists; exiting/);
+  assert.match(stableRuntime, /installProcessHandlers\(\);/);
+  assert.match(stableRuntime, /function installProcessHandlers\(\)/);
+  assert.match(stableRuntime, /process\.on\("uncaughtException"/);
   assert.match(stableRuntime, /const specs = \[/);
   assert.match(stableRuntime, /const webStandaloneServerPath = path\.join\(root, "apps", "web", "\.next", "standalone", "apps", "web", "server\.js"\)/);
   assert.match(stableRuntime, /detached: process\.platform === "win32"/);
@@ -853,6 +872,8 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /port \$\{spec\.port\} owned by wrong pid\(s\)/);
   assert.match(stableRuntime, /wrongOwners\.join\(","\)/);
   assert.match(stableRuntime, /for \(const pid of wrongOwners\) killPid\(pid\);/);
+  assert.match(stableRuntime, /if \(!existing && owners\.length && portHealthMatches\(spec\)\)/);
+  assert.match(stableRuntime, /adopting externally managed service/);
   assert.match(stableRuntime, /const unmanagedOwners = owners\.filter\(\(pid\) => \{/);
   assert.match(stableRuntime, /ownerMatches\(pid, spec\.expected\) === true && isDescendantPid\(pid, existing\.pid\)/);
   assert.match(stableRuntime, /owned by unmanaged matching pid\(s\)/);
@@ -869,6 +890,7 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function parentPidForPid\(pid\)/);
   assert.match(stableRuntime, /ParentProcessId/);
   assert.match(stableRuntime, /function killPid\(pid\)/);
+  assert.match(stableRuntime, /function closeFd\(value\)/);
   assert.match(stableRuntime, /function killStaleRuntimeProcesses\(\)/);
   assert.match(stableRuntime, /Disabled in stable mode: stale process cleanup is handled by stop-stable-desktop\.cmd/);
   assert.match(stableRuntime, /prevents the supervisor from killing its own service children/);
@@ -951,9 +973,15 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(launcher, /const stableRuntimeDir = path\.join\(desktopRoot, "\.runtime-stable"\);/);
   assert.match(launcher, /const stableStartingLockFile = path\.join\(stableRuntimeDir, "stable-starting\.lock"\);/);
   assert.match(launcher, /const stableKeepAliveHeartbeatFile = path\.join\(stableRuntimeDir, "keep-alive\.json"\);/);
+  assert.match(launcher, /const stableRuntimeLauncherPidFile = path\.join\(stableRuntimeDir, "stable-runtime-launcher\.pid"\);/);
   assert.match(launcher, /function stableDesktopGuardActive\(\)/);
   assert.match(launcher, /ALLOW_LEGACY_START_WITH_STABLE/);
-  assert.match(launcher, /fileFresh\(stableStartingLockFile, 600000\) \|\| heartbeatFresh\(stableKeepAliveHeartbeatFile, 600000\)/);
+  assert.match(launcher, /stableStartingLockActive\(\) \|\| heartbeatFresh\(stableKeepAliveHeartbeatFile, 3600000\)/);
+  assert.match(launcher, /function stableStartingLockActive\(\)/);
+  assert.match(launcher, /stableRuntimeLauncherProcessActive\(readNumericFile\(stableRuntimeLauncherPidFile\)\)/);
+  assert.match(launcher, /function stableRuntimeLauncherProcessActive\(pid\)/);
+  assert.match(launcher, /tools\/stable-runtime-launcher\.js/);
+  assert.match(launcher, /function findStableRuntimeLauncherProcesses\(\)/);
   assert.match(launcher, /const realDesignMode =\s+requestedRealDesignMode \|\|/);
   assert.match(launcher, /const modeArg = realDesignMode \? "--real-design" : "--mock-design";/);
   assert.match(launcher, /const mockRepairLockFile = path\.join\(runtimeDir, "mock-repair\.lock"\);/);
@@ -1048,6 +1076,8 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(supervisorJs, /\["tools\/start-dev-ports\.js", "--real-design", "--keep-alive"\]/);
   assert.match(supervisorJs, /\["tools\/start-dev-ports\.js", "--mock-design", "--keep-alive"\]/);
   assert.match(supervisorJs, /--supervisor-child/);
+  assert.match(supervisorJs, /stableDesktopGuardActive/);
+  assert.match(supervisorJs, /stable desktop runtime is active; legacy supervisor skipped/);
   assert.doesNotMatch(supervisorJs, /removed stale real mode lock before mock launch/);
   assert.match(supervisorJs, /removed stale mock mode lock before real design startup/);
   assert.match(supervisorJs, /const stableConflictingLauncherCmd = path\.join/);
@@ -1238,6 +1268,16 @@ test("web build script refuses to build while dev web port is occupied", () => {
   assert.match(buildWeb, /ProcessId = \$\{Number\(pid\)\}/);
   assert.match(buildWeb, /commandLine\.includes\("tools\/build-web\.js"\)/);
   assert.match(buildWeb, /process\.on\("exit", releaseBuildLock\)/);
+  assert.match(buildWeb, /stableStartingLockIsFresh\(\)/);
+  assert.match(buildWeb, /stableRuntimeHeartbeatIsFresh\(\)/);
+  assert.match(buildWeb, /const stableRuntimeLauncherPidFile = path\.join\(root, "\.runtime-stable", "stable-runtime-launcher\.pid"\);/);
+  assert.match(buildWeb, /stableRuntimeLauncherProcessActive\(readNumericFile\(stableRuntimeLauncherPidFile\)\)/);
+  assert.match(buildWeb, /function stableRuntimeLauncherProcessActive\(pid\)/);
+  assert.match(buildWeb, /function keepAliveLauncherProcessActive\(pid\)/);
+  assert.match(buildWeb, /function projectProcessMatches\(pid, markers\)/);
+  assert.match(buildWeb, /function findStableRuntimeLauncherPids\(\)/);
+  assert.match(buildWeb, /Date\.now\(\) - stat\.mtimeMs > 3600000/);
+  assert.match(buildWeb, /Date\.now\(\) - updatedAt > 3600000/);
   assert.match(buildWeb, /removeStaleNextBuildLock\(\);/);
   assert.match(buildWeb, /process\.env\.FORCE_WEB_CLEAN_BUILD === "1"/);
   assert.match(buildWeb, /resetNextBuildState\(\);/);
@@ -1278,12 +1318,15 @@ test("web build script refuses to build while dev web port is occupied", () => {
   assert.match(syncStandaloneAssets, /function syncStandaloneNextBuild\(\)/);
   assert.match(syncStandaloneAssets, /const standaloneServer = path\.join\(standaloneWebRoot, "server\.js"\);/);
   assert.match(syncStandaloneAssets, /Missing standalone server entry/);
+  assert.match(syncStandaloneAssets, /function copyDirectory\(source, target, options = \{\}\)/);
+  assert.match(syncStandaloneAssets, /if \(options\.optional\) \{\s+console\.log\(`\[warn\] Optional source directory disappeared during sync:/);
   assert.match(syncStandaloneAssets, /const excludedNextEntries = new Set\(\["cache", "dev", "diagnostics", "standalone", "trace"\]\);/);
   assert.doesNotMatch(syncStandaloneAssets, /fs\.rmSync\(standaloneNextRoot/);
   assert.match(syncStandaloneAssets, /fs\.mkdirSync\(standaloneNextRoot, \{ recursive: true \}\);/);
   assert.match(syncStandaloneAssets, /for \(const entry of fs\.readdirSync\(nextRoot, \{ withFileTypes: true \}\)\)/);
   assert.match(syncStandaloneAssets, /if \(excludedNextEntries\.has\(entry\.name\)\) continue;/);
   assert.match(syncStandaloneAssets, /copyFile\(source, target\)/);
+  assert.match(syncStandaloneAssets, /copyDirectory\(source, target, \{ optional: true \}\)/);
   assert.match(syncStandaloneAssets, /function writeStableStandaloneServer\(\)/);
   assert.match(syncStandaloneAssets, /if \(!fs\.existsSync\(standaloneWebRoot\) && productionBuildReady\(\)\) \{\s+writeStableStandaloneServer\(\);/);
   assert.match(syncStandaloneAssets, /if \(!fs\.existsSync\(standaloneServer\)\) \{\s+if \(productionBuildReady\(\)\) \{\s+writeStableStandaloneServer\(\);/);

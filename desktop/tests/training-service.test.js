@@ -331,12 +331,16 @@ test("passes identity filters when listing training samples", () => {
       },
     ]);
 
-    service.listSkillSuggestions({
+    const suggestions = service.listSkillSuggestions({
       agentId: "agent_gift",
       wechatAccountId: "wechat_a",
       conversationId: "conv_a",
       customerId: "customer_a",
     });
+    assert.equal(suggestions[0].scope.label, "当前会话私有");
+    assert.equal(suggestions[0].scope.wechatAccountId, "wechat_a");
+    assert.equal(suggestions[0].scope.conversationId, "conv_a");
+    assert.equal(suggestions[0].scope.customerId, "customer_a");
 
     assert.deepEqual(calls.find((call) => call.method === "listTrainingSamples"), {
       method: "listTrainingSamples",
@@ -352,6 +356,53 @@ test("passes identity filters when listing training samples", () => {
       conversationId: "conv_a",
       customerId: "customer_a",
     });
+  });
+
+  test("keeps same-name private skill suggestions selectable per identity", () => {
+    const { service } = createTrainingService([
+      {
+        id: "account_a_budget",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_a",
+        conversationId: "conv_a",
+        customerId: "customer_a",
+        scene: "礼盒设计",
+        customerText: "每盒 200，想看礼盒效果图",
+        idealReply: "我先按您的预算整理礼盒方案。",
+        score: 92,
+        skillHints: ["预算澄清"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "account_b_budget",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_b",
+        conversationId: "conv_b",
+        customerId: "customer_b",
+        scene: "礼盒设计",
+        customerText: "总预算 1 万，100 份",
+        idealReply: "我先折算单份预算，再确认搭配。",
+        score: 92,
+        skillHints: ["预算澄清"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    const suggestions = service.listSkillSuggestions({ agentId: "agent_gift" });
+
+    assert.equal(suggestions.length, 2);
+    assert.deepEqual(
+      suggestions.map((suggestion) => suggestion.scope.customerId).sort(),
+      ["customer_a", "customer_b"],
+    );
+    assert.equal(new Set(suggestions.map((suggestion) => suggestion.suggestionKey)).size, 2);
+    assert.equal(suggestions.some((suggestion) => suggestion.scope.label === "混合来源"), false);
   });
 
   test("batch reviews visible training samples with de-duplicated ids", () => {

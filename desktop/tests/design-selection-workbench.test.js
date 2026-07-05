@@ -21,9 +21,15 @@ test("design image selection has a typed result and updates local workbench stat
 });
 
 test("current customer design card can select an image without jumping away first", () => {
+  const activeImageTileSection = pageSource.slice(
+    pageSource.indexOf("className={`image-tile"),
+    pageSource.indexOf("<SafeImagePreview", pageSource.indexOf("className={`image-tile")),
+  );
   assert.match(pageSource, /selectDesignImageForJob\(\s*activeConversationLatestDesignJob,[\s\S]*\{ referencedImageId: image\.id \}/);
   assert.match(pageSource, /"当前客户选图"/);
   assert.match(pageSource, /onClick=\{\(\) => void selectDesignImageForJob\(activeJob, \{ referencedImageId: image\.id \}\)\}/);
+  assert.match(activeImageTileSection, /disabled=\{Boolean\(busy\)\}/);
+  assert.doesNotMatch(activeImageTileSection, /lowValueAutomationIssueSummary/);
 });
 
 test("quote and order selected thumbnails use scoped local design preview when job context exists", () => {
@@ -53,9 +59,31 @@ test("quick image send and quote creation ask for human confirmation", () => {
   assert.match(pageSource, /quickConfirmSend\(activeJob\.id, identityExpectation\(activeJob\)\)/);
   assert.match(pageSource, /function confirmDesignJobQuoteCreation\(job: DesignJob\)/);
   assert.match(pageSource, /系统会按当前礼盒组合、数量、售价、成本和利润生成报价草稿/);
+  assert.match(pageSource, /function designJobQuoteBlockReason\(job: DesignJob \| null \| undefined\)/);
+  assert.match(pageSource, /designJobQuoteBlockReason\([\s\S]*!job\.customerId[\s\S]*不能生成报价/);
+  assert.match(pageSource, /designJobQuoteBlockReason\([\s\S]*!job\.wechatAccountId \|\| !job\.conversationId[\s\S]*不能生成报价/);
+  assert.match(pageSource, /designJobQuoteBlockReason\([\s\S]*!selectedImage[\s\S]*再生成报价/);
+  assert.match(pageSource, /const selectedImageDesignJobId = "designJobId" in selectedImage/);
+  assert.match(pageSource, /selectedImageDesignJobId && selectedImageDesignJobId !== job\.id[\s\S]*不能生成报价/);
+  assert.match(pageSource, /async function createQuoteForJob\(job: DesignJob\)[\s\S]*const blocker = designJobQuoteBlockReason\(job\)[\s\S]*setMessage\(blocker\)[\s\S]*return/);
   assert.match(pageSource, /if \(!confirmDesignJobQuoteCreation\(job\)\) return/);
   assert.match(pageSource, /createQuote\(job\.id, identityExpectation\(job\)\)/);
   assert.match(pageSource, /async function quoteActiveJob\(\)[\s\S]*await createQuoteForJob\(activeJob\)/);
+  assert.match(pageSource, /disabled=\{Boolean\(busy\) \|\| Boolean\(designJobQuoteBlockReason\(activeJob\)\)\}/);
+  assert.match(pageSource, /title=\{designJobQuoteBlockReason\(activeJob\) \|\| "按当前选图生成报价草稿"\}/);
+});
+
+test("design failure and timeout card exposes operator recovery path", () => {
+  assert.match(pageSource, /function designJobOperatorRecoveryPlan\(job: DesignJob\)/);
+  assert.match(pageSource, /job\.status === "timeout"[\s\S]*先点轮询结果/);
+  assert.match(pageSource, /job\.status === "failed" \|\| \(job\.status === "manual_review" && job\.errorMessage\)/);
+  assert.match(pageSource, /避免把 A 客户结果处理到 B 客户/);
+  assert.match(pageSource, /className="design-escalation-plan"/);
+  assert.match(pageSource, /aria-label="设计异常处理路径"/);
+  assert.match(pageSource, /activeJob\.status === "timeout"[\s\S]*onClick=\{pollActiveJob\}/);
+  assert.match(pageSource, /onClick=\{manualReviewActiveJob\}/);
+  assert.match(cssSource, /\.design-escalation-plan\s*\{/);
+  assert.match(cssSource, /\.design-escalation-plan li::marker\s*\{/);
 });
 
 test("current customer design card can submit revision requests through the existing design job API", () => {

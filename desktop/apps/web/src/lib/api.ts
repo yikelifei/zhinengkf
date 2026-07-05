@@ -27,6 +27,7 @@ export type DesignJob = {
   };
   images?: Array<{
     id: string;
+    designJobId?: string;
     imageId: string;
     position: number;
     localPath?: string;
@@ -341,6 +342,14 @@ export type Agent = {
     name: string;
     description: string;
     enabled: boolean;
+    scope?: {
+      level?: string;
+      label?: string;
+      reason?: string;
+      wechatAccountId?: string | null;
+      conversationId?: string | null;
+      customerId?: string | null;
+    };
   }>;
   trainingSampleCount: number;
   averageTrainingScore: number;
@@ -530,6 +539,14 @@ export type SkillSuggestion = {
   confidence: number;
   sampleIds: string[];
   scenes: string[];
+  scope?: {
+    level: "global" | "wechat_account" | "customer" | "conversation" | "mixed" | string;
+    label: string;
+    reason: string;
+    wechatAccountId?: string | null;
+    conversationId?: string | null;
+    customerId?: string | null;
+  };
   evidence?: {
     question?: string;
     answer?: string;
@@ -629,6 +646,15 @@ export type SendTask = {
     blockedBy?: string;
     blockedAt?: string;
       failedKeys?: string[];
+      windowDiagnostic?: {
+        ok?: boolean;
+        status?: string;
+        riskLevel?: string;
+        reason?: string;
+        activeConversationId?: string | null;
+        activeCustomerId?: string | null;
+        failedKeys?: string[];
+      } | null;
       history?: Array<{
         action?: string;
         fromStatus?: string;
@@ -1038,6 +1064,14 @@ export type RouteEvaluation = {
     confidence?: number;
     sampleCount?: number;
     version?: number;
+    scope?: {
+      level?: string;
+      label?: string;
+      bindingStatus?: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+    };
   }>;
   knowledgeMatches?: Array<{
     id?: string;
@@ -1291,6 +1325,8 @@ export type DesignPlatformReadiness = {
     hasAccessToken: boolean;
     hasCookie: boolean;
     hasDeviceId: boolean;
+    hasCallbackApiKey?: boolean;
+    callbackUrl?: string;
   };
   data?: Record<string, unknown>;
 };
@@ -1302,6 +1338,9 @@ export type DesignPlatformConfigSummary = {
   hasAccessToken: boolean;
   hasCookie: boolean;
   hasDeviceId: boolean;
+  hasCallbackApiKey?: boolean;
+  customerServicePublicBaseUrl?: string;
+  callbackUrl?: string;
   deviceIdSuffix?: string;
   runtimeConfigPath?: string;
 };

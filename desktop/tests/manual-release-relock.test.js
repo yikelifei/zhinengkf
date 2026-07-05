@@ -264,7 +264,11 @@ test("manual-approved order review queues confirmation and records audit log", a
     status: "confirmed",
     quoteDraftId: "quote_high",
     designJobId: "design_high",
+    paymentStatus: "deposit_paid",
+    selectedImageId: "image_high_1",
     totalPrice: 10000,
+    totalCost: 6000,
+    profit: 4000,
     unitPrice: 200,
     wechatAccountId: "wechat_1",
     conversationId: "conversation_1",
@@ -311,6 +315,159 @@ test("manual-approved order review queues confirmation and records audit log", a
   assert.equal(reviewLogs[0].decision, "approve_confirmation");
   assert.equal(reviewLogs[0].metadata.sendTaskId, "send_order_1");
   assert.equal(result.log.afterStatus, "confirmed");
+});
+
+test("manual-approved high-value order review rejects missing selected image before queueing", async () => {
+  let queueCalled = false;
+  const order = {
+    id: "order_high_without_image",
+    status: "confirmed",
+    quoteDraftId: "quote_high_without_image",
+    designJobId: "design_high_without_image",
+    paymentStatus: "deposit_paid",
+    totalPrice: 10000,
+    totalCost: 6000,
+    profit: 4000,
+    unitPrice: 200,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getOrderDraft: () => order,
+      createReviewLog: () => {
+        throw new Error("review log should not be created");
+      },
+    },
+    {},
+    {},
+    { create: async () => ({}) },
+    {
+      queueOrderConfirmation: async () => {
+        queueCalled = true;
+        throw new Error("queue should not be called");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewOrder("order_high_without_image", {
+        decision: "approve_confirmation",
+        reviewer: "Alice",
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }),
+    /高价值订单未绑定客户选中的效果图/,
+  );
+
+  assert.equal(queueCalled, false);
+});
+
+test("manual-approved high-value order review rejects unpaid order before queueing", async () => {
+  let queueCalled = false;
+  const order = {
+    id: "order_high_unpaid",
+    status: "processing",
+    quoteDraftId: "quote_high_unpaid",
+    designJobId: "design_high_unpaid",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_high_1",
+    totalPrice: 10000,
+    totalCost: 6000,
+    profit: 4000,
+    unitPrice: 200,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getOrderDraft: () => order,
+      createReviewLog: () => {
+        throw new Error("review log should not be created");
+      },
+    },
+    {},
+    {},
+    { create: async () => ({}) },
+    {
+      queueOrderFollowup: async () => {
+        queueCalled = true;
+        throw new Error("queue should not be called");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewOrder("order_high_unpaid", {
+        decision: "approve_followup",
+        followupType: "delivery",
+        reviewer: "Alice",
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }),
+    /高价值订单未核验定金或全款/,
+  );
+
+  assert.equal(queueCalled, false);
+});
+
+test("manual-approved high-value order review rejects negative profit before queueing", async () => {
+  let queueCalled = false;
+  const order = {
+    id: "order_high_negative_profit",
+    status: "confirmed",
+    quoteDraftId: "quote_high_negative_profit",
+    designJobId: "design_high_negative_profit",
+    paymentStatus: "deposit_paid",
+    selectedImageId: "image_high_1",
+    totalPrice: 10000,
+    totalCost: 12000,
+    profit: -2000,
+    unitPrice: 200,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getOrderDraft: () => order,
+      createReviewLog: () => {
+        throw new Error("review log should not be created");
+      },
+    },
+    {},
+    {},
+    { create: async () => ({}) },
+    {
+      queueOrderConfirmation: async () => {
+        queueCalled = true;
+        throw new Error("queue should not be called");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      service.reviewOrder("order_high_negative_profit", {
+        decision: "approve_confirmation",
+        reviewer: "Alice",
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }),
+    /高价值订单利润为负/,
+  );
+
+  assert.equal(queueCalled, false);
 });
 
 test("manual-approved design image send relocks conversation when queueing fails", async () => {
@@ -1067,6 +1224,114 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   assert.equal(reviewLogs[0].metadata.sendTaskId, "send_1");
 });
 
+test("verified high-value payment proof keeps manual handoff instead of queueing confirmation", async () => {
+  const locks = [];
+  const reviewLogs = [];
+  const queuedConfirmations = [];
+  const quote = {
+    id: "quote_high_1",
+    status: "manual_review",
+    paymentStatus: "unpaid",
+    designJobId: "design_high_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 100,
+    unitPrice: 180,
+    totalPrice: 18000,
+    totalCost: 10000,
+    profit: 8000,
+    owner: "Alice",
+    designJob: {
+      id: "design_high_1",
+      customerId: "customer_1",
+      conversationId: "conversation_1",
+      wechatAccountId: "wechat_1",
+      isHighValue: true,
+      budget: { totalAmount: 18000, perUnitAmount: 180 },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+      images: [{ id: "image_1", imageId: "candidate_1", designJobId: "design_high_1", selected: true }],
+    },
+    selectedImage: { id: "image_1", imageId: "candidate_1", designJobId: "design_high_1", selected: true },
+  };
+  let quoteRecord = quote;
+  let orderRecord = null;
+  const localStore = {
+    getQuoteDraft: () => quoteRecord,
+    updateQuoteDraft: (id, patch) => {
+      quoteRecord = { ...quoteRecord, id, ...patch };
+      return quoteRecord;
+    },
+    createReviewLog: (payload) => {
+      reviewLogs.push(payload);
+      return payload;
+    },
+  };
+  const orders = {
+    createFromQuote: async (quoteId) => {
+      assert.equal(quoteId, quote.id);
+      orderRecord = {
+        id: "order_high_1",
+        quoteDraftId: quote.id,
+        designJobId: "design_high_1",
+        customerId: "customer_1",
+        conversationId: "conversation_1",
+        wechatAccountId: "wechat_1",
+        selectedImageId: "image_1",
+        status: "draft",
+        paymentStatus: "paid",
+        quantity: 100,
+        unitPrice: 180,
+        totalPrice: 18000,
+        totalCost: 10000,
+        profit: 8000,
+        quoteDraft: quoteRecord,
+      };
+      return orderRecord;
+    },
+    update: async (id, patch) => {
+      assert.equal(id, "order_high_1");
+      orderRecord = { ...orderRecord, ...patch };
+      return orderRecord;
+    },
+  };
+  const wechat = {
+    setConversationManualLock: async (conversationId, payload) => {
+      locks.push({ conversationId, payload });
+      return { conversation: { id: conversationId, manualLocked: payload.locked } };
+    },
+    queueOrderConfirmation: async (orderId, payload) => {
+      queuedConfirmations.push({ orderId, payload });
+      throw new Error("high-value payment verification must not queue automatically");
+    },
+  };
+  const service = new QuotesService({}, localStore, orders, wechat);
+
+  const result = await service.verifyPaymentProofAndQueueConfirmation("quote_high_1", {
+    paymentStatus: "paid",
+    owner: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(result.quote.status, "accepted");
+  assert.equal(result.orderDraft.status, "confirmed");
+  assert.equal(result.orderDraft.paymentStatus, "paid");
+  assert.equal(result.sendTask, null);
+  assert.match(result.message, /高价值订单付款已核验/);
+  assert.deepEqual(
+    locks.map((item) => ({ conversationId: item.conversationId, locked: item.payload.locked, reason: item.payload.reason })),
+    [{ conversationId: "conversation_1", locked: true, reason: "manual_payment_proof_high_value" }],
+  );
+  assert.equal(queuedConfirmations.length, 0);
+  assert.equal(reviewLogs[0].decision, "manual_payment_proof_verified_high_value");
+  assert.equal(reviewLogs[0].metadata.sendTaskId, null);
+});
+
 test("queued quote selection cannot be changed by later customer image selection", async () => {
   let updateCount = 0;
   const designJob = {
@@ -1579,6 +1844,14 @@ test("order service customer-facing failures stay readable Chinese", async () =>
     (error) => {
       assert.match(error.message, /订单草稿没有可更新的字段/);
       assert.doesNotMatch(error.message, /order draft update has no allowed fields/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => service.update(order.id, { status: "fulfilled" }),
+    (error) => {
+      assert.match(error.message, /订单未绑定客户选中的效果图，不能标记为完成/);
+      assert.doesNotMatch(error.message, /selectedImageId|order has no selected image/);
       return true;
     },
   );

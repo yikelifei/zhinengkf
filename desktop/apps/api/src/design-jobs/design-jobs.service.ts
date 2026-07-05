@@ -89,6 +89,7 @@ type DesignRevisionLike = {
   sourceText?: string | null;
   policyAction: string;
   status: string;
+  retryCount?: number;
   chargeRequired?: boolean;
   manualReviewRequired?: boolean;
   externalJobId?: string | null;
@@ -1082,7 +1083,16 @@ export class DesignJobsService {
   }
 
   async retry(id: string, expected: ExpectedIdentityPayload = {}) {
-    return this.retryDesignJob(id, "manual", undefined, expected);
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await (this.prisma as any).designJob.findUnique({
+          where: { id },
+          select: { id: true, customerId: true, conversationId: true, wechatAccountId: true },
+        });
+    if (!job) throw new Error(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
+    const revision = await this.findLatestRevisionForRetry(job.id);
+    return this.retryDesignJob(id, "manual", undefined, expected, revision);
   }
 
   async attachAssets(id: string, assetIds: string[], expected: ExpectedIdentityPayload = {}) {
@@ -1215,6 +1225,9 @@ export class DesignJobsService {
     if (!decision.submitAllowed) {
       const manualLock = job.conversationId
         ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+            expectedWechatAccountId: job.wechatAccountId,
+            expectedConversationId: job.conversationId,
+            expectedCustomerId: job.customerId,
             locked: true,
             reviewer: "system",
             reason: decision.reason,
@@ -1382,13 +1395,13 @@ export class DesignJobsService {
     }
 
     if (payload.status === "failed") {
-      await this.finishLatestRevision(job.id, "failed", [], payload.errorMessage);
-      const retryCount = Number(job.retryCount || 0);
+      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], payload.errorMessage);
+      const retryCount = this.designResultRetryCount(job, failedRevision);
       await this.notifications.create(retryCount < 1 ? "warning" : "error", "设计平台出图失败", payload.errorMessage || "未返回失败原因", {
         designJobId: job.id,
       });
       if (retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", payload.errorMessage || "设计平台返回失败");
+        return this.retryDesignJob(job.id, "automatic", payload.errorMessage || "设计平台返回失败", {}, failedRevision);
       }
       await this.notifications.create("error", "设计任务已转人工", "自动重试后仍失败，需要客服人工处理。", {
         designJobId: job.id,
@@ -1403,14 +1416,14 @@ export class DesignJobsService {
     const images = this.normalizeCallbackImages(payload.images || []);
     if (!images.length) {
       const errorMessage = "design platform completed without images";
-      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = Number(job.retryCount || 0);
+      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = this.designResultRetryCount(job, failedRevision);
       await this.notifications.create(retryCount < 1 ? "warning" : "error", "设计平台未返回图片", errorMessage, {
         designJobId: job.id,
         externalJobId: payload.externalJobId || job.externalJobId,
       });
       if (retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
         reason: "design_platform_completed_without_images",
@@ -1421,10 +1434,11 @@ export class DesignJobsService {
     const imageMetadataCheck = this.validateCallbackImages(job, images);
     if (!imageMetadataCheck.ok) {
       const errorMessage = `design platform returned invalid image metadata: ${imageMetadataCheck.reasons.join("; ")}`;
-      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = Number(job.retryCount || 0);
+      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const retryableFailure = this.isInitialDesignResult(job) || Boolean(failedRevision);
       await this.notifications.create(
-        retryCount < 1 && this.isInitialDesignResult(job) ? "warning" : "error",
+        retryCount < 1 && retryableFailure ? "warning" : "error",
         "设计平台图片数据无效",
         imageMetadataCheck.reasons.join("；"),
         {
@@ -1433,8 +1447,8 @@ export class DesignJobsService {
           invalidImageReasons: imageMetadataCheck.reasons,
         },
       );
-      if (this.isInitialDesignResult(job) && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      if (retryableFailure && retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
         reason: "design_platform_invalid_image_metadata",
@@ -1494,10 +1508,11 @@ export class DesignJobsService {
     const requiredLocalImageCount = this.minimumRequiredLocalImageCount(job);
     if (localSavedCount < requiredLocalImageCount) {
       const errorMessage = `design platform saved only ${localSavedCount} local image files; expected at least ${requiredLocalImageCount}`;
-      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = Number(job.retryCount || 0);
+      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
+      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const retryableFailure = this.isInitialDesignResult(job) || Boolean(failedRevision);
       await this.notifications.create(
-        retryCount < 1 && this.isInitialDesignResult(job) ? "warning" : "error",
+        retryCount < 1 && retryableFailure ? "warning" : "error",
         "设计图本地保存不足",
         `只有 ${localSavedCount} 张候选图保存到本地，至少需要 ${requiredLocalImageCount} 张才能安全发给客户。`,
         {
@@ -1508,8 +1523,8 @@ export class DesignJobsService {
           downloadFailureCount,
         },
       );
-      if (this.isInitialDesignResult(job) && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      if (retryableFailure && retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
         reason: "design_platform_local_image_save_failed",
@@ -1707,6 +1722,9 @@ export class DesignJobsService {
     if (options.releaseManualLock) {
       assertManualReleaseReason(options.releaseReason, "design send manual release");
       await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+        expectedWechatAccountId: job.wechatAccountId,
+        expectedConversationId: job.conversationId,
+        expectedCustomerId: job.customerId,
         locked: false,
         reviewer: options.reviewer || "人工客服",
         reason: options.releaseReason,
@@ -1753,6 +1771,9 @@ export class DesignJobsService {
     } catch (error) {
       if (options.releaseManualLock) {
         await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          expectedWechatAccountId: job.wechatAccountId,
+          expectedConversationId: job.conversationId,
+          expectedCustomerId: job.customerId,
           locked: true,
           reviewer: options.reviewer || "人工客服",
           reason: "manual_approve_send_queue_failed",
@@ -1943,6 +1964,9 @@ export class DesignJobsService {
 
     const manualLock = job.conversationId
       ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          expectedWechatAccountId: job.wechatAccountId,
+          expectedConversationId: job.conversationId,
+          expectedCustomerId: job.customerId,
           locked: true,
           reviewer: options.reviewer || "system",
           reason: options.reason,
@@ -2060,6 +2084,7 @@ export class DesignJobsService {
     mode: "automatic" | "manual",
     reason?: string,
     expected: ExpectedIdentityPayload = {},
+    revision?: DesignRevisionLike | null,
   ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -2069,10 +2094,19 @@ export class DesignJobsService {
 
     try {
       await this.assertDesignPlatformPreflight(job.id);
-      const payload = await this.buildDesignPlatformPayload(job);
+      const payload = await this.buildDesignPlatformPayload(job, revision);
       const remote = await this.designPlatform.createDesignJob(payload);
       const externalJobId = remote.externalJobId || remote.jobId || remote.id;
       const retryCount = Number(job.retryCount || 0) + 1;
+      if (revision?.id) {
+        const revisionRetryCount = Number(revision.retryCount || 0) + 1;
+        await this.updateRevision(revision.id, {
+          externalJobId,
+          status: "submitted",
+          retryCount: revisionRetryCount,
+          errorMessage: "",
+        });
+      }
       const updated = appConfig.useLocalStore
         ? this.localStore.updateDesignJob(job.id, {
             externalJobId,
@@ -2138,6 +2172,7 @@ export class DesignJobsService {
       renderStyle: job.renderStyle,
       requirements: job.requirements as Record<string, unknown>,
       customerText: job.customerText,
+      callback: this.buildDesignPlatformCallback(job.requestId),
       revision: revision
         ? {
             revisionId: revision.id,
@@ -2147,6 +2182,28 @@ export class DesignJobsService {
             sourceText: revision.sourceText,
           }
         : null,
+      };
+  }
+
+  private buildDesignPlatformCallback(requestId: string) {
+    const configuredUrl = String(appConfig.designPlatformCallbackUrl || "").trim();
+    const baseUrl = String(appConfig.customerServicePublicBaseUrl || `http://127.0.0.1:${appConfig.apiPort}`).replace(
+      /\/+$/,
+      "",
+    );
+    const url = configuredUrl || `${baseUrl}/api/integrations/design-platform/callback`;
+    const headers = appConfig.callbackApiKey
+      ? {
+          Authorization: `Bearer ${appConfig.callbackApiKey}`,
+        }
+      : undefined;
+    return {
+      url,
+      method: "POST" as const,
+      events: ["completed", "failed"] as Array<"completed" | "failed">,
+      headers,
+      requestId,
+      fallbackPolling: true,
     };
   }
 
@@ -2176,6 +2233,39 @@ export class DesignJobsService {
     });
   }
 
+  private designResultRetryCount(job: any, revision?: DesignRevisionLike | null) {
+    return revision ? Number(revision.retryCount || 0) : Number(job.retryCount || 0);
+  }
+
+  private async findLatestRevisionForRetry(designJobId: string): Promise<DesignRevisionLike | null> {
+    const retryableStatuses = ["submitted", "generating"];
+    if (appConfig.useLocalStore) {
+      const revisions = this.localStore.listDesignRevisions(designJobId) || [];
+      return (
+        this.latestRevisionByUpdatedAt(revisions.filter((revision: any) => retryableStatuses.includes(revision.status))) ||
+        this.latestRevisionByUpdatedAt(revisions.filter((revision: any) => revision.status === "failed"))
+      );
+    }
+    const prisma = this.prisma as any;
+    const active = await prisma.designRevision.findFirst({
+      where: { designJobId, status: { in: retryableStatuses } },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (active) return active;
+    return prisma.designRevision.findFirst({
+      where: { designJobId, status: "failed" },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
+  private latestRevisionByUpdatedAt(revisions: DesignRevisionLike[]) {
+    return (
+      [...revisions].sort((a: any, b: any) =>
+        String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")),
+      )[0] || null
+    );
+  }
+
   private findSelectedImageId(job: any) {
     const selected = (job.images || []).find((image: any) => image.selected);
     return selected?.id || selected?.imageId || null;
@@ -2183,6 +2273,7 @@ export class DesignJobsService {
 
   private versionedImageId(job: any, imageId: string) {
     const revisionCount = Number(job.revisionCount || 0);
+    if (/^r\d+-/.test(String(imageId || ""))) return imageId;
     return revisionCount > 0 ? `r${revisionCount}-${imageId}` : imageId;
   }
 

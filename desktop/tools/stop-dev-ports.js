@@ -5,6 +5,9 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
+const staleDesktopRoots = [
+  path.resolve("C:\\Users\\27808\\Desktop\\zhinengkefu_restore_work\\desktop"),
+];
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(desktopRoot, ".runtime");
@@ -469,7 +472,11 @@ function findManagedLauncherPids() {
       if (commandLine.includes("keepalive-stable-desktop.cmd")) {
         return true;
       }
-      if (commandLine.includes("run-stable-service-window.cmd") || commandLine.includes("start-stable-desktop.cmd")) {
+      if (
+        commandLine.includes("run-stable-service-window.cmd") ||
+        commandLine.includes("start-stable-desktop.cmd") ||
+        commandLine.includes("start-stable-desktop-foreground.cmd")
+      ) {
         if (skipStableServiceWrappers) return false;
         return true;
       }
@@ -587,6 +594,7 @@ function isStoppablePortOwnerAncestor(pid) {
     "supervise-real.cmd",
     "stable-supervise-mock.cmd",
     "stable-supervise-real.cmd",
+    "start-stable-desktop-foreground.cmd",
   ].some((marker) => commandLine.includes(marker));
 }
 
@@ -745,6 +753,7 @@ function isManagedCommandLine(pid) {
   const normalizedCommand = normalizePathText(commandLine);
   const normalizedRoot = normalizePathText(desktopRoot);
   if (normalizedCommand.includes(normalizedRoot)) return true;
+  if (staleDesktopRoots.some((rootPath) => normalizedCommand.includes(normalizePathText(rootPath)))) return true;
   const normalizedParentCommand = normalizePathText(getParentCommandLine(pid));
   if (
     /"?node(?:\.exe)?"?\s+server\.js\b/.test(normalizedCommand) &&

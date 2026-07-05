@@ -4,12 +4,12 @@ const DEFAULT_MAX_SKILLS = 5;
 const DEFAULT_MAX_KNOWLEDGE = 3;
 
 function buildAgentReplyDraft(route = {}, context = {}) {
-  const skills = selectSkills(context.skills || [], route, context.maxSkills || DEFAULT_MAX_SKILLS);
   const identity = {
     wechatAccountId: firstText(context.wechatAccountId, route.wechatAccountId),
     conversationId: firstText(context.conversationId, route.conversationId),
     customerId: firstText(context.customerId, route.customerId),
   };
+  const skills = selectSkills(context.skills || [], route, context.maxSkills || DEFAULT_MAX_SKILLS, identity);
   const knowledgeMatches = matchKnowledge(route.text || "", context.knowledgeEntries || [], {
     agentId: context.agentId,
     max: context.maxKnowledge || DEFAULT_MAX_KNOWLEDGE,
@@ -25,6 +25,7 @@ function buildAgentReplyDraft(route = {}, context = {}) {
       confidence: Number(skill.confidence || 0),
       sampleCount: Number(skill.sampleCount || 0),
       version: Number(skill.version || 1),
+      scope: skillScopeSummary(skill),
     })),
     knowledgeMatches,
     replyDraft: {
@@ -36,10 +37,49 @@ function buildAgentReplyDraft(route = {}, context = {}) {
   };
 }
 
-function selectSkills(skills, route, max) {
+function skillScopeSummary(skill = {}) {
+  const wechatAccountId = firstText(skill.wechatAccountId, skill.identityBinding?.wechatAccountId, skill.scope?.wechatAccountId);
+  const conversationId = firstText(skill.conversationId, skill.identityBinding?.conversationId, skill.scope?.conversationId);
+  const customerId = firstText(skill.customerId, skill.identityBinding?.customerId, skill.scope?.customerId);
+  if (conversationId) {
+    return {
+      level: "conversation",
+      label: "当前会话私有",
+      wechatAccountId,
+      conversationId,
+      customerId,
+      bindingStatus: firstText(skill.identityBinding?.status) || "passed",
+    };
+  }
+  if (customerId) {
+    return {
+      level: "customer",
+      label: "客户私有",
+      wechatAccountId,
+      customerId,
+      bindingStatus: firstText(skill.identityBinding?.status) || "passed",
+    };
+  }
+  if (wechatAccountId) {
+    return {
+      level: "wechat_account",
+      label: "微信账号内共享",
+      wechatAccountId,
+      bindingStatus: firstText(skill.identityBinding?.status) || "passed",
+    };
+  }
+  return {
+    level: "global",
+    label: "全局 Skill",
+    bindingStatus: firstText(skill.identityBinding?.status) || "",
+  };
+}
+
+function selectSkills(skills, route, max, identity = {}) {
   const wanted = wantedSkillNames(route);
   return [...skills]
     .filter((skill) => skill && skill.enabled !== false)
+    .filter((skill) => skillIdentityMatches(skill, identity))
     .map((skill) => ({
       ...skill,
       relevance: scoreSkill(skill, route, wanted),
@@ -47,6 +87,38 @@ function selectSkills(skills, route, max) {
     .filter((skill) => skill.relevance > 0)
     .sort((a, b) => b.relevance - a.relevance || Number(b.confidence || 0) - Number(a.confidence || 0))
     .slice(0, max);
+}
+
+function skillIdentityMatches(skill = {}, identity = {}) {
+  const scopeLevel = firstText(skill.scope?.level);
+  if (scopeLevel === "mixed") return false;
+  if (scopeLevel === "conversation" && !firstText(skill.conversationId, skill.identityBinding?.conversationId, skill.scope?.conversationId)) return false;
+  if (scopeLevel === "customer" && !firstText(skill.customerId, skill.identityBinding?.customerId, skill.scope?.customerId)) return false;
+  if (scopeLevel === "wechat_account" && !firstText(skill.wechatAccountId, skill.identityBinding?.wechatAccountId, skill.scope?.wechatAccountId)) return false;
+  const checks = ["wechatAccountId", "conversationId", "customerId"];
+  for (const key of checks) {
+    const actual = identityFieldValue(skill, key);
+    if (actual.conflict) return false;
+    if (!actual.value) continue;
+    const expected = firstText(identity?.[key]);
+    if (!expected || expected !== actual.value) return false;
+  }
+  return true;
+}
+
+function identityFieldValue(record = {}, key) {
+  const values = [
+    record?.[key],
+    record?.identityBinding?.[key],
+    record?.scope?.[key],
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const unique = [...new Set(values)];
+  return {
+    value: unique[0] || "",
+    conflict: unique.length > 1,
+  };
 }
 
 function wantedSkillNames(route) {
@@ -104,8 +176,10 @@ function knowledgeIdentityMatches(entry, options = {}) {
   const checks = ["wechatAccountId", "conversationId", "customerId"];
   for (const key of checks) {
     const expected = firstText(options[key]);
-    const actual = firstText(entry?.[key]);
-    if (expected && actual && expected !== actual) return false;
+    const actual = identityFieldValue(entry, key);
+    if (actual.conflict) return false;
+    if (!actual.value) continue;
+    if (!expected || expected !== actual.value) return false;
   }
   return true;
 }

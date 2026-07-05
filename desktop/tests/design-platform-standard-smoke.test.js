@@ -33,6 +33,9 @@ test("standard design platform smoke submits, polls, saves images, and keeps upl
     designPlatformCookie: appConfig.designPlatformCookie,
     designPlatformDeviceId: appConfig.designPlatformDeviceId,
     designPlatformTimeoutMs: appConfig.designPlatformTimeoutMs,
+    customerServicePublicBaseUrl: appConfig.customerServicePublicBaseUrl,
+    designPlatformCallbackUrl: appConfig.designPlatformCallbackUrl,
+    callbackApiKey: appConfig.callbackApiKey,
   };
   const port = await freePort();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "standard-design-smoke-"));
@@ -76,6 +79,9 @@ test("standard design platform smoke submits, polls, saves images, and keeps upl
     appConfig.designPlatformCookie = "";
     appConfig.designPlatformDeviceId = "";
     appConfig.designPlatformTimeoutMs = 5000;
+    appConfig.customerServicePublicBaseUrl = "http://127.0.0.1:33200";
+    appConfig.designPlatformCallbackUrl = "";
+    appConfig.callbackApiKey = "test-callback-key";
 
     await waitForHealth(port);
 
@@ -157,6 +163,15 @@ test("standard design platform smoke submits, polls, saves images, and keeps upl
       createdPayloads[0].assets.map((asset) => asset.role).sort(),
       ["customer_logo", "gift_box", "sku_image"],
     );
+    assert.equal(
+      createdPayloads[0].callback.url,
+      "http://127.0.0.1:33200/api/integrations/design-platform/callback",
+    );
+    assert.equal(createdPayloads[0].callback.method, "POST");
+    assert.deepEqual(createdPayloads[0].callback.events, ["completed", "failed"]);
+    assert.equal(createdPayloads[0].callback.headers.Authorization, "Bearer test-callback-key");
+    assert.equal(createdPayloads[0].callback.requestId, "request_standard_smoke_1");
+    assert.equal(createdPayloads[0].callback.fallbackPolling, true);
 
     const completed = await waitForCompletedPoll(service, job.id);
     assert.equal(completed.remoteStatus, "completed");

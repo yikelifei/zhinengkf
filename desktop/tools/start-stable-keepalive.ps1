@@ -6,6 +6,7 @@ $LogDir = Join-Path $RuntimeDir "logs"
 $KeepAliveScript = Join-Path $Root "keepalive-stable-desktop.cmd"
 $StartLog = Join-Path $RuntimeDir "stable-start.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
+$StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 
 function Write-StableStartLog($Message) {
   try {
@@ -25,6 +26,7 @@ function Find-KeepAliveProcess {
 try {
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+  Remove-Item -Force -ErrorAction SilentlyContinue -Path $StopRequestFile
   Set-Content -Path $StableStartingLock -Value (Get-Date).ToString("o") -Encoding UTF8
 
   & node (Join-Path $Root "tools\stable-start-needed.js") | Out-Null
@@ -44,7 +46,6 @@ try {
   Write-StableStartLog "starting detached keepalive"
   $process = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/k", "`"$KeepAliveScript`"") -WorkingDirectory $Root -WindowStyle Minimized -PassThru
   Start-Sleep -Milliseconds 1500
-
   $running = Find-KeepAliveProcess
   if ($running) {
     Write-StableStartLog "detached keepalive pid=$($running.ProcessId) startProcessPid=$($process.Id)"

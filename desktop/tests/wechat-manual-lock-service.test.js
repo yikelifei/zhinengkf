@@ -16,6 +16,7 @@ require("ts-node").register({
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
 const { OrdersService } = require("../apps/api/src/orders/orders.service");
+const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
 const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
@@ -41,9 +42,18 @@ function setupService(overrides = {}) {
   const sendAdapter = new WechatSendAdapterService();
   const orders = overrides.orders || new OrdersService({}, localStore, notifications);
   const service = new WechatDispatchService({}, localStore, sendAdapter, notifications, orders);
+  const quotes = new QuotesService({}, localStore, orders, service);
   const reviews = new ReviewsService({}, localStore, {}, {}, notifications);
 
-  return { tempDir, localStore, service, reviews, orders };
+  return { tempDir, localStore, service, reviews, orders, quotes };
+}
+
+function demoExpectedIdentity() {
+  return {
+    expectedWechatAccountId: "wechat_demo_1",
+    expectedConversationId: "conversation_demo_1",
+    expectedCustomerId: "customer_demo_1",
+  };
 }
 
 test("wechat manual review copy stays readable Chinese", () => {
@@ -263,6 +273,7 @@ test("manual lock cancels in-flight bridge send tasks and archives outbox", asyn
   const task = localStore.createSendTask({
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
     status: "sending",
     payload: { kind: "text", text: "manual lock should cancel this" },
     guardSnapshot: {
@@ -292,6 +303,7 @@ test("manual lock cancels in-flight bridge send tasks and archives outbox", asyn
   });
 
   const result = await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -341,6 +353,7 @@ test("manual release does not requeue tasks paused by manual lock", async () => 
   });
 
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -350,6 +363,9 @@ test("manual release does not requeue tasks paused by manual lock", async () => 
     reviewer: "test",
     reason: "manual_release_test",
     note: "manual handled the customer question and can resume automation",
+    expectedWechatAccountId: "wechat_demo_1",
+    expectedConversationId: "conversation_demo_1",
+    expectedCustomerId: "customer_demo_1",
   });
 
   const updatedQueuedTask = localStore.getSendTask(queuedTask.id);
@@ -368,10 +384,56 @@ test("manual release does not requeue tasks paused by manual lock", async () => 
   assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === "conversation_demo_1" && task.status === "queued").length, 0);
 });
 
+test("manual lock blocked order task records order note without changing quote status", async () => {
+  const { localStore, service } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_manual_lock_block_note_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "manual lock should write order note" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_acceptance",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
+    locked: true,
+    reviewer: "test",
+    reason: "manual_takeover_test",
+  });
+
+  const blockedTask = localStore.getSendTask(task.id);
+  const blockedOrder = localStore.getOrderDraft(order.id);
+  const quote = localStore.getQuoteDraft(order.quoteDraftId);
+
+  assert.equal(blockedTask.status, "blocked");
+  assert.equal(blockedTask.guardSnapshot.blockedByManualLock, true);
+  assert.match(blockedOrder.customerNotes, new RegExp(`\\[发送任务:${task.id}\\]`));
+  assert.match(blockedOrder.customerNotes, /订单确认发送失败，需要人工处理/);
+  assert.match(blockedOrder.customerNotes, /会话已人工接管，自动发送暂停/);
+  assert.equal(quote.status, "accepted");
+});
+
 test("manual release requires explicit manual reason and keeps conversation locked", async () => {
   const { localStore, service } = setupService();
 
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -379,7 +441,14 @@ test("manual release requires explicit manual reason and keeps conversation lock
   const reviewLogCount = localStore.listReviewLogs().length;
 
   await assert.rejects(
-    () => service.setConversationManualLock("conversation_demo_1", { locked: false, reviewer: "test" }),
+    () =>
+      service.setConversationManualLock("conversation_demo_1", {
+        locked: false,
+        reviewer: "test",
+        expectedWechatAccountId: "wechat_demo_1",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
+      }),
     /需要填写明确的人工处理原因/,
   );
 
@@ -392,6 +461,7 @@ test("manual release requires a resolution note and keeps conversation locked", 
   const { localStore, service } = setupService();
 
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -404,6 +474,9 @@ test("manual release requires a resolution note and keeps conversation locked", 
         locked: false,
         reviewer: "test",
         reason: "manual_release_test",
+        expectedWechatAccountId: "wechat_demo_1",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
       }),
     /manual|reason|result|note|处理|结果/,
   );
@@ -759,7 +832,7 @@ test("requeue rejects send task after its design binding becomes invalid", async
 
 test("requeue records explicit manual audit reason", async () => {
   const { localStore, service } = setupService();
-  seedStoredOrderDraft(localStore, { id: "order_demo_1", status: "processing", paymentStatus: "deposit_paid" });
+  const order = seedStoredOrderDraft(localStore, { id: "order_demo_1", status: "processing", paymentStatus: "deposit_paid" });
 
   const task = localStore.createSendTask({
     wechatAccountId: "wechat_demo_1",
@@ -791,6 +864,11 @@ test("requeue records explicit manual audit reason", async () => {
   assert.equal(updated.guardSnapshot.opsAlertedStatus, "requeued");
   assert.equal(updated.guardSnapshot.history.at(-1).action, "requeue");
   assert.equal(updated.guardSnapshot.history.at(-1).reason, "manual_resolution_before_send_requeue");
+
+  const orderAfterRequeue = localStore.getOrderDraft("order_demo_1");
+  assert.match(orderAfterRequeue.customerNotes, /\[发送任务:.*:requeue\]订单跟进发送已人工重新排队/);
+  assert.match(orderAfterRequeue.customerNotes, /manual_resolution_before_send_requeue/);
+  assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
 });
 
 test("low-value failed send task retries once before human alert", async () => {
@@ -876,8 +954,80 @@ test("requeue rejects order confirmation task after order payment is refunded", 
     },
   });
 
-  await assert.rejects(() => service.requeueSendTask(task.id), /verified deposit|payment/i);
+  await assert.rejects(() => service.requeueSendTask(task.id), /订单确认重新排队需要先核验定金或全款/);
   assert.equal(localStore.getSendTask(task.id).status, "failed");
+});
+
+test("requeue records order note for low-value quote acceptance order task", async () => {
+  const { localStore, service } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_quote_acceptance_requeue_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "failed",
+    payload: { kind: "text", text: "quote acceptance order confirmation should requeue safely" },
+    errorMessage: "previous bridge failure",
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_acceptance",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  const updated = await service.requeueSendTask(task.id, {
+    reason: "quote_acceptance_order_requeue_after_operator_review",
+  });
+  const orderAfterRequeue = localStore.getOrderDraft(order.id);
+
+  assert.equal(updated.status, "queued");
+  assert.match(orderAfterRequeue.customerNotes, /\[发送任务:.*:requeue\]订单确认发送已人工重新排队/);
+  assert.match(orderAfterRequeue.customerNotes, /quote_acceptance_order_requeue_after_operator_review/);
+  assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
+});
+
+test("requeue rejects low-value quote acceptance order task after payment is refunded", async () => {
+  const { localStore, service } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_quote_acceptance_refund_1",
+    status: "confirmed",
+    paymentStatus: "refunded",
+  });
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "failed",
+    payload: { kind: "text", text: "quote acceptance order confirmation should still recheck order" },
+    errorMessage: "previous bridge failure",
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_acceptance",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  await assert.rejects(() => service.requeueSendTask(task.id), /订单确认重新排队需要先核验定金或全款/);
+  assert.equal(localStore.getSendTask(task.id).status, "failed");
+  assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
 });
 
 test("requeue rejects order follow-up task while conversation is manually locked", async () => {
@@ -908,6 +1058,7 @@ test("requeue rejects order follow-up task while conversation is manually locked
     },
   });
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -1061,6 +1212,45 @@ test("cancel records explicit manual audit reason", () => {
   assert.ok(updated.guardSnapshot.cancelledAt);
   assert.equal(updated.guardSnapshot.history.at(-1).action, "cancel");
   assert.equal(updated.guardSnapshot.history.at(-1).reason, "manual_takeover_cancel_send_task");
+});
+
+test("cancel order send task records order note without changing quote status", () => {
+  const { localStore, service } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_cancel_note_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "cancel order send task should write order note" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_acceptance",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  const updated = service.cancelSendTask(task.id, {
+    reason: "manual_cancel_order_confirmation_before_send",
+  });
+  const cancelledOrder = localStore.getOrderDraft(order.id);
+  const quote = localStore.getQuoteDraft(order.quoteDraftId);
+
+  assert.equal(updated.status, "cancelled");
+  assert.match(cancelledOrder.customerNotes, new RegExp(`\\[发送任务:${task.id}\\]`));
+  assert.match(cancelledOrder.customerNotes, /订单确认发送失败，需要人工处理/);
+  assert.match(cancelledOrder.customerNotes, /manual_cancel_order_confirmation_before_send/);
+  assert.equal(quote.status, "accepted");
 });
 
 test("requeue rejects audited cancelled send task", async () => {
@@ -1347,6 +1537,64 @@ test("send task validation requires matching account conversation identity", () 
   assert.equal(result.wechatAccountId, "wechat_demo_1");
   assert.equal(result.conversationId, "conversation_demo_1");
   assert.equal(result.guardSnapshot.status, "passed");
+});
+
+test("current window validation records missing snapshot diagnostic for operator triage", () => {
+  const { localStore, service } = setupService();
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "missing current window snapshot should be auditable" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+
+  const result = service.validateSendTaskWithCurrentWindow(task.id, demoExpectedIdentity());
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.guardSnapshot.status, "blocked");
+  assert.equal(result.guardSnapshot.windowSnapshotId, null);
+  assert.equal(result.guardSnapshot.activeWindow, null);
+  assert.equal(result.guardSnapshot.windowDiagnostic.ok, false);
+  assert.equal(result.guardSnapshot.windowDiagnostic.reason, "没有可用的微信窗口快照");
+  assert.deepEqual(result.guardSnapshot.failedKeys, ["windowSnapshotMissing"]);
+});
+
+test("current window validation preserves failed window diagnostic details", () => {
+  const { localStore, service } = setupService();
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "failed current window snapshot should be visible" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  const snapshot = localStore.createWechatWindowSnapshot({
+    source: "test",
+    isOnline: true,
+    wechatAccountId: "wechat_demo_1",
+    chatTitle: "not a known customer",
+    activeChatTitle: "not a known customer",
+    recentCustomerId: "customer_demo_2",
+    confidence: 1,
+    capturedAt: new Date().toISOString(),
+  });
+
+  const result = service.validateSendTaskWithCurrentWindow(task.id, demoExpectedIdentity());
+
+  assert.equal(snapshot.diagnostic.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.equal(result.guardSnapshot.windowSnapshotId, snapshot.id);
+  assert.equal(result.guardSnapshot.activeWindow.id, snapshot.id);
+  assert.equal(result.guardSnapshot.windowDiagnostic.ok, false);
+  assert.equal(result.guardSnapshot.windowDiagnostic.reason, snapshot.diagnostic.reason);
+  assert.deepEqual(result.guardSnapshot.failedKeys, snapshot.diagnostic.failedKeys);
 });
 
 test("send attempt list by task id requires matching account conversation identity", () => {
@@ -2381,6 +2629,7 @@ test("manual lock blocks order confirmation queueing before order state changes"
   });
 
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -2405,6 +2654,7 @@ test("manual lock blocks order follow-up queueing before notification is created
   const notificationsBefore = localStore.listNotifications().length;
 
   await service.setConversationManualLock("conversation_demo_1", {
+    ...demoExpectedIdentity(),
     locked: true,
     reviewer: "test",
     reason: "manual_takeover_test",
@@ -2466,7 +2716,7 @@ test("order confirmation queue rejects refunded order before send task creation"
 
   await assert.rejects(
     () => service.queueOrderConfirmation(order.id, { owner: "low_value_automation" }),
-    /verified deposit|full payment|payment/i,
+    /订单确认需要先核验定金或全款/,
   );
 
   assert.equal(updateCalled, false);
@@ -2483,9 +2733,90 @@ test("order follow-up queue rejects refunded order before send task creation", a
 
   await assert.rejects(
     () => service.queueOrderFollowup(order.id, { owner: "low_value_automation", type: "production" }),
-    /verified deposit|full payment|payment/i,
+    /订单跟进需要先核验定金或全款/,
   );
 
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("order confirmation queue rejects paid order without selected image before send task creation", async () => {
+  const order = buildOrderDraft({
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+    selectedImageId: null,
+    selectedImage: null,
+  });
+  order.quoteDraft = { ...order.quoteDraft, selectedImageId: null, selectedImage: null };
+  order.selectedImageSnapshot = null;
+  let updateCalled = false;
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+      update: async () => {
+        updateCalled = true;
+        return order;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderConfirmation(order.id, { owner: "low_value_automation" }),
+    /订单确认需要先绑定客户选中的效果图/,
+  );
+
+  assert.equal(updateCalled, false);
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("order follow-up queue rejects paid order without selected image before send task creation", async () => {
+  const order = buildOrderDraft({
+    status: "processing",
+    paymentStatus: "deposit_paid",
+    selectedImageId: null,
+    selectedImage: null,
+  });
+  order.quoteDraft = { ...order.quoteDraft, selectedImageId: null, selectedImage: null };
+  order.selectedImageSnapshot = null;
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+      update: async () => order,
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderFollowup(order.id, { owner: "low_value_automation", type: "production" }),
+    /订单跟进需要先绑定客户选中的效果图/,
+  );
+
+  assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
+});
+
+test("order confirmation queue rejects negative profit order before send task creation", async () => {
+  const order = buildOrderDraft({
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+    totalPrice: 1000,
+    totalCost: 1200,
+    profit: -200,
+  });
+  let updateCalled = false;
+  const { localStore, service } = setupService({
+    orders: {
+      getById: async () => order,
+      update: async () => {
+        updateCalled = true;
+        return order;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.queueOrderConfirmation(order.id, { owner: "low_value_automation" }),
+    /订单确认发现订单利润为负/,
+  );
+
+  assert.equal(updateCalled, false);
   assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === order.conversationId).length, 0);
 });
 
@@ -2852,6 +3183,7 @@ test("local conversation updates reject invalid identity changes", async () => {
     locked: true,
     reviewer: "test",
     reason: "manual_review",
+    ...demoExpectedIdentity(),
   });
   assert.equal(result.conversation.manualLocked, true);
   assert.equal(result.conversation.customerId, "customer_demo_1");
@@ -3542,6 +3874,123 @@ test("inbound text image selection binds the latest revision round", async () =>
   assert.equal(selectedImage.id, images[2].id);
 });
 
+test("inbound screenshot fingerprint selection queues low-value quote safely", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_screenshot_fingerprint_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      fingerprint: "aaaaaaaaaaaaaaaa",
+      localPath: "C:\\storage\\design-jobs\\selection_screenshot_fingerprint_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      fingerprint: "bbbbbbbbbbbbbbbb",
+      localPath: "C:\\storage\\design-jobs\\selection_screenshot_fingerprint_request_1\\candidate_2.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
+    },
+  ]);
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "就这个图，麻烦按这个报价",
+    attachments: [{ type: "image", fileName: "客户回传截图.png", screenshotFingerprint: "bbbbbbbbbbbbbbbb" }],
+  });
+
+  const updatedJob = localStore.getDesignJob(job.id);
+  const selectedImage = updatedJob.images.find((image) => image.selected);
+
+  assert.equal(result.plan.type, "select_design_image_and_create_quote");
+  assert.equal(result.plan.reason, "low_value_customer_selected_image_quote_queued");
+  assert.equal(result.selection.result.source, "fingerprint");
+  assert.equal(result.selection.result.imageId, "candidate_2");
+  assert.equal(result.quote.status, "send_queued");
+  assert.equal(result.quote.selectedImageId, images[1].id);
+  assert.equal(selectedImage.id, images[1].id);
+  assert.equal(result.sendTask.status, "queued");
+  assert.equal(result.sendTask.quoteDraftId, result.quote.id);
+  assert.equal(result.sendTask.wechatAccountId, "wechat_demo_1");
+  assert.equal(result.sendTask.conversationId, "conversation_demo_1");
+});
+
+test("uncertain inbound screenshot selection goes to manual review without quoting", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "selection_uncertain_screenshot_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      fingerprint: "aaaaaaaaaaaaaaaa",
+      localPath: "C:\\storage\\design-jobs\\selection_uncertain_screenshot_request_1\\candidate_1.png",
+    },
+    {
+      imageId: "candidate_2",
+      position: 2,
+      fingerprint: "bbbbbbbbbbbbbbbb",
+      localPath: "C:\\storage\\design-jobs\\selection_uncertain_screenshot_request_1\\candidate_2.png",
+    },
+  ]);
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "就按这个截图里的来",
+    attachments: [{ type: "image", fileName: "客户回传截图.png", imageFingerprint: "bbbbcccccccccccc" }],
+  });
+
+  const updatedJob = localStore.getDesignJob(job.id);
+  const conversation = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+
+  assert.equal(result.plan.type, "manual_selection_review");
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.selection.reviewRequired, true);
+  assert.equal(result.selection.result.source, "fingerprint");
+  assert.equal(result.sendTask, null);
+  assert.equal(result.quote, null);
+  assert.equal(updatedJob.images.some((image) => image.selected), false);
+  assert.equal(localStore.listQuoteDrafts().some((quote) => quote.designJobId === job.id), false);
+  assert.equal(conversation.manualLocked, true);
+  assert.equal(result.notification.target.designJobId, job.id);
+  assert.equal(result.notification.target.reason, "截图相似度不足，需要人工确认");
+  assert.equal(images.length, 2);
+});
+
 test("inbound high value image selection locks conversation and leaves human review note", async () => {
   const { localStore, service } = setupService();
 
@@ -3983,6 +4432,114 @@ test("inbound payment proof attachment with paid wording still requires manual v
       }),
     /payment|proof|manual|verification|付款|凭证/,
   );
+});
+
+test("manual payment proof verification rejects quote without selected image before order queueing", async () => {
+  const { localStore, quotes } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "payment_proof_without_selected_image_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\payment_proof_without_selected_image_request_1\\candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id);
+  localStore.updateQuoteDraft(quote.id, { status: "manual_review", paymentStatus: "unpaid" });
+
+  await assert.rejects(
+    () =>
+      quotes.verifyPaymentProofAndQueueConfirmation(quote.id, {
+        ...demoExpectedIdentity(),
+        paymentStatus: "deposit_paid",
+        owner: "人工客服",
+        note: "人工核验付款前必须先绑定客户选图。",
+      }),
+    /selected design image/,
+  );
+
+  const unchangedQuote = localStore.getQuoteDraft(quote.id);
+  assert.equal(unchangedQuote.paymentStatus, "unpaid");
+  assert.equal(unchangedQuote.selectedImageId, null);
+  assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
+  assert.equal(localStore.listSendTasks().some((task) => task.quoteDraftId === quote.id), false);
+});
+
+test("payment proof screenshot fingerprint is not treated as design image selection", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "payment_proof_fingerprint_manual_review_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      fingerprint: "aaaaaaaaaaaaaaaa",
+      localPath: "C:\\storage\\design-jobs\\payment_proof_fingerprint_manual_review_request_1\\candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+  const originalSelectedImageId = quote.selectedImageId;
+
+  const result = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "定金已经转账了，付款截图发你",
+    attachments: [
+      {
+        role: "payment_proof",
+        type: "image",
+        fileName: "付款截图.png",
+        screenshotFingerprint: "aaaaaaaaaaaaaaaa",
+      },
+    ],
+  });
+
+  const updatedQuote = localStore.getQuoteDraft(quote.id);
+  const updatedJob = localStore.getDesignJob(job.id);
+
+  assert.equal(result.plan.type, "quote_payment_proof_manual_review");
+  assert.equal(result.plan.shouldNotifyHuman, true);
+  assert.equal(result.quoteAcceptance.reason, "payment_proof_needs_manual_verification");
+  assert.equal(result.sendTask, null);
+  assert.equal(result.quote.id, quote.id);
+  assert.equal(updatedQuote.paymentStatus, "unpaid");
+  assert.equal(updatedQuote.status, "manual_review");
+  assert.equal(updatedQuote.selectedImageId, originalSelectedImageId);
+  assert.equal(updatedJob.images.filter((image) => image.selected).length, 0);
+  assert.equal(localStore.listQuoteDrafts().filter((item) => item.designJobId === job.id).length, 1);
+  assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
 });
 
 test("inbound payment proof attachment goes to manual verification without marking paid", async () => {

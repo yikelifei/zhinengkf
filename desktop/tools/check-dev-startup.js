@@ -7,9 +7,11 @@ const { spawnSync } = require("node:child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = path.join(desktopRoot, ".runtime");
+const stableRuntimeDir = path.join(desktopRoot, ".runtime-stable");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const args = new Set(process.argv.slice(2));
 const forceMockDesignMode = args.has("--mock-design");
 const requestedRealDesignMode = args.has("--real-design");
@@ -412,6 +414,8 @@ function findWechatWorkerProcesses() {
 }
 
 function findKeepAliveSupervisorProcesses() {
+  const stableRuntimeProcess = findStableRuntimeHeartbeatProcess();
+  if (stableRuntimeProcess.length) return stableRuntimeProcess;
   const heartbeatProcess = findKeepAliveHeartbeatProcess();
   if (heartbeatProcess.length) return heartbeatProcess;
   if (process.platform !== "win32") return [];
@@ -458,6 +462,24 @@ async function waitForKeepAliveSupervisorProcesses(attempts, delayMs) {
     if (attempt < attempts) await sleep(delayMs);
   }
   return supervisors;
+}
+
+function findStableRuntimeHeartbeatProcess() {
+  const heartbeat = readJson(stableKeepAliveHeartbeatFile);
+  if (heartbeat.mode !== "mock") return [];
+  const updatedAt = Date.parse(String(heartbeat.updatedAt || ""));
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 30_000) return [];
+  const pid = String(heartbeat.pid || "");
+  if (!/^\d+$/.test(pid)) return [];
+  const commandLine = getCommandLine(pid);
+  const normalizedCommand = normalizePathText(commandLine);
+  if (!normalizedCommand.includes("tools/stable-runtime-launcher.js")) return [];
+  return [
+    {
+      pid,
+      commandLine,
+    },
+  ];
 }
 
 function findKeepAliveHeartbeatProcess() {

@@ -55,6 +55,7 @@ function validOutboxPayload(overrides = {}) {
       wechatAccountId: "wechat_1",
       conversationId: "conv_1",
       customerId: "customer_1",
+      windowSnapshotId: "window_1",
     },
     sendPlan: {
       kind: "text",
@@ -62,6 +63,7 @@ function validOutboxPayload(overrides = {}) {
         wechatAccountId: "wechat_1",
         conversationId: "conv_1",
         customerId: "customer_1",
+        windowSnapshotId: "window_1",
       },
       actionCount: 1,
       actions: [{ type: "text", text: "hello" }],
@@ -75,6 +77,17 @@ function validOutboxPayload(overrides = {}) {
     payload: { kind: "text", text: "hello" },
     guardSnapshot: { status: "passed", ok: true },
     context: { guardStatus: "passed", windowSnapshotId: "window_1" },
+    preflight: {
+      requiredBeforeSend: ["wechatAccountId", "activeChatTitle", "recentMessageOrCustomerId", "dispatchNotExpired"],
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conv_1",
+      expectedCustomerId: "customer_1",
+      expectedWindowSnapshotId: "window_1",
+      rejectIfAnyCheckFails: true,
+      rejectIfWindowChanged: true,
+      rejectIfExpired: true,
+      rejectIfOutboxMissing: true,
+    },
     createdAt: "2026-06-27T00:00:00.000Z",
     ...overrides,
   };
@@ -295,6 +308,17 @@ test("rejects bridge outbox file body without strict send constraints", () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("sendPlanConstraints"), true);
+});
+
+test("rejects bridge outbox file body when preflight window snapshot changed", () => {
+  const payload = validOutboxPayload({
+    context: { guardStatus: "passed", windowSnapshotId: "window_2" },
+  });
+
+  const result = validateOutboxPayload(validOutboxEntry(), payload);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("preflightWindowSnapshot"), true);
 });
 
 test("rejects bridge outbox file body without ack token", () => {

@@ -120,9 +120,10 @@ function sharedIdentityFields(records: any[]) {
   for (const key of ["wechatAccountId", "conversationId", "customerId"] as const) {
     const values = [
       ...new Set(
-        records
-          .map((record) => String(record?.[key] || record?.identityBinding?.[key] || "").trim())
-          .filter(Boolean),
+        records.flatMap((record) => [
+          String(record?.[key] || "").trim(),
+          String(record?.identityBinding?.[key] || "").trim(),
+        ]).filter(Boolean),
       ),
     ];
     if (values.length > 1) return null;
@@ -138,6 +139,61 @@ function skillIdentityFields(data: StoreData, skill: any) {
   if (!sampleIds.length) return {};
   const samples = sampleIds.map((sampleId: string) => data.trainingSamples.find((sample) => sample.id === sampleId)).filter(Boolean);
   return sharedIdentityFields(samples) || {};
+}
+
+function skillIdentityHasConflict(data: StoreData, skill: any) {
+  if (sharedIdentityFields([skill]) === null) return true;
+  const sampleIds = Array.isArray(skill?.sourceSampleIds) ? skill.sourceSampleIds.map(String).filter(Boolean) : [];
+  if (!sampleIds.length) return false;
+  const samples = sampleIds.map((sampleId: string) => data.trainingSamples.find((sample) => sample.id === sampleId)).filter(Boolean);
+  return Boolean(samples.length && sharedIdentityFields(samples) === null);
+}
+
+function skillScopeMetadata(data: StoreData, skill: any) {
+  if (skillIdentityHasConflict(data, skill)) {
+    return {
+      level: "mixed",
+      label: "混合来源",
+      reason: "Skill 身份字段或来源样本身份不一致，自动回复会拒绝使用。",
+    };
+  }
+  const identityFields = skillIdentityFields(data, skill);
+  if (identityFields.conversationId) {
+    return {
+      level: "conversation",
+      label: "当前会话私有",
+      reason: "只在同一微信账号、同一客户、同一会话下使用。",
+      ...identityFields,
+    };
+  }
+  if (identityFields.customerId) {
+    return {
+      level: "customer",
+      label: "客户私有",
+      reason: "只在同一客户下使用。",
+      ...identityFields,
+    };
+  }
+  if (identityFields.wechatAccountId) {
+    return {
+      level: "wechat_account",
+      label: "微信账号内共享",
+      reason: "只在同一微信账号下使用。",
+      ...identityFields,
+    };
+  }
+  return {
+    level: "global",
+    label: "全局 Skill",
+    reason: "没有客户或账号绑定，作为该 Agent 的通用能力使用。",
+  };
+}
+
+function hydrateAgentSkill(data: StoreData, skill: any) {
+  return {
+    ...skill,
+    scope: skillScopeMetadata(data, skill),
+  };
 }
 
 function sameSkillIdentityScope(left: IdentityListFilter = {}, right: IdentityListFilter = {}) {
@@ -345,6 +401,7 @@ export class LocalStoreService {
       .filter((skill) => !agentId || skill.agentId === agentId)
       .filter((skill) => !localStoreIsSceneClarificationDerivedBusinessSkill(data, skill))
       .filter((skill) => this.matchesSkillIdentityFilter(data, skill, filter))
+      .map((skill) => hydrateAgentSkill(data, skill))
       .sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
   }
 
@@ -863,6 +920,7 @@ export class LocalStoreService {
       sourceText: payload.sourceText || "",
       policyAction: payload.policyAction || "manual_review",
       status: payload.status || "requested",
+      retryCount: Number(payload.retryCount || 0),
       chargeRequired: Boolean(payload.chargeRequired),
       manualReviewRequired: Boolean(payload.manualReviewRequired),
       externalJobId: payload.externalJobId || null,
@@ -1938,6 +1996,7 @@ export class LocalStoreService {
     const expectedConversationId = String(filter.conversationId || "").trim();
     const expectedCustomerId = String(filter.customerId || "").trim();
     if (!expectedWechatAccountId && !expectedConversationId && !expectedCustomerId) return true;
+    if (sharedIdentityFields([record]) === null) return false;
     const identity = this.recordIdentity(record);
     if (expectedWechatAccountId && identity.wechatAccountId !== expectedWechatAccountId) return false;
     if (expectedConversationId && identity.conversationId !== expectedConversationId) return false;
@@ -1950,6 +2009,14 @@ export class LocalStoreService {
     const expectedConversationId = String(filter.conversationId || "").trim();
     const expectedCustomerId = String(filter.customerId || "").trim();
     if (!expectedWechatAccountId && !expectedConversationId && !expectedCustomerId) return true;
+    if (skillIdentityHasConflict(data, skill)) return false;
+    const skillIdentity = skillIdentityFields(data, skill);
+    if (skillIdentity.wechatAccountId || skillIdentity.conversationId || skillIdentity.customerId) {
+      if (skillIdentity.wechatAccountId && skillIdentity.wechatAccountId !== expectedWechatAccountId) return false;
+      if (skillIdentity.conversationId && skillIdentity.conversationId !== expectedConversationId) return false;
+      if (skillIdentity.customerId && skillIdentity.customerId !== expectedCustomerId) return false;
+      return true;
+    }
     const sourceSampleIds = Array.isArray(skill?.sourceSampleIds) ? skill.sourceSampleIds.map(String).filter(Boolean) : [];
     if (!sourceSampleIds.length) return true;
     const samples = sourceSampleIds
@@ -1968,13 +2035,31 @@ export class LocalStoreService {
     const target = record?.target || null;
     return {
       conversationId: String(
-        record?.conversationId || target?.conversationId || conversation?.id || sendTask?.conversationId || designJob?.conversationId || quoteDraft?.designJob?.conversationId || orderDraft?.conversationId || "",
+        record?.conversationId ||
+          record?.identityBinding?.conversationId ||
+          target?.conversationId ||
+          conversation?.id ||
+          sendTask?.conversationId ||
+          designJob?.conversationId ||
+          quoteDraft?.designJob?.conversationId ||
+          orderDraft?.conversationId ||
+          "",
       ),
       customerId: String(
-        record?.customerId || target?.customerId || conversation?.customerId || sendTask?.conversation?.customerId || designJob?.customerId || quoteDraft?.customerId || quoteDraft?.designJob?.customerId || orderDraft?.customerId || "",
+        record?.customerId ||
+          record?.identityBinding?.customerId ||
+          target?.customerId ||
+          conversation?.customerId ||
+          sendTask?.conversation?.customerId ||
+          designJob?.customerId ||
+          quoteDraft?.customerId ||
+          quoteDraft?.designJob?.customerId ||
+          orderDraft?.customerId ||
+          "",
       ),
       wechatAccountId: String(
         record?.wechatAccountId ||
+          record?.identityBinding?.wechatAccountId ||
           target?.wechatAccountId ||
           conversation?.wechatAccountId ||
           sendTask?.wechatAccountId ||
@@ -2012,7 +2097,8 @@ export class LocalStoreService {
       skills: data.agentSkills
         .filter((skill) => skill.agentId === agent.id)
         .filter((skill) => !localStoreIsSceneClarificationDerivedBusinessSkill(data, skill))
-        .filter((skill) => this.matchesSkillIdentityFilter(data, skill, filter)),
+        .filter((skill) => this.matchesSkillIdentityFilter(data, skill, filter))
+        .map((skill) => hydrateAgentSkill(data, skill)),
       trainingSampleCount: samples.length,
       averageTrainingScore: averageScore,
     };

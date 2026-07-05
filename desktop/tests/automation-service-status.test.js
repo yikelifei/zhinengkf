@@ -78,7 +78,7 @@ test("automation run records last run and clears running marker", async () => {
   assert.equal(status.recentRuns.length, 1);
   assert.equal(status.recentRuns[0], run);
   assert.ok(run.steps.length >= 7);
-  assert.equal(run.steps[0].step, "pollActiveResults");
+  assert.equal(run.steps[0].step, "scanTimeouts");
   assert.equal(run.steps[0].status, "completed");
   assert.equal(typeof run.steps[0].durationMs, "number");
 });
@@ -141,9 +141,9 @@ test("manual automation run forwards selected conversation identity to each side
   assert.deepEqual(
     calls.map(([step]) => step),
     [
+      "scanTimeouts",
       "pollActiveResults",
       "runLowValueAutomation",
-      "scanTimeouts",
       "scanLowValueAutoOrderDrafts",
       "scanLowValueOrderConfirmations",
       "scanLowValueOrderFollowups",
@@ -537,15 +537,13 @@ test("automation status persists skipped run when another run is active", async 
   let releaseRunningStep;
   const saved = [];
   const service = createService({
-    catalog: {
-      auditSkus: () =>
+    designJobs: {
+      scanTimeouts: () =>
         new Promise((resolve) => {
           releaseRunningStep = () =>
             resolve({
-              total: 2,
-              readyCount: 2,
-              catalogStructureIssueCount: 0,
-              blockingRepairCount: 0,
+              scanned: 0,
+              timedOut: 0,
             });
         }),
     },
@@ -596,8 +594,13 @@ test("automation run clears running marker when history persistence fails", asyn
 
 test("automation run is skipped before side effects when readiness has blockers", async () => {
   let lowValueRan = false;
+  let timeoutScanRan = false;
   const service = createService({
     designJobs: {
+      scanTimeouts: async () => {
+        timeoutScanRan = true;
+        return { scanned: 1, timedOut: 1 };
+      },
       runLowValueAutomation: async () => {
         lowValueRan = true;
         return { autoSubmit: { submitted: [] } };
@@ -620,8 +623,12 @@ test("automation run is skipped before side effects when readiness has blockers"
   assert.equal(run.reason, "automation_readiness_blocked");
   assert.equal(run.skipSummary.total, 1);
   assert.equal(run.skipSummary.reasons[0].reason, "automation_readiness_blocked");
-  assert.equal(run.steps.length, 0);
+  assert.equal(run.steps.length, 1);
+  assert.equal(run.steps[0].step, "scanTimeouts");
+  assert.equal(run.steps[0].status, "completed");
+  assert.equal(timeoutScanRan, true);
   assert.equal(lowValueRan, false);
+  assert.equal(run.results.scanTimeouts.timedOut, 1);
   assert.equal(run.results.readiness.ready, false);
   assert.equal(run.results.readiness.blockers.some((item) => item.key === "sku_catalog"), true);
   assert.equal(status.runCount, 0);

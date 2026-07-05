@@ -191,6 +191,75 @@ test("chat import stores scene summary for later review", () => {
   assert.deepEqual(store.listChatImports()[0].sceneSummary, result.sceneSummary);
 });
 
+test("knowledge entries with only identityBinding stay scoped in local store lists", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      agents: [{ id: "agent_logistics_exception", key: "logistics_exception", name: "Logistics Agent" }],
+      knowledgeEntries: [
+        {
+          id: "knowledge_legacy_current",
+          agentId: "agent_logistics_exception",
+          sourceType: "chat_import",
+          title: "物流异常",
+          content: "客户：快递一直不动\n客服：我先帮您查下物流节点。",
+          tags: ["物流"],
+          qualityScore: 90,
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_demo_1",
+            conversationId: "conversation_demo_1",
+            customerId: "customer_demo_1",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "knowledge_conflict",
+          agentId: "agent_logistics_exception",
+          sourceType: "chat_import",
+          title: "物流异常冲突",
+          content: "客户：快递一直不动\n客服：这条身份冲突，不能被使用。",
+          tags: ["物流"],
+          qualityScore: 100,
+          wechatAccountId: "wechat_demo_1",
+          conversationId: "conversation_demo_1",
+          customerId: "customer_demo_1",
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_demo_2",
+            conversationId: "conversation_demo_2",
+            customerId: "customer_demo_2",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    store
+      .listKnowledgeEntries({
+        agentId: "agent_logistics_exception",
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_1",
+      })
+      .map((entry) => entry.id),
+    ["knowledge_legacy_current"],
+  );
+  assert.deepEqual(
+    store.listKnowledgeEntries({
+      agentId: "agent_logistics_exception",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_2",
+    }),
+    [],
+  );
+});
+
 test("agent skills compiled from private samples stay scoped to matching identity", () => {
   const now = "2026-07-02T00:00:00.000Z";
   const { store } = createStore(
@@ -228,6 +297,38 @@ test("agent skills compiled from private samples stay scoped to matching identit
           version: 1,
           sourceType: "training_compiler",
           sourceSampleIds: ["sample_two"],
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "skill_direct_private_two",
+          agentId: "agent_gift_design",
+          name: "私有补充话术",
+          description: "直接绑定二号客户，不能在一号客户会话里出现。",
+          enabled: true,
+          version: 1,
+          wechatAccountId: "wechat_demo_2",
+          conversationId: "conversation_demo_2",
+          customerId: "customer_demo_2",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "skill_conflict",
+          agentId: "agent_gift_design",
+          name: "冲突身份话术",
+          description: "顶层身份和绑定身份冲突，不能进入客户可用 Skill。",
+          enabled: true,
+          version: 1,
+          wechatAccountId: "wechat_demo_1",
+          conversationId: "conversation_demo_1",
+          customerId: "customer_demo_1",
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_demo_2",
+            conversationId: "conversation_demo_2",
+            customerId: "customer_demo_2",
+          },
           createdAt: now,
           updatedAt: now,
         },
@@ -279,6 +380,18 @@ test("agent skills compiled from private samples stay scoped to matching identit
   assert.equal(accountOneSkillIds.includes("skill_global"), true);
   assert.equal(accountOneSkillIds.includes("skill_private_one"), true);
   assert.equal(accountOneSkillIds.includes("skill_private_two"), false);
+  assert.equal(accountOneSkillIds.includes("skill_direct_private_two"), false);
+  assert.equal(accountOneSkillIds.includes("skill_conflict"), false);
+  assert.equal(store.listAgentSkills("agent_gift_design").find((skill) => skill.id === "skill_conflict").scope.label, "混合来源");
+  const accountOnePrivateSkill = store
+    .listAgentSkills("agent_gift_design", {
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    })
+    .find((skill) => skill.id === "skill_private_one");
+  assert.equal(accountOnePrivateSkill.scope.label, "当前会话私有");
+  assert.equal(accountOnePrivateSkill.scope.conversationId, "conversation_demo_1");
   const accountOneAgent = store.listAgents({
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
@@ -289,6 +402,10 @@ test("agent skills compiled from private samples stay scoped to matching identit
   assert.equal(accountOneAgentSkillIds.includes("skill_global"), true);
   assert.equal(accountOneAgentSkillIds.includes("skill_private_one"), true);
   assert.equal(accountOneAgentSkillIds.includes("skill_private_two"), false);
+  assert.equal(accountOneAgentSkillIds.includes("skill_direct_private_two"), false);
+  assert.equal(accountOneAgentSkillIds.includes("skill_conflict"), false);
+  assert.equal(accountOneAgent.skills.find((skill) => skill.id === "skill_global").scope.label, "全局 Skill");
+  assert.equal(accountOneAgent.skills.find((skill) => skill.id === "skill_private_one").scope.label, "当前会话私有");
   assert.equal(accountOneAgent.trainingSampleCount, 1);
 
   const mismatchedSkillIds = store
@@ -301,6 +418,8 @@ test("agent skills compiled from private samples stay scoped to matching identit
   assert.equal(mismatchedSkillIds.includes("skill_global"), true);
   assert.equal(mismatchedSkillIds.includes("skill_private_one"), false);
   assert.equal(mismatchedSkillIds.includes("skill_private_two"), false);
+  assert.equal(mismatchedSkillIds.includes("skill_direct_private_two"), false);
+  assert.equal(mismatchedSkillIds.includes("skill_conflict"), false);
   const mismatchedAgent = store.listAgents({
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
@@ -311,6 +430,8 @@ test("agent skills compiled from private samples stay scoped to matching identit
   assert.equal(mismatchedAgentSkillIds.includes("skill_global"), true);
   assert.equal(mismatchedAgentSkillIds.includes("skill_private_one"), false);
   assert.equal(mismatchedAgentSkillIds.includes("skill_private_two"), false);
+  assert.equal(mismatchedAgentSkillIds.includes("skill_direct_private_two"), false);
+  assert.equal(mismatchedAgentSkillIds.includes("skill_conflict"), false);
   assert.equal(mismatchedAgent.trainingSampleCount, 0);
 });
 
@@ -384,6 +505,8 @@ test("private skill suggestions do not overwrite global skills or mix customer i
   assert.equal(scopedResult.created[0].wechatAccountId, "wechat_demo_1");
   assert.equal(scopedResult.created[0].conversationId, "conversation_demo_1");
   assert.equal(scopedResult.created[0].customerId, "customer_demo_1");
+  assert.equal(scopedResult.created[0].identityBinding.status, "passed");
+  assert.deepEqual(scopedResult.created[0].identityBinding.sourceSampleIds, ["sample_one"]);
 
   const globalSkill = store.listAgentSkills("agent_gift_design").find((skill) => skill.id === "skill_global_budget");
   assert.equal(globalSkill.description, "系统预置全局预算澄清。");
@@ -403,4 +526,74 @@ test("private skill suggestions do not overwrite global skills or mix customer i
   assert.equal(mixedResult.created.length, 0);
   assert.equal(mixedResult.updated.length, 0);
   assert.equal(mixedResult.skipped[0].reason, "mixed_source_identity");
+
+  const spoofedScopeResult = store.applyAgentSkillSuggestions([
+    {
+      agentId: "agent_gift_design",
+      name: "身份防伪测试",
+      description: "前端传错身份时，后端必须按训练样本重新绑定。",
+      sampleCount: 1,
+      confidence: 95,
+      sampleIds: ["sample_one"],
+      wechatAccountId: "wechat_spoofed",
+      conversationId: "conversation_spoofed",
+      customerId: "customer_spoofed",
+      identityBinding: {
+        status: "passed",
+        wechatAccountId: "wechat_spoofed",
+        conversationId: "conversation_spoofed",
+        customerId: "customer_spoofed",
+      },
+    },
+  ]);
+
+  assert.equal(spoofedScopeResult.created.length, 1);
+  assert.equal(spoofedScopeResult.created[0].wechatAccountId, "wechat_demo_1");
+  assert.equal(spoofedScopeResult.created[0].conversationId, "conversation_demo_1");
+  assert.equal(spoofedScopeResult.created[0].customerId, "customer_demo_1");
+  assert.deepEqual(spoofedScopeResult.created[0].identityBinding.sourceSampleIds, ["sample_one"]);
+
+  const { store: conflictStore } = createStore(
+    emptyStoreData({
+      agents: [{ id: "agent_gift_design", key: "gift_design", name: "Gift Design Agent" }],
+      trainingSamples: [
+        {
+          id: "sample_conflict",
+          agentId: "agent_gift_design",
+          agentKey: "gift_design",
+          customerId: "customer_top",
+          conversationId: "conversation_top",
+          wechatAccountId: "wechat_top",
+          identityBinding: {
+            status: "passed",
+            customerId: "customer_binding",
+            conversationId: "conversation_binding",
+            wechatAccountId: "wechat_binding",
+          },
+          scene: "gift_design",
+          customerText: "每盒 200，想看礼盒效果图",
+          idealReply: "我先按预算帮您确认搭配。",
+          score: 95,
+          status: "ready",
+          skillHints: ["预算澄清"],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+  const conflictResult = conflictStore.applyAgentSkillSuggestions([
+    {
+      agentId: "agent_gift_design",
+      name: "预算澄清",
+      description: "冲突身份样本不能应用。",
+      sampleCount: 1,
+      confidence: 95,
+      sampleIds: ["sample_conflict"],
+    },
+  ]);
+
+  assert.equal(conflictResult.created.length, 0);
+  assert.equal(conflictResult.updated.length, 0);
+  assert.equal(conflictResult.skipped[0].reason, "mixed_source_identity");
 });

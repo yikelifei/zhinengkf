@@ -11,6 +11,9 @@ test("uses agent skills to enhance gift design reply draft", () => {
       text: "端午礼盒每盒 180，做 50 份，想看效果图，logo 已发",
       agentKey: "gift_design",
       action: "auto_agent",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
       budget: { perUnitAmount: 180, quantity: 50 },
       missingFields: [],
       riskFlags: [],
@@ -18,8 +21,26 @@ test("uses agent skills to enhance gift design reply draft", () => {
     },
     {
       agentId: "agent_gift_design",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
       skills: [
-        { id: "skill_budget", name: "预算澄清", enabled: true, confidence: 80, sampleCount: 3 },
+        {
+          id: "skill_budget",
+          name: "预算澄清",
+          enabled: true,
+          confidence: 80,
+          sampleCount: 3,
+          wechatAccountId: "wechat_1",
+          conversationId: "conversation_1",
+          customerId: "customer_1",
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_1",
+            conversationId: "conversation_1",
+            customerId: "customer_1",
+          },
+        },
         { id: "skill_design", name: "设计需求确认", enabled: true, confidence: 80, sampleCount: 3 },
       ],
       knowledgeEntries: [],
@@ -28,6 +49,19 @@ test("uses agent skills to enhance gift design reply draft", () => {
 
   assert.equal(draft.replyDraft.source, "skill_enhanced");
   assert.equal(draft.appliedSkills.length, 2);
+  assert.deepEqual(draft.appliedSkills[0].scope, {
+    level: "conversation",
+    label: "当前会话私有",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    bindingStatus: "passed",
+  });
+  assert.deepEqual(draft.appliedSkills[1].scope, {
+    level: "global",
+    label: "全局 Skill",
+    bindingStatus: "",
+  });
   assert.match(draft.suggestedReply, /每份 180 元/);
   assert.match(draft.suggestedReply, /不乱换商品/);
 });

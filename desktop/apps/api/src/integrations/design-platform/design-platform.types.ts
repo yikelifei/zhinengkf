@@ -13,6 +13,14 @@ export type DesignPlatformJobPayload = {
   requirements: Record<string, unknown>;
   customerText?: string | null;
   revision?: Record<string, unknown> | null;
+  callback?: {
+    url: string;
+    method: "POST";
+    events: Array<"completed" | "failed">;
+    headers?: Record<string, string>;
+    requestId: string;
+    fallbackPolling: boolean;
+  };
 };
 
 export type DesignPlatformCallbackPayload = {

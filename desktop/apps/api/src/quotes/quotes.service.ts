@@ -248,6 +248,9 @@ export class QuotesService {
     if (options.releaseManualLock && designJob.conversationId) {
       assertManualReleaseReason(options.releaseReason, "quote send manual release");
       await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+        expectedWechatAccountId: designJob.wechatAccountId,
+        expectedConversationId: designJob.conversationId,
+        expectedCustomerId: quote.customerId || designJob.customerId,
         locked: false,
         reviewer: options.owner || "人工客服",
         reason: options.releaseReason,
@@ -268,6 +271,9 @@ export class QuotesService {
     } catch (error) {
       if (options.releaseManualLock && designJob.conversationId) {
         await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+          expectedWechatAccountId: designJob.wechatAccountId,
+          expectedConversationId: designJob.conversationId,
+          expectedCustomerId: quote.customerId || designJob.customerId,
           locked: true,
           reviewer: options.owner || "人工客服",
           reason: "manual_approve_quote_queue_failed",
@@ -331,6 +337,7 @@ export class QuotesService {
     if (!quote) throw new BadRequestException(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(quote);
     assertExpectedIdentity(quote, payload, "quote draft");
+    this.assertQuoteHasSelectedImageForPaymentProof(quote);
 
     const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
     const reviewer = payload.owner || quote.owner || "人工客服";
@@ -358,6 +365,46 @@ export class QuotesService {
     });
 
     const conversationId = confirmedOrder.conversationId || updatedQuote.designJob?.conversationId;
+    if (this.isHighValueQuote(quote)) {
+      if (conversationId) {
+        await this.wechatDispatch.setConversationManualLock(conversationId, {
+          expectedWechatAccountId: payload.expectedWechatAccountId,
+          expectedConversationId: payload.expectedConversationId,
+          expectedCustomerId: payload.expectedCustomerId,
+          locked: true,
+          reviewer,
+          reason: "manual_payment_proof_high_value",
+          note: `${note} 高价值订单已核验付款，保留人工接管；请人工核对订单确认话术后再发送。`,
+        });
+      }
+      await this.createReviewLog({
+        targetType: "quote",
+        targetId: id,
+        decision: "manual_payment_proof_verified_high_value",
+        reviewer,
+        note,
+        beforeStatus: quote.status || "",
+        afterStatus: "accepted",
+        metadata: {
+          source: "manual_payment_proof_verified_high_value",
+          quoteDraftId: id,
+          orderDraftId: confirmedOrder.id,
+          designJobId: quote.designJobId,
+          wechatAccountId: confirmedOrder.wechatAccountId || quote.designJob?.wechatAccountId,
+          conversationId: confirmedOrder.conversationId || quote.designJob?.conversationId,
+          customerId: confirmedOrder.customerId || quote.customerId || quote.designJob?.customerId,
+          paymentStatus,
+          sendTaskId: null,
+        },
+      });
+      return {
+        quote: updatedQuote,
+        orderDraft: confirmedOrder,
+        sendTask: null,
+        message: "高价值订单付款已核验，已保留人工接管；请人工核对订单确认后再发送。",
+      };
+    }
+
     if (conversationId) {
       await this.wechatDispatch.setConversationManualLock(conversationId, {
         expectedWechatAccountId: payload.expectedWechatAccountId,
@@ -620,6 +667,11 @@ export class QuotesService {
     throw new BadRequestException("报价缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
   }
 
+  private assertQuoteHasSelectedImageForPaymentProof(quote: any) {
+    if (quote?.selectedImageId) return;
+    throw new BadRequestException("quote payment proof verification requires a selected design image");
+  }
+
   private assertHighValueQuoteHasManualRelease(
     quote: any,
     options: { releaseManualLock?: boolean; releaseReason?: string },
@@ -649,6 +701,9 @@ export class QuotesService {
     const conversationId = designJob?.conversationId;
     if (!conversationId) return null;
     return this.wechatDispatch.setConversationManualLock(conversationId, {
+      expectedWechatAccountId: designJob.wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: quote.customerId || designJob.customerId,
       locked: true,
       reviewer: reviewer || "人工客服",
       reason: "quote_manual_review",

@@ -233,6 +233,8 @@ export class WechatDispatchService {
     this.assertOrderConversationUnlocked(order, "order confirmation");
     this.assertOrderPaymentReadyForSend(order, "order confirmation");
     this.assertOrderHasCompleteSendIdentity(order);
+    this.assertOrderHasSelectedImageForSend(order, "order confirmation");
+    this.assertOrderProfitReadyForSend(order, "order confirmation");
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -324,6 +326,8 @@ export class WechatDispatchService {
     this.assertOrderConversationUnlocked(order, "order follow-up");
     this.assertOrderPaymentReadyForSend(order, "order follow-up");
     this.assertOrderHasCompleteSendIdentity(order);
+    this.assertOrderHasSelectedImageForSend(order, "order follow-up");
+    this.assertOrderProfitReadyForSend(order, "order follow-up");
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -420,10 +424,20 @@ export class WechatDispatchService {
     throw new BadRequestException("订单缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
   }
 
+  private assertOrderHasSelectedImageForSend(order: any, context: string) {
+    if (this.orderSelectedImage(order)) return;
+    throw new BadRequestException(`${orderSendContextLabel(context)}需要先绑定客户选中的效果图，不能进入微信发送队列。`);
+  }
+
   private assertOrderPaymentReadyForSend(order: any, context: string) {
     const paymentStatus = String(order?.paymentStatus || order?.quoteDraft?.paymentStatus || "");
     if (paymentStatus === "deposit_paid" || paymentStatus === "paid") return;
-    throw new BadRequestException(`${context} requires verified deposit or full payment before queueing`);
+    throw new BadRequestException(`${orderSendContextLabel(context)}需要先核验定金或全款，不能进入微信发送队列。`);
+  }
+
+  private assertOrderProfitReadyForSend(order: any, context: string) {
+    if (Number(order?.profit || 0) >= 0) return;
+    throw new BadRequestException(`${orderSendContextLabel(context)}发现订单利润为负，必须人工确认报价和成本后再发送。`);
   }
 
   private assertOrderConversationUnlocked(order: any, context: string) {
@@ -445,19 +459,18 @@ export class WechatDispatchService {
   private assertOrderSendTaskStillQueueable(task: any) {
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     const source = String(automation.source || "");
-    if (source !== "order_confirmation" && source !== "order_followup") return;
-
     const orderDraftId = String(automation.orderDraftId || "");
-    if (!orderDraftId) {
-      throw new BadRequestException("order send task is missing orderDraftId and cannot be requeued");
-    }
+    if (!orderDraftId) return;
 
     const order = this.localStore.getOrderDraft(orderDraftId);
     if (!order) {
       throw new BadRequestException(`order draft not found for send task requeue: ${orderDraftId}`);
     }
 
-    const context = source === "order_confirmation" ? "order confirmation requeue" : "order follow-up requeue";
+    const context =
+      source === "order_followup" || automation.followupType
+        ? "order follow-up requeue"
+        : "order confirmation requeue";
     assertExpectedIdentity(
       order,
       {
@@ -470,6 +483,8 @@ export class WechatDispatchService {
     this.assertOrderConversationUnlocked(order, context);
     this.assertOrderPaymentReadyForSend(order, context);
     this.assertOrderHasCompleteSendIdentity(order);
+    this.assertOrderHasSelectedImageForSend(order, context);
+    this.assertOrderProfitReadyForSend(order, context);
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -711,7 +726,11 @@ export class WechatDispatchService {
       : await this.prisma.conversation.findUnique({ where: { id } });
     if (!before) throw new BadRequestException(`conversation not found: ${id}`);
     assertExpectedIdentity({ ...before, conversationId: before.id }, payload, "conversation");
+    if (payload.locked === true) {
+      this.assertManualLockTransitionHasExpectedIdentity(payload, "人工接管");
+    }
     if (payload.locked === false && before.manualLocked) {
+      this.assertManualLockTransitionHasExpectedIdentity(payload, "解除人工接管");
       assertManualReleaseReason(payload.reason, "conversation manual release");
       assertManualReleaseNote(payload.note, "conversation manual release");
     }
@@ -787,6 +806,17 @@ export class WechatDispatchService {
       );
     }
     return { conversation: updated, log, blockedSendTasks, inFlightSendTasks };
+  }
+
+  private assertManualLockTransitionHasExpectedIdentity(payload: ExpectedIdentityPayload, action: string) {
+    const missing = [
+      !payload.expectedWechatAccountId ? "expectedWechatAccountId" : "",
+      !payload.expectedConversationId ? "expectedConversationId" : "",
+      !payload.expectedCustomerId ? "expectedCustomerId" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      throw new BadRequestException(`${action}必须带完整会话身份：${missing.join(", ")}`);
+    }
   }
 
   async processInboundMessage(payload: {
@@ -1934,7 +1964,7 @@ export class WechatDispatchService {
           task: freshTask,
         });
         const blockedTask = this.blockSendTask(freshTask.id, "会话已人工接管，自动发送暂停", {
-          failedKeys: ["conversationManualUnlocked"],
+          failedKeys: ["conversationManualUnlocked", "conversationManualLocked"],
           queueBlockedAdvice: advice,
           blockedByManualLock: true,
           blockedAt: new Date().toISOString(),
@@ -2157,6 +2187,15 @@ export class WechatDispatchService {
       return this.blockSendTask(id, "没有可用的微信窗口快照", {
         status: "blocked",
         failedKeys: ["windowSnapshotMissing"],
+        activeWindow: null,
+        windowSnapshotId: null,
+        windowDiagnostic: {
+          ok: false,
+          status: "missing",
+          riskLevel: "high",
+          reason: "没有可用的微信窗口快照",
+          failedKeys: ["windowSnapshotMissing"],
+        },
         checks: [
           {
             key: "windowSnapshotMissing",
@@ -2171,7 +2210,10 @@ export class WechatDispatchService {
     if (latestWindow.diagnostic && latestWindow.diagnostic.ok === false) {
       return this.blockSendTask(id, latestWindow.diagnostic.reason || "微信窗口快照不可用", {
         ...latestWindow.diagnostic,
+        activeWindow: latestWindow,
         windowSnapshotId: latestWindow.id,
+        windowDiagnostic: latestWindow.diagnostic,
+        failedKeys: Array.isArray(latestWindow.diagnostic.failedKeys) ? latestWindow.diagnostic.failedKeys : ["windowDiagnosticFailed"],
       });
     }
 
@@ -2569,7 +2611,9 @@ export class WechatDispatchService {
         ],
       },
     });
-    this.markLinkedQuoteRequeued(updated, payload.reason || "发送任务已重新排队");
+    const requeueReason = payload.reason || "发送任务已重新排队";
+    this.markLinkedQuoteRequeued(updated, requeueReason);
+    this.markLinkedOrderSendRequeued(updated, requeueReason);
     return updated;
   }
 
@@ -2785,6 +2829,7 @@ export class WechatDispatchService {
   }) {
     const job = this.findLatestSelectableDesignJob(params.conversation);
     const candidates = job ? [...(job.images || [])].sort((a: any, b: any) => Number(a.position || 0) - Number(b.position || 0)) : [];
+    if (this.hasInboundPaymentProof(params.payload)) return null;
     const selectionPlan = planCustomerImageSelection({
       ...this.buildInboundSelectionInput(params.payload),
       candidates,
@@ -3278,7 +3323,7 @@ export class WechatDispatchService {
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
     const hasAsset = Boolean((payload.assetIds || []).length || attachments.length);
     if (!hasAsset) return false;
-    const paymentTextHint = /(付款|支付|转账|打款|汇款|定金|订金|尾款|全款|凭证|截图|回单|收据|流水)/.test(text);
+    const paymentTextHint = /(付款|支付|转账|打款|汇款|定金|订金|尾款|全款|凭证|回单|收据|流水)/.test(text);
     if (paymentTextHint) return true;
     return attachments.some((attachment) => {
       const values = [
@@ -3415,6 +3460,9 @@ export class WechatDispatchService {
     options: { reviewer?: string; reason?: string } = {},
   ) {
     const manualLock = await this.setConversationManualLock(conversation.id, {
+      expectedWechatAccountId: conversation.wechatAccountId,
+      expectedConversationId: conversation.id,
+      expectedCustomerId: conversation.customerId,
       locked: true,
       reviewer: options.reviewer || "system",
       reason: options.reason || "manual_review",
@@ -3511,7 +3559,12 @@ export class WechatDispatchService {
     if (!appConfig.useLocalStore) return [];
     const reason = `会话已人工接管，发送中任务已取消，避免自动内容继续发送。操作人：${reviewer}`;
     return this.listInFlightSendTasksForConversation(conversationId).map((task) =>
-      this.cancelSendTask(task.id, { reason }),
+      this.cancelSendTask(task.id, {
+        expectedWechatAccountId: task.wechatAccountId,
+        expectedConversationId: task.conversationId,
+        expectedCustomerId: task.customerId || task.conversation?.customerId,
+        reason,
+      }),
     );
   }
 
@@ -3529,6 +3582,7 @@ export class WechatDispatchService {
   }
 
   private markLinkedQuoteSent(task: any) {
+    if (this.hasOrderDraftBinding(task)) return;
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (!quoteDraftId) return;
     if (appConfig.useLocalStore) {
@@ -3548,6 +3602,10 @@ export class WechatDispatchService {
   }
 
   private markLinkedQuoteFailed(task: any, reason: string) {
+    if (this.hasOrderDraftBinding(task)) {
+      this.markLinkedOrderSendFailed(task, reason);
+      return;
+    }
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (quoteDraftId && appConfig.useLocalStore) {
       this.localStore.updateQuoteDraft(quoteDraftId, {
@@ -3555,19 +3613,17 @@ export class WechatDispatchService {
         customerNotes: `报价发送失败，需要人工处理：${reason}`,
       });
     }
-    this.markLinkedOrderSendFailed(task, reason);
   }
 
   private markLinkedOrderSendFailed(task: any, reason: string) {
     if (!appConfig.useLocalStore) return;
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     const source = String(automation.source || task?.payload?.source || "");
-    if (source !== "order_confirmation" && source !== "order_followup") return;
     const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (!orderDraftId) return;
     const order = this.localStore.getOrderDraft(orderDraftId);
     if (!order) return;
-    const stage = source === "order_followup" ? "订单跟进发送" : "订单确认发送";
+    const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
     const marker = `[发送任务:${task.id}]`;
     const currentNotes = String(order.customerNotes || "");
     if (currentNotes.includes(marker)) return;
@@ -3578,7 +3634,26 @@ export class WechatDispatchService {
     });
   }
 
+  private markLinkedOrderSendRequeued(task: any, reason: string) {
+    if (!appConfig.useLocalStore) return;
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const source = String(automation.source || task?.payload?.source || "");
+    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    if (!orderDraftId) return;
+    const order = this.localStore.getOrderDraft(orderDraftId);
+    if (!order) return;
+    const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
+    const marker = `[发送任务:${task.id}:requeue]`;
+    const currentNotes = String(order.customerNotes || "");
+    if (currentNotes.includes(marker)) return;
+    const note = `${marker}${stage}已人工重新排队：${reason}`;
+    this.localStore.updateOrderDraft(orderDraftId, {
+      customerNotes: appendCustomerNote(order.customerNotes, note),
+    });
+  }
+
   private markLinkedQuoteRequeued(task: any, reason: string) {
+    if (this.hasOrderDraftBinding(task)) return;
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (!quoteDraftId) return;
     if (appConfig.useLocalStore) {
@@ -3599,6 +3674,11 @@ export class WechatDispatchService {
     return latestAttempt?.adapter === "windows_bridge" &&
       latestAttempt.status === "started" &&
       isOlderThan(latestAttempt.startedAt || latestAttempt.createdAt, now, appConfig.sendBridgeAckTimeoutMinutes);
+  }
+
+  private hasOrderDraftBinding(task: any) {
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    return Boolean(String(automation.orderDraftId || ""));
   }
 
   private inspectPendingBridgeOutbox(task: any) {
@@ -3716,6 +3796,7 @@ export class WechatDispatchService {
       },
     });
     this.markLinkedQuoteFailed(updatedTask, failureReason);
+    this.markLinkedOrderSendFailed(updatedTask, failureReason);
     return { task: this.localStore.getSendTask(task.id), attempt, binding, currentBinding };
   }
 
@@ -3765,7 +3846,11 @@ export class WechatDispatchService {
     const actionValidation = validateBridgeSendPlanActions(actions);
     const guardSnapshot = isPlainObject(data.guardSnapshot) ? data.guardSnapshot : {};
     const context = isPlainObject(data.context) ? data.context : {};
+    const preflight = isPlainObject(data.preflight) ? data.preflight : {};
     const guardPassed = guardSnapshot.status === "passed" || guardSnapshot.ok === true || context.guardStatus === "passed";
+    const hasPreflightWindowPolicy = Boolean(preflight.expectedWindowSnapshotId || preflight.rejectIfAnyCheckFails || preflight.rejectIfWindowChanged);
+    const expectedWindowSnapshotId = String(preflight.expectedWindowSnapshotId || target.windowSnapshotId || attempt?.windowSnapshotId || "");
+    const actualWindowSnapshotId = String(context.windowSnapshotId || target.windowSnapshotId || "");
     const outboxAckToken = typeof data.ackToken === "string" ? data.ackToken : "";
     const ackToken = typeof payload?.ackToken === "string"
       ? payload.ackToken
@@ -3871,6 +3956,14 @@ export class WechatDispatchService {
           constraints.requireActiveWindowMatch === true &&
           constraints.requireRecentCustomerMatch === true &&
           constraints.doNotMarkSentWithoutAck === true,
+      },
+      {
+        key: "preflightWindowChangePolicy",
+        passed: !hasPreflightWindowPolicy || (preflight.rejectIfAnyCheckFails === true && preflight.rejectIfWindowChanged === true),
+      },
+      {
+        key: "preflightWindowSnapshot",
+        passed: Boolean(expectedWindowSnapshotId && actualWindowSnapshotId && expectedWindowSnapshotId === actualWindowSnapshotId),
       },
       {
         key: "guardSnapshot",
@@ -4269,6 +4362,16 @@ function listJsonInboxFiles(directory: string) {
       };
     })
     .sort((a, b) => a.modifiedAt.localeCompare(b.modifiedAt) || a.fileName.localeCompare(b.fileName));
+}
+
+function orderSendContextLabel(context: string) {
+  const labels: Record<string, string> = {
+    "order confirmation": "订单确认",
+    "order follow-up": "订单跟进",
+    "order confirmation requeue": "订单确认重新排队",
+    "order follow-up requeue": "订单跟进重新排队",
+  };
+  return labels[context] || "订单发送";
 }
 
 function clampWindowSnapshotScanLimit(value: unknown) {

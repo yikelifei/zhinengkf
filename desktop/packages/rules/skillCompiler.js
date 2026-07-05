@@ -33,7 +33,9 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
     if (score < minScore) continue;
     const names = extractSkillNames(sample);
     for (const name of names) {
-      const key = `${sample.agentId || sample.agentKey || "general"}::${canonicalSkillName(name)}`;
+      const identity = sampleIdentityFields(sample);
+      const baseKey = `${sample.agentId || sample.agentKey || "general"}::${canonicalSkillName(name)}`;
+      const key = skillSuggestionBucketKey(baseKey, identity);
       if (!buckets.has(key)) {
         buckets.set(key, {
           suggestionKey: key,
@@ -42,6 +44,7 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
           name,
           scenes: new Set(),
           sampleIds: [],
+          identities: [],
           scores: [],
           questions: [],
           answers: [],
@@ -50,6 +53,7 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
       const bucket = buckets.get(key);
       bucket.scenes.add(sample.scene || "未分类");
       bucket.sampleIds.push(sample.id);
+      bucket.identities.push(identity);
       bucket.scores.push(score);
       if (sample.customerText) bucket.questions.push(String(sample.customerText));
       if (sample.idealReply) bucket.answers.push(String(sample.idealReply));
@@ -59,7 +63,8 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
   return [...buckets.values()]
     .map((bucket) => {
       const averageScore = average(bucket.scores);
-      const existing = findExistingSkill(existingSkills, bucket.agentId, bucket.name);
+      const scope = skillSuggestionScope(bucket.identities);
+      const existing = findExistingSkill(existingSkills, bucket.agentId, bucket.name, scope);
       const evidence = pickEvidence(bucket.questions, bucket.answers);
       const description = buildSkillDescription(bucket, averageScore, evidence);
       const sampleCount = bucket.sampleIds.length;
@@ -75,6 +80,7 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
         confidence,
         sampleIds: bucket.sampleIds,
         scenes: [...bucket.scenes],
+        scope,
         evidence,
         existingSkillId: existing?.id || null,
         action: existing ? "update" : "create",
@@ -691,11 +697,13 @@ function inferSkillNames(text) {
   return names.length ? [...new Set(names)] : ["高情商承接"];
 }
 
-function findExistingSkill(existingSkills, agentId, name) {
+function findExistingSkill(existingSkills, agentId, name, scope = {}) {
   const key = canonicalSkillName(name);
+  const scopeIdentity = skillScopeIdentityFields(scope);
   return existingSkills.find((skill) => {
     if (agentId && skill.agentId !== agentId) return false;
-    return canonicalSkillName(skill.name) === key;
+    if (canonicalSkillName(skill.name) !== key) return false;
+    return sameSuggestionIdentityFields(skillIdentityFields(skill), scopeIdentity);
   });
 }
 
@@ -707,6 +715,122 @@ function buildSkillDescription(bucket, averageScore, evidence) {
   const scenes = [...bucket.scenes].slice(0, 3).join("、");
   const answer = evidence.answer ? `参考回复方式：${evidence.answer}` : "参考回复方式：先承接客户情绪，再给出明确下一步。";
   return `从 ${bucket.sampleIds.length} 条高分聊天样本提炼，适用于${scenes || "当前场景"}，平均评分 ${averageScore}。${answer}`;
+}
+
+function sampleIdentityFields(sample = {}) {
+  const binding = sample.identityBinding || {};
+  const fields = {};
+  let identityConflict = false;
+  for (const key of ["wechatAccountId", "conversationId", "customerId"]) {
+    const values = [
+      String(sample[key] || "").trim(),
+      String(binding[key] || "").trim(),
+    ].filter(Boolean);
+    const unique = [...new Set(values)];
+    if (unique.length > 1) identityConflict = true;
+    fields[key] = unique[0] || "";
+  }
+  if (identityConflict) fields.identityConflict = true;
+  return fields;
+}
+
+function skillSuggestionBucketKey(baseKey, identity = {}) {
+  if (identity?.identityConflict) return `${baseKey}::identity=conflict`;
+  const scopeKey = skillIdentityScopeKey(identity);
+  return scopeKey ? `${baseKey}::${scopeKey}` : baseKey;
+}
+
+function skillIdentityScopeKey(identity = {}) {
+  const fields = sampleIdentityFields(identity);
+  if (!fields.wechatAccountId && !fields.conversationId && !fields.customerId) return "";
+  return [
+    fields.wechatAccountId ? `wechat=${fields.wechatAccountId}` : "wechat=-",
+    fields.customerId ? `customer=${fields.customerId}` : "customer=-",
+    fields.conversationId ? `conversation=${fields.conversationId}` : "conversation=-",
+  ].join("|");
+}
+
+function skillScopeIdentityFields(scope = {}) {
+  return {
+    wechatAccountId: String(scope.wechatAccountId || "").trim(),
+    conversationId: String(scope.conversationId || "").trim(),
+    customerId: String(scope.customerId || "").trim(),
+  };
+}
+
+function skillIdentityFields(skill = {}) {
+  const binding = skill.identityBinding || {};
+  return {
+    wechatAccountId: String(skill.wechatAccountId || binding.wechatAccountId || "").trim(),
+    conversationId: String(skill.conversationId || binding.conversationId || "").trim(),
+    customerId: String(skill.customerId || binding.customerId || "").trim(),
+  };
+}
+
+function sameSuggestionIdentityFields(left = {}, right = {}) {
+  return (
+    String(left.wechatAccountId || "") === String(right.wechatAccountId || "") &&
+    String(left.conversationId || "") === String(right.conversationId || "") &&
+    String(left.customerId || "") === String(right.customerId || "")
+  );
+}
+
+function skillSuggestionScope(identities = []) {
+  const rows = (Array.isArray(identities) ? identities : []).filter(Boolean);
+  if (rows.some((identity) => identity?.identityConflict)) {
+    return {
+      level: "mixed",
+      label: "混合来源",
+      reason: "样本身份字段和身份绑定不一致，应用时会被拦截，避免把 A 客户经验写给 B 客户。",
+    };
+  }
+  const shared = sharedSuggestionIdentityFields(rows);
+  if (!rows.length || !shared) {
+    return {
+      level: "mixed",
+      label: "混合来源",
+      reason: "样本来自不同微信账号、客户或会话，应用时会被拦截，避免把 A 客户经验写给 B 客户。",
+    };
+  }
+  if (shared.conversationId) {
+    return {
+      level: "conversation",
+      label: "当前会话私有",
+      reason: "只沉淀到同一微信账号、同一客户、同一会话下，不影响其他客户。",
+      ...shared,
+    };
+  }
+  if (shared.customerId) {
+    return {
+      level: "customer",
+      label: "客户私有",
+      reason: "只沉淀到同一客户，不影响其他客户。",
+      ...shared,
+    };
+  }
+  if (shared.wechatAccountId) {
+    return {
+      level: "wechat_account",
+      label: "微信账号内共享",
+      reason: "只沉淀到同一微信账号，不跨账号使用。",
+      ...shared,
+    };
+  }
+  return {
+    level: "global",
+    label: "全局 Skill",
+    reason: "样本没有客户或账号绑定，会作为该 Agent 的通用能力使用。",
+  };
+}
+
+function sharedSuggestionIdentityFields(identities = []) {
+  const fields = {};
+  for (const key of ["wechatAccountId", "conversationId", "customerId"]) {
+    const values = [...new Set(identities.map((identity) => String(identity?.[key] || "").trim()).filter(Boolean))];
+    if (values.length > 1) return null;
+    if (values.length === 1) fields[key] = values[0];
+  }
+  return fields;
 }
 
 function pickEvidence(questions, answers) {

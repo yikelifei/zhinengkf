@@ -283,6 +283,7 @@ export class ReviewsService {
     const beforeStatus = order.status;
     const decision = payload.decision || "request_followup";
     assertHighValueOrderHasCompleteIdentity(order, decision);
+    assertHighValueOrderApprovalReady(order, decision);
     const reviewer = payload.reviewer || "人工客服";
     let result: any = { orderDraft: order };
     let notification: any = null;
@@ -503,4 +504,20 @@ function assertHighValueOrderHasCompleteIdentity(order: any, decision: string) {
   const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
   if (wechatAccountId && conversationId && customerId) return;
   throw new BadRequestException("高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。");
+}
+
+function assertHighValueOrderApprovalReady(order: any, decision: string) {
+  if (!["approve_confirmation", "approve_followup"].includes(decision)) return;
+  if (!isOrderHighValue(order)) return;
+  const selectedImageId = String(order?.selectedImageId || order?.quoteDraft?.selectedImageId || "").trim();
+  if (!selectedImageId) {
+    throw new BadRequestException("高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送。");
+  }
+  const paymentStatus = String(order?.paymentStatus || order?.quoteDraft?.paymentStatus || "");
+  if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+    throw new BadRequestException("高价值订单未核验定金或全款，不能批准订单确认或跟进发送。");
+  }
+  if (Number(order?.profit || 0) < 0) {
+    throw new BadRequestException("高价值订单利润为负，必须人工确认报价和成本后再批准发送。");
+  }
 }

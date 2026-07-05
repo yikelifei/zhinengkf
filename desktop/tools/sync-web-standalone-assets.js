@@ -29,8 +29,12 @@ function retryFsOperation(label, operation) {
   throw lastError;
 }
 
-function copyDirectory(source, target) {
+function copyDirectory(source, target, options = {}) {
   if (!fs.existsSync(source)) {
+    if (options.optional) {
+      console.log(`[warn] Optional source directory disappeared during sync: ${path.relative(root, source)}`);
+      return;
+    }
     throw new Error(`Missing source directory: ${path.relative(root, source)}`);
   }
   fs.mkdirSync(target, { recursive: true });
@@ -38,7 +42,7 @@ function copyDirectory(source, target) {
     const sourceEntry = path.join(source, entry.name);
     const targetEntry = path.join(target, entry.name);
     if (entry.isDirectory()) {
-      copyDirectory(sourceEntry, targetEntry);
+      copyDirectory(sourceEntry, targetEntry, options);
     } else if (entry.isFile()) {
       copyFile(sourceEntry, targetEntry);
     }
@@ -46,9 +50,16 @@ function copyDirectory(source, target) {
 }
 
 function copyFile(source, target) {
-  if (!fs.existsSync(source)) return;
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.copyFileSync(source, target);
+  retryFsOperation(`copy ${path.relative(root, source)}`, () => {
+    if (!fs.existsSync(source)) return;
+    try {
+      fs.copyFileSync(source, target);
+    } catch (error) {
+      if (error?.code === "ENOENT" && !fs.existsSync(source)) return;
+      throw error;
+    }
+  });
 }
 
 function syncStandaloneNextBuild() {
@@ -60,7 +71,7 @@ function syncStandaloneNextBuild() {
     const source = path.join(nextRoot, entry.name);
     const target = path.join(standaloneNextRoot, entry.name);
     if (entry.isDirectory()) {
-      copyDirectory(source, target);
+      copyDirectory(source, target, { optional: true });
     } else if (entry.isFile()) {
       copyFile(source, target);
     }

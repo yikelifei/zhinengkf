@@ -113,6 +113,7 @@ test("blocks send guard when conversation is manually locked", () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
+  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
   assert.match(result.reason, /人工接管/);
 });
 
@@ -196,6 +197,7 @@ test("rejects requeue while conversation is manually locked", () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, "conversation_manual_locked");
   assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
+  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
 });
 
 test("rejects requeue while bridge ack is pending", () => {
@@ -314,6 +316,7 @@ test("blocks send task binding when conversation is manually locked", () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
+  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
 });
 
 test("blocks send task binding when design job belongs to another conversation", () => {

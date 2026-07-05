@@ -17,6 +17,7 @@ const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.jso
 const stableRuntimeDir = path.join(desktopRoot, ".runtime-stable");
 const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
 const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
+const stableRuntimeLauncherPidFile = path.join(stableRuntimeDir, "stable-runtime-launcher.pid");
 const args = new Set(process.argv.slice(2));
 const requestedRealDesignMode = args.has("--real-design");
 const requestedMockDesignMode = args.has("--mock-design");
@@ -863,7 +864,12 @@ function normalizePathText(value) {
 
 function stableDesktopGuardActive() {
   if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
+  return stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3600000);
+}
+
+function stableStartingLockActive() {
+  if (!fileFresh(stableStartingLockFile, 3600000)) return false;
+  return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherProcesses().length > 0;
 }
 
 function fileFresh(file, maxAgeMs) {
@@ -878,8 +884,61 @@ function heartbeatFresh(file, maxAgeMs) {
   try {
     const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
     const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
-    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > maxAgeMs) return false;
+    return stableRuntimeLauncherProcessActive(Number(heartbeat?.pid)) || findStableRuntimeLauncherProcesses().length > 0;
   } catch {
     return false;
   }
+}
+
+function readNumericFile(file) {
+  try {
+    const value = Number(String(fs.readFileSync(file, "utf8")).trim());
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function stableRuntimeLauncherProcessActive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0 || numericPid === process.pid) return false;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(numericPid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const commandLine = normalizePathText(getProcessCommandLinesByPid([String(numericPid)]).get(String(numericPid)) || "");
+  return commandLine.includes(normalizePathText(desktopRoot)) && commandLine.includes("tools/stable-runtime-launcher.js");
+}
+
+function findStableRuntimeLauncherProcesses() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows]).filter((item) => {
+    const pid = Number(item?.ProcessId);
+    const commandLine = normalizePathText(item?.CommandLine || "");
+    return Number.isFinite(pid) && pid !== process.pid && commandLine.includes(normalizedRoot) && commandLine.includes("tools/stable-runtime-launcher.js");
+  });
 }

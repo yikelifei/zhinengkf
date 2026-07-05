@@ -143,6 +143,10 @@ export class DesignPlatformController {
         hasAccessToken: Boolean(appConfig.designPlatformAccessToken),
         hasCookie: Boolean(appConfig.designPlatformCookie),
         hasDeviceId: Boolean(appConfig.designPlatformDeviceId),
+        hasCallbackApiKey: Boolean(appConfig.callbackApiKey),
+        callbackUrl:
+          appConfig.designPlatformCallbackUrl ||
+          `${appConfig.customerServicePublicBaseUrl}/api/integrations/design-platform/callback`,
       },
       data: healthData,
     };

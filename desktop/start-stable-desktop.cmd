@@ -12,6 +12,7 @@ if not "%STABLE_SERVICE_WINDOW%"=="1" (
 )
 set DESKTOP_RUNTIME_DIR=D:\zhinengkefu\desktop\.runtime-stable
 if not exist "D:\zhinengkefu\desktop\.runtime-stable" mkdir "D:\zhinengkefu\desktop\.runtime-stable"
+if exist "D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request" del /f /q "D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request"
 echo %date% %time% > "D:\zhinengkefu\desktop\.runtime-stable\stable-starting.lock"
 set STABLE_SERVICE_LOG=D:\zhinengkefu\desktop\.runtime-stable\stable-service-window.log
 echo [%date% %time%] service window entered >> "%STABLE_SERVICE_LOG%"

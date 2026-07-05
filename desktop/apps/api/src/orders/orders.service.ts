@@ -68,12 +68,20 @@ export class OrdersService {
     const orderDraft = appConfig.useLocalStore
       ? this.localStore.upsertOrderDraftFromQuote(quoteId, decision.orderDraft)
       : await this.upsertPrismaOrderDraft(quoteId, decision.orderDraft);
+    this.assertCreatedOrderDraftBinding(orderDraft, quote);
 
     await this.notifications.create(
       "info",
       "订单草稿已生成",
       `客户 ${quote.customer?.name || quote.customerId} 的报价已生成订单草稿，金额 ${decision.orderDraft.totalPrice} 元。`,
-      { orderDraftId: orderDraft.id, quoteDraftId: quoteId, designJobId: quote.designJobId },
+      {
+        orderDraftId: orderDraft.id,
+        quoteDraftId: quoteId,
+        designJobId: quote.designJobId,
+        wechatAccountId: orderDraft.wechatAccountId || quote.designJob?.wechatAccountId,
+        conversationId: orderDraft.conversationId || quote.designJob?.conversationId,
+        customerId: orderDraft.customerId || quote.customerId || quote.designJob?.customerId,
+      },
     );
 
     return orderDraft;
@@ -89,6 +97,7 @@ export class OrdersService {
       throw new BadRequestException("订单草稿没有可更新的字段，请至少修改状态、付款状态、备注或跟进人。");
     }
     assertOrderStatusPaymentReady(current, data);
+    assertOrderStatusCommercialReady(current, data);
 
     const quotePatch = quotePatchForOrderDraft(current, data);
     if (current.quoteDraftId && Object.keys(quotePatch).length) {
@@ -119,7 +128,7 @@ export class OrdersService {
     await this.notifications.create(
       "info",
       "订单草稿已更新",
-      `订单 ${id} 已更新为 ${updated.status} / ${updated.paymentStatus}。`,
+      `订单 ${id} 已更新为 ${updated.status} / ${orderDraftPaymentStatus({ ...current, ...updated }, data)}。`,
       { orderDraftId: id, quoteDraftId: current.quoteDraftId, designJobId: current.designJobId },
     );
 
@@ -300,7 +309,7 @@ export class OrdersService {
       scene: context.scene,
       quantity: order.quantity,
       totalPrice: order.totalPrice,
-      paymentStatus: order.paymentStatus,
+      paymentStatus: orderDraftPaymentStatus(order),
       items: context.items,
       hasSelectedImage: Boolean(context.selectedImage),
       selectedImagePosition: context.selectedImage?.position,
@@ -348,6 +357,19 @@ export class OrdersService {
 
   private orderSelectedImage(order: any) {
     return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
+  }
+
+  private assertCreatedOrderDraftBinding(orderDraft: any, quote: any) {
+    const binding = validateOrderDraftQuoteBinding({
+      orderDraft,
+      quoteDraft: quote,
+      designJob: orderDraft?.designJob || quote?.designJob,
+      conversation: orderDraft?.conversation || quote?.designJob?.conversation,
+      selectedImage: orderDraft?.selectedImage || quote?.selectedImage || orderDraft?.selectedImageSnapshot,
+    });
+    if (!binding.ok) {
+      throw new BadRequestException(`订单草稿生成后绑定校验失败：${orderBindingReasonLabel(binding.reason)}`);
+    }
   }
 
   private expectedIdentityFromQuote(quote: any): ExpectedIdentityPayload {
@@ -661,10 +683,30 @@ function orderBindingReasonLabel(reason: string) {
 function assertOrderStatusPaymentReady(current: any, patch: OrderDraftUpdatePatch) {
   const nextStatus = patch.status || current?.status || "";
   if (!["processing", "fulfilled"].includes(nextStatus)) return;
-  const nextPaymentStatus = patch.paymentStatus || current?.paymentStatus || current?.quoteDraft?.paymentStatus || "";
+  const nextPaymentStatus = orderDraftPaymentStatus(current, patch);
   if (["deposit_paid", "paid"].includes(nextPaymentStatus)) return;
   const actionLabel = nextStatus === "processing" ? "生产中" : "完成";
   throw new BadRequestException(`订单未记录定金或全款，不能标记为${actionLabel}；请先人工核验付款凭证。`);
+}
+
+function orderDraftPaymentStatus(order: any, patch: OrderDraftUpdatePatch = {}) {
+  return patch.paymentStatus || order?.paymentStatus || order?.quoteDraft?.paymentStatus || "unpaid";
+}
+
+function assertOrderStatusCommercialReady(current: any, patch: OrderDraftUpdatePatch) {
+  const nextStatus = patch.status || current?.status || "";
+  if (!["processing", "fulfilled"].includes(nextStatus)) return;
+  const actionLabel = nextStatus === "processing" ? "生产中" : "完成";
+  const selectedImageId = current?.selectedImageId || current?.quoteDraft?.selectedImageId;
+  if (!selectedImageId) {
+    throw new BadRequestException(`订单未绑定客户选中的效果图，不能标记为${actionLabel}。`);
+  }
+  if (!current?.wechatAccountId || !current?.customerId || !current?.conversationId) {
+    throw new BadRequestException(`订单缺少微信账号、客户或会话绑定，不能标记为${actionLabel}。`);
+  }
+  if (Number(current?.profit || 0) < 0) {
+    throw new BadRequestException(`订单利润为负，不能标记为${actionLabel}；请先人工确认报价和成本。`);
+  }
 }
 
 type OrderDraftUpdatePatch = {

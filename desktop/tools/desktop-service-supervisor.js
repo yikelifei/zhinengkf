@@ -14,8 +14,6 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(process.cwd(), ".runtime");
 const stableRuntimeDir = path.join(process.cwd(), ".runtime-stable");
-const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
-const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const logsDir = path.join(runtimeDir, "logs");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
@@ -23,6 +21,9 @@ const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.j
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
+const stableRuntimeLauncherPidFile = path.join(stableRuntimeDir, "stable-runtime-launcher.pid");
 const launcherLog = path.join(logsDir, realDesignMode ? "launcher-real.log" : "launcher-mock.log");
 const launcherCmd = path.join(runtimeDir, realDesignMode ? "supervise-real.cmd" : "supervise-mock.cmd");
 const legacyLauncherCmd = path.join(runtimeDir, realDesignMode ? "launch-real.cmd" : "launch-mock.cmd");
@@ -39,6 +40,11 @@ main();
 
 function main() {
   fs.mkdirSync(logsDir, { recursive: true });
+  if (stableDesktopGuardActive()) {
+    appendLog(launcherLog, "[supervisor] blocked because stable desktop startup/runtime is active");
+    console.log("[supervisor] stable desktop runtime is active; legacy supervisor skipped.");
+    return;
+  }
   setModeEnv();
   if (supervisorChild) {
     runSupervisorLoop();
@@ -361,6 +367,8 @@ function writeSupervisorChildCmd() {
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(process.cwd())}`,
+    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     ...envLines,
     `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
       realDesignMode ? "--real-design" : "--mock-design",
@@ -655,6 +663,8 @@ function buildLauncherCmd() {
       .filter((key) => process.env[key] !== undefined)
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
     ":restart",
+    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
     `if %ERRORLEVEL% EQU 0 echo [%date% %time%] start-dev-ports exited with 0, continuing supervision >> ${cmdQuote(launcherLog)}`,
     `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,
@@ -694,6 +704,105 @@ function launcherModeEnv() {
     `set ${cmdSetArg("DESIGN_PLATFORM_ADAPTER", "standard_v1")}`,
     `set ${cmdSetArg("DESIGN_PLATFORM_BASE_URL", "http://127.0.0.1:3700")}`,
   ];
+}
+
+function stableDesktopGuardActive() {
+  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  return stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
+}
+
+function stableStartingLockActive() {
+  if (!fileFresh(stableStartingLockFile, 3_600_000)) return false;
+  return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherProcesses().length > 0;
+}
+
+function fileFresh(filePath, maxAgeMs) {
+  try {
+    return Date.now() - fs.statSync(filePath).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function heartbeatFresh(filePath, maxAgeMs) {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > maxAgeMs) return false;
+    return stableRuntimeLauncherProcessActive(Number(heartbeat?.pid)) || findStableRuntimeLauncherProcesses().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function readNumericFile(filePath) {
+  try {
+    const value = Number(String(fs.readFileSync(filePath, "utf8")).trim());
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function stableRuntimeLauncherProcessActive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0 || numericPid === process.pid) return false;
+  if (process.platform !== "win32") return processIsRunning(numericPid);
+  const commandLine = normalizePathText(getProcessCommandLinesByPid([String(numericPid)]).get(String(numericPid)) || "");
+  return commandLine.includes(normalizePathText(process.cwd())) && commandLine.includes("tools/stable-runtime-launcher.js");
+}
+
+function findStableRuntimeLauncherProcesses() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(process.cwd());
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows]).filter((item) => {
+    const pid = Number(item?.ProcessId);
+    const commandLine = normalizePathText(item?.CommandLine || "");
+    return Number.isFinite(pid) && pid !== process.pid && commandLine.includes(normalizedRoot) && commandLine.includes("tools/stable-runtime-launcher.js");
+  });
+}
+
+function getProcessCommandLinesByPid(pids) {
+  const ids = pids.map((pid) => Number(pid)).filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+  if (!ids.length || process.platform !== "win32") return new Map();
+  const filter = ids.map((pid) => `ProcessId = ${pid}`).join(" OR ");
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter ${psQuote(filter)} | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return new Map();
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+    return new Map(rows.map((item) => [String(item.ProcessId || ""), String(item.CommandLine || "")]));
+  } catch {
+    return new Map();
+  }
 }
 
 function psQuote(value) {
@@ -761,27 +870,4 @@ function closeLogFd(value) {
 
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function stableDesktopGuardActive() {
-  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
-}
-
-function fileFresh(file, maxAgeMs) {
-  try {
-    return Date.now() - fs.statSync(file).mtimeMs <= maxAgeMs;
-  } catch {
-    return false;
-  }
-}
-
-function heartbeatFresh(file, maxAgeMs) {
-  try {
-    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
-    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
-    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
-  } catch {
-    return false;
-  }
 }

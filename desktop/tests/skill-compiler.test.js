@@ -50,6 +50,136 @@ test("compiles high-score training samples into skill suggestions", () => {
   assert.equal(suggestions[0].confidence > 70, true);
 });
 
+test("labels skill suggestion scope from sample identities", () => {
+  const baseSample = {
+    agentId: "agent_gift_design",
+    agentKey: "gift_design",
+    scene: "礼盒设计",
+    customerText: "每盒 200，想看礼盒效果图",
+    idealReply: "我先按预算帮您确认搭配。",
+    score: 95,
+    status: "ready",
+    skillHints: ["预算澄清"],
+  };
+  const [conversationScope] = compileAgentSkillSuggestions([
+    {
+      ...baseSample,
+      id: "sample_conversation",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    },
+  ]);
+  const [customerScope] = compileAgentSkillSuggestions([
+    {
+      ...baseSample,
+      id: "sample_customer",
+      wechatAccountId: "wechat_1",
+      customerId: "customer_1",
+    },
+  ]);
+  const [wechatScope] = compileAgentSkillSuggestions([
+    {
+      ...baseSample,
+      id: "sample_wechat",
+      wechatAccountId: "wechat_1",
+    },
+  ]);
+  const [globalScope] = compileAgentSkillSuggestions([{ ...baseSample, id: "sample_global" }]);
+  const separatedScopes = compileAgentSkillSuggestions([
+    {
+      ...baseSample,
+      id: "sample_mixed_a",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    },
+    {
+      ...baseSample,
+      id: "sample_mixed_b",
+      wechatAccountId: "wechat_2",
+      conversationId: "conversation_2",
+      customerId: "customer_2",
+    },
+  ]);
+
+  assert.equal(conversationScope.scope.label, "当前会话私有");
+  assert.match(conversationScope.suggestionKey, /conversation=conversation_1/);
+  assert.equal(conversationScope.scope.conversationId, "conversation_1");
+  assert.equal(customerScope.scope.label, "客户私有");
+  assert.match(customerScope.suggestionKey, /customer=customer_1/);
+  assert.equal(customerScope.scope.customerId, "customer_1");
+  assert.equal(wechatScope.scope.label, "微信账号内共享");
+  assert.match(wechatScope.suggestionKey, /wechat=wechat_1/);
+  assert.equal(wechatScope.scope.wechatAccountId, "wechat_1");
+  assert.equal(globalScope.scope.label, "全局 Skill");
+  assert.equal(globalScope.suggestionKey, "agent_gift_design::预算澄清");
+  assert.equal(separatedScopes.length, 2);
+  assert.deepEqual(
+    separatedScopes.map((suggestion) => suggestion.scope.customerId).sort(),
+    ["customer_1", "customer_2"],
+  );
+  assert.equal(new Set(separatedScopes.map((suggestion) => suggestion.suggestionKey)).size, 2);
+});
+
+test("uses identityBinding when compiling legacy scoped training samples", () => {
+  const [suggestion] = compileAgentSkillSuggestions([
+    {
+      id: "sample_legacy_identity",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      customerText: "每盒 200，想看礼盒效果图",
+      idealReply: "我先按预算帮您确认搭配。",
+      score: 95,
+      status: "ready",
+      skillHints: ["预算澄清"],
+      identityBinding: {
+        status: "passed",
+        wechatAccountId: "wechat_legacy",
+        conversationId: "conversation_legacy",
+        customerId: "customer_legacy",
+      },
+    },
+  ]);
+
+  assert.equal(suggestion.scope.label, "当前会话私有");
+  assert.equal(suggestion.scope.wechatAccountId, "wechat_legacy");
+  assert.equal(suggestion.scope.conversationId, "conversation_legacy");
+  assert.equal(suggestion.scope.customerId, "customer_legacy");
+  assert.match(suggestion.suggestionKey, /wechat=wechat_legacy/);
+  assert.match(suggestion.suggestionKey, /conversation=conversation_legacy/);
+});
+
+test("marks conflicting training sample identities as mixed source", () => {
+  const [suggestion] = compileAgentSkillSuggestions([
+    {
+      id: "sample_conflict_identity",
+      agentId: "agent_gift_design",
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      customerText: "每盒 200，想看礼盒效果图",
+      idealReply: "我先按预算帮您确认搭配。",
+      score: 95,
+      status: "ready",
+      skillHints: ["预算澄清"],
+      wechatAccountId: "wechat_top",
+      conversationId: "conversation_top",
+      customerId: "customer_top",
+      identityBinding: {
+        status: "passed",
+        wechatAccountId: "wechat_binding",
+        conversationId: "conversation_binding",
+        customerId: "customer_binding",
+      },
+    },
+  ]);
+
+  assert.equal(suggestion.scope.label, "混合来源");
+  assert.equal(suggestion.scope.level, "mixed");
+  assert.match(suggestion.suggestionKey, /identity=conflict/);
+});
+
 test("matches mojibake skill hints to existing readable skill names", () => {
   const suggestions = compileAgentSkillSuggestions(
     [
@@ -79,6 +209,47 @@ test("matches mojibake skill hints to existing readable skill names", () => {
   assert.equal(suggestions[0].name, "预算澄清");
   assert.equal(suggestions[0].existingSkillId, "skill_1");
   assert.equal(suggestions[0].action, "update");
+});
+
+test("matches existing skills only within the same identity scope", () => {
+  const [suggestion] = compileAgentSkillSuggestions(
+    [
+      {
+        id: "sample_private",
+        agentId: "agent_gift_design",
+        agentKey: "gift_design",
+        scene: "gift",
+        customerText: "budget and render",
+        idealReply: "reply",
+        score: 90,
+        status: "ready",
+        skillHints: ["预算澄清"],
+        wechatAccountId: "wechat_1",
+        conversationId: "conversation_1",
+        customerId: "customer_1",
+      },
+    ],
+    {
+      existingSkills: [
+        {
+          id: "skill_global",
+          agentId: "agent_gift_design",
+          name: "预算澄清",
+        },
+        {
+          id: "skill_private",
+          agentId: "agent_gift_design",
+          name: "预算澄清",
+          wechatAccountId: "wechat_1",
+          conversationId: "conversation_1",
+          customerId: "customer_1",
+        },
+      ],
+    },
+  );
+
+  assert.equal(suggestion.existingSkillId, "skill_private");
+  assert.equal(suggestion.action, "update");
 });
 
 test("classifies skill suggestion quality before applying skills", () => {

@@ -11,10 +11,11 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(desktopRoot, ".runtime");
 const stableRuntimeDir = path.join(desktopRoot, ".runtime-stable");
-const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
-const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "dev-ports.json");
+const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
+const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
+const stableRuntimeLauncherPidFile = path.join(stableRuntimeDir, "stable-runtime-launcher.pid");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
@@ -144,6 +145,11 @@ process.on("exit", (code) => {
 
 async function main() {
   fs.mkdirSync(logsDir, { recursive: true });
+
+  if (!statusOnly && (await stableDesktopGuardActive())) {
+    console.log("[ports] stable desktop runtime is active; legacy start-dev-ports skipped.");
+    return;
+  }
 
   if (!statusOnly && !preflightOnly) {
     assertMockDesignStartAllowed();
@@ -1792,6 +1798,105 @@ function readPreferredDesignMode() {
   }
 }
 
+async function stableDesktopGuardActive() {
+  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  const processActive = stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
+  if (!processActive) return false;
+  if (await stableRuntimeServicesHealthy()) return true;
+  console.log("[ports] ignored stale stable desktop runtime guard because the stable launcher is not serving required ports.");
+  return false;
+}
+
+function stableStartingLockActive() {
+  if (!fileFresh(stableStartingLockFile, 3_600_000)) return false;
+  return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherProcesses().length > 0;
+}
+
+async function stableRuntimeServicesHealthy() {
+  const webHealthy = await isHealthy(`http://127.0.0.1:${webPort}/`);
+  if (!webHealthy) return false;
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealth?.ok) return false;
+  if (!includeMockDesignPlatform) return true;
+  return isHealthy(`http://127.0.0.1:${mockPort}/v1/health`);
+}
+
+function fileFresh(filePath, maxAgeMs) {
+  try {
+    return Date.now() - fs.statSync(filePath).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function heartbeatFresh(filePath, maxAgeMs) {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > maxAgeMs) return false;
+    return stableRuntimeLauncherProcessActive(Number(heartbeat?.pid)) || findStableRuntimeLauncherProcesses().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function readNumericFile(filePath) {
+  try {
+    const value = Number(String(fs.readFileSync(filePath, "utf8")).trim());
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function stableRuntimeLauncherProcessActive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0 || numericPid === process.pid) return false;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(numericPid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const commandLine = normalizePathText(getProcessCommandLinesByPid([String(numericPid)]).get(String(numericPid)) || "");
+  return commandLine.includes(normalizePathText(desktopRoot)) && commandLine.includes("tools/stable-runtime-launcher.js");
+}
+
+function findStableRuntimeLauncherProcesses() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(desktopRoot);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows]).filter((item) => {
+    const pid = Number(item?.ProcessId);
+    const commandLine = normalizePathText(item?.CommandLine || "");
+    return (
+      Number.isFinite(pid) &&
+      pid !== process.pid &&
+      commandLine.includes(normalizedRoot) &&
+      commandLine.includes("tools/stable-runtime-launcher.js")
+    );
+  });
+}
+
 function mockRepairLockIsFresh() {
   try {
     const updatedAt = Date.parse(fs.readFileSync(mockRepairLockFile, "utf8").trim());
@@ -1860,27 +1965,4 @@ function normalizePathText(value) {
 
 function normalizeBaseUrl(value) {
   return String(value || "").replace(/\/+$/, "");
-}
-
-function stableDesktopGuardActive() {
-  if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return fileFresh(stableStartingLockFile, 600000) || heartbeatFresh(stableKeepAliveHeartbeatFile, 600000);
-}
-
-function fileFresh(file, maxAgeMs) {
-  try {
-    return Date.now() - fs.statSync(file).mtimeMs <= maxAgeMs;
-  } catch {
-    return false;
-  }
-}
-
-function heartbeatFresh(file, maxAgeMs) {
-  try {
-    const heartbeat = JSON.parse(fs.readFileSync(file, "utf8"));
-    const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
-    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
-  } catch {
-    return false;
-  }
 }

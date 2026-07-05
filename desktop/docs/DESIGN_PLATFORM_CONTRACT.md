@@ -117,6 +117,16 @@ POST /v1/design-jobs
     "showAllItems": true,
     "noWatermark": true,
     "highResolution": true
+  },
+  "callback": {
+    "url": "http://127.0.0.1:3200/api/integrations/design-platform/callback",
+    "method": "POST",
+    "events": ["completed", "failed"],
+    "headers": {
+      "Authorization": "Bearer <DESIGN_PLATFORM_CALLBACK_API_KEY>"
+    },
+    "requestId": "客服平台任务 requestId",
+    "fallbackPolling": true
   }
 }
 ```

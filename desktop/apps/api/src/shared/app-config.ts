@@ -15,6 +15,7 @@ function booleanEnv(name: string, fallback: boolean): boolean {
 
 const defaultDesignPlatformAdapter = "standard_v1";
 const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3700";
+const apiPort = numberEnv("API_PORT", 3200);
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.resolve("./.runtime");
@@ -66,7 +67,7 @@ function resolveDesignPlatformRuntime(config = runtimeConfig) {
 const designPlatformRuntime = resolveDesignPlatformRuntime();
 
 export const appConfig = {
-  apiPort: numberEnv("API_PORT", 3200),
+  apiPort,
   useLocalStore: process.env.USE_LOCAL_STORE !== "false",
   localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || runtimePath("storage")),
   designPlatformAdapter: designPlatformRuntime.adapter,
@@ -81,6 +82,10 @@ export const appConfig = {
   designPlatformCardType: process.env.DESIGN_PLATFORM_CARD_TYPE || "礼盒真实产品摆拍",
   designResultPollIntervalMs: numberEnv("DESIGN_RESULT_POLL_INTERVAL_MS", 5000),
   designResultPollMaxMs: numberEnv("DESIGN_RESULT_POLL_MAX_MS", 20 * 60 * 1000),
+  customerServicePublicBaseUrl: trimTrailingSlash(
+    process.env.CUSTOMER_SERVICE_PUBLIC_BASE_URL || `http://127.0.0.1:${apiPort}`,
+  ),
+  designPlatformCallbackUrl: process.env.DESIGN_PLATFORM_CALLBACK_URL || "",
   callbackApiKey: process.env.DESIGN_PLATFORM_CALLBACK_API_KEY || "",
   wechatSendAdapter: process.env.WECHAT_SEND_ADAPTER || "dry_run",
   wechatBridgeOutboxDir: path.resolve(process.env.WECHAT_BRIDGE_OUTBOX_DIR || runtimePath("wechat-outbox")),
@@ -160,6 +165,11 @@ export function getDesignPlatformRuntimeConfigSummary() {
     hasAccessToken: Boolean(appConfig.designPlatformAccessToken),
     hasCookie: Boolean(appConfig.designPlatformCookie),
     hasDeviceId: Boolean(appConfig.designPlatformDeviceId),
+    hasCallbackApiKey: Boolean(appConfig.callbackApiKey),
+    customerServicePublicBaseUrl: appConfig.customerServicePublicBaseUrl,
+    callbackUrl:
+      appConfig.designPlatformCallbackUrl ||
+      `${appConfig.customerServicePublicBaseUrl}/api/integrations/design-platform/callback`,
     deviceIdSuffix: appConfig.designPlatformDeviceId ? appConfig.designPlatformDeviceId.slice(-6) : "",
     runtimeConfigPath: designPlatformRuntimeConfigPath,
   };
@@ -169,4 +179,8 @@ function setRuntimeString(target: Record<string, unknown>, key: string, value: s
   const text = String(value || "").trim();
   if (text) target[key] = text;
   else delete target[key];
+}
+
+function trimTrailingSlash(value: string) {
+  return String(value || "").replace(/\/+$/, "");
 }

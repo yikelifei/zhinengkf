@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("node:http");
+const https = require("node:https");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 
@@ -33,7 +34,10 @@ const server = http.createServer(async (req, res) => {
     jobs.set(externalJobId, job);
     setTimeout(() => {
       const current = jobs.get(externalJobId);
-      if (current) current.status = "completed";
+      if (current) {
+        current.status = "completed";
+        void notifyCallback(current, body.callback);
+      }
     }, 1500);
     return json(res, { externalJobId, status: "generating" });
   }
@@ -168,5 +172,62 @@ function readJson(req) {
         reject(error);
       }
     });
+  });
+}
+
+function notifyCallback(job, callback) {
+  const url = String(callback?.url || "").trim();
+  const events = Array.isArray(callback?.events) ? callback.events : [];
+  if (!url || (events.length && !events.includes("completed"))) return Promise.resolve();
+
+  const payload = {
+    requestId: job.requestId,
+    externalJobId: job.externalJobId,
+    status: "completed",
+    images: job.images,
+    errorMessage: "",
+  };
+  return postJson(url, payload, callback?.headers).catch((error) => {
+    console.error(`[mock-design-platform] callback failed ${url}: ${error.message || error}`);
+  });
+}
+
+function postJson(targetUrl, payload, headers = {}) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const body = Buffer.from(JSON.stringify(payload));
+    const client = parsed.protocol === "https:" ? https : http;
+    const req = client.request(
+      {
+        method: "POST",
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        timeout: 3000,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": body.length,
+          ...(headers && typeof headers === "object" ? headers : {}),
+        },
+      },
+      (res) => {
+        res.resume();
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+          else reject(new Error(`HTTP ${res.statusCode}`));
+        });
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("callback timeout")));
+    req.on("error", reject);
+    req.end(body);
   });
 }

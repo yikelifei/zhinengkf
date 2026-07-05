@@ -332,6 +332,7 @@ const skuImageProblemActionOptions = [
 const skuImageProblemSortOptions = [
   { value: "severity", label: "严重程度" },
   { value: "product_issue_count", label: "同商品问题数" },
+  { value: "path_state", label: "路径状态" },
   { value: "image_role", label: "图片位置" },
   { value: "name", label: "商品名" },
 ];
@@ -484,6 +485,7 @@ type TrainingSampleQualityFilter =
   | "review"
   | "risk"
   | "blocked"
+  | "missing_required"
   | "needs_attention"
   | "scene_uncertain"
   | "anti_wrong_reply"
@@ -1225,6 +1227,14 @@ function sortSkuImageProblems(problems: SkuImageProblem[], sortBy: string, count
         (severityRank[left.severity] ?? 9) - (severityRank[right.severity] ?? 9)
       );
     }
+    if (sortBy === "path_state") {
+      return (
+        Number(Boolean(left.path)) - Number(Boolean(right.path)) ||
+        (severityRank[left.severity] ?? 9) - (severityRank[right.severity] ?? 9) ||
+        (left.skuCode || "").localeCompare(right.skuCode || "", "zh-Hans-CN") ||
+        (roleRank[left.imageRole || ""] ?? 9) - (roleRank[right.imageRole || ""] ?? 9)
+      );
+    }
     if (sortBy === "name") {
       return (left.name || left.skuCode || "").localeCompare(right.name || right.skuCode || "", "zh-Hans-CN");
     }
@@ -1491,6 +1501,7 @@ export default function HomePage() {
   const [dealProgressFilter, setDealProgressFilter] = useState<string>("all");
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<string>("design-center");
   const [noticeWorkbenchView, setNoticeWorkbenchView] = useState<"automation" | "issues" | "history">("automation");
+  const [activeAutomationIssueKey, setActiveAutomationIssueKey] = useState<string>("");
   const [skuImportText, setSkuImportText] = useState<string>(`SKU编号\t商品名称\t商品类型\t分类\t成本价\t售价\t库存\t场景标签\t主图\t多角度图\t尺寸\t重量g\t材质\t供应商\t交期天数\t替代SKU\t搭配规则
 BOX-B\t雅黑礼盒B\t礼盒\t礼盒\t40\t80\t20\t员工福利、客户拜访\tC:\\products\\box-b-main.jpg\tC:\\products\\box-b-side.jpg、C:\\products\\box-b-open.jpg\t30*22*9\t650\t特种纸\t杭州礼盒厂\t5\tBOX-A\t{"preferWith":["TEA-C","CARD-B"]}
 TEA-C\t乌龙茶C\t内搭\t茶叶\t55\t120\t15\t员工福利\tC:\\products\\tea-c-main.jpg\tC:\\products\\tea-c-detail.jpg\t12*8*18\t300\t茶叶\t福建茶业供应商\t3\t\t适合与礼盒和感谢卡搭配
@@ -1501,7 +1512,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function orderFollowupBlockReason(order: OrderDraft, type: "production" | "delivery") {
     if (order.status === "cancelled") return "订单已取消，不能发送跟进消息。";
-    if (!order.wechatAccountId || !order.conversationId) return "订单缺少微信账号或会话，不能发送跟进消息。";
+    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话，不能发送跟进消息。";
+    if (!orderPaymentReady(order)) return "订单未记录定金或全款，先核验付款凭证后再发送跟进消息。";
+    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能发送跟进消息。";
     if (type === "production" && !["confirmed", "processing", "fulfilled"].includes(order.status)) {
       return "订单还未确认，先确认订单或收款后再发生产通知。";
     }
@@ -2487,6 +2500,25 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     return window.confirm(lines.join("\n"));
   }
 
+  function designJobQuoteBlockReason(job: DesignJob | null | undefined) {
+    if (!job?.id) return "设计任务不存在，不能生成报价。";
+    if (!job.customerId) return "设计任务缺少客户绑定，不能生成报价。";
+    if (!job.wechatAccountId || !job.conversationId) return "设计任务缺少微信账号或客户会话，不能生成报价。";
+    if (job.conversation?.customerId && job.customerId !== job.conversation.customerId) {
+      return "设计任务客户和当前会话客户不一致，不能生成报价。";
+    }
+    if (job.conversation?.wechatAccountId && job.wechatAccountId !== job.conversation.wechatAccountId) {
+      return "设计任务微信账号和当前会话账号不一致，不能生成报价。";
+    }
+    const selectedImage = designJobSelectedImage(job);
+    if (!selectedImage) return "先让客户明确选择一张效果图，再生成报价。";
+    const selectedImageDesignJobId = "designJobId" in selectedImage ? String((selectedImage as { designJobId?: string }).designJobId || "") : "";
+    if (selectedImageDesignJobId && selectedImageDesignJobId !== job.id) {
+      return "客户选中的效果图不属于当前设计任务，不能生成报价。";
+    }
+    return "";
+  }
+
   async function quickConfirmActiveJob() {
     if (!activeJob) return;
     if (activeDesignImageSendRisk) {
@@ -2503,6 +2535,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function createQuoteForJob(job: DesignJob) {
+    const blocker = designJobQuoteBlockReason(job);
+    if (blocker) {
+      setMessage(blocker);
+      return;
+    }
     if (!confirmDesignJobQuoteCreation(job)) return;
     await runAction("生成报价", async () => {
       const quote = await createQuote(job.id, identityExpectation(job));
@@ -2782,15 +2819,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function trainingSampleSelectionRiskSummary(samples: TrainingSample[], options: { includeNeedsAttention?: boolean } = {}) {
     const parts: string[] = [];
+    const missingRequiredCount = samples.filter((sample) => trainingSampleReadyBlockingReasons(sample).length).length;
     const needsAttentionCount = options.includeNeedsAttention
       ? samples.filter(isTrainingSampleNeedingManualReview).length
       : 0;
     const sceneUncertainCount = samples.filter(isSceneUncertainTrainingSample).length;
+    if (missingRequiredCount) parts.push(`${missingRequiredCount} 条缺必填项`);
     if (needsAttentionCount) parts.push(`${needsAttentionCount} 条需处理`);
     if (sceneUncertainCount) parts.push(`${sceneUncertainCount} 条场景待确认`);
     return parts.length ? `，其中 ${parts.join("，")}` : "";
   }
-
   function selectVisibleTrainingSamples() {
     const samples = visibleTrainingSamples.slice(0, TRAINING_SAMPLE_BATCH_REVIEW_LIMIT);
     const ids = samples.map((sample) => sample.id);
@@ -2803,6 +2841,20 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     setMessage(`已选择 ${samples.length} 条当前显示样本${riskText}${overflowText}。`);
   }
 
+  function selectTrainingSamplesMissingRequired() {
+    const matchingSamples = visibleTrainingSamples.filter((sample) => trainingSampleReadyBlockingReasons(sample).length);
+    const samples = matchingSamples.slice(0, TRAINING_SAMPLE_BATCH_REVIEW_LIMIT);
+    if (!samples.length) {
+      setMessage("当前显示样本里没有缺必填项的训练样本。");
+      return;
+    }
+    setSelectedTrainingSampleIds((current) => [...new Set([...current, ...samples.map((sample) => sample.id)])]);
+    const overflowText =
+      matchingSamples.length > samples.length
+        ? `，本次只选择前 ${TRAINING_SAMPLE_BATCH_REVIEW_LIMIT} 条`
+        : "";
+    setMessage(`已选择 ${samples.length} 条缺必填项样本${overflowText}，请先逐条补齐后再确认训练。`);
+  }
   function selectTrainingSamplesNeedingReview() {
     const matchingSamples = visibleTrainingSamples.filter(isTrainingSampleNeedingManualReview);
     const samples = matchingSamples.slice(0, TRAINING_SAMPLE_BATCH_REVIEW_LIMIT);
@@ -2840,13 +2892,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function trainingSampleReadyBlockingReasons(sample: TrainingSample) {
-    const reasons: string[] = [];
-    if (!String(sample.agentKey || sample.agentId || "").trim()) reasons.push("缺少 Agent");
-    if (!String(sample.scene || "").trim()) reasons.push("缺少场景");
-    if (!String(sample.customerText || "").trim()) reasons.push("缺少客户问题");
-    if (!String(sample.idealReply || "").trim()) reasons.push("缺少标准回复");
-    if (!(sample.skillHints || []).some((hint) => String(hint || "").trim())) reasons.push("缺少 Skill 提示");
-    return reasons;
+    return trainingSampleRequiredFieldBlockingReasons(sample);
   }
 
   function trainingSampleBatchBlockingSummary(samples: TrainingSample[]) {
@@ -3627,18 +3673,44 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const existingOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
     const selectedImage = quoteSelectedImage(quote);
+    const selectedImageLabel = selectedImage?.position
+      ? `选图：第 ${selectedImage.position} 张`
+      : quote.selectedImageId
+        ? `选图：已绑定（${quote.selectedImageId}）`
+        : "选图：未绑定";
     const lines = [
       `确认按「${customerName}」当前报价${existingOrder ? "更新" : "生成"}订单草稿吗？`,
       "",
       `报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元`,
       `数量：${Number(quote.quantity || 0) || "-"} 份`,
-      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已绑定",
+      selectedImageLabel,
       "",
       existingOrder
         ? "系统会覆盖订单草稿里的报价快照、选图和金额，后续仍需要人工确认收款与交付。"
         : "系统会把报价、选图和客户信息生成订单草稿，后续用于收款、排产和订单确认。",
     ];
     return window.confirm(lines.join("\n"));
+  }
+
+  function quoteOrderDraftBlockReason(quote: QuoteDraft) {
+    const designJob = quote.designJob as
+      | (QuoteDraft["designJob"] & { wechatAccountId?: string | null; conversationId?: string | null })
+      | undefined;
+    if (!quote.id) return "报价缺少草稿编号，不能生成订单。";
+    if (!quote.designJobId) return "报价缺少设计任务绑定，不能生成订单。";
+    if (!quote.customerId) return "报价缺少客户绑定，不能生成订单。";
+    if (!quote.selectedImageId) return "报价还没有绑定客户选中的效果图，不能生成订单。";
+    if (!quoteSelectedImage(quote)) return "报价选中的效果图不在当前设计任务里，不能生成订单。";
+    if (!designJob?.conversationId || !designJob?.wechatAccountId) return "报价缺少微信账号或客户会话，不能生成订单。";
+    if (quote.designJobId && designJob?.id && quote.designJobId !== designJob.id) return "报价和设计任务绑定不一致，不能生成订单。";
+    if (quote.customerId && designJob?.customerId && quote.customerId !== designJob.customerId) return "报价和客户绑定不一致，不能生成订单。";
+    if (Number(quote.quantity || 0) <= 0) return "报价数量无效，不能生成订单。";
+    if (Number(quote.unitPrice ?? -1) < 0) return "报价单价无效，不能生成订单。";
+    if (Number(quote.totalPrice || 0) <= 0) return "报价总价无效，不能生成订单。";
+    if (Number(quote.totalCost ?? -1) < 0) return "报价成本无效，不能生成订单。";
+    if (!Number.isFinite(Number(quote.profit))) return "报价利润未计算，不能生成订单。";
+    if (Number(quote.profit || 0) < 0) return "报价利润为负，不能生成订单。";
+    return "";
   }
 
   function confirmQuoteAcceptanceOrderCreation(quote: QuoteDraft) {
@@ -3661,6 +3733,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function createOrderDraft(quote: QuoteDraft) {
+    const blocker = quoteOrderDraftBlockReason(quote);
+    if (blocker) {
+      setMessage(blocker);
+      return;
+    }
     if (!confirmQuoteOrderDraftCreation(quote)) {
       setMessage("已取消生成订单草稿操作。");
       return;
@@ -3676,12 +3753,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const linkedOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const customerName = quote.customer?.name || quote.designJob?.customerId || linkedOrder?.customer?.name || "客户";
     const selectedImage = quoteSelectedImage(quote);
+    const selectedImageLabel = selectedImage?.position
+      ? `选图：第 ${selectedImage.position} 张`
+      : quote.selectedImageId
+        ? `选图：已绑定（${quote.selectedImageId}）`
+        : "选图：未绑定";
     const lines = [
       `确认已核验「${customerName}」的${paymentLabel}付款吗？`,
       "",
       `报价金额：${formatMoney(Number(quote.totalPrice || linkedOrder?.totalPrice || 0))} 元`,
       `数量：${Number(quote.quantity || linkedOrder?.quantity || 0) || "-"} 份`,
-      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已绑定",
+      selectedImageLabel,
       linkedOrder ? `订单草稿：${linkedOrder.id}` : "订单草稿：核验后系统会按报价生成或更新",
       "",
       paymentStatus === "paid"
@@ -3691,11 +3773,57 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     return window.confirm(lines.join("\n"));
   }
 
+  function quotePaymentProofBlockReason(quote: QuoteDraft) {
+    const designJob = quote.designJob as
+      | (QuoteDraft["designJob"] & { wechatAccountId?: string | null; conversationId?: string | null })
+      | undefined;
+    if (!quote.selectedImageId) return "报价还没有绑定客户选中的效果图，不能核验付款。";
+    if (!designJob?.wechatAccountId || !quote.customerId || !designJob?.conversationId) {
+      return "报价缺少微信账号、客户或会话绑定，不能核验付款。";
+    }
+    return "";
+  }
+
+  function orderPaymentProofBlockReason(order: OrderDraft) {
+    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) {
+      return "订单还没有绑定客户选中的效果图，不能核验付款。";
+    }
+    if (!order.wechatAccountId || !order.customerId || !order.conversationId) {
+      return "订单缺少微信账号、客户或会话绑定，不能核验付款。";
+    }
+    return "";
+  }
+
+  function orderProductionBlockReason(order: OrderDraft) {
+    if (order.status === "cancelled") return "订单已取消，不能标记生产中。";
+    if (order.status === "fulfilled") return "订单已完成，不能重新标记生产中。";
+    if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记生产中；请先人工核验付款凭证。";
+    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能标记生产中。";
+    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记生产中。";
+    if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记生产中。";
+    return "";
+  }
+
+  function orderFulfillmentBlockReason(order: OrderDraft) {
+    if (order.status === "cancelled") return "订单已取消，不能标记完成。";
+    if (order.status !== "processing") return "订单还未进入生产中，不能直接标记完成。";
+    if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记完成；请先人工核验付款凭证。";
+    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能标记完成。";
+    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记完成。";
+    if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记完成。";
+    return "";
+  }
+
   async function verifyQuotePaymentProof(
     quote: QuoteDraft,
     paymentStatus: "deposit_paid" | "paid",
   ) {
     const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
+    const blocker = quotePaymentProofBlockReason(quote);
+    if (blocker) {
+      setMessage(blocker);
+      return;
+    }
     if (!confirmQuotePaymentProofVerification(quote, paymentStatus)) {
       setMessage(`已取消核验${paymentLabel}付款操作。`);
       return;
@@ -3727,6 +3855,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function verifyOrderPaymentProof(order: OrderDraft, paymentStatus: "deposit_paid" | "paid") {
+    const blocker = orderPaymentProofBlockReason(order);
+    if (blocker) {
+      setMessage(blocker);
+      return;
+    }
     const quote =
       order.quoteDraft ||
       quotes.find((item) => item.id === order.quoteDraftId) ||
@@ -3921,8 +4054,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   async function confirmAndUpdateOrderDraftStatus(order: OrderDraft, status: "fulfilled" | "cancelled") {
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
     const statusText = status === "fulfilled" ? "完成" : "取消";
-    if (status === "fulfilled" && !orderPaymentReady(order)) {
-      setMessage("订单未记录定金或全款，不能标记完成；请先人工核验付款凭证。");
+    const blocker = status === "fulfilled" ? orderFulfillmentBlockReason(order) : "";
+    if (blocker) {
+      setMessage(blocker);
       return;
     }
     const confirmed = window.confirm(
@@ -3937,9 +4071,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function confirmAndStartOrderProduction(order: OrderDraft) {
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
-    const paymentText = paymentStatusLabel(order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid");
-    if (!orderPaymentReady(order)) {
-      setMessage("订单未记录定金或全款，不能标记生产中；请先人工核验付款凭证。");
+    const paymentText = paymentStatusLabel(orderPaymentStatusValue(order));
+    const blocker = orderProductionBlockReason(order);
+    if (blocker) {
+      setMessage(blocker);
       return;
     }
     const confirmed = window.confirm(
@@ -4070,7 +4205,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       "",
       `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
       `订单状态：${orderStatusLabel(order.status)}`,
-      `付款状态：${paymentStatusLabel(order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid")}`,
+      `付款状态：${paymentStatusLabel(orderPaymentStatusValue(order))}`,
       "",
       "系统会继续通过账号、聊天对象、最近消息三重校验后再发送。",
     ];
@@ -4240,6 +4375,77 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     focusQuoteCenter(order.quoteDraftId || order.id, "orders");
   }
 
+  function focusSendTaskOrder(task: SendTask) {
+    const orderDraftId = sendTaskOrderDraftId(task);
+    if (!orderDraftId) {
+      setMessage(`发送任务 ${task.id} 没有关联订单，请按会话和发送内容人工核对。`);
+      return;
+    }
+    const order = dedupeOrdersById([...orderDrafts, ...(reviewCenter.orderDrafts || [])]).find((item) => item.id === orderDraftId);
+    if (order) {
+      focusOrderDraft(order);
+      setReviewWorkbenchView("order");
+      setHighValueOrderReviewFilter(highValueOrderReviewFilterForOrder(order));
+      setMessage(`已定位到订单 ${orderDraftId}，请核对发送任务 ${task.id} 的异常原因。`);
+      return;
+    }
+    focusQuoteCenter(orderDraftId, "orders");
+    setReviewWorkbenchView("order");
+    setHighValueOrderReviewFilter("send_attention");
+    setMessage(`已切到订单列表并搜索 ${orderDraftId}，如列表里没有该订单，请刷新后再核对发送任务 ${task.id}。`);
+  }
+
+  function orderSendAttentionTasks(order: OrderDraft) {
+    const directTasks = [
+      order.confirmationSendTask,
+      order.followupSendTask,
+      order.productionFollowupSendTask,
+      order.deliveryFollowupSendTask,
+      ...(order.followupSendTasks || []),
+    ].filter(Boolean) as SendTask[];
+    const taskIds = new Set<string>(
+      [
+        order.confirmationSendTaskId,
+        order.followupSendTaskId,
+        order.productionFollowupSendTaskId,
+        order.deliveryFollowupSendTaskId,
+        ...directTasks.map((task) => task.id),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value)),
+    );
+    const matchedTasks = sendTasks.filter((task) => {
+      if (taskIds.has(task.id)) return true;
+      const automation = (task.guardSnapshot as { automation?: Record<string, unknown> } | undefined)?.automation || {};
+      return Boolean(order.id && String(automation.orderDraftId || task.payload?.orderDraftId || "") === order.id);
+    });
+    const unique = new Map<string, SendTask>();
+    for (const task of [...directTasks, ...matchedTasks]) {
+      if (task.id && !unique.has(task.id)) unique.set(task.id, task);
+    }
+    return [...unique.values()];
+  }
+
+  function sendTaskNeedsManualAttention(task: SendTask) {
+    return ["blocked", "failed", "cancelled", "dry_run"].includes(String(task.status || ""));
+  }
+
+  async function focusOrderManualSendAttention(order: OrderDraft) {
+    setReviewWorkbenchView("order");
+    setHighValueOrderReviewFilter("send_attention");
+    const tasks = orderSendAttentionTasks(order);
+    const task = tasks.find((item) => sendTaskNeedsManualAttention(item)) || tasks[0] || null;
+    setSendWorkbenchView(task && sendTaskNeedsManualAttention(task) ? "blocked" : "queue");
+    const conversationId = task?.conversationId || order.conversationId;
+    if (conversationId) await focusConversation(conversationId, "send-center");
+    else scrollToWorkspaceSection("send-center");
+    setMessage(
+      task
+        ? `已定位到发送中心，请核对发送任务 ${task.id} 的账号、会话、最近消息和失败原因。`
+        : `已切到发送中心，但未找到订单 ${order.id} 对应的发送任务；请按客户会话和订单备注人工核对。`,
+    );
+  }
+
   function clearQuoteCenterFocus() {
     setQuoteCenterSearch("");
     setQuoteStatusFilter("all");
@@ -4251,6 +4457,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function handleLowValueAutomationIssue(issue: LowValueAutomationIssue) {
+    setActiveAutomationIssueKey(issue.key);
     const order =
       (issue.orderDraftId && orderDrafts.find((row) => row.id === issue.orderDraftId)) ||
       (issue.quoteDraftId && orderDrafts.find((row) => row.quoteDraftId === issue.quoteDraftId)) ||
@@ -4260,6 +4467,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       (issue.quoteDraftId && quotes.find((row) => row.id === issue.quoteDraftId)) ||
       (issue.designJobId && quotes.find((row) => row.designJobId === issue.designJobId)) ||
       null;
+
+    if (issue.reason === "manual_send_attention_required" && order) {
+      void focusOrderManualSendAttention(order);
+      return;
+    }
 
     if (order && lowValueIssuePrefersQuoteCenter(issue)) {
       focusOrderDraft(order);
@@ -4425,13 +4637,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function handleAutomationIssueMetric(kind: "errors" | "warnings" | "missing" | "sendTargets" | "manualLocks") {
-    if (kind === "manualLocks") {
-      scrollToWorkspaceSection("account-center");
-      setMessage("已切到多账号控制，可查看人工接管会话。");
+    const issue = findLowValueAutomationIssueForMetric(lowValueAutomationIssues, kind);
+    if (issue) {
+      handleLowValueAutomationIssue(issue);
+      setMessage(`已定位「${lowValueIssueMetricLabel(kind)}」卡点：${issue.stage} · ${issue.target}。`);
       return;
     }
-    if (lowValueAutomationIssueSummary?.firstIssue) {
-      handleLowValueAutomationIssue(lowValueAutomationIssueSummary.firstIssue);
+    if (kind === "manualLocks") {
+      scrollToWorkspaceSection("account-center");
+      setMessage("当前没有具体人工接管卡点，已切到多账号控制查看人工接管会话。");
       return;
     }
     scrollToWorkspaceSection(kind === "sendTargets" ? "send-center" : "notice-center");
@@ -4655,13 +4869,35 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
   }
 
-  async function runQuoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk = "") {
+  function guardedQuoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk = "") {
     const step = quoteDealNextStep(quote, order, sendRisk);
+    const orderDraftBlocker = quoteOrderDraftBlockReason(quote);
+    if (orderDraftBlocker && (step.action === "confirm_quote_create_order" || step.action === "create_order")) {
+      return { tone: "amber", label: "先补资料", detail: orderDraftBlocker, action: "none" };
+    }
+    return step;
+  }
+
+  function guardedOrderDealNextStep(order: OrderDraft) {
+    return orderDealNextStep(order, {
+      confirmationBlocker: orderConfirmationBlockReason(order),
+      productionBlocker: orderProductionBlockReason(order),
+      deliveryFollowupBlocker: orderFollowupBlockReason(order, "delivery"),
+    });
+  }
+
+  async function runQuoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk = "") {
+    const step = guardedQuoteDealNextStep(quote, order, sendRisk);
     if (step.action === "queue_quote") {
       await queueQuoteDraft(quote);
       return;
     }
     if (step.action === "confirm_quote_create_order") {
+      const blocker = quoteOrderDraftBlockReason(quote);
+      if (blocker) {
+        setMessage(blocker);
+        return;
+      }
       if (!confirmQuoteAcceptanceOrderCreation(quote)) {
         setMessage("已取消客户确认成单操作。");
         return;
@@ -4682,7 +4918,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function runOrderDealNextStep(order: OrderDraft) {
-    const step = orderDealNextStep(order);
+    const step = guardedOrderDealNextStep(order);
     if (step.action === "queue_order_confirmation") {
       await queueOrderDraftConfirmation(order);
       return;
@@ -4874,7 +5110,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
       `数量：${Number(order.quantity || 0) || "-"} 份`,
       `订单状态：${orderStatusLabel(order.status)}`,
-      `付款状态：${paymentStatusLabel(order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid")}`,
+      `付款状态：${paymentStatusLabel(orderPaymentStatusValue(order))}`,
       selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：未识别",
       order.owner ? `跟进人：${order.owner}` : "跟进人：未指定",
       "",
@@ -4942,6 +5178,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       request_followup: "高价值订单需要客服继续跟进收款、交期和客户需求。",
       reject_order: "高价值订单暂不适合继续自动发送，请重新核对订单信息。",
     };
+    if (decision === "approve_confirmation" || decision === "approve_followup") {
+      const blocker = highValueOrderApprovalBlockReason(order);
+      if (blocker) {
+        setMessage(blocker);
+        return;
+      }
+    }
     if (decision === "approve_confirmation") {
       if (hasActiveOrderConfirmationTask(order)) {
         setMessage(`订单确认已在发送队列中：${sendStatusLabel(order.confirmationSendTask?.status || "")}`);
@@ -5099,7 +5342,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ];
     const fileName = `sku-image-problems-${formatDateForFile(new Date())}.csv`;
     downloadTextFile(fileName, "text/csv;charset=utf-8", `\uFEFF${toCsv(rows)}`);
-    setMessage(`已导出 ${exportableSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品；${visibleSkuImageProblemActionSummary}；筛选：${visibleSkuImageProblemFilterSummary}；审核：${skuImageProblemAuditRefreshContext}。`);
+    setMessage(`已导出 ${exportableSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品；${visibleSkuImageProblemActionSummary}；分组涉及商品：${visibleSkuImageProblemActionProductSummary}；筛选：${visibleSkuImageProblemFilterSummary}；审核：${skuImageProblemAuditRefreshContext}。`);
   }
 
   async function copySkuImageProblemHandoff() {
@@ -5143,6 +5386,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const lines = [
       `商品图片补图交接清单：当前 ${handoffProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
       `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
+      `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
       `处理口径：优先补真实商品图；确认不再使用的失效路径，再回到商品编辑里移除并保存。`,
@@ -5194,6 +5438,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const lines = [
       `商品图片按处理方式分派：当前 ${handoffProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
       `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
+      `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
       `处理口径：补主图和补多角度图优先补真实商品图；核对失效路径时先确认文件是否还在，再决定重传或移除。`,
@@ -5204,6 +5449,50 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`已按处理方式复制 ${handoffProblems.length} 个图片问题的分派清单。`);
     } catch {
       setMessage("复制失败，请导出清单后交给运营处理。");
+    }
+  }
+
+  async function copyVisibleSkuImageProblemActionProducts(actionFilter: "upload_main" | "upload_angle", actionLabel: string) {
+    const actionProblems = visibleSkuImageProblems.filter((problem) => skuImageProblemMatchesAction(problem, actionFilter));
+    if (!actionProblems.length) {
+      setMessage(`当前筛选下没有需要${actionLabel}的商品。`);
+      return;
+    }
+    const products = new Map<string, SkuImageProblem[]>();
+    for (const problem of actionProblems) {
+      const key = problem.skuCode || problem.name || "未编号商品";
+      products.set(key, [...(products.get(key) || []), problem]);
+    }
+    const lines = [
+      `商品图片${actionLabel}商品清单：当前筛选 ${actionProblems.length} 个图片问题，涉及 ${products.size} 个商品。`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      `处理口径：逐个商品补真实商品图；补完保存商品，再刷新商品审核确认问题减少。`,
+      ...Array.from(products.entries()).map(([key, problems], index) => {
+        const firstProblem = problems[0];
+        const positions = problems
+          .map((problem) => {
+            const imageIndex =
+              problem.imageRole === "angle" && problem.imageIndex !== null && problem.imageIndex !== undefined
+                ? `第 ${Number(problem.imageIndex) + 1} 张`
+                : "";
+            return `${skuImageRoleLabel(problem)}${imageIndex ? `（${imageIndex}）` : ""}`;
+          })
+          .join("、");
+        return [
+          `${index + 1}. ${firstProblem?.skuCode || key}｜${firstProblem?.name || key}`,
+          `问题数：${problems.length} 个`,
+          `图片位置：${positions}`,
+          `修复入口：${firstProblem ? skuImageProblemRepairEntry(firstProblem) : key}`,
+          `建议：${firstProblem ? skuImageProblemAction(firstProblem) : actionLabel}`,
+        ].join("\n");
+      }),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n\n"));
+      setMessage(`已复制 ${products.size} 个商品的${actionLabel}清单。`);
+    } catch {
+      setMessage(`复制${actionLabel}商品清单失败，请导出清单后处理。`);
     }
   }
 
@@ -5262,6 +5551,140 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
   }
 
+  async function copyVisibleSkuImageProblemPaths() {
+    const problemsWithPath = visibleSkuImageProblems.filter((problem) => Boolean(problem.path));
+    if (!problemsWithPath.length) {
+      setMessage("当前筛选下没有可复制的图片路径。");
+      return;
+    }
+    const lines = [
+      `商品图片路径核对清单：当前筛选 ${problemsWithPath.length} 个有路径图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      ...problemsWithPath.map((problem, index) =>
+        [
+          `${index + 1}. ${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}`,
+          `位置：${skuImageRoleLabel(problem)}`,
+          `处理方式：${skuImageProblemActionGroupLabel(problem)}`,
+          `修复入口：${skuImageProblemRepairEntry(problem)}`,
+          `路径：${problem.path}`,
+        ].join("\n"),
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n\n"));
+      setMessage(`已复制 ${problemsWithPath.length} 条图片路径，供核对失效文件或批量补图。`);
+    } catch {
+      setMessage("复制路径清单失败，请导出清单后处理。");
+    }
+  }
+
+  async function copyVisibleSkuImageProblemMissingPaths() {
+    const problemsMissingPath = visibleSkuImageProblems.filter((problem) => !problem.path);
+    if (!problemsMissingPath.length) {
+      setMessage("当前筛选下没有未填路径的图片问题。");
+      return;
+    }
+    const lines = [
+      `商品图片补路径清单：当前筛选 ${problemsMissingPath.length} 个未填路径图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      `处理口径：先补真实商品图路径；主图优先，其次补多角度图。`,
+      ...problemsMissingPath.map((problem, index) =>
+        [
+          `${index + 1}. ${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}`,
+          `位置：${skuImageRoleLabel(problem)}`,
+          `字段：${skuFieldLabel(problem.field)}`,
+          `处理方式：${skuImageProblemActionGroupLabel(problem)}`,
+          `修复入口：${skuImageProblemRepairEntry(problem)}`,
+          `建议：${skuImageProblemAction(problem)}`,
+        ].join("\n"),
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n\n"));
+      setMessage(`已复制 ${problemsMissingPath.length} 条未填路径补图任务。`);
+    } catch {
+      setMessage("复制补路径清单失败，请导出清单后处理。");
+    }
+  }
+
+  async function copyVisibleSkuImageProblemInvalidPaths() {
+    const invalidPathProblems = visibleSkuImageProblems.filter(
+      (problem) => Boolean(problem.path) && skuImageProblemMatchesAction(problem, "review_invalid"),
+    );
+    if (!invalidPathProblems.length) {
+      setMessage("当前筛选下没有需要核对的失效图片路径。");
+      return;
+    }
+    const lines = [
+      `商品图片失效路径核对清单：当前筛选 ${invalidPathProblems.length} 个失效路径图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      "处理口径：先确认文件是否存在；文件存在但不可读就重传真实图；文件不存在就移除旧路径并补新图。",
+      ...invalidPathProblems.map((problem, index) =>
+        [
+          `${index + 1}. ${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}`,
+          `位置：${skuImageRoleLabel(problem)}`,
+          `字段：${skuFieldLabel(problem.field)}`,
+          `修复入口：${skuImageProblemRepairEntry(problem)}`,
+          `失效路径：${problem.path}`,
+          `建议：${skuImageProblemAction(problem)}`,
+        ].join("\n"),
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n\n"));
+      setMessage(`已复制 ${invalidPathProblems.length} 条失效图片路径核对任务。`);
+    } catch {
+      setMessage("复制失效路径清单失败，请导出清单后处理。");
+    }
+  }
+
+  async function copySkuImageProblemReviewChecklist() {
+    if (!visibleSkuImageProblems.length) {
+      setMessage("当前没有图片问题可生成复核清单。");
+      return;
+    }
+    const lines = [
+      `商品图片修复复核清单：当前筛选 ${visibleSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
+      `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
+      `路径状态：有路径 ${visibleSkuImageProblemPathCount} 个，失效路径 ${visibleSkuImageProblemInvalidPathCount} 个，未填路径 ${visibleSkuImageProblemMissingPathCount} 个。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      "复核步骤：",
+      "1. 在商品编辑里补真实商品图或移除确认不用的失效路径。",
+      "2. 点击“保存商品”，确认保存提示里没有阻塞项。",
+      "3. 点击“刷新商品审核”，确认图片问题数量减少或归零。",
+      "4. 如果仍有图片问题，按当前清单继续处理剩余商品。",
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setMessage(`已复制 ${visibleSkuImageProblems.length} 个图片问题的修复复核清单。`);
+    } catch {
+      setMessage("复制复核清单失败，请导出清单后处理。");
+    }
+  }
+
+  async function copySkuImageProblemRepairEntry(problem: SkuImageProblem) {
+    const lines = [
+      `商品：${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}`,
+      `位置：${skuImageRoleLabel(problem)}`,
+      `字段：${skuFieldLabel(problem.field)}`,
+      `处理方式：${skuImageProblemActionGroupLabel(problem)}`,
+      `修复入口：${skuImageProblemRepairEntry(problem)}`,
+      `路径状态：${skuImagePathStateLabel(problem.path)}`,
+      `原始路径：${problem.path || "未填写"}`,
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setMessage(`已复制 ${problem.skuCode || problem.name || "当前商品"} 的图片修复入口。`);
+    } catch {
+      setMessage("复制修复入口失败，请使用复制此商品或导出清单。");
+    }
+  }
+
   function resetSkuImageProblemView() {
     setSkuImageProblemSeverityFilter("all");
     setSkuImageProblemPathFilter("all");
@@ -5276,6 +5699,26 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function prioritizeSkuImageProblemProducts() {
     setSkuImageProblemSort("product_issue_count");
     setMessage("已按同商品图片问题数排序：优先处理同一商品多处缺图或失效路径。");
+  }
+
+  function prioritizeSkuImageMissingPaths() {
+    setSkuImageProblemPathFilter("missing_path");
+    setSkuImageProblemActionFilter("all");
+    setSkuImageProblemProductScope("all");
+    setSkuImageProblemSearch("");
+    setSkuImageProblemSort("path_state");
+    setSkuImageProblemVisibleLimit(SKU_IMAGE_PROBLEM_PAGE_SIZE);
+    setMessage("已聚焦未填路径图片问题：先补真实商品图路径，再刷新商品审核。");
+  }
+
+  function prioritizeSkuImageInvalidPaths() {
+    setSkuImageProblemPathFilter("has_path");
+    setSkuImageProblemActionFilter("review_invalid");
+    setSkuImageProblemProductScope("all");
+    setSkuImageProblemSearch("");
+    setSkuImageProblemSort("path_state");
+    setSkuImageProblemVisibleLimit(SKU_IMAGE_PROBLEM_PAGE_SIZE);
+    setMessage("已聚焦失效路径图片问题：先核对文件是否还在，再决定重传真实图或移除路径。");
   }
 
   function toggleMultiSkuImageProblemProducts() {
@@ -5948,6 +6391,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const rail = activeRailButton?.closest<HTMLElement>(".rail");
     if (!activeRailButton || !rail) return;
     const centerActiveRailButton = () => {
+      if (window.matchMedia("(max-width: 760px)").matches) {
+        rail.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+
       const isHorizontalRail = rail.scrollWidth > rail.clientWidth && rail.clientWidth >= rail.clientHeight;
 
       if (isHorizontalRail) {
@@ -6089,28 +6537,41 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     : null;
   const scopedTrainingOverview = trainingSampleImportFilterId ? null : trainingOverview;
   const trainingSampleQualityOptions = buildTrainingSampleQualityOptions({ overview: scopedTrainingOverview, samples: trainingSamples });
+  const missingRequiredTrainingSamples = trainingSamples.filter((sample) => trainingSampleReadyBlockingReasons(sample).length);
   const filteredTrainingSampleTotal = trainingSampleQualityTotal(
     scopedTrainingOverview,
     trainingSampleQualityFilter,
-    trainingSamples.length,
+    trainingSampleQualityFilter === "missing_required" ? missingRequiredTrainingSamples.length : trainingSamples.length,
   );
-  const visibleTrainingSamples = trainingSamples;
+  const visibleTrainingSamples = trainingSampleQualityFilter === "missing_required" ? missingRequiredTrainingSamples : trainingSamples;
   const visibleTrainingSampleIds = useMemo(() => visibleTrainingSamples.map((sample) => sample.id), [visibleTrainingSamples]);
   const selectedTrainingSampleIdSet = useMemo(() => new Set(selectedTrainingSampleIds), [selectedTrainingSampleIds]);
   const selectedVisibleTrainingSamples = useMemo(
     () => visibleTrainingSamples.filter((sample) => selectedTrainingSampleIdSet.has(sample.id)),
     [visibleTrainingSamples, selectedTrainingSampleIdSet],
   );
+  const selectedTrainingSamplesMissingRequired = selectedVisibleTrainingSamples.filter(
+    (sample) => trainingSampleReadyBlockingReasons(sample).length,
+  );
+  const selectedMissingRequiredTrainingSampleCount = selectedTrainingSamplesMissingRequired.length;
+  const selectedMissingRequiredTrainingSample = selectedTrainingSamplesMissingRequired[0] || null;
   const selectedNeedsAttentionTrainingSampleCount = selectedVisibleTrainingSamples.filter(isTrainingSampleNeedingManualReview).length;
   const selectedSceneUncertainTrainingSampleCount = selectedVisibleTrainingSamples.filter(isSceneUncertainTrainingSample).length;
   const selectedRiskTrainingSample =
+    selectedMissingRequiredTrainingSample ||
     selectedVisibleTrainingSamples.find(isTrainingSampleNeedingManualReview) ||
     selectedVisibleTrainingSamples.find(isSceneUncertainTrainingSample) ||
     null;
+  const visibleTrainingSamplesMissingRequired = visibleTrainingSamples.filter((sample) => trainingSampleReadyBlockingReasons(sample).length);
+  const visibleMissingRequiredTrainingSampleCount = visibleTrainingSamplesMissingRequired.length;
+  const visibleMissingRequiredTrainingSample = visibleTrainingSamplesMissingRequired[0] || null;
   const visibleNeedsAttentionTrainingSampleCount = visibleTrainingSamples.filter(isTrainingSampleNeedingManualReview).length;
   const visibleSceneUncertainTrainingSampleCount = visibleTrainingSamples.filter(isSceneUncertainTrainingSample).length;
   const visibleRiskTrainingSample =
-    visibleTrainingSamples.find(isTrainingSampleNeedingManualReview) || visibleTrainingSamples.find(isSceneUncertainTrainingSample) || null;
+    visibleMissingRequiredTrainingSample ||
+    visibleTrainingSamples.find(isTrainingSampleNeedingManualReview) ||
+    visibleTrainingSamples.find(isSceneUncertainTrainingSample) ||
+    null;
   const hiddenTrainingSampleCount = Math.max(0, filteredTrainingSampleTotal - visibleTrainingSamples.length);
   const latestCorrectionSamples = latestTrainingCorrectionSamples.length
     ? latestTrainingCorrectionSamples
@@ -6235,15 +6696,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     return ordered;
   };
   const queuedSendTasks = prioritizeSendTasks(
-    openSendTasks.filter((task) => task.status !== "blocked" && !isSendTaskConversationLocked(task)),
+    openSendTasks.filter((task) => !sendTaskNeedsManualAttention(task) && !isSendTaskConversationLocked(task)),
   );
   const blockedSendTasksForView = prioritizeSendTasks(
-    openSendTasks.filter(
+    sendTasks.filter(
       (task) =>
-        task.status === "blocked" ||
+        task.status !== "sent" &&
+        (sendTaskNeedsManualAttention(task) ||
         isSendTaskConversationLocked(task) ||
         Boolean(task.guardSnapshot?.blockedByManualLock) ||
-        task.guardSnapshot?.blockedBy === "manual_lock",
+          task.guardSnapshot?.blockedBy === "manual_lock"),
     ),
   );
   const diagnosticSendTasks = prioritizeSendTasks(openSendTasks, 3);
@@ -6257,9 +6719,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ? visibleSendTasks.filter((task) => task.conversationId === activeConversationId).length
     : 0;
   const blockedSendCount = sendTasks.filter((task) => task.status === "blocked").length;
+  const manualAttentionSendTaskCount = sendTasks.filter((task) => task.status !== "sent" && sendTaskNeedsManualAttention(task)).length;
   const sendWorkbenchSummary =
     sendWorkbenchView === "blocked"
-      ? `${blockedSendTasksForView.length} 个拦截任务优先处理，${blockedSendCount} 个总拦截`
+      ? `${blockedSendTasksForView.length} 个异常任务优先处理，${manualAttentionSendTaskCount} 个需人工处理`
       : sendWorkbenchView === "diagnostics"
         ? `桥接 ${operatorStatusName(bridgeStatus?.worker?.status)}，${sendAttempts.length} 次发送尝试`
         : `${queuedSendTasks.length} 个可处理任务，${openSendTasks.length} 个待发送`;
@@ -6286,6 +6749,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const activeJobLocalImageCount = activeJobImages.filter((image) => Boolean(image.localPath)).length;
   const activeDesignImageSendRisk = activeJob ? designImageSendBlockReason(activeJob) : "";
   const activeDesignEscalationNotice = activeJob ? designJobEscalationNotice(activeJob) : null;
+  const activeDesignOperatorPlan =
+    activeJob && activeDesignEscalationNotice ? designJobOperatorRecoveryPlan(activeJob) : [];
   const activeQuoteCenterFocusText = quoteCenterSearch.trim();
   const quoteCenterSearchTerm = quoteCenterSearch.trim().toLowerCase();
   const filteredQuotes = quotes.filter((quote) => {
@@ -6293,21 +6758,38 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (quotePaymentFilter !== "all" && quote.paymentStatus !== quotePaymentFilter) return false;
     const orderDraft = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     if (!matchesDealProgressFilter(dealProgressSteps(quote, orderDraft), dealProgressFilter)) return false;
-    const step = quoteDealNextStep(quote, orderDraft, quoteSendBlockReason(quote));
+    const step = guardedQuoteDealNextStep(quote, orderDraft, quoteSendBlockReason(quote));
     if (!matchesDealNextStepFilter(step, dealNextStepFilter, quote.status)) return false;
     return matchesQuoteSearch(quote, quoteCenterSearchTerm);
   });
   const filteredOrderDrafts = orderDrafts.filter((order) => {
     if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) return false;
-    if (orderPaymentFilter !== "all" && order.paymentStatus !== orderPaymentFilter) return false;
+    if (orderPaymentFilter !== "all" && orderPaymentStatusValue(order) !== orderPaymentFilter) return false;
     const linkedQuote = order.quoteDraft || quotes.find((quote) => quote.id === order.quoteDraftId) || null;
     if (linkedQuote && !matchesDealProgressFilter(dealProgressSteps(linkedQuote, order), dealProgressFilter)) return false;
-    const step = orderDealNextStep(order);
+    const step = guardedOrderDealNextStep(order);
     if (!matchesDealNextStepFilter(step, dealNextStepFilter, order.status)) return false;
     return matchesOrderSearch(order, quoteCenterSearchTerm);
   });
-  const quoteNextStepCounts = calculateDealNextStepCounts(quotes, orderDrafts);
-  const orderNextStepCounts = calculateOrderNextStepCounts(orderDrafts);
+  const quoteNextStepCounts = quotes.reduce(
+    (counts, quote) => {
+      const orderDraft = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
+      const step = guardedQuoteDealNextStep(quote, orderDraft, quoteSendBlockReason(quote));
+      if (step.action !== "none") counts.actionable += 1;
+      else if (matchesDealNextStepFilter(step, "blocked", quote.status)) counts.blocked += 1;
+      return counts;
+    },
+    { actionable: 0, blocked: 0 },
+  );
+  const orderNextStepCounts = orderDrafts.reduce(
+    (counts, order) => {
+      const step = guardedOrderDealNextStep(order);
+      if (step.action !== "none") counts.actionable += 1;
+      else if (matchesDealNextStepFilter(step, "blocked", order.status)) counts.blocked += 1;
+      return counts;
+    },
+    { actionable: 0, blocked: 0 },
+  );
   const dealProgressStageCounts = calculateDealProgressStageCounts(quotes, orderDrafts);
   const dealProgressSummaryItems = dealProgressFilterOptions.map((option) => ({
     filter: option.value,
@@ -6359,7 +6841,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ...quotes.map((quote) => {
       const orderDraft = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
       const sendRisk = quoteSendBlockReason(quote);
-      const step = quoteDealNextStep(quote, orderDraft, sendRisk);
+      const step = guardedQuoteDealNextStep(quote, orderDraft, sendRisk);
       return {
         id: `quote-${quote.id}`,
         kind: "报价",
@@ -6377,7 +6859,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       };
     }),
     ...orderDrafts.map((order) => {
-      const step = orderDealNextStep(order);
+      const step = guardedOrderDealNextStep(order);
       return {
         id: `order-${order.id}`,
         kind: "订单",
@@ -6410,12 +6892,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const dealFlowSendableQuotes = quotes.filter((quote) =>
     !isHighValueQuote(quote) && ["draft", "auto_sent"].includes(quote.status) && !quoteSendBlockReason(quote),
   );
-  const dealFlowAcceptedQuotesWithoutOrder = acceptedQuotesWithoutOrder.filter((quote) => !isHighValueQuote(quote));
+  const dealFlowAcceptedQuotesWithoutOrder = acceptedQuotesWithoutOrder.filter((quote) =>
+    !isHighValueQuote(quote) && !quoteOrderDraftBlockReason(quote),
+  );
   const dealFlowConfirmationCandidates = orderDrafts.filter((order) =>
-    !isHighValueOrder(order) &&
-    order.status === "confirmed" &&
-    orderPaymentReady(order) &&
-    !hasActiveOrderConfirmationTask(order),
+    guardedOrderDealNextStep(order).action === "queue_order_confirmation",
   );
   const dealFlowQueuedSendCount = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status)).length;
   const dealFlowPreviewItems = [
@@ -6477,7 +6958,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     {
       key: "payment",
       label: "待收款",
-      value: orderDrafts.filter((order) => ["draft", "confirmed"].includes(order.status) && order.paymentStatus === "unpaid").length,
+      value: orderDrafts.filter((order) => ["draft", "confirmed"].includes(order.status) && orderPaymentStatusValue(order) === "unpaid").length,
       note: "订单已建，未记录定金或全款",
       tone: "red",
       onClick: () => {
@@ -6541,9 +7022,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     activeQuote && activeQuotePreview?.quote.id === activeQuote.id ? activeQuotePreview.warnings : [];
   const activeQuoteSendRisk = activeQuote ? quoteSendBlockReason(activeQuote, activeQuoteWarnings) : "";
   const activeDealNextStep = activeOrderDraft
-    ? orderDealNextStep(activeOrderDraft)
+    ? guardedOrderDealNextStep(activeOrderDraft)
     : activeQuote
-      ? quoteDealNextStep(activeQuote, activeOrderDraft, activeQuoteSendRisk)
+      ? guardedQuoteDealNextStep(activeQuote, activeOrderDraft, activeQuoteSendRisk)
       : activeSelectedImage
         ? { tone: "blue", label: "下一步：生成报价", detail: "客户已经选图，可以生成报价草稿。", action: "create_quote" }
         : { tone: "amber", label: "先让客户选图", detail: "还没有明确选中效果图，不能生成报价。", action: "none" };
@@ -6556,6 +7037,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => buildLowValueAutomationIssueSummary(lowValueAutomationIssues),
     [lowValueAutomationIssues],
   );
+  useEffect(() => {
+    if (!activeAutomationIssueKey) return;
+    if (lowValueAutomationIssues.some((issue) => issue.key === activeAutomationIssueKey)) return;
+    setActiveAutomationIssueKey("");
+  }, [activeAutomationIssueKey, lowValueAutomationIssues]);
   const lowValueAutomationSummary = useMemo(
     () => buildLowValueAutomationSummary(automationStatus?.lastRun),
     [automationStatus?.lastRun],
@@ -6744,6 +7230,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => buildSkuImageProblemActionSummary(visibleSkuImageProblems),
     [visibleSkuImageProblems],
   );
+  const visibleSkuImageProblemActionProductSummary = useMemo(
+    () => buildSkuImageProblemActionProductSummary(visibleSkuImageProblems),
+    [visibleSkuImageProblems],
+  );
+  const visibleSkuImageProblemUploadMainCount = useMemo(
+    () => visibleSkuImageProblems.filter((problem) => skuImageProblemMatchesAction(problem, "upload_main")).length,
+    [visibleSkuImageProblems],
+  );
+  const visibleSkuImageProblemUploadAngleCount = useMemo(
+    () => visibleSkuImageProblems.filter((problem) => skuImageProblemMatchesAction(problem, "upload_angle")).length,
+    [visibleSkuImageProblems],
+  );
   const visibleSkuImageProblemFilterSummary = useMemo(() => {
     const severityLabel = skuImageProblemSeverityOptions.find((option) => option.value === skuImageProblemSeverityFilter)?.label || "全部图片";
     const pathLabel = skuImageProblemPathOptions.find((option) => option.value === skuImageProblemPathFilter)?.label || "全部路径";
@@ -6775,6 +7273,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     }
     return keys.size;
   }, [visibleSkuImageProblems]);
+  const visibleSkuImageProblemPathCount = useMemo(
+    () => visibleSkuImageProblems.filter((problem) => Boolean(problem.path)).length,
+    [visibleSkuImageProblems],
+  );
+  const visibleSkuImageProblemInvalidPathCount = useMemo(
+    () =>
+      visibleSkuImageProblems.filter(
+        (problem) => Boolean(problem.path) && skuImageProblemMatchesAction(problem, "review_invalid"),
+      ).length,
+    [visibleSkuImageProblems],
+  );
+  const visibleSkuImageProblemMissingPathCount = Math.max(0, visibleSkuImageProblems.length - visibleSkuImageProblemPathCount);
   const skuImageProblemViewCustomized =
     skuImageProblemSeverityFilter !== "all" ||
     skuImageProblemPathFilter !== "all" ||
@@ -7304,7 +7814,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           id: `order-${order.id}`,
           kind: "订单",
           title: order.customer?.name || order.quoteDraft?.customer?.name || "未知客户",
-          subtitle: `${order.totalPrice} 元 · ${order.quantity} 份 · ${paymentStatusLabel(order.paymentStatus)}`,
+          subtitle: `${order.totalPrice} 元 · ${order.quantity} 份 · ${paymentStatusLabel(orderPaymentStatusValue(order))}`,
           accountLabel: highValueQueueAccountLabel(accountIdentity),
           customerLabel: highValueQueueCustomerLabel(customerIdentity),
           conversationLabel: highValueQueueConversationLabel(order.designJob?.conversation?.title || order.conversationId),
@@ -7320,6 +7830,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           reviewFilterLabel: highValueOrderReviewFilterOptionLabel(reviewFilter),
           nextFollowLabel,
           focus: () => {
+            if (orderNeedsManualSendAttention(order)) {
+              void focusOrderManualSendAttention(order);
+              return;
+            }
             focusHighValueOrderReview(order);
           },
           run: () => {
@@ -7336,6 +7850,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             }
             if (action.type === "queue_delivery") {
               void reviewOrderDraft(order, "approve_followup", "delivery");
+              return;
+            }
+            if (orderNeedsManualSendAttention(order)) {
+              void focusOrderManualSendAttention(order);
               return;
             }
             focusHighValueOrderReview(order);
@@ -9004,14 +9522,37 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <strong>{activeDesignEscalationNotice.label}</strong>
                       <span>{activeDesignEscalationNotice.detail}</span>
                       <small>下一步：{activeDesignEscalationNotice.nextAction}</small>
+                      {activeDesignOperatorPlan.length ? (
+                        <ol className="design-escalation-plan" aria-label="设计异常处理路径">
+                          {activeDesignOperatorPlan.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ol>
+                      ) : null}
                     </div>
                     <div className="design-escalation-actions">
+                      {activeJob.status === "timeout" ? (
+                        <button
+                          type="button"
+                          className="ghost compact-button"
+                          onClick={pollActiveJob}
+                          disabled={!activeJob.externalJobId || Boolean(busy)}
+                          title={!activeJob.externalJobId ? "任务缺少设计平台任务号，不能轮询" : "先轮询一次，确认是否只是回调丢失"}
+                        >
+                          <RefreshCw size={14} aria-hidden="true" />轮询结果
+                        </button>
+                      ) : null}
                       <button type="button" className="ghost compact-button" onClick={preflightActiveJob} disabled={Boolean(busy)}>
                         <ShieldCheck size={14} aria-hidden="true" />预检
                       </button>
                       {canRetryDesignJobFromUi(activeJob) ? (
                         <button type="button" className="primary compact-button" onClick={retryActiveJob} disabled={Boolean(busy)}>
                           <RefreshCw size={14} aria-hidden="true" />重新提交
+                        </button>
+                      ) : null}
+                      {activeJob.status !== "manual_review" ? (
+                        <button type="button" className="ghost compact-button danger" onClick={manualReviewActiveJob} disabled={Boolean(busy)}>
+                          <ShieldAlert size={14} aria-hidden="true" />转人工接管
                         </button>
                       ) : null}
                       <button
@@ -9258,12 +9799,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <button type="button"
                             className="ghost"
                             onClick={() => queueOrderDraftConfirmation(activeOrderDraft)}
-                            disabled={
-                              Boolean(busy) ||
-                              activeOrderDraft.status === "cancelled" ||
-                              !orderPaymentReady(activeOrderDraft) ||
-                              hasActiveOrderConfirmationTask(activeOrderDraft)
-                            }
+                              disabled={
+                                Boolean(busy) ||
+                                Boolean(orderConfirmationBlockReason(activeOrderDraft))
+                              }
                             title={orderConfirmationButtonTitle(activeOrderDraft)}
                           >
                             <Send size={16} aria-hidden="true" />{orderConfirmationButtonLabel(activeOrderDraft)}
@@ -9278,18 +9817,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
-                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "deposit_paid")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "deposit_paid")} disabled={Boolean(busy) || Boolean(orderPaymentProofBlockReason(activeOrderDraft))} title={orderPaymentProofBlockReason(activeOrderDraft) || "核验定金并确认订单"}>
                             <CreditCard size={16} aria-hidden="true" />核验定金并确认
                           </button>
-                            <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "paid")} disabled={Boolean(busy)}>
+                            <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(activeOrderDraft, "paid")} disabled={Boolean(busy) || Boolean(orderPaymentProofBlockReason(activeOrderDraft))} title={orderPaymentProofBlockReason(activeOrderDraft) || "核验全款并确认订单"}>
                               <Check size={16} aria-hidden="true" />核验全款并确认
                             </button>
-                            <button type="button" className="ghost" onClick={() => confirmAndStartOrderProduction(activeOrderDraft)} disabled={Boolean(busy)}>
+                            <button type="button" className="ghost" onClick={() => confirmAndStartOrderProduction(activeOrderDraft)} disabled={Boolean(busy) || Boolean(orderProductionBlockReason(activeOrderDraft))} title={orderProductionBlockReason(activeOrderDraft) || "核验付款和选图后标记生产中"}>
                               <PackageSearch size={16} aria-hidden="true" />生产中
                             </button>
                             {renderOrderFollowupControls(activeOrderDraft, "production")}
                             {renderOrderFollowupControls(activeOrderDraft, "delivery")}
-                            <button type="button" className="ghost" onClick={() => confirmAndUpdateOrderDraftStatus(activeOrderDraft, "fulfilled")} disabled={Boolean(busy)}>
+                            <button type="button" className="ghost" onClick={() => confirmAndUpdateOrderDraftStatus(activeOrderDraft, "fulfilled")} disabled={Boolean(busy) || Boolean(orderFulfillmentBlockReason(activeOrderDraft))} title={orderFulfillmentBlockReason(activeOrderDraft) || "生产完成后标记订单完成"}>
                               <ShieldCheck size={16} aria-hidden="true" />完成
                             </button>
                             <button type="button" className="ghost danger" onClick={() => confirmAndUpdateOrderDraftStatus(activeOrderDraft, "cancelled")} disabled={Boolean(busy)}>
@@ -9312,7 +9851,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         >
                           <Send size={16} aria-hidden="true" />发送报价
                         </button>
-                        <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(activeQuote, "deposit_paid")} disabled={Boolean(busy)}>
+                        <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(activeQuote, "deposit_paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(activeQuote))} title={quotePaymentProofBlockReason(activeQuote) || "核验定金并确认订单"}>
                           <CreditCard size={16} aria-hidden="true" />核验定金并确认
                         </button>
                         <button
@@ -9330,10 +9869,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         >
                           <ImageIcon size={16} aria-hidden="true" />修订选图
                         </button>
-                        <button type="button" className="ghost" onClick={() => createOrderDraft(activeQuote)} disabled={Boolean(busy)} title="按当前报价生成或更新订单草稿">
+                        <button type="button" className="ghost" onClick={() => createOrderDraft(activeQuote)} disabled={Boolean(busy) || Boolean(quoteOrderDraftBlockReason(activeQuote))} title={quoteOrderDraftBlockReason(activeQuote) || "按当前报价生成或更新订单草稿"}>
                           <ClipboardList size={16} aria-hidden="true" />{activeOrderDraft ? "更新订单" : "生成订单"}
                         </button>
-                        <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(activeQuote, "paid")} disabled={Boolean(busy)}>
+                        <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(activeQuote, "paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(activeQuote))} title={quotePaymentProofBlockReason(activeQuote) || "核验全款并确认订单"}>
                           <Check size={16} aria-hidden="true" />核验全款并确认
                         </button>
                         <button type="button" className="ghost danger" onClick={() => confirmQuoteManualFollowup(activeQuote)} disabled={Boolean(busy)}>
@@ -9344,9 +9883,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   ) : (
                     <div className="active-quote-empty">
                       <span>{activeSelectedImage ? "已选图，可以生成报价草稿。" : "先识别客户选图，再生成报价。"}</span>
-                      <button type="button" className="ghost" onClick={quoteActiveJob} disabled={!activeSelectedImage || Boolean(busy)}>
-                        <ClipboardList size={16} aria-hidden="true" />生成报价
-                      </button>
+                        <button type="button" className="ghost" onClick={quoteActiveJob} disabled={Boolean(busy) || Boolean(designJobQuoteBlockReason(activeJob))} title={designJobQuoteBlockReason(activeJob) || "按当前选图生成报价草稿"}>
+                          <ClipboardList size={16} aria-hidden="true" />生成报价
+                        </button>
                     </div>
                   )}
                 </div>
@@ -9366,7 +9905,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   >
                     <Check size={16} aria-hidden="true" />快速确认
                   </button>
-                  <button type="button" className="ghost" onClick={quoteActiveJob} disabled={Boolean(busy)}><ClipboardList size={16} aria-hidden="true" />生成报价</button>
+                  <button type="button" className="ghost" onClick={quoteActiveJob} disabled={Boolean(busy) || Boolean(designJobQuoteBlockReason(activeJob))} title={designJobQuoteBlockReason(activeJob) || "按当前选图生成报价草稿"}><ClipboardList size={16} aria-hidden="true" />生成报价</button>
                   <button type="button" className="ghost danger" onClick={cancelActiveJob} disabled={["sent", "customer_selected", "quote_created", "cancelled"].includes(activeJob.status) || Boolean(busy)}><Ban size={16} aria-hidden="true" />取消</button>
                   <button type="button" className="ghost danger" onClick={manualReviewActiveJob} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />转人工</button>
                 </div>
@@ -9783,7 +10322,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <div className="sku-image-problem-head">
                     <div className="sku-image-problem-title">
                       <strong>图片问题清单</strong>
-                      <span>共 {skuImageProblems.length} 个 · 涉及商品 {skuImageProblemCountByProduct.size} 个 · 多问题商品 {skuImageProblemMultiProductCount} 个 · 有路径 {skuImageProblemPathCounts.has_path || 0} 个 · 未填路径 {skuImageProblemPathCounts.missing_path || 0} 个 · 当前涉及商品 {visibleSkuImageProblemProductCount} 个 · 当前搜索 {visibleSkuImageProblems.length} 个 · 定位到主图或具体多角度图</span>
+                      <span>共 {skuImageProblems.length} 个 · 涉及商品 {skuImageProblemCountByProduct.size} 个 · 多问题商品 {skuImageProblemMultiProductCount} 个 · 有路径 {skuImageProblemPathCounts.has_path || 0} 个 · 未填路径 {skuImageProblemPathCounts.missing_path || 0} 个 · 当前涉及商品 {visibleSkuImageProblemProductCount} 个 · 当前搜索 {visibleSkuImageProblems.length} 个 · 当前有路径 {visibleSkuImageProblemPathCount} 个 · 当前失效路径 {visibleSkuImageProblemInvalidPathCount} 个 · 当前未填路径 {visibleSkuImageProblemMissingPathCount} 个 · 定位到主图或具体多角度图</span>
                     </div>
                     <div className="sku-image-problem-head-actions">
                       <button
@@ -9798,11 +10337,35 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <button type="button" className="ghost compact-button" onClick={prioritizeSkuImageProblemProducts} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
                         <Search size={14} aria-hidden="true" />多问题优先
                       </button>
+                      <button type="button" className="ghost compact-button" onClick={prioritizeSkuImageMissingPaths} disabled={!visibleSkuImageProblemMissingPathCount || Boolean(busy)}>
+                        <Search size={14} aria-hidden="true" />补路径优先
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={prioritizeSkuImageInvalidPaths} disabled={!skuImageProblemActionCounts.review_invalid || Boolean(busy)}>
+                        <Search size={14} aria-hidden="true" />核路径优先
+                      </button>
                       <button type="button" className="ghost compact-button" onClick={copySkuImageProblemHandoff} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
                         <ClipboardList size={14} aria-hidden="true" />复制交接
                       </button>
                       <button type="button" className="ghost compact-button" onClick={copySkuImageProblemActionHandoff} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
                         <ClipboardList size={14} aria-hidden="true" />复制分派
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={() => copyVisibleSkuImageProblemActionProducts("upload_main", "补主图")} disabled={!visibleSkuImageProblemUploadMainCount || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制补主图
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={() => copyVisibleSkuImageProblemActionProducts("upload_angle", "补多角度图")} disabled={!visibleSkuImageProblemUploadAngleCount || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制补多角度
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={copyVisibleSkuImageProblemPaths} disabled={!visibleSkuImageProblemPathCount || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制路径清单
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={copyVisibleSkuImageProblemInvalidPaths} disabled={!visibleSkuImageProblemInvalidPathCount || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制失效路径
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={copyVisibleSkuImageProblemMissingPaths} disabled={!visibleSkuImageProblemMissingPathCount || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制补路径
+                      </button>
+                      <button type="button" className="ghost compact-button" onClick={copySkuImageProblemReviewChecklist} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制复核
                       </button>
                       <button type="button" className="ghost compact-button" onClick={exportSkuImageProblems} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
                         <Download size={14} aria-hidden="true" />导出清单
@@ -9876,6 +10439,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <div className="sku-image-problem-action-summary" aria-label="当前图片问题处理方式统计">
                     <span>当前处理方式统计</span>
                     <strong>{visibleSkuImageProblemActionSummary}</strong>
+                    <small>分组涉及商品：{visibleSkuImageProblemActionProductSummary}</small>
                     <small>{visibleSkuImageProblemFilterSummary}</small>
                     <small>审核刷新口径：{skuImageProblemAuditRefreshContext}</small>
                   </div>
@@ -9914,6 +10478,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <span>{skuSeverityLabel(problem.severity)}</span>
                               <strong>{skuImageProblemAction(problem)}</strong>
                             </div>
+                            <div className="sku-image-problem-entry">
+                              <span>修复入口</span>
+                              <strong>{skuImageProblemRepairEntry(problem)}</strong>
+                            </div>
                             <small>{problem.path || "未填写图片路径"}</small>
                             <div className="sku-image-problem-actions">
                               <button type="button" className="ghost compact-button" onClick={() => focusSkuImageProblemProduct(problem)} disabled={Boolean(busy)}>
@@ -9924,6 +10492,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               </button>
                               <button type="button" className="ghost compact-button" onClick={() => copySkuImageProblemPath(problem)} disabled={!problem.path || Boolean(busy)}>
                                 <ClipboardList size={14} aria-hidden="true" />复制路径
+                              </button>
+                              <button type="button" className="ghost compact-button" onClick={() => copySkuImageProblemRepairEntry(problem)} disabled={Boolean(busy)}>
+                                <ClipboardList size={14} aria-hidden="true" />复制入口
                               </button>
                               <button type="button" className="ghost compact-button" onClick={() => editSkuImageProblem(problem)} disabled={Boolean(busy)}>
                                 <Pencil size={14} aria-hidden="true" />编辑图片
@@ -10812,7 +11383,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         type="button"
                         className={lowValueAutomationIssueSummary.errors ? "error" : ""}
                         onClick={() => handleAutomationIssueMetric("errors")}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || !lowValueAutomationIssueSummary.errors}
                       >
                         <small>错误</small>
                         <b>{lowValueAutomationIssueSummary.errors}</b>
@@ -10821,7 +11392,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         type="button"
                         className={lowValueAutomationIssueSummary.warnings ? "warning" : ""}
                         onClick={() => handleAutomationIssueMetric("warnings")}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || !lowValueAutomationIssueSummary.warnings}
                       >
                         <small>提醒</small>
                         <b>{lowValueAutomationIssueSummary.warnings}</b>
@@ -10830,7 +11401,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         type="button"
                         className={lowValueAutomationIssueSummary.missingFields ? "warning" : ""}
                         onClick={() => handleAutomationIssueMetric("missing")}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || !lowValueAutomationIssueSummary.missingFields}
                       >
                         <small>缺字段</small>
                         <b>{lowValueAutomationIssueSummary.missingFields}</b>
@@ -10839,7 +11410,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         type="button"
                         className={lowValueAutomationIssueSummary.sendTargets ? "error" : ""}
                         onClick={() => handleAutomationIssueMetric("sendTargets")}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || !lowValueAutomationIssueSummary.sendTargets}
                       >
                         <small>发送对象</small>
                         <b>{lowValueAutomationIssueSummary.sendTargets}</b>
@@ -10848,7 +11419,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         type="button"
                         className={lowValueAutomationIssueSummary.manualLocks ? "warning" : ""}
                         onClick={() => handleAutomationIssueMetric("manualLocks")}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || !lowValueAutomationIssueSummary.manualLocks}
                       >
                         <small>人工接管</small>
                         <b>{lowValueAutomationIssueSummary.manualLocks}</b>
@@ -10858,12 +11429,32 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <button
                         type="button"
                         className="primary compact-button"
-                        onClick={() => handleLowValueAutomationIssue(lowValueAutomationIssueSummary.firstIssue!)}
+                        onClick={() => {
+                          const firstIssue = lowValueAutomationIssueSummary.firstIssue;
+                          if (firstIssue) handleLowValueAutomationIssue(firstIssue);
+                        }}
                         disabled={Boolean(busy)}
                       >
                         <Search size={14} aria-hidden="true" />处理第一个卡点
                       </button>
                     ) : null}
+                    <div className="automation-issue-resolution">
+                      <strong>{lowValueAutomationIssueSummary.resolutionLabel}</strong>
+                      <span>{lowValueAutomationIssueSummary.resolutionDetail}</span>
+                      <button
+                        type="button"
+                        className="ghost compact-button"
+                        onClick={lowValueAutomationIssueSummary.resolutionAction === "scan_send_ops" ? scanSendOps : runLowValueAutomation}
+                        disabled={Boolean(busy)}
+                      >
+                        {lowValueAutomationIssueSummary.resolutionAction === "scan_send_ops" ? (
+                          <ShieldAlert size={14} aria-hidden="true" />
+                        ) : (
+                          <Check size={14} aria-hidden="true" />
+                        )}
+                        {lowValueAutomationIssueSummary.resolutionButtonLabel}
+                      </button>
+                    </div>
                   </div>
                 ) : null}
                 <div className="automation-issue-head">
@@ -10874,25 +11465,39 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <em>{lowValueAutomationIssues.length} 项</em>
                 </div>
                 <div className="automation-issue-list">
-                  {lowValueAutomationIssues.map((issue) => (
-                    <div className={`automation-issue-item ${issue.tone}`} key={issue.key}>
-                      <div>
-                        <strong>{issue.stage}</strong>
-                        <span>{issue.target}</span>
+                  {lowValueAutomationIssues.map((issue) => {
+                    const nextStep = lowValueIssueNextStep(issue);
+                    const priority = lowValueIssuePriority(issue);
+                    const issueSelected = activeAutomationIssueKey === issue.key;
+                    return (
+                      <div
+                        aria-current={issueSelected ? "true" : undefined}
+                        className={`automation-issue-item ${issue.tone} ${issueSelected ? "selected" : ""}`}
+                        key={issue.key}
+                      >
+                        <div>
+                          <strong>{issue.stage}</strong>
+                          <span>{issue.target}</span>
+                          <em className={`automation-issue-priority ${priority.tone}`}>{priority.label}</em>
+                        </div>
+                        <p>
+                          <strong>{issue.title}</strong>
+                          <span>{issue.detail || issue.reason}</span>
+                        </p>
+                        <div className="automation-issue-fields">
+                          {issue.missing.length ? issue.missing.map((field) => <span key={field}>{lowValueMissingFieldLabel(field)}</span>) : <span>无字段缺失</span>}
+                        </div>
+                        <div className="automation-issue-next">
+                          <strong>{nextStep.label}</strong>
+                          <span>{nextStep.detail}</span>
+                          <small>{issue.action}</small>
+                        </div>
+                        <button className="ghost compact-button" onClick={() => handleLowValueAutomationIssue(issue)} disabled={Boolean(busy)} type="button">
+                          <Search size={14} aria-hidden="true" />{nextStep.buttonLabel}
+                        </button>
                       </div>
-                      <p>
-                        <strong>{issue.title}</strong>
-                        <span>{issue.detail || issue.reason}</span>
-                      </p>
-                      <div className="automation-issue-fields">
-                        {issue.missing.length ? issue.missing.map((field) => <span key={field}>{lowValueMissingFieldLabel(field)}</span>) : <span>无字段缺失</span>}
-                      </div>
-                      <small>{issue.action}</small>
-                      <button className="ghost compact-button" onClick={() => handleLowValueAutomationIssue(issue)} disabled={Boolean(busy)} type="button">
-                        <Search size={14} aria-hidden="true" />定位处理
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -11406,7 +12011,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <p>{agent.scene}</p>
                   <div className="skill-row">
                     {agent.skills.slice(0, 3).map((skill) => (
-                      <span key={skill.id}>{skill.name}</span>
+                      <span className={`agent-skill-pill ${agentSkillScopeTone(skill.scope?.level)}`} key={skill.id} title={skill.scope?.reason || ""}>
+                        {skill.name}
+                        {skill.scope?.label ? <small>{skill.scope.label}</small> : null}
+                      </span>
                     ))}
                   </div>
                   <small className="agent-card-action">查看训练与 Skill</small>
@@ -11867,6 +12475,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 {visibleSkillSuggestions.length ? (
                   visibleSkillSuggestions.map((suggestion) => {
                     const safetyTone = skillSuggestionSafetyTone(suggestion);
+                    const scopeTone = skillSuggestionScopeTone(suggestion);
                     return (
                     <div
                       aria-checked={selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion))}
@@ -11894,7 +12503,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <span className={`skill-suggestion-safety ${safetyTone}`} title={suggestion.quality?.reason || ""}>
                             {skillSuggestionSafetyLabel(suggestion)}
                           </span>
+                          <span className={`skill-suggestion-scope ${scopeTone}`} title={skillSuggestionScopeDetail(suggestion)}>
+                            {skillSuggestionScopeLabel(suggestion)}
+                          </span>
                         </div>
+                      </div>
+                      <div className={`skill-suggestion-scope-note ${scopeTone}`} role="note">
+                        <strong>作用范围</strong>
+                        <span>{skillSuggestionScopeDetail(suggestion)}</span>
                       </div>
                       {!isSkillSuggestionAutoSelected(suggestion) ? (
                         <div className="skill-suggestion-review-note" role="note">
@@ -11908,6 +12524,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <span>{suggestion.scenes.slice(0, 3).join("、") || "未分类场景"}</span>
                         <span>{suggestion.sampleCount} 条样本</span>
                         <span>置信度 {suggestion.confidence}</span>
+                        <span>{skillSuggestionScopeLabel(suggestion)}</span>
                       </div>
                       {suggestion.evidence?.question || suggestion.evidence?.answer ? (
                         <div className="skill-suggestion-evidence">
@@ -11989,6 +12606,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   </span>
                   <span className="sample-selection-summary">
                     已选 {selectedVisibleTrainingSamples.length} 条
+                    {selectedMissingRequiredTrainingSampleCount ? `，${selectedMissingRequiredTrainingSampleCount} 条缺必填项` : ""}
                     {selectedNeedsAttentionTrainingSampleCount ? `，${selectedNeedsAttentionTrainingSampleCount} 条需处理` : ""}
                     {selectedSceneUncertainTrainingSampleCount ? `，其中 ${selectedSceneUncertainTrainingSampleCount} 条场景待确认` : ""}
                   </span>
@@ -12024,6 +12642,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <button
                       type="button"
                       className="ghost compact"
+                      onClick={selectTrainingSamplesMissingRequired}
+                      disabled={Boolean(busy) || !visibleMissingRequiredTrainingSampleCount}
+                    >
+                      选择缺项
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost compact"
                       onClick={selectTrainingSamplesNeedingReview}
                       disabled={Boolean(busy) || !visibleTrainingSamples.length}
                     >
@@ -12049,7 +12675,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       type="button"
                       className="ghost compact"
                       onClick={() => batchUpdateTrainingSampleStatus("ready", "selected")}
-                      disabled={Boolean(busy) || !selectedVisibleTrainingSamples.length}
+                      disabled={Boolean(busy) || !selectedVisibleTrainingSamples.length || selectedMissingRequiredTrainingSampleCount > 0}
+                      title={selectedMissingRequiredTrainingSampleCount ? "请先补齐已选样本的必填信息" : "将已选样本确认进入训练"}
                     >
                       已选确认
                     </button>
@@ -12087,19 +12714,30 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     </button>
                   </div>
                 </div>
-                {selectedNeedsAttentionTrainingSampleCount || selectedSceneUncertainTrainingSampleCount ? (
+                {selectedMissingRequiredTrainingSampleCount || selectedNeedsAttentionTrainingSampleCount || selectedSceneUncertainTrainingSampleCount ? (
                   <div className="sample-selection-risk" role="status">
-                    <strong>已选样本需要复核</strong>
+                    <strong>{selectedMissingRequiredTrainingSampleCount ? "已选样本缺少必填项" : "已选样本需要复核"}</strong>
                     <span>
+                      {selectedMissingRequiredTrainingSampleCount ? `${selectedMissingRequiredTrainingSampleCount} 条缺少 Agent、场景、客户问题、标准回复或 Skill 提示` : ""}
+                      {selectedMissingRequiredTrainingSampleCount && (selectedNeedsAttentionTrainingSampleCount || selectedSceneUncertainTrainingSampleCount) ? "；" : ""}
                       {selectedNeedsAttentionTrainingSampleCount ? `${selectedNeedsAttentionTrainingSampleCount} 条仍被标记为需人工处理` : ""}
                       {selectedNeedsAttentionTrainingSampleCount && selectedSceneUncertainTrainingSampleCount ? "；" : ""}
                       {selectedSceneUncertainTrainingSampleCount ? `${selectedSceneUncertainTrainingSampleCount} 条场景还没有完全确认` : ""}
                     </span>
-                    <small>点击“已选确认”会把这些样本写成人工确认记录，再进入训练；不确定就先退回复核。</small>
+                    <small>
+                      {selectedMissingRequiredTrainingSampleCount
+                        ? "缺必填项的样本不能进入训练；请先编辑补齐，再点击已选确认。"
+                        : "点击“已选确认”会把这些样本写成人工确认记录，再进入训练；不确定就先退回复核。"}
+                    </small>
                     <div className="sample-selection-risk-actions">
                       {selectedRiskTrainingSample ? (
                         <button type="button" onClick={() => startSampleEdit(selectedRiskTrainingSample)} disabled={Boolean(busy)}>
-                          编辑首条风险
+                          {selectedMissingRequiredTrainingSample ? "编辑首条缺项" : "编辑首条风险"}
+                        </button>
+                      ) : null}
+                      {selectedMissingRequiredTrainingSampleCount ? (
+                        <button type="button" onClick={() => changeTrainingSampleQualityFilterInReviewScope("missing_required")} disabled={Boolean(busy)}>
+                          只看缺项
                         </button>
                       ) : null}
                       {selectedNeedsAttentionTrainingSampleCount ? (
@@ -12114,19 +12752,35 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       ) : null}
                     </div>
                   </div>
-                ) : visibleNeedsAttentionTrainingSampleCount || visibleSceneUncertainTrainingSampleCount ? (
+                ) : visibleMissingRequiredTrainingSampleCount || visibleNeedsAttentionTrainingSampleCount || visibleSceneUncertainTrainingSampleCount ? (
                   <div className="sample-selection-risk muted" role="status">
-                    <strong>当前显示里有待复核样本</strong>
+                    <strong>{visibleMissingRequiredTrainingSampleCount ? "当前显示里有缺项样本" : "当前显示里有待复核样本"}</strong>
                     <span>
+                      {visibleMissingRequiredTrainingSampleCount ? `${visibleMissingRequiredTrainingSampleCount} 条缺必填项` : ""}
+                      {visibleMissingRequiredTrainingSampleCount && (visibleNeedsAttentionTrainingSampleCount || visibleSceneUncertainTrainingSampleCount) ? "；" : ""}
                       {visibleNeedsAttentionTrainingSampleCount ? `${visibleNeedsAttentionTrainingSampleCount} 条需处理` : ""}
                       {visibleNeedsAttentionTrainingSampleCount && visibleSceneUncertainTrainingSampleCount ? "；" : ""}
                       {visibleSceneUncertainTrainingSampleCount ? `${visibleSceneUncertainTrainingSampleCount} 条场景待确认` : ""}
                     </span>
-                    <small>使用“智能选择需处理”或“选择场景待确认”可以先集中处理风险样本。</small>
+                    <small>
+                      {visibleMissingRequiredTrainingSampleCount
+                        ? "缺必填项的样本不能批量确认进入训练；先编辑补齐，再选择确认。"
+                        : "使用“智能选择需处理”或“选择场景待确认”可以先集中处理风险样本。"}
+                    </small>
                     <div className="sample-selection-risk-actions">
                       {visibleRiskTrainingSample ? (
                         <button type="button" onClick={() => startSampleEdit(visibleRiskTrainingSample)} disabled={Boolean(busy)}>
-                          编辑首条风险
+                          {visibleMissingRequiredTrainingSample ? "编辑首条缺项" : "编辑首条风险"}
+                        </button>
+                      ) : null}
+                      {visibleMissingRequiredTrainingSampleCount ? (
+                        <button type="button" onClick={() => changeTrainingSampleQualityFilterInReviewScope("missing_required")} disabled={Boolean(busy)}>
+                          只看缺项
+                        </button>
+                      ) : null}
+                      {visibleMissingRequiredTrainingSampleCount ? (
+                        <button type="button" onClick={selectTrainingSamplesMissingRequired} disabled={Boolean(busy)}>
+                          选择缺项
                         </button>
                       ) : null}
                       {visibleNeedsAttentionTrainingSampleCount ? (
@@ -12162,6 +12816,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   visibleTrainingSamples.map((sample) => {
                     const qualityTone = sampleQualityTone(sample);
                     const attentionReasons = sampleAttentionReasons(sample);
+                    const requiredFieldReasons = trainingSampleReadyBlockingReasons(sample);
                     const sceneEvidence = sampleSceneEvidence(sample);
                     const sceneRouteMemoryBadge = sampleSceneRouteMemoryBadge(sample);
                     const isEditingSample = editingSampleId === sample.id && Boolean(sampleEdit);
@@ -12216,6 +12871,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           ) : null}
                           {sceneEvidence.slice(0, 4).map((keyword) => (
                             <em key={keyword}>{keyword}</em>
+                          ))}
+                        </div>
+                      ) : null}
+                      {requiredFieldReasons.length ? (
+                        <div className="sample-required-reasons" aria-label="训练样本缺必填项">
+                          <strong>缺必填项</strong>
+                          {requiredFieldReasons.map((reason) => (
+                            <button
+                              type="button"
+                              key={reason}
+                              title={`点击后只看缺必填项样本：${reason}`}
+                              onClick={() => changeTrainingSampleQualityFilterInReviewScope("missing_required")}
+                              disabled={Boolean(busy)}
+                            >
+                              {reason}
+                            </button>
                           ))}
                         </div>
                       ) : null}
@@ -12610,6 +13281,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     const sendDisabled = Boolean(busy) || task.status === "sent" || task.status === "dry_run" || taskConversationLocked;
                     const bridgeEntry = bridgeOutboxEntryForTask(task, bridgeOutbox, bridgeStatus);
                     const bridgeDispatchEntry = bridgeDispatchEntryForTask(task, bridgeStatus);
+                    const latestWindow = latestWindowByAccount.get(task.wechatAccountId) || null;
+                    const taskOrderDraftId = sendTaskOrderDraftId(task);
                     return (
                       <div className={`send-task ${task.status}`} key={task.id}>
                         <button
@@ -12636,13 +13309,25 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             任务已取消并留痕，不会重新排队；如仍需发送，请重新生成对应报价、订单确认或跟进任务。
                           </p>
                         ) : null}
+                        <SendOrderContext task={task} />
+                        <SendPreflightStatus task={task} latestWindow={latestWindow} />
                         <GuardChecks task={task} />
                         <SendQueueAdvice task={task} />
+                        <SendManualAttentionActionHint
+                          task={task}
+                          canRequeue={taskCanBeRequeued}
+                          conversationLocked={taskConversationLocked}
+                        />
                         <SendRequeueAudit task={task} />
                         <SendCancelAudit task={task} />
                         <SendAttemptSummary task={task} />
                         <BridgeOutboxPreview entry={bridgeEntry} dispatchEntry={bridgeDispatchEntry} attempt={task.latestAttempt || task.attempts?.[0]} />
                         <div className="send-task-actions" data-send-view={sendWorkbenchView}>
+                          {taskOrderDraftId ? (
+                            <button type="button" className="ghost" onClick={() => focusSendTaskOrder(task)} disabled={Boolean(busy)}>
+                              <Search size={16} aria-hidden="true" />定位订单
+                            </button>
+                          ) : null}
                           {sendWorkbenchView === "queue" ? (
                             <>
                               <button
@@ -13202,10 +13887,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           >
                             <Check size={16} aria-hidden="true" />通过并入队
                           </button>
-                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(quote))} title={quotePaymentProofBlockReason(quote) || "核验定金并确认订单"}>
                             <CreditCard size={16} aria-hidden="true" />定金并确认
                           </button>
-                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(quote))} title={quotePaymentProofBlockReason(quote) || "核验全款并确认订单"}>
                             <Check size={16} aria-hidden="true" />全款并确认
                           </button>
                           <button type="button" className="ghost" onClick={() => reviewQuoteDraft(quote, "request_followup")} disabled={Boolean(busy)}>
@@ -13268,6 +13953,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       const step = highValueOrderManualStep(order);
                       const followupStatus = orderFollowupStatusText(order);
                       const latestManualNote = latestHighValueOrderManualNote(order.customerNotes);
+                      const manualAttentionTask = orderSendAttentionTasks(order).find((task) => sendTaskNeedsManualAttention(task)) || null;
+                      const manualAttentionSummary = manualAttentionTask ? sendTaskManualAttentionSummary(manualAttentionTask) : null;
                       return (
                         <div className={`review-card order ${step.tone}`} key={order.id}>
                           <button
@@ -13278,11 +13965,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             title="定位到这条订单"
                           >
                             <strong>{order.customer?.name || order.quoteDraft?.customer?.name || "未知客户"} · {formatMoney(Number(order.totalPrice || 0))} 元</strong>
-                            <p>{order.quantity} 份 · 单价 {formatMoney(Number(order.unitPrice || 0))} 元 · {paymentStatusLabel(order.paymentStatus)} · {orderStatusLabel(order.status)}</p>
+                            <p>{order.quantity} 份 · 单价 {formatMoney(Number(order.unitPrice || 0))} 元 · {paymentStatusLabel(orderPaymentStatusValue(order))} · {orderStatusLabel(order.status)}</p>
                             <small>{highValueOrderReason(order)}</small>
                             <small>{step.detail}</small>
                             {order.owner ? <small>跟进人 {order.owner}</small> : null}
                             {latestManualNote ? <small>{latestManualNote}</small> : null}
+                            {manualAttentionSummary ? <small>{manualAttentionSummary}</small> : null}
                             {order.confirmationSendTask ? <small>确认发送 {sendStatusLabel(order.confirmationSendTask.status)}</small> : null}
                             {followupStatus ? <small>{followupStatus}</small> : null}
                           </button>
@@ -13295,6 +13983,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             >
                               <Search size={16} aria-hidden="true" />定位订单
                             </button>
+                            {orderNeedsManualSendAttention(order) ? (
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => void focusOrderManualSendAttention(order)}
+                                disabled={Boolean(busy)}
+                              >
+                                <Send size={16} aria-hidden="true" />查发送
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               className="primary"
@@ -13702,7 +14400,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     const rowPreview = quoteCenterPreviewId === quote.id ? quoteCenterPreview : null;
                     const rowPreviewWarnings = rowPreview?.warnings || [];
                     const rowSendRisk = quoteSendBlockReason(quote, rowPreviewWarnings);
-                    const nextStep = quoteDealNextStep(quote, orderDraft, rowSendRisk);
+                      const nextStep = guardedQuoteDealNextStep(quote, orderDraft, rowSendRisk);
                     const rowProgressSteps = dealProgressSteps(quote, orderDraft);
                     const rowRiskItems = dealRiskItemsForQuote(quote, rowSendRisk);
                     const rowCustomerNote = customerNoteSummary(quote.customerNotes);
@@ -13835,7 +14533,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <button type="button" className="ghost" onClick={() => queueQuoteDraft(quote)} disabled={Boolean(busy) || Boolean(rowSendRisk)} title={rowSendRisk || "发送报价"}>
                           <Send size={16} aria-hidden="true" />发送报价
                         </button>
-                        <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy)}>
+                        <button type="button" className="ghost" onClick={() => verifyQuotePaymentProof(quote, "deposit_paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(quote))} title={quotePaymentProofBlockReason(quote) || "核验定金并确认订单"}>
                           <CreditCard size={16} aria-hidden="true" />核验定金并确认
                         </button>
                         {orderDraft ? (
@@ -13843,10 +14541,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             <ReceiptText size={16} aria-hidden="true" />定位订单
                           </button>
                         ) : null}
-                        <button type="button" className="ghost" onClick={() => createOrderDraft(quote)} disabled={Boolean(busy)} title="按当前报价生成或更新订单草稿">
+                        <button type="button" className="ghost" onClick={() => createOrderDraft(quote)} disabled={Boolean(busy) || Boolean(quoteOrderDraftBlockReason(quote))} title={quoteOrderDraftBlockReason(quote) || "按当前报价生成或更新订单草稿"}>
                           <ClipboardList size={16} aria-hidden="true" />{orderDraft ? "更新订单" : "生成订单"}
                         </button>
-                        <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy)}>
+                        <button type="button" className="primary" onClick={() => verifyQuotePaymentProof(quote, "paid")} disabled={Boolean(busy) || Boolean(quotePaymentProofBlockReason(quote))} title={quotePaymentProofBlockReason(quote) || "核验全款并确认订单"}>
                           <Check size={16} aria-hidden="true" />核验全款并确认
                         </button>
                         <button type="button" className="ghost danger" onClick={() => confirmQuoteManualFollowup(quote)} disabled={Boolean(busy)}>
@@ -13932,7 +14630,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   {filteredOrderDrafts.length ? (
                     filteredOrderDrafts.map((order) => {
                       const selectedImage = orderSelectedImage(order);
-                      const nextStep = orderDealNextStep(order);
+                      const nextStep = guardedOrderDealNextStep(order);
                       const linkedQuote = order.quoteDraft || quotes.find((quote) => quote.id === order.quoteDraftId) || null;
                       const rowProgressSteps = linkedQuote ? dealProgressSteps(linkedQuote, order) : [];
                       const rowRiskItems = dealRiskItemsForOrder(order);
@@ -13943,7 +14641,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           type="button"
                           className="order-row-main quote-focus-trigger"
                           onClick={() => focusOrderDraft(order)}
-                          disabled={Boolean(busy)}
+                        disabled={Boolean(busy)}
                           title="聚焦这条订单和对应报价"
                         >
                           <div className="quote-identity">
@@ -13960,7 +14658,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         </button>
                         <div className="quote-tags order-tags">
                           <span>{orderStatusLabel(order.status)}</span>
-                          <span>{paymentStatusLabel(order.paymentStatus)}</span>
+                          <span>{paymentStatusLabel(orderPaymentStatusValue(order))}</span>
                           <span>{selectedImage ? `选中第 ${selectedImage.position || "-"} 张` : "未选图"}</span>
                           {order.confirmationSendTask ? <span>确认{sendStatusLabel(order.confirmationSendTask.status)}</span> : null}
                           {orderFollowupStatusItems(order).map((item) => <span key={item.key}>{item.label}</span>)}
@@ -14061,12 +14759,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <button type="button"
                             className="ghost"
                             onClick={() => queueOrderDraftConfirmation(order)}
-                            disabled={
-                              Boolean(busy) ||
-                              order.status === "cancelled" ||
-                              !orderPaymentReady(order) ||
-                              hasActiveOrderConfirmationTask(order)
-                            }
+                              disabled={
+                                Boolean(busy) ||
+                                Boolean(orderConfirmationBlockReason(order))
+                              }
                             title={orderConfirmationButtonTitle(order)}
                           >
                             <Send size={16} aria-hidden="true" />{orderConfirmationButtonLabel(order)}
@@ -14081,18 +14777,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <X size={16} aria-hidden="true" />取消确认
                             </button>
                           ) : null}
-                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "deposit_paid")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "deposit_paid")} disabled={Boolean(busy) || Boolean(orderPaymentProofBlockReason(order))} title={orderPaymentProofBlockReason(order) || "核验定金并确认订单"}>
                             <CreditCard size={16} aria-hidden="true" />核验定金并确认
                           </button>
-                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "paid")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => verifyOrderPaymentProof(order, "paid")} disabled={Boolean(busy) || Boolean(orderPaymentProofBlockReason(order))} title={orderPaymentProofBlockReason(order) || "核验全款并确认订单"}>
                             <Check size={16} aria-hidden="true" />核验全款并确认
                           </button>
-                          <button type="button" className="ghost" onClick={() => confirmAndStartOrderProduction(order)} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => confirmAndStartOrderProduction(order)} disabled={Boolean(busy) || Boolean(orderProductionBlockReason(order))} title={orderProductionBlockReason(order) || "核验付款和选图后标记生产中"}>
                             <PackageSearch size={16} aria-hidden="true" />生产中
                           </button>
                           {renderOrderFollowupControls(order, "production")}
                           {renderOrderFollowupControls(order, "delivery")}
-                          <button type="button" className="ghost" onClick={() => confirmAndUpdateOrderDraftStatus(order, "fulfilled")} disabled={Boolean(busy)}>
+                          <button type="button" className="ghost" onClick={() => confirmAndUpdateOrderDraftStatus(order, "fulfilled")} disabled={Boolean(busy) || Boolean(orderFulfillmentBlockReason(order))} title={orderFulfillmentBlockReason(order) || "生产完成后标记订单完成"}>
                             <ShieldCheck size={16} aria-hidden="true" />完成
                           </button>
                           <button type="button" className="ghost danger" onClick={() => confirmAndUpdateOrderDraftStatus(order, "cancelled")} disabled={Boolean(busy)}>
@@ -14394,6 +15090,43 @@ function GuardChecks({ task }: { task: SendTask }) {
   );
 }
 
+function SendPreflightStatus({ task, latestWindow }: { task: SendTask; latestWindow?: WechatWindowSnapshot | null }) {
+  const checks = task.guardSnapshot?.checks || [];
+  const failedChecks = checks.filter((check) => !check.passed);
+  const latestAttempt = task.latestAttempt || task.attempts?.[0] || null;
+  const guardStatus = String(task.guardSnapshot?.status || latestAttempt?.guardStatus || "").trim();
+  const latestWindowDiagnostic = latestWindow?.diagnostic;
+  const storedWindowDiagnostic = task.guardSnapshot?.windowDiagnostic || null;
+  const effectiveWindowDiagnostic = latestWindowDiagnostic || storedWindowDiagnostic;
+  const latestWindowChatTitle = latestWindow?.activeChatTitle || latestWindow?.chatTitle || "";
+  const windowDiagnosticReason = effectiveWindowDiagnostic?.reason || "";
+  const windowDiagnosticKeys = (effectiveWindowDiagnostic?.failedKeys || [])
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((key) => sendWindowDiagnosticKeyLabel(key))
+    .join("、");
+  const status = sendPreflightStatus(task, guardStatus, failedChecks.length, latestWindow || null);
+  const failedSummary = failedChecks
+    .slice(0, 3)
+    .map((check) => sendGuardCheckLabel(check))
+    .join("、");
+  const windowSummary = latestWindow
+    ? `当前窗口：${latestWindowChatTitle || "未识别聊天"}${latestWindow.recentCustomerId ? ` / 最近客户 ${latestWindow.recentCustomerId}` : ""}`
+    : "当前窗口：还没有可用快照";
+  return (
+    <div className={`send-preflight-status ${status.tone}`} aria-label="发送前实时校验状态">
+      <div>
+        <strong>{status.label}</strong>
+        <span>{status.detail}</span>
+      </div>
+      <small>{failedSummary ? `失败项：${failedSummary}` : windowSummary}</small>
+      {windowDiagnosticReason ? <small>窗口诊断：{windowDiagnosticReason}</small> : null}
+      {windowDiagnosticKeys ? <small>诊断失败项：{windowDiagnosticKeys}</small> : null}
+      <small>{status.nextAction}</small>
+    </div>
+  );
+}
+
 function SendQueueAdvice({ task }: { task: SendTask }) {
   const advice = task.guardSnapshot?.queueBlockedAdvice;
   if (!advice) return null;
@@ -14403,6 +15136,26 @@ function SendQueueAdvice({ task }: { task: SendTask }) {
       <span>{advice.message}</span>
       <small>{advice.recommendedAction}</small>
       {advice.blockingTaskId ? <small>前序任务：{advice.blockingTaskId}</small> : null}
+    </div>
+  );
+}
+
+function SendManualAttentionActionHint({
+  task,
+  canRequeue,
+  conversationLocked,
+}: {
+  task: SendTask;
+  canRequeue: boolean;
+  conversationLocked: boolean;
+}) {
+  const hint = sendManualAttentionActionHint(task, canRequeue, conversationLocked);
+  if (!hint) return null;
+  return (
+    <div className={`queue-advice ${hint.tone}`} aria-label="人工处理下一步">
+      <strong>{hint.title}</strong>
+      <span>{hint.detail}</span>
+      <small>{hint.action}</small>
     </div>
   );
 }
@@ -14428,6 +15181,18 @@ function SendRequeueAudit({ task }: { task: SendTask }) {
   );
 }
 
+function SendOrderContext({ task }: { task: SendTask }) {
+  const context = sendOrderContext(task);
+  if (!context) return null;
+  return (
+    <div className="send-order-context" aria-label="订单发送上下文">
+      <strong>{context.label}</strong>
+      <span>{context.detail}</span>
+      <small>{context.stage}</small>
+    </div>
+  );
+}
+
 function SendCancelAudit({ task }: { task: SendTask }) {
   const history = task.guardSnapshot?.history || [];
   let cancelEvent: (typeof history)[number] | undefined;
@@ -14447,6 +15212,99 @@ function SendCancelAudit({ task }: { task: SendTask }) {
       {at ? <small>{formatDateTime(at)}</small> : null}
     </div>
   );
+}
+
+function sendOrderContext(task: SendTask) {
+  const automation = (task.guardSnapshot as { automation?: Record<string, unknown> } | undefined)?.automation || {};
+  const orderDraftId = sendTaskOrderDraftId(task);
+  if (!orderDraftId) return null;
+  const source = String(automation.source || task.payload?.source || "").trim();
+  const followupType = String(automation.followupType || task.payload?.followupType || "").trim();
+  const valueLevel = String(automation.valueLevel || task.payload?.valueLevel || "").trim();
+  const label = source === "order_followup" || followupType
+    ? "订单跟进发送"
+    : "订单确认发送";
+  const stage = followupType === "production"
+    ? "生产进度"
+    : followupType === "delivery"
+      ? "交付/签收"
+      : source === "low_value_quote_acceptance"
+        ? "报价接受后确认"
+        : "确认客户已付款或已确认";
+  const detailParts = [`订单 ${orderDraftId}`];
+  if (valueLevel === "low") detailParts.push("低价值自动化");
+  if (valueLevel === "high") detailParts.push("高价值人工审核");
+  if (source) detailParts.push(sendAutomationSourceLabel(source));
+  return {
+    label,
+    detail: detailParts.join(" · "),
+    stage,
+  };
+}
+
+function sendTaskOrderDraftId(task: SendTask) {
+  const automation = (task.guardSnapshot as { automation?: Record<string, unknown> } | undefined)?.automation || {};
+  return String(automation.orderDraftId || task.payload?.orderDraftId || "").trim();
+}
+
+function sendTaskManualAttentionSummary(task: SendTask) {
+  const guardReason = String(task.guardSnapshot?.reason || "").trim();
+  const attemptReason = String(task.latestAttempt?.errorMessage || task.attempts?.[0]?.errorMessage || "").trim();
+  const failedKeys = (task.guardSnapshot?.failedKeys || []).filter(Boolean).join(", ");
+  const reason = task.errorMessage || guardReason || attemptReason || failedKeys || "请打开发送中心查看校验记录";
+  return `发送任务 ${task.id}：${sendStatusLabel(task.status)}，${operatorStatusMessage(reason, reason)}`;
+}
+
+function sendManualAttentionActionHint(task: SendTask, canRequeue: boolean, conversationLocked: boolean) {
+  const status = String(task.status || "");
+  if (!["blocked", "failed", "cancelled", "dry_run"].includes(status)) return null;
+  if (status === "cancelled") {
+    return {
+      tone: "info",
+      title: "人工留痕",
+      detail: "任务已取消，不会自动重排。",
+      action: "如仍需发送，请重新生成报价、订单确认或跟进任务。",
+    };
+  }
+  if (conversationLocked && canRequeue) {
+    return {
+      tone: "warning",
+      title: "先解除人工锁",
+      detail: "会话仍在人工接管中，智能体不会自动继续发送。",
+      action: "确认客户问题处理完后，再点“解除并重排”。",
+    };
+  }
+  if (status === "dry_run") {
+    return {
+      tone: "info",
+      title: "演练已留痕",
+      detail: "演练不会真实发送给客户。",
+      action: "确认窗口和内容无误后，从队列执行正式发送。",
+    };
+  }
+  if (canRequeue) {
+    return {
+      tone: "info",
+      title: "可重新排队",
+      detail: "先核对微信账号、聊天对象、最近消息和订单/付款状态。",
+      action: "确认无误后，可点“重新排队”。",
+    };
+  }
+  return {
+    tone: "error",
+    title: "保持人工处理",
+    detail: "当前任务不适合自动重排。",
+    action: "请在订单或会话里继续人工跟进，并重新生成任务。",
+  };
+}
+
+function sendAutomationSourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    order_confirmation: "订单确认",
+    order_followup: "订单跟进",
+    low_value_quote_acceptance: "低价值报价成交",
+  };
+  return labels[source] || source;
 }
 
 function SendAttemptSummary({ task }: { task: SendTask }) {
@@ -14593,6 +15451,95 @@ function sendCancelReasonLabel(reason: string) {
   return labels[reason] || reviewReasonLabel(reason);
 }
 
+function sendPreflightStatus(task: SendTask, guardStatus: string, failedCheckCount: number, latestWindow: WechatWindowSnapshot | null) {
+  if (task.status === "sent") {
+    return {
+      tone: "ok",
+      label: "已发送",
+      detail: "任务已经完成，保留校验和发送记录用于复盘。",
+      nextAction: "如客户反馈未收到，先查发送尝试和桥接回执，不要重复发给错误会话。",
+    };
+  }
+  if (task.status === "cancelled") {
+    return {
+      tone: "idle",
+      label: "已取消",
+      detail: "这条任务不会重新排队或自动发送。",
+      nextAction: "如仍需发送，请重新生成对应报价、订单确认或跟进任务。",
+    };
+  }
+  if (failedCheckCount > 0 || ["blocked", "failed"].includes(task.status) || ["blocked", "failed"].includes(guardStatus)) {
+    return {
+      tone: "danger",
+      label: "不可发送",
+      detail: "账号、聊天对象或最近客户校验没有通过。",
+      nextAction: "先定位会话并确认微信窗口是同一个客户；仍不一致时转人工处理。",
+    };
+  }
+  if (task.status === "sending") {
+    return {
+      tone: "warning",
+      label: "等待回执",
+      detail: "任务已经交给发送适配器或桥接指令，正在等待回执。",
+      nextAction: "不要重复点击执行；先等桥接回执或扫描发送异常。",
+    };
+  }
+  if (guardStatus === "passed") {
+    return {
+      tone: "ok",
+      label: "校验通过",
+      detail: "最近一次三重校验通过，可以继续按安全发送流程执行。",
+      nextAction: "执行前仍会再次校验当前窗口，避免 A 客户内容发给 B 客户。",
+    };
+  }
+  if (latestWindow?.diagnostic?.ok === false || task.guardSnapshot?.windowDiagnostic?.ok === false) {
+    return {
+      tone: "warning",
+      label: "窗口待处理",
+      detail: "最新窗口快照没有通过诊断。",
+      nextAction: "先切到正确微信账号和客户聊天，再点当前快照校验。",
+    };
+  }
+  return {
+    tone: "idle",
+    label: "待校验",
+    detail: "还没有基于当前窗口完成三重校验。",
+    nextAction: "先点当前快照校验，确认账号、聊天对象和最近客户都一致后再执行。",
+  };
+}
+
+function sendGuardCheckLabel(check: { key?: string; label?: string }) {
+  if (check.label) return check.label;
+  const labels: Record<string, string> = {
+    wechatAccount: "微信账号",
+    activeChatTitle: "聊天对象",
+    recentMessageOrCustomerId: "最近客户",
+    queueHead: "账号队列头",
+    manualLock: "人工接管",
+    conversationManualUnlocked: "会话未被人工接管",
+    conversationManualLocked: "会话已人工接管",
+    binding: "任务绑定",
+  };
+  return labels[String(check.key || "")] || String(check.key || "未知检查");
+}
+
+function sendWindowDiagnosticKeyLabel(key: string) {
+  const labels: Record<string, string> = {
+    windowSnapshotMissing: "无窗口快照",
+    windowDiagnosticFailed: "窗口诊断失败",
+    wechatAccountMissing: "微信账号缺失",
+    wechatAccountMismatch: "微信账号不一致",
+    activeChatTitleMissing: "聊天对象缺失",
+    activeChatTitleMismatch: "聊天对象不一致",
+    recentCustomerMissing: "最近客户缺失",
+    recentCustomerMismatch: "最近客户不一致",
+    conversationNotFound: "未匹配会话",
+    windowOffline: "微信离线",
+    staleWindowSnapshot: "快照过期",
+  };
+  return labels[String(key || "")] || String(key || "未知诊断");
+}
+
 function promptManualResolutionNote(conversationTitle: string, fallback = "") {
   const text = window.prompt(
     `请填写「${conversationTitle}」人工处理结果。\n\n例如：已电话确认预算和款式，客户同意恢复自动报价。`,
@@ -14607,7 +15554,11 @@ function hasActiveOrderConfirmationTask(order: OrderDraft) {
 }
 
 function orderPaymentReady(order: OrderDraft) {
-  return ["deposit_paid", "paid"].includes(order.paymentStatus || order.quoteDraft?.paymentStatus || "");
+  return ["deposit_paid", "paid"].includes(orderPaymentStatusValue(order));
+}
+
+function orderPaymentStatusValue(order: OrderDraft) {
+  return order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid";
 }
 
 function orderRevisionBlockReason(order: OrderDraft) {
@@ -14662,7 +15613,8 @@ function orderConfirmationButtonLabel(order: OrderDraft) {
 
 function orderConfirmationButtonTitle(order: OrderDraft) {
   if (order.status === "cancelled") return "订单已取消，不能发送确认";
-  if (!orderPaymentReady(order)) return "未记录定金或全款，先核验付款凭证后再发送订单确认";
+  const blocker = orderConfirmationBlockReason(order);
+  if (blocker) return blocker;
   const task = order.confirmationSendTask;
   if (canRequeueOrderConfirmationTask(order)) return `订单确认任务${sendStatusLabel(task?.status || "")}，点击重新排队`;
   if (!task || ["failed", "cancelled"].includes(task.status)) return "生成订单确认话术并放入微信安全发送队列";
@@ -14788,6 +15740,10 @@ type LowValueAutomationIssueSummary = {
   missingFields: number;
   manualLocks: number;
   sendTargets: number;
+  resolutionAction: "run_low_value" | "scan_send_ops";
+  resolutionLabel: string;
+  resolutionDetail: string;
+  resolutionButtonLabel: string;
   firstIssue?: LowValueAutomationIssue;
 };
 
@@ -14957,9 +15913,9 @@ function buildAutomationStepItems(run?: AutomationRun | null): AutomationStepIte
   const stepRecords = new Map((run.steps || []).map((step) => [step.step, step]));
   const results = run.results || {};
   const stepDefs: Array<{ key: string; label: string; detail: (result: unknown) => string }> = [
+    { key: "scanTimeouts", label: "超时扫描", detail: describeCountStep("timedOut", "超时") },
     { key: "pollActiveResults", label: "出图轮询", detail: describePollActiveStep },
     { key: "lowValueAutomation", label: "低价值主链路", detail: describeLowValueAutomationStep },
-    { key: "scanTimeouts", label: "超时扫描", detail: describeCountStep("timedOut", "超时") },
     { key: "scanLowValueOrderDrafts", label: "订单草稿", detail: describeOrderDraftStep },
     { key: "scanLowValueOrderConfirmations", label: "订单确认", detail: describeQueuedStep },
     { key: "scanLowValueOrderFollowups", label: "订单跟进", detail: describeQueuedStep },
@@ -15258,6 +16214,7 @@ function buildLowValueAutomationIssueSummary(issues: LowValueAutomationIssue[]):
   for (const issue of issues) {
     for (const field of issue.missing) missingFields.add(field);
   }
+  const resolution = lowValueIssueResolutionPlan(issues);
   return {
     total: issues.length,
     errors: issues.filter((issue) => issue.tone === "error").length,
@@ -15265,7 +16222,61 @@ function buildLowValueAutomationIssueSummary(issues: LowValueAutomationIssue[]):
     missingFields: missingFields.size,
     manualLocks: issues.filter((issue) => issue.reason === "conversation_manual_locked" || issue.missing.includes("manualLocked")).length,
     sendTargets: issues.filter((issue) => issue.reason.includes("send_target") || issue.missing.includes("wechatAccountId") || issue.missing.includes("conversationId")).length,
+    ...resolution,
     firstIssue: issues.find((issue) => issue.tone === "error") || issues[0],
+  };
+}
+
+function findLowValueAutomationIssueForMetric(
+  issues: LowValueAutomationIssue[],
+  kind: "errors" | "warnings" | "missing" | "sendTargets" | "manualLocks",
+) {
+  if (kind === "errors") return issues.find((issue) => issue.tone === "error") || null;
+  if (kind === "warnings") return issues.find((issue) => issue.tone === "warning") || null;
+  if (kind === "missing") return issues.find((issue) => issue.missing.length) || null;
+  if (kind === "sendTargets") {
+    return issues.find((issue) =>
+      issue.reason.includes("send_target") ||
+      issue.reason.includes("order_target") ||
+      issue.missing.includes("wechatAccountId") ||
+      issue.missing.includes("conversationId"),
+    ) || null;
+  }
+  if (kind === "manualLocks") {
+    return issues.find((issue) => issue.reason === "conversation_manual_locked" || issue.missing.includes("manualLocked")) || null;
+  }
+  return null;
+}
+
+function lowValueIssueMetricLabel(kind: "errors" | "warnings" | "missing" | "sendTargets" | "manualLocks") {
+  const labels = {
+    errors: "错误",
+    warnings: "提醒",
+    missing: "缺字段",
+    sendTargets: "发送对象",
+    manualLocks: "人工接管",
+  };
+  return labels[kind];
+}
+
+function lowValueIssueResolutionPlan(issues: LowValueAutomationIssue[]) {
+  const hasSendAttention = issues.some((issue) => issue.reason === "manual_send_attention_required" || issue.reason === "failed");
+  const hasOnlySendAttention = hasSendAttention && issues.every((issue) => issue.reason === "manual_send_attention_required" || issue.reason === "failed");
+  if (hasOnlySendAttention) {
+    return {
+      resolutionAction: "scan_send_ops" as const,
+      resolutionLabel: "处理后先扫发送异常",
+      resolutionDetail: "这些卡点都集中在发送任务；处理完窗口、人工锁或重排后，先扫描发送异常刷新状态。",
+      resolutionButtonLabel: "扫发送异常",
+    };
+  }
+  return {
+    resolutionAction: "run_low_value" as const,
+    resolutionLabel: hasSendAttention ? "先补资料，再复跑低价值" : "处理后复跑低价值",
+    resolutionDetail: hasSendAttention
+      ? "本轮既有发送异常，也有资料/付款/选图问题；先按卡片处理，再跑一轮低价值自动化继续推进。"
+      : "补齐资料、付款、选图或发送对象后，跑一轮低价值自动化让系统继续处理。",
+    resolutionButtonLabel: "复跑低价值",
   };
 }
 
@@ -15434,6 +16445,90 @@ function lowValueReasonAction(reason: string) {
   return actions[reason] || "查看设计任务、报价、订单和发送队列，确认后手动处理或转人工。";
 }
 
+function lowValueIssueNextStep(issue: LowValueAutomationIssue) {
+  if (issue.reason === "manual_send_attention_required") {
+    return {
+      label: "先看发送中心",
+      detail: "找到同一订单的异常发送任务，按任务提示重排、解除人工锁或继续人工处理。",
+      buttonLabel: "定位发送",
+    };
+  }
+  if (issue.reason === "conversation_manual_locked" || issue.missing.includes("manualLocked")) {
+    return {
+      label: "先处理人工接管",
+      detail: "客户还在人工沟通时不要解除；确认问题结束后再解除人工锁并重跑自动化。",
+      buttonLabel: "定位会话",
+    };
+  }
+  if (issue.reason.includes("send_target") || issue.reason.includes("order_target")) {
+    return {
+      label: "先补发送对象",
+      detail: "补齐微信账号、客户和会话绑定，避免把 A 客户内容发到 B 客户窗口。",
+      buttonLabel: "补对象",
+    };
+  }
+  if (issue.reason === "payment_not_ready") {
+    return {
+      label: "先核验付款",
+      detail: "低价值订单也不能跳过收款校验；先标记定金或全款，再排队订单确认。",
+      buttonLabel: "去订单",
+    };
+  }
+  if (issue.reason === "missing_selected_image") {
+    return {
+      label: "先确认选图",
+      detail: "让客户明确选择第几张图，或由人工在报价/订单里标记选中效果图。",
+      buttonLabel: "去选图",
+    };
+  }
+  if (issue.reason === "negative_profit") {
+    return {
+      label: "先改价格",
+      detail: "成本、售价或数量导致利润为负时，不允许自动报价或自动确认订单。",
+      buttonLabel: "去报价",
+    };
+  }
+  if (issue.reason === "missing_images") {
+    return {
+      label: "先补效果图",
+      detail: "候选图必须能找到本地文件；缺图时重新出图或重新绑定图片。",
+      buttonLabel: "去设计",
+    };
+  }
+  if (issue.orderDraftId) {
+    return {
+      label: "先看订单",
+      detail: "从订单草稿核对付款、选图、客户会话和发送任务状态。",
+      buttonLabel: "去订单",
+    };
+  }
+  if (issue.quoteDraftId) {
+    return {
+      label: "先看报价",
+      detail: "从报价草稿核对选图、利润、客户会话和发送状态。",
+      buttonLabel: "去报价",
+    };
+  }
+  return {
+    label: "先定位来源",
+    detail: "查看设计任务、报价、订单和发送队列，确认后手动处理或转人工。",
+    buttonLabel: "定位处理",
+  };
+}
+
+function lowValueIssuePriority(issue: LowValueAutomationIssue) {
+  if (issue.reason === "manual_send_attention_required" || issue.reason === "failed") {
+    return { tone: "error" as const, label: "先处理发送" };
+  }
+  if (issue.reason === "conversation_manual_locked" || issue.missing.includes("manualLocked")) {
+    return { tone: "warning" as const, label: "人工接管中" };
+  }
+  if (issue.tone === "error") {
+    return { tone: "error" as const, label: "阻断自动化" };
+  }
+  return { tone: "warning" as const, label: "人工确认" };
+}
+
 function lowValueMissingFieldLabel(field: string) {
   const labels: Record<string, string> = {
     job: "设计任务",
@@ -15468,7 +16563,7 @@ function trainingSampleStatusLabel(status?: string) {
 }
 
 function trainingSampleApiQualityFilter(filter: TrainingSampleQualityFilter) {
-  return filter === "all" ? undefined : filter;
+  return filter === "all" || filter === "missing_required" ? undefined : filter;
 }
 
 function trainingSampleQualityTotal(
@@ -15486,6 +16581,7 @@ function trainingSampleQualityTotal(
     review: Math.max(0, summary.reviewQualitySamples - summary.antiWrongReplySamples),
     risk: summary.riskSamples,
     blocked: summary.blockedSamples,
+    missing_required: fallbackCount,
     needs_attention: summary.needsAttentionSamples ?? fallbackCount,
     scene_uncertain: summary.sceneUncertainSamples ?? fallbackCount,
     anti_wrong_reply: summary.antiWrongReplySamples,
@@ -15530,6 +16626,7 @@ function buildTrainingSampleQualityOptions({
     { key: "reply_skill", label: "客服话术" },
     { key: "route_and_reply", label: "判断+话术" },
     { key: "scene_uncertain", label: "场景待确认" },
+    { key: "missing_required", label: "缺必填项" },
     { key: "not_trainable", label: "不可训练" },
     { key: "safe", label: "正常业务" },
     { key: "anti_wrong_reply", label: "防乱回复" },
@@ -15548,6 +16645,15 @@ function buildTrainingSampleQualityOptions({
   }));
 }
 
+function trainingSampleRequiredFieldBlockingReasons(sample: TrainingSample) {
+  const reasons: string[] = [];
+  if (!String(sample.agentKey || sample.agentId || "").trim()) reasons.push("缺少 Agent");
+  if (!String(sample.scene || "").trim()) reasons.push("缺少场景");
+  if (!String(sample.customerText || "").trim()) reasons.push("缺少客户问题");
+  if (!String(sample.idealReply || "").trim()) reasons.push("缺少标准回复");
+  if (!(sample.skillHints || []).some((hint) => String(hint || "").trim())) reasons.push("缺少 Skill 提示");
+  return reasons;
+}
 function matchesTrainingSampleQualityFilter(sample: TrainingSample, filter: TrainingSampleQualityFilter) {
   if (filter === "all") return true;
   if (filter === "trainable") return sample.quality?.trainable === true;
@@ -15557,6 +16663,7 @@ function matchesTrainingSampleQualityFilter(sample: TrainingSample, filter: Trai
   if (filter === "route_and_reply") {
     return sample.quality?.usage?.routeMemory === true && sample.quality?.usage?.replySkill === true;
   }
+  if (filter === "missing_required") return trainingSampleRequiredFieldBlockingReasons(sample).length > 0;
   if (filter === "needs_attention") return isTrainingSampleNeedingManualReview(sample);
   if (filter === "scene_uncertain") return isSceneUncertainTrainingSample(sample);
   if (filter === "anti_wrong_reply") return isAntiWrongReplyTrainingSample(sample);
@@ -15893,6 +17000,36 @@ function skillSuggestionSafetyLabel(suggestion: SkillSuggestion) {
   return "低置信需复核";
 }
 
+function skillSuggestionScopeTone(suggestion: SkillSuggestion) {
+  const level = String(suggestion.scope?.level || "");
+  if (level === "mixed") return "risk";
+  if (level === "global") return "safe";
+  return "review";
+}
+
+function agentSkillScopeTone(level?: string) {
+  const value = String(level || "");
+  if (value === "global") return "global";
+  if (value === "mixed") return "risk";
+  return "private";
+}
+
+function skillSuggestionScopeLabel(suggestion: SkillSuggestion) {
+  return suggestion.scope?.label || "范围待确认";
+}
+
+function skillSuggestionScopeDetail(suggestion: SkillSuggestion) {
+  const scope = suggestion.scope;
+  if (!scope) return "这条建议还没有范围信息，应用前需要先核对样本来源。";
+  const parts = [
+    scope.wechatAccountId ? `微信 ${scope.wechatAccountId}` : "",
+    scope.customerId ? `客户 ${scope.customerId}` : "",
+    scope.conversationId ? `会话 ${scope.conversationId}` : "",
+  ].filter(Boolean);
+  const detail = parts.length ? `${scope.reason} ${parts.join(" / ")}` : scope.reason;
+  return `${detail}，避免把 A 客户经验写给 B 客户。`;
+}
+
 function skillSuggestionEvidencePreview(value?: string) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
@@ -15904,7 +17041,7 @@ function skillSuggestionReviewSummary(suggestion: SkillSuggestion) {
   const question = skillSuggestionEvidencePreview(suggestion.evidence?.question);
   const answer = skillSuggestionEvidencePreview(suggestion.evidence?.answer);
   const evidence = question ? `｜客户 ${question}` : answer ? `｜客服 ${answer}` : "";
-  return `${suggestion.name}｜${reason}｜样本 ${suggestion.sampleCount} 条｜置信度 ${suggestion.confidence}${evidence}`;
+  return `${suggestion.name}｜${skillSuggestionScopeLabel(suggestion)}｜${reason}｜样本 ${suggestion.sampleCount} 条｜置信度 ${suggestion.confidence}${evidence}`;
 }
 
 function skillApplyChangeSummary(result: { created?: Array<Record<string, unknown>>; updated?: Array<Record<string, unknown>>; skipped?: Array<Record<string, unknown>> }) {
@@ -16507,6 +17644,7 @@ function RouteResult({
                     <span key={skill.id || skill.name}>
                       {skill.name}
                       {skill.sampleCount ? ` · ${skill.sampleCount} 样本` : ""}
+                      {skill.scope?.label ? ` · ${skill.scope.label}` : ""}
                     </span>
                   ))}
                 </div>
@@ -16834,6 +17972,21 @@ function buildSkuImageProblemActionSummary(problems: SkuImageProblem[]) {
   }
   return ["补主图", "补多角度图", "核对失效路径"]
     .map((label) => `${label} ${counts.get(label) || 0} 个`)
+    .join(" · ");
+}
+
+function buildSkuImageProblemActionProductSummary(problems: SkuImageProblem[]) {
+  const productKeysByAction = new Map<string, Set<string>>();
+  for (const problem of problems) {
+    const label = skuImageProblemActionGroupLabel(problem);
+    const productKey = problem.skuCode || problem.name;
+    if (!productKey) continue;
+    const keys = productKeysByAction.get(label) || new Set<string>();
+    keys.add(productKey);
+    productKeysByAction.set(label, keys);
+  }
+  return ["补主图", "补多角度图", "核对失效路径"]
+    .map((label) => `${label} ${productKeysByAction.get(label)?.size || 0} 个商品`)
     .join(" · ");
 }
 
@@ -17195,7 +18348,7 @@ function confirmOrderSelectionRevision(order: OrderDraft, selectedImage: NonNull
     `原选图：${current?.position ? `第 ${current.position} 张` : "未识别"}`,
     `新选图：第 ${selectedImage.position || "-"} 张`,
     `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
-    `付款状态：${paymentStatusLabel(order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid")}`,
+    `付款状态：${paymentStatusLabel(orderPaymentStatusValue(order))}`,
     "",
     "确认后订单会回到待确认，发送订单确认前仍会再做身份、付款和选图检查。",
   ];
@@ -17272,7 +18425,7 @@ function dealProgressSteps(quote: QuoteDraft, order: OrderDraft | null) {
   }));
 }
 
-function quoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk = "") {
+function quoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk = "", orderDraftBlocker = "") {
   if (quote.status === "cancelled" || quote.status === "rejected") {
     return { tone: "red", label: "已终止", detail: "这条报价不用再自动推进，需要重新沟通后再建新报价。", action: "none" };
   }
@@ -17289,9 +18442,15 @@ function quoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk
     return { tone: "blue", label: "等待安全发送", detail: "报价已经入队，等待微信账号窗口校验后发送。", action: "none" };
   }
   if (!order && quote.status !== "accepted") {
+    if (orderDraftBlocker) {
+      return { tone: "amber", label: "先补资料", detail: orderDraftBlocker, action: "none" };
+    }
     return { tone: "blue", label: "下一步：客户确认成单", detail: "客户明确回复确认、要这个、可以做后，点击这里生成订单草稿。", action: "confirm_quote_create_order" };
   }
   if (!order) {
+    if (orderDraftBlocker) {
+      return { tone: "amber", label: "先补资料", detail: orderDraftBlocker, action: "none" };
+    }
     return { tone: "green", label: "下一步：生成订单", detail: "客户已经确认报价，可以生成订单草稿并进入收款/排产。", action: "create_order" };
   }
   if (!["deposit_paid", "paid"].includes(order.paymentStatus || quote.paymentStatus)) {
@@ -17337,7 +18496,10 @@ function orderSendFailureStep(order: OrderDraft) {
   return null;
 }
 
-function orderDealNextStep(order: OrderDraft) {
+function orderDealNextStep(
+  order: OrderDraft,
+  blockers: { confirmationBlocker?: string; productionBlocker?: string; deliveryFollowupBlocker?: string } = {},
+) {
   if (order.status === "cancelled") {
     return { tone: "red", label: "已取消", detail: "这条订单已终止，不再发送确认或跟进。", action: "none" };
   }
@@ -17349,7 +18511,14 @@ function orderDealNextStep(order: OrderDraft) {
   if (!orderPaymentReady(order)) {
     return { tone: "blue", label: "下一步：收款", detail: "订单已建，先跟进定金或全款，人工核验付款凭证后再发订单确认。", action: "none" };
   }
+  const commercialBlocker = orderCommercialBlockReason(order);
+  if (commercialBlocker) {
+    return { tone: "amber", label: "先补资料", detail: commercialBlocker, action: "none" };
+  }
   if (!hasActiveOrderConfirmationTask(order)) {
+    if (blockers.confirmationBlocker) {
+      return { tone: "amber", label: "先补资料", detail: blockers.confirmationBlocker, action: "none" };
+    }
     return { tone: "blue", label: "下一步：发订单确认", detail: "把订单明细放入微信安全发送队列，让客户确认数量、金额和效果图。", action: "queue_order_confirmation" };
   }
   if (order.confirmationSendTask?.status === "queued" || order.confirmationSendTask?.status === "sending") {
@@ -17359,12 +18528,25 @@ function orderDealNextStep(order: OrderDraft) {
     return { tone: "blue", label: "下一步：收款", detail: "确认已发，继续跟进定金或全款。", action: "none" };
   }
   if (order.status === "draft" || order.status === "confirmed") {
+    if (blockers.productionBlocker) {
+      return { tone: "amber", label: "先补资料", detail: blockers.productionBlocker, action: "none" };
+    }
     return { tone: "green", label: "下一步：排产", detail: "客户已付款，可以标记生产中并发送生产通知。", action: "start_production" };
   }
   if (order.status === "processing") {
+    if (blockers.deliveryFollowupBlocker) {
+      return { tone: "amber", label: "先补资料", detail: blockers.deliveryFollowupBlocker, action: "none" };
+    }
     return { tone: "green", label: "下一步：交付", detail: "生产处理中，准备交期说明或完成订单。", action: "send_delivery_followup" };
   }
   return { tone: "green", label: "已完成", detail: "订单流程已完成，保留报价、选图和发送记录方便复盘。", action: "none" };
+}
+
+function orderCommercialBlockReason(order: OrderDraft) {
+  if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能继续自动推进。";
+  if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能继续自动推进。";
+  if (Number(order.profit || 0) < 0) return "订单利润为负，需要人工确认报价和成本后再推进。";
+  return "";
 }
 
 function matchesDealNextStepFilter(step: { action: string }, filter: string, status: string) {
@@ -17710,6 +18892,31 @@ function designJobEscalationNotice(job: DesignJob): HighValueManualStep | null {
   return null;
 }
 
+function designJobOperatorRecoveryPlan(job: DesignJob) {
+  if (job.status === "timeout") {
+    return [
+      "先点轮询结果，确认设计平台是否已完成但回调丢失。",
+      "仍无结果再点预检，检查设计平台在线、客户素材和 SKU 真实图片。",
+      "预检通过后重新提交；客户正在等图时先转人工接管并解释正在处理。",
+    ];
+  }
+  if (job.status === "failed" || (job.status === "manual_review" && job.errorMessage)) {
+    return [
+      "先看失败原因，再点预检，确认设计平台、客户素材和 SKU 图片都可用。",
+      "预检通过后重新提交；再次失败不要自动发图，继续人工接管。",
+      "重试前核对微信账号、客户和会话，避免把 A 客户结果处理到 B 客户。",
+    ];
+  }
+  if (job.status === "manual_review") {
+    return [
+      "先核对预算、数量、客户素材和礼盒组合是否完整。",
+      "已有候选图时逐张检查真实 SKU、Logo、礼盒组合和质感。",
+      "确认无误后再批准发图或生成报价，高价值客户继续人工跟进。",
+    ];
+  }
+  return [];
+}
+
 function highValueDesignManualStep(job: DesignJob): HighValueManualStep {
   if (job.status === "failed") {
     return {
@@ -17827,7 +19034,17 @@ function highValueOrderManualStep(order: OrderDraft): HighValueManualStep {
       priority: 12,
     };
   }
-  if (!["deposit_paid", "paid"].includes(order.paymentStatus)) {
+  const approvalBlocker = highValueOrderApprovalBlockReason(order, { includePayment: false });
+  if (approvalBlocker) {
+    return {
+      tone: "red",
+      label: "先补资料",
+      detail: approvalBlocker,
+      nextAction: "先补齐选图、付款、客户身份和利润确认；这些条件没过时，不要批准订单确认或跟进发送。",
+      priority: 16,
+    };
+  }
+  if (!orderPaymentReady(order)) {
     return {
       tone: "red",
       label: "先跟收款",
@@ -17907,8 +19124,12 @@ function highValueOrderMatchesReviewFilter(order: OrderDraft, filter: (typeof hi
   if (filter === "all") return true;
   if (filter === "send_attention") return orderNeedsManualSendAttention(order);
   if (filter === "payment") return !orderPaymentReady(order);
-  if (filter === "confirmation") return orderPaymentReady(order) && !hasActiveOrderConfirmationTask(order);
-  if (filter === "delivery") return order.status === "processing";
+  if (filter === "confirmation") {
+    return orderPaymentReady(order) && !highValueOrderApprovalBlockReason(order, { includePayment: false }) && !hasActiveOrderConfirmationTask(order);
+  }
+  if (filter === "delivery") {
+    return order.status === "processing" && !highValueOrderApprovalBlockReason(order, { includePayment: false });
+  }
   if (filter === "overdue") {
     const nextFollowAt = highValueOrderNextFollowTime(order);
     return nextFollowAt > 0 && nextFollowAt <= Date.now();
@@ -17936,8 +19157,17 @@ function highValueOrderNextFollowLabel(order: OrderDraft) {
   return nextFollowAt <= Date.now() ? `已到跟进：${label}` : `下次跟进：${label}`;
 }
 
+function highValueOrderApprovalBlockReason(order: OrderDraft, options: { includePayment?: boolean } = {}) {
+  if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送。";
+  if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。";
+  if (options.includePayment !== false && !orderPaymentReady(order)) return "高价值订单未核验定金或全款，不能批准订单确认或跟进发送。";
+  if (Number(order.profit || 0) < 0) return "高价值订单利润为负，必须人工确认报价和成本后再批准发送。";
+  return "";
+}
+
 function highValueOrderManualPrimaryAction(order: OrderDraft): { type: "focus" | "queue_confirmation" | "queue_delivery"; label: string } {
   if (orderNeedsManualSendAttention(order)) return { type: "focus", label: "查发送" };
+  if (highValueOrderApprovalBlockReason(order, { includePayment: false })) return { type: "focus", label: "补资料" };
   if (!orderPaymentReady(order)) return { type: "focus", label: "去收款" };
   if (!hasActiveOrderConfirmationTask(order)) return { type: "queue_confirmation", label: "核验并发确认" };
   if (order.status === "processing") return { type: "queue_delivery", label: "发交期说明" };

@@ -13,6 +13,7 @@ const buildLockFile = path.join(runtimeDir, "web-build.lock");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const stableKeepAliveHeartbeatFile = path.join(root, ".runtime-stable", "keep-alive.json");
 const stableStartingLockFile = path.join(root, ".runtime-stable", "stable-starting.lock");
+const stableRuntimeLauncherPidFile = path.join(root, ".runtime-stable", "stable-runtime-launcher.pid");
 const nextDir = path.join(root, "apps", "web", ".next");
 const nextLockFile = path.join(root, "apps", "web", ".next", "lock");
 
@@ -404,7 +405,8 @@ function readFreshestHeartbeat(files) {
 function stableStartingLockIsFresh() {
   try {
     const stat = fs.statSync(stableStartingLockFile);
-    return Date.now() - stat.mtimeMs <= 3600000;
+    if (Date.now() - stat.mtimeMs > 3600000) return false;
+    return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherPids().length > 0;
   } catch {
     return false;
   }
@@ -415,10 +417,71 @@ function stableRuntimeHeartbeatIsFresh() {
     const updatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
     if (!Number.isFinite(updatedAt)) return false;
     if (Date.now() - updatedAt > 3600000) return false;
-    return true;
+    return heartbeatProcessActive(Number(heartbeat?.pid));
   } catch {
     return false;
   }
+}
+
+function readNumericFile(file) {
+  try {
+    const value = Number(String(fs.readFileSync(file, "utf8")).trim());
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function heartbeatProcessActive(pid) {
+  return keepAliveLauncherProcessActive(pid) || stableRuntimeLauncherProcessActive(pid);
+}
+
+function stableRuntimeLauncherProcessActive(pid) {
+  return projectProcessMatches(pid, ["tools/stable-runtime-launcher.js"]);
+}
+
+function keepAliveLauncherProcessActive(pid) {
+  return projectProcessMatches(pid, ["tools/start-dev-ports.js", "--keep-alive"]);
+}
+
+function projectProcessMatches(pid, markers) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0 || numericPid === process.pid) return false;
+  if (process.platform !== "win32") return isPidAlive(numericPid);
+  const commandLine = commandLineForPid(numericPid);
+  if (!commandLine.includes(normalizePathText(root))) return false;
+  return markers.every((marker) => commandLine.includes(normalizePathText(marker)));
+}
+
+function findStableRuntimeLauncherPids() {
+  if (process.platform !== "win32") return [];
+  const normalizedRoot = normalizePathText(root);
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(rows) ? rows : [rows])
+    .filter((item) => {
+      const pid = Number(item?.ProcessId);
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      return Number.isFinite(pid) && pid !== process.pid && commandLine.includes(normalizedRoot) && commandLine.includes("tools/stable-runtime-launcher.js");
+    })
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
 }
 
 function isPidAlive(pid) {
@@ -429,6 +492,23 @@ function isPidAlive(pid) {
     return false;
   }
 }
+
+function commandLineForPid(pid) {
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty CommandLine`,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) return "";
+  return normalizePathText(result.stdout || "");
+}
+
 function getPortOwnerPids(port) {
   const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return [];

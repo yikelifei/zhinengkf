@@ -6,6 +6,9 @@ set SKIP_EXISTING_WEB_BUILD=1
 set FORCE_PORTS_SWEEP=1
 set START_SERVICES_THROUGH_WRAPPERS=1
 cd /d D:\zhinengkefu\desktop
+if not exist "D:\zhinengkefu\desktop\.runtime-stable" mkdir "D:\zhinengkefu\desktop\.runtime-stable"
+if exist "D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request" del /f /q "D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request"
+echo %date% %time% > "D:\zhinengkefu\desktop\.runtime-stable\stable-starting.lock"
 echo Starting stable desktop services in foreground.
 echo Keep this window open. Close it or press Ctrl+C to stop the services.
 call npm.cmd run ports:stop
