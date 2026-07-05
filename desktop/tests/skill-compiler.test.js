@@ -178,6 +178,8 @@ test("marks conflicting training sample identities as mixed source", () => {
   assert.equal(suggestion.scope.label, "混合来源");
   assert.equal(suggestion.scope.level, "mixed");
   assert.match(suggestion.suggestionKey, /identity=conflict/);
+  assert.equal(suggestion.quality.level, "blocked");
+  assert.equal(isSkillSuggestionSafeToApply(suggestion), false);
 });
 
 test("matches mojibake skill hints to existing readable skill names", () => {
@@ -338,6 +340,31 @@ test("classifies skill suggestion quality before applying skills", () => {
   assert.equal(isSkillSuggestionSafeToApply(safe), true);
   assert.equal(needsReview.quality.needsReview, true);
   assert.match(classifySkillSuggestionQuality(needsReview).reason, /低于 2 条/);
+});
+
+test("blocks mixed identity skill suggestions before applying skills", () => {
+  const quality = classifySkillSuggestionQuality({
+    name: "预算澄清",
+    sampleCount: 4,
+    confidence: 96,
+    scope: {
+      level: "mixed",
+      reason: "样本来自不同客户身份。",
+    },
+  });
+
+  assert.equal(quality.level, "blocked");
+  assert.equal(quality.needsReview, true);
+  assert.equal(quality.blocked, true);
+  assert.match(quality.reason, /不同客户身份/);
+  assert.equal(
+    isSkillSuggestionSafeToApply({
+      sampleCount: 4,
+      confidence: 96,
+      scope: { level: "mixed" },
+    }),
+    false,
+  );
 });
 
 test("compiles scene clarification replies only as anti-wrong-reply skill", () => {

@@ -405,6 +405,47 @@ test("passes identity filters when listing training samples", () => {
     assert.equal(suggestions.some((suggestion) => suggestion.scope.label === "混合来源"), false);
   });
 
+  test("does not apply mixed identity skill suggestions even when review is included", () => {
+    const { service, calls } = createTrainingService([
+      {
+        id: "conflict_budget",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_top",
+        conversationId: "conv_top",
+        customerId: "customer_top",
+        identityBinding: {
+          status: "passed",
+          wechatAccountId: "wechat_binding",
+          conversationId: "conv_binding",
+          customerId: "customer_binding",
+        },
+        scene: "礼盒设计",
+        customerText: "每盒 200，想看礼盒效果图",
+        idealReply: "我先按您的预算整理礼盒方案。",
+        score: 95,
+        skillHints: ["预算澄清"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    const result = service.applySkillSuggestions({
+      agentId: "agent_gift",
+      includeNeedsReview: true,
+    });
+
+    assert.equal(result.applied, 0);
+    assert.equal(result.blocked.length, 1);
+    assert.equal(result.blocked[0].reason, "identity_scope_blocked");
+    assert.equal(result.blocked[0].quality.level, "blocked");
+    assert.deepEqual(calls.find((call) => call.method === "applyAgentSkillSuggestions"), {
+      method: "applyAgentSkillSuggestions",
+      suggestionCount: 0,
+    });
+  });
+
   test("batch reviews visible training samples with de-duplicated ids", () => {
   const notifications = [];
   const { service, calls, rows } = createTrainingService(samples);

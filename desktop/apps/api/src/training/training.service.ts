@@ -225,13 +225,20 @@ export class TrainingService {
     const blocked: any[] = [];
     const suggestions: any[] = [];
     for (const suggestion of selectedSuggestions) {
-      if (options.includeNeedsReview || isSkillSuggestionSafeToApply(suggestion)) {
+      const quality = classifySkillSuggestionQuality(suggestion);
+      if (quality.blocked) {
+        blocked.push({
+          ...suggestion,
+          reason: "identity_scope_blocked",
+          quality,
+        });
+      } else if (options.includeNeedsReview || isSkillSuggestionSafeToApply(suggestion)) {
         suggestions.push(suggestion);
       } else {
         blocked.push({
           ...suggestion,
           reason: "needs_review",
-          quality: classifySkillSuggestionQuality(suggestion),
+          quality,
         });
       }
     }

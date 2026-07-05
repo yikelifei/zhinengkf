@@ -84,7 +84,7 @@ function compileAgentSkillSuggestions(samples = [], options = {}) {
         evidence,
         existingSkillId: existing?.id || null,
         action: existing ? "update" : "create",
-        quality: classifySkillSuggestionQuality({ sampleCount, confidence }),
+        quality: classifySkillSuggestionQuality({ sampleCount, confidence, scope }),
       };
     })
     .sort((a, b) => b.confidence - a.confidence || b.sampleCount - a.sampleCount || a.name.localeCompare(b.name, "zh-Hans-CN"));
@@ -95,6 +95,17 @@ function classifySkillSuggestionQuality(suggestion = {}, options = {}) {
   const minConfidence = Number(options.minConfidence || DEFAULT_SAFE_MIN_CONFIDENCE);
   const sampleCount = Number(suggestion.sampleCount || 0);
   const confidence = Number(suggestion.confidence || 0);
+  if (suggestion?.scope?.level === "mixed") {
+    return {
+      level: "blocked",
+      label: "身份冲突禁止应用",
+      reason: suggestion.scope.reason || "样本来自混合来源或身份字段冲突，不能自动沉淀为可用 Skill。",
+      needsReview: true,
+      blocked: true,
+      minSampleCount,
+      minConfidence,
+    };
+  }
   if (sampleCount >= minSampleCount && confidence >= minConfidence) {
     return {
       level: "safe",
