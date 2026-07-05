@@ -1,6 +1,11 @@
 "use strict";
 
-const { inspectBundleAutomationReadiness, inspectRealDesignReferences, validateDesignRequest } = require("./designWorkflow");
+const {
+  inspectBundleAutomationReadiness,
+  inspectDesignOutputCount,
+  inspectRealDesignReferences,
+  validateDesignRequest,
+} = require("./designWorkflow");
 const { isHighValueBudget } = require("./budget");
 
 function evaluateDesignAutoSubmit(job = {}, options = {}) {
@@ -22,6 +27,11 @@ function evaluateDesignAutoSubmit(job = {}, options = {}) {
     assets,
   });
   if (!check.ok) return skip("missing_required_fields", check.missing || []);
+
+  const outputCount = inspectDesignOutputCount(job.outputCount, {
+    fallback: options.defaultOutputCount || 6,
+  });
+  if (!outputCount.ok) return skip(outputCount.reason, ["outputCount"]);
 
   const automation = inspectBundleAutomationReadiness(job.bundle || {});
   if (!automation.ok) return skip(automation.reason, automation.blockers || []);

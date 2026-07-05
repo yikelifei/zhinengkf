@@ -53,7 +53,7 @@ type TrainingSampleBatchReviewPayload = {
   expectedBySampleId?: Record<string, ExpectedIdentityPayload>;
 };
 
-type ApplySkillSuggestionsPayload = {
+export type ApplySkillSuggestionsPayload = {
   agentId?: string;
   minScore?: number;
   suggestionKeys?: string[];
@@ -61,6 +61,18 @@ type ApplySkillSuggestionsPayload = {
   wechatAccountId?: string;
   conversationId?: string;
   customerId?: string;
+};
+
+type SkillSuggestionApplyBlockedReason = "identity_scope_blocked" | "needs_review";
+
+type SkillSuggestionApplyBlocked = Record<string, unknown> & {
+  reason: SkillSuggestionApplyBlockedReason;
+  quality: {
+    level?: string;
+    blocked?: boolean;
+    needsReview?: boolean;
+    reason?: string;
+  };
 };
 
 type TrainingSampleQualityFilter =
@@ -222,7 +234,7 @@ export class TrainingService {
     const selectedSuggestions = selectedKeys.size
       ? allSuggestions.filter((suggestion: any) => selectedKeys.has(skillSuggestionKey(suggestion)))
       : allSuggestions;
-    const blocked: any[] = [];
+    const blocked: SkillSuggestionApplyBlocked[] = [];
     const suggestions: any[] = [];
     for (const suggestion of selectedSuggestions) {
       const quality = classifySkillSuggestionQuality(suggestion);

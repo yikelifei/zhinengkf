@@ -367,6 +367,8 @@ function writeSupervisorChildCmd() {
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(process.cwd())}`,
+    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     ...envLines,
     `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
       realDesignMode ? "--real-design" : "--mock-design",
@@ -383,6 +385,10 @@ function runSupervisorLoop() {
   writeActiveLaunchers();
   appendLog(launcherLog, `[supervisor] persistent ${realDesignMode ? "real" : "mock"} supervisor started pid=${process.pid}`);
   for (;;) {
+    if (stableDesktopGuardActive()) {
+      appendLog(launcherLog, "[supervisor] stable desktop runtime became active; stopping legacy supervisor loop");
+      return;
+    }
     assertModeSwitchAllowed();
     const stdout = openLauncherLogForAppend("stdout");
     const stderr = openLauncherLogForAppend("stderr");
@@ -661,6 +667,8 @@ function buildLauncherCmd() {
       .filter((key) => process.env[key] !== undefined)
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
     ":restart",
+    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
     `if %ERRORLEVEL% EQU 0 echo [%date% %time%] start-dev-ports exited with 0, continuing supervision >> ${cmdQuote(launcherLog)}`,
     `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,

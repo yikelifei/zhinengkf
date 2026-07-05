@@ -203,6 +203,17 @@ test("web automation send operations summary renders low value auto retry count"
   assert.match(webPage, /自动重试/);
 });
 
+test("web timeout scan summaries expose recovered jobs and poll errors", () => {
+  assert.match(webApi, /export type DesignTimeoutScanResult/);
+  assert.match(webApi, /recovered: number/);
+  assert.match(webApi, /pollErrors: Array/);
+  assert.match(webPage, /function describeTimeoutScanStep/);
+  assert.match(webPage, /row\.recovered \|\| 0/);
+  assert.match(webPage, /row\.pollErrors\?\.length \|\| 0/);
+  assert.match(webPage, /找回/);
+  assert.match(webPage, /轮询错误/);
+});
+
 test("web automation step list matches backend queue before send order", () => {
   const stepSection = webPage.slice(
     webPage.indexOf("function buildAutomationStepItems"),
@@ -257,9 +268,20 @@ test("web manual automation summaries expose safe send skipped queue blocks", ()
   assert.match(lowValueRunSection, /被前序发送任务卡住/);
   assert.match(automationCycleSection, /安全发送处理 \$\{sendQueue\?\.processed\.length \|\| 0\} 个，跳过 \$\{sendQueue\?\.skipped\.length \|\| 0\} 个/);
   assert.match(automationCycleSection, /被前序发送任务卡住/);
+  assert.match(lowValueRunSection, /订单草稿 \$\{orderCreated\} 个（不会自动标记收款）/);
+  assert.match(automationCycleSection, /订单草稿 \$\{orderCreated\} 个（不会自动标记收款）/);
   assert.match(dealFlowSection, /queueHeadBlocked: 0/);
   assert.match(dealFlowSection, /sendResult\.skipped\.filter\(\(item\) => item\.reason === "not_account_queue_head"\)\.length/);
   assert.match(dealFlowSection, /其中 \$\{summary\.queueHeadBlocked\} 个被前序发送任务卡住/);
+});
+
+test("web automation order draft step keeps payment boundary visible", () => {
+  const orderDraftSection = webPage.slice(
+    webPage.indexOf("function describeOrderDraftStep"),
+    webPage.indexOf("function describeQueuedStep"),
+  );
+
+  assert.match(orderDraftSection, /订单草稿不会自动标记收款/);
 });
 
 test("web automation summary metric actions route split order stages", () => {

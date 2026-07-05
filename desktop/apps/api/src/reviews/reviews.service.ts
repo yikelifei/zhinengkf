@@ -352,7 +352,7 @@ export class ReviewsService {
           designJobId: order.designJobId || order.designJob?.id || order.quoteDraft?.designJobId || order.quoteDraft?.designJob?.id,
           wechatAccountId: order.wechatAccountId,
           conversationId: order.conversationId,
-          customerId: order.customerId || order.quoteDraft?.customerId || order.designJob?.customerId,
+          customerId: order.customerId,
         },
       );
     }
@@ -374,7 +374,7 @@ export class ReviewsService {
         followupType: payload.followupType,
         wechatAccountId: order.wechatAccountId,
         conversationId: order.conversationId,
-        customerId: order.customerId || order.quoteDraft?.customerId || order.designJob?.customerId,
+        customerId: order.customerId,
         source: "manual_order_review",
       },
     });
@@ -501,7 +501,7 @@ function assertHighValueOrderHasCompleteIdentity(order: any, decision: string) {
   if (!isOrderHighValue(order)) return;
   const wechatAccountId = String(order?.wechatAccountId || "").trim();
   const conversationId = String(order?.conversationId || "").trim();
-  const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
+  const customerId = String(order?.customerId || "").trim();
   if (wechatAccountId && conversationId && customerId) return;
   throw new BadRequestException("高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。");
 }

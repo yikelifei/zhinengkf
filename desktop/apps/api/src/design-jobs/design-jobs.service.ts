@@ -49,6 +49,7 @@ const {
   inspectAssetReferences,
   inspectBundleAutomationReadiness,
   inspectBundleReferences,
+  inspectDesignOutputCount,
   inspectRealDesignReferences,
   isHighValueBudget,
   latestCandidateRound,
@@ -588,8 +589,32 @@ export class DesignJobsService {
       shouldTimeout(job.submittedAt || job.createdAt, now, appConfig.designTimeoutMinutes),
     );
     const updatedJobs = [];
+    const recoveredJobs = [];
+    const pollErrors = [];
 
     for (const job of candidates as any[]) {
+      if (job.externalJobId) {
+        try {
+          const polled = await this.pollResult(job.id);
+          const remoteStatus = String(polled.remoteStatus || "").toLowerCase();
+          const recovered =
+            polled.autoRetried ||
+            ["completed", "failed", "cancelled"].includes(remoteStatus) ||
+            !["submitted", "generating"].includes(String(polled.job?.status || "").toLowerCase());
+          if (recovered) {
+            recoveredJobs.push(polled.job);
+            continue;
+          }
+        } catch (error) {
+          pollErrors.push({
+            designJobId: job.id,
+            requestId: job.requestId,
+            externalJobId: job.externalJobId,
+            errorMessage: error instanceof Error ? error.message : "unknown poll error",
+          });
+        }
+      }
+
       const body = `任务 ${job.requestId} 已超过 ${appConfig.designTimeoutMinutes} 分钟未完成，需要客服关注。`;
       await this.notifications.create("warning", "设计任务出图超时", body, {
         designJobId: job.id,
@@ -622,7 +647,11 @@ export class DesignJobsService {
 
     return {
       scanned: jobs.length,
+      candidates: candidates.length,
+      recovered: recoveredJobs.length,
       timedOut: updatedJobs.length,
+      pollErrors,
+      recoveredJobs,
       jobs: updatedJobs,
     };
   }
@@ -913,6 +942,17 @@ export class DesignJobsService {
     const usableRefs = [...assetRefs, ...bundleRefs].filter((item) => item.ok);
     const unusableRefs = [...assetRefs, ...bundleRefs].filter((item) => !item.ok);
     const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
+    const outputCount = inspectDesignOutputCount(job.outputCount, {
+      fallback: appConfig.defaultOutputCount || 6,
+    });
+    const callback = this.buildDesignPlatformCallback(job.requestId || id);
+    const callbackSummary = {
+      url: callback.url,
+      method: callback.method,
+      events: callback.events,
+      hasAuthorization: Boolean(callback.headers?.Authorization),
+      fallbackPolling: callback.fallbackPolling,
+    };
 
     checks.push({
       key: "request_identity",
@@ -928,6 +968,14 @@ export class DesignJobsService {
       ok: Boolean(job.scene && job.budget && job.bundle),
       severity: "error",
       detail: `scene=${job.scene || "-"} outputCount=${job.outputCount || 0}`,
+    });
+
+    checks.push({
+      key: "design_output_count",
+      label: "候选图数量",
+      ok: outputCount.ok,
+      severity: "error",
+      detail: outputCount.detail,
     });
 
     checks.push({
@@ -948,6 +996,16 @@ export class DesignJobsService {
       detail: bundleAutomation.ok
         ? "商品组合满足自动出图/报价前置规则。"
         : `商品组合需要人工确认：${(bundleAutomation.blockers || []).join(", ") || "unknown"}`,
+    });
+
+    checks.push({
+      key: "design_result_delivery",
+      label: "结果回传兜底",
+      ok: Boolean(callbackSummary.url || callbackSummary.fallbackPolling),
+      severity: "info",
+      detail: `回调${callbackSummary.url ? "已配置" : "未配置"}，${
+        callbackSummary.hasAuthorization ? "已启用签名" : "未启用签名"
+      }，${callbackSummary.fallbackPolling ? "已启用轮询兜底" : "未启用轮询兜底"}`,
     });
 
     if (appConfig.designPlatformAdapter === "art_image_local") {
@@ -1024,8 +1082,11 @@ export class DesignJobsService {
       requestId: job.requestId,
       status: job.status,
       isHighValue: this.isHighValueDesignJob(job),
+      outputCount: outputCount.requested,
+      requiredOutputCountRange: { min: outputCount.min, max: outputCount.max },
       usableReferenceCount: usableRefs.length,
       unusableReferenceCount: unusableRefs.length,
+      callback: callbackSummary,
       checks,
       health,
     };

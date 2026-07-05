@@ -394,11 +394,14 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     {
       key: "timeout",
       label: "超时兜底",
-      completed: countArray(timeouts, "timedOut") + countArray(sendOperations, "timedOut"),
+      completed:
+        countArrayOrNumber(timeouts, "recovered") +
+        countArrayOrNumber(timeouts, "timedOut") +
+        countArrayOrNumber(sendOperations, "timedOut"),
       blocked: 0,
-      failed: countArray(timeouts, "failed"),
-      detail: "把出图或发送超时的任务转提醒或人工处理。",
-      action: "超时数量增加时，检查设计平台、微信桥接和发送回执扫描。",
+      failed: countArray(timeouts, "failed") + countArray(timeouts, "pollErrors"),
+      detail: "先轮询找回回调丢失的出图，再把仍超时的任务转提醒或人工处理。",
+      action: "超时或轮询错误增加时，检查设计平台状态、回调地址、微信桥接和发送回执扫描。",
       tone: "idle",
     },
   ];

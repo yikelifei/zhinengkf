@@ -564,13 +564,18 @@ export type SkillSuggestion = {
   };
 };
 
+export type SkillSuggestionApplyBlocked = SkillSuggestion & {
+  reason: "identity_scope_blocked" | "needs_review" | string;
+  quality?: NonNullable<SkillSuggestion["quality"]>;
+};
+
 export type ApplySkillSuggestionsResult = {
   suggested: number;
   selected?: number;
   applied?: number;
   filtered?: number;
   requiresReview?: number;
-  blocked?: Array<Record<string, unknown>>;
+  blocked?: SkillSuggestionApplyBlocked[];
   created: Array<Record<string, unknown>>;
   updated: Array<Record<string, unknown>>;
   skipped: Array<Record<string, unknown>>;
@@ -1405,8 +1410,20 @@ export type DesignJobPreflightResult = {
   requestId: string;
   status: string;
   isHighValue: boolean;
+  outputCount?: number;
+  requiredOutputCountRange?: {
+    min: number;
+    max: number;
+  };
   usableReferenceCount: number;
   unusableReferenceCount: number;
+  callback?: {
+    url: string;
+    method: string;
+    events: string[];
+    hasAuthorization: boolean;
+    fallbackPolling: boolean;
+  };
   checks: Array<{
     key: string;
     label: string;
@@ -2145,8 +2162,23 @@ export async function createFailureDemoJob(conversationId: string, expected: Ide
     return postJson<DesignJob>("/design-jobs/demo-failure", { ...expected, conversationId });
 }
 
-export async function scanDesignTimeouts(filters: IdentityFilters = {}): Promise<{ scanned: number; timedOut: number; jobs: DesignJob[] }> {
-    return postJson<{ scanned: number; timedOut: number; jobs: DesignJob[] }>("/design-jobs/scan-timeouts", filters);
+export type DesignTimeoutScanResult = {
+  scanned: number;
+  candidates?: number;
+  recovered: number;
+  timedOut: number;
+  pollErrors: Array<{
+    designJobId?: string;
+    requestId?: string;
+    externalJobId?: string;
+    errorMessage: string;
+  }>;
+  recoveredJobs: DesignJob[];
+  jobs: DesignJob[];
+};
+
+export async function scanDesignTimeouts(filters: IdentityFilters = {}): Promise<DesignTimeoutScanResult> {
+    return postJson<DesignTimeoutScanResult>("/design-jobs/scan-timeouts", filters);
 }
 
 export type DesignActivePollResult = {

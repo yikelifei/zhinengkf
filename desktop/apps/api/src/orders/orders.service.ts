@@ -78,9 +78,9 @@ export class OrdersService {
         orderDraftId: orderDraft.id,
         quoteDraftId: quoteId,
         designJobId: quote.designJobId,
-        wechatAccountId: orderDraft.wechatAccountId || quote.designJob?.wechatAccountId,
-        conversationId: orderDraft.conversationId || quote.designJob?.conversationId,
-        customerId: orderDraft.customerId || quote.customerId || quote.designJob?.customerId,
+        wechatAccountId: orderDraft.wechatAccountId,
+        conversationId: orderDraft.conversationId,
+        customerId: orderDraft.customerId,
       },
     );
 
@@ -338,7 +338,7 @@ export class OrdersService {
     if (order.confirmationSendTaskId || order.confirmationSendTask) warnings.push("订单确认消息已进入发送队列");
     if (!orderDraftSelectedImageId(order)) warnings.push("订单还没有选图");
     if (!order.wechatAccountId) warnings.push("订单缺少微信账号");
-    if (!order.customerId && !order.quoteDraft?.customerId && !order.designJob?.customerId) warnings.push("订单缺少客户绑定");
+    if (!order.customerId) warnings.push("订单缺少客户绑定");
     if (!order.conversationId) warnings.push("订单缺少客户会话");
     if (Number(order.profit || 0) < 0) warnings.push("订单利润为负，需要人工确认");
     const designJob = order.designJob || order.quoteDraft?.designJob || null;

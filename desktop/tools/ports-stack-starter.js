@@ -190,7 +190,15 @@ async function main() {
         process.exitCode = result.status || 1;
         return;
       }
-      await waitForStartedStack();
+      try {
+        await waitForStartedStack();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error || "unknown startup wait error");
+        logStep(`supervisor readiness failed; falling back to direct keep-alive: ${message}`);
+        console.log(`[launch] supervisor did not produce a ready stack; falling back to direct keep-alive startup.`);
+        launchDirectKeepAlive(env);
+        await waitForStartedStack();
+      }
       return;
     }
 

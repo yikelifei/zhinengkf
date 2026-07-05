@@ -11,6 +11,7 @@ const {
   evaluateDesignPlatformActivationStatus,
   inspectAssetReferences,
   inspectBundleReferences,
+  inspectDesignOutputCount,
   inspectRealDesignReferences,
   isHighValueBudget,
   matchCustomerSelection,
@@ -454,6 +455,26 @@ test("builds warm waiting message", () => {
   const text = buildWaitingMessage({ customerName: "王总", scene: "员工福利", outputCount: 6 });
   assert.match(text, /王总/);
   assert.match(text, /6张/);
+});
+
+test("validates formal first-round design output count", () => {
+  const ready = inspectDesignOutputCount(6);
+  assert.equal(ready.ok, true);
+  assert.equal(ready.requested, 6);
+  assert.equal(ready.min, 4);
+  assert.equal(ready.max, 6);
+
+  const tooFew = inspectDesignOutputCount(3);
+  assert.equal(tooFew.ok, false);
+  assert.equal(tooFew.reason, "output_count_below_minimum");
+
+  const tooMany = inspectDesignOutputCount(7);
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.reason, "output_count_above_maximum");
+
+  const invalid = inspectDesignOutputCount("六张");
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason, "invalid_output_count");
 });
 
 test("detects design job timeout after configured minutes", () => {

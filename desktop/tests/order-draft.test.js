@@ -31,6 +31,8 @@ test("builds an order draft snapshot from a selected quote", () => {
   assert.equal(decision.ok, true);
   assert.equal(decision.orderDraft.status, "confirmed");
   assert.equal(decision.orderDraft.quoteDraftId, "quote_1");
+  assert.equal(decision.orderDraft.customerId, "customer_1");
+  assert.equal(decision.orderDraft.conversationId, "conversation_1");
   assert.equal(decision.orderDraft.wechatAccountId, "wechat_1");
   assert.equal(decision.orderDraft.profitRate, 0.4222);
   assert.deepEqual(decision.orderDraft.bundleSnapshot.items[0].skuCode, "BOX-A");

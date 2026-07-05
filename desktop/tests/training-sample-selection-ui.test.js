@@ -92,10 +92,11 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(page, /请先勾选要应用的\$\{scopeLabel\} Skill 建议/);
   assert.match(page, /\$\{scopeLabel\} \$\{result\.selected \?\? suggestionKeys\.length\} 条建议/);
   assert.match(page, /const blockedText = skillApplyBlockedSummary\(result\)/);
-  assert.match(page, /function skillApplyBlockedSummary\(result: \{ requiresReview\?: number; blocked\?: Array<Record<string, unknown>> \}\)/);
+  assert.match(page, /SkillSuggestionApplyBlocked/);
+  assert.match(page, /function skillApplyBlockedSummary\(result: \{ requiresReview\?: number; blocked\?: SkillSuggestionApplyBlocked\[\] \}\)/);
   assert.match(page, /identityBlockedCount \? `身份冲突禁止 \$\{identityBlockedCount\} 条`/);
   assert.match(page, /reviewBlockedCount \? `需复核未应用 \$\{reviewBlockedCount\} 条`/);
-  assert.match(page, /function skillApplyBlockedByIdentity\(row: Record<string, unknown>\)/);
+  assert.match(page, /function skillApplyBlockedByIdentity\(row: SkillSuggestionApplyBlocked\)/);
   assert.match(page, /row\.reason === "identity_scope_blocked"/);
   assert.match(page, /quality\?\.blocked === true \|\| quality\?\.level === "blocked"/);
   assert.match(page, /function skillApplyChangeSummary\(result: \{ created\?: Array<Record<string, unknown>>; updated\?: Array<Record<string, unknown>>; skipped\?: Array<Record<string, unknown>> \}\)/);
@@ -105,6 +106,9 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(api, /scope\?: \{[\s\S]*label\?: string;[\s\S]*conversationId\?: string \| null;/);
   assert.match(api, /level: "safe" \| "review" \| "risk" \| "blocked"/);
   assert.match(api, /blocked\?: boolean/);
+  assert.match(api, /export type SkillSuggestionApplyBlocked = SkillSuggestion & \{/);
+  assert.match(api, /reason: "identity_scope_blocked" \| "needs_review" \| string/);
+  assert.match(api, /blocked\?: SkillSuggestionApplyBlocked\[\]/);
   assert.match(page, /function agentSkillScopeTone\(level\?: string\)/);
   assert.match(page, /className=\{`agent-skill-pill \$\{agentSkillScopeTone\(skill\.scope\?\.level\)\}`\}/);
   assert.match(page, /\{skill\.scope\?\.label \? <small>\{skill\.scope\.label\}<\/small> : null\}/);

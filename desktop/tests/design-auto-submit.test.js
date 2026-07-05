@@ -152,11 +152,35 @@ test("skips draft when recommended bundle is not automation ready", () => {
   assert.deepEqual(decision.missing, ["low_margin", "size_unknown"]);
 });
 
+test("skips draft when formal output count is outside the safe range", () => {
+  const decision = evaluateDesignAutoSubmit({
+    id: "design_1",
+    status: "draft",
+    isHighValue: false,
+    budget: { perUnitAmount: 180, quantity: 50 },
+    bundle: { items: [{ skuCode: "BOX-A", imageUrl: "https://example.test/box.png" }] },
+    designType: "bundle_render",
+    scene: "employee gift",
+    outputCount: 3,
+    assets: [{ id: "asset_1", url: "https://example.test/logo.png" }],
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "output_count_below_minimum");
+  assert.deepEqual(decision.missing, ["outputCount"]);
+});
+
 test("low-value automation submits complete draft to design platform with customer and sku assets", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   const previousAdapter = appConfig.designPlatformAdapter;
+  const previousPublicBaseUrl = appConfig.customerServicePublicBaseUrl;
+  const previousCallbackApiKey = appConfig.callbackApiKey;
+  const previousCallbackUrl = appConfig.designPlatformCallbackUrl;
   appConfig.useLocalStore = true;
   appConfig.designPlatformAdapter = "standard_v1";
+  appConfig.customerServicePublicBaseUrl = "http://127.0.0.1:3200";
+  appConfig.callbackApiKey = "callback-secret";
+  appConfig.designPlatformCallbackUrl = "";
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "zhinengkefu-auto-submit-"));
   const customerLogoPath = path.join(tmpDir, "customer-logo.png");
@@ -294,6 +318,12 @@ test("low-value automation submits complete draft to design platform with custom
     assert.equal(createPayloads[0].conversationId, "conversation_1");
     assert.equal(createPayloads[0].outputCount, 6);
     assert.equal(createPayloads[0].requirements.useRealSkuImages, true);
+    assert.equal(createPayloads[0].callback.url, "http://127.0.0.1:3200/api/integrations/design-platform/callback");
+    assert.equal(createPayloads[0].callback.method, "POST");
+    assert.deepEqual(createPayloads[0].callback.events, ["completed", "failed"]);
+    assert.equal(createPayloads[0].callback.requestId, "request_low_value_submit");
+    assert.equal(createPayloads[0].callback.fallbackPolling, true);
+    assert.equal(createPayloads[0].callback.headers.Authorization, "Bearer callback-secret");
     assert.deepEqual(
       uploadedAssets.map((asset) => asset.role).sort(),
       ["customer_logo", "gift_box", "sku_image"],
@@ -313,6 +343,9 @@ test("low-value automation submits complete draft to design platform with custom
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
     appConfig.designPlatformAdapter = previousAdapter;
+    appConfig.customerServicePublicBaseUrl = previousPublicBaseUrl;
+    appConfig.callbackApiKey = previousCallbackApiKey;
+    appConfig.designPlatformCallbackUrl = previousCallbackUrl;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

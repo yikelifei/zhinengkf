@@ -5,6 +5,7 @@ $RuntimeDir = if ($env:DESKTOP_RUNTIME_DIR) { $env:DESKTOP_RUNTIME_DIR } else { 
 $LogDir = Join-Path $RuntimeDir "logs"
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 $StableRuntimeLauncherScript = Join-Path $Root "tools\stable-runtime-launcher.js"
+$StableRuntimeLauncherArgument = "tools\stable-runtime-launcher.js"
 $StartLog = Join-Path $RuntimeDir "stable-start.log"
 $KeepAliveOutLog = Join-Path $LogDir "stable-runtime-launcher.out.log"
 $KeepAliveErrLog = Join-Path $LogDir "stable-runtime-launcher.err.log"
@@ -28,34 +29,46 @@ function Write-StableStartingLock {
 }
 
 function Find-KeepAliveProcess {
-  Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { $_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript) } |
-    Sort-Object ProcessId -Descending |
-    Select-Object -First 1
+  try {
+    Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
+      Where-Object { ($_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript)) -or ($_.CommandLine -like "*stable-runtime-launcher.js*") } |
+      Sort-Object ProcessId -Descending |
+      Select-Object -First 1
+  } catch {
+    Write-Warning "stable launcher process lookup unavailable: $($_.Exception.Message)"
+    return $null
+  }
 }
 
 function Test-StableHttp($Url) {
   try {
-    $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $Url
-    return [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 500
+    $statusCodeText = & curl.exe -s -o NUL -w "%{http_code}" --max-time 3 $Url
+    $statusCode = [int]$statusCodeText
+    return $statusCode -ge 200 -and $statusCode -lt 500
   } catch {
     return $false
   }
 }
 
+function Test-StableRuntimeHealthy {
+  $webReady = Test-StableHttp "http://127.0.0.1:3100/"
+  $apiReady = Test-StableHttp "http://127.0.0.1:3200/api/health"
+  $designReady = Test-StableHttp "http://127.0.0.1:3700/v1/health"
+  return $webReady -and $apiReady -and $designReady
+}
+
 function Wait-StableRuntimeReady($ProcessId) {
-  $deadline = (Get-Date).AddSeconds(35)
+  $deadline = (Get-Date).AddSeconds(180)
+  $reportedProcessExit = $false
   while ((Get-Date) -lt $deadline) {
-    $running = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if (-not $running) {
-      return $false
+    if (Test-StableRuntimeHealthy) {
+      return $true
     }
 
-    $webReady = Test-StableHttp "http://127.0.0.1:3100/"
-    $apiReady = Test-StableHttp "http://127.0.0.1:3200/api/health"
-    $designReady = Test-StableHttp "http://127.0.0.1:3700/v1/health"
-    if ($webReady -and $apiReady -and $designReady) {
-      return $true
+    $running = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $running -and -not $reportedProcessExit) {
+      Write-StableStartLog "stable runtime launcher pid=$ProcessId exited before health check passed; continuing health wait"
+      $reportedProcessExit = $true
     }
 
     Start-Sleep -Milliseconds 1000
@@ -67,33 +80,30 @@ function Wait-StableRuntimeReady($ProcessId) {
 function Start-StableRuntimeProcess {
   try {
     return Start-Process `
-      -FilePath $NodeExe `
-      -ArgumentList @($StableRuntimeLauncherScript) `
+      -FilePath "cmd.exe" `
+      -ArgumentList @("/d", "/c", "node $StableRuntimeLauncherArgument") `
       -WorkingDirectory $Root `
       -WindowStyle Hidden `
-      -RedirectStandardOutput $KeepAliveOutLog `
-      -RedirectStandardError $KeepAliveErrLog `
       -PassThru
   } catch {
-    Write-StableStartLog "stable launcher log redirect failed: $($_.Exception.Message); retrying without redirected logs"
-    Write-Warning "stable launcher log redirect failed: $($_.Exception.Message); retrying without redirected logs"
-    return Start-Process `
-      -FilePath $NodeExe `
-      -ArgumentList @($StableRuntimeLauncherScript) `
-      -WorkingDirectory $Root `
-      -WindowStyle Hidden `
-      -PassThru
+    Write-StableStartLog "stable launcher process start failed: $($_.Exception.Message)"
+    throw
   }
 }
 
 try {
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-  Remove-Item -Force -ErrorAction SilentlyContinue -Path $StopRequestFile
+  try {
+    Remove-Item -Force -ErrorAction Stop -Path $StopRequestFile
+  } catch [System.Management.Automation.ItemNotFoundException] {
+  } catch {
+    Write-Warning "stable stop request cleanup unavailable: $($_.Exception.Message)"
+  }
   Write-StableStartingLock
 
   & node (Join-Path $Root "tools\stable-start-needed.js") | Out-Null
-  if ($LASTEXITCODE -eq 0) {
+  if ($LASTEXITCODE -eq 0 -or (Test-StableRuntimeHealthy)) {
     Write-StableStartLog "stable services already healthy; keepalive start skipped"
     Write-Output "[stable] services already healthy"
     exit 0

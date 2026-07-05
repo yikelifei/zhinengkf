@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
-import { TrainingService } from "./training.service";
+import { ApplySkillSuggestionsPayload, TrainingService } from "./training.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 
 @Controller("training")
@@ -128,15 +128,7 @@ export class TrainingController {
   @Post("skill-suggestions/apply")
   applySkillSuggestions(
     @Body()
-    payload: {
-      agentId?: string;
-      minScore?: number;
-      suggestionKeys?: string[];
-      includeNeedsReview?: boolean;
-      wechatAccountId?: string;
-      conversationId?: string;
-      customerId?: string;
-    },
+    payload: ApplySkillSuggestionsPayload,
   ) {
     return this.training.applySkillSuggestions(payload || {});
   }

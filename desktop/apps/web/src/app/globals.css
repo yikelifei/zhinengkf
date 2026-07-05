@@ -11434,6 +11434,54 @@ input[type="checkbox"]:disabled {
   color: #b42318;
 }
 
+.order-send-preflight {
+  margin: 8px 0;
+  padding: 10px 12px 10px 16px;
+}
+
+.order-send-preflight .preflight-head {
+  gap: 10px;
+}
+
+.order-send-preflight .preflight-head span {
+  overflow-wrap: anywhere;
+}
+
+.order-send-preflight-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.order-send-preflight-badge.ok {
+  background: rgba(52, 199, 89, 0.12);
+  color: #167c34;
+}
+
+.order-send-preflight-badge.warning {
+  background: rgba(255, 149, 0, 0.14);
+  color: #9a5a00;
+}
+
+.order-send-preflight-badge.error {
+  background: rgba(255, 59, 48, 0.12);
+  color: #b42318;
+}
+
+.order-send-preflight-checks {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.order-send-preflight-checks span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .quote-note-strip {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -13963,6 +14011,18 @@ body:has(.apple-light-shell) {
 .apple-light-shell .workspace[data-active-section="review-center"] > .review-grid,
 .apple-light-shell .workspace[data-active-section="quote-center"] > .quote-grid {
   display: grid !important;
+}
+
+.apple-light-shell .workspace[data-active-section="design-center"] > .main-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.apple-light-shell .workspace[data-active-section="design-center"] > .main-grid > .panel:not(#design-center) {
+  display: none !important;
+}
+
+.apple-light-shell .workspace[data-active-section="design-center"] #design-center {
+  grid-column: 1 / -1;
 }
 
 .apple-light-shell .workspace[data-active-section] > :is(

@@ -446,6 +446,86 @@ test("passes identity filters when listing training samples", () => {
     });
   });
 
+  test("reports needs-review and identity-blocked skill suggestions separately", () => {
+    const source = require("node:fs").readFileSync(
+      require("node:path").join(__dirname, "..", "apps/api/src/training/training.service.ts"),
+      "utf8",
+    );
+    assert.match(source, /type SkillSuggestionApplyBlockedReason = "identity_scope_blocked" \| "needs_review"/);
+    assert.match(source, /type SkillSuggestionApplyBlocked = Record<string, unknown> & \{/);
+    assert.match(source, /const blocked: SkillSuggestionApplyBlocked\[\] = \[\]/);
+    const { service, calls } = createTrainingService([
+      {
+        id: "review_budget",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_top",
+        conversationId: "conv_top",
+        customerId: "customer_top",
+        scene: "礼盒设计",
+        customerText: "预算还没确定",
+        idealReply: "我先帮您确认预算和数量。",
+        score: 95,
+        skillHints: ["预算澄清"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+      {
+        id: "conflict_scene",
+        agentId: "agent_gift",
+        agentKey: "gift_design",
+        status: "ready",
+        sourceType: "chat_import",
+        wechatAccountId: "wechat_top",
+        conversationId: "conv_top",
+        customerId: "customer_top",
+        identityBinding: {
+          status: "passed",
+          wechatAccountId: "wechat_binding",
+          conversationId: "conv_binding",
+          customerId: "customer_binding",
+        },
+        scene: "礼盒设计",
+        customerText: "客户身份混在一起",
+        idealReply: "我先核对客户来源。",
+        score: 95,
+        skillHints: ["场景确认"],
+        quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+      },
+    ]);
+
+    const result = service.applySkillSuggestions({
+      agentId: "agent_gift",
+      includeNeedsReview: false,
+    });
+
+    assert.equal(result.selected, 2);
+    assert.equal(result.applied, 0);
+    assert.equal(result.requiresReview, 2);
+    assert.deepEqual(
+      result.blocked.map((item) => item.reason).sort(),
+      ["identity_scope_blocked", "needs_review"],
+    );
+    assert.equal(result.blocked.find((item) => item.reason === "identity_scope_blocked").quality.blocked, true);
+    assert.deepEqual(calls.find((call) => call.method === "applyAgentSkillSuggestions"), {
+      method: "applyAgentSkillSuggestions",
+      suggestionCount: 0,
+    });
+  });
+
+  test("training controller reuses apply skill suggestions payload type", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const controller = fs.readFileSync(path.join(__dirname, "..", "apps/api/src/training/training.controller.ts"), "utf8");
+    const service = fs.readFileSync(path.join(__dirname, "..", "apps/api/src/training/training.service.ts"), "utf8");
+
+    assert.match(service, /export type ApplySkillSuggestionsPayload = \{/);
+    assert.match(controller, /import \{ ApplySkillSuggestionsPayload, TrainingService \} from "\.\/training\.service"/);
+    assert.match(controller, /payload: ApplySkillSuggestionsPayload/);
+    assert.doesNotMatch(controller, /suggestionKeys\?: string\[\];[\s\S]*includeNeedsReview\?: boolean;[\s\S]*wechatAccountId\?: string;/);
+  });
+
   test("batch reviews visible training samples with de-duplicated ids", () => {
   const notifications = [];
   const { service, calls, rows } = createTrainingService(samples);

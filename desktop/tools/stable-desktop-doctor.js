@@ -302,9 +302,17 @@ function checkStaleRuntimeProcesses() {
 }
 
 function findStaleRuntimeProcesses() {
+  const normalizedRoot = normalizePathText(desktopRoot);
   const script = [
+    `$root = ${psQuote(normalizedRoot)}`,
     "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'cmd.exe'\"",
-    "$items | Where-Object { $_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo' } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "$items | Where-Object {",
+    "  $_.CommandLine -and",
+    "  (",
+    "    ($_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo') -or",
+    "    ((($_.CommandLine -replace '\\\\','/').ToLowerInvariant().Contains($root)) -and ($_.CommandLine -like '*.runtime*') -and ($_.CommandLine -notlike '*.runtime-stable*'))",
+    "  )",
+    "} | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
     cwd: desktopRoot,

@@ -54,6 +54,37 @@ test("design task failure guidance is visible and supports safe retry", () => {
   assert.match(cssSource, /\.job-row \.job-next-action/);
 });
 
+test("design task preflight shows output count and result delivery fallback", () => {
+  assert.match(apiSource, /requiredOutputCountRange/);
+  assert.match(apiSource, /fallbackPolling/);
+  assert.match(pageSource, /候选图：\{outputCountText\}/);
+  assert.match(pageSource, /结果回传：\{callbackText\}/);
+});
+
+test("design submit action runs task preflight before calling submit", () => {
+  const submitSection = pageSource.slice(
+    pageSource.indexOf("async function submitActiveJob"),
+    pageSource.indexOf("async function runDesignJobPreflight"),
+  );
+  assert.match(submitSection, /const preflight = await runDesignJobPreflight\(job\)/);
+  assert.match(submitSection, /if \(!preflight\.ok\)/);
+  assert.match(submitSection, /提交已停止/);
+  assert.match(submitSection, /await submitDesignJob\(job\.id, identityExpectation\(job\)\)/);
+  assert.ok(
+    submitSection.indexOf("runDesignJobPreflight(job)") < submitSection.indexOf("submitDesignJob(job.id"),
+    "submit should only run after task preflight",
+  );
+});
+
+test("design center active view hides sibling panels instead of clipping them", () => {
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] > \.main-grid \{/);
+  assert.match(cssSource, /grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] > \.main-grid > \.panel:not\(#design-center\)/);
+  assert.match(cssSource, /display: none !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center/);
+  assert.match(cssSource, /grid-column: 1 \/ -1/);
+});
+
 test("design platform config exposes a real one-click smoke test path", () => {
   assert.match(pageSource, /smokeTestDesignPlatform/);
   assert.match(pageSource, /试跑出图/);

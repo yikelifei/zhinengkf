@@ -354,6 +354,15 @@ test("automation run summarizes skipped reasons for operator triage", async () =
 test("automation run summarizes low value stage progress and next action", async () => {
   const service = createService({
     designJobs: {
+      scanTimeouts: async () => ({
+        scanned: 3,
+        candidates: 2,
+        recovered: 1,
+        timedOut: 1,
+        pollErrors: [{ designJobId: "design_poll_error_1", errorMessage: "network timeout" }],
+        recoveredJobs: [{ id: "design_recovered_1" }],
+        jobs: [{ id: "design_timeout_1" }],
+      }),
       runLowValueAutomation: async () => ({
         autoSubmit: {
           submitted: [{ designJobId: "design_submit_1", wechatAccountId: "wechat_1", conversationId: "conversation_1" }],
@@ -399,9 +408,9 @@ test("automation run summarizes low value stage progress and next action", async
 
   const run = await service.runOnce("manual");
 
-  assert.equal(run.stageSummary.progressed, 7);
+  assert.equal(run.stageSummary.progressed, 9);
   assert.equal(run.stageSummary.blocked, 4);
-  assert.equal(run.stageSummary.failed, 1);
+  assert.equal(run.stageSummary.failed, 2);
   assert.equal(run.stageSummary.nextAction, "先处理失败步骤，再重新跑一轮低价值自动化。");
   assert.deepEqual(
     run.stageSummary.stages.map((stage) => [stage.key, stage.completed, stage.blocked, stage.failed, stage.tone]),
@@ -413,7 +422,7 @@ test("automation run summarizes low value stage progress and next action", async
       ["orderConfirmation", 1, 0, 0, "ok"],
       ["orderFollowup", 0, 1, 0, "warning"],
       ["safeSend", 2, 2, 1, "error"],
-      ["timeout", 0, 0, 0, "idle"],
+      ["timeout", 2, 0, 1, "error"],
     ],
   );
 });

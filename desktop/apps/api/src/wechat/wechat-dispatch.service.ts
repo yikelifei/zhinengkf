@@ -424,7 +424,7 @@ export class WechatDispatchService {
 
   private assertOrderHasCompleteSendIdentity(order: any) {
     const wechatAccountId = String(order?.wechatAccountId || "").trim();
-    const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
+    const customerId = String(order?.customerId || "").trim();
     const conversationId = String(order?.conversationId || "").trim();
     if (wechatAccountId && customerId && conversationId) return;
     throw new BadRequestException("订单缺少微信账号、客户或会话绑定，不能进入微信发送队列。");
@@ -506,11 +506,10 @@ export class WechatDispatchService {
   }
 
   private expectedIdentityFromOrder(order: any): ExpectedIdentityPayload {
-    const designJob = order?.designJob || order?.quoteDraft?.designJob || {};
     return {
-      expectedWechatAccountId: order?.wechatAccountId || designJob?.wechatAccountId,
-      expectedConversationId: order?.conversationId || designJob?.conversationId,
-      expectedCustomerId: order?.customerId || order?.quoteDraft?.customerId || designJob?.customerId,
+      expectedWechatAccountId: order?.wechatAccountId,
+      expectedConversationId: order?.conversationId,
+      expectedCustomerId: order?.customerId,
     };
   }
 

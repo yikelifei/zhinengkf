@@ -44,6 +44,51 @@ function buildWaitingMessage({ customerName = "", scene = "", outputCount = 6 })
   return `${name}我先${sceneText}把礼盒搭配效果图做几版出来，预计会有${outputCount}张，出来后我发您挑。`;
 }
 
+function inspectDesignOutputCount(value, { min = 4, max = 6, fallback = 6 } = {}) {
+  const raw = value === undefined || value === null || value === "" ? fallback : value;
+  const numeric = Number(raw);
+  const isInteger = Number.isInteger(numeric);
+  const requested = isInteger ? numeric : 0;
+  if (!isInteger) {
+    return {
+      ok: false,
+      requested,
+      min,
+      max,
+      reason: "invalid_output_count",
+      detail: `候选图数量必须是整数，当前值为 ${String(raw || "-")}`,
+    };
+  }
+  if (requested < min) {
+    return {
+      ok: false,
+      requested,
+      min,
+      max,
+      reason: "output_count_below_minimum",
+      detail: `正式首轮出图至少 ${min} 张，当前为 ${requested} 张`,
+    };
+  }
+  if (requested > max) {
+    return {
+      ok: false,
+      requested,
+      min,
+      max,
+      reason: "output_count_above_maximum",
+      detail: `正式首轮出图最多 ${max} 张，当前为 ${requested} 张`,
+    };
+  }
+  return {
+    ok: true,
+    requested,
+    min,
+    max,
+    reason: "output_count_ready",
+    detail: `正式首轮将生成 ${requested} 张候选图`,
+  };
+}
+
 function shouldTimeout(createdAt, now = new Date(), timeoutMinutes = 20) {
   const started = new Date(createdAt).getTime();
   if (!Number.isFinite(started)) return false;
@@ -409,6 +454,7 @@ module.exports = {
   validateDesignRequest,
   nextStatusAfterDesignCompleted,
   buildWaitingMessage,
+  inspectDesignOutputCount,
   shouldTimeout,
   inspectAssetReferences,
   inspectBundleReferences,

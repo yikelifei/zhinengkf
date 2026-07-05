@@ -40,6 +40,8 @@ const specs = [
 ];
 
 const children = new Map();
+const runtimeKeepAlive = setInterval(() => undefined, 60000);
+runtimeKeepAlive.ref();
 fs.mkdirSync(logsDir, { recursive: true });
 installProcessHandlers();
 if (fs.existsSync(stopRequestFile)) {
@@ -100,6 +102,10 @@ function ensureService(spec) {
   if (existing && owners.includes(existing.pid)) return;
   const wrongOwners = owners.filter((pid) => {
     if (existing && pid === existing.pid) return false;
+    if (portHealthMatches(spec)) {
+      append(spec.name, `port ${spec.port} owner ${pid} accepted by health check`);
+      return false;
+    }
     const match = ownerMatches(pid, spec.expected);
     if (match === true) return false;
     if (match === "unknown" && portHealthMatches(spec)) {
@@ -232,9 +238,17 @@ function acquireSingleInstanceLock() {
   fs.mkdirSync(runtimeDir, { recursive: true });
   try {
     const existingPid = Number(fs.readFileSync(lockFile, "utf8").trim());
-    if (Number.isFinite(existingPid) && existingPid > 0 && isStableRuntimeLauncherPid(existingPid)) {
-      console.log(`[stable-runtime] existing launcher pid=${existingPid}; exiting`);
-      process.exit(0);
+    if (Number.isFinite(existingPid) && existingPid > 0) {
+      if (!isPidAlive(existingPid)) {
+        fs.rmSync(lockFile, { force: true });
+        append("stable-runtime", `removed stale launcher pid file pid=${existingPid}`);
+      } else if (isCurrentStableRuntimeLauncher(existingPid)) {
+        console.log(`[stable-runtime] existing launcher pid=${existingPid}; exiting`);
+        process.exit(0);
+      } else {
+        fs.rmSync(lockFile, { force: true });
+        append("stable-runtime", `removed stale launcher pid file with stale heartbeat pid=${existingPid}`);
+      }
     }
   } catch {}
   fs.writeFileSync(lockFile, `${process.pid}\n`, "utf8");
@@ -245,10 +259,26 @@ function acquireSingleInstanceLock() {
   });
 }
 
+function isCurrentStableRuntimeLauncher(pid) {
+  if (!isStableRuntimeLauncherPid(pid)) return false;
+  const heartbeat = readJsonFile(heartbeatFile);
+  const heartbeatPid = Number(heartbeat?.pid);
+  const heartbeatUpdatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
+  return heartbeatPid === Number(pid) && Number.isFinite(heartbeatUpdatedAt) && Date.now() - heartbeatUpdatedAt < 30000;
+}
+
 
 function isStableRuntimeLauncherPid(pid) {
   const commandLine = normalize(commandLineForPid(pid));
   return Boolean(commandLine && commandLine.includes("stable-runtime-launcher.js"));
+}
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 function getPortOwnerPids(port) {
   const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
