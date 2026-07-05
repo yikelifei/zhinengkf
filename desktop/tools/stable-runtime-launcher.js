@@ -138,11 +138,9 @@ function ensureProcessService(spec) {
 }
 
 function startService(spec) {
-  let out = "ignore";
-  let err = "ignore";
+  const out = openServiceLogForAppend(spec.name, "out");
+  const err = openServiceLogForAppend(spec.name, "err");
   try {
-    out = fs.openSync(path.join(logsDir, `${spec.name}.out.log`), "a");
-    err = fs.openSync(path.join(logsDir, `${spec.name}.err.log`), "a");
     append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
     const child = spawn(spec.command, spec.args, {
       cwd: root,
@@ -168,6 +166,16 @@ function startService(spec) {
 
 function processServiceSpec(name, args, env = {}) {
   return { name, type: "process", command: process.execPath, args, expected: normalize(args[0]), env };
+}
+
+function openServiceLogForAppend(name, streamName) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+    return fs.openSync(path.join(logsDir, `${name}.${streamName}.log`), "a");
+  } catch (error) {
+    append("stable-runtime", `${name} ${streamName} log unavailable: ${error?.message || error}`);
+    return "ignore";
+  }
 }
 
 function webServiceSpec() {
@@ -388,8 +396,10 @@ function writeWebRuntimeServer() {
 }
 
 function append(name, message) {
-  fs.mkdirSync(logsDir, { recursive: true });
-  fs.appendFileSync(path.join(logsDir, `${name}.launcher.log`), `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.appendFileSync(path.join(logsDir, `${name}.launcher.log`), `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  } catch {}
 }
 
 function normalize(value) {

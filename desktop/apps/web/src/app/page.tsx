@@ -660,6 +660,36 @@ function buildSkuFormImageChangeSummary(form: SkuForm, originalSku: Sku | null |
   return `待保存图片变更：${parts.join("，")}。保存商品后才会生效，保存后请刷新商品审核确认图片问题减少。`;
 }
 
+function buildSkuFormImageChangeCopyText(form: SkuForm, originalSku: Sku | null | undefined) {
+  const summary = buildSkuFormImageChangeSummary(form, originalSku);
+  if (!summary || !originalSku) return "";
+  const originalMainImage = String(originalSku.mainImagePath || "").trim();
+  const nextMainImage = form.mainImagePath.trim();
+  const originalAngleImages = originalSku.angleImages || [];
+  const nextAngleImages = splitTextList(form.angleImages);
+  const removedImages = [
+    ...(originalMainImage && originalMainImage !== nextMainImage ? [`主图：${originalMainImage}`] : []),
+    ...originalAngleImages
+      .filter((imagePath) => !nextAngleImages.includes(imagePath))
+      .map((imagePath, index) => `多角度图${index + 1}：${imagePath}`),
+  ];
+  const addedImages = [
+    ...(nextMainImage && nextMainImage !== originalMainImage ? [`主图：${nextMainImage}`] : []),
+    ...nextAngleImages
+      .filter((imagePath) => !originalAngleImages.includes(imagePath))
+      .map((imagePath, index) => `多角度图${index + 1}：${imagePath}`),
+  ];
+  return [
+    `SKU 图片待保存变更：${form.skuCode.trim()}｜${form.name.trim() || originalSku.name || "未命名商品"}`,
+    summary,
+    "移除路径：",
+    ...(removedImages.length ? removedImages.map((item, index) => `${index + 1}. ${item}`) : ["无"]),
+    "新增路径：",
+    ...(addedImages.length ? addedImages.map((item, index) => `${index + 1}. ${item}`) : ["无"]),
+    "下一步：确认路径无误后点击“保存商品”，再点击“刷新商品审核”确认图片问题减少。",
+  ].join("\n");
+}
+
 function splitTextList(value: string) {
   return String(value || "")
     .split(/[、,，;；|/\n]+/)
@@ -1543,7 +1573,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function orderFollowupBlockReason(order: OrderDraft, type: "production" | "delivery") {
     if (order.status === "cancelled") return "订单已取消，不能发送跟进消息。";
-    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话，不能发送跟进消息。";
+    if (orderStrictIdentityMissing(order)) return orderStrictIdentityBlockReason("发送跟进消息");
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，先核验付款凭证后再发送跟进消息。";
     if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能发送跟进消息。";
     if (type === "production" && !["confirmed", "processing", "fulfilled"].includes(order.status)) {
@@ -1681,7 +1711,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       const nextKeys = typedSuggestionRows.map(skillSuggestionKey);
       const safeKeys = typedSuggestionRows.filter(isSkillSuggestionAutoSelected).map(skillSuggestionKey);
       const validKeys = new Set(nextKeys);
-      const kept = current.filter((key) => validKeys.has(key));
+      const blockedKeys = new Set(typedSuggestionRows.filter(isSkillSuggestionBlocked).map(skillSuggestionKey));
+      const kept = current.filter((key) => validKeys.has(key) && !blockedKeys.has(key));
       return kept.length ? kept : safeKeys;
     });
     setWechatAccounts(accountRows);
@@ -2735,7 +2766,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `应用${scopeLabel} Agent Skill`,
       async () => {
         const result = await applySkillSuggestions({ ...activeIdentityFilters(), minScore: 70, suggestionKeys, includeNeedsReview });
-        const blockedText = result.requiresReview ? `，拦截 ${result.requiresReview} 条需复核建议` : "";
+        const blockedText = skillApplyBlockedSummary(result);
         const detailText = skillApplyChangeSummary(result);
         summary = `${scopeLabel} ${result.selected ?? suggestionKeys.length} 条建议，实际应用 ${result.applied ?? result.selected ?? suggestionKeys.length} 条，新增 ${result.created.length} 个 Skill，更新 ${result.updated.length} 个 Skill，跳过 ${result.skipped.length} 个无变化项${blockedText}。${detailText}`;
       },
@@ -3838,9 +3869,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (!orderSelectedImageIdValue(order)) {
       return "订单还没有绑定客户选中的效果图，不能核验付款。";
     }
-    if (!order.wechatAccountId || !order.customerId || !order.conversationId) {
-      return "订单缺少微信账号、客户或会话绑定，不能核验付款。";
-    }
+    if (orderStrictIdentityMissing(order)) return orderStrictIdentityBlockReason("核验付款");
     return "";
   }
 
@@ -3849,7 +3878,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (order.status === "fulfilled") return "订单已完成，不能重新标记生产中。";
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记生产中；请先人工核验付款凭证。";
     if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能标记生产中。";
-    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记生产中。";
+    if (orderStrictIdentityMissing(order)) return orderStrictIdentityBlockReason("标记生产中");
     if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记生产中。";
     return "";
   }
@@ -3859,7 +3888,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (order.status !== "processing") return "订单还未进入生产中，不能直接标记完成。";
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记完成；请先人工核验付款凭证。";
     if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能标记完成。";
-    if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记完成。";
+    if (orderStrictIdentityMissing(order)) return orderStrictIdentityBlockReason("标记完成");
     if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记完成。";
     return "";
   }
@@ -4236,7 +4265,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       "",
       `订单金额：${formatMoney(Number(previewOrder.totalPrice || order.totalPrice || 0))} 元`,
       `数量：${Number(previewOrder.quantity || order.quantity || 0) || "-"} 份`,
-      `付款状态：${paymentStatusLabel(previewOrder.paymentStatus || order.paymentStatus || "unpaid")}`,
+      `付款状态：${paymentStatusLabel(orderPaymentStatusValue(previewOrder))}`,
       "",
       "系统会继续通过账号、聊天对象、最近消息三重校验后再发送。",
     ];
@@ -6072,8 +6101,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`没有找到图片问题商品：${problem.skuCode || problem.name}`);
       return;
     }
+    if (!problem.path) {
+      setMessage(`这个${skuImageRoleLabel(problem)}问题没有旧路径可移除，请点“编辑图片”补真实图片。`);
+      return;
+    }
+    const angleImages = splitTextList(skuToForm(sku).angleImages);
+    const targetImageIndex = problem.imageIndex === null || problem.imageIndex === undefined ? -1 : Number(problem.imageIndex);
+    const targetPath =
+      problem.path ||
+      (problem.imageRole === "main"
+        ? sku.mainImagePath || ""
+        : targetImageIndex >= 0
+          ? angleImages[targetImageIndex] || ""
+          : "");
     const confirmed = window.confirm(
-      `确认从 ${sku.skuCode} 移除${skuImageRoleLabel(problem)}路径吗？\n\n这一步只会先改到商品表单里，确认无误后还需要点击“保存商品”才会生效。`,
+      `确认从 ${sku.skuCode} 移除${skuImageRoleLabel(problem)}路径吗？\n\n原路径：${targetPath || "未填写"}\n\n这一步只会先改到商品表单里，确认无误后还需要点击“保存商品”才会生效。`,
     );
     if (!confirmed) {
       setMessage(`已取消移除 ${sku.skuCode} 的${skuImageRoleLabel(problem)}路径。`);
@@ -6083,10 +6125,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (problem.imageRole === "main") {
       form.mainImagePath = "";
     } else {
-      const angleImages = splitTextList(form.angleImages);
-      const index = problem.imageIndex === null || problem.imageIndex === undefined ? -1 : Number(problem.imageIndex);
       const nextImages = angleImages.filter((imagePath, imageIndex) => {
-        if (index >= 0) return imageIndex !== index;
+        if (targetImageIndex >= 0) return imageIndex !== targetImageIndex;
         return imagePath !== problem.path;
       });
       form.angleImages = nextImages.join("、");
@@ -6100,7 +6140,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     window.setTimeout(() => {
       focusSkuFormField(problem.imageRole === "main" ? "mainImagePath" : "angleImages", skuImageRoleLabel(problem));
     }, 220);
-    setMessage(`已在表单中处理 ${sku.skuCode} 的${skuImageRoleLabel(problem)}，确认无误后点击“保存商品”生效。`);
+    setMessage(`已在表单中移除 ${sku.skuCode} 的${skuImageRoleLabel(problem)}旧路径：${targetPath || "未填写"}。确认无误后点击“保存商品”生效。`);
+  }
+
+  async function copySkuFormImageChangeSummary() {
+    const text = buildSkuFormImageChangeCopyText(skuForm, activeSkuOriginal);
+    if (!text) {
+      setMessage("当前商品没有待保存的图片变更可复制。");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage(`已复制 ${skuForm.skuCode || "当前商品"} 的待保存图片变更。`);
+    } catch {
+      setMessage("复制图片变更失败，请手动核对当前商品表单。");
+    }
   }
 
   function resetSkuForm() {
@@ -10601,7 +10655,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <button type="button" className="ghost compact-button" onClick={() => editSkuImageProblem(problem)} disabled={Boolean(busy)}>
                                 <Pencil size={14} aria-hidden="true" />编辑图片
                               </button>
-                              <button type="button" className="ghost danger compact-button" onClick={() => stageSkuImageProblemFix(problem)} disabled={Boolean(busy)}>
+                              <button type="button" className="ghost danger compact-button" onClick={() => stageSkuImageProblemFix(problem)} disabled={!problem.path || Boolean(busy)}>
                                 <X size={14} aria-hidden="true" />移除路径
                               </button>
                             </div>
@@ -10929,6 +10983,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   <div>
                     <strong>待保存图片变更</strong>
                     <span>{skuFormImageChangeSummary}</span>
+                    <button type="button" className="ghost compact-button" onClick={copySkuFormImageChangeSummary} disabled={Boolean(busy)}>
+                      <ClipboardList size={14} aria-hidden="true" />复制变更
+                    </button>
                   </div>
                 </div>
               ) : null}
@@ -15696,6 +15753,18 @@ function orderSelectedImageIdValue(order: OrderDraft) {
   return order.selectedImageId || order.quoteDraft?.selectedImageId || "";
 }
 
+function orderStrictIdentityMissing(order: OrderDraft) {
+  return !order.wechatAccountId || !order.customerId || !order.conversationId;
+}
+
+function orderStrictIdentityWarning() {
+  return "缺少微信账号、客户或会话绑定";
+}
+
+function orderStrictIdentityBlockReason(actionLabel: string) {
+  return `订单${orderStrictIdentityWarning()}，不能${actionLabel}。`;
+}
+
 function orderRevisionBlockReason(order: OrderDraft) {
   if (!["draft", "confirmed"].includes(order.status)) {
     return "订单已进入生产、完成或取消阶段，不能直接修订选图。";
@@ -17204,6 +17273,22 @@ function skillSuggestionReviewSummary(suggestion: SkillSuggestion) {
   return `${suggestion.name}｜${skillSuggestionScopeLabel(suggestion)}｜${reason}｜样本 ${suggestion.sampleCount} 条｜置信度 ${suggestion.confidence}${evidence}`;
 }
 
+function skillApplyBlockedSummary(result: { requiresReview?: number; blocked?: Array<Record<string, unknown>> }) {
+  const blockedRows = result.blocked || [];
+  const identityBlockedCount = blockedRows.filter(skillApplyBlockedByIdentity).length;
+  const reviewBlockedCount = Math.max(0, Number(result.requiresReview || blockedRows.length || 0) - identityBlockedCount);
+  const parts = [
+    identityBlockedCount ? `身份冲突禁止 ${identityBlockedCount} 条` : "",
+    reviewBlockedCount ? `需复核未应用 ${reviewBlockedCount} 条` : "",
+  ].filter(Boolean);
+  return parts.length ? `，拦截 ${parts.join("，")}` : "";
+}
+
+function skillApplyBlockedByIdentity(row: Record<string, unknown>) {
+  const quality = row.quality && typeof row.quality === "object" ? (row.quality as Record<string, unknown>) : null;
+  return row.reason === "identity_scope_blocked" || quality?.blocked === true || quality?.level === "blocked";
+}
+
 function skillApplyChangeSummary(result: { created?: Array<Record<string, unknown>>; updated?: Array<Record<string, unknown>>; skipped?: Array<Record<string, unknown>> }) {
   const parts = [
     skillApplyNamesLabel("新增", result.created || []),
@@ -18040,7 +18125,7 @@ function dealRiskItemsForOrder(order: OrderDraft) {
   if (isHighValueOrder(order)) items.push({ label: highValueOrderReason(order), tone: "warning" });
   if (!orderSelectedImageIdValue(order)) items.push({ label: "订单未选图，不能发确认", tone: "danger" });
   if (!orderPaymentReady(order)) items.push({ label: "未核验定金或全款", tone: "warning" });
-  if (!order.wechatAccountId || !order.customerId || !order.conversationId) items.push({ label: "缺少微信账号、客户或会话绑定", tone: "danger" });
+  if (orderStrictIdentityMissing(order)) items.push({ label: orderStrictIdentityWarning(), tone: "danger" });
   if (hasActiveOrderConfirmationTask(order)) items.push({ label: `订单确认${sendStatusLabel(order.confirmationSendTask?.status || "")}`, tone: "warning" });
   if (Number(order.profit || 0) < 0) items.push({ label: "利润为负，需要人工确认", tone: "danger" });
   return dedupeDealRiskItems(items);
@@ -18585,8 +18670,9 @@ function matchesOrderSearch(order: OrderDraft, term: string) {
 
 function dealProgressSteps(quote: QuoteDraft, order: OrderDraft | null) {
   const quoteSent = Boolean(quote.sendTaskId) || ["send_queued", "sent", "accepted"].includes(quote.status);
-  const paid = ["deposit_paid", "paid"].includes(order?.paymentStatus || quote.paymentStatus);
-  const fullyPaid = (order?.paymentStatus || quote.paymentStatus) === "paid";
+  const paymentStatus = order ? orderPaymentStatusValue(order) : quote.paymentStatus;
+  const paid = ["deposit_paid", "paid"].includes(paymentStatus);
+  const fullyPaid = paymentStatus === "paid";
   const orderCreated = Boolean(order?.id);
   const processing = ["processing", "fulfilled"].includes(order?.status || "");
   const fulfilled = order?.status === "fulfilled";
@@ -18634,7 +18720,7 @@ function quoteDealNextStep(quote: QuoteDraft, order: OrderDraft | null, sendRisk
     }
     return { tone: "green", label: "下一步：生成订单", detail: "客户已经确认报价，可以生成订单草稿并进入收款/排产。", action: "create_order" };
   }
-  if (!["deposit_paid", "paid"].includes(order.paymentStatus || quote.paymentStatus)) {
+  if (!["deposit_paid", "paid"].includes(orderPaymentStatusValue(order))) {
     return { tone: "blue", label: "下一步：收款", detail: "订单已建，继续跟进定金或全款。", action: "none" };
   }
   return { tone: "green", label: "订单已衔接", detail: "报价已经进入订单链路，后续在订单草稿里处理确认、生产和交付。", action: "none" };
@@ -18725,7 +18811,7 @@ function orderDealNextStep(
 
 function orderCommercialBlockReason(order: OrderDraft) {
   if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能继续自动推进。";
-  if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能继续自动推进。";
+  if (orderStrictIdentityMissing(order)) return orderStrictIdentityBlockReason("继续自动推进");
   if (Number(order.profit || 0) < 0) return "订单利润为负，需要人工确认报价和成本后再推进。";
   return "";
 }
@@ -18933,7 +19019,7 @@ function orderConfirmationBlockReason(order: OrderDraft, previewWarnings: string
     if (hasActiveOrderConfirmationTask(order)) warnings.push(`订单确认${sendStatusLabel(order.confirmationSendTask?.status || "")}`);
     if (!orderSelectedImageIdValue(order)) warnings.push("订单还没有选图");
     if (!orderPaymentReady(order)) warnings.push("未记录定金或全款，先核验付款凭证");
-    if (!order.wechatAccountId || !order.customerId || !order.conversationId) warnings.push("缺少微信账号、客户或会话绑定");
+    if (orderStrictIdentityMissing(order)) warnings.push(orderStrictIdentityWarning());
     if (isHighValueOrder(order)) warnings.push("达到高价值线，需要人工确认订单");
     if (Number(order.profit || 0) < 0) warnings.push("利润为负，需要人工确认");
   }
@@ -19340,7 +19426,7 @@ function highValueOrderNextFollowLabel(order: OrderDraft) {
 
 function highValueOrderApprovalBlockReason(order: OrderDraft, options: { includePayment?: boolean } = {}) {
   if (!orderSelectedImageIdValue(order)) return "高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送。";
-  if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。";
+  if (orderStrictIdentityMissing(order)) return `高价值${orderStrictIdentityBlockReason("批准订单确认或跟进发送")}`;
   if (options.includePayment !== false && !orderPaymentReady(order)) return "高价值订单未核验定金或全款，不能批准订单确认或跟进发送。";
   if (Number(order.profit || 0) < 0) return "高价值订单利润为负，必须人工确认报价和成本后再批准发送。";
   return "";

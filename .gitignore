@@ -51,6 +51,7 @@ desktop/apps/**/.next/
 desktop/apps/**/dist/
 desktop/storage/
 desktop/.runtime/
+desktop/.runtime-stable-probe/
 desktop/uploads/
 desktop/generated/
 desktop/*.tsbuildinfo

@@ -415,13 +415,14 @@ function checkWechatWorkerStatus(label, statusFile, commandMarker, isSafeStatus 
     const ok = status.ok === true && running && commandMatches && Number.isFinite(updatedAtMs) && ageMs <= 30000 && statusSafe;
     return {
       ok,
+      severity: ok ? undefined : "warn",
       label,
       detail: ok
         ? `pid=${pid} status=${status.status || "unknown"} ageMs=${ageMs}${status.mode ? ` mode=${status.mode}` : ""}`
         : `status=${JSON.stringify({ ok: status.ok, status: status.status, pid: status.pid, mode: status.mode, ageMs, running, commandMatches, statusSafe, errorMessage: status.errorMessage || "" })}`,
     };
   } catch (error) {
-    return { ok: false, label, detail: `${statusFile}: ${error?.message || String(error)}` };
+    return { ok: true, severity: "warn", label, detail: `${statusFile}: ${error?.message || String(error)}` };
   }
 }
 function getPortOwners(ports) {

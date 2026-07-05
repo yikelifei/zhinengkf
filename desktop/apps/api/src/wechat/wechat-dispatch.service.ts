@@ -255,12 +255,13 @@ export class WechatDispatchService {
       : Array.isArray((bundleSnapshot as any).items)
         ? (bundleSnapshot as any).items
         : [];
+    const paymentStatus = this.orderPaymentStatus(order);
     const message = buildOrderConfirmationCustomerMessage({
       customerName: order.customer?.name || order.quoteDraft?.customer?.name,
       scene: designJob?.scene,
       quantity: order.quantity,
       totalPrice: order.totalPrice,
-      paymentStatus: order.paymentStatus,
+      paymentStatus,
       items,
       hasSelectedImage: Boolean(this.orderSelectedImage(order)),
       selectedImagePosition: this.orderSelectedImage(order)?.position,
@@ -276,7 +277,7 @@ export class WechatDispatchService {
         source: "order_confirmation",
         orderDraftId: order.id,
         quoteDraftId: order.quoteDraftId,
-        paymentStatus: order.paymentStatus,
+        paymentStatus,
         queuedBy: payload.owner || "manual_operator",
         ...(payload.automation || {}),
       },
@@ -344,13 +345,14 @@ export class WechatDispatchService {
 
     const context = this.buildOrderMessageContext(order);
     const followupType = payload.type || (order.status === "fulfilled" ? "delivery" : "production");
+    const paymentStatus = this.orderPaymentStatus(order);
     const message = buildOrderFollowupCustomerMessage({
       type: followupType,
       customerName: context.customerName,
       scene: context.scene,
       quantity: order.quantity,
       totalPrice: order.totalPrice,
-      paymentStatus: order.paymentStatus,
+      paymentStatus,
       leadTimeDays: this.maxLeadTimeDays(context.items),
       items: context.items,
     });
@@ -366,7 +368,7 @@ export class WechatDispatchService {
         followupType,
         orderDraftId: order.id,
         quoteDraftId: order.quoteDraftId,
-        paymentStatus: order.paymentStatus,
+        paymentStatus,
         queuedBy: payload.owner || "manual_operator",
         ...(payload.automation || {}),
       },
@@ -416,6 +418,10 @@ export class WechatDispatchService {
     return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
   }
 
+  private orderPaymentStatus(order: any) {
+    return String(order?.paymentStatus || order?.quoteDraft?.paymentStatus || "unpaid");
+  }
+
   private assertOrderHasCompleteSendIdentity(order: any) {
     const wechatAccountId = String(order?.wechatAccountId || "").trim();
     const customerId = String(order?.customerId || order?.quoteDraft?.customerId || order?.designJob?.customerId || "").trim();
@@ -430,7 +436,7 @@ export class WechatDispatchService {
   }
 
   private assertOrderPaymentReadyForSend(order: any, context: string) {
-    const paymentStatus = String(order?.paymentStatus || order?.quoteDraft?.paymentStatus || "");
+    const paymentStatus = this.orderPaymentStatus(order);
     if (paymentStatus === "deposit_paid" || paymentStatus === "paid") return;
     throw new BadRequestException(`${orderSendContextLabel(context)}需要先核验定金或全款，不能进入微信发送队列。`);
   }

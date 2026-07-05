@@ -1940,6 +1940,21 @@ function findMockRepairProcesses() {
   });
 }
 
+function stopPid(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isFinite(numericPid) || numericPid <= 0 || numericPid === process.pid) return false;
+  try {
+    process.kill(numericPid, "SIGTERM");
+  } catch {}
+  if (process.platform !== "win32") return true;
+  const script = `Stop-Process -Id ${numericPid} -Force -ErrorAction SilentlyContinue`;
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return result.status === 0;
+}
+
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }

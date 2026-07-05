@@ -8307,6 +8307,24 @@ input[type="checkbox"]:disabled {
   background: var(--red);
 }
 
+.skill-suggestion-row.blocked {
+  cursor: not-allowed;
+  border-color: rgba(175, 82, 222, 0.28);
+  background: rgba(250, 246, 255, 0.92);
+}
+
+.skill-suggestion-row.blocked:hover {
+  transform: none;
+}
+
+.skill-suggestion-row.blocked::before {
+  background: #af52de;
+}
+
+.skill-suggestion-row.blocked :is(input, label) {
+  cursor: not-allowed;
+}
+
 .skill-suggestion-check {
   display: flex;
   align-items: center;
@@ -8374,6 +8392,11 @@ input[type="checkbox"]:disabled {
 .skill-suggestion-safety.risk {
   color: #b42318;
   background: rgba(255, 59, 48, 0.11);
+}
+
+.skill-suggestion-safety.blocked {
+  color: #71368a;
+  background: rgba(175, 82, 222, 0.13);
 }
 
 .skill-suggestion-scope {
@@ -8450,6 +8473,16 @@ input[type="checkbox"]:disabled {
 .skill-suggestion-review-note strong {
   color: #6f3c00;
   font-size: 12px;
+}
+
+.skill-suggestion-review-note.blocked {
+  border-color: rgba(175, 82, 222, 0.24);
+  color: #5c2d73;
+  background: rgba(175, 82, 222, 0.09);
+}
+
+.skill-suggestion-review-note.blocked strong {
+  color: #5c2d73;
 }
 
 .skill-suggestion-meta {

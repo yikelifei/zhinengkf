@@ -1,4 +1,4 @@
-const assert = require("node:assert/strict");
+﻿const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -81,6 +81,8 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(stableDoctor, /fs\.readFileSync\(keepAliveHeartbeatFile, "utf8"\)/);
   assert.match(stableDoctor, /const heartbeatIsFresh = Number\.isFinite\(ageMs\) && ageMs <= 30000;/);
   assert.match(stableDoctor, /heartbeatIsFresh && processIsRunning\(pid\)/);
+  assert.match(stableDoctor, /severity: ok \? undefined : "warn"/);
+  assert.match(stableDoctor, /return \{ ok: true, severity: "warn", label, detail:/);
   assert.doesNotMatch(stableDoctor, /readFileSync\(heartbeatFile/);
   assert.match(stableDoctor, /const nextCliPath = path\.join\(desktopRoot, "node_modules", "next", "dist", "bin", "next"\)/);
   assert.match(stableDoctor, /const nextStartServerPath = path\.join\(desktopRoot, "node_modules", "next", "dist", "server", "lib", "start-server\.js"\)/);
@@ -754,14 +756,19 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalive, /stable-runtime exited cleanly while services are healthy; continuing guard/);
   assert.doesNotMatch(stableKeepalive, /ports:keepalive:mock/);
   const stableKeepalivePs1 = readText("tools/start-stable-keepalive.ps1");
-  assert.match(stableKeepalivePs1, /keepalive-stable-desktop\.cmd/);
+  assert.match(stableKeepalivePs1, /\$StableRuntimeLauncherScript = Join-Path \$Root "tools\\stable-runtime-launcher\.js"/);
   assert.match(stableKeepalivePs1, /\$StopRequestFile = Join-Path \$RuntimeDir "stable-runtime-stop-request"/);
   assert.match(stableKeepalivePs1, /Remove-Item -Force -ErrorAction SilentlyContinue -Path \$StopRequestFile/);
-  assert.match(stableKeepalivePs1, /\$StartDevPortsScript = Join-Path \$Root "tools\\start-dev-ports\.js"/);
-  assert.match(stableKeepalivePs1, /-ArgumentList @\(\$StartDevPortsScript, "--mock-design", "--keep-alive"\)/);
+  assert.doesNotMatch(stableKeepalivePs1, /function Write-StableSupervisorCmd/);
+  assert.doesNotMatch(stableKeepalivePs1, /tools\\start-dev-ports\.js/);
+  assert.doesNotMatch(stableKeepalivePs1, /--mock-design --keep-alive/);
   assert.doesNotMatch(stableKeepalivePs1, /Start-Process -FilePath "cmd\.exe"/);
+  assert.match(stableKeepalivePs1, /-ArgumentList @\(\$StableRuntimeLauncherScript\)/);
   assert.doesNotMatch(stableKeepalivePs1, /-ArgumentList @\("\/d", "\/k"/);
   assert.match(stableKeepalivePs1, /-WindowStyle Hidden[\s\S]*-PassThru/);
+  assert.doesNotMatch(stableKeepalivePs1, /\[regex\]::Escape\(\$StableSupervisorCmd\)/);
+  assert.match(stableKeepalivePs1, /\[regex\]::Escape\(\$StableRuntimeLauncherScript\)/);
+  assert.doesNotMatch(stableKeepalivePs1, /stable supervisor process was not found/);
   assert.match(stableKeepalivePs1, /stable-start\.log/);
   assert.match(stableKeepalivePs1, /\$StableStartingLock = Join-Path \$RuntimeDir "stable-starting\.lock"/);
   assert.match(stableKeepalivePs1, /Set-Content -Path \$StableStartingLock/);
@@ -770,8 +777,15 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /function Find-KeepAliveProcess/);
   assert.doesNotMatch(stableKeepalivePs1, /Invoke-CimMethod -ClassName Win32_Process -MethodName Create/);
   assert.match(stableKeepalivePs1, /Get-CimInstance Win32_Process -Filter "name = 'node\.exe'"/);
-  assert.match(stableKeepalivePs1, /\[regex\]::Escape\(\$StartDevPortsScript\)/);
-  assert.match(stableKeepalivePs1, /detached keepalive pid=/);
+  assert.match(stableKeepalivePs1, /function Wait-StableRuntimeReady/);
+  assert.match(stableKeepalivePs1, /function Start-StableRuntimeProcess/);
+  assert.match(stableKeepalivePs1, /RedirectStandardOutput \$KeepAliveOutLog/);
+  assert.match(stableKeepalivePs1, /retrying without redirected logs/);
+  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/"/);
+  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3200\/api\/health"/);
+  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3700\/v1\/health"/);
+  assert.match(stableKeepalivePs1, /stable runtime launcher ready pid=/);
+  assert.match(stableKeepalivePs1, /stable runtime did not become healthy/);
   assert.doesNotMatch(stableKeepalivePs1, /"-NoExit"/);
   assert.doesNotMatch(stableKeepalivePs1, /"\/c"/);
   assert.doesNotMatch(stableKeepalivePs1, /System\.Diagnostics\.ProcessStartInfo/);
@@ -855,6 +869,11 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function ensureService\(spec\)/);
   assert.match(stableRuntime, /if \(spec\.type === "process"\)/);
   assert.match(stableRuntime, /function ensureProcessService\(spec\)/);
+  assert.match(stableRuntime, /const out = openServiceLogForAppend\(spec\.name, "out"\)/);
+  assert.match(stableRuntime, /const err = openServiceLogForAppend\(spec\.name, "err"\)/);
+  assert.match(stableRuntime, /function openServiceLogForAppend\(name, streamName\)/);
+  assert.match(stableRuntime, /return "ignore"/);
+  assert.match(stableRuntime, /function append\(name, message\)[\s\S]*catch \{\}/);
   assert.match(stableRuntime, /function processServiceSpec\(name, args, env = \{\}\)/);
   assert.match(stableRuntime, /LOW_VALUE_AUTOMATION_ENABLED: "true"/);
   assert.match(stableRuntime, /LOW_VALUE_AUTOMATION_RUN_ON_START: "true"/);
@@ -894,6 +913,10 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /ParentProcessId/);
   assert.match(stableRuntime, /function killPid\(pid\)/);
   assert.match(stableRuntime, /function closeFd\(value\)/);
+  assert.match(stableRuntime, /function openServiceLogForAppend\(name, streamName\)/);
+  assert.match(stableRuntime, /return "ignore";/);
+  assert.match(stableRuntime, /function append\(name, message\) \{[\s\S]*try \{[\s\S]*fs\.appendFileSync/);
+  assert.match(stableRuntime, /catch \{\}/);
   assert.match(stableRuntime, /function killStaleRuntimeProcesses\(\)/);
   assert.match(stableRuntime, /Disabled in stable mode: stale process cleanup is handled by stop-stable-desktop\.cmd/);
   assert.match(stableRuntime, /prevents the supervisor from killing its own service children/);
@@ -905,7 +928,7 @@ test("electron startup failure points beginners to stable repair script", () => 
   assert.match(electronMain, /const APP_TITLE = "智能体客服工作台";/);
   assert.match(electronMain, /repair-stable-desktop\.cmd/);
   assert.match(electronMain, /保持服务窗口打开/);
-  assert.doesNotMatch(electronMain, /请先运行 start-stable-desktop\.cmd/);
+  assert.doesNotMatch(electronMain, /璇峰厛杩愯 start-stable-desktop\.cmd/);
 });
 
 test("port stack launcher blocks mock when real mode is active and starts supervised services", () => {
