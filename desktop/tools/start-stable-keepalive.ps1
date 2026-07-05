@@ -6,8 +6,9 @@ $LogDir = Join-Path $RuntimeDir "logs"
 $KeepAliveScript = Join-Path $Root "keepalive-stable-desktop.cmd"
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 $StartDevPortsScript = Join-Path $Root "tools\start-dev-ports.js"
-$StableRuntimeLauncherScript = Join-Path $Root "tools\stable-runtime-launcher.js"
 $StartLog = Join-Path $RuntimeDir "stable-start.log"
+$KeepAliveOutLog = Join-Path $LogDir "stable-start-dev-ports.out.log"
+$KeepAliveErrLog = Join-Path $LogDir "stable-start-dev-ports.err.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 
@@ -22,7 +23,9 @@ function Write-StableStartLog($Message) {
 function Find-KeepAliveProcess {
   Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
     Where-Object {
-      $_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript)
+      $_.CommandLine -match [regex]::Escape($StartDevPortsScript) -and
+      $_.CommandLine -match "--mock-design" -and
+      $_.CommandLine -match "--keep-alive"
     } |
     Sort-Object ProcessId -Descending |
     Select-Object -First 1
@@ -48,12 +51,19 @@ try {
     exit 0
   }
 
-  Write-StableStartLog "starting detached stable-runtime-launcher"
+  Write-StableStartLog "starting detached start-dev-ports keepalive"
   $env:DESKTOP_RUNTIME_DIR = $RuntimeDir
   $env:SKIP_EXISTING_API_BUILD = "1"
   $env:SKIP_EXISTING_WEB_BUILD = "1"
   $env:FORCE_PORTS_SWEEP = "1"
-  $process = Start-Process -FilePath $NodeExe -ArgumentList @($StableRuntimeLauncherScript) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+  $process = Start-Process `
+    -FilePath $NodeExe `
+    -ArgumentList @($StartDevPortsScript, "--mock-design", "--keep-alive") `
+    -WorkingDirectory $Root `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $KeepAliveOutLog `
+    -RedirectStandardError $KeepAliveErrLog `
+    -PassThru
   Start-Sleep -Milliseconds 1500
   $running = Find-KeepAliveProcess
   if ($running) {

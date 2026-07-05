@@ -226,10 +226,19 @@ function windowSnapshotScanSummary(result: WindowSnapshotInboxScanResult) {
 }
 
 function isSkillSuggestionAutoSelected(suggestion: SkillSuggestion) {
+  if (isSkillSuggestionBlocked(suggestion)) return false;
   if (suggestion.quality) return !suggestion.quality.needsReview;
   return (
     Number(suggestion.sampleCount || 0) >= AUTO_SELECT_SKILL_SUGGESTION_MIN_SAMPLES &&
     Number(suggestion.confidence || 0) >= AUTO_SELECT_SKILL_SUGGESTION_MIN_CONFIDENCE
+  );
+}
+
+function isSkillSuggestionBlocked(suggestion: SkillSuggestion) {
+  return Boolean(
+    suggestion.quality?.blocked ||
+      suggestion.quality?.level === "blocked" ||
+      suggestion.scope?.level === "mixed",
   );
 }
 
@@ -1423,7 +1432,7 @@ export default function HomePage() {
   const [skillSuggestions, setSkillSuggestions] = useState<SkillSuggestion[]>([]);
   const [selectedSkillSuggestionKeys, setSelectedSkillSuggestionKeys] = useState<string[]>([]);
   const [skillSuggestionAgentFilter, setSkillSuggestionAgentFilter] = useState<string>("all");
-  const [skillSuggestionSafetyFilter, setSkillSuggestionSafetyFilter] = useState<"all" | "safe" | "review">("all");
+  const [skillSuggestionSafetyFilter, setSkillSuggestionSafetyFilter] = useState<"all" | "safe" | "review" | "blocked">("all");
   const [skillApplySummary, setSkillApplySummary] = useState<string>("");
   const [trainingSampleQualityFilter, setTrainingSampleQualityFilter] = useState<TrainingSampleQualityFilter>("all");
   const [trainingSampleImportFilterId, setTrainingSampleImportFilterId] = useState<string>("");
@@ -2704,6 +2713,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return;
     }
     const selectedSuggestions = skillSuggestions.filter((suggestion) => suggestionKeySet.has(skillSuggestionKey(suggestion)));
+    const selectedBlockedSkillSuggestions = selectedSuggestions.filter(isSkillSuggestionBlocked);
+    if (selectedBlockedSkillSuggestions.length > 0) {
+      const blockedPreview = selectedBlockedSkillSuggestions.slice(0, 3).map(skillSuggestionReviewSummary).join("\n");
+      const moreText = selectedBlockedSkillSuggestions.length > 3 ? `\n还有 ${selectedBlockedSkillSuggestions.length - 3} 条身份冲突建议未展示。` : "";
+      setMessage(`${scopeLabel}里有 ${selectedBlockedSkillSuggestions.length} 条身份冲突/混合来源 Skill 建议，不能应用。请先回到样本复核里拆分客户、账号或会话来源。`);
+      window.alert(`${scopeLabel}里有 ${selectedBlockedSkillSuggestions.length} 条身份冲突/混合来源 Skill 建议，系统已禁止应用：\n${blockedPreview}${moreText}`);
+      return;
+    }
     const selectedNeedsReviewSkillSuggestions = selectedSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion));
     const includeNeedsReview = selectedNeedsReviewSkillSuggestions.length > 0;
     if (selectedNeedsReviewSkillSuggestions.length > 0) {
@@ -2733,6 +2750,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function confirmNeedsReviewSkillSuggestion(suggestion: SkillSuggestion) {
+    if (isSkillSuggestionBlocked(suggestion)) {
+      window.alert(`这条 Skill 建议存在身份冲突/混合来源，不能选中应用：\n${skillSuggestionReviewSummary(suggestion)}\n请先拆分或修正训练样本来源。`);
+      return false;
+    }
     if (isSkillSuggestionAutoSelected(suggestion)) return true;
     return window.confirm(`这条 Skill 建议需要人工判断：\n${skillSuggestionReviewSummary(suggestion)}\n确认选中后再人工复核吗？`);
   }
@@ -2767,8 +2788,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function selectAllSkillSuggestions() {
+    const selectableSuggestions = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionBlocked(suggestion));
     if (filteredUnselectedNeedsReviewSkillSuggestionCount > 0) {
-      const reviewSuggestions = filteredSkillSuggestions.filter(
+      const reviewSuggestions = selectableSuggestions.filter(
         (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
       );
       const reviewPreview = reviewSuggestions.slice(0, 3).map(skillSuggestionReviewSummary).join("\n");
@@ -2777,7 +2799,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         return;
       }
     }
-    const keys = filteredSkillSuggestions.map(skillSuggestionKey);
+    const keys = selectableSuggestions.map(skillSuggestionKey);
     setSelectedSkillSuggestionKeys((current) => [...new Set([...current, ...keys])]);
   }
 
@@ -2805,6 +2827,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   function compileAllSelectedTrainingSkills() {
     if (hiddenSelectedSkillSuggestionCount > 0) {
+      if (hiddenBlockedSkillSuggestionCount > 0) {
+        const hiddenBlockedPreview = hiddenBlockedSkillSuggestions.slice(0, 3).map(skillSuggestionReviewSummary).join("\n");
+        const hiddenBlockedMoreText = hiddenBlockedSkillSuggestionCount > 3 ? `\n还有 ${hiddenBlockedSkillSuggestionCount - 3} 条身份冲突建议未展示。` : "";
+        window.alert(`还有 ${hiddenBlockedSkillSuggestionCount} 条其他 Agent 已选建议存在身份冲突/混合来源，不能应用：\n${hiddenBlockedPreview}${hiddenBlockedMoreText}\n请先清空其他已选或修正训练样本来源。`);
+        return;
+      }
       const hiddenReviewPreview = hiddenNeedsReviewSkillSuggestions.slice(0, 3).map(skillSuggestionReviewSummary).join("\n");
       const hiddenMoreText = hiddenNeedsReviewSkillSuggestionCount > 3 ? `\n还有 ${hiddenNeedsReviewSkillSuggestionCount - 3} 条需复核建议未展示。` : "";
       const hiddenReviewText = hiddenNeedsReviewSkillSuggestionCount
@@ -6610,10 +6638,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       ? skillSuggestions
       : skillSuggestions.filter((suggestion) => skillSuggestionAgentFilterKey(suggestion) === skillSuggestionAgentFilter);
   const agentFilteredSafeSkillSuggestionCount = agentFilteredSkillSuggestions.filter(isSkillSuggestionAutoSelected).length;
-  const agentFilteredNeedsReviewSkillSuggestionCount = agentFilteredSkillSuggestions.length - agentFilteredSafeSkillSuggestionCount;
+  const agentFilteredBlockedSkillSuggestionCount = agentFilteredSkillSuggestions.filter(isSkillSuggestionBlocked).length;
+  const agentFilteredNeedsReviewSkillSuggestionCount = agentFilteredSkillSuggestions.filter(
+    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !isSkillSuggestionBlocked(suggestion),
+  ).length;
   const filteredSkillSuggestions = agentFilteredSkillSuggestions.filter((suggestion) => {
     if (skillSuggestionSafetyFilter === "safe") return isSkillSuggestionAutoSelected(suggestion);
-    if (skillSuggestionSafetyFilter === "review") return !isSkillSuggestionAutoSelected(suggestion);
+    if (skillSuggestionSafetyFilter === "review") return !isSkillSuggestionAutoSelected(suggestion) && !isSkillSuggestionBlocked(suggestion);
+    if (skillSuggestionSafetyFilter === "blocked") return isSkillSuggestionBlocked(suggestion);
     return true;
   });
   const visibleSkillSuggestions = filteredSkillSuggestions.slice(0, 12);
@@ -6625,7 +6657,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const selectedSkillSuggestions = skillSuggestions.filter((suggestion) => selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)));
   const selectedSkillSuggestionCount = selectedSkillSuggestions.length;
   const selectedSafeSkillSuggestionCount = selectedSkillSuggestions.filter(isSkillSuggestionAutoSelected).length;
-  const selectedNeedsReviewSkillSuggestionCount = selectedSkillSuggestionCount - selectedSafeSkillSuggestionCount;
+  const selectedBlockedSkillSuggestionCount = selectedSkillSuggestions.filter(isSkillSuggestionBlocked).length;
+  const selectedNeedsReviewSkillSuggestionCount = selectedSkillSuggestions.filter(
+    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !isSkillSuggestionBlocked(suggestion),
+  ).length;
   const filteredSelectedSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) =>
     selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
@@ -6634,16 +6669,33 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     (suggestion) => isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
   const filteredUnselectedNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter(
-    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
+    (suggestion) =>
+      !isSkillSuggestionAutoSelected(suggestion) &&
+      !isSkillSuggestionBlocked(suggestion) &&
+      !selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   ).length;
-  const filteredNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion)).length;
-  const filteredUnselectedSkillSuggestionCount = Math.max(0, filteredSkillSuggestions.length - filteredSelectedSkillSuggestionCount);
+  const filteredBlockedSkillSuggestionCount = filteredSkillSuggestions.filter(isSkillSuggestionBlocked).length;
+  const filteredNeedsReviewSkillSuggestionCount = filteredSkillSuggestions.filter(
+    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !isSkillSuggestionBlocked(suggestion),
+  ).length;
+  const filteredSelectableSkillSuggestionCount = filteredSkillSuggestions.filter((suggestion) => !isSkillSuggestionBlocked(suggestion)).length;
+  const filteredSelectedBlockedSkillSuggestionCount = filteredSkillSuggestions.filter(
+    (suggestion) => isSkillSuggestionBlocked(suggestion) && selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
+  ).length;
+  const filteredUnselectedSkillSuggestionCount = Math.max(
+    0,
+    filteredSelectableSkillSuggestionCount - filteredSelectedSkillSuggestionCount + filteredSelectedBlockedSkillSuggestionCount,
+  );
   const filteredSkillSuggestionKeySet = new Set(filteredSkillSuggestions.map(skillSuggestionKey));
   const hiddenSelectedSkillSuggestions = selectedSkillSuggestions.filter(
     (suggestion) => !filteredSkillSuggestionKeySet.has(skillSuggestionKey(suggestion)),
   );
   const hiddenSelectedSkillSuggestionCount = hiddenSelectedSkillSuggestions.length;
-  const hiddenNeedsReviewSkillSuggestions = hiddenSelectedSkillSuggestions.filter((suggestion) => !isSkillSuggestionAutoSelected(suggestion));
+  const hiddenBlockedSkillSuggestions = hiddenSelectedSkillSuggestions.filter(isSkillSuggestionBlocked);
+  const hiddenBlockedSkillSuggestionCount = hiddenBlockedSkillSuggestions.length;
+  const hiddenNeedsReviewSkillSuggestions = hiddenSelectedSkillSuggestions.filter(
+    (suggestion) => !isSkillSuggestionAutoSelected(suggestion) && !isSkillSuggestionBlocked(suggestion),
+  );
   const hiddenNeedsReviewSkillSuggestionCount = hiddenNeedsReviewSkillSuggestions.length;
   const trainingWorkbenchSummary =
     trainingWorkbenchView === "review"
@@ -12437,8 +12489,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <strong>Skill 进化预览</strong>
                     <span>
                       当前筛选 {filteredSelectedSkillSuggestionCount} / {filteredSkillSuggestions.length} 条已选，全部已选 {selectedSkillSuggestionCount} 条；
-                      已选高可信 {selectedSafeSkillSuggestionCount} 条，已选需复核 {selectedNeedsReviewSkillSuggestionCount} 条；
-                      当前筛选高可信 {filteredSafeSkillSuggestionCount} 条，当前筛选需复核 {filteredNeedsReviewSkillSuggestionCount} 条
+                      已选高可信 {selectedSafeSkillSuggestionCount} 条，已选需复核 {selectedNeedsReviewSkillSuggestionCount} 条，已选禁止 {selectedBlockedSkillSuggestionCount} 条；
+                      当前筛选高可信 {filteredSafeSkillSuggestionCount} 条，当前筛选需复核 {filteredNeedsReviewSkillSuggestionCount} 条，当前筛选身份冲突 {filteredBlockedSkillSuggestionCount} 条
                     </span>
                   </div>
                   <div className="skill-suggestion-controls">
@@ -12493,6 +12545,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       >
                         需复核（{agentFilteredNeedsReviewSkillSuggestionCount}）
                       </button>
+                      <button
+                        aria-pressed={skillSuggestionSafetyFilter === "blocked"}
+                        className={skillSuggestionSafetyFilter === "blocked" ? "selected" : ""}
+                        disabled={Boolean(busy)}
+                        onClick={() => setSkillSuggestionSafetyFilter("blocked")}
+                        type="button"
+                      >
+                        身份冲突（{agentFilteredBlockedSkillSuggestionCount}）
+                      </button>
                     </div>
                     <button type="button" className="ghost compact" onClick={selectAllSkillSuggestions} disabled={Boolean(busy) || !filteredUnselectedSkillSuggestionCount}>
                       全选当前筛选
@@ -12518,12 +12579,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 </div>
                 {hiddenSelectedSkillSuggestionCount ? (
                   <div className="training-summary skill-suggestion-hint" role="status">
-                    <span>还有 {hiddenSelectedSkillSuggestionCount} 条其他 Agent 已选，其中 {hiddenNeedsReviewSkillSuggestionCount} 条需人工判断；全部已选里有 {selectedNeedsReviewSkillSuggestionCount} 条需人工判断，点击“应用全部已选”会一起提交。</span>
+                    <span>
+                      还有 {hiddenSelectedSkillSuggestionCount} 条其他 Agent 已选，其中 {hiddenNeedsReviewSkillSuggestionCount} 条需人工判断、{hiddenBlockedSkillSuggestionCount} 条身份冲突；
+                      全部已选里有 {selectedNeedsReviewSkillSuggestionCount} 条需人工判断、{selectedBlockedSkillSuggestionCount} 条禁止应用，点击“应用全部已选”会先做身份校验。
+                    </span>
                   </div>
                 ) : filteredSkillSuggestions.length && !filteredSelectedSkillSuggestionCount ? (
                   <div className="training-summary skill-suggestion-hint" role="status">
                     <span>
-                      当前筛选没有已选建议；可先用“只选当前筛选高可信”应用 {filteredUnselectedSafeSkillSuggestionCount} 条，剩余 {filteredNeedsReviewSkillSuggestionCount} 条需人工判断。
+                      当前筛选没有已选建议；可先用“只选当前筛选高可信”应用 {filteredUnselectedSafeSkillSuggestionCount} 条，剩余 {filteredNeedsReviewSkillSuggestionCount} 条需人工判断，{filteredBlockedSkillSuggestionCount} 条身份冲突只能查看不能应用。
                     </span>
                   </div>
                 ) : filteredUnselectedSkillSuggestionCount ? (
@@ -12535,17 +12599,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                   visibleSkillSuggestions.map((suggestion) => {
                     const safetyTone = skillSuggestionSafetyTone(suggestion);
                     const scopeTone = skillSuggestionScopeTone(suggestion);
+                    const blocked = isSkillSuggestionBlocked(suggestion);
                     return (
                     <div
                       aria-checked={selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion))}
+                      aria-disabled={blocked}
                       aria-label={`选择 Skill 建议：${suggestion.name}`}
-                      className={`skill-suggestion-row ${safetyTone}`}
+                      className={`skill-suggestion-row ${safetyTone}${blocked ? " blocked" : ""}`}
                       key={skillSuggestionKey(suggestion)}
                       onClick={(event) => toggleSkillSuggestionFromRow(event, suggestion)}
                       onKeyDown={(event) => handleSkillSuggestionRowKeyDown(event, suggestion)}
                       role="checkbox"
                       tabIndex={0}
-                      title="点击整行切换是否应用这条 Skill 建议"
+                      title={blocked ? "这条建议存在身份冲突，不能应用" : "点击整行切换是否应用这条 Skill 建议"}
                     >
                       <div className="skill-suggestion-title">
                         <label className="skill-suggestion-check">
@@ -12553,7 +12619,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                             type="checkbox"
                             checked={selectedSkillSuggestionKeySet.has(skillSuggestionKey(suggestion))}
                             onChange={(event) => toggleSkillSuggestion(skillSuggestionKey(suggestion), event.target.checked, suggestion)}
-                            disabled={Boolean(busy)}
+                            disabled={Boolean(busy) || blocked}
                           />
                           <strong>{suggestion.name}</strong>
                         </label>
@@ -12571,7 +12637,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <strong>作用范围</strong>
                         <span>{skillSuggestionScopeDetail(suggestion)}</span>
                       </div>
-                      {!isSkillSuggestionAutoSelected(suggestion) ? (
+                      {blocked ? (
+                        <div className="skill-suggestion-review-note blocked" role="note">
+                          <strong>禁止应用</strong>
+                          <span>{suggestion.quality?.reason || "这条建议来自混合客户、账号或会话，不能沉淀为可自动调用的 Skill。"}</span>
+                          <span>建议动作：回到训练样本复核，先拆分客户、微信账号或会话来源，再重新生成 Skill。</span>
+                        </div>
+                      ) : !isSkillSuggestionAutoSelected(suggestion) ? (
                         <div className="skill-suggestion-review-note" role="note">
                           <strong>复核原因</strong>
                           <span>{suggestion.quality?.reason || skillSuggestionSafetyLabel(suggestion)}</span>

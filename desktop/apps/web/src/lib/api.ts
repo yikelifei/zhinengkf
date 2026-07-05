@@ -554,10 +554,11 @@ export type SkillSuggestion = {
   existingSkillId?: string | null;
   action: "create" | "update";
   quality?: {
-    level: "safe" | "review" | "risk";
+    level: "safe" | "review" | "risk" | "blocked";
     label: string;
     reason: string;
     needsReview: boolean;
+    blocked?: boolean;
     minSampleCount?: number;
     minConfidence?: number;
   };

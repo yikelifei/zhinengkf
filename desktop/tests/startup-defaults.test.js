@@ -171,8 +171,8 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(desktopServiceSupervisor, /const stableRuntimeDir = path\.join\(process\.cwd\(\), "\.runtime-stable"\);/);
   assert.match(desktopServiceSupervisor, /stableDesktopGuardActive\(\)/);
   assert.match(desktopServiceSupervisor, /legacy supervisor skipped/);
-  assert.match(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableStartingLockFile\)\} exit \/b 0/);
-  assert.match(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableKeepAliveHeartbeatFile\)\} exit \/b 0/);
+  assert.doesNotMatch(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableStartingLockFile\)\} exit \/b 0/);
+  assert.doesNotMatch(desktopServiceSupervisor, /if exist \$\{cmdQuote\(stableKeepAliveHeartbeatFile\)\} exit \/b 0/);
   assert.doesNotMatch(desktopServiceSupervisor, /"ALLOW_LEGACY_START_WITH_STABLE"/);
   assert.match(repairDevStartupSource, /clearMockRepairLock\(\);/);
   assert.match(repairDevStartupSource, /function clearMockRepairLock\(\)/);
@@ -757,11 +757,11 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /keepalive-stable-desktop\.cmd/);
   assert.match(stableKeepalivePs1, /\$StopRequestFile = Join-Path \$RuntimeDir "stable-runtime-stop-request"/);
   assert.match(stableKeepalivePs1, /Remove-Item -Force -ErrorAction SilentlyContinue -Path \$StopRequestFile/);
-  assert.match(stableKeepalivePs1, /\$StableRuntimeLauncherScript = Join-Path \$Root "tools\\stable-runtime-launcher\.js"/);
-  assert.match(stableKeepalivePs1, /Start-Process -FilePath \$NodeExe -ArgumentList @\(\$StableRuntimeLauncherScript\)/);
+  assert.match(stableKeepalivePs1, /\$StartDevPortsScript = Join-Path \$Root "tools\\start-dev-ports\.js"/);
+  assert.match(stableKeepalivePs1, /-ArgumentList @\(\$StartDevPortsScript, "--mock-design", "--keep-alive"\)/);
   assert.doesNotMatch(stableKeepalivePs1, /Start-Process -FilePath "cmd\.exe"/);
   assert.doesNotMatch(stableKeepalivePs1, /-ArgumentList @\("\/d", "\/k"/);
-  assert.match(stableKeepalivePs1, /-WindowStyle Hidden -PassThru/);
+  assert.match(stableKeepalivePs1, /-WindowStyle Hidden[\s\S]*-PassThru/);
   assert.match(stableKeepalivePs1, /stable-start\.log/);
   assert.match(stableKeepalivePs1, /\$StableStartingLock = Join-Path \$RuntimeDir "stable-starting\.lock"/);
   assert.match(stableKeepalivePs1, /Set-Content -Path \$StableStartingLock/);
@@ -770,7 +770,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /function Find-KeepAliveProcess/);
   assert.doesNotMatch(stableKeepalivePs1, /Invoke-CimMethod -ClassName Win32_Process -MethodName Create/);
   assert.match(stableKeepalivePs1, /Get-CimInstance Win32_Process -Filter "name = 'node\.exe'"/);
-  assert.match(stableKeepalivePs1, /\[regex\]::Escape\(\$StableRuntimeLauncherScript\)/);
+  assert.match(stableKeepalivePs1, /\[regex\]::Escape\(\$StartDevPortsScript\)/);
   assert.match(stableKeepalivePs1, /detached keepalive pid=/);
   assert.doesNotMatch(stableKeepalivePs1, /"-NoExit"/);
   assert.doesNotMatch(stableKeepalivePs1, /"\/c"/);
