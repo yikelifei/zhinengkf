@@ -16,6 +16,9 @@ for (const name of [
   "DESIGN_PLATFORM_COOKIE",
   "DESIGN_PLATFORM_DEVICE_ID",
   "DESIGN_PLATFORM_RUNTIME_CONFIG",
+  "CUSTOMER_SERVICE_PUBLIC_BASE_URL",
+  "DESIGN_PLATFORM_CALLBACK_URL",
+  "DESIGN_PLATFORM_CALLBACK_API_KEY",
 ]) {
   delete process.env[name];
 }
@@ -37,6 +40,9 @@ test("defaults design platform runtime config to local mock platform", () => {
   assert.equal(summary.hasAccessToken, false);
   assert.equal(summary.hasCookie, false);
   assert.equal(summary.hasDeviceId, false);
+  assert.equal(summary.hasCallbackApiKey, false);
+  assert.equal(summary.customerServicePublicBaseUrl, "http://127.0.0.1:3200");
+  assert.equal(summary.callbackUrl, "http://127.0.0.1:3200/api/integrations/design-platform/callback");
   assert.equal(summary.runtimeConfigPath, runtimeConfigPath);
 });
 

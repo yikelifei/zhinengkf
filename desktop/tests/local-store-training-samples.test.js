@@ -597,3 +597,51 @@ test("private skill suggestions do not overwrite global skills or mix customer i
   assert.equal(conflictResult.updated.length, 0);
   assert.equal(conflictResult.skipped[0].reason, "mixed_source_identity");
 });
+
+test("skill suggestion apply does not update existing skills with conflicting identity", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      agents: [{ id: "agent_gift_design", key: "gift_design", name: "Gift Design Agent" }],
+      agentSkills: [
+        {
+          id: "skill_conflict_budget",
+          agentId: "agent_gift_design",
+          name: "预算澄清",
+          description: "身份冲突的旧 Skill，不能被继续更新。",
+          enabled: true,
+          version: 1,
+          wechatAccountId: "wechat_demo_1",
+          conversationId: "conversation_demo_1",
+          customerId: "customer_demo_1",
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_demo_2",
+            conversationId: "conversation_demo_2",
+            customerId: "customer_demo_2",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const result = store.applyAgentSkillSuggestions([
+    {
+      agentId: "agent_gift_design",
+      name: "预算澄清",
+      description: "干净全局预算澄清。",
+      sampleCount: 0,
+      confidence: 80,
+      sampleIds: [],
+    },
+  ]);
+
+  assert.equal(result.updated.length, 0);
+  assert.equal(result.created.length, 1);
+  assert.equal(result.created[0].description, "干净全局预算澄清。");
+  const conflictSkill = store.listAgentSkills("agent_gift_design").find((skill) => skill.id === "skill_conflict_budget");
+  assert.equal(conflictSkill.description, "身份冲突的旧 Skill，不能被继续更新。");
+  assert.equal(conflictSkill.scope.label, "混合来源");
+});

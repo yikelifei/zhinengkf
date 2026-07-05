@@ -760,14 +760,24 @@ function skillScopeIdentityFields(scope = {}) {
 
 function skillIdentityFields(skill = {}) {
   const binding = skill.identityBinding || {};
-  return {
-    wechatAccountId: String(skill.wechatAccountId || binding.wechatAccountId || "").trim(),
-    conversationId: String(skill.conversationId || binding.conversationId || "").trim(),
-    customerId: String(skill.customerId || binding.customerId || "").trim(),
-  };
+  const fields = {};
+  let identityConflict = false;
+  for (const key of ["wechatAccountId", "conversationId", "customerId"]) {
+    const values = [
+      String(skill[key] || "").trim(),
+      String(binding[key] || "").trim(),
+      String(skill.scope?.[key] || "").trim(),
+    ].filter(Boolean);
+    const unique = [...new Set(values)];
+    if (unique.length > 1) identityConflict = true;
+    fields[key] = unique[0] || "";
+  }
+  if (identityConflict) fields.identityConflict = true;
+  return fields;
 }
 
 function sameSuggestionIdentityFields(left = {}, right = {}) {
+  if (left.identityConflict || right.identityConflict) return false;
   return (
     String(left.wechatAccountId || "") === String(right.wechatAccountId || "") &&
     String(left.conversationId || "") === String(right.conversationId || "") &&

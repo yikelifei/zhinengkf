@@ -429,6 +429,7 @@ export class LocalStoreService {
         (skill) =>
           skill.agentId === suggestion.agentId &&
           canonicalSkillName(skill.name) === canonicalSkillName(suggestion.name) &&
+          !skillIdentityHasConflict(data, skill) &&
           sameSkillIdentityScope(skillIdentityFields(data, skill), sourceScope.identityFields),
       );
       const nextPatch = {

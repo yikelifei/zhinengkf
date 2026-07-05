@@ -128,6 +128,8 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /buildSkuImageProblemActionSummary\(visibleSkuImageProblems\)/);
   assert.match(page, /const visibleSkuImageProblemActionProductSummary = useMemo\(/);
   assert.match(page, /buildSkuImageProblemActionProductSummary\(visibleSkuImageProblems\)/);
+  assert.match(page, /const visibleSkuImageProblemNextStepSummary = useMemo\(/);
+  assert.match(page, /buildSkuImageProblemNextStepSummary\(visibleSkuImageProblems\)/);
   assert.match(page, /const visibleSkuImageProblemUploadMainCount = useMemo\(/);
   assert.match(page, /skuImageProblemMatchesAction\(problem, "upload_main"\)/);
   assert.match(page, /const visibleSkuImageProblemUploadAngleCount = useMemo\(/);
@@ -223,6 +225,7 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /已导出 \$\{exportableSkuImageProblems\.length\} 个图片问题/);
   assert.match(page, /\$\{visibleSkuImageProblemActionSummary\}/);
   assert.match(page, /分组涉及商品：\$\{visibleSkuImageProblemActionProductSummary\}/);
+  assert.match(page, /下一步：\$\{visibleSkuImageProblemNextStepSummary\}/);
   assert.match(page, /筛选：\$\{visibleSkuImageProblemFilterSummary\}。/);
   assert.match(page, /审核：\$\{skuImageProblemAuditRefreshContext\}。/);
   assert.match(page, /async function copySkuImageProblemHandoff\(\)/);
@@ -234,6 +237,7 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /\$\{handoffIndex\}\. 同商品 \$\{problemIndex \+ 1\}\/\$\{problems\.length\}/);
   assert.match(page, /处理方式统计：\$\{visibleSkuImageProblemActionSummary\}。/);
   assert.match(page, /分组涉及商品：\$\{visibleSkuImageProblemActionProductSummary\}。/);
+  assert.match(page, /下一步：\$\{visibleSkuImageProblemNextStepSummary\}。/);
   assert.match(page, /当前筛选：\$\{visibleSkuImageProblemFilterSummary\}。/);
   assert.match(page, /审核刷新口径：\$\{skuImageProblemAuditRefreshContext\}。/);
   assert.match(page, /await navigator\.clipboard\.writeText\(lines\.join\("\\n\\n"\)\)/);
@@ -294,6 +298,7 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /商品图片修复复核清单：当前筛选 \$\{visibleSkuImageProblems\.length\} 个图片问题/);
   assert.match(page, /处理方式统计：\$\{visibleSkuImageProblemActionSummary\}。/);
   assert.match(page, /分组涉及商品：\$\{visibleSkuImageProblemActionProductSummary\}。/);
+  assert.match(page, /下一步：\$\{visibleSkuImageProblemNextStepSummary\}。/);
   assert.match(page, /路径状态：有路径 \$\{visibleSkuImageProblemPathCount\} 个，失效路径 \$\{visibleSkuImageProblemInvalidPathCount\} 个，未填路径 \$\{visibleSkuImageProblemMissingPathCount\} 个。/);
   assert.ok(page.includes("点击“刷新商品审核”，确认图片问题数量减少或归零。"));
   assert.match(page, /已复制 \$\{visibleSkuImageProblems\.length\} 个图片问题的修复复核清单。/);
@@ -352,6 +357,7 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.ok(page.includes("当前处理方式统计"));
   assert.match(page, /\{visibleSkuImageProblemActionSummary\}/);
   assert.match(page, /分组涉及商品：\{visibleSkuImageProblemActionProductSummary\}/);
+  assert.match(page, /下一步：\{visibleSkuImageProblemNextStepSummary\}/);
   assert.match(page, /\{visibleSkuImageProblemFilterSummary\}/);
   assert.match(page, /审核刷新口径：\{skuImageProblemAuditRefreshContext\}/);
   assert.ok(page.includes('{ value: "has_path", label: "有路径" }'));
@@ -408,6 +414,12 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /const productKeysByAction = new Map<string, Set<string>>\(\)/);
   assert.match(page, /const productKey = problem\.skuCode \|\| problem\.name/);
   assert.match(page, /\$\{label\} \$\{productKeysByAction\.get\(label\)\?\.size \|\| 0\} 个商品/);
+  assert.match(page, /function buildSkuImageProblemNextStepSummary\(problems: SkuImageProblem\[\]\)/);
+  assert.match(page, /const mainProblems = problems\.filter\(\(problem\) => skuImageProblemMatchesAction\(problem, "upload_main"\)\)/);
+  assert.match(page, /const invalidProblems = problems\.filter\(\(problem\) => skuImageProblemMatchesAction\(problem, "review_invalid"\)\)/);
+  assert.match(page, /const angleProblems = problems\.filter\(\(problem\) => skuImageProblemMatchesAction\(problem, "upload_angle"\)\)/);
+  assert.ok(page.includes("主图不完整时先不要自动出图"));
+  assert.ok(page.includes("让设计平台能看清包装、材质和比例"));
   assert.match(page, /const productProblemCount = skuImageProblemCountByProduct\.get\(problem\.skuCode \|\| problem\.name\) \|\| 1/);
   assert.match(page, /const productProblemPosition = visibleSkuImageProblems/);
   assert.match(page, /\.slice\(0, index \+ 1\)/);

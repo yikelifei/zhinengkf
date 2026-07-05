@@ -252,6 +252,48 @@ test("matches existing skills only within the same identity scope", () => {
   assert.equal(suggestion.action, "update");
 });
 
+test("does not update existing skills with conflicting identity fields", () => {
+  const [suggestion] = compileAgentSkillSuggestions(
+    [
+      {
+        id: "sample_private_clean",
+        agentId: "agent_gift_design",
+        agentKey: "gift_design",
+        scene: "gift",
+        customerText: "budget and render",
+        idealReply: "reply",
+        score: 90,
+        status: "ready",
+        skillHints: ["预算澄清"],
+        wechatAccountId: "wechat_1",
+        conversationId: "conversation_1",
+        customerId: "customer_1",
+      },
+    ],
+    {
+      existingSkills: [
+        {
+          id: "skill_conflict",
+          agentId: "agent_gift_design",
+          name: "预算澄清",
+          wechatAccountId: "wechat_1",
+          conversationId: "conversation_1",
+          customerId: "customer_1",
+          identityBinding: {
+            status: "passed",
+            wechatAccountId: "wechat_2",
+            conversationId: "conversation_2",
+            customerId: "customer_2",
+          },
+        },
+      ],
+    },
+  );
+
+  assert.equal(suggestion.existingSkillId, null);
+  assert.equal(suggestion.action, "create");
+});
+
 test("classifies skill suggestion quality before applying skills", () => {
   const suggestions = compileAgentSkillSuggestions([
     {

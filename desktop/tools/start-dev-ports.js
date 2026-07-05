@@ -1800,6 +1800,7 @@ function readPreferredDesignMode() {
 
 async function stableDesktopGuardActive() {
   if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
+  if (normalizePathText(runtimeDir) === normalizePathText(stableRuntimeDir)) return false;
   const processActive = stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
   if (!processActive) return false;
   if (await stableRuntimeServicesHealthy()) return true;

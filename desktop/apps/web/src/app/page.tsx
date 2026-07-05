@@ -5342,7 +5342,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     ];
     const fileName = `sku-image-problems-${formatDateForFile(new Date())}.csv`;
     downloadTextFile(fileName, "text/csv;charset=utf-8", `\uFEFF${toCsv(rows)}`);
-    setMessage(`已导出 ${exportableSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品；${visibleSkuImageProblemActionSummary}；分组涉及商品：${visibleSkuImageProblemActionProductSummary}；筛选：${visibleSkuImageProblemFilterSummary}；审核：${skuImageProblemAuditRefreshContext}。`);
+    setMessage(`已导出 ${exportableSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品；${visibleSkuImageProblemActionSummary}；分组涉及商品：${visibleSkuImageProblemActionProductSummary}；下一步：${visibleSkuImageProblemNextStepSummary}；筛选：${visibleSkuImageProblemFilterSummary}；审核：${skuImageProblemAuditRefreshContext}。`);
   }
 
   async function copySkuImageProblemHandoff() {
@@ -5387,6 +5387,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `商品图片补图交接清单：当前 ${handoffProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
       `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
       `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
+      `下一步：${visibleSkuImageProblemNextStepSummary}。`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
       `处理口径：优先补真实商品图；确认不再使用的失效路径，再回到商品编辑里移除并保存。`,
@@ -5439,6 +5440,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `商品图片按处理方式分派：当前 ${handoffProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品。`,
       `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
       `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
+      `下一步：${visibleSkuImageProblemNextStepSummary}。`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
       `处理口径：补主图和补多角度图优先补真实商品图；核对失效路径时先确认文件是否还在，再决定重传或移除。`,
@@ -5467,6 +5469,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `商品图片${actionLabel}商品清单：当前筛选 ${actionProblems.length} 个图片问题，涉及 ${products.size} 个商品。`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      `下一步：${visibleSkuImageProblemNextStepSummary}。`,
       `处理口径：逐个商品补真实商品图；补完保存商品，再刷新商品审核确认问题减少。`,
       ...Array.from(products.entries()).map(([key, problems], index) => {
         const firstProblem = problems[0];
@@ -5511,6 +5514,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `单商品补图交接：${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}（${productProblems.length} 个图片问题）`,
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      `下一步：${buildSkuImageProblemNextStepSummary(productProblems)}。`,
       `处理口径：优先补真实商品图；确认不再使用的失效路径，再回到商品编辑里移除并保存。`,
       ...productProblems.map((item, index) => {
         const imageIndex =
@@ -5651,6 +5655,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
       `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
       `分组涉及商品：${visibleSkuImageProblemActionProductSummary}。`,
+      `下一步：${visibleSkuImageProblemNextStepSummary}。`,
       `路径状态：有路径 ${visibleSkuImageProblemPathCount} 个，失效路径 ${visibleSkuImageProblemInvalidPathCount} 个，未填路径 ${visibleSkuImageProblemMissingPathCount} 个。`,
       `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
       "复核步骤：",
@@ -7234,6 +7239,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => buildSkuImageProblemActionProductSummary(visibleSkuImageProblems),
     [visibleSkuImageProblems],
   );
+  const visibleSkuImageProblemNextStepSummary = useMemo(
+    () => buildSkuImageProblemNextStepSummary(visibleSkuImageProblems),
+    [visibleSkuImageProblems],
+  );
   const visibleSkuImageProblemUploadMainCount = useMemo(
     () => visibleSkuImageProblems.filter((problem) => skuImageProblemMatchesAction(problem, "upload_main")).length,
     [visibleSkuImageProblems],
@@ -8331,7 +8340,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <span role="listitem" className={platformConfig?.hasDeviceId ? "ready" : ""}>
                 设备 {platformConfig?.hasDeviceId ? `已绑定${platformConfig.deviceIdSuffix ? ` · ${platformConfig.deviceIdSuffix}` : ""}` : "未绑定"}
               </span>
+              <span role="listitem" className={platformConfig?.hasCallbackApiKey ? "ready" : ""}>
+                回调签名 {platformConfig?.hasCallbackApiKey ? "已配置" : "未配置"}
+              </span>
             </div>
+            {platformConfig?.callbackUrl ? (
+              <div className="config-callback-endpoint">
+                <strong>出图完成回调地址</strong>
+                <code>{platformConfig.callbackUrl}</code>
+                <span>真实设计平台完成或失败后 POST 到这里；轮询仍会继续兜底。</span>
+              </div>
+            ) : null}
             {designPlatformOperationGuide ? (
               <div className={`config-mode-guide ${designPlatformOperationGuide.tone}`}>
                 <strong>{designPlatformOperationGuide.title}</strong>
@@ -10440,6 +10459,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <span>当前处理方式统计</span>
                     <strong>{visibleSkuImageProblemActionSummary}</strong>
                     <small>分组涉及商品：{visibleSkuImageProblemActionProductSummary}</small>
+                    <small>下一步：{visibleSkuImageProblemNextStepSummary}</small>
                     <small>{visibleSkuImageProblemFilterSummary}</small>
                     <small>审核刷新口径：{skuImageProblemAuditRefreshContext}</small>
                   </div>
@@ -17988,6 +18008,25 @@ function buildSkuImageProblemActionProductSummary(problems: SkuImageProblem[]) {
   return ["补主图", "补多角度图", "核对失效路径"]
     .map((label) => `${label} ${productKeysByAction.get(label)?.size || 0} 个商品`)
     .join(" · ");
+}
+
+function buildSkuImageProblemNextStepSummary(problems: SkuImageProblem[]) {
+  if (!problems.length) return "当前筛选没有图片问题，刷新商品审核后继续看剩余问题。";
+  const mainProblems = problems.filter((problem) => skuImageProblemMatchesAction(problem, "upload_main"));
+  const invalidProblems = problems.filter((problem) => skuImageProblemMatchesAction(problem, "review_invalid"));
+  const angleProblems = problems.filter((problem) => skuImageProblemMatchesAction(problem, "upload_angle"));
+  const countProducts = (items: SkuImageProblem[]) =>
+    new Set(items.map((problem) => problem.skuCode || problem.name).filter(Boolean)).size;
+  if (mainProblems.length) {
+    return `先补 ${countProducts(mainProblems)} 个商品的真实主图，主图不完整时先不要自动出图。`;
+  }
+  if (invalidProblems.length) {
+    return `先核对 ${invalidProblems.length} 条失效图片路径，确认文件不存在就移除旧路径并补新图。`;
+  }
+  if (angleProblems.length) {
+    return `补 ${countProducts(angleProblems)} 个商品的多角度图，让设计平台能看清包装、材质和比例。`;
+  }
+  return "按当前筛选逐条复核图片问题，处理后刷新商品审核确认数量减少。";
 }
 
 function skuImagePathStateLabel(path?: string | null) {
