@@ -336,7 +336,7 @@ export class OrdersService {
     const warnings: string[] = [];
     if (order.status === "cancelled") warnings.push("订单已取消");
     if (order.confirmationSendTaskId || order.confirmationSendTask) warnings.push("订单确认消息已进入发送队列");
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) warnings.push("订单还没有选图");
+    if (!orderDraftSelectedImageId(order)) warnings.push("订单还没有选图");
     if (!order.wechatAccountId) warnings.push("订单缺少微信账号");
     if (!order.customerId && !order.quoteDraft?.customerId && !order.designJob?.customerId) warnings.push("订单缺少客户绑定");
     if (!order.conversationId) warnings.push("订单缺少客户会话");
@@ -693,11 +693,15 @@ function orderDraftPaymentStatus(order: any, patch: OrderDraftUpdatePatch = {}) 
   return patch.paymentStatus || order?.paymentStatus || order?.quoteDraft?.paymentStatus || "unpaid";
 }
 
+function orderDraftSelectedImageId(order: any) {
+  return order?.selectedImageId || order?.quoteDraft?.selectedImageId || "";
+}
+
 function assertOrderStatusCommercialReady(current: any, patch: OrderDraftUpdatePatch) {
   const nextStatus = patch.status || current?.status || "";
   if (!["processing", "fulfilled"].includes(nextStatus)) return;
   const actionLabel = nextStatus === "processing" ? "生产中" : "完成";
-  const selectedImageId = current?.selectedImageId || current?.quoteDraft?.selectedImageId;
+  const selectedImageId = orderDraftSelectedImageId(current);
   if (!selectedImageId) {
     throw new BadRequestException(`订单未绑定客户选中的效果图，不能标记为${actionLabel}。`);
   }

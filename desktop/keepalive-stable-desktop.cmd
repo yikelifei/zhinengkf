@@ -11,8 +11,8 @@ if not exist "D:\zhinengkefu\desktop\dist\apps\api\main.js" call npm.cmd run bui
 if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 :restart
 if exist "%STABLE_STOP_REQUEST%" exit /b 0
-echo [%date% %time%] stable-runtime starting start-dev-ports keepalive >> "D:\zhinengkefu\desktop\.runtime-stable\keepalive-wrapper.log"
-node tools\start-dev-ports.js --mock-design --keep-alive >> "D:\zhinengkefu\desktop\.runtime-stable\keepalive-wrapper.log" 2>&1
+echo [%date% %time%] stable-runtime starting stable-runtime-launcher >> "D:\zhinengkefu\desktop\.runtime-stable\keepalive-wrapper.log"
+node tools\stable-runtime-launcher.js >> "D:\zhinengkefu\desktop\.runtime-stable\keepalive-wrapper.log" 2>&1
 set STABLE_RUNTIME_EXIT_CODE=%ERRORLEVEL%
 echo [%date% %time%] stable-runtime exited with %STABLE_RUNTIME_EXIT_CODE% >> "D:\zhinengkefu\desktop\.runtime-stable\keepalive-wrapper.log"
 if exist "%STABLE_STOP_REQUEST%" exit /b 0

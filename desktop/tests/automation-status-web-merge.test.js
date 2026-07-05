@@ -137,6 +137,12 @@ test("web automation history renders skipped reason summary from latest run", ()
   assert.match(webPage, /conversation_manual_locked[\s\S]*人工接管中/);
   assert.match(webPage, /issue\.tone === "error"[\s\S]*阻断自动化/);
   assert.match(webPage, /人工确认/);
+  assert.match(webPage, /function lowValueIssueSortRank\(issue: LowValueAutomationIssue\)/);
+  assert.match(webPage, /manual_send_attention_required[\s\S]*return 0/);
+  assert.match(webPage, /issue\.tone === "error"[\s\S]*return 1/);
+  assert.match(webPage, /conversation_manual_locked[\s\S]*return 2/);
+  assert.match(webPage, /return 3/);
+  assert.match(webPage, /\.sort\(\(left, right\) => lowValueIssueSortRank\(left\.issue\) - lowValueIssueSortRank\(right\.issue\) \|\| left\.index - right\.index\)/);
   assert.match(webPage, /issue\.reason === "manual_send_attention_required"[\s\S]*先看发送中心[\s\S]*定位发送/);
   assert.match(webPage, /issue\.reason\.includes\("send_target"\) \|\| issue\.reason\.includes\("order_target"\)[\s\S]*先补发送对象/);
   assert.match(webPage, /issue\.reason === "payment_not_ready"[\s\S]*先核验付款/);

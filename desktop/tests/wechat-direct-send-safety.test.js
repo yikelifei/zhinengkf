@@ -464,7 +464,7 @@ test("order payment buttons must verify the linked quote before confirmation que
 
   assert.match(verifyOrderPaymentProofSection, /async function verifyOrderPaymentProof\([\s\S]*order: OrderDraft,[\s\S]*paymentStatus: "deposit_paid" \| "paid"/);
   assert.match(page, /function orderPaymentProofBlockReason\(order: OrderDraft\)/);
-  assert.match(page, /orderPaymentProofBlockReason\([\s\S]*!order\.selectedImageId && !order\.quoteDraft\?\.selectedImageId[\s\S]*订单还没有绑定客户选中的效果图，不能核验付款/);
+  assert.match(page, /orderPaymentProofBlockReason\([\s\S]*!orderSelectedImageIdValue\(order\)[\s\S]*订单还没有绑定客户选中的效果图，不能核验付款/);
   assert.match(page, /orderPaymentProofBlockReason\([\s\S]*!order\.wechatAccountId \|\| !order\.customerId \|\| !order\.conversationId[\s\S]*订单缺少微信账号、客户或会话绑定，不能核验付款/);
   assert.match(verifyOrderPaymentProofSection, /const blocker = orderPaymentProofBlockReason\(order\)/);
   assert.match(verifyOrderPaymentProofSection, /if \(blocker\) \{[\s\S]*setMessage\(blocker\);[\s\S]*return;/);
@@ -1828,11 +1828,15 @@ test("review center exposes current manual locked conversations", () => {
   assert.match(page, /function orderPaymentReady\(order: OrderDraft\)[\s\S]*orderPaymentStatusValue\(order\)/);
   assert.match(page, /orderPaymentFilter !== "all" && orderPaymentStatusValue\(order\) !== orderPaymentFilter/);
   assert.match(page, /orderPaymentStatusValue\(order\) === "unpaid"/);
+  assert.match(page, /function orderSelectedImageIdValue\(order: OrderDraft\)/);
+  assert.match(page, /return order\.selectedImageId \|\| order\.quoteDraft\?\.selectedImageId \|\| ""/);
+  assert.match(page, /function orderSelectedImage\(order: OrderDraft\)[\s\S]*const selectedImageId = String\(orderSelectedImageIdValue\(order\)\)/);
   assert.match(page, /function orderNeedsManualSendAttention\(order: OrderDraft\)/);
   assert.match(page, /orderNeedsManualSendAttention\(order\)[\s\S]*label: "发送异常"/);
   assert.match(page, /const approvalBlocker = highValueOrderApprovalBlockReason\(order, \{ includePayment: false \}\)/);
   assert.match(page, /approvalBlocker[\s\S]*label: "先补资料"[\s\S]*detail: approvalBlocker/);
   assert.match(page, /function highValueOrderApprovalBlockReason\(order: OrderDraft, options: \{ includePayment\?: boolean \} = \{\}\)/);
+  assert.match(page, /highValueOrderApprovalBlockReason\(order: OrderDraft[\s\S]*!orderSelectedImageIdValue\(order\)/);
   assert.match(page, /高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送/);
   assert.match(page, /高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送/);
   assert.match(page, /options\.includePayment !== false && !orderPaymentReady\(order\)/);
@@ -2153,6 +2157,7 @@ test("web quote center renders guarded next-step guidance", () => {
   assert.match(page, /利润为负，需要人工确认/);
   assert.match(page, /function orderCommercialBlockReason\(order: OrderDraft\)/);
   assert.match(page, /orderCommercialBlockReason\(order\)/);
+  assert.match(page, /orderCommercialBlockReason\(order: OrderDraft\)[\s\S]*!orderSelectedImageIdValue\(order\)/);
   assert.match(page, /订单未绑定客户选中的效果图，不能继续自动推进/);
   assert.match(page, /订单缺少微信账号、客户或会话绑定，不能继续自动推进/);
   assert.match(page, /订单利润为负，需要人工确认报价和成本后再推进/);
@@ -2307,6 +2312,9 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(ordersService, /const nextPaymentStatus = orderDraftPaymentStatus\(current, patch\)/);
   assert.match(ordersService, /\["deposit_paid", "paid"\]\.includes\(nextPaymentStatus\)/);
   assert.match(ordersService, /function assertOrderStatusCommercialReady\(current: any, patch: OrderDraftUpdatePatch\)/);
+  assert.match(ordersService, /function orderDraftSelectedImageId\(order: any\)/);
+  assert.match(ordersService, /return order\?\.selectedImageId \|\| order\?\.quoteDraft\?\.selectedImageId \|\| ""/);
+  assert.match(ordersService, /const selectedImageId = orderDraftSelectedImageId\(current\)/);
   assert.match(ordersService, /!selectedImageId[\s\S]*订单未绑定客户选中的效果图/);
   assert.match(ordersService, /!current\?\.wechatAccountId \|\| !current\?\.customerId \|\| !current\?\.conversationId[\s\S]*订单缺少微信账号、客户或会话绑定/);
   assert.match(ordersService, /Number\(current\?\.profit \|\| 0\) < 0[\s\S]*订单利润为负/);
@@ -2346,12 +2354,12 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(orderProductionBlockSection, /function orderProductionBlockReason\(order: OrderDraft\)/);
   assert.match(orderProductionBlockSection, /order\.status === "cancelled"[\s\S]*不能标记生产中/);
   assert.match(orderProductionBlockSection, /!orderPaymentReady\(order\)[\s\S]*不能标记生产中/);
-  assert.match(orderProductionBlockSection, /!order\.selectedImageId && !order\.quoteDraft\?\.selectedImageId[\s\S]*不能标记生产中/);
+  assert.match(orderProductionBlockSection, /!orderSelectedImageIdValue\(order\)[\s\S]*不能标记生产中/);
   assert.match(orderProductionBlockSection, /!order\.wechatAccountId \|\| !order\.customerId \|\| !order\.conversationId[\s\S]*不能标记生产中/);
   assert.match(orderFulfillmentBlockSection, /function orderFulfillmentBlockReason\(order: OrderDraft\)/);
   assert.match(orderFulfillmentBlockSection, /order\.status !== "processing"[\s\S]*不能直接标记完成/);
   assert.match(orderFulfillmentBlockSection, /!orderPaymentReady\(order\)[\s\S]*不能标记完成/);
-  assert.match(orderFulfillmentBlockSection, /!order\.selectedImageId && !order\.quoteDraft\?\.selectedImageId[\s\S]*不能标记完成/);
+  assert.match(orderFulfillmentBlockSection, /!orderSelectedImageIdValue\(order\)[\s\S]*不能标记完成/);
   assert.match(orderFulfillmentBlockSection, /!order\.wechatAccountId \|\| !order\.customerId \|\| !order\.conversationId[\s\S]*不能标记完成/);
   assert.match(updateOrderDraftStatusSection, /const blocker = status === "fulfilled" \? orderFulfillmentBlockReason\(order\) : ""/);
   assert.match(updateOrderDraftStatusSection, /if \(blocker\) \{[\s\S]*setMessage\(blocker\);[\s\S]*return;/);
@@ -2379,7 +2387,7 @@ test("web quote center can filter records by next-step actionability", () => {
   assert.match(page, /function orderFollowupBlockReason\(order: OrderDraft, type: "production" \| "delivery"\)/);
   assert.match(page, /orderFollowupBlockReason\([\s\S]*!order\.wechatAccountId \|\| !order\.customerId \|\| !order\.conversationId/);
   assert.match(page, /orderFollowupBlockReason\([\s\S]*!orderPaymentReady\(order\)/);
-  assert.match(page, /orderFollowupBlockReason\([\s\S]*!order\.selectedImageId && !order\.quoteDraft\?\.selectedImageId/);
+  assert.match(page, /orderFollowupBlockReason\([\s\S]*!orderSelectedImageIdValue\(order\)/);
   assert.match(page, /function orderSendFailureStep\(order: OrderDraft\)/);
   assert.match(page, /const failedSendStep = orderSendFailureStep\(order\)/);
   assert.match(page, /if \(failedSendStep\) return failedSendStep/);

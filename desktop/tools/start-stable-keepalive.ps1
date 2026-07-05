@@ -4,6 +4,9 @@ $Root = "D:\zhinengkefu\desktop"
 $RuntimeDir = if ($env:DESKTOP_RUNTIME_DIR) { $env:DESKTOP_RUNTIME_DIR } else { Join-Path $Root ".runtime-stable" }
 $LogDir = Join-Path $RuntimeDir "logs"
 $KeepAliveScript = Join-Path $Root "keepalive-stable-desktop.cmd"
+$NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
+$StartDevPortsScript = Join-Path $Root "tools\start-dev-ports.js"
+$StableRuntimeLauncherScript = Join-Path $Root "tools\stable-runtime-launcher.js"
 $StartLog = Join-Path $RuntimeDir "stable-start.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
@@ -17,8 +20,10 @@ function Write-StableStartLog($Message) {
 }
 
 function Find-KeepAliveProcess {
-  Get-CimInstance Win32_Process -Filter "name = 'cmd.exe'" |
-    Where-Object { $_.CommandLine -match [regex]::Escape($KeepAliveScript) } |
+  Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
+    Where-Object {
+      $_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript)
+    } |
     Sort-Object ProcessId -Descending |
     Select-Object -First 1
 }
@@ -43,8 +48,12 @@ try {
     exit 0
   }
 
-  Write-StableStartLog "starting detached keepalive"
-  $process = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/k", "`"$KeepAliveScript`"") -WorkingDirectory $Root -WindowStyle Minimized -PassThru
+  Write-StableStartLog "starting detached stable-runtime-launcher"
+  $env:DESKTOP_RUNTIME_DIR = $RuntimeDir
+  $env:SKIP_EXISTING_API_BUILD = "1"
+  $env:SKIP_EXISTING_WEB_BUILD = "1"
+  $env:FORCE_PORTS_SWEEP = "1"
+  $process = Start-Process -FilePath $NodeExe -ArgumentList @($StableRuntimeLauncherScript) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
   Start-Sleep -Milliseconds 1500
   $running = Find-KeepAliveProcess
   if ($running) {

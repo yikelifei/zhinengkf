@@ -629,6 +629,28 @@ function skuToForm(sku: Sku): SkuForm {
   };
 }
 
+function buildSkuFormImageChangeSummary(form: SkuForm, originalSku: Sku | null | undefined) {
+  if (!originalSku?.skuCode || form.skuCode.trim() !== originalSku.skuCode) return "";
+  const originalMainImage = String(originalSku.mainImagePath || "").trim();
+  const nextMainImage = form.mainImagePath.trim();
+  const originalAngleImages = originalSku.angleImages || [];
+  const nextAngleImages = splitTextList(form.angleImages);
+  const removedImages = [
+    ...(originalMainImage && originalMainImage !== nextMainImage ? [originalMainImage] : []),
+    ...originalAngleImages.filter((imagePath) => !nextAngleImages.includes(imagePath)),
+  ];
+  const addedImages = [
+    ...(nextMainImage && nextMainImage !== originalMainImage ? [nextMainImage] : []),
+    ...nextAngleImages.filter((imagePath) => !originalAngleImages.includes(imagePath)),
+  ];
+  if (!removedImages.length && !addedImages.length) return "";
+  const parts = [
+    removedImages.length ? `移除 ${removedImages.length} 条旧图片路径` : "",
+    addedImages.length ? `新增 ${addedImages.length} 条图片路径` : "",
+  ].filter(Boolean);
+  return `待保存图片变更：${parts.join("，")}。保存商品后才会生效，保存后请刷新商品审核确认图片问题减少。`;
+}
+
 function splitTextList(value: string) {
   return String(value || "")
     .split(/[、,，;；|/\n]+/)
@@ -1514,7 +1536,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (order.status === "cancelled") return "订单已取消，不能发送跟进消息。";
     if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话，不能发送跟进消息。";
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，先核验付款凭证后再发送跟进消息。";
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能发送跟进消息。";
+    if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能发送跟进消息。";
     if (type === "production" && !["confirmed", "processing", "fulfilled"].includes(order.status)) {
       return "订单还未确认，先确认订单或收款后再发生产通知。";
     }
@@ -3785,7 +3807,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   function orderPaymentProofBlockReason(order: OrderDraft) {
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) {
+    if (!orderSelectedImageIdValue(order)) {
       return "订单还没有绑定客户选中的效果图，不能核验付款。";
     }
     if (!order.wechatAccountId || !order.customerId || !order.conversationId) {
@@ -3798,7 +3820,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (order.status === "cancelled") return "订单已取消，不能标记生产中。";
     if (order.status === "fulfilled") return "订单已完成，不能重新标记生产中。";
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记生产中；请先人工核验付款凭证。";
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能标记生产中。";
+    if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能标记生产中。";
     if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记生产中。";
     if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记生产中。";
     return "";
@@ -3808,7 +3830,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     if (order.status === "cancelled") return "订单已取消，不能标记完成。";
     if (order.status !== "processing") return "订单还未进入生产中，不能直接标记完成。";
     if (!orderPaymentReady(order)) return "订单未记录定金或全款，不能标记完成；请先人工核验付款凭证。";
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能标记完成。";
+    if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能标记完成。";
     if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能标记完成。";
     if (Number(order.profit || 0) < 0) return "订单利润为负，不能直接标记完成。";
     return "";
@@ -7039,7 +7061,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     [automationStatus?.lastRun],
   );
   const lowValueAutomationIssueSummary = useMemo(
-    () => buildLowValueAutomationIssueSummary(lowValueAutomationIssues),
+    () => buildLowValueAutomationIssueSummary(lowValueAutomationIssues) ?? EMPTY_LOW_VALUE_AUTOMATION_ISSUE_SUMMARY,
     [lowValueAutomationIssues],
   );
   useEffect(() => {
@@ -7323,6 +7345,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   const skuFormAutomationStatus = useMemo(() => skuFormAutomationPreview(skuForm, skuFormReadinessWarnings), [skuForm, skuFormReadinessWarnings]);
   const skuFormReferenceWarnings = useMemo(() => validateSkuFormReferences(skuForm, knownSkuCodeSet), [knownSkuCodeSet, skuForm]);
   const skuFormReferenceMatches = useMemo(() => skuFormReferenceSummary(skuForm, skuNameByCode), [skuForm, skuNameByCode]);
+  const activeSkuOriginal = useMemo(
+    () => skus.find((sku) => sku.skuCode === skuForm.skuCode.trim()) || null,
+    [skuForm.skuCode, skus],
+  );
+  const skuFormImageChangeSummary = useMemo(
+    () => buildSkuFormImageChangeSummary(skuForm, activeSkuOriginal),
+    [activeSkuOriginal, skuForm],
+  );
   const activeSkuRepairItem = useMemo(() => {
     const skuCode = skuForm.skuCode.trim();
     const name = skuForm.name.trim();
@@ -10839,6 +10869,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     ))}
                   </p>
                   {skuFormReferenceMatches.length > 8 ? <small>还有 {skuFormReferenceMatches.length - 8} 个引用已识别。</small> : null}
+                </div>
+              ) : null}
+              {skuFormImageChangeSummary ? (
+                <div className="sku-form-readiness-warning sku-form-image-change-summary" role="status">
+                  <ImageIcon size={16} aria-hidden="true" />
+                  <div>
+                    <strong>待保存图片变更</strong>
+                    <span>{skuFormImageChangeSummary}</span>
+                  </div>
                 </div>
               ) : null}
               {skuFormReadinessWarnings.length ? (
@@ -15581,6 +15620,10 @@ function orderPaymentStatusValue(order: OrderDraft) {
   return order.paymentStatus || order.quoteDraft?.paymentStatus || "unpaid";
 }
 
+function orderSelectedImageIdValue(order: OrderDraft) {
+  return order.selectedImageId || order.quoteDraft?.selectedImageId || "";
+}
+
 function orderRevisionBlockReason(order: OrderDraft) {
   if (!["draft", "confirmed"].includes(order.status)) {
     return "订单已进入生产、完成或取消阶段，不能直接修订选图。";
@@ -15765,6 +15808,19 @@ type LowValueAutomationIssueSummary = {
   resolutionDetail: string;
   resolutionButtonLabel: string;
   firstIssue?: LowValueAutomationIssue;
+};
+
+const EMPTY_LOW_VALUE_AUTOMATION_ISSUE_SUMMARY: LowValueAutomationIssueSummary = {
+  total: 0,
+  errors: 0,
+  warnings: 0,
+  missingFields: 0,
+  manualLocks: 0,
+  sendTargets: 0,
+  resolutionAction: "run_low_value",
+  resolutionLabel: "",
+  resolutionDetail: "",
+  resolutionButtonLabel: "",
 };
 
 type AutomationStepItem = {
@@ -16317,12 +16373,17 @@ function buildLowValueAutomationIssueItems(run?: AutomationRun | null): LowValue
   collectLowValueFollowupIssues(issues, directFollowup);
 
   const seen = new Set<string>();
-  return issues.filter((issue) => {
+  const dedupedIssues = issues.filter((issue) => {
     const key = `${issue.stage}:${issue.target}:${issue.reason}:${issue.detail || ""}:${issue.missing.join(",")}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 8);
+  });
+  return dedupedIssues
+    .map((issue, index) => ({ issue, index }))
+    .sort((left, right) => lowValueIssueSortRank(left.issue) - lowValueIssueSortRank(right.issue) || left.index - right.index)
+    .slice(0, 8)
+    .map((item) => item.issue);
 }
 
 function collectLowValueIssueSource(
@@ -16547,6 +16608,13 @@ function lowValueIssuePriority(issue: LowValueAutomationIssue) {
     return { tone: "error" as const, label: "阻断自动化" };
   }
   return { tone: "warning" as const, label: "人工确认" };
+}
+
+function lowValueIssueSortRank(issue: LowValueAutomationIssue) {
+  if (issue.reason === "manual_send_attention_required" || issue.reason === "failed") return 0;
+  if (issue.tone === "error") return 1;
+  if (issue.reason === "conversation_manual_locked" || issue.missing.includes("manualLocked")) return 2;
+  return 3;
 }
 
 function lowValueMissingFieldLabel(field: string) {
@@ -17898,7 +17966,7 @@ function dealRiskItemsForQuote(quote: QuoteDraft, sendRisk = "") {
 function dealRiskItemsForOrder(order: OrderDraft) {
   const items: Array<{ label: string; tone: string }> = [];
   if (isHighValueOrder(order)) items.push({ label: highValueOrderReason(order), tone: "warning" });
-  if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) items.push({ label: "订单未选图，不能发确认", tone: "danger" });
+  if (!orderSelectedImageIdValue(order)) items.push({ label: "订单未选图，不能发确认", tone: "danger" });
   if (!orderPaymentReady(order)) items.push({ label: "未核验定金或全款", tone: "warning" });
   if (!order.wechatAccountId || !order.customerId || !order.conversationId) items.push({ label: "缺少微信账号、客户或会话绑定", tone: "danger" });
   if (hasActiveOrderConfirmationTask(order)) items.push({ label: `订单确认${sendStatusLabel(order.confirmationSendTask?.status || "")}`, tone: "warning" });
@@ -18395,14 +18463,15 @@ function confirmOrderSelectionRevision(order: OrderDraft, selectedImage: NonNull
 }
 
 function orderSelectedImage(order: OrderDraft) {
+  const selectedImageId = String(orderSelectedImageIdValue(order));
   return (
     order.selectedImage ||
     order.quoteDraft?.selectedImage ||
     order.designJob?.images?.find((image) =>
-      [image.id, image.imageId].includes(String(order.selectedImageId || "")) || image.selected,
+      [image.id, image.imageId].includes(selectedImageId) || image.selected,
     ) ||
     order.quoteDraft?.designJob?.images?.find((image) =>
-      [image.id, image.imageId].includes(String(order.selectedImageId || "")) || image.selected,
+      [image.id, image.imageId].includes(selectedImageId) || image.selected,
     ) ||
     snapshotDesignImage(order.selectedImageSnapshot) ||
     null
@@ -18431,6 +18500,7 @@ function matchesOrderSearch(order: OrderDraft, term: string) {
     order.quoteDraftId,
     order.designJobId,
     order.selectedImageId,
+    order.quoteDraft?.selectedImageId,
     order.customer?.name,
     order.quoteDraft?.customer?.name,
     order.designJob?.scene,
@@ -18582,7 +18652,7 @@ function orderDealNextStep(
 }
 
 function orderCommercialBlockReason(order: OrderDraft) {
-  if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "订单未绑定客户选中的效果图，不能继续自动推进。";
+  if (!orderSelectedImageIdValue(order)) return "订单未绑定客户选中的效果图，不能继续自动推进。";
   if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "订单缺少微信账号、客户或会话绑定，不能继续自动推进。";
   if (Number(order.profit || 0) < 0) return "订单利润为负，需要人工确认报价和成本后再推进。";
   return "";
@@ -18789,7 +18859,7 @@ function orderConfirmationBlockReason(order: OrderDraft, previewWarnings: string
   if (!warnings.length) {
     if (order.status === "cancelled") warnings.push("订单已取消");
     if (hasActiveOrderConfirmationTask(order)) warnings.push(`订单确认${sendStatusLabel(order.confirmationSendTask?.status || "")}`);
-    if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) warnings.push("订单还没有选图");
+    if (!orderSelectedImageIdValue(order)) warnings.push("订单还没有选图");
     if (!orderPaymentReady(order)) warnings.push("未记录定金或全款，先核验付款凭证");
     if (!order.wechatAccountId || !order.customerId || !order.conversationId) warnings.push("缺少微信账号、客户或会话绑定");
     if (isHighValueOrder(order)) warnings.push("达到高价值线，需要人工确认订单");
@@ -19197,7 +19267,7 @@ function highValueOrderNextFollowLabel(order: OrderDraft) {
 }
 
 function highValueOrderApprovalBlockReason(order: OrderDraft, options: { includePayment?: boolean } = {}) {
-  if (!order.selectedImageId && !order.quoteDraft?.selectedImageId) return "高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送。";
+  if (!orderSelectedImageIdValue(order)) return "高价值订单未绑定客户选中的效果图，不能批准订单确认或跟进发送。";
   if (!order.wechatAccountId || !order.customerId || !order.conversationId) return "高价值订单缺少微信账号、客户或会话绑定，不能批准订单确认或跟进发送。";
   if (options.includePayment !== false && !orderPaymentReady(order)) return "高价值订单未核验定金或全款，不能批准订单确认或跟进发送。";
   if (Number(order.profit || 0) < 0) return "高价值订单利润为负，必须人工确认报价和成本后再批准发送。";

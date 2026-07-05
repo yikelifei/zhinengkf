@@ -99,6 +99,8 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /function skuImageProblemRepairEntry\(problem: Pick<SkuImageProblem, "code" \| "imageRole" \| "path">\)/);
   assert.match(page, /先复制路径核对文件；确认不用时点“移除路径”/);
   assert.match(page, /点“编辑图片”，在商品表单补真实\$\{role\}后保存商品/);
+  assert.match(page, /function buildSkuFormImageChangeSummary\(form: SkuForm, originalSku: Sku \| null \| undefined\)/);
+  assert.match(page, /待保存图片变更：\$\{parts\.join\("，"\)\}。保存商品后才会生效，保存后请刷新商品审核确认图片问题减少。/);
   assert.match(page, /function skuImageProblemSaveTraceSummary\(problems: SkuImageProblem\[\], skuCode: string, name: string\)/);
   assert.match(page, /const matchedProblems = problems\.filter\(\(problem\) => problem\.skuCode === skuCode \|\| problem\.name === name\)/);
   assert.match(page, /图片修复追踪：保存前该商品有 \$\{matchedProblems\.length\} 个图片问题/);
@@ -319,10 +321,17 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /setSkuImageProblemSort\("image_role"\)/);
   assert.ok(page.includes("已聚焦 ${keyword} 的全部图片问题，并按图片位置排序。"));
   assert.match(page, /function stageSkuImageProblemFix\(problem: SkuImageProblem\)/);
+  assert.match(page, /const activeSkuOriginal = useMemo\(/);
+  assert.match(page, /skus\.find\(\(sku\) => sku\.skuCode === skuForm\.skuCode\.trim\(\)\) \|\| null/);
+  assert.match(page, /const skuFormImageChangeSummary = useMemo\(/);
+  assert.match(page, /buildSkuFormImageChangeSummary\(skuForm, activeSkuOriginal\)/);
   assert.match(page, /setSkuIssueFilter\("missing_image"\)/);
   assert.match(page, /const confirmed = window\.confirm\(/);
   assert.ok(page.includes("确认从 ${sku.skuCode} 移除${skuImageRoleLabel(problem)}路径吗？"));
   assert.ok(page.includes("这一步只会先改到商品表单里，确认无误后还需要点击“保存商品”才会生效。"));
+  assert.match(page, /className="sku-form-readiness-warning sku-form-image-change-summary"/);
+  assert.ok(page.includes("待保存图片变更"));
+  assert.match(page, /\{skuFormImageChangeSummary\}/);
   assert.ok(page.includes("已取消移除 ${sku.skuCode} 的${skuImageRoleLabel(problem)}路径。"));
   assert.match(page, /setSkuWorkbenchView\("editor"\)/);
   assert.match(page, /window\.setTimeout\(\(\) => \{/);
