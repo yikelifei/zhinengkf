@@ -272,6 +272,10 @@ const statusLabel: Record<string, string> = {
   cancelled: "已取消",
 };
 
+function designStatusLabel(status: string) {
+  return statusLabel[status] || status;
+}
+
 const skuTypeOptions = [
   { value: "all", label: "全部" },
   { value: "gift_box", label: "礼盒" },
@@ -2435,15 +2439,20 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function selectFromCustomerText() {
     if (!activeJob) return;
-    if (!selectionText.trim()) {
+    const customerSelectionText = selectionText.trim();
+    if (!customerSelectionText) {
       setMessage("请先粘贴客户选图原话。");
+      return;
+    }
+    if (!confirmDesignImageSelection(activeJob, customerSelectionText, "识别客户选图")) {
+      setMessage("已取消识别客户选图。");
       return;
     }
     let summary = "";
     await runAction(
       "识别客户选图",
       async () => {
-        const result = await selectDesignImage(activeJob.id, selectionText.trim(), identityExpectation(activeJob));
+        const result = await selectDesignImage(activeJob.id, customerSelectionText, identityExpectation(activeJob));
         applyDesignImageSelectionResult(activeJob, result);
         summary = designImageSelectionSummary(result);
       },
@@ -2455,6 +2464,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function selectDesignImageForJob(job: DesignJob, input: Parameters<typeof selectDesignImage>[1], label = "选择候选图") {
     let summary = "";
+    if (!confirmDesignImageSelection(job, input, label)) {
+      setMessage(`已取消${label}。`);
+      return;
+    }
     setActiveId(job.id);
     await runAction(
       label,
@@ -2546,6 +2559,36 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     return job.customer?.name || job.conversation?.title || job.customerId || "客户";
   }
 
+  function designJobIdentityConfirmLines(job: DesignJob) {
+    const wechatAccountLabel = job.wechatAccountId || job.conversation?.wechatAccountId || "未绑定";
+    const customerLabel = job.customerId || job.conversation?.customerId || "未绑定";
+    const conversationLabel = job.conversation?.title || job.conversationId || "未绑定";
+    return [`设计任务ID：${job.id}`, `微信账号：${wechatAccountLabel}`, `客户ID：${customerLabel}`, `会话：${conversationLabel}`];
+  }
+
+  function confirmDesignImageSelection(job: DesignJob, input: Parameters<typeof selectDesignImage>[1], label: string) {
+    const identityLines = designJobIdentityConfirmLines(job);
+    const candidate =
+      typeof input === "object" && input && "referencedImageId" in input
+        ? job.images?.find((image) => [image.id, image.imageId].includes(String(input.referencedImageId || "")))
+        : null;
+    const screenshotFingerprint = typeof input === "object" && input && "screenshotFingerprint" in input ? String(input.screenshotFingerprint || "") : "";
+    const rawText = typeof input === "string" ? input.trim() : "";
+    const clippedText = rawText.length > 260 ? `${rawText.slice(0, 260)}...` : rawText;
+    const lines = [
+      `确认为「${designJobCustomerName(job)}」执行${label}吗？`,
+      "",
+      ...identityLines,
+      "",
+      candidate?.position ? `候选图：第 ${candidate.position} 张` : "候选图：由系统识别",
+      rawText ? `客户原话：${clippedText}` : "",
+      screenshotFingerprint ? `截图指纹：${screenshotFingerprint.slice(0, 12)}${screenshotFingerprint.length > 12 ? "..." : ""}` : "",
+      "",
+      "确认后会把选图结果绑定到当前设计任务，并可能继续触发报价或人工审核。",
+    ].filter(Boolean);
+    return window.confirm(lines.join("\n"));
+  }
+
   function designJobBudgetText(job: DesignJob) {
     const quantity = Number(job.budget?.quantity || 0);
     const perUnit = Number(job.budget?.perUnitAmount || 0);
@@ -2563,8 +2606,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage("先让客户明确选择一张效果图，再快速确认发送。");
       return false;
     }
+    const identityLines = designJobIdentityConfirmLines(job);
     const lines = [
       `确认把「${designJobCustomerName(job)}」的效果图加入微信安全发送队列吗？`,
+      "",
+      ...identityLines,
       "",
       `选图：第 ${selectedImage.position || "-"} 张`,
       `场景：${readableScene(job.scene, "未填写场景")}`,
@@ -2581,14 +2627,68 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage("先让客户明确选择一张效果图，再生成报价。");
       return false;
     }
+    const identityLines = designJobIdentityConfirmLines(job);
     const lines = [
       `确认按「${designJobCustomerName(job)}」当前选图生成报价草稿吗？`,
+      "",
+      ...identityLines,
       "",
       `选图：第 ${selectedImage.position || "-"} 张`,
       `场景：${readableScene(job.scene, "未填写场景")}`,
       `预算：${designJobBudgetText(job)}`,
       "",
       "系统会按当前礼盒组合、数量、售价、成本和利润生成报价草稿。",
+    ];
+    return window.confirm(lines.join("\n"));
+  }
+
+  function confirmDesignRevisionRequest(job: DesignJob, instruction: string, selectedImage?: NonNullable<DesignJob["images"]>[number] | null) {
+    const identityLines = designJobIdentityConfirmLines(job);
+    const clippedInstruction = instruction.length > 260 ? `${instruction.slice(0, 260)}...` : instruction;
+    const lines = [
+      `确认为「${designJobCustomerName(job)}」提交客户改图吗？`,
+      "",
+      ...identityLines,
+      "",
+      selectedImage?.position ? `当前选图：第 ${selectedImage.position} 张` : "当前选图：未识别",
+      `已改图次数：${job.revisionCount || job.revisions?.length || 0}`,
+      job.revisionPolicy?.chargeRequired ? "改图策略：已进入收费/人工确认" : "改图策略：低预算默认 2 次免费",
+      "",
+      "客户改图要求：",
+      clippedInstruction,
+      "",
+      "确认后会把这条改图要求提交给设计平台，并继续绑定当前微信账号、客户和会话。",
+    ];
+    return window.confirm(lines.join("\n"));
+  }
+
+  function confirmDesignJobRetry(job: DesignJob) {
+    const identityLines = designJobIdentityConfirmLines(job);
+    const lines = [
+      `确认重试「${designJobCustomerName(job)}」的设计任务吗？`,
+      "",
+      ...identityLines,
+      "",
+      `当前状态：${designStatusLabel(job.status)}`,
+      job.errorMessage ? `失败原因：${operatorStatusMessage(job.errorMessage, job.errorMessage)}` : "失败原因：未记录",
+      "",
+      "确认后会重新提交出图，原候选图、选图、报价和订单记录不会被自动改掉。",
+    ];
+    return window.confirm(lines.join("\n"));
+  }
+
+  function confirmDesignJobCancel(job: DesignJob) {
+    const identityLines = designJobIdentityConfirmLines(job);
+    const selectedImage = designJobSelectedImage(job);
+    const lines = [
+      `确认取消「${designJobCustomerName(job)}」的设计任务吗？`,
+      "",
+      ...identityLines,
+      "",
+      `当前状态：${designStatusLabel(job.status)}`,
+      selectedImage?.position ? `当前选图：第 ${selectedImage.position} 张` : "当前选图：未识别",
+      "",
+      "取消后不会继续出图或发图；如果客户仍需要，需要重新创建或重试任务。",
     ];
     return window.confirm(lines.join("\n"));
   }
@@ -2703,6 +2803,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function retryActiveJob() {
     if (!activeJob) return;
+    if (!confirmDesignJobRetry(activeJob)) {
+      setMessage("已取消重试设计任务。");
+      return;
+    }
     await runAction("重试设计任务", () => retryDesignJob(activeJob.id, identityExpectation(activeJob)));
   }
 
@@ -2714,6 +2818,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       return;
     }
     const selectedImage = job.images?.find((image) => image.selected);
+    if (!confirmDesignRevisionRequest(job, instruction, selectedImage)) {
+      setMessage("已取消提交客户改图。");
+      return;
+    }
     await runAction(label, async () => {
       const result = await requestDesignRevision(job.id, {
         ...identityExpectation(job),
@@ -2732,6 +2840,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function cancelActiveJob() {
     if (!activeJob) return;
+    if (!confirmDesignJobCancel(activeJob)) {
+      setMessage("已取消设计任务取消操作。");
+      return;
+    }
     await runAction("取消设计任务", () => cancelDesignJob(activeJob.id, identityExpectation(activeJob)));
   }
 
@@ -3378,12 +3490,20 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function sendTaskConfirmLines(task: SendTask, actionLabel: string, scopeLabel: string) {
     const conversationName = task.conversation?.title || task.conversationId || "客户会话";
     const accountName = task.wechatAccount?.displayName || task.wechatAccountId || "微信账号";
+    const customerName =
+      task.conversation?.customer?.name ||
+      task.conversation?.customerId ||
+      task.guardSnapshot?.windowDiagnostic?.activeCustomerId ||
+      "未绑定";
+    const orderDraftId = sendTaskOrderDraftId(task);
     const message = typeof task.payload?.text === "string" ? task.payload.text.trim() : "";
     const lines = [
       `确认${actionLabel}${scopeLabel}吗？`,
       "",
       `会话：${conversationName}`,
       `微信账号：${accountName}`,
+      `客户：${customerName}`,
+      ...(orderDraftId ? [`订单ID：${orderDraftId}`] : []),
       `任务状态：${sendStatusLabel(task.status)}`,
       `任务 ID：${task.id}`,
       "",
@@ -4253,8 +4373,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function recordHighValueOrderManualFollowup(order: OrderDraft) {
     const step = highValueOrderManualStep(order);
+    const identityLines = orderIdentityConfirmLines(order);
     const note = window.prompt(
-      `记录「${order.customer?.name || order.quoteDraft?.customer?.name || "客户"}」高价值订单人工处理结果。\n\n请写清楚客户答复、收款/交期/生产承诺和下一步动作。`,
+      [
+        `记录「${order.customer?.name || order.quoteDraft?.customer?.name || "客户"}」高价值订单人工处理结果。`,
+        "",
+        `订单ID：${order.id}`,
+        ...identityLines,
+        "",
+        "请写清楚客户答复、收款/交期/生产承诺和下一步动作。",
+      ].join("\n"),
       step.nextAction,
     );
     if (note === null) return;
@@ -5240,6 +5368,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         reason: highValueDesignReason(job),
         actionLabel: decision === "approve_send" ? "批准发图进入微信安全发送队列" : "图片审核通过，继续人工确认报价",
         nextAction: decision === "approve_send" ? "发送前再次核对微信账号、客户会话、最近消息和候选图。" : "继续人工核对报价、利润、交期和客户话术。",
+        identityLines: designJobIdentityConfirmLines(job),
       })
     ) {
       setMessage("已取消高价值设计人工批准。");
@@ -5297,6 +5426,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     followupType: "production" | "delivery" = "delivery",
   ) {
     const selectedImage = orderSelectedImage(order);
+    const identityLines = orderIdentityConfirmLines(order);
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
     const actionLabels: Record<typeof decision, string> = {
       approve_confirmation: "通过订单确认，并在后端检查通过后进入微信安全发送队列",
@@ -5312,6 +5442,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     };
     const lines = [
       `确认审核「${customerName}」的订单吗？`,
+      "",
+      `订单ID：${order.id}`,
+      ...identityLines,
       "",
       `操作：${actionLabels[decision]}`,
       `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
@@ -5353,6 +5486,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           reason: highValueQuoteReason(quote),
           actionLabel: "批准报价进入微信安全发送队列",
           nextAction: "发送前再次核对客户身份、选图、金额、利润、话术和微信会话。",
+          identityLines: [`报价ID：${quote.id}`, ...quoteIdentityConfirmLines(quote)],
         })
       ) {
         setMessage("已取消高价值报价人工批准。");
@@ -13696,6 +13830,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           </p>
                         ) : null}
                         <SendOrderContext task={task} />
+                        <SendRoutingPolicy task={task} />
                         <SendPreflightStatus task={task} latestWindow={latestWindow} />
                         <GuardChecks task={task} />
                         <SendQueueAdvice task={task} />
@@ -15540,6 +15675,28 @@ function SendQueueAdvice({ task }: { task: SendTask }) {
   );
 }
 
+function SendRoutingPolicy({ task }: { task: SendTask }) {
+  const policy = task.payload?.routingPolicy;
+  if (!policy) return null;
+  return (
+    <div className={`queue-advice ${policy.manualRequired ? "warning" : "info"}`} aria-label="路由处理策略">
+      <strong>路由策略：{routingPolicyLaneLabel(policy.lane || "")}</strong>
+      {policy.reason ? <span>{policy.reason}</span> : null}
+      {policy.nextStep ? <small>{policy.nextStep}</small> : null}
+      <div className="route-evidence-tags">
+        <span className={policy.manualRequired ? "warn" : "pass"}>{policy.handler === "human" ? "人工处理" : "智能体处理"}</span>
+        <span>{policy.valueTier === "high" ? "高价值" : "普通价值"}</span>
+        <span className={policy.canQueueAutoReply ? "pass" : "warn"}>
+          {policy.canQueueAutoReply ? "允许排队回复" : "不自动排队"}
+        </span>
+        {policy.safeguards?.slice(0, 4).map((item) => (
+          <span key={item}>{routingPolicySafeguardLabel(item)}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SendManualAttentionActionHint({
   task,
   canRequeue,
@@ -15650,7 +15807,10 @@ function sendTaskOrderDraftId(task: SendTask) {
 function sendTaskManualAttentionSummary(task: SendTask) {
   const guardReason = String(task.guardSnapshot?.reason || "").trim();
   const attemptReason = String(task.latestAttempt?.errorMessage || task.attempts?.[0]?.errorMessage || "").trim();
-  const failedKeys = (task.guardSnapshot?.failedKeys || []).filter(Boolean).join(", ");
+  const failedKeys = (task.guardSnapshot?.failedKeys || [])
+    .filter(Boolean)
+    .map((key) => sendGuardCheckLabel({ key }))
+    .join("、");
   const reason = task.errorMessage || guardReason || attemptReason || failedKeys || "请打开发送中心查看校验记录";
   return `发送任务 ${task.id}：${sendStatusLabel(task.status)}，${operatorStatusMessage(reason, reason)}`;
 }
@@ -15919,6 +16079,8 @@ function sendGuardCheckLabel(check: { key?: string; label?: string }) {
     conversationManualUnlocked: "会话未被人工接管",
     conversationManualLocked: "会话已人工接管",
     binding: "任务绑定",
+    routingPolicyManualRequired: "路由策略要求人工处理",
+    routingPolicyQueueDisabled: "路由策略禁止自动排队",
   };
   return labels[String(check.key || "")] || String(check.key || "未知检查");
 }
@@ -18032,6 +18194,26 @@ function RouteResult({
             ) : null}
           </div>
         ) : null}
+        {route.routingPolicy ? (
+          <div className={`route-evidence compact scene-audit ${route.routingPolicy.manualRequired ? "manual" : "pass"}`}>
+            <small>处理策略 · {routingPolicyLaneLabel(route.routingPolicy.lane || "")}</small>
+            {route.routingPolicy.reason ? <p>{route.routingPolicy.reason}</p> : null}
+            {route.routingPolicy.nextStep ? <p><strong>下一步</strong><span>{route.routingPolicy.nextStep}</span></p> : null}
+            <div className="route-evidence-tags">
+              <span className={route.routingPolicy.manualRequired ? "warn" : "pass"}>
+                {route.routingPolicy.handler === "human" ? "人工处理" : "智能体处理"}
+              </span>
+              <span>{route.routingPolicy.valueTier === "high" ? "高价值" : "普通价值"}</span>
+              <span className={route.routingPolicy.canQueueAutoReply ? "pass" : "warn"}>
+                {route.routingPolicy.canQueueAutoReply ? "允许自动排队回复" : "不自动排队"}
+              </span>
+              {route.routingPolicy.canAskClarification ? <span>先追问补齐</span> : null}
+              {route.routingPolicy.safeguards?.slice(0, 5).map((item) => (
+                <span key={item}>{routingPolicySafeguardLabel(item)}</span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {route.correction?.corrected ? (
           <div className="route-evidence compact">
             <small>人工已纠正</small>
@@ -18149,6 +18331,31 @@ function routeActionLabel(action: string) {
     manual_review: "转人工",
   };
   return labels[action] || action;
+}
+
+function routingPolicyLaneLabel(lane: string) {
+  const labels: Record<string, string> = {
+    high_value_human: "高价值人工",
+    risk_human: "风险人工",
+    manual_review: "人工确认",
+    scene_clarification: "先确认场景",
+    info_collection: "先补信息",
+    low_value_agent: "低价值智能体",
+  };
+  return labels[lane] || lane || "待判断";
+}
+
+function routingPolicySafeguardLabel(key: string) {
+  const labels: Record<string, string> = {
+    identity_binding_required: "客户身份绑定",
+    no_cross_conversation_reply: "防 A 发 B",
+    use_agent_skills_and_knowledge: "使用 Skill/知识",
+    human_approval_required: "需人工批准",
+    wechat_send_guard_required: "微信发送守卫",
+    ask_before_answering_uncertain_scene: "不确定先问",
+    price_image_and_order_manual_review: "图片报价订单人工核对",
+  };
+  return labels[key] || key;
 }
 
 function inboundSelectionReasonLabel(reason: string) {
@@ -19329,10 +19536,13 @@ function confirmHighValueManualApproval(options: {
   reason: string;
   actionLabel: string;
   nextAction: string;
+  identityLines?: string[];
 }) {
   return window.confirm(
     [
       `确认人工批准：${options.title}`,
+      ...(options.identityLines?.length ? ["", ...options.identityLines] : []),
+      "",
       `原因：${options.reason}`,
       `动作：${options.actionLabel}`,
       `下一步：${options.nextAction}`,

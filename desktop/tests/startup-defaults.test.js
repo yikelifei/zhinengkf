@@ -108,7 +108,7 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(stableDoctor, /old desktop supervisor tasks are absent or disabled/);
   assert.match(stableDoctor, /function staleScheduledTaskXmlLooksEnabled\(taskName\)/);
   assert.match(stableDoctor, /function checkStaleRuntimeProcesses\(\)/);
-  assert.match(stableDoctor, /function checkStableRuntimeVersion\(\)/);
+  assert.match(stableDoctor, /function checkStableRuntimeVersion\(portOwners = new Map\(\)\)/);
   assert.match(stableDoctor, /old launcher process is still running/);
   assert.match(stableDoctor, /parsePowerShellJsonDate/);
   assert.match(stableDoctor, /function findStaleRuntimeProcesses\(\)/);
@@ -147,6 +147,7 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /const mockModeLockFile = path\.join\(runtimeDir, "mock-mode\.lock"\);/);
   assert.match(startDevPorts, /const realModeLockFile = path\.join\(runtimeDir, "real-mode\.lock"\);/);
   assert.match(startDevPorts, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
+  assert.match(startDevPorts, /fileFresh\(stableStartingLockFile, 10 \* 60_000\)/);
   assert.match(startDevPorts, /assertRealDesignStartAllowed\(\);/);
   assert.match(startDevPorts, /assertMockDesignStartAllowed\(\);/);
   assert.match(startDevPorts, /writeRealModeLockIfNeeded\(\);/);
@@ -718,16 +719,17 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableForeground, /ports:keepalive:mock/);
   const stableStart = readText("start-stable-desktop.cmd");
   assert.match(stableStart, /STABLE_SERVICE_WINDOW/);
-  assert.match(stableStart, /run-stable-service-window\.cmd/);
-  assert.match(stableStart, /explorer\.exe "D:\\zhinengkefu\\desktop\\run-stable-service-window\.cmd"/);
+  assert.match(stableStart, /tools\\start-stable-keepalive\.ps1/);
+  assert.doesNotMatch(stableStart, /explorer\.exe "D:\\zhinengkefu\\desktop\\run-stable-service-window\.cmd"/);
   assert.doesNotMatch(stableStart, /Invoke-CimMethod -ClassName Win32_Process -MethodName Create/);
   assert.doesNotMatch(stableStart, /start "Smart Kefu Services" \/min/);
   assert.match(stableStart, /stable-service-window\.log/);
   assert.match(stableStart, /stable-starting\.lock/);
   assert.match(stableStart, /stable-runtime-stop-request/);
-  assert.match(stableStart, /service window entered/);
-  assert.match(stableStart, /entering keepalive/);
-  assert.match(stableStart, /skip ports:stop inside service window/);
+  assert.match(stableStart, /failed to start stable keepalive/);
+  assert.doesNotMatch(stableStart, /service window entered/);
+  assert.doesNotMatch(stableStart, /entering keepalive/);
+  assert.doesNotMatch(stableStart, /skip ports:stop inside service window/);
   assert.doesNotMatch(stableStart, /ports:stop >> "%STABLE_SERVICE_LOG%" 2>>&1/);
   assert.doesNotMatch(stableStart, /stable:doctor -- --wait/);
   assert.match(stableStart, /node tools\\stable-start-needed\.js/);
@@ -745,7 +747,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableStart, /call npm\.cmd run build:web/);
   assert.match(stableStart, /web standalone missing; runtime will use Next dev fallback/);
   assert.doesNotMatch(stableStart, /stable:doctor -- --wait --wait-ms=15000 --interval-ms=3000/);
-  assert.match(stableStart, /call "D:\\zhinengkefu\\desktop\\keepalive-stable-desktop\.cmd"/);
+  assert.doesNotMatch(stableStart, /call "D:\\zhinengkefu\\desktop\\keepalive-stable-desktop\.cmd"/);
   const startDevPorts = readText("tools/start-dev-ports.js");
   assert.match(startDevPorts, /SKIP_EXISTING_WEB_BUILD === "1"/);
   assert.match(startDevPorts, /web rebuild skipped for stable startup/);
@@ -889,6 +891,15 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function ensureService\(spec\)/);
   assert.match(stableRuntime, /if \(spec\.type === "process"\)/);
   assert.match(stableRuntime, /function ensureProcessService\(spec\)/);
+  assert.match(stableRuntime, /if \(process\.platform === "win32" && spec\.port\)/);
+  assert.match(stableRuntime, /existing && isPidAlive\(existing\.pid\) && process\.platform === "win32" && spec\.port/);
+  assert.match(stableRuntime, /function startWindowsWrappedPortService\(spec\)/);
+  assert.match(stableRuntime, /function buildWindowsPortServiceWrapper\(spec\)/);
+  assert.match(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1 -LocalPort \$\{spec\.port\} -State Listen/);
+  assert.match(stableRuntime, /:restart/);
+  assert.match(stableRuntime, /goto restart/);
+  assert.match(stableRuntime, /SERVICE_EXIT_CODE/);
+  assert.match(stableRuntime, /if exist \$\{cmdQuote\(stopRequestFile\)\} exit \/b 0/);
   assert.match(stableRuntime, /const out = openServiceLogForAppend\(spec\.name, "out"\)/);
   assert.match(stableRuntime, /const err = openServiceLogForAppend\(spec\.name, "err"\)/);
   assert.match(stableRuntime, /function openServiceLogForAppend\(name, streamName\)/);
@@ -940,9 +951,15 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function append\(name, message\) \{[\s\S]*try \{[\s\S]*fs\.appendFileSync/);
   assert.match(stableRuntime, /catch \{\}/);
   assert.match(stableRuntime, /function killStaleRuntimeProcesses\(\)/);
-  assert.match(stableRuntime, /Disabled in stable mode: stale process cleanup is handled by stop-stable-desktop\.cmd/);
-  assert.match(stableRuntime, /prevents the supervisor from killing its own service children/);
-  assert.doesNotMatch(stableRuntime, /killing stale runtime process pid\(s\)/);
+  assert.match(stableRuntime, /function findLegacyRuntimeProcesses\(\)/);
+  assert.match(stableRuntime, /killing legacy runtime process pid\(s\)/);
+  assert.match(stableRuntime, /ports:keepalive:mock/);
+  assert.match(stableRuntime, /tools\/start-dev-ports\.js/);
+  assert.match(stableRuntime, /commandLine\.includes\(stableMarker\)/);
+  const stableDoctor = readText("tools/stable-desktop-doctor.js");
+  assert.match(stableDoctor, /checkStableRuntimeVersion\(portOwners\)/);
+  assert.match(stableDoctor, /direct service mode healthy pid=/);
+  assert.match(stableDoctor, /directServicePids\.length >= 3/);
 });
 
 test("electron startup failure points beginners to stable repair script", () => {
@@ -1030,8 +1047,8 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(launcher, /apiHealthUsesRuntimeDir\(apiHealth, stableRuntimeDir\)/);
   assert.match(launcher, /function apiHealthUsesRuntimeDir\(apiHealth, expectedRuntimeDir = runtimeDir\)/);
   assert.match(launcher, /function stableStartingLockActive\(\)/);
+  assert.match(launcher, /fileFresh\(stableStartingLockFile, 10 \* 60_000\)/);
   assert.match(launcher, /if \(!fileFresh\(stableStartingLockFile, 3600000\)\) return false;/);
-  assert.doesNotMatch(launcher, /fileFresh\(stableStartingLockFile, 10 \* 60_000\)/);
   assert.match(launcher, /stableRuntimeLauncherProcessActive\(readNumericFile\(stableRuntimeLauncherPidFile\)\)/);
   assert.match(launcher, /function stableRuntimeLauncherProcessActive\(pid\)/);
   assert.match(launcher, /tools\/stable-runtime-launcher\.js/);

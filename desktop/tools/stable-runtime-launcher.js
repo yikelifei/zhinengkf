@@ -99,6 +99,7 @@ function ensureService(spec) {
   }
   const owners = getPortOwnerPids(spec.port);
   const existing = children.get(spec.name);
+  if (existing && isPidAlive(existing.pid) && process.platform === "win32" && spec.port) return;
   if (existing && owners.includes(existing.pid)) return;
   const wrongOwners = owners.filter((pid) => {
     if (existing && pid === existing.pid) return false;
@@ -145,6 +146,10 @@ function ensureProcessService(spec) {
 }
 
 function startService(spec) {
+  if (process.platform === "win32" && spec.port) {
+    startWindowsWrappedPortService(spec);
+    return;
+  }
   const out = openServiceLogForAppend(spec.name, "out");
   const err = openServiceLogForAppend(spec.name, "err");
   try {
@@ -169,6 +174,59 @@ function startService(spec) {
     closeFd(out);
     closeFd(err);
   }
+}
+
+function startWindowsWrappedPortService(spec) {
+  const wrapperPath = path.join(runtimeDir, `run-${spec.name}.cmd`);
+  fs.writeFileSync(wrapperPath, buildWindowsPortServiceWrapper(spec), "utf8");
+  try {
+    append(spec.name, `starting wrapper ${wrapperPath}`);
+    const child = spawn("cmd.exe", ["/d", "/c", wrapperPath], {
+      cwd: root,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    children.set(spec.name, child);
+    append(spec.name, `wrapper pid=${child.pid}`);
+    child.unref();
+    child.once("exit", (code, signal) => {
+      const current = children.get(spec.name);
+      if (current === child) children.delete(spec.name);
+      append(spec.name, `wrapper exited code=${code ?? ""} signal=${signal ?? ""}`);
+    });
+  } catch (error) {
+    append(spec.name, `wrapper start failed: ${error?.stack || error?.message || error}`);
+  }
+}
+
+function buildWindowsPortServiceWrapper(spec) {
+  const env = { ...serviceEnv(spec.port), ...(spec.env || {}) };
+  return [
+    "@echo off",
+    "setlocal",
+    `cd /d ${cmdQuote(root)}`,
+    ...Object.entries(env).map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)}`),
+    ":restart",
+    `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
+    `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${spec.port} -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`,
+    "if not errorlevel 1 (",
+    "  timeout /t 2 /nobreak >nul",
+    "  goto restart",
+    ")",
+    `echo [%date% %time%] launching ${spec.name} >> ${cmdQuote(path.join(logsDir, `${spec.name}.launcher.log`))}`,
+    `${cmdQuote(spec.command)} ${spec.args.map(cmdQuote).join(" ")} >> ${cmdQuote(path.join(logsDir, `${spec.name}.out.log`))} 2>> ${cmdQuote(path.join(logsDir, `${spec.name}.err.log`))}`,
+    "set SERVICE_EXIT_CODE=%ERRORLEVEL%",
+    `echo [%date% %time%] ${spec.name} exited with %SERVICE_EXIT_CODE% >> ${cmdQuote(path.join(logsDir, `${spec.name}.launcher.log`))}`,
+    `if exist ${cmdQuote(stopRequestFile)} exit /b %SERVICE_EXIT_CODE%`,
+    "timeout /t 2 /nobreak >nul",
+    "goto restart",
+    "",
+  ].join("\r\n");
+}
+
+function cmdQuote(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 function processServiceSpec(name, args, env = {}) {
@@ -375,8 +433,66 @@ function closeFd(value) {
 }
 
 function killStaleRuntimeProcesses() {
-  // Disabled in stable mode: stale process cleanup is handled by stop-stable-desktop.cmd.
-  // Keeping this as a no-op prevents the supervisor from killing its own service children.
+  const pids = findLegacyRuntimeProcesses();
+  if (!pids.length) return;
+  append("stable-runtime", `killing legacy runtime process pid(s) ${pids.join(",")}`);
+  for (const pid of pids) killPid(pid);
+}
+
+function findLegacyRuntimeProcesses() {
+  if (process.platform !== "win32") return [];
+  const script = [
+    "$items = Get-CimInstance Win32_Process",
+    "$items | Where-Object { $_.Name -in @('node.exe','cmd.exe','powershell.exe') -and $_.CommandLine } | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
+  let items = [];
+  try {
+    const parsed = JSON.parse(result.stdout);
+    items = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  } catch {
+    return [];
+  }
+  const normalizedRoot = normalize(root);
+  const stableMarker = normalize(`${path.sep}.runtime-stable${path.sep}`);
+  const legacyRuntimeMarker = normalize(`${path.sep}.runtime${path.sep}`);
+  const byParent = new Map();
+  const seeds = [];
+  for (const item of items) {
+    const pid = Number(item.ProcessId);
+    const parentPid = Number(item.ParentProcessId);
+    const commandLine = normalize(item.CommandLine || "");
+    if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) continue;
+    if (Number.isFinite(parentPid) && parentPid > 0) {
+      if (!byParent.has(parentPid)) byParent.set(parentPid, []);
+      byParent.get(parentPid).push(pid);
+    }
+    if (!commandLine.includes(normalizedRoot)) continue;
+    if (commandLine.includes(stableMarker)) continue;
+    if (
+      commandLine.includes(legacyRuntimeMarker) ||
+      commandLine.includes("tools/start-dev-ports.js") ||
+      commandLine.includes("tools\\start-dev-ports.js") ||
+      commandLine.includes("ports:keepalive:mock") ||
+      commandLine.includes("ports:keepalive:real") ||
+      commandLine.includes("desktop-service-supervisor.js")
+    ) {
+      seeds.push(pid);
+    }
+  }
+  const resultPids = new Set();
+  const visit = (pid) => {
+    if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid || resultPids.has(pid)) return;
+    resultPids.add(pid);
+    for (const childPid of byParent.get(pid) || []) visit(childPid);
+  };
+  for (const pid of seeds) visit(pid);
+  return [...resultPids];
 }
 
 function isPidAlive(pid) {

@@ -631,7 +631,14 @@ export type SendTask = {
   status: string;
   wechatAccountId: string;
   conversationId: string;
-  payload: Record<string, unknown>;
+  payload: Record<string, unknown> & {
+    kind?: string;
+    text?: string;
+    routeId?: string;
+    inboundMessageId?: string;
+    automationPlan?: string;
+    routingPolicy?: RouteEvaluation["routingPolicy"];
+  };
     guardSnapshot?: {
       status?: string;
       reason?: string;
@@ -1062,6 +1069,21 @@ export type RouteEvaluation = {
   } | null;
   missingFields: string[];
   riskFlags: string[];
+  routingPolicy?: {
+    lane?: string;
+    valueTier?: "high" | "standard" | string;
+    handler?: "human" | "agent" | string;
+    agentKey?: string;
+    scene?: string;
+    manualRequired?: boolean;
+    canDraftReply?: boolean;
+    canAskClarification?: boolean;
+    canQueueAutoReply?: boolean;
+    autoSendAllowed?: boolean;
+    reason?: string;
+    nextStep?: string;
+    safeguards?: string[];
+  } | null;
   suggestedReply: string;
   appliedSkills?: Array<{
     id?: string;
@@ -1129,6 +1151,7 @@ export type InboundProcessResult = {
     shouldCreateDesignJob?: boolean;
     shouldNotifyHuman?: boolean;
     missingFields?: string[];
+    routingPolicy?: RouteEvaluation["routingPolicy"];
   };
   sendTask?: SendTask | null;
   designJob?: DesignJob | null;

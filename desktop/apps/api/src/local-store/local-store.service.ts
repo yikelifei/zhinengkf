@@ -1173,6 +1173,7 @@ export class LocalStoreService {
       budget: result.budget,
       missingFields: result.missingFields,
       riskFlags: result.riskFlags,
+      routingPolicy: result.routingPolicy || null,
       suggestedReply: result.suggestedReply,
       appliedSkills: result.appliedSkills || [],
       knowledgeMatches: result.knowledgeMatches || [],

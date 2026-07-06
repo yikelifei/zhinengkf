@@ -51,6 +51,17 @@ function evaluateAgentRoute(input = {}, options = {}) {
     missing,
     action,
   });
+  const routingPolicy = buildRoutingPolicy({
+    scene,
+    sceneDecision,
+    sceneClarification,
+    budget,
+    highValue,
+    riskFlags,
+    missing,
+    action,
+    sceneAudit,
+  });
   return {
     text,
     channel: input.channel || "wechat",
@@ -69,6 +80,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
     riskFlags,
     missingFields: missing,
     action,
+    routingPolicy,
     manualRequired: action === "manual_review",
     confidence: calculateConfidence(scene, budget, missing, riskFlags),
     suggestedReply: buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }),
@@ -726,6 +738,76 @@ function buildSceneAudit({
   };
 }
 
+function buildRoutingPolicy({
+  scene,
+  sceneDecision,
+  sceneClarification,
+  budget,
+  highValue,
+  riskFlags,
+  missing,
+  action,
+  sceneAudit,
+}) {
+  const missingFields = [...new Set(missing || [])];
+  const lane = routingPolicyLane({ highValue, riskFlags, missingFields, action, sceneDecision });
+  const manualRequired = action === "manual_review";
+  const canQueueAutoReply = action === "auto_agent" && !manualRequired;
+  const canAskClarification = action === "collect_info" && missingFields.length > 0 && !manualRequired;
+  const valueTier = highValue ? "high" : "standard";
+  return {
+    lane,
+    valueTier,
+    handler: manualRequired ? "human" : "agent",
+    agentKey: scene.agentKey,
+    scene: scene.scene,
+    manualRequired,
+    canDraftReply: true,
+    canAskClarification,
+    canQueueAutoReply,
+    autoSendAllowed: canQueueAutoReply,
+    reason: routingPolicyReason({ lane, scene, budget, riskFlags, missingFields }),
+    nextStep: sceneAudit?.nextStep || "",
+    safeguards: routingPolicySafeguards({ lane, manualRequired, canQueueAutoReply, sceneClarification }),
+  };
+}
+
+function routingPolicyLane({ highValue, riskFlags, missingFields, action, sceneDecision }) {
+  if (highValue) return "high_value_human";
+  if (riskFlags.length) return "risk_human";
+  if (action === "manual_review") return "manual_review";
+  if (missingFields.includes("scene_clarification") || sceneDecision?.status === "ambiguous" || sceneDecision?.status === "weak") {
+    return "scene_clarification";
+  }
+  if (action === "collect_info") return "info_collection";
+  if (action === "auto_agent") return "low_value_agent";
+  return "manual_review";
+}
+
+function routingPolicyReason({ lane, scene, budget, riskFlags, missingFields }) {
+  if (lane === "high_value_human") return `达到高价值线，${scene.scene} 由人工审核后推进。`;
+  if (lane === "risk_human") return `命中敏感风险：${riskFlags.join("、")}，需要人工处理。`;
+  if (lane === "scene_clarification") return "场景判断还不够稳，先确认客户真正要处理的问题，避免回错会话或回错场景。";
+  if (lane === "info_collection") return `已识别为 ${scene.scene}，但还缺少 ${missingFields.map(fieldLabel).join("、")}。`;
+  if (lane === "low_value_agent") {
+    const parts = [];
+    if (budget?.perUnitAmount) parts.push(`单份 ${budget.perUnitAmount} 元`);
+    if (budget?.totalAmount) parts.push(`总额 ${budget.totalAmount} 元`);
+    const budgetText = parts.length ? `，${parts.join("，")}` : "";
+    return `低价值线内且场景清晰${budgetText}，可交给 ${sceneOptionLabel(scene.agentKey, scene.scene)} 智能体处理。`;
+  }
+  return "需要人工确认后再继续。";
+}
+
+function routingPolicySafeguards({ lane, manualRequired, canQueueAutoReply, sceneClarification }) {
+  const safeguards = ["identity_binding_required", "no_cross_conversation_reply", "use_agent_skills_and_knowledge"];
+  if (manualRequired) safeguards.push("human_approval_required");
+  if (canQueueAutoReply) safeguards.push("wechat_send_guard_required");
+  if (lane === "scene_clarification" || sceneClarification?.required) safeguards.push("ask_before_answering_uncertain_scene");
+  if (lane === "high_value_human") safeguards.push("price_image_and_order_manual_review");
+  return safeguards;
+}
+
 function sceneAuditLevel(sceneDecision, action, warnings) {
   if (action === "manual_review") return "manual";
   if (sceneDecision?.status === "ambiguous" || sceneDecision?.status === "weak") return "review";
@@ -795,6 +877,7 @@ module.exports = {
   findPendingSceneClarificationContext,
   resolveSceneClarification,
   buildSceneAudit,
+  buildRoutingPolicy,
   shouldParseBudgetForRoute,
   detectMissingFields,
   detectRiskFlags,

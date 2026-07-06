@@ -97,8 +97,20 @@ test("design center active view hides sibling panels instead of clipping them", 
 
 test("design center mobile commands and empty actions fit one app viewport", () => {
   assert.match(cssSource, /Iteration 89 Design center mobile containment/);
+  assert.match(cssSource, /Iteration 96 Design center mobile command density/);
   assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \.toolbar-group\.context-toolbar/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \{[\s\S]*display: grid !important[\s\S]*width: min\(100%, 100dvw\) !important[\s\S]*overflow-x: hidden !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \{[\s\S]*width: min\(100%, calc\(100dvw - 28px\)\) !important[\s\S]*align-self: stretch !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] > \.main-grid,[\s\S]*\.workspace\[data-active-section="design-center"\] #design-center \{[\s\S]*width: min\(100%, 100dvw\) !important[\s\S]*overflow-x: hidden !important/);
   assert.match(cssSource, /grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \.toolbar-group\.status-group[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \.toolbar-group\.context-toolbar\.design-platform-toolbar[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \.toolbar-group\.context-toolbar\.design-workspace-toolbar[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) !important/);
+  assert.match(cssSource, /\.toolbar-group\.status-group \.platform-pill[\s\S]*min-width: 0 !important/);
+  assert.match(cssSource, /font-size: 10\.5px !important/);
+  assert.match(cssSource, /min-height: 33px !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center \.job-row \{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\) !important[\s\S]*overflow: hidden !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center \.job-row em \{[\s\S]*grid-column: 2 !important[\s\S]*text-overflow: ellipsis !important/);
   assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center \.empty\.empty-cta \.empty-actions/);
   assert.match(cssSource, /min-height: 154px !important/);
   assert.match(cssSource, /max-height: 188px !important/);

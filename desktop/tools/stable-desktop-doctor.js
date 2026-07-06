@@ -72,11 +72,11 @@ async function collectReport() {
   checks.push(checkRuntimeWritable());
   checks.push(checkStaleScheduledTasks());
   checks.push(checkStaleRuntimeProcesses());
-  checks.push(checkStableRuntimeVersion());
   for (const [label, filePath] of requiredFiles) checks.push(checkFile(label, filePath));
   checks.push(checkWebStartable());
 
   const portOwners = getPortOwners([webPort, apiPort, mockPort]);
+  checks.push(checkStableRuntimeVersion(portOwners));
   for (const port of [webPort, apiPort, mockPort]) {
     const owners = portOwners.get(port) || [];
     checks.push({
@@ -206,13 +206,21 @@ function staleScheduledTaskXmlLooksEnabled(taskName) {
   }
 }
 
-function checkStableRuntimeVersion() {
+function checkStableRuntimeVersion(portOwners = new Map()) {
   if (process.platform !== "win32") {
     return { ok: true, severity: "warn", label: "Stable runtime version", detail: "not checked on non-Windows platform" };
   }
   let launchers = stableRuntimeLauncherFromHeartbeat();
   if (!launchers.length) launchers = findStableRuntimeLauncherProcesses();
   if (!launchers.length) {
+    const directServicePids = [webPort, apiPort, mockPort].flatMap((port) => portOwners.get(port) || []);
+    if (directServicePids.length >= 3) {
+      return {
+        ok: true,
+        label: "Stable runtime version",
+        detail: `direct service mode healthy pid=${directServicePids.join(",")}`,
+      };
+    }
     return { ok: true, severity: "warn", label: "Stable runtime version", detail: "no stable runtime launcher process found" };
   }
   const launcherPath = path.join(desktopRoot, "tools", "stable-runtime-launcher.js");

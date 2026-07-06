@@ -5,8 +5,8 @@ if not "%STABLE_SERVICE_WINDOW%"=="1" (
   cd /d D:\zhinengkefu\desktop
   node tools\stable-start-needed.js
   if errorlevel 1 (
-    explorer.exe "D:\zhinengkefu\desktop\run-stable-service-window.cmd"
-    if errorlevel 1 echo [%date% %time%] failed to open stable service window with %ERRORLEVEL% >> "D:\zhinengkefu\desktop\.runtime-stable\stable-service-window.log"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\zhinengkefu\desktop\tools\start-stable-keepalive.ps1"
+    if errorlevel 1 echo [%date% %time%] failed to start stable keepalive with %ERRORLEVEL% >> "D:\zhinengkefu\desktop\.runtime-stable\stable-service-window.log"
     exit /b 0
   )
   exit /b 0

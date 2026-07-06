@@ -29396,3 +29396,158 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     text-overflow: ellipsis !important;
   }
 }
+
+/* Iteration 96 Design center mobile command density: split status and commands into app-style rows. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: stretch !important;
+    width: min(100%, 100dvw) !important;
+    max-width: 100dvw !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-title {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions {
+    width: min(100%, calc(100dvw - 28px)) !important;
+    max-width: calc(100dvw - 28px) !important;
+    min-width: 0 !important;
+    gap: 6px !important;
+    justify-self: stretch !important;
+    align-self: stretch !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.status-group {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    gap: 5px !important;
+    box-sizing: border-box !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.status-group .platform-pill {
+    min-height: 27px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding-inline: 6px !important;
+    font-size: 10.5px !important;
+    justify-content: center !important;
+    justify-self: stretch !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-platform-toolbar,
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-workspace-toolbar {
+    display: grid !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: none !important;
+    gap: 6px !important;
+    padding: 2px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-platform-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-workspace-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-platform-toolbar > button,
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-workspace-toolbar > button {
+    min-height: 33px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding-inline: 7px !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-platform-toolbar > button svg,
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] .topbar .top-actions .toolbar-group.context-toolbar.design-workspace-toolbar > button svg {
+    flex: 0 0 auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] > .main-grid,
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center {
+    width: min(100%, 100dvw) !important;
+    max-width: 100dvw !important;
+    min-width: 0 !important;
+    margin-inline: 0 !important;
+    padding-inline: 0 !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-list {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding: 7px 8px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-row {
+    display: grid !important;
+    grid-template-columns: 12px minmax(0, 1fr) !important;
+    grid-template-rows: auto auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    min-height: 64px !important;
+    padding: 9px 10px !important;
+    gap: 6px 8px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-row > div {
+    grid-column: 2 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-row small {
+    max-width: 100% !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="design-center"] #design-center .job-row em {
+    grid-column: 2 !important;
+    justify-self: start !important;
+    max-width: 100% !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+}

@@ -14,6 +14,12 @@ test("routes complete low-value gift design request to gift design agent", () =>
   assert.equal(result.scene, "礼盒设计");
   assert.equal(result.action, "auto_agent");
   assert.equal(result.isHighValue, false);
+  assert.equal(result.routingPolicy.lane, "low_value_agent");
+  assert.equal(result.routingPolicy.handler, "agent");
+  assert.equal(result.routingPolicy.valueTier, "standard");
+  assert.equal(result.routingPolicy.canQueueAutoReply, true);
+  assert.equal(result.routingPolicy.manualRequired, false);
+  assert.equal(result.routingPolicy.safeguards.includes("wechat_send_guard_required"), true);
   assert.ok(result.sceneScore > 0);
   assert.ok(result.matchedKeywords.includes("礼盒"));
   assert.ok(result.sceneScores[0].agentKey === "gift_design");
@@ -26,6 +32,9 @@ test("asks for missing info before gift design automation", () => {
 
   assert.equal(result.agentKey, "gift_design");
   assert.equal(result.action, "collect_info");
+  assert.equal(result.routingPolicy.lane, "info_collection");
+  assert.equal(result.routingPolicy.canAskClarification, true);
+  assert.equal(result.routingPolicy.canQueueAutoReply, false);
   assert.equal(result.missingFields.includes("budget"), true);
   assert.equal(result.missingFields.includes("quantity"), true);
 });
@@ -38,6 +47,13 @@ test("routes high-value request to manual review", () => {
   assert.equal(result.agentKey, "gift_design");
   assert.equal(result.action, "manual_review");
   assert.equal(result.isHighValue, true);
+  assert.equal(result.routingPolicy.lane, "high_value_human");
+  assert.equal(result.routingPolicy.handler, "human");
+  assert.equal(result.routingPolicy.valueTier, "high");
+  assert.equal(result.routingPolicy.canQueueAutoReply, false);
+  assert.equal(result.routingPolicy.manualRequired, true);
+  assert.equal(result.routingPolicy.safeguards.includes("human_approval_required"), true);
+  assert.equal(result.routingPolicy.safeguards.includes("price_image_and_order_manual_review"), true);
 });
 
 test("routes order and payment request to order payment agent", () => {
@@ -74,6 +90,10 @@ test("asks for clarification when only weak scene signal is detected", () => {
   assert.equal(result.agentKey, "pre_sales");
   assert.equal(result.sceneDecision.status, "weak");
   assert.equal(result.action, "collect_info");
+  assert.equal(result.routingPolicy.lane, "scene_clarification");
+  assert.equal(result.routingPolicy.canAskClarification, true);
+  assert.equal(result.routingPolicy.canQueueAutoReply, false);
+  assert.equal(result.routingPolicy.safeguards.includes("ask_before_answering_uncertain_scene"), true);
   assert.equal(result.missingFields.includes("scene_clarification"), true);
   assert.equal(result.sceneClarification.type, "confirm_scene");
   assert.match(result.sceneClarification.question, /售前咨询/);

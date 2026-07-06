@@ -902,6 +902,7 @@ async function stableRuntimeServicesHealthy() {
 }
 
 function stableStartingLockActive() {
+  if (fileFresh(stableStartingLockFile, 10 * 60_000)) return true;
   if (!fileFresh(stableStartingLockFile, 3600000)) return false;
   return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherProcesses().length > 0;
 }

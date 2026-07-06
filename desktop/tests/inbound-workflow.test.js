@@ -7,12 +7,27 @@ const { buildInboundReplyText, planInboundAutomation } = require("../packages/ru
 
 test("plans manual review for high value route", () => {
   const plan = planInboundAutomation({
-    route: { action: "manual_review", isHighValue: true, agentKey: "gift_design" },
+    route: {
+      action: "manual_review",
+      isHighValue: true,
+      agentKey: "gift_design",
+      routingPolicy: {
+        lane: "high_value_human",
+        valueTier: "high",
+        handler: "human",
+        manualRequired: true,
+        canQueueAutoReply: false,
+        safeguards: ["human_approval_required"],
+      },
+    },
   });
 
   assert.equal(plan.type, "manual_review");
+  assert.equal(plan.reason, "high_value_customer");
   assert.equal(plan.shouldNotifyHuman, true);
   assert.equal(plan.shouldQueueReply, false);
+  assert.equal(plan.routingPolicy.lane, "high_value_human");
+  assert.equal(plan.routingPolicy.canQueueAutoReply, false);
 });
 
 test("keeps manually locked conversation out of automation", () => {
@@ -44,17 +59,42 @@ test("does not create gift design job without real asset ids", () => {
 
 test("separates scene clarification from normal missing info", () => {
   const plan = planInboundAutomation({
-    route: { action: "collect_info", agentKey: "pre_sales", missingFields: ["scene_clarification"] },
+    route: {
+      action: "collect_info",
+      agentKey: "pre_sales",
+      missingFields: ["scene_clarification"],
+      routingPolicy: {
+        lane: "scene_clarification",
+        handler: "agent",
+        canAskClarification: true,
+        canQueueAutoReply: false,
+        safeguards: ["ask_before_answering_uncertain_scene"],
+      },
+    },
   });
 
   assert.equal(plan.type, "queue_reply");
   assert.equal(plan.reason, "scene_clarification_required");
   assert.equal(plan.shouldQueueReply, true);
+  assert.equal(plan.routingPolicy.lane, "scene_clarification");
+  assert.equal(plan.routingPolicy.canAskClarification, true);
 });
 
 test("creates gift design job only when bundle and real assets exist", () => {
   const plan = planInboundAutomation({
-    route: { action: "auto_agent", agentKey: "gift_design", missingFields: [] },
+    route: {
+      action: "auto_agent",
+      agentKey: "gift_design",
+      missingFields: [],
+      routingPolicy: {
+        lane: "low_value_agent",
+        valueTier: "standard",
+        handler: "agent",
+        manualRequired: false,
+        canQueueAutoReply: true,
+        safeguards: ["wechat_send_guard_required"],
+      },
+    },
     assetIds: ["asset_logo"],
     bundleRecommendation: { items: [{ skuCode: "BOX-A" }, { skuCode: "TEA-A" }] },
   });
@@ -62,6 +102,8 @@ test("creates gift design job only when bundle and real assets exist", () => {
   assert.equal(plan.type, "create_design_job");
   assert.equal(plan.shouldCreateDesignJob, true);
   assert.equal(plan.shouldQueueReply, true);
+  assert.equal(plan.routingPolicy.lane, "low_value_agent");
+  assert.equal(plan.routingPolicy.canQueueAutoReply, true);
 });
 
 test("sends gift design request to manual review when recommended bundle is not automation ready", () => {

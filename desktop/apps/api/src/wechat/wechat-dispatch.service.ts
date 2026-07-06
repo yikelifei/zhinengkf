@@ -505,6 +505,30 @@ export class WechatDispatchService {
     }
   }
 
+  private validateQueuedRoutingPolicySendState(task: any):
+    | { ok: true; routingPolicy?: Record<string, unknown> | null }
+    | { ok: false; reason: string; message: string; routingPolicy: Record<string, unknown>; lane: string } {
+    const routingPolicy = isPlainObject(task?.payload?.routingPolicy) ? task.payload.routingPolicy : null;
+    if (!routingPolicy) return { ok: true };
+
+    const manualRequired = routingPolicy.manualRequired === true;
+    const canQueueAutoReply = routingPolicy.canQueueAutoReply !== false;
+    const canQueueClarificationReply =
+      task?.payload?.automationPlan === "queue_reply" && routingPolicy.canAskClarification === true;
+    if (!manualRequired && (canQueueAutoReply || canQueueClarificationReply)) return { ok: true, routingPolicy };
+
+    const reason = manualRequired ? "routingPolicyManualRequired" : "routingPolicyQueueDisabled";
+    return {
+      ok: false,
+      reason,
+      message: manualRequired
+        ? "routing policy requires manual review before sending"
+        : "routing policy does not allow queued auto reply",
+      routingPolicy,
+      lane: String(routingPolicy.lane || ""),
+    };
+  }
+
   private expectedIdentityFromOrder(order: any): ExpectedIdentityPayload {
     return {
       expectedWechatAccountId: order?.wechatAccountId,
@@ -1006,6 +1030,7 @@ export class WechatDispatchService {
           routeId: route.id,
           inboundMessageId: message.id,
           automationPlan: plan.type,
+          routingPolicy: plan.routingPolicy || route.routingPolicy || null,
         },
         guardSnapshot: {
           requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
@@ -1875,6 +1900,9 @@ export class WechatDispatchService {
       }
 
       if (["blocked", "failed"].includes(task.status) && task.guardSnapshot?.opsAlertedStatus !== task.status) {
+        const blockedByRoutingPolicy = Boolean(task.guardSnapshot?.blockedByRoutingPolicy);
+        const routingPolicy = isPlainObject(task.guardSnapshot?.routingPolicy) ? task.guardSnapshot.routingPolicy : null;
+        const routingPolicyLane = String(task.guardSnapshot?.routingPolicyLane || routingPolicy?.lane || "");
         this.localStore.updateSendTask(task.id, {
           guardSnapshot: {
             ...(task.guardSnapshot || {}),
@@ -1884,12 +1912,27 @@ export class WechatDispatchService {
         });
         await this.notifications.create(
           task.status === "failed" ? "error" : "warning",
-          task.status === "failed" ? "发送任务失败" : "发送任务被安全拦截",
-          task.errorMessage || "需要客服检查微信窗口、客户会话或桥接状态。",
+          blockedByRoutingPolicy
+            ? "路由策略转人工处理"
+            : task.status === "failed"
+              ? "发送任务失败"
+              : "发送任务被安全拦截",
+          blockedByRoutingPolicy
+            ? `${task.conversation?.title || task.conversationId} 的发送任务被路由策略拦截，请人工核对客户价值、场景和下一步话术。`
+            : task.errorMessage || "需要客服检查微信窗口、客户会话或桥接状态。",
           {
             sendTaskId: task.id,
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
+            customerId: task.conversation?.customerId || task.customerId,
+            ...(blockedByRoutingPolicy
+              ? {
+                  reason: task.guardSnapshot?.reason,
+                  routingPolicyLane,
+                  routingPolicy,
+                  blockedByRoutingPolicy: true,
+                }
+              : {}),
           },
         );
         alerted.push(task);
@@ -2080,6 +2123,10 @@ export class WechatDispatchService {
   }
 
   private createLocalSendTask(payload: any) {
+    const routingPolicyState = this.validateQueuedRoutingPolicySendState(payload);
+    if (!routingPolicyState.ok) {
+      throw new BadRequestException(routingPolicyState.message);
+    }
     try {
       return this.localStore.createSendTask(payload);
     } catch (error) {
@@ -2274,6 +2321,33 @@ export class WechatDispatchService {
     assertExpectedIdentity(taskBeforeValidation, params, "send task");
     if (taskBeforeValidation.status !== "queued") {
       throw new BadRequestException(`send task is not queued: ${taskBeforeValidation.status || "unknown"}`);
+    }
+    const routingPolicyState = this.validateQueuedRoutingPolicySendState(taskBeforeValidation);
+    if (!routingPolicyState.ok) {
+      const startedAt = new Date().toISOString();
+      const blockedTask = this.blockSendTask(id, routingPolicyState.message, {
+        failedKeys: [routingPolicyState.reason],
+        routingPolicy: routingPolicyState.routingPolicy,
+        routingPolicyLane: routingPolicyState.lane,
+        routingPolicySendState: routingPolicyState,
+        blockedByRoutingPolicy: true,
+        blockedAt: startedAt,
+      });
+      const attempt = this.localStore.createSendAttempt({
+        sendTaskId: id,
+        adapter: adapter.name,
+        status: "blocked",
+        guardStatus: routingPolicyState.reason,
+        payloadSummary: this.summarizePayload(taskBeforeValidation.payload),
+        errorMessage: blockedTask.errorMessage,
+        metadata: {
+          adapter,
+          routingPolicyState,
+        },
+        startedAt,
+        completedAt: new Date().toISOString(),
+      });
+      return { task: blockedTask, attempt, adapter };
     }
     const orderState = this.validateQueuedOrderSendState(taskBeforeValidation);
     if (!orderState.ok) {
