@@ -124,6 +124,7 @@ function ensureService(spec) {
     return;
   }
   const unmanagedOwners = owners.filter((pid) => {
+    if (portHealthMatches(spec)) return false;
     if (!existing) return true;
     if (pid === existing.pid) return false;
     return !(ownerMatches(pid, spec.expected) === true && isDescendantPid(pid, existing.pid));

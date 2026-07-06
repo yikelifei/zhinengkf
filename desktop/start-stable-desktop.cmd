@@ -5,7 +5,8 @@ if not "%STABLE_SERVICE_WINDOW%"=="1" (
   cd /d D:\zhinengkefu\desktop
   node tools\stable-start-needed.js
   if errorlevel 1 (
-    start "Smart Kefu Services" /min /D "D:\zhinengkefu\desktop" cmd.exe /d /c ""D:\zhinengkefu\desktop\run-stable-service-window.cmd""
+    explorer.exe "D:\zhinengkefu\desktop\run-stable-service-window.cmd"
+    if errorlevel 1 echo [%date% %time%] failed to open stable service window with %ERRORLEVEL% >> "D:\zhinengkefu\desktop\.runtime-stable\stable-service-window.log"
     exit /b 0
   )
   exit /b 0
@@ -25,7 +26,6 @@ if %ERRORLEVEL% NEQ 0 (
   exit /b %ERRORLEVEL%
 )
 echo [%date% %time%] checking existing services >> "%STABLE_SERVICE_LOG%"
-call npm.cmd run stable:doctor -- --wait --wait-ms=15000 --interval-ms=3000
 node tools\stable-start-needed.js
 if not errorlevel 1 (
   echo [%date% %time%] services already healthy; entering keepalive guard >> "%STABLE_SERVICE_LOG%"

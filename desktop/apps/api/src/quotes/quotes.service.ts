@@ -120,6 +120,25 @@ export class QuotesService {
     this.ensureQuoteIdentity(current);
     assertExpectedIdentity(current, patch, "quote draft");
     const data = cleanQuotePatch(patch, current);
+    const shouldClearLinkedSendTask =
+      this.quoteUpdateInvalidatesPendingSendTask(data) && this.quoteLinkedSendTaskCanBeCleared(current);
+    const cancelledSendTask = shouldClearLinkedSendTask
+      ? await this.cancelLinkedQuoteSendTaskForRevision(current, {
+          ...patch,
+          note: patch.customerNotes || `报价状态已改为 ${data.status}，取消旧发送任务。`,
+        })
+      : null;
+    if (shouldClearLinkedSendTask) {
+      data.sendTaskId = null;
+      const staleSendTaskNote = cancelledSendTask
+        ? `原报价发送任务 ${cancelledSendTask.id} 已取消。`
+        : current.sendTask?.status === "cancelled"
+          ? `原报价发送任务 ${current.sendTaskId} 已经取消，已解除旧发送绑定。`
+          : "";
+      if (staleSendTaskNote) {
+        data.customerNotes = appendCustomerNote(data.customerNotes || current.customerNotes, staleSendTaskNote);
+      }
+    }
     const updated = appConfig.useLocalStore
       ? this.localStore.updateQuoteDraft(id, data)
       : await this.prisma.quoteDraft.update({
@@ -134,6 +153,7 @@ export class QuotesService {
     if (data.status === "manual_review") {
       await this.lockQuoteConversationForManualReview(current, patch.owner || current.owner);
     }
+    await this.syncOrderPaymentStatusFromQuoteUpdate(current, data, patch);
     return updated;
   }
 
@@ -596,18 +616,45 @@ export class QuotesService {
     payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
   ) {
     if (!quote?.sendTaskId) return null;
-    if (quote.sendTask?.status === "sent" || quote.status === "sent") return null;
+    if (quote.sendTask?.status === "sent" || quote.sendTask?.status === "cancelled" || quote.status === "sent") return null;
     return this.wechatDispatch.cancelSendTask(quote.sendTaskId, {
       ...payload,
       reason: payload.note || "报价已人工修订，取消旧发送任务",
     });
   }
 
+  private quoteUpdateInvalidatesPendingSendTask(data: Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(data, "status")) return false;
+    return ["draft", "manual_review", "rejected", "cancelled"].includes(String(data.status || ""));
+  }
+
+  private quoteLinkedSendTaskCanBeCleared(quote: any) {
+    if (!quote?.sendTaskId) return false;
+    if (quote.status === "sent") return false;
+    if (quote.sendTask?.status === "sent") return false;
+    return true;
+  }
+
   private async findOrderDraftForQuote(quoteDraftId: string) {
     if (appConfig.useLocalStore) {
+      if (typeof this.localStore.listOrderDrafts !== "function") return null;
       return this.localStore.listOrderDrafts().find((order: any) => order.quoteDraftId === quoteDraftId) || null;
     }
     return (this.prisma as any).orderDraft.findUnique({ where: { quoteDraftId } });
+  }
+
+  private async syncOrderPaymentStatusFromQuoteUpdate(quote: any, data: any, payload: ExpectedIdentityPayload & { owner?: string }) {
+    if (!Object.prototype.hasOwnProperty.call(data, "paymentStatus")) return null;
+    const order = await this.findOrderDraftForQuote(quote.id);
+    if (!order || order.paymentStatus === data.paymentStatus) return null;
+    return this.orders.update(order.id, {
+      expectedWechatAccountId: payload.expectedWechatAccountId || order.wechatAccountId || quote.designJob?.wechatAccountId,
+      expectedConversationId: payload.expectedConversationId || order.conversationId || quote.designJob?.conversationId,
+      expectedCustomerId: payload.expectedCustomerId || order.customerId || quote.customerId || quote.designJob?.customerId,
+      paymentStatus: data.paymentStatus,
+      owner: payload.owner || order.owner || quote.owner || "人工客服",
+      customerNotes: appendCustomerNote(order.customerNotes, `报价付款状态已同步为 ${data.paymentStatus}。`),
+    });
   }
 
   private isQuoteSelectionLocked(quote: any) {
@@ -788,7 +835,7 @@ type QuoteUpdatePatch = {
 };
 
 function cleanQuotePatch(patch: QuoteUpdatePatch, current: any) {
-  const data: Record<string, string | number> = {};
+  const data: Record<string, string | number | null> = {};
   if (isAllowed(patch.status, ["draft", "auto_sent", "send_queued", "manual_review", "sent", "accepted", "rejected", "cancelled"])) {
     data.status = patch.status as string;
   }
@@ -833,6 +880,11 @@ function moneyNumber(value: unknown, fallback: number) {
 
 function roundMoney(value: number) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function appendCustomerNote(before: unknown, note: string) {
+  const previous = String(before || "").trim();
+  return previous ? `${previous}\n${note}` : note;
 }
 
 function assertManualReleaseReason(reason: unknown, context: string) {

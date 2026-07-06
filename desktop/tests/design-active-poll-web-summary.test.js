@@ -18,5 +18,8 @@ test("web design active poll summary reports automatic retries separately", () =
 
 test("web single design poll reports automatic retry instead of plain failure", () => {
   assert.match(webApi, /autoRetried\?: boolean/);
-  assert.match(webPage, /result\.autoRetried \? "设计平台状态：已自动重试，正在重新出图。"/);
+  assert.match(webPage, /result\.remoteStatus === "terminal"/);
+  assert.match(webPage, /result\.autoRetried/);
+  assert.match(webPage, /设计平台状态：已自动重试，正在重新出图。/);
+  assert.match(webPage, /设计平台状态：任务已进入客户确认后的终态，已跳过轮询。/);
 });

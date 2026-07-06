@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { DesignJobsService } from "../design-jobs/design-jobs.service";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { OrdersService } from "../orders/orders.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { rules } from "../shared/rules";
@@ -27,6 +28,7 @@ export class ReviewsService {
     private readonly quotes: QuotesService,
     private readonly notifications: NotificationsService,
     private readonly wechat: WechatDispatchService,
+    private readonly orders?: OrdersService,
   ) {}
 
   async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
@@ -382,7 +384,10 @@ export class ReviewsService {
   }
 
   private async updateReviewedOrder(id: string, data: { owner?: string; customerNotes?: string; status?: string }) {
-    if (appConfig.useLocalStore) return this.localStore.updateOrderDraft(id, data);
+    if (appConfig.useLocalStore) {
+      if (this.orders) return this.orders.update(id, data);
+      return this.localStore.updateOrderDraft(id, data);
+    }
     return (this.prisma as any).orderDraft.update({
       where: { id },
       data,

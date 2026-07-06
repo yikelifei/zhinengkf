@@ -2,6 +2,7 @@
 
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("node:path");
 
 const args = new Set(process.argv.slice(2));
@@ -36,18 +37,22 @@ const stableConflictingLauncherCmd = path.join(
   realDesignMode ? "stable-supervise-mock.cmd" : "stable-supervise-real.cmd",
 );
 
-main();
+main().catch((error) => {
+  appendLog(launcherLog, `[supervisor] failed ${error?.stack || error}`);
+  console.error(error?.stack || error);
+  process.exitCode = 1;
+});
 
-function main() {
+async function main() {
   fs.mkdirSync(logsDir, { recursive: true });
-  if (stableDesktopGuardActive()) {
+  if (await stableDesktopGuardActive()) {
     appendLog(launcherLog, "[supervisor] blocked because stable desktop startup/runtime is active");
     console.log("[supervisor] stable desktop runtime is active; legacy supervisor skipped.");
     return;
   }
   setModeEnv();
   if (supervisorChild) {
-    runSupervisorLoop();
+    await runSupervisorLoop();
     return;
   }
 
@@ -367,8 +372,6 @@ function writeSupervisorChildCmd() {
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(process.cwd())}`,
-    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
-    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     ...envLines,
     `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
       realDesignMode ? "--real-design" : "--mock-design",
@@ -377,7 +380,7 @@ function writeSupervisorChildCmd() {
   fs.writeFileSync(supervisorChildCmd, `${lines.join("\r\n")}\r\n`, "utf8");
 }
 
-function runSupervisorLoop() {
+async function runSupervisorLoop() {
   assertModeSwitchAllowed();
   updateMockModeLock();
   updateRealModeLock();
@@ -385,7 +388,7 @@ function runSupervisorLoop() {
   writeActiveLaunchers();
   appendLog(launcherLog, `[supervisor] persistent ${realDesignMode ? "real" : "mock"} supervisor started pid=${process.pid}`);
   for (;;) {
-    if (stableDesktopGuardActive()) {
+    if (await stableDesktopGuardActive()) {
       appendLog(launcherLog, "[supervisor] stable desktop runtime became active; stopping legacy supervisor loop");
       return;
     }
@@ -667,8 +670,6 @@ function buildLauncherCmd() {
       .filter((key) => process.env[key] !== undefined)
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
     ":restart",
-    `if exist ${cmdQuote(stableStartingLockFile)} exit /b 0`,
-    `if exist ${cmdQuote(stableKeepAliveHeartbeatFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
     `if %ERRORLEVEL% EQU 0 echo [%date% %time%] start-dev-ports exited with 0, continuing supervision >> ${cmdQuote(launcherLog)}`,
     `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,
@@ -710,14 +711,68 @@ function launcherModeEnv() {
   ];
 }
 
-function stableDesktopGuardActive() {
+async function stableDesktopGuardActive() {
   if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
+  if (normalizePathText(runtimeDir) === normalizePathText(stableRuntimeDir)) return false;
+  const processActive = stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
+  if (!processActive) return false;
+  if (await stableRuntimeServicesHealthy()) return true;
+  appendLog(launcherLog, "[supervisor] ignored stale stable desktop runtime guard because the stable launcher is not serving required ports");
+  console.log("[supervisor] ignored stale stable desktop runtime guard because required ports are not healthy.");
+  return false;
 }
 
 function stableStartingLockActive() {
+  if (fileFresh(stableStartingLockFile, 10 * 60_000)) return true;
   if (!fileFresh(stableStartingLockFile, 3_600_000)) return false;
   return stableRuntimeLauncherProcessActive(readNumericFile(stableRuntimeLauncherPidFile)) || findStableRuntimeLauncherProcesses().length > 0;
+}
+
+async function stableRuntimeServicesHealthy() {
+  const webPort = numberEnv("WEB_PORT", 3100);
+  const apiPort = numberEnv("API_PORT", 3200);
+  const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+  if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) return false;
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealth?.ok) return false;
+  const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
+  if (realDesignMode) return integrationHealth?.adapter === "art_image_local";
+  return (
+    (await httpOk(`http://127.0.0.1:${mockPort}/v1/health`)) &&
+    integrationHealth?.adapter === "standard_v1"
+  );
+}
+
+function httpOk(url) {
+  return requestText(url).then((response) => response.statusCode >= 200 && response.statusCode < 400).catch(() => false);
+}
+
+async function getJson(url) {
+  try {
+    const response = await requestText(url);
+    if (response.statusCode < 200 || response.statusCode >= 400) return null;
+    return JSON.parse(response.body || "{}");
+  } catch {
+    return null;
+  }
+}
+
+function requestText(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(url, { timeout: 2500 }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => resolve({ statusCode: response.statusCode || 0, body }));
+    });
+    request.once("timeout", () => {
+      request.destroy(new Error(`timeout ${url}`));
+    });
+    request.once("error", reject);
+    request.end();
+  });
 }
 
 function fileFresh(filePath, maxAgeMs) {

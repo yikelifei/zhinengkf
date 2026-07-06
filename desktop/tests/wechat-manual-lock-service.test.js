@@ -43,7 +43,7 @@ function setupService(overrides = {}) {
   const orders = overrides.orders || new OrdersService({}, localStore, notifications);
   const service = new WechatDispatchService({}, localStore, sendAdapter, notifications, orders);
   const quotes = new QuotesService({}, localStore, orders, service);
-  const reviews = new ReviewsService({}, localStore, {}, {}, notifications);
+  const reviews = new ReviewsService({}, localStore, {}, {}, notifications, service, orders);
 
   return { tempDir, localStore, service, reviews, orders, quotes };
 }
@@ -169,6 +169,145 @@ function seedStoredOrderDraft(localStore, overrides = {}) {
     ...overrides,
   });
 }
+
+test("manual quote status update cancels pending quote send task", async () => {
+  const { localStore, quotes } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "quote_manual_review_cancels_send_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 50 },
+    scene: "端午员工福利礼盒",
+    bundle: {
+      items: [{ name: "保温杯", salePrice: 100, costPrice: 60, quantity: 1 }],
+    },
+    assets: [],
+    requirements: {},
+    status: "completed",
+  });
+  const [image] = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "quote_manual_review_cancel_candidate_1",
+      downloadUrl: "http://127.0.0.1:3700/files/quote-manual-review-cancel.png",
+      localPath: "C:\\storage\\design-jobs\\quote_manual_review_cancel\\candidate_1.png",
+      position: 1,
+      width: 1024,
+      height: 1024,
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, image.id);
+  const sendTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: {
+      kind: "quote",
+      quoteDraftId: quote.id,
+      text: "这条报价不应该继续自动发出",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_send",
+        valueLevel: "low",
+        quoteDraftId: quote.id,
+      },
+    },
+  });
+  localStore.updateQuoteDraft(quote.id, {
+    status: "send_queued",
+    sendTaskId: sendTask.id,
+  });
+
+  const updated = await quotes.update(quote.id, {
+    ...demoExpectedIdentity(),
+    status: "manual_review",
+    owner: "人工客服",
+    customerNotes: "客户改需求，报价回到人工审核。",
+  });
+  const cancelled = localStore.getSendTask(sendTask.id);
+
+  assert.equal(updated.status, "manual_review");
+  assert.equal(updated.sendTaskId, null);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.guardSnapshot.status, "cancelled");
+  assert.match(cancelled.guardSnapshot.cancelReason, /客户改需求/);
+  assert.match(updated.customerNotes, /原报价发送任务/);
+});
+
+test("manual quote status update unlinks an already cancelled quote send task", async () => {
+  const { localStore, quotes } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "quote_manual_review_unlinks_cancelled_send_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 50 },
+    scene: "端午员工福利礼盒",
+    bundle: {
+      items: [{ name: "保温杯", salePrice: 100, costPrice: 60, quantity: 1 }],
+    },
+    assets: [],
+    requirements: {},
+    status: "completed",
+  });
+  const [image] = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "quote_manual_review_cancelled_candidate_1",
+      downloadUrl: "http://127.0.0.1:3700/files/quote-manual-review-cancelled.png",
+      localPath: "C:\\storage\\design-jobs\\quote_manual_review_cancelled\\candidate_1.png",
+      position: 1,
+      width: 1024,
+      height: 1024,
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, image.id);
+  const sendTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job.id,
+    quoteDraftId: quote.id,
+    status: "cancelled",
+    payload: {
+      kind: "quote",
+      quoteDraftId: quote.id,
+      text: "这条报价已经取消过，不应该再次取消",
+    },
+    guardSnapshot: {
+      status: "cancelled",
+      cancelReason: "manual_lock_before_revision",
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_send",
+        valueLevel: "low",
+        quoteDraftId: quote.id,
+      },
+    },
+  });
+  localStore.updateQuoteDraft(quote.id, {
+    status: "send_queued",
+    sendTaskId: sendTask.id,
+  });
+
+  const updated = await quotes.update(quote.id, {
+    ...demoExpectedIdentity(),
+    status: "manual_review",
+    owner: "人工客服",
+    customerNotes: "客户改需求，旧报价不再发送。",
+  });
+  const keptCancelled = localStore.getSendTask(sendTask.id);
+
+  assert.equal(updated.status, "manual_review");
+  assert.equal(updated.sendTaskId, null);
+  assert.equal(keptCancelled.status, "cancelled");
+  assert.equal(keptCancelled.guardSnapshot.cancelReason, "manual_lock_before_revision");
+  assert.match(updated.customerNotes, /已经取消/);
+});
 
 function createPassingWechatWindowSnapshot(localStore, recentMessageText = "") {
   return localStore.createWechatWindowSnapshot({
@@ -1253,6 +1392,234 @@ test("cancel order send task records order note without changing quote status", 
   assert.equal(quote.status, "accepted");
 });
 
+test("cancelled order draft cancels pending order send tasks only", async () => {
+  const { localStore, orders } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_cancel_clears_pending_sends_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+  const confirmation = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "pending order confirmation should be cancelled" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_acceptance",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+  const followup = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "blocked",
+    payload: { kind: "text", text: "pending production follow-up should be cancelled", followupType: "production" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_followup",
+        valueLevel: "low",
+        followupType: "production",
+        orderDraftId: order.id,
+      },
+    },
+  });
+  const unrelated = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "normal conversation reply should stay queued" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: { source: "scene_reply", valueLevel: "low" },
+    },
+  });
+
+  const updated = await orders.update(order.id, {
+    ...demoExpectedIdentity(),
+    status: "cancelled",
+    owner: "人工客服",
+    customerNotes: "客户取消订单",
+  });
+
+  const cancelledConfirmation = localStore.getSendTask(confirmation.id);
+  const cancelledFollowup = localStore.getSendTask(followup.id);
+  const keptUnrelated = localStore.getSendTask(unrelated.id);
+  const notification = localStore
+    .listNotifications()
+    .find((item) => item.target?.orderDraftId === order.id && item.target?.cancelledSendTaskIds?.length === 2);
+
+  assert.equal(updated.status, "cancelled");
+  assert.equal(cancelledConfirmation.status, "cancelled");
+  assert.equal(cancelledConfirmation.guardSnapshot.cancelReason, "order_cancelled_before_send");
+  assert.equal(cancelledConfirmation.guardSnapshot.orderSendState.reason, "orderCancelledBeforeSend");
+  assert.equal(cancelledConfirmation.guardSnapshot.history.at(-1).fromStatus, "queued");
+  assert.equal(cancelledFollowup.status, "cancelled");
+  assert.equal(cancelledFollowup.guardSnapshot.history.at(-1).fromStatus, "blocked");
+  assert.equal(keptUnrelated.status, "queued");
+  assert.ok(notification);
+});
+
+test("refunded order draft cancels pending order send tasks before execution", async () => {
+  const { localStore, orders } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_refund_clears_pending_sends_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+  const confirmation = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "pending order confirmation should be cancelled after refund" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_confirmation",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+  const unrelated = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "normal conversation reply should stay queued after refund" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: { source: "scene_reply", valueLevel: "low" },
+    },
+  });
+
+  const updated = await orders.update(order.id, {
+    ...demoExpectedIdentity(),
+    paymentStatus: "refunded",
+    owner: "人工客服",
+    customerNotes: "客户退款，停止自动确认",
+  });
+
+  const cancelledConfirmation = localStore.getSendTask(confirmation.id);
+  const keptUnrelated = localStore.getSendTask(unrelated.id);
+  const notification = localStore
+    .listNotifications()
+    .find((item) => item.target?.orderDraftId === order.id && item.target?.cancelledSendTaskIds?.includes(confirmation.id));
+
+  assert.equal(updated.paymentStatus, "refunded");
+  assert.equal(cancelledConfirmation.status, "cancelled");
+  assert.equal(cancelledConfirmation.errorMessage, "order_payment_not_ready_before_send");
+  assert.equal(cancelledConfirmation.guardSnapshot.cancelReason, "order_payment_not_ready_before_send");
+  assert.equal(cancelledConfirmation.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
+  assert.equal(keptUnrelated.status, "queued");
+  assert.ok(notification);
+});
+
+test("refunded quote update syncs linked order and cancels pending order sends", async () => {
+  const { localStore, quotes } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_quote_refund_clears_pending_sends_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "pending order confirmation should be cancelled after quote refund" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "order_confirmation",
+        valueLevel: "low",
+        quoteDraftId: order.quoteDraftId,
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  const updatedQuote = await quotes.update(order.quoteDraftId, {
+    ...demoExpectedIdentity(),
+    paymentStatus: "refunded",
+    owner: "人工客服",
+    customerNotes: "客户退款，报价停止推进",
+  });
+
+  const syncedOrder = localStore.getOrderDraft(order.id);
+  const cancelledTask = localStore.getSendTask(task.id);
+
+  assert.equal(updatedQuote.paymentStatus, "refunded");
+  assert.equal(syncedOrder.paymentStatus, "refunded");
+  assert.match(syncedOrder.customerNotes, /报价付款状态已同步为 refunded/);
+  assert.equal(cancelledTask.status, "cancelled");
+  assert.equal(cancelledTask.guardSnapshot.cancelReason, "order_payment_not_ready_before_send");
+  assert.equal(cancelledTask.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
+});
+
+test("manual rejected order review reuses order cancellation send cleanup", async () => {
+  const { localStore, reviews } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_review_reject_clears_pending_sends_1",
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+    totalPrice: 12000,
+    unitPrice: 240,
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: order.designJobId,
+    quoteDraftId: order.quoteDraftId,
+    status: "queued",
+    payload: { kind: "text", text: "pending high-value confirmation should be cancelled after rejection" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "manual_order_review",
+        valueLevel: "high",
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  const result = await reviews.reviewOrder(order.id, {
+    ...demoExpectedIdentity(),
+    decision: "reject_order",
+    reviewer: "人工客服",
+    note: "人工审核不通过，停止推进",
+  });
+
+  const rejectedOrder = localStore.getOrderDraft(order.id);
+  const cancelledTask = localStore.getSendTask(task.id);
+
+  assert.equal(result.result.orderDraft.status, "cancelled");
+  assert.equal(result.log.afterStatus, "cancelled");
+  assert.equal(rejectedOrder.status, "cancelled");
+  assert.equal(cancelledTask.status, "cancelled");
+  assert.equal(cancelledTask.guardSnapshot.cancelReason, "order_cancelled_before_send");
+  assert.equal(cancelledTask.guardSnapshot.orderSendState.reason, "orderCancelledBeforeSend");
+});
+
 test("requeue rejects audited cancelled send task", async () => {
   const { localStore, service } = setupService();
 
@@ -1346,6 +1713,71 @@ test("execute send blocks task after its design binding becomes invalid", () => 
   assert.equal(attempts.length, 1);
   assert.equal(attempts[0].status, "blocked");
   assert.equal(attempts[0].guardStatus, "binding_failed");
+});
+
+test("execute send blocks queued quote task when quote returned to manual review before send", () => {
+  const { localStore, service } = setupService();
+
+  const designJob = localStore.createDesignJob({
+    requestId: "execute_manual_quote_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [{ name: "保温杯", salePrice: 100, costPrice: 60 }] },
+    requirements: {},
+    status: "completed",
+  });
+  const images = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "execute_manual_quote_candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\execute_manual_quote_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/execute_manual_quote_candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, images[0].id);
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "quote", quoteDraftId: quote.id, text: "这条报价状态变化后不能再发送" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_send",
+        valueLevel: "low",
+        quoteDraftId: quote.id,
+      },
+    },
+  });
+  localStore.updateQuoteDraft(quote.id, {
+    status: "send_queued",
+    sendTaskId: task.id,
+  });
+  localStore.updateQuoteDraft(quote.id, {
+    status: "manual_review",
+    sendTaskId: null,
+    customerNotes: "客户改需求，报价回到人工审核。",
+  });
+
+  const result = service.executeDryRunSend(task.id);
+  const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
+  const quoteAfterBlock = localStore.getQuoteDraft(quote.id);
+
+  assert.equal(result.task.status, "blocked");
+  assert.match(result.task.errorMessage, /quote is no longer bound to this send task/);
+  assert.equal(result.task.guardSnapshot.quoteSendState.reason, "quoteSendTaskChangedBeforeSend");
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].status, "blocked");
+  assert.equal(attempts[0].guardStatus, "quoteSendTaskChangedBeforeSend");
+  assert.equal(quoteAfterBlock.status, "manual_review");
+  assert.equal(quoteAfterBlock.sendTaskId, null);
+  assert.match(quoteAfterBlock.customerNotes, /客户改需求/);
 });
 
 test("execute send blocks queued order task when payment is refunded before send", () => {
@@ -2613,6 +3045,89 @@ test("bridge sent ack rejects order task after payment is refunded while waiting
   assert.match(failedOrder.customerNotes, new RegExp(`\\[发送任务:${task.id}\\]`));
   assert.match(failedOrder.customerNotes, /订单确认发送失败，需要人工处理/);
   assert.match(failedOrder.customerNotes, /bridge ack order state invalid/);
+});
+
+test("bridge sent ack rejects quote task after quote returned to manual review while waiting for ack", () => {
+  const { localStore, service } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "bridge_manual_quote_request_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    scene: "员工福利",
+    bundle: { items: [{ name: "保温杯", salePrice: 100, costPrice: 60 }] },
+    requirements: {},
+    status: "completed",
+  });
+  const images = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "bridge_manual_quote_candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\bridge_manual_quote_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/bridge_manual_quote_candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, images[0].id);
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: { kind: "quote", quoteDraftId: quote.id, text: "桥接等待时状态变化不能标记已发送" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "low_value_quote_send",
+        valueLevel: "low",
+        quoteDraftId: quote.id,
+      },
+    },
+  });
+  localStore.updateQuoteDraft(quote.id, {
+    status: "send_queued",
+    sendTaskId: task.id,
+  });
+  createPassingWechatWindowSnapshot(localStore, "桥接等待时状态变化不能标记已发送");
+  const started = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const outboxFile = started.attempt.metadata.outboxFile;
+  const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+  writeDispatchInstructionForStartedBridgeSend(localStore, task.id);
+  localStore.updateQuoteDraft(quote.id, {
+    status: "manual_review",
+    sendTaskId: null,
+    customerNotes: "客户临时修改需求，报价回到人工审核。",
+  });
+
+  assert.throws(
+    () =>
+      service.acknowledgeBridgeSend(task.id, {
+        status: "sent",
+        version: "wechat_bridge_ack_v1",
+        ackToken: outbox.ackToken,
+        taskId: task.id,
+        attemptId: started.attempt.id,
+        wechatAccountId: task.wechatAccountId,
+        conversationId: task.conversationId,
+        customerId: "customer_demo_1",
+        outboxFileName: path.basename(outboxFile),
+      }),
+    /bridge ack quote state invalid: quote send blocked: quote is no longer bound to this send task/,
+  );
+
+  const rejectedTask = localStore.getSendTask(task.id);
+  const rejectedAttempt = localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge" });
+  const quoteAfterReject = localStore.getQuoteDraft(quote.id);
+  assert.equal(rejectedTask.status, "failed");
+  assert.match(rejectedTask.errorMessage, /bridge ack quote state invalid/);
+  assert.equal(rejectedTask.guardSnapshot.reason, "bridge_ack_rejected_after_trusted_validation");
+  assert.equal(rejectedAttempt.status, "failed");
+  assert.match(rejectedAttempt.errorMessage, /quote is no longer bound to this send task/);
+  assert.equal(quoteAfterReject.status, "manual_review");
+  assert.equal(quoteAfterReject.sendTaskId, null);
+  assert.match(quoteAfterReject.customerNotes, /客户临时修改需求/);
 });
 
 test("manual lock blocks order confirmation queueing before order state changes", async () => {

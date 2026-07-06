@@ -1110,6 +1110,23 @@ export class DesignJobsService {
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
     if (!job.externalJobId) throw new Error("design job has no externalJobId");
+    const terminalStatusLabel = this.designJobTerminalStatusLabel(job.status);
+    if (terminalStatusLabel) {
+      await this.notifications.create("info", "已跳过终态任务轮询", `设计任务已${terminalStatusLabel}，不会再用设计平台状态覆盖客户已确认内容。`, {
+        designJobId: job.id,
+        externalJobId: job.externalJobId,
+        designJobStatus: job.status,
+      });
+      return {
+        remoteStatus: "terminal",
+        job,
+        result: {
+          status: "terminal",
+          designJobStatus: job.status,
+          reason: "terminal_design_job",
+        },
+      };
+    }
 
     const result = await this.designPlatform.getDesignJobResults(job.externalJobId);
     if (result.status === "completed") {
@@ -1148,10 +1165,11 @@ export class DesignJobsService {
       ? this.localStore.getDesignJob(id)
       : await (this.prisma as any).designJob.findUnique({
           where: { id },
-          select: { id: true, customerId: true, conversationId: true, wechatAccountId: true },
+          select: { id: true, customerId: true, conversationId: true, wechatAccountId: true, status: true, errorMessage: true },
         });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
+    this.assertDesignJobCanManualRetry(job);
     const revision = await this.findLatestRevisionForRetry(job.id);
     return this.retryDesignJob(id, "manual", undefined, expected, revision);
   }
@@ -1234,6 +1252,7 @@ export class DesignJobsService {
         });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, payload, "design job");
+    this.assertDesignJobCanRequestRevision(job);
 
     const existingRevisions = appConfig.useLocalStore
       ? this.localStore.listDesignRevisions(job.id)
@@ -1421,6 +1440,7 @@ export class DesignJobsService {
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
+    this.assertDesignJobCanCancel(job);
     let remoteResult: Record<string, unknown> | null = null;
     if (job.externalJobId) {
       try {
@@ -1453,6 +1473,17 @@ export class DesignJobsService {
     const callbackBinding = validateDesignCallbackBinding({ payload, job });
     if (!callbackBinding.ok) {
       throw new BadRequestException(`design callback binding invalid: ${callbackBinding.reason}`);
+    }
+    const terminalStatusLabel = this.designJobTerminalStatusLabel(job.status);
+    if (terminalStatusLabel) {
+      const notificationTitle = String(job.status || "") === "cancelled" ? "已忽略取消任务回调" : "已忽略终态任务回调";
+      await this.notifications.create("info", notificationTitle, `设计任务已${terminalStatusLabel}，迟到的设计平台结果不会再保存或触发发送。`, {
+        designJobId: job.id,
+        externalJobId: payload.externalJobId || job.externalJobId,
+        callbackStatus: payload.status,
+        designJobStatus: job.status,
+      });
+      return job;
     }
 
     if (payload.status === "failed") {
@@ -1681,6 +1712,49 @@ export class DesignJobsService {
       },
       include: { images: true },
     });
+  }
+
+  private assertDesignJobCanCancel(job: any) {
+    const status = String(job?.status || "");
+    const label = this.designJobTerminalStatusLabel(status);
+    if (!label) return;
+    throw new BadRequestException(`design job cannot be cancelled: ${label}`);
+  }
+
+  private assertDesignJobCanManualRetry(job: any) {
+    const status = String(job?.status || "");
+    if (status === "failed" || status === "timeout") return;
+    if (status === "manual_review" && Boolean(job?.errorMessage)) return;
+    const terminalLabel = this.designJobTerminalStatusLabel(status);
+    if (terminalLabel) {
+      throw new BadRequestException(`design job cannot be retried: ${terminalLabel}`);
+    }
+    throw new BadRequestException(`design job cannot be retried from status: ${status || "unknown"}`);
+  }
+
+  private assertDesignJobCanRequestRevision(job: any) {
+    const status = String(job?.status || "");
+    const label = this.designJobRevisionBlockedStatusLabel(status);
+    if (!label) return;
+    throw new BadRequestException(`design job cannot request revision: ${label}`);
+  }
+
+  private designJobRevisionBlockedStatusLabel(status: string) {
+    const labels: Record<string, string> = {
+      quote_created: "已生成报价草稿",
+      cancelled: "任务已经取消",
+    };
+    return labels[String(status || "")] || "";
+  }
+
+  private designJobTerminalStatusLabel(status: string) {
+    const labels: Record<string, string> = {
+      sent: "候选图已发送给客户",
+      customer_selected: "客户已经选图",
+      quote_created: "已生成报价草稿",
+      cancelled: "任务已经取消",
+    };
+    return labels[String(status || "")] || "";
   }
 
   private isInitialDesignResult(job: any) {

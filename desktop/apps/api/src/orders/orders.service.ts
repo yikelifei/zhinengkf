@@ -125,11 +125,22 @@ export class OrdersService {
       await this.updateQuote(current.quoteDraftId, quotePatch);
     }
 
+    const orderSendInvalidation = this.orderSendInvalidationForUpdate(data, { ...current, ...updated });
+    const cancelledSendTasks =
+      appConfig.useLocalStore && orderSendInvalidation
+        ? this.cancelPendingOrderSendTasksForInvalidatedOrder({ ...current, ...updated }, orderSendInvalidation)
+        : [];
+
     await this.notifications.create(
       "info",
       "订单草稿已更新",
       `订单 ${id} 已更新为 ${updated.status} / ${orderDraftPaymentStatus({ ...current, ...updated }, data)}。`,
-      { orderDraftId: id, quoteDraftId: current.quoteDraftId, designJobId: current.designJobId },
+      {
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId,
+        designJobId: current.designJobId,
+        cancelledSendTaskIds: cancelledSendTasks.map((task: any) => task.id),
+      },
     );
 
     return appConfig.useLocalStore ? this.localStore.getOrderDraft(id) : this.getOrderDraft(id);
@@ -402,6 +413,81 @@ export class OrdersService {
     return null;
   }
 
+  private orderSendInvalidationForUpdate(patch: OrderDraftUpdatePatch, order: any) {
+    if (patch.status === "cancelled") {
+      return {
+        errorMessage: "order_cancelled_before_send",
+        cancelReason: "order_cancelled_before_send",
+        orderSendStateReason: "orderCancelledBeforeSend",
+      };
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) {
+      const paymentStatus = orderDraftPaymentStatus(order, patch);
+      if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+        return {
+          errorMessage: "order_payment_not_ready_before_send",
+          cancelReason: "order_payment_not_ready_before_send",
+          orderSendStateReason: "orderPaymentNotReadyBeforeSend",
+        };
+      }
+    }
+    return null;
+  }
+
+  private cancelPendingOrderSendTasksForInvalidatedOrder(
+    order: any,
+    invalidation: { errorMessage: string; cancelReason: string; orderSendStateReason: string },
+  ) {
+    const now = new Date().toISOString();
+    const tasks = this.localStore
+      .listSendTasks({
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        customerId: order.customerId,
+      })
+      .filter((task: any) => this.isPendingOrderSendTaskForOrder(task, order));
+
+    return tasks.map((task: any) => {
+      const guardSnapshot = task.guardSnapshot && typeof task.guardSnapshot === "object" ? task.guardSnapshot : {};
+      const history = Array.isArray(guardSnapshot.history) ? guardSnapshot.history : [];
+      return this.localStore.updateSendTask(
+        task.id,
+        {
+          status: "cancelled",
+          sentAt: null,
+          errorMessage: invalidation.errorMessage,
+          guardSnapshot: {
+            ...guardSnapshot,
+            status: "cancelled",
+            cancelledAt: now,
+            cancelReason: invalidation.cancelReason,
+            orderSendState: {
+              status: "blocked",
+              reason: invalidation.orderSendStateReason,
+              orderDraftId: order.id,
+              checkedAt: now,
+            },
+            history: [
+              ...history,
+              {
+                action: "cancel",
+                fromStatus: task.status,
+                reason: invalidation.cancelReason,
+                at: now,
+              },
+            ],
+          },
+        },
+        { skipBindingValidation: true },
+      );
+    });
+  }
+
+  private isPendingOrderSendTaskForOrder(task: any, order: any) {
+    if (!["queued", "blocked", "failed"].includes(String(task?.status || ""))) return false;
+    return this.isOrderConfirmationSendTask(task, order) || this.isOrderFollowupSendTask(task, order);
+  }
+
   private async resolveOrderDesignImage(order: any, selectedImageId?: string) {
     const id = String(selectedImageId || "").trim();
     if (!id) throw new BadRequestException("请选择要改成哪一张候选图。");
@@ -498,6 +584,7 @@ export class OrdersService {
     const isConfirmation =
       automation.source === "order_confirmation" ||
       automation.source === "low_value_quote_acceptance" ||
+      (automation.source === "manual_order_review" && !automation.followupType) ||
       task.guardSnapshot?.reason === "order-confirmation" ||
       task.guardSnapshot?.reason === "low_value_order_confirmation";
     if (automation.orderDraftId === order.id) return isConfirmation;
@@ -510,6 +597,7 @@ export class OrdersService {
     if (automation.orderDraftId !== order.id && task.quoteDraftId !== order.quoteDraftId) return false;
     return (
       automation.source === "order_followup" ||
+      (automation.source === "manual_order_review" && Boolean(automation.followupType)) ||
       task.guardSnapshot?.reason === "order-followup" ||
       task.guardSnapshot?.reason === "low_value_order_followup"
     );

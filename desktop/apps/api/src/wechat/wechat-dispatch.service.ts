@@ -2300,6 +2300,31 @@ export class WechatDispatchService {
       });
       return { task: blockedTask, attempt, adapter };
     }
+    const quoteState = this.validateQueuedQuoteSendState(taskBeforeValidation);
+    if (!quoteState.ok) {
+      const startedAt = new Date().toISOString();
+      const blockedTask = this.blockSendTask(id, quoteState.message, {
+        failedKeys: [quoteState.reason],
+        quoteDraftId: quoteState.quoteDraftId,
+        quoteSendState: quoteState,
+        blockedAt: startedAt,
+      });
+      const attempt = this.localStore.createSendAttempt({
+        sendTaskId: id,
+        adapter: adapter.name,
+        status: "blocked",
+        guardStatus: quoteState.reason,
+        payloadSummary: this.summarizePayload(taskBeforeValidation.payload),
+        errorMessage: blockedTask.errorMessage,
+        metadata: {
+          adapter,
+          quoteSendState: quoteState,
+        },
+        startedAt,
+        completedAt: new Date().toISOString(),
+      });
+      return { task: blockedTask, attempt, adapter };
+    }
     const binding = this.validateExistingSendTaskBinding(taskBeforeValidation);
     if (!binding.ok) {
       const startedAt = new Date().toISOString();
@@ -2466,6 +2491,48 @@ export class WechatDispatchService {
     };
   }
 
+  private validateQueuedQuoteSendState(task: any) {
+    if (this.hasOrderDraftBinding(task)) return { ok: true as const };
+    const quoteDraftId = String(task?.quoteDraftId || task?.payload?.quoteDraftId || "").trim();
+    if (!quoteDraftId) return { ok: true as const };
+    const quote = this.localStore.getQuoteDraft(quoteDraftId);
+    if (!quote) {
+      return {
+        ok: false as const,
+        reason: "quoteDraftMissing",
+        message: `quote draft not found before send: ${quoteDraftId}`,
+        quoteDraftId,
+      };
+    }
+    if (String(quote.sendTaskId || "") !== String(task.id || "")) {
+      return {
+        ok: false as const,
+        reason: "quoteSendTaskChangedBeforeSend",
+        message: "quote send blocked: quote is no longer bound to this send task",
+        quoteDraftId,
+        expectedSendTaskId: task.id,
+        actualSendTaskId: quote.sendTaskId || null,
+        quoteStatus: quote.status,
+      };
+    }
+    if (String(quote.status || "") !== "send_queued") {
+      return {
+        ok: false as const,
+        reason: "quoteStatusChangedBeforeSend",
+        message: "quote send blocked: quote is no longer waiting to be sent",
+        quoteDraftId,
+        sendTaskId: task.id,
+        quoteStatus: quote.status,
+      };
+    }
+    return {
+      ok: true as const,
+      quoteDraftId,
+      sendTaskId: task.id,
+      quoteStatus: quote.status,
+    };
+  }
+
   acknowledgeBridgeSend(id: string, payload: {
     status: "sent" | "failed";
     version?: string;
@@ -2515,6 +2582,12 @@ export class WechatDispatchService {
       const orderState = this.validateQueuedOrderSendState(task);
       if (!orderState.ok) {
         const errorMessage = `bridge ack order state invalid: ${orderState.message}`;
+        this.failTaskForRejectedTrustedBridgeAck(id, payload, { fileName: "direct-bridge-ack", source: "direct_ack" }, errorMessage);
+        throw new BadRequestException(errorMessage);
+      }
+      const quoteState = this.validateQueuedQuoteSendState(task);
+      if (!quoteState.ok) {
+        const errorMessage = `bridge ack quote state invalid: ${quoteState.message}`;
         this.failTaskForRejectedTrustedBridgeAck(id, payload, { fileName: "direct-bridge-ack", source: "direct_ack" }, errorMessage);
         throw new BadRequestException(errorMessage);
       }
@@ -3591,6 +3664,8 @@ export class WechatDispatchService {
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (!quoteDraftId) return;
     if (appConfig.useLocalStore) {
+      const quote = this.localStore.getQuoteDraft(quoteDraftId);
+      if (String(quote?.sendTaskId || "") !== String(task.id || "")) return;
       this.localStore.updateQuoteDraft(quoteDraftId, {
         status: "sent",
         customerNotes: "报价已通过微信发送安全流程。",
@@ -3613,6 +3688,9 @@ export class WechatDispatchService {
     }
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (quoteDraftId && appConfig.useLocalStore) {
+      const quote = this.localStore.getQuoteDraft(quoteDraftId);
+      if (String(quote?.sendTaskId || "") !== String(task.id || "")) return;
+      if (["sent", "accepted", "cancelled"].includes(String(quote?.status || ""))) return;
       this.localStore.updateQuoteDraft(quoteDraftId, {
         status: "manual_review",
         customerNotes: `报价发送失败，需要人工处理：${reason}`,

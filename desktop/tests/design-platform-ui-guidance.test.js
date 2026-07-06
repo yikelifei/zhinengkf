@@ -54,6 +54,16 @@ test("design task failure guidance is visible and supports safe retry", () => {
   assert.match(cssSource, /\.job-row \.job-next-action/);
 });
 
+test("design polling explains terminal jobs without implying a remote status change", () => {
+  const pollSection = pageSource.slice(
+    pageSource.indexOf("async function pollDesignJobIntoState"),
+    pageSource.indexOf("async function pollActiveJob"),
+  );
+  assert.match(pollSection, /result\.remoteStatus === "terminal"/);
+  assert.match(pollSection, /任务已进入客户确认后的终态/);
+  assert.match(pollSection, /已跳过轮询/);
+});
+
 test("design task preflight shows output count and result delivery fallback", () => {
   assert.match(apiSource, /requiredOutputCountRange/);
   assert.match(apiSource, /fallbackPolling/);
@@ -83,6 +93,20 @@ test("design center active view hides sibling panels instead of clipping them", 
   assert.match(cssSource, /display: none !important/);
   assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center/);
   assert.match(cssSource, /grid-column: 1 \/ -1/);
+});
+
+test("design center mobile commands and empty actions fit one app viewport", () => {
+  assert.match(cssSource, /Iteration 89 Design center mobile containment/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] \.topbar \.top-actions \.toolbar-group\.context-toolbar/);
+  assert.match(cssSource, /grid-template-columns: minmax\(0, 1fr\) !important/);
+  assert.match(cssSource, /\.workspace\[data-active-section="design-center"\] #design-center \.empty\.empty-cta \.empty-actions/);
+  assert.match(cssSource, /min-height: 154px !important/);
+  assert.match(cssSource, /max-height: 188px !important/);
+  assert.match(cssSource, /-webkit-line-clamp: 2/);
+  assert.match(cssSource, /width: min\(100%, 210px\) !important/);
+  assert.match(cssSource, /min-height: 31px !important/);
+  assert.match(cssSource, /overflow-x: hidden !important/);
+  assert.match(cssSource, /text-overflow: ellipsis !important/);
 });
 
 test("design platform config exposes a real one-click smoke test path", () => {

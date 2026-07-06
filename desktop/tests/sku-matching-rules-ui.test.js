@@ -280,6 +280,10 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /问题标识列表：\$\{problems\.map\(\(problem\) => skuImageProblemTrackingId\(problem\)\)\.join\("、"\)\}/);
   assert.match(page, /await navigator\.clipboard\.writeText\(lines\.join\("\\n\\n"\)\)/);
   assert.match(page, /setMessage\(`已复制 \$\{products\.size\} 个商品的\$\{actionLabel\}清单。`\)/);
+  assert.match(page, /async function copyVisibleSkuImageProblemTrackingIds\(\)/);
+  assert.match(page, /skuImageProblemTrackingId\(problem\)}｜\$\{problem\.skuCode \|\| "未编号"\}/);
+  assert.match(page, /onClick=\{copyVisibleSkuImageProblemTrackingIds\}/);
+  assert.ok(page.includes("复制标识清单"));
   assert.match(page, /async function copySkuImageProblemProductHandoff\(problem: SkuImageProblem\)/);
   assert.match(page, /const productProblems = visibleSkuImageProblems\.filter\(\(item\) => \(item\.skuCode \|\| item\.name\) === key\)/);
   assert.match(page, /单商品补图交接：\$\{problem\.skuCode \|\| "未编号"\}/);
@@ -338,6 +342,11 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /已复制 \$\{problem\.skuCode \|\| problem\.name \|\| "当前商品"\} 的图片修复入口。/);
   assert.match(page, /onClick=\{\(\) => copySkuImageProblemRepairEntry\(problem\)\}/);
   assert.ok(page.includes("复制入口"));
+  assert.match(page, /async function copySkuImageProblemTrackingId\(problem: SkuImageProblem\)/);
+  assert.match(page, /await navigator\.clipboard\.writeText\(skuImageProblemTrackingId\(problem\)\)/);
+  assert.match(page, /已复制 \$\{problem\.skuCode \|\| problem\.name \|\| "当前商品"\} 的图片问题标识。/);
+  assert.match(page, /onClick=\{\(\) => copySkuImageProblemTrackingId\(problem\)\}/);
+  assert.ok(page.includes("复制标识"));
   assert.match(page, /function editSkuImageProblem\(problem: SkuImageProblem\)/);
   assert.match(page, /function focusSkuImageProblemProduct\(problem: SkuImageProblem\)/);
   assert.match(page, /const keyword = problem\.skuCode \|\| problem\.name/);
@@ -382,7 +391,7 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.match(page, /disabled=\{!problem\.path \|\| Boolean\(busy\)\}/);
   assert.match(page, /title=\{problem\.path \? `移除旧路径：\$\{problem\.path\}` : "没有旧路径可移除，请先编辑图片补真实图"\}/);
   assert.match(page, /aria-label="搜索图片问题"/);
-  assert.match(page, /placeholder="搜索 SKU \/ 图片位置 \/ 路径 \/ 问题"/);
+  assert.match(page, /placeholder="搜索 SKU \/ 问题标识 \/ 图片位置 \/ 路径 \/ 问题"/);
   assert.match(page, /onChange=\{\(event\) => setSkuImageProblemSearch\(event\.target\.value\)\}/);
   assert.match(page, /aria-label="图片问题排序"/);
   assert.match(page, /value=\{skuImageProblemSort\}/);
@@ -463,6 +472,9 @@ test("sku image problems can be searched and exported as the visible repair list
   assert.ok(page.includes("重置图片"));
   assert.ok(page.includes("已重置图片问题清单：显示全部图片问题，并按严重程度排序。"));
   assert.match(page, /visibleSkuImageProblemCards\.map/);
+  assert.match(page, /className="sku-image-problem-tracking-id"/);
+  assert.match(css, /\.sku-image-problem-item \.sku-image-problem-tracking-id/);
+  assert.match(page, /问题标识：\{skuImageProblemTrackingId\(problem\)\}/);
   assert.match(page, /function buildSkuImageProblemActionProductSummary\(problems: SkuImageProblem\[\]\)/);
   assert.match(page, /const productKeysByAction = new Map<string, Set<string>>\(\)/);
   assert.match(page, /const productKey = problem\.skuCode \|\| problem\.name/);

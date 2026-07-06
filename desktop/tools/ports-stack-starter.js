@@ -49,7 +49,7 @@ main().catch((error) => {
 async function main() {
   fs.mkdirSync(path.dirname(launcherLog), { recursive: true });
   logStep(`start mode=${realDesignMode ? "real" : "mock"} ppid=${process.ppid}`);
-  if (stableDesktopGuardActive()) {
+  if (await stableDesktopGuardActive()) {
     logStep("blocked because stable desktop startup/runtime is active");
     console.log("[launch] stable desktop runtime is active; legacy port stack start skipped.");
     return;
@@ -191,7 +191,7 @@ async function main() {
         return;
       }
       try {
-        await waitForStartedStack();
+        await waitForStartedStack(numberEnv("PORTS_STACK_SUPERVISOR_READY_TIMEOUT_MS", 15000));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "unknown startup wait error");
         logStep(`supervisor readiness failed; falling back to direct keep-alive: ${message}`);
@@ -242,8 +242,7 @@ function launchDirectKeepAlive(env) {
   console.log(`[launch] node tools/start-dev-ports.js ${modeArg} --keep-alive pid=${child.pid}`);
 }
 
-async function waitForStartedStack() {
-  const timeoutMs = numberEnv("PORTS_STACK_READY_TIMEOUT_MS", 120000);
+async function waitForStartedStack(timeoutMs = numberEnv("PORTS_STACK_READY_TIMEOUT_MS", 120000)) {
   const startedAt = Date.now();
   let lastReason = "startup has not been checked yet";
   let lastLoggedAt = 0;
@@ -826,10 +825,10 @@ function webPortRuntimeMismatchReason(pids) {
   return `web port is running from a different runtime PID ${mismatched.join(",")}`;
 }
 
-function apiHealthUsesRuntimeDir(apiHealth) {
+function apiHealthUsesRuntimeDir(apiHealth, expectedRuntimeDir = runtimeDir) {
   const storePath = apiHealth?.localStore?.path;
   if (!storePath) return true;
-  return normalizePathText(storePath).startsWith(normalizePathText(runtimeDir));
+  return normalizePathText(storePath).startsWith(normalizePathText(expectedRuntimeDir));
 }
 
 function getProcessCommandLinesByPid(pids) {
@@ -870,9 +869,36 @@ function normalizePathText(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
-function stableDesktopGuardActive() {
+async function stableDesktopGuardActive() {
   if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3600000);
+  return stableStartingLockActive() || (await stableRuntimeServicesHealthy());
+}
+
+async function stableRuntimeServicesHealthy() {
+  const webPort = numberEnv("WEB_PORT", 3100);
+  const apiPort = numberEnv("API_PORT", 3200);
+  const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+  const webPids = getPortOwnerPids(webPort);
+  const apiPids = getPortOwnerPids(apiPort);
+  if (!webPids.length || !apiPids.length) return false;
+  if (workspacePortOwnerMismatchReason("web", webPids) || workspacePortOwnerMismatchReason("api", apiPids)) return false;
+  if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) return false;
+  const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
+  if (!apiHealth?.ok || !apiHealthUsesRuntimeDir(apiHealth, stableRuntimeDir)) return false;
+  const integrationHealth = await getJson(`http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`);
+  if (realDesignMode) {
+    return (
+      integrationHealth?.adapter === "art_image_local" &&
+      normalizeBaseUrl(integrationHealth.baseUrl) === normalizeBaseUrl(realDesignBaseUrl())
+    );
+  }
+  const mockPids = getPortOwnerPids(mockPort);
+  if (!mockPids.length || workspacePortOwnerMismatchReason("mock design", mockPids)) return false;
+  return (
+    integrationHealth?.ok &&
+    integrationHealth.adapter === "standard_v1" &&
+    normalizeBaseUrl(integrationHealth.baseUrl) === `http://127.0.0.1:${mockPort}`
+  );
 }
 
 function stableStartingLockActive() {

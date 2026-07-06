@@ -2670,7 +2670,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const result = await pollDesignJob(job.id, identityExpectation(job));
     upsertDesignJobState(result.job);
     upsertReviewDesignJobState(result.job);
-    setMessage(result.autoRetried ? "设计平台状态：已自动重试，正在重新出图。" : `设计平台状态：${result.remoteStatus}`);
+    setMessage(
+      result.remoteStatus === "terminal"
+        ? "设计平台状态：任务已进入客户确认后的终态，已跳过轮询。"
+        : result.autoRetried
+          ? "设计平台状态：已自动重试，正在重新出图。"
+          : `设计平台状态：${result.remoteStatus}`,
+    );
     return result;
   }
 
@@ -3690,8 +3696,17 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function confirmQuoteManualFollowup(quote: QuoteDraft) {
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
+    const identityLines = quoteIdentityConfirmLines(quote);
     const confirmed = window.confirm(
-      `确认将「${customerName}」的报价转为人工跟进吗？\n\n报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元\n系统会保留选图、报价和发送检查记录，后续由人工客服继续处理。`,
+      [
+        `确认将「${customerName}」的报价转为人工跟进吗？`,
+        "",
+        `报价ID：${quote.id}`,
+        ...identityLines,
+        "",
+        `报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元`,
+        "系统会保留选图、报价和发送检查记录，后续由人工客服继续处理。",
+      ].join("\n"),
     );
     if (!confirmed) {
       setMessage("已取消报价人工跟进操作。");
@@ -3728,8 +3743,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function confirmQuoteSelectionRevision(quote: QuoteDraft, selectedImage: NonNullable<DesignJob["images"]>[number]) {
     const current = quoteSelectedImage(quote);
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
+    const identityLines = quoteIdentityConfirmLines(quote);
     const lines = [
       `确认把「${customerName}」的报价选图改为第 ${selectedImage.position || "-"} 张吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `原选图：${current?.position ? `第 ${current.position} 张` : "未识别"}`,
       `新选图：第 ${selectedImage.position || "-"} 张`,
@@ -3765,8 +3784,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const nextTotal = quantity * unitPrice;
     const nextProfit = nextTotal - totalCost;
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
+    const identityLines = quoteIdentityConfirmLines(quote);
     const lines = [
       `确认保存「${customerName}」的报价调整吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `数量：${Number(quote.quantity || 0) || "-"} -> ${quantity || "-"}`,
       `单价：${formatMoney(Number(quote.unitPrice || 0))} -> ${formatMoney(unitPrice)} 元/份`,
@@ -3785,6 +3808,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const existingOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
     const selectedImage = quoteSelectedImage(quote);
+    const identityLines = quoteIdentityConfirmLines(quote);
     const selectedImageLabel = selectedImage?.position
       ? `选图：第 ${selectedImage.position} 张`
       : quote.selectedImageId
@@ -3792,6 +3816,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         : "选图：未绑定";
     const lines = [
       `确认按「${customerName}」当前报价${existingOrder ? "更新" : "生成"}订单草稿吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元`,
       `数量：${Number(quote.quantity || 0) || "-"} 份`,
@@ -3829,8 +3856,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const existingOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
     const selectedImage = quoteSelectedImage(quote);
+    const identityLines = quoteIdentityConfirmLines(quote);
     const lines = [
       `确认「${customerName}」已经明确同意这份报价并要生成订单吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元`,
       `数量：${Number(quote.quantity || 0) || "-"} 份`,
@@ -3865,6 +3896,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const linkedOrder = orderDrafts.find((order) => order.quoteDraftId === quote.id) || null;
     const customerName = quote.customer?.name || quote.designJob?.customerId || linkedOrder?.customer?.name || "客户";
     const selectedImage = quoteSelectedImage(quote);
+    const identityLines = quoteIdentityConfirmLines(quote);
     const selectedImageLabel = selectedImage?.position
       ? `选图：第 ${selectedImage.position} 张`
       : quote.selectedImageId
@@ -3872,6 +3904,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         : "选图：未绑定";
     const lines = [
       `确认已核验「${customerName}」的${paymentLabel}付款吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `报价金额：${formatMoney(Number(quote.totalPrice || linkedOrder?.totalPrice || 0))} 元`,
       `数量：${Number(quote.quantity || linkedOrder?.quantity || 0) || "-"} 份`,
@@ -4164,13 +4199,22 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   async function confirmAndUpdateOrderDraftStatus(order: OrderDraft, status: "fulfilled" | "cancelled") {
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
     const statusText = status === "fulfilled" ? "完成" : "取消";
+    const identityLines = orderIdentityConfirmLines(order);
     const blocker = status === "fulfilled" ? orderFulfillmentBlockReason(order) : "";
     if (blocker) {
       setMessage(blocker);
       return;
     }
     const confirmed = window.confirm(
-      `确认将「${customerName}」的订单标记为${statusText}吗？\n\n订单金额：${formatMoney(Number(order.totalPrice || 0))} 元\n选图、报价和发送记录会保留，后续如需恢复需要人工重新处理。`,
+      [
+        `确认将「${customerName}」的订单标记为${statusText}吗？`,
+        "",
+        `订单ID：${order.id}`,
+        ...identityLines,
+        "",
+        `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
+        "选图、报价和发送记录会保留，后续如需恢复需要人工重新处理。",
+      ].join("\n"),
     );
     if (!confirmed) {
       setMessage(`已取消${statusText}订单操作。`);
@@ -4182,13 +4226,23 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   async function confirmAndStartOrderProduction(order: OrderDraft) {
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
     const paymentText = paymentStatusLabel(orderPaymentStatusValue(order));
+    const identityLines = orderIdentityConfirmLines(order);
     const blocker = orderProductionBlockReason(order);
     if (blocker) {
       setMessage(blocker);
       return;
     }
     const confirmed = window.confirm(
-      `确认将「${customerName}」的订单标记为生产中吗？\n\n订单金额：${formatMoney(Number(order.totalPrice || 0))} 元\n付款状态：${paymentText}\n系统会保留报价、选图和发送记录，后续可继续发送生产通知或交期说明。`,
+      [
+        `确认将「${customerName}」的订单标记为生产中吗？`,
+        "",
+        `订单ID：${order.id}`,
+        ...identityLines,
+        "",
+        `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
+        `付款状态：${paymentText}`,
+        "系统会保留报价、选图和发送记录，后续可继续发送生产通知或交期说明。",
+      ].join("\n"),
     );
     if (!confirmed) {
       setMessage("已取消标记生产中操作。");
@@ -4262,6 +4316,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     action: "confirmation" | "production_followup" | "delivery_followup",
   ) {
     if (!isHighValueOrder(order)) return {};
+    const identityLines = orderIdentityConfirmLines(order);
     const labels = {
       confirmation: "发送订单确认",
       production_followup: "发送生产进度",
@@ -4273,7 +4328,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       delivery_followup: "manual_approve_order_followup",
     };
     const confirmed = window.confirm(
-      `这是高价值订单，${labels[action]}前请确认：客户、微信账号、金额、付款状态、效果图和交付承诺都已人工核对。确认继续入队吗？`,
+      [
+        `这是高价值订单，确认继续${labels[action]}吗？`,
+        "",
+        `订单ID：${order.id}`,
+        ...identityLines,
+        "",
+        `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
+        `付款状态：${paymentStatusLabel(orderPaymentStatusValue(order))}`,
+        "请确认客户、微信账号、金额、付款状态、效果图和交付承诺都已人工核对。",
+      ].join("\n"),
     );
     if (!confirmed) {
       setMessage("已取消高价值订单发送，请人工核对后再处理。");
@@ -4290,9 +4354,19 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function confirmOrderConfirmationSendQueue(order: OrderDraft, preview: OrderConfirmationPreview) {
     const previewOrder = preview.orderDraft || order;
     const customerName = previewOrder.customer?.name || previewOrder.quoteDraft?.customer?.name || "客户";
+    const selectedImage = orderSelectedImage(previewOrder);
+    const wechatAccountLabel = previewOrder.wechatAccountId || previewOrder.designJob?.wechatAccountId || "未绑定";
+    const customerLabel = previewOrder.customerId || previewOrder.quoteDraft?.customerId || "未绑定";
+    const conversationLabel = previewOrder.designJob?.conversation?.title || previewOrder.conversationId || "未绑定";
     const message = String(preview.message || "").trim();
     const lines = [
       `确认把「${customerName}」的订单确认加入微信安全发送队列吗？`,
+      "",
+      `订单ID：${previewOrder.id || order.id}`,
+      `微信账号：${wechatAccountLabel}`,
+      `客户ID：${customerLabel}`,
+      `会话：${conversationLabel}`,
+      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已通过发送前检查",
       "",
       `订单金额：${formatMoney(Number(previewOrder.totalPrice || order.totalPrice || 0))} 元`,
       `数量：${Number(previewOrder.quantity || order.quantity || 0) || "-"} 份`,
@@ -4310,8 +4384,18 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function confirmOrderFollowupSendQueue(order: OrderDraft, type: "production" | "delivery") {
     const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
     const stageLabel = orderFollowupStageLabel(type);
+    const selectedImage = orderSelectedImage(order);
+    const wechatAccountLabel = order.wechatAccountId || order.designJob?.wechatAccountId || "未绑定";
+    const customerLabel = order.customerId || order.quoteDraft?.customerId || "未绑定";
+    const conversationLabel = order.designJob?.conversation?.title || order.conversationId || "未绑定";
     const lines = [
       `确认把「${customerName}」的${stageLabel}加入微信安全发送队列吗？`,
+      "",
+      `订单ID：${order.id}`,
+      `微信账号：${wechatAccountLabel}`,
+      `客户ID：${customerLabel}`,
+      `会话：${conversationLabel}`,
+      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已通过发送前检查",
       "",
       `订单金额：${formatMoney(Number(order.totalPrice || 0))} 元`,
       `订单状态：${orderStatusLabel(order.status)}`,
@@ -4783,12 +4867,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const previewQuote = preview.quote || quote;
     const customerName = previewQuote.customer?.name || previewQuote.designJob?.customerId || "客户";
     const selectedImage = quoteSelectedImage(previewQuote);
+    const wechatAccountLabel =
+      previewQuote.designJob?.conversation?.wechatAccountId || previewQuote.designJob?.wechatAccountId || "未绑定";
+    const customerLabel = previewQuote.customerId || previewQuote.designJob?.customerId || "未绑定";
+    const conversationLabel = previewQuote.designJob?.conversation?.title || previewQuote.designJob?.conversationId || "未绑定";
     const lines = [
       `确认把「${customerName}」的报价加入微信安全发送队列吗？`,
       "",
+      `报价ID：${previewQuote.id || quote.id}`,
+      `微信账号：${wechatAccountLabel}`,
+      `客户ID：${customerLabel}`,
+      `会话：${conversationLabel}`,
+      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已通过发送前检查",
+      "",
       `报价金额：${formatMoney(Number(previewQuote.totalPrice || quote.totalPrice || 0))} 元`,
       `数量：${Number(previewQuote.quantity || quote.quantity || 0) || "-"} 份`,
-      selectedImage?.position ? `选图：第 ${selectedImage.position} 张` : "选图：已通过发送前检查",
       "",
       "系统会继续通过账号、聊天对象、最近消息三重校验后再发送。",
     ];
@@ -5166,6 +5259,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   function confirmQuoteReviewDecision(quote: QuoteDraft, decision: "approve_quote" | "request_followup" | "reject_quote") {
     const selectedImage = quoteSelectedImage(quote);
     const customerName = quote.customer?.name || quote.designJob?.customerId || "客户";
+    const identityLines = quoteIdentityConfirmLines(quote);
     const actionLabels: Record<typeof decision, string> = {
       approve_quote: "通过报价，并在后端检查通过后进入微信安全发送队列",
       request_followup: "转人工继续跟进，不自动发送报价",
@@ -5178,6 +5272,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     };
     const lines = [
       `确认审核「${customerName}」的报价吗？`,
+      "",
+      `报价ID：${quote.id}`,
+      ...identityLines,
       "",
       `操作：${actionLabels[decision]}`,
       `报价金额：${formatMoney(Number(quote.totalPrice || 0))} 元`,
@@ -5454,6 +5551,32 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     const fileName = `sku-image-problems-${formatDateForFile(new Date())}.csv`;
     downloadTextFile(fileName, "text/csv;charset=utf-8", `\uFEFF${toCsv(rows)}`);
     setMessage(`已导出 ${exportableSkuImageProblems.length} 个图片问题，涉及 ${visibleSkuImageProblemProductCount} 个商品；${visibleSkuImageProblemActionSummary}；分组涉及商品：${visibleSkuImageProblemActionProductSummary}；下一步：${visibleSkuImageProblemNextStepSummary}；筛选：${visibleSkuImageProblemFilterSummary}；审核：${skuImageProblemAuditRefreshContext}。`);
+  }
+
+  async function copyVisibleSkuImageProblemTrackingIds() {
+    if (!visibleSkuImageProblems.length) {
+      setMessage("当前没有图片问题标识可复制。");
+      return;
+    }
+    const lines = [
+      `商品图片问题标识清单：当前筛选 ${visibleSkuImageProblems.length} 个图片问题`,
+      `当前筛选：${visibleSkuImageProblemFilterSummary}。`,
+      `处理方式统计：${visibleSkuImageProblemActionSummary}。`,
+      `审核刷新口径：${skuImageProblemAuditRefreshContext}。`,
+      "",
+      ...visibleSkuImageProblems.map((problem, index) => {
+        const imageIndex = problem.imageRole === "angle" && problem.imageIndex !== null && problem.imageIndex !== undefined
+          ? `第 ${Number(problem.imageIndex) + 1} 张`
+          : "";
+        return `${index + 1}. ${skuImageProblemTrackingId(problem)}｜${problem.skuCode || "未编号"}｜${problem.name || "未命名商品"}｜${skuImageRoleLabel(problem)}${imageIndex ? `（${imageIndex}）` : ""}`;
+      }),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setMessage(`已复制 ${visibleSkuImageProblems.length} 个图片问题标识。`);
+    } catch {
+      setMessage("复制图片问题标识清单失败，请导出 CSV 后处理。");
+    }
   }
 
   async function copySkuImageProblemHandoff() {
@@ -5819,6 +5942,15 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       setMessage(`已复制 ${problem.skuCode || problem.name || "当前商品"} 的图片修复入口。`);
     } catch {
       setMessage("复制修复入口失败，请使用复制此商品或导出清单。");
+    }
+  }
+
+  async function copySkuImageProblemTrackingId(problem: SkuImageProblem) {
+    try {
+      await navigator.clipboard.writeText(skuImageProblemTrackingId(problem));
+      setMessage(`已复制 ${problem.skuCode || problem.name || "当前商品"} 的图片问题标识。`);
+    } catch {
+      setMessage("复制图片问题标识失败，请使用复制此商品或导出清单。");
     }
   }
 
@@ -7912,6 +8044,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     primaryLabel: string;
     reviewFilterLabel?: string;
     nextFollowLabel?: string;
+    order?: OrderDraft;
     focus: () => void;
     run: () => void;
   };
@@ -8022,6 +8155,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           primaryLabel: identityMissing ? "补身份" : action.label,
           reviewFilterLabel: highValueOrderReviewFilterOptionLabel(reviewFilter),
           nextFollowLabel,
+          order,
           focus: () => {
             if (orderNeedsManualSendAttention(order)) {
               void focusOrderManualSendAttention(order);
@@ -10553,6 +10687,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       <button type="button" className="ghost compact-button" onClick={copySkuImageProblemActionHandoff} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
                         <ClipboardList size={14} aria-hidden="true" />复制分派
                       </button>
+                      <button type="button" className="ghost compact-button" onClick={copyVisibleSkuImageProblemTrackingIds} disabled={!visibleSkuImageProblems.length || Boolean(busy)}>
+                        <ClipboardList size={14} aria-hidden="true" />复制标识清单
+                      </button>
                       <button type="button" className="ghost compact-button" onClick={() => copyVisibleSkuImageProblemActionProducts("upload_main", "补主图")} disabled={!visibleSkuImageProblemUploadMainCount || Boolean(busy)}>
                         <ClipboardList size={14} aria-hidden="true" />复制补主图
                       </button>
@@ -10585,7 +10722,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       aria-label="搜索图片问题"
                       value={skuImageProblemSearch}
                       onChange={(event) => setSkuImageProblemSearch(event.target.value)}
-                      placeholder="搜索 SKU / 图片位置 / 路径 / 问题"
+                      placeholder="搜索 SKU / 问题标识 / 图片位置 / 路径 / 问题"
                     />
                   </label>
                   <label className="sku-image-problem-sort">
@@ -10666,6 +10803,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <span className="sku-image-problem-field">
                                 字段：{skuFieldLabel(problem.field)}
                               </span>
+                              <span className="sku-image-problem-tracking-id">
+                                问题标识：{skuImageProblemTrackingId(problem)}
+                              </span>
                               <span className="sku-image-problem-action-group">
                                 处理方式：{skuImageProblemActionGroupLabel(problem)}
                               </span>
@@ -10694,6 +10834,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               </button>
                               <button type="button" className="ghost compact-button" onClick={() => copySkuImageProblemProductHandoff(problem)} disabled={Boolean(busy)}>
                                 <ClipboardList size={14} aria-hidden="true" />复制此商品
+                              </button>
+                              <button type="button" className="ghost compact-button" onClick={() => copySkuImageProblemTrackingId(problem)} disabled={Boolean(busy)}>
+                                <ClipboardList size={14} aria-hidden="true" />复制标识
                               </button>
                               <button type="button" className="ghost compact-button" onClick={() => copySkuImageProblemPath(problem)} disabled={!problem.path || Boolean(busy)}>
                                 <ClipboardList size={14} aria-hidden="true" />复制路径
@@ -13947,6 +14090,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           <p>{item.detail}</p>
                           <p>下一步：{item.nextAction}</p>
                         </button>
+                        {item.order ? <OrderSendPreflightPanel order={item.order} /> : null}
                         <div className="deal-attention-actions">
                           <button type="button" className="primary" onClick={item.run} disabled={Boolean(busy)}>
                             <Search size={14} aria-hidden="true" />{item.primaryLabel}
@@ -18709,6 +18853,13 @@ function quoteSelectedImage(quote: QuoteDraft) {
   );
 }
 
+function quoteIdentityConfirmLines(quote: QuoteDraft) {
+  const wechatAccountLabel = quote.designJob?.conversation?.wechatAccountId || quote.designJob?.wechatAccountId || "未绑定";
+  const customerLabel = quote.customerId || quote.designJob?.customerId || "未绑定";
+  const conversationLabel = quote.designJob?.conversation?.title || quote.designJob?.conversationId || "未绑定";
+  return [`微信账号：${wechatAccountLabel}`, `客户ID：${customerLabel}`, `会话：${conversationLabel}`];
+}
+
 function snapshotDesignImage(snapshot?: Record<string, unknown> | null): NonNullable<DesignJob["images"]>[number] | null {
   if (!snapshot || typeof snapshot !== "object") return null;
   const id = String(snapshot.id || snapshot.imageId || "").trim();
@@ -18784,8 +18935,12 @@ function promptOrderRevisionImage(order: OrderDraft) {
 function confirmOrderSelectionRevision(order: OrderDraft, selectedImage: NonNullable<DesignJob["images"]>[number]) {
   const current = orderSelectedImage(order);
   const customerName = order.customer?.name || order.quoteDraft?.customer?.name || "客户";
+  const identityLines = orderIdentityConfirmLines(order);
   const lines = [
     `确认把「${customerName}」的订单选图改为第 ${selectedImage.position || "-"} 张吗？`,
+    "",
+    `订单ID：${order.id}`,
+    ...identityLines,
     "",
     `原选图：${current?.position ? `第 ${current.position} 张` : "未识别"}`,
     `新选图：第 ${selectedImage.position || "-"} 张`,
@@ -18795,6 +18950,19 @@ function confirmOrderSelectionRevision(order: OrderDraft, selectedImage: NonNull
     "确认后订单会回到待确认，发送订单确认前仍会再做身份、付款和选图检查。",
   ];
   return window.confirm(lines.join("\n"));
+}
+
+function orderIdentityConfirmLines(order: OrderDraft) {
+  const wechatAccountLabel = order.wechatAccountId || order.designJob?.wechatAccountId || order.quoteDraft?.designJob?.wechatAccountId || "未绑定";
+  const customerLabel = order.customerId || order.quoteDraft?.customerId || order.designJob?.customerId || "未绑定";
+  const conversationLabel =
+    order.designJob?.conversation?.title ||
+    order.quoteDraft?.designJob?.conversation?.title ||
+    order.conversationId ||
+    order.designJob?.conversationId ||
+    order.quoteDraft?.designJob?.conversationId ||
+    "未绑定";
+  return [`微信账号：${wechatAccountLabel}`, `客户ID：${customerLabel}`, `会话：${conversationLabel}`];
 }
 
 function orderSelectedImage(order: OrderDraft) {

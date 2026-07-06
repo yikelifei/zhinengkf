@@ -1753,19 +1753,16 @@ function assertMockDesignStartAllowed() {
 
 function writeMockModeLockIfNeeded() {
   if (!includeMockDesignPlatform) return;
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(mockModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+  writeRuntimeFileWithRetry(mockModeLockFile, `${new Date().toISOString()}\n`);
 }
 
 function writeRealModeLockIfNeeded() {
   if (!realDesignMode) return;
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
+  writeRuntimeFileWithRetry(realModeLockFile, `${new Date().toISOString()}\n`);
 }
 
 function writePreferredDesignMode() {
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(
+  writeRuntimeFileWithRetry(
     preferredDesignModeFile,
     `${JSON.stringify(
       {
@@ -1777,8 +1774,27 @@ function writePreferredDesignMode() {
       null,
       2,
     )}\n`,
-    "utf8",
   );
+}
+
+function writeRuntimeFileWithRetry(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  let lastError;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      fs.writeFileSync(filePath, content, "utf8");
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!["EPERM", "EBUSY", "EACCES"].includes(error?.code)) throw error;
+      sleepSync(40 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function readRuntimeDesignPlatformConfig() {
