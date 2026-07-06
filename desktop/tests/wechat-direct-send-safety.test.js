@@ -163,6 +163,7 @@ test("execute send revalidates queued order payment and cancellation before adap
 
 test("execute send blocks queued tasks when routing policy requires manual handling", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const sendGuardRules = readProjectFile("packages/rules/sendGuard.js");
   const executeSection = service.slice(
     service.indexOf("  executeSend("),
     service.indexOf("  acknowledgeBridgeSend("),
@@ -191,6 +192,9 @@ test("execute send blocks queued tasks when routing policy requires manual handl
   assert.match(routingPolicySection, /canQueueAutoReply \|\| canQueueClarificationReply/);
   assert.match(routingPolicySection, /routingPolicyManualRequired/);
   assert.match(routingPolicySection, /routingPolicyQueueDisabled/);
+  assert.match(sendGuardRules, /task\.guardSnapshot\?\.blockedByRoutingPolicy/);
+  assert.match(sendGuardRules, /reason: "routing_policy_manual_required"/);
+  assert.match(sendGuardRules, /failedKeys: \["routingPolicyManualRequired"\]/);
   assert.match(executeSection, /const routingPolicyState = this\.validateQueuedRoutingPolicySendState\(taskBeforeValidation\)/);
   assert.match(executeSection, /blockedByRoutingPolicy: true/);
   assert.match(executeSection, /guardStatus: routingPolicyState\.reason/);
@@ -296,6 +300,9 @@ test("web send task cards show dispatch instruction state", () => {
   assert.match(page, /routingPolicyManualRequired: "路由策略要求人工处理"/);
   assert.match(page, /routingPolicyQueueDisabled: "路由策略禁止自动排队"/);
   assert.match(page, /sendTaskManualAttentionSummary[\s\S]*map\(\(key\) => sendGuardCheckLabel\(\{ key \}\)\)/);
+  assert.match(taskListSection, /const taskBlockedByRoutingPolicy = Boolean\(task\.guardSnapshot\?\.blockedByRoutingPolicy\)/);
+  assert.match(taskListSection, /!taskBlockedByRoutingPolicy[\s\S]*\["blocked", "failed", "dry_run"\]\.includes\(task\.status\)/);
+  assert.match(page, /task\.guardSnapshot\?\.blockedByRoutingPolicy[\s\S]*title: "路由策略转人工"/);
   assert.match(page, /function sendWindowDiagnosticKeyLabel\(key: string\)/);
   assert.match(page, /windowSnapshotMissing: "无窗口快照"/);
   assert.match(wechatService, /failedKeys: \["conversationManualUnlocked", "conversationManualLocked"\]/);

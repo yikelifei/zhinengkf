@@ -13796,8 +13796,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     const taskBlockedByManualLock =
                       Boolean(task.guardSnapshot?.blockedByManualLock) || task.guardSnapshot?.blockedBy === "manual_lock";
                     const taskCancelledWithAudit = isAuditedCancelledSendTask(task);
+                    const taskBlockedByRoutingPolicy = Boolean(task.guardSnapshot?.blockedByRoutingPolicy);
                     const taskCanBeRequeued =
-                      ["blocked", "failed", "dry_run"].includes(task.status) || (task.status === "cancelled" && !taskCancelledWithAudit);
+                      !taskBlockedByRoutingPolicy &&
+                      (["blocked", "failed", "dry_run"].includes(task.status) || (task.status === "cancelled" && !taskCancelledWithAudit));
                     const sendDisabled = Boolean(busy) || task.status === "sent" || task.status === "dry_run" || taskConversationLocked;
                     const bridgeEntry = bridgeOutboxEntryForTask(task, bridgeOutbox, bridgeStatus);
                     const bridgeDispatchEntry = bridgeDispatchEntryForTask(task, bridgeStatus);
@@ -15818,6 +15820,14 @@ function sendTaskManualAttentionSummary(task: SendTask) {
 function sendManualAttentionActionHint(task: SendTask, canRequeue: boolean, conversationLocked: boolean) {
   const status = String(task.status || "");
   if (!["blocked", "failed", "cancelled", "dry_run"].includes(status)) return null;
+  if (task.guardSnapshot?.blockedByRoutingPolicy) {
+    return {
+      tone: "warning",
+      title: "路由策略转人工",
+      detail: "系统已判断这条发送不适合直接重排，避免高价值、风险或不确定场景被智能体继续发送。",
+      action: "请人工核对客户价值、场景、话术和下一步动作；需要发送时重新生成新的发送任务。",
+    };
+  }
   if (status === "cancelled") {
     return {
       tone: "info",

@@ -438,6 +438,15 @@ function evaluateSendTaskRequeue({ task } = {}) {
       message: "已人工取消并记录审计的发送任务不能重新排队，请重新创建发送任务。",
     };
   }
+  if (task.guardSnapshot?.blockedByRoutingPolicy) {
+    return {
+      ok: false,
+      action: "reject_requeue",
+      reason: "routing_policy_manual_required",
+      failedKeys: ["routingPolicyManualRequired"],
+      message: "路由策略已要求人工处理，不能直接重新排队；请人工核对客户价值、场景和话术后重新生成发送任务。",
+    };
+  }
   if (task.status === "sending") {
     return {
       ok: false,

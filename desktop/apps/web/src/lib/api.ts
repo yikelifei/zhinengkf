@@ -656,6 +656,7 @@ export type SendTask = {
       recommendedAction: string;
     };
     blockedByManualLock?: boolean;
+    blockedByRoutingPolicy?: boolean;
     blockedBy?: string;
     blockedAt?: string;
       failedKeys?: string[];

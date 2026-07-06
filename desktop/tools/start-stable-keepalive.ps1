@@ -80,10 +80,12 @@ function Wait-StableRuntimeReady($ProcessId) {
 function Start-StableRuntimeProcess {
   try {
     return Start-Process `
-      -FilePath "cmd.exe" `
-      -ArgumentList @("/d", "/c", "node $StableRuntimeLauncherArgument") `
+      -FilePath $NodeExe `
+      -ArgumentList @($StableRuntimeLauncherArgument) `
       -WorkingDirectory $Root `
       -WindowStyle Hidden `
+      -RedirectStandardOutput $KeepAliveOutLog `
+      -RedirectStandardError $KeepAliveErrLog `
       -PassThru
   } catch {
     Write-StableStartLog "stable launcher process start failed: $($_.Exception.Message)"

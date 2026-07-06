@@ -232,6 +232,25 @@ test("rejects requeue after audited manual cancellation", () => {
   assert.deepEqual(result.failedKeys, ["taskNotAuditedCancelled"]);
 });
 
+test("rejects requeue after routing policy moves task to manual handling", () => {
+  const result = evaluateSendTaskRequeue({
+    task: {
+      ...task,
+      status: "blocked",
+      conversation,
+      guardSnapshot: {
+        blockedByRoutingPolicy: true,
+        routingPolicyLane: "high_value_human",
+      },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "routing_policy_manual_required");
+  assert.deepEqual(result.failedKeys, ["routingPolicyManualRequired"]);
+  assert.match(result.message, /路由策略/);
+});
+
 test("allows requeue after dry run audit", () => {
   const result = evaluateSendTaskRequeue({
     task: {
