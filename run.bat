@@ -12,6 +12,8 @@ tasklist /FI "IMAGENAME eq WeChat.exe" | find /I "WeChat.exe" >nul
 if %errorlevel%==0 set "WECHAT_RUNNING=1"
 tasklist /FI "IMAGENAME eq Weixin.exe" | find /I "Weixin.exe" >nul
 if %errorlevel%==0 set "WECHAT_RUNNING=1"
+powershell -NoProfile -Command "if (Get-Process WeChat,Weixin -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>nul
+if %errorlevel%==0 set "WECHAT_RUNNING=1"
 
 if not defined WECHAT_RUNNING (
     echo.
@@ -22,11 +24,11 @@ if not defined WECHAT_RUNNING (
     exit /b 2
 )
 
-if exist "dist\smart_bot\smart_bot.exe" goto packaged
 if exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python.exe" -V >nul 2>nul
     if %errorlevel%==0 goto venv
 )
+if exist "dist\smart_bot\smart_bot.exe" goto packaged
 where python >nul 2>nul
 if %errorlevel%==0 goto system_python
 

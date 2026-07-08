@@ -48,12 +48,26 @@ class ChatListener:
             def enum_cb(hwnd, results):
                 try:
                     cls = GetClassName(hwnd)
-                    if cls == 'WeChatMainWndForPC':
+                    title = GetWindowText(hwnd)
+                    is_legacy_wechat = cls == 'WeChatMainWndForPC'
+                    is_qt_weixin = (
+                        cls.startswith('Qt')
+                        and IsWindowVisible(hwnd)
+                        and title in {'微信', 'Weixin', 'WeChat'}
+                    )
+                    if is_legacy_wechat or is_qt_weixin:
                         pid_out = ctypes.c_ulong()
                         user32.GetWindowThreadProcessId(
                             hwnd, ctypes.byref(pid_out)
                         )
-                        results.append({'hwnd': hex(hwnd), 'pid': pid_out.value})
+                        results.append({
+                            'hwnd': hex(hwnd),
+                            'pid': pid_out.value,
+                            'class': cls,
+                            'title': title,
+                            'visible': bool(IsWindowVisible(hwnd)),
+                            'priority': 0 if is_legacy_wechat else 1,
+                        })
                 except Exception:
                     pass
                 return True
@@ -64,6 +78,7 @@ class ChatListener:
                     '未找到微信 4.x 主窗口。请先打开并登录微信 4.x，然后重新启动智能客服。'
                 )
 
+            hwnds.sort(key=lambda item: (item.get('priority', 9), not item.get('visible', False)))
             target_hwnd = int(hwnds[0]['hwnd'], 16)
             from pywinauto import Desktop
             self.desktop = Desktop(backend='uia')

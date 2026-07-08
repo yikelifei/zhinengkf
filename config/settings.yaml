@@ -30,18 +30,17 @@ channels:
       type: official_or_aggregator_api
 ai_engine:
   enabled: true
-  primary: geeknow
+  primary: custom_api_1
   prompt_key: commercial_customer_service_skill
   fallback_chain:
-  - custom_api_1
+  - zhipu
   - deepseek
   - openai
-  - zhipu
   timeout_seconds: 15
   max_retries: 2
   providers:
     geeknow:
-      enabled: true
+      enabled: false
       api_key: ${GEEKNOW_API_KEY}
       base_url: ${GEEKNOW_BASE_URL}
       model: ${GEEKNOW_MODEL}

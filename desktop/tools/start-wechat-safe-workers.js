@@ -10,34 +10,13 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DE
 const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "wechat-safe-workers.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const personalWechatBridgeStatusFile = path.join(runtimeDir, "personal-wechat-bridge-status.json");
 const apiPort = numberEnv("API_PORT", 3200);
 const apiBase = String(process.env.BRIDGE_API_BASE || process.env.WECHAT_WINDOW_OBSERVER_API_BASE || `http://127.0.0.1:${apiPort}/api`).replace(/\/$/, "");
 const args = new Set(process.argv.slice(2));
 const requestedBridgeMode = resolveBridgeMode();
 
-const services = [
-  {
-    name: "wechat-window-observer",
-    label: "WeChat window observer",
-    commandArgs: ["tools/wechat-window-observer.js", "--watch", "--scan"],
-    statusFile: path.join(runtimeDir, "wechat-window-observer-status.json"),
-    env: {
-      WECHAT_WINDOW_OBSERVER_API_BASE: apiBase,
-      WECHAT_WINDOW_OBSERVER_SCAN: "true",
-    },
-  },
-  {
-    name: "wechat-bridge-worker",
-    label: "WeChat bridge worker",
-    commandArgs: ["tools/wechat-bridge-worker.js", "--watch"],
-    statusFile: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
-    env: {
-      BRIDGE_API_BASE: apiBase,
-      BRIDGE_MODE: requestedBridgeMode,
-      BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
-    },
-  },
-];
+const services = buildServices();
 
 main().catch((error) => {
   console.error(error?.stack || error);
@@ -95,6 +74,55 @@ function resolveBridgeMode() {
   const envMode = String(process.env.BRIDGE_MODE || "").trim();
   if (envMode === "dispatch" || envMode === "noop") return envMode;
   return "noop";
+}
+
+function buildServices() {
+  const list = [
+    {
+      name: "wechat-window-observer",
+      label: "WeChat window observer",
+      commandArgs: ["tools/wechat-window-observer.js", "--watch", "--scan"],
+      statusFile: path.join(runtimeDir, "wechat-window-observer-status.json"),
+      env: {
+        WECHAT_WINDOW_OBSERVER_API_BASE: apiBase,
+        WECHAT_WINDOW_OBSERVER_SCAN: "true",
+      },
+    },
+    {
+      name: "wechat-bridge-worker",
+      label: "WeChat bridge worker",
+      commandArgs: ["tools/wechat-bridge-worker.js", "--watch"],
+      statusFile: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
+      env: {
+        BRIDGE_API_BASE: apiBase,
+        BRIDGE_MODE: requestedBridgeMode,
+        BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
+      },
+    },
+  ];
+
+  if (
+    args.has("--personal") ||
+    process.env.PERSONAL_WECHAT_BRIDGE === "1" ||
+    ((args.has("--status") || args.has("--stop")) && fs.existsSync(personalWechatBridgeStatusFile))
+  ) {
+    list.push({
+      name: "personal-wechat-bridge",
+      label: "Personal WeChat bridge",
+      commandArgs: ["tools/personal-wechat-bridge.js", "--watch"],
+      statusFile: personalWechatBridgeStatusFile,
+      env: {
+        PERSONAL_WECHAT_API_BASE: apiBase,
+        WECHAT_BRIDGE_DISPATCH_DIR: process.env.WECHAT_BRIDGE_DISPATCH_DIR || path.join(runtimeDir, "wechat-dispatch"),
+        WECHAT_BRIDGE_INBOX_DIR: process.env.WECHAT_BRIDGE_INBOX_DIR || path.join(runtimeDir, "wechat-inbox"),
+        PERSONAL_WECHAT_SEND: process.env.PERSONAL_WECHAT_SEND || "0",
+        PERSONAL_WECHAT_AUTO_ENTER: process.env.PERSONAL_WECHAT_AUTO_ENTER || "0",
+        PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW: process.env.PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW || "0",
+      },
+    });
+  }
+
+  return list;
 }
 
 function assertExistingWorkerMode(service) {
@@ -238,8 +266,10 @@ function buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogP
 
 function windowsWorkerEnv(service) {
   return windowsSafeEnv({
-    PATH: process.env.PATH || "",
-    SystemRoot: process.env.SystemRoot || "C:\\WINDOWS",
+    ...process.env,
+    PATH: process.env.PATH || process.env.Path || "",
+    SystemRoot: process.env.SystemRoot || process.env.WINDIR || "C:\\WINDOWS",
+    windir: process.env.windir || process.env.SystemRoot || process.env.WINDIR || "C:\\WINDOWS",
     ComSpec: process.env.ComSpec || "C:\\WINDOWS\\System32\\cmd.exe",
     TEMP: process.env.TEMP || process.env.TMP || runtimeDir,
     TMP: process.env.TMP || process.env.TEMP || runtimeDir,

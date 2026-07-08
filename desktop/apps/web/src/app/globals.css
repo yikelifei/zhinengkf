@@ -761,6 +761,10 @@ h3 {
   transform: scale(0.96);
 }
 
+.rail-label {
+  display: none;
+}
+
 .rail button.active {
   background: rgba(0, 122, 255, 0.14);
   color: var(--blue);
@@ -29549,5 +29553,139 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
+  }
+}
+
+/* Iteration 97 Mobile app dock: move global navigation out of the content flow. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell {
+    display: block !important;
+    min-height: 100dvh !important;
+    width: 100dvw !important;
+    max-width: 100dvw !important;
+    overflow-x: hidden !important;
+    background: #fff !important;
+  }
+
+  body .apple-light-shell.shell .rail {
+    position: fixed !important;
+    inset: auto 0 0 0 !important;
+    z-index: 70 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+    width: 100dvw !important;
+    max-width: 100dvw !important;
+    min-height: 0 !important;
+    height: calc(64px + env(safe-area-inset-bottom)) !important;
+    padding: 7px 10px calc(7px + env(safe-area-inset-bottom)) !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-snap-type: x proximity !important;
+    border-right: 0 !important;
+    border-top: 1px solid rgba(60, 60, 67, 0.16) !important;
+    border-bottom: 0 !important;
+    background: rgba(255, 255, 255, 0.94) !important;
+    box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.07) !important;
+    backdrop-filter: blur(24px) saturate(1.35) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(1.35) !important;
+    scrollbar-width: none !important;
+  }
+
+  body .apple-light-shell.shell .rail::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .rail .brand {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .rail button {
+    flex: 0 0 58px !important;
+    display: grid !important;
+    grid-template-rows: 24px 16px !important;
+    place-items: center !important;
+    align-content: center !important;
+    gap: 1px !important;
+    width: 58px !important;
+    max-width: 58px !important;
+    height: 50px !important;
+    min-height: 50px !important;
+    padding: 5px 4px 4px !important;
+    border-radius: 14px !important;
+    scroll-snap-align: center !important;
+    color: rgba(60, 60, 67, 0.72) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body .apple-light-shell.shell .rail button svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+
+  body .apple-light-shell.shell .rail button::after {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .rail .rail-label {
+    display: block !important;
+    min-width: 0 !important;
+    max-width: 50px !important;
+    color: currentColor !important;
+    font-size: 10px !important;
+    font-weight: 590 !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  body .apple-light-shell.shell .rail button.active {
+    background: var(--blue) !important;
+    color: #fff !important;
+    box-shadow: 0 8px 18px rgba(0, 122, 255, 0.22) !important;
+  }
+
+  body .apple-light-shell.shell .rail button.active::before {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace {
+    display: grid !important;
+    grid-template-rows: auto auto minmax(0, 1fr) auto !important;
+    width: 100dvw !important;
+    max-width: 100dvw !important;
+    min-height: 100dvh !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section] > :is(
+    .asset-grid,
+    .main-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .wechat-channel-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) {
+    padding-bottom: calc(86px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body .apple-light-shell.shell .dock-strip,
+  body .apple-light-shell.shell .system-footer {
+    display: none !important;
   }
 }

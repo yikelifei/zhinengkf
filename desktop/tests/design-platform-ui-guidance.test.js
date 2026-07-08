@@ -121,6 +121,20 @@ test("design center mobile commands and empty actions fit one app viewport", () 
   assert.match(cssSource, /text-overflow: ellipsis !important/);
 });
 
+test("mobile global navigation uses a bottom app dock instead of a stacked top rail", () => {
+  assert.match(cssSource, /Iteration 97 Mobile app dock/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \{[\s\S]*position: fixed !important[\s\S]*inset: auto 0 0 0 !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \{[\s\S]*flex-direction: row !important[\s\S]*overflow-x: auto !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \.brand \{[\s\S]*display: none !important/);
+  assert.match(pageSource, /<span className="rail-label">\{item\.label\}<\/span>/);
+  assert.match(cssSource, /\.rail-label \{[\s\S]*display: none/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail button::after \{[\s\S]*display: none !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \.rail-label \{[\s\S]*display: block !important[\s\S]*text-overflow: ellipsis !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.rail button\.active \{[\s\S]*background: var\(--blue\) !important[\s\S]*color: #fff !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.workspace \{[\s\S]*padding-bottom: calc\(72px \+ env\(safe-area-inset-bottom\)\) !important[\s\S]*overflow-y: auto !important/);
+  assert.match(cssSource, /\.apple-light-shell\.shell \.dock-strip,[\s\S]*\.apple-light-shell\.shell \.system-footer \{[\s\S]*display: none !important/);
+});
+
 test("design platform config exposes a real one-click smoke test path", () => {
   assert.match(pageSource, /smokeTestDesignPlatform/);
   assert.match(pageSource, /试跑出图/);

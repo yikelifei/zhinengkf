@@ -8669,6 +8669,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               type="button"
             >
               <Icon size={20} aria-hidden="true" />
+              <span className="rail-label">{item.label}</span>
             </button>
           );
         })}

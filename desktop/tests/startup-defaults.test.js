@@ -802,6 +802,14 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /continuing health wait/);
   assert.match(stableKeepalivePs1, /function Test-StableRuntimeHealthy/);
   assert.match(stableKeepalivePs1, /function Start-StableRuntimeProcess/);
+  assert.match(stableKeepalivePs1, /\$SupervisorMode = \$env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"/);
+  assert.match(stableKeepalivePs1, /function Start-StableSupervisorProcess/);
+  assert.match(stableKeepalivePs1, /STABLE_KEEPALIVE_SUPERVISOR = "1"/);
+  assert.match(stableKeepalivePs1, /function Invoke-StableSupervisorLoop/);
+  assert.match(stableKeepalivePs1, /stable runtime launcher missing; restarting/);
+  assert.match(stableKeepalivePs1, /if \(\$SupervisorMode\)/);
+  assert.match(stableKeepalivePs1, /Start-StableSupervisorProcess/);
+  assert.doesNotMatch(stableKeepalivePs1, /\$LASTEXITCODE -eq 0 -or \(Test-StableRuntimeHealthy\)/);
   assert.match(stableKeepalivePs1, /RedirectStandardOutput/);
   assert.match(stableKeepalivePs1, /RedirectStandardError/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/"/);
@@ -809,7 +817,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3700\/v1\/health"/);
   assert.match(stableKeepalivePs1, /curl\.exe -s -o NUL -w "%\{http_code\}" --max-time 3 \$Url/);
   assert.doesNotMatch(stableKeepalivePs1, /Invoke-WebRequest -UseBasicParsing -TimeoutSec 2/);
-  assert.match(stableKeepalivePs1, /stable runtime launcher ready pid=/);
+  assert.match(stableKeepalivePs1, /stable keepalive supervisor ready pid=/);
   assert.match(stableKeepalivePs1, /stable runtime did not become healthy/);
   assert.doesNotMatch(stableKeepalivePs1, /"-NoExit"/);
   assert.doesNotMatch(stableKeepalivePs1, /"-NoExit"/);
@@ -1047,7 +1055,8 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(launcher, /if \(await stableDesktopGuardActive\(\)\)/);
   assert.match(launcher, /async function stableDesktopGuardActive\(\)/);
   assert.match(launcher, /ALLOW_LEGACY_START_WITH_STABLE/);
-  assert.match(launcher, /stableStartingLockActive\(\) \|\| \(await stableRuntimeServicesHealthy\(\)\)/);
+  assert.match(launcher, /stableStartingLockActive\(\) \|\| heartbeatFresh\(stableKeepAliveHeartbeatFile, 3_600_000\)/);
+  assert.match(launcher, /stable desktop runtime guard is active; legacy start-dev-ports skipped/);
   assert.match(launcher, /async function stableRuntimeServicesHealthy\(\)/);
   assert.match(launcher, /apiHealthUsesRuntimeDir\(apiHealth, stableRuntimeDir\)/);
   assert.match(launcher, /function apiHealthUsesRuntimeDir\(apiHealth, expectedRuntimeDir = runtimeDir\)/);

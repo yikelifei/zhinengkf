@@ -871,7 +871,10 @@ function normalizePathText(value) {
 
 async function stableDesktopGuardActive() {
   if (process.env.ALLOW_LEGACY_START_WITH_STABLE === "1") return false;
-  return stableStartingLockActive() || (await stableRuntimeServicesHealthy());
+  const processActive = stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
+  if (!processActive) return false;
+  console.log("[launch] stable desktop runtime guard is active; legacy start-dev-ports skipped.");
+  return true;
 }
 
 async function stableRuntimeServicesHealthy() {

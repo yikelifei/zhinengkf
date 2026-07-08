@@ -1819,9 +1819,8 @@ async function stableDesktopGuardActive() {
   if (normalizePathText(runtimeDir) === normalizePathText(stableRuntimeDir)) return false;
   const processActive = stableStartingLockActive() || heartbeatFresh(stableKeepAliveHeartbeatFile, 3_600_000);
   if (!processActive) return false;
-  if (await stableRuntimeServicesHealthy()) return true;
-  console.log("[ports] ignored stale stable desktop runtime guard because the stable launcher is not serving required ports.");
-  return false;
+  console.log("[ports] stable desktop runtime guard is active; legacy start-dev-ports skipped.");
+  return true;
 }
 
 function stableStartingLockActive() {

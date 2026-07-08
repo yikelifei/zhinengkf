@@ -11,6 +11,7 @@ $KeepAliveOutLog = Join-Path $LogDir "stable-runtime-launcher.out.log"
 $KeepAliveErrLog = Join-Path $LogDir "stable-runtime-launcher.err.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
+$SupervisorMode = $env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"
 
 function Write-StableStartLog($Message) {
   try {
@@ -93,6 +94,40 @@ function Start-StableRuntimeProcess {
   }
 }
 
+function Start-StableSupervisorProcess {
+  $command = @"
+`$env:DESKTOP_RUNTIME_DIR = "$RuntimeDir"
+`$env:STABLE_KEEPALIVE_SUPERVISOR = "1"
+& "$PSCommandPath"
+"@
+  return Start-Process `
+    -FilePath "powershell.exe" `
+    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) `
+    -WorkingDirectory $Root `
+    -WindowStyle Hidden `
+    -PassThru
+}
+
+function Invoke-StableSupervisorLoop {
+  Write-StableStartLog "stable keepalive supervisor running pid=$PID"
+  while ($true) {
+    if (Test-Path $StopRequestFile) {
+      Write-StableStartLog "stable keepalive supervisor stop request received pid=$PID"
+      exit 0
+    }
+
+    Write-StableStartingLock
+    $existing = Find-KeepAliveProcess
+    if (-not $existing) {
+      Write-StableStartLog "stable runtime launcher missing; restarting"
+      $process = Start-StableRuntimeProcess
+      Write-StableStartLog "stable runtime launcher restarted pid=$($process.Id)"
+    }
+
+    Start-Sleep -Seconds 5
+  }
+}
+
 try {
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -104,8 +139,13 @@ try {
   }
   Write-StableStartingLock
 
+  if ($SupervisorMode) {
+    Invoke-StableSupervisorLoop
+    exit 0
+  }
+
   & node (Join-Path $Root "tools\stable-start-needed.js") | Out-Null
-  if ($LASTEXITCODE -eq 0 -or (Test-StableRuntimeHealthy)) {
+  if ($LASTEXITCODE -eq 0) {
     Write-StableStartLog "stable services already healthy; keepalive start skipped"
     Write-Output "[stable] services already healthy"
     exit 0
@@ -118,15 +158,15 @@ try {
     exit 0
   }
 
-  Write-StableStartLog "starting detached stable runtime launcher"
-  $process = Start-StableRuntimeProcess
+  Write-StableStartLog "starting hidden stable keepalive supervisor"
+  $process = Start-StableSupervisorProcess
   if (Wait-StableRuntimeReady $process.Id) {
-    Write-StableStartLog "stable runtime launcher ready pid=$($process.Id)"
-    Write-Output "[stable] stable runtime launcher started pid=$($process.Id)"
+    Write-StableStartLog "stable keepalive supervisor ready pid=$($process.Id)"
+    Write-Output "[stable] stable keepalive supervisor started pid=$($process.Id)"
     exit 0
   }
 
-  throw "stable runtime did not become healthy pid=$($process.Id)"
+  throw "stable runtime did not become healthy supervisorPid=$($process.Id)"
 } catch {
   Write-StableStartLog "stable runtime launcher start failed: $($_.Exception.Message)"
   Write-Error "failed to start stable runtime launcher: $($_.Exception.Message)"
