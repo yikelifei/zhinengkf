@@ -81,7 +81,16 @@ async function runOnce(config = readConfig()) {
     }
 
     try {
-      processed.push(await processPendingEntry({ ...entry, outboxDir: outbox.outboxDir || config.outboxDir }, config));
+      processed.push(
+        await processPendingEntry(
+          {
+            ...entry,
+            customerId: entry.customerId || entry.preview?.customerId || "",
+            outboxDir: outbox.outboxDir || config.outboxDir,
+          },
+          config,
+        ),
+      );
     } catch (error) {
       failed.push({
         taskId: entry.taskId,

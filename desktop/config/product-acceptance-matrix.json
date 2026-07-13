@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "matrixVersion": "2026-07-13",
+  "defaultMode": "local-safe",
+  "modeDefinitions": {
+    "mock": "独立临时数据、NestJS API、Next.js Web 与本地模拟设计平台；不访问真实外部系统。",
+    "local-safe": "包含 mock，并验证本机安全队列、企微加密回调、个人微信 dispatch/no-send 和 CRM 回归；不真实发信、不确认付款。",
+    "real-external": "只读探测真实设计平台、企业微信配置和个人微信桥接就绪度；必须显式传入 --allow-external-readiness。"
+  },
+  "requiredCapabilities": [
+    "api_web_startup",
+    "identity_isolation",
+    "inbound_message",
+    "manual_reply_safe_queue",
+    "wechat_work_callback_safety",
+    "personal_wechat_dry_run",
+    "design_job",
+    "crm",
+    "automation_rules",
+    "mobile_390_layout"
+  ],
+  "safetyPolicy": {
+    "defaultNetworkScope": "loopback-only",
+    "realMessageSend": "forbidden",
+    "paymentMutation": "forbidden",
+    "legacyDirectWechatSend": "forbidden",
+    "allowedLocalAdapters": [
+      "dry_run",
+      "windows_bridge_dispatch_only"
+    ],
+    "forbiddenHttpMutations": [
+      "/api/wechat-work/kf/send-text",
+      "/api/wechat/send-tasks/:id/mark-sent",
+      "/api/wechat/send-tasks/:id/mark-sent-current-window",
+      "/api/wechat/send-tasks/:id/bridge-ack",
+      "/api/quotes/:id/verify-payment-proof",
+      "/api/chat/send"
+    ],
+    "forcedEnvironment": {
+      "PERSONAL_WECHAT_SEND": "0",
+      "PERSONAL_WECHAT_BRIDGE_AUTO_ENTER": "0",
+      "BRIDGE_MODE": "noop",
+      "LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE": "false"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "MCK-STACK-001",
+      "capability": "api_web_startup",
+      "mode": "mock",
+      "handler": "stack_startup",
+      "titleZh": "API、Web、模拟设计平台独立启动",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "三项健康检查均成功，API 使用独立 local-json 数据文件。"
+    },
+    {
+      "id": "MCK-IDENTITY-001",
+      "capability": "identity_isolation",
+      "mode": "mock",
+      "handler": "identity_isolation",
+      "titleZh": "账号、客户、会话隔离",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "两个演示账号只返回各自会话；错绑入站返回 400 且不新增发送任务。"
+    },
+    {
+      "id": "LSF-MANUAL-QUEUE-001",
+      "capability": "manual_reply_safe_queue",
+      "mode": "local-safe",
+      "handler": "manual_safe_queue",
+      "titleZh": "人工回复安全入队（现有发送队列入口）",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "显式三元身份校验后只生成 queued 任务，不生成发送尝试、不标记 sent。",
+      "knownLimit": "当前自由文本入口复用 send-tasks/demo 验收夹具；旧版 /api/chat/send 会直接操作微信，因此默认验收明确禁用。"
+    },
+    {
+      "id": "LSF-PERSONAL-BRIDGE-001",
+      "capability": "personal_wechat_dry_run",
+      "mode": "local-safe",
+      "handler": "personal_bridge_no_send",
+      "titleZh": "个人微信桥接 dispatch/no-send",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "安全闸门通过后仅写 outbox/dispatch；个人微信桥接在 PERSONAL_WECHAT_SEND=0 时只观察并跳过，无 ack、无 sent。"
+    },
+    {
+      "id": "MCK-INBOUND-001",
+      "capability": "inbound_message",
+      "mode": "mock",
+      "handler": "inbound_local",
+      "titleZh": "入站消息落库、路由和安全排队",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "消息、路由和自动化计划绑定同一账号/客户/会话；如需回复只能进入 queued。"
+    },
+    {
+      "id": "LSF-WXWORK-CALLBACK-001",
+      "capability": "wechat_work_callback_safety",
+      "mode": "local-safe",
+      "handler": "wechat_work_callback",
+      "titleZh": "企业微信加密回调安全",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "伪签名被拒绝且不写任务；本地测试密钥生成的合法 AES 回调可解密并复用现有入站分发。"
+    },
+    {
+      "id": "MCK-DESIGN-001",
+      "capability": "design_job",
+      "mode": "mock",
+      "handler": "design_task",
+      "titleZh": "设计任务创建、查询和身份拒绝",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "同身份任务可创建并查询；跨账号/客户创建被拒绝；模拟设计平台健康。"
+    },
+    {
+      "id": "MCK-AUTOMATION-001",
+      "capability": "automation_rules",
+      "mode": "mock",
+      "handler": "automation_cycle",
+      "titleZh": "自动化规则单轮运行",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "readiness 可解释，manual 单轮有步骤、身份审计和持久化记录；发送队列处理被强制关闭。"
+    },
+    {
+      "id": "LSF-CRM-001",
+      "capability": "crm",
+      "mode": "local-safe",
+      "handler": "crm_regression",
+      "titleZh": "CRM 数据隔离与线索生命周期回归",
+      "sideEffectClass": "temp-files-only",
+      "mutatesExternal": false,
+      "acceptance": "复用 tests/test_crm_database.py，所有数据库文件使用测试临时目录。"
+    },
+    {
+      "id": "LSF-CONTRACT-001",
+      "capability": "acceptance_infrastructure",
+      "mode": "local-safe",
+      "handler": "contract_regression",
+      "titleZh": "身份、入站、桥接、自动化契约回归",
+      "sideEffectClass": "temp-files-only",
+      "mutatesExternal": false,
+      "acceptance": "复用现有 Node 测试，不建立平行业务实现。"
+    },
+    {
+      "id": "MCK-UI390-001",
+      "capability": "mobile_390_layout",
+      "mode": "mock",
+      "handler": "layout_390",
+      "titleZh": "390px 关键工作台布局与导航",
+      "sideEffectClass": "local-render-only",
+      "mutatesExternal": false,
+      "acceptance": "390x844 渲染非空、无框架错误层、无页面级横向溢出；发送中心导航可交互并截图留证。"
+    },
+    {
+      "id": "EXT-DESIGN-001",
+      "capability": "design_job",
+      "mode": "real-external",
+      "handler": "external_design_readiness",
+      "titleZh": "真实设计平台只读就绪探测",
+      "sideEffectClass": "read-only-external",
+      "mutatesExternal": false,
+      "acceptance": "本地 API 报告 art_image_local 且 canSubmitFormalGeneration=true；不提交设计任务。",
+      "externalDependencies": [
+        "真实设计平台进程与可访问 Base URL",
+        "设计平台登录态或访问凭证",
+        "已激活设备 ID（如适配器要求）"
+      ]
+    },
+    {
+      "id": "EXT-WXWORK-001",
+      "capability": "wechat_work_callback_safety",
+      "mode": "real-external",
+      "handler": "external_wechat_work_readiness",
+      "titleZh": "真实企业微信只读配置探测",
+      "sideEffectClass": "read-only-external",
+      "mutatesExternal": false,
+      "acceptance": "企微凭证布尔项完整且回调 URL 为公网 HTTPS；不调用 sync_msg/send_msg。",
+      "externalDependencies": [
+        "企业微信 Corp ID、Secret、Token、EncodingAESKey、OpenKfId",
+        "企业微信可达的公网 HTTPS 回调地址",
+        "external_userid 到本地客户/会话的正式映射"
+      ]
+    },
+    {
+      "id": "EXT-PERSONAL-001",
+      "capability": "personal_wechat_dry_run",
+      "mode": "real-external",
+      "handler": "external_personal_wechat_readiness",
+      "titleZh": "真实个人微信桥接只读就绪探测",
+      "sideEffectClass": "read-only-external",
+      "mutatesExternal": false,
+      "acceptance": "通道和桥接 worker 报告就绪；不粘贴、不按回车、不写 sent ack。",
+      "externalDependencies": [
+        "已登录且经授权的个人微信 PC 客户端",
+        "可核验当前账号与聊天对象的窗口观察能力",
+        "人工确认后的真实桥接发送授权"
+      ]
+    }
+  ]
+}
