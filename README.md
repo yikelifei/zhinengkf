@@ -87,6 +87,14 @@ run_web_console.bat
 - `config/templates.yaml`：固定话术模板。
 - `config/prompts.yaml`：AI 系统提示词。
 
+运行统一配置体检（只读、JSON 脱敏、不联网）：
+
+```bat
+config-readiness-doctor.cmd --json
+```
+
+详细状态语义和 npm 入口见 [统一配置体检](docs/CONFIG_READINESS_DOCTOR.md)。
+
 Web 控制台的系统设置页已经支持维护 API 接口、客户资料、线索管道和上线检查。保存客户资料或线索管道时会自动备份原 YAML 配置。
 转化分析页提供交付文件中心，可查看和下载最近生成的报告、验收包、跟进任务、报价准备清单、订单交付清单、人工接管队列、SLA 监控报告、回复安全审计、非工作时间审计、优化待办和备份包。
 风控质检页提供 SLA 运行监控、人工接管队列、回复安全护栏、非工作时间兜底、优化待办和操作审计，可追踪配置保存、报告生成、备份创建、人工锁定和人工发送等关键动作。
@@ -253,6 +261,7 @@ tools/quality/run_tests.bat
 
 - [部署与验收指南](C:/Users/27808/Desktop/zhinengkefu/docs/DEPLOYMENT_GUIDE.md)
 - [商业化落地路线](C:/Users/27808/Desktop/zhinengkefu/docs/COMMERCIALIZATION_ROADMAP.md)
+- [统一配置体检](docs/CONFIG_READINESS_DOCTOR.md)
 
 ## 验收口径
 

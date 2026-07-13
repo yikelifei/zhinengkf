@@ -15,6 +15,7 @@
     "build:api": "nest build --config apps/api/nest-cli.json",
     "build:web": "node tools/build-web.js",
     "test": "node --test tests/*.test.js",
+    "config:doctor": "..\\config-readiness-doctor.cmd",
     "mock:design-platform": "node tools/mock-design-platform.js",
     "ports:start": "node tools/ports-stack-starter.js",
     "ports:start:mock": "node tools/ports-stack-starter.js --mock-design",

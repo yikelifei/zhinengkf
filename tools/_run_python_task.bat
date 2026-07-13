@@ -31,7 +31,9 @@ exit /b 1
 :run
 %PY% %*
 set "RC=%errorlevel%"
-echo.
-echo Command exited with code %RC%.
+if not "%SMART_KEFU_QUIET_EXIT%"=="1" (
+  echo.
+  echo Command exited with code %RC%.
+)
 if "%SMART_KEFU_PAUSE%"=="1" pause
 exit /b %RC%
