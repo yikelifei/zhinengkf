@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { AiProviderController } from "./ai/ai-provider.controller";
+import { AiProviderService } from "./ai/ai-provider.service";
 import { AgentsController } from "./agents/agents.controller";
 import { AgentsService } from "./agents/agents.service";
 import { AutomationController } from "./automation/automation.controller";
@@ -43,6 +45,7 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
 
 @Module({
   controllers: [
+    AiProviderController,
     AgentsController,
     AutomationController,
     AssetsController,
@@ -63,6 +66,7 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
     WechatWorkController,
   ],
   providers: [
+    AiProviderService,
     AgentsService,
     AutomationService,
     AssetsService,

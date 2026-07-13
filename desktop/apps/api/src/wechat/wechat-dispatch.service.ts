@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { AiProviderService } from "../ai/ai-provider.service";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { OrdersService } from "../orders/orders.service";
@@ -71,6 +72,7 @@ export class WechatDispatchService {
     private readonly sendAdapter: WechatSendAdapterService,
     private readonly notifications: NotificationsService,
     private readonly orders: OrdersService,
+    @Optional() private readonly aiProviders?: AiProviderService,
   ) {}
 
   async enqueueDesignImages(params: {
@@ -987,6 +989,12 @@ export class WechatDispatchService {
       skills,
       knowledgeEntries,
     });
+    const aiAssistance = await this.buildAiAssistedInboundDraft({
+      conversation,
+      route: routeBase,
+      draft,
+      customerText: payload.text || "",
+    });
     const route = this.localStore.createRouteEvaluation(
       {
         channel: conversation.channel || "wechat",
@@ -996,10 +1004,15 @@ export class WechatDispatchService {
       },
       {
         ...routeBase,
-        suggestedReply: draft.suggestedReply,
+        suggestedReply: aiAssistance?.text || draft.suggestedReply,
         appliedSkills: draft.appliedSkills,
         knowledgeMatches: draft.knowledgeMatches,
-        replyDraft: draft.replyDraft,
+        replyDraft: {
+          ...draft.replyDraft,
+          source: aiAssistance?.used ? "ai_assisted" : draft.replyDraft?.source,
+          ruleSuggestedReply: draft.suggestedReply,
+          aiAssistance,
+        },
       },
     );
     if (conversation.manualLocked) {
@@ -1116,6 +1129,37 @@ export class WechatDispatchService {
     }
 
     return result;
+  }
+
+  private async buildAiAssistedInboundDraft(input: { conversation: any; route: any; draft: any; customerText: string }) {
+    if (!this.aiProviders || input.conversation.manualLocked || input.route.action !== "auto_agent") return null;
+    try {
+      const result = await this.aiProviders.generateInboundSuggestion({
+        customerMessage: input.customerText,
+        ruleSuggestion: input.draft.suggestedReply,
+        agentKey: input.route.agentKey,
+        scene: input.route.scene,
+        nextAction: input.draft.replyDraft?.nextAction,
+        knowledgeMatches: (input.draft.knowledgeMatches || []).map((item: any) => ({
+          title: item.title,
+          excerpt: item.excerpt,
+        })),
+      });
+      return {
+        used: true,
+        text: result.text,
+        provider: result.provider,
+        model: result.model,
+        attempts: result.attempts,
+        authority: "rules_and_scoped_knowledge",
+      };
+    } catch {
+      return {
+        used: false,
+        reason: "provider_unavailable_or_unsafe",
+        authority: "rule_fallback",
+      };
+    }
   }
 
   listWindowSnapshots(filter: IdentityFilter = {}) {

@@ -90,6 +90,7 @@
     "dotenv": "^17.4.1",
     "electron": "^42.5.0",
     "ioredis": "^5.4.2",
+    "js-yaml": "^4.1.0",
     "lucide-react": "^0.468.0",
     "next": "^16.2.9",
     "react": "^19.0.0",
