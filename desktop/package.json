@@ -63,6 +63,8 @@
     "data:reset": "node tools/reset-local-store.js",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:wechat:import": "node -r ts-node/register tools/migrate-wechat-local-json-to-prisma.ts",
     "start:api": "node dist/apps/api/main.js",
     "start:web": "set PORT=3100&& cd /d apps\\web\\.next\\standalone\\apps\\web&& node server.js"
   },

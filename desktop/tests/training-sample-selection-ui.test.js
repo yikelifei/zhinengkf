@@ -391,10 +391,10 @@ test("training sample review center supports selected batch actions", () => {
   assert.match(page, /if \(missingRequiredCount\) parts\.push\(`\$\{missingRequiredCount\} 条缺必填项`\)/);
   assert.match(page, /selectedMissingRequiredTrainingSampleCount = selectedTrainingSamplesMissingRequired\.length/);
   assert.match(page, /selectedMissingRequiredTrainingSample = selectedTrainingSamplesMissingRequired\[0\] \|\| null/);
-  assert.match(page, /selectedMissingRequiredTrainingSample \|\|\n\s+selectedVisibleTrainingSamples\.find\(isTrainingSampleNeedingManualReview\)/);
+  assert.match(page, /selectedMissingRequiredTrainingSample \|\|\r?\n\s+selectedVisibleTrainingSamples\.find\(isTrainingSampleNeedingManualReview\)/);
   assert.match(page, /visibleTrainingSamplesMissingRequired = visibleTrainingSamples\.filter/);
   assert.match(page, /visibleMissingRequiredTrainingSampleCount = visibleTrainingSamplesMissingRequired\.length/);
-  assert.match(page, /visibleMissingRequiredTrainingSample \|\|\n\s+visibleTrainingSamples\.find\(isTrainingSampleNeedingManualReview\)/);
+  assert.match(page, /visibleMissingRequiredTrainingSample \|\|\r?\n\s+visibleTrainingSamples\.find\(isTrainingSampleNeedingManualReview\)/);
   assert.match(page, /selectedNeedsAttentionTrainingSampleCount = selectedVisibleTrainingSamples\.filter\(isTrainingSampleNeedingManualReview\)\.length/);
   assert.match(page, /selectedSceneUncertainTrainingSampleCount = selectedVisibleTrainingSamples\.filter\(isSceneUncertainTrainingSample\)\.length/);
   assert.match(page, /selectedRiskTrainingSample =/);

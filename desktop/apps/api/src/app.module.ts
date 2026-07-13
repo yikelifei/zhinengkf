@@ -30,6 +30,8 @@ import { TrainingService } from "./training/training.service";
 import { WechatController } from "./wechat/wechat.controller";
 import { WechatDispatchService } from "./wechat/wechat-dispatch.service";
 import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
+import { WechatWorkController } from "./wechat-work/wechat-work.controller";
+import { WechatWorkService } from "./wechat-work/wechat-work.service";
 
 @Module({
   controllers: [
@@ -47,6 +49,7 @@ import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
     RoutingController,
     TrainingController,
     WechatController,
+    WechatWorkController,
   ],
   providers: [
     AgentsService,
@@ -75,6 +78,7 @@ import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
     TrainingService,
     WechatDispatchService,
     WechatSendAdapterService,
+    WechatWorkService,
   ],
 })
 export class AppModule {}

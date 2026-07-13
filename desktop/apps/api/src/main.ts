@@ -35,11 +35,22 @@ process.on("unhandledRejection", (reason) => {
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
   appRef = app;
+  registerWechatWorkXmlParsers(app);
   app.setGlobalPrefix("api");
   app.enableCors({ origin: true, credentials: true });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   await app.listen({ port: appConfig.apiPort, host: "127.0.0.1" });
   console.log(`[api] listening on http://127.0.0.1:${appConfig.apiPort}/api/health`);
+}
+
+function registerWechatWorkXmlParsers(app: NestFastifyApplication) {
+  const fastify = app.getHttpAdapter().getInstance() as any;
+  const parseAsString = (_request: unknown, body: string, done: (error: Error | null, value?: string) => void) => done(null, body);
+  for (const contentType of ["text/xml", "application/xml", "application/octet-stream"]) {
+    if (!fastify.hasContentTypeParser?.(contentType)) {
+      fastify.addContentTypeParser(contentType, { parseAs: "string" }, parseAsString);
+    }
+  }
 }
 
 bootstrap().catch((error) => {
