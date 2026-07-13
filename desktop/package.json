@@ -4,6 +4,10 @@
   "private": true,
   "description": "Windows desktop intelligent customer service platform with gift-box design platform integration.",
   "main": "apps/electron/main.js",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
   "scripts": {
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:electron\"",
     "dev:stack": "concurrently -k -n web,mock,api \"node node_modules/next/dist/bin/next dev apps/web -p 3100 --webpack\" \"node tools/mock-design-platform.js\" \"node dist/apps/api/main.js\"",
@@ -16,6 +20,7 @@
     "build:web": "node tools/build-web.js",
     "test": "node --test tests/*.test.js",
     "config:doctor": "..\\config-readiness-doctor.cmd",
+    "release:gate": "node tools/production-release-gate.js",
     "mock:design-platform": "node tools/mock-design-platform.js",
     "ports:start": "node tools/ports-stack-starter.js",
     "ports:start:mock": "node tools/ports-stack-starter.js --mock-design",
@@ -72,6 +77,8 @@
     "wechat:safe:stop": "node tools/start-wechat-safe-workers.js --stop",
     "data:reset": "node tools/reset-local-store.js",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:migrate:check": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
     "start:api": "node dist/apps/api/main.js",
     "start:web": "set PORT=3100&& cd /d apps\\web\\.next\\standalone\\apps\\web&& node server.js"
@@ -102,6 +109,7 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.23",
+    "@types/multer": "^1.4.12",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

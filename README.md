@@ -65,6 +65,14 @@ tools/quality/run_tests.bat
 
 如果本机安装了 `pytest`，会跑完整测试；否则自动运行冒烟测试。
 
+正式发布评审前运行不依赖真实密钥的生产门禁：
+
+```bat
+production-release-gate.cmd
+```
+
+门禁会统一检查运行时版本、依赖锁、Prisma、测试、安全扫描、端口、API/Web 构建和桌面入口，并在 `desktop/.runtime/production-release-gate/latest.md` 生成 `PASS` / `BLOCKED` / `FAIL` 报告。真实数据库、密钥与渠道联调会明确保留为 `BLOCKED`，详见 [生产发布清单](docs/PRODUCTION_RELEASE_CHECKLIST.md)。
+
 7. 启动客服主程序：
 
 ```bat

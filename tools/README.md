@@ -22,6 +22,7 @@
 - `quality/run_web_console_http_smoke.bat`: 启动临时 HTTP 服务检查真实 Web 响应
 - `quality/run_web_console_smoke.bat`: 检查 Web Console 关键接口
 - `quality/run_launch_readiness.bat --strict`: 上线前严格缺口检查
+- 根目录 `production-release-gate.cmd`: 运行不依赖真实密钥的生产代码门禁，生成 `PASS` / `BLOCKED` / `FAIL` 报告；不打包、不上传
 
 项目模块入口：
 

@@ -1,0 +1,84 @@
+# 生产发布门禁与发布清单
+
+本清单用于在 Windows 上判断当前提交是否具备进入预发布环境的条件。门禁只验证仓库内可重复检查的内容，不读取真实密钥、不执行真实发送、不打包、不选择安装包输出目录、不上传远端，也不会自动终止占用端口的进程。
+
+## 一键入口
+
+在仓库根目录运行：
+
+```bat
+production-release-gate.cmd
+```
+
+也可以在 `desktop` 目录运行：
+
+```bat
+npm.cmd run release:gate
+```
+
+固定报告位置：
+
+- `desktop/.runtime/production-release-gate/latest.md`
+- `desktop/.runtime/production-release-gate/latest.json`
+- 每项命令日志：`desktop/.runtime/production-release-gate/logs/`
+
+这些文件位于已忽略的 `.runtime` 目录，不进入 Git。
+
+## 状态口径
+
+- `PASS`：本机可重复执行的代码、构建、测试和静态安全检查通过。
+- `BLOCKED`：代码检查未必失败，但缺少真实外部环境、授权、数据库证据或空闲端口；禁止发布。
+- `FAIL`：仓库、构建、测试、安全或本地工具链检查失败；禁止发布。
+
+Windows 入口退出码为：`PASS=0`、`FAIL=1`、`BLOCKED=2`。默认不接入真实密钥，因此即使所有本地检查通过，真实生产依赖仍会保留为 `BLOCKED`，直到发布负责人完成下面的人工证据清单。
+
+## 自动门禁范围
+
+门禁必须完成以下检查：
+
+1. Node.js `>=20.0.0`、npm `>=10.0.0`，Python `>=3.10.0`。
+2. `package.json` 与 `package-lock.json` 的依赖、开发依赖和 engines 一致；`requirements-dev.txt` 复用 `requirements.txt`。
+3. Prisma schema 校验、Prisma Client 生成、离线 SQL 生成，以及迁移目录/SQL 文件完整性检查。
+4. 复用 `ports:preflight:mock:free` 检查 3100、3200、3700 端口冲突；发现占用只报告 `BLOCKED`，不杀进程。
+5. 复用 Python 测试入口、Node 全量测试和身份绑定/发送护栏/桌面启动等关键安全测试。
+6. 分别执行 API 与 Web 生产构建；端口被占用时不破坏运行中的桌面服务，Web 构建记为 `BLOCKED`。
+7. 扫描 Git 候选文件中的私钥、禁止提交的密钥文件、高置信度供应商令牌和硬编码敏感赋值；报告只记录文件、行号和规则，不记录密钥值。
+8. 校验 `package.json` 的 Electron main、preload、`run_desktop.bat`、Windows 门禁入口和本发布清单。
+
+门禁不会运行 `electron-builder`、PyInstaller、Inno Setup、NSIS、`git push` 或任何真实发送命令。
+
+## 预发布人工证据（必须清零 BLOCKED）
+
+### 数据库与队列
+
+- [ ] 已确认目标 PostgreSQL 的现有基线与仓库迁移历史一致。
+- [ ] 已在隔离的预发布数据库执行并留存 `prisma migrate deploy --schema prisma/schema.prisma` 输出。
+- [ ] 已备份数据库并完成一次迁移回滚/恢复演练。
+- [ ] 若启用 BullMQ/Redis，已验证目标 Redis 的连接、权限、持久化和故障提示。
+
+不要在本地门禁中传入生产 `DATABASE_URL`。数据库迁移必须在受控预发布环境执行：
+
+```bat
+cd desktop
+npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
+```
+
+### 密钥与网络
+
+- [ ] 真实 AI、数据库、Redis、企业微信/微信和设计平台凭据由目标环境的密钥管理能力注入，未写入仓库或报告。
+- [ ] 生产 API/Web 使用明确的监听地址、反向代理、HTTPS、访问控制与日志脱敏策略。
+- [ ] 企业微信回调使用可达的公开 HTTPS 地址，并完成签名、Token/AESKey 和重放保护验收。
+- [ ] 真实设计平台健康检查、超时、重试、回调和文件访问边界已验收。
+
+### Windows 桌面与渠道
+
+- [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
+- [ ] 微信客户端版本、登录账号、窗口识别和人工接管流程已由授权操作员验收。
+- [ ] 真实发送保持显式授权和审计，未通过测试代码或本地脚本绕过发送护栏。
+- [ ] 端口 3100、3200、3700 的占用来源已确认，发布前无未知进程。
+
+## 发布判定
+
+1. 任一自动项为 `FAIL`：停止发布，修复后完整重跑。
+2. 任一自动项或人工项为 `BLOCKED`：停止发布，补齐外部证据后再评审。
+3. 自动项全部 `PASS` 且人工清单全部完成：可以进入独立的打包/部署流程；本门禁本身不负责打包或上传。
