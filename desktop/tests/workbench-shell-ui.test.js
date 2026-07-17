@@ -93,6 +93,7 @@ test("topbar exposes optional real search, refresh, and text-labelled health sta
 
 test("shell provides one composable main landmark and accepts legacy compatibility classes", () => {
   assert.match(shell, /\[styles\.shellFrame, className\]\.filter\(Boolean\)\.join\(" "\)/);
+  assert.match(shell, /data-has-topbar=\{topbar \? "true" : "false"\}/);
   assert.match(shell, /<main className=\{styles\.shellContent\} aria-label=\{contentLabel\}>/);
   assert.doesNotMatch(shell, /<main[\s\S]*<main/);
   assert.doesNotMatch(shell, /<section className=\{styles\.shellContent\}/);
@@ -103,6 +104,7 @@ test("shared CSS uses compact Tencent tokens and a complete 390px mobile bottom-
   assert.match(css, /--workbench-surface:\s*var\(--wk-color-surface\);/);
   assert.match(css, /grid-template-columns:\s*var\(--wk-sidebar-width\) minmax\(0, 1fr\);/);
   assert.match(css, /grid-template-rows:\s*60px minmax\(0, 1fr\);/);
+  assert.match(css, /\.mainColumn\[data-has-topbar="false"\]\s*\{\s*grid-template-rows:\s*minmax\(0, 1fr\);/);
   assert.match(css, /min-height:\s*34px;/);
   assert.doesNotMatch(css, /linear-gradient|radial-gradient/i);
 

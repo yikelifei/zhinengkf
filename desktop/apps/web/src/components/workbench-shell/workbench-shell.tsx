@@ -21,7 +21,7 @@ export function WorkbenchShell({
         onSelect={onSelectSection}
         groups={navigationGroups}
       />
-      <div className={styles.mainColumn}>
+      <div className={styles.mainColumn} data-has-topbar={topbar ? "true" : "false"}>
         {topbar ? <AppTopbar {...topbar} /> : null}
         <main className={styles.shellContent} aria-label={contentLabel}>
           {children}

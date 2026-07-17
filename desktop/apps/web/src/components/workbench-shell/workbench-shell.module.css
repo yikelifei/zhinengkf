@@ -264,6 +264,10 @@
   grid-template-rows: 60px minmax(0, 1fr);
 }
 
+.mainColumn[data-has-topbar="false"] {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .topbar {
   position: relative;
   z-index: 10;
@@ -646,6 +650,10 @@ button.healthSummary:hover .healthDetail {
   .mainColumn {
     height: 100%;
     grid-template-rows: 54px minmax(0, 1fr);
+  }
+
+  .mainColumn[data-has-topbar="false"] {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .topbar {
