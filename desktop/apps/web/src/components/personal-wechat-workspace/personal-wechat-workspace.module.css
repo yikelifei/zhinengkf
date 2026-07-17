@@ -1,0 +1,151 @@
+.workspace {
+  display: grid;
+  gap: var(--wk-space-4, 16px);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--wk-border, #e5e7eb);
+  border-radius: var(--wk-radius-lg, 10px);
+  background: var(--wk-surface, #fff);
+}
+
+.header h2 {
+  margin: 0;
+  color: var(--wk-text, #111827);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: var(--wk-text-muted, #667085);
+  font-size: 12px;
+}
+
+.lockedStatus {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.headerActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--wk-border, #e5e7eb);
+  border-radius: 6px;
+  background: var(--wk-surface, #fff);
+  color: var(--wk-text, #111827);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.headerActions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wk-accent, #1677ff) 38%, transparent);
+  outline-offset: 2px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--wk-border, #e5e7eb);
+}
+
+.tabs button {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--wk-text-muted, #667085);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tabs button::after {
+  position: absolute;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  content: "";
+}
+
+.tabs button[data-active="true"] {
+  color: var(--wk-accent, #1677ff);
+  font-weight: 650;
+}
+
+.tabs button[data-active="true"]::after {
+  background: var(--wk-accent, #1677ff);
+}
+
+.tabs button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wk-accent, #1677ff) 38%, transparent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 640px) {
+  .workspace {
+    gap: 10px;
+  }
+
+  .header {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .header p {
+    max-width: 28ch;
+  }
+
+  .lockedStatus {
+    max-width: 118px;
+    white-space: normal;
+  }
+
+  .headerActions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .tabs button {
+    flex: 1 0 auto;
+    justify-content: center;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import type {
   AutomationRun,
@@ -13,6 +13,7 @@ import type {
 } from "../lib/api";
 import {
   AlertTriangle,
+  ArrowLeft,
   Bell,
   Bot,
   Boxes,
@@ -24,11 +25,14 @@ import {
   CircleDollarSign,
   CreditCard,
   Download,
+  FileText,
   FileUp,
   Image as ImageIcon,
   Layers,
+  LayoutDashboard,
   LockKeyhole,
   MessageCircle,
+  Paperclip,
   Monitor,
   Network,
   Route,
@@ -60,6 +64,8 @@ import {
   cancelDesignJob,
   cancelSendTask,
   Conversation,
+  ConversationOperationsQueue,
+  ConversationTimelineItem,
   captureWindowObserverOnce,
   correctRouteEvaluation,
   createDemoDesignJob,
@@ -81,6 +87,7 @@ import {
   DesignPlatformSmokeTestResult,
   DesignJobPreflightResult,
   downloadSkuImportTemplate,
+  disablePersonalWechatRpaInstance,
   executeDryRunSend,
   executeSendTask,
   evaluateRoute,
@@ -96,6 +103,8 @@ import {
   getDesignPlatformReadiness,
   getAssets,
   getNotifications,
+  getOperatorAccessPolicy,
+  getOperatorAccessStatus,
   getOrderConfirmationPreview,
   getOrderDrafts,
   getQuotePreview,
@@ -115,6 +124,10 @@ import {
   getWechatAccounts,
   getWechatChannelStatus,
   getWechatConversations,
+  getWechatWorkProductionPreflight,
+  getPersonalWechatRpaRegistry,
+  getConversationOperationsQueue,
+  getConversationTimeline,
   getWechatWindowSnapshots,
   getWindowObserverStatus,
   importChatTranscript,
@@ -123,12 +136,16 @@ import {
   localDesignImageUrl,
   loginDesignPlatform,
   markAllNotificationsRead,
+  markConversationMessagesRead,
   markNotificationRead,
   markManualReview,
   mergeAutomationStatusRun,
   NotificationItem,
+  OperatorAccessPolicy,
+  OperatorAccessStatus,
   OrderConfirmationPreview,
   OrderDraft,
+  PersonalWechatRpaRegistry,
   preflightDesignJob,
   previewSkuImportFile,
   previewSkuImportText,
@@ -140,6 +157,7 @@ import {
   QuotePreview,
   queueOrderConfirmation,
   queueOrderFollowup,
+  queueManualConversationReply,
   queueQuoteSend,
   quickConfirmSend,
   recommendBundle,
@@ -168,6 +186,7 @@ import {
   scanSendOperations,
   scanWindowSnapshotInbox,
   selectDesignImage,
+  savePersonalWechatRpaInstance,
   setConversationManualLock,
   SafeSendQueueResult,
   SendOperationsScanResult,
@@ -195,6 +214,7 @@ import {
   TrainingSample,
   TrainingOverview,
   updateOrderDraft,
+  updateConversationOperations,
   updateDesignPlatformConfig,
   updateQuote,
   upsertSku,
@@ -202,20 +222,76 @@ import {
   verifyQuotePaymentProofAndQueueConfirmation,
   validateSendTask,
   validateSendTaskCurrentWindow,
+  validatePersonalWechatRpaInstance,
   WechatAccount,
   WechatChannelKey,
   WechatChannelStatus,
   WechatChannelStatusItem,
+  WechatWorkProductionReadiness,
   WechatWindowSnapshot,
   WindowObserverStatus,
   WindowSnapshotInboxScanResult,
 } from "../lib/api";
+import {
+  OperationsOverview,
+  type OverviewAction,
+  type OverviewChannel,
+  type OverviewConversation,
+  type OverviewMetric,
+  type OverviewTone,
+} from "../components/operations-overview";
+import {
+  ConversationOperationsPanel,
+  type ConversationOperationsPatch as ConversationOperationsPanelPatch,
+} from "../components/conversation-operations-panel";
+import { OperatorAccessPanel } from "../components/operator-access-panel";
+import {
+  PersonalWechatInstancesPanel,
+  type PersonalWechatInstanceDraft,
+} from "../components/personal-wechat-instances-panel";
+import { WechatWorkReadinessPanel } from "../components/wechat-work-readiness-panel";
+import { IntegrationCenterHeader } from "../components/integration-center/integration-center-header";
+import { WorkbenchShell } from "../components/workbench-shell/workbench-shell";
+import { DEFAULT_WORKBENCH_NAVIGATION } from "../components/workbench-shell/navigation";
+import { ConversationWorkbench } from "../components/conversation-workbench/conversation-workbench";
+import {
+  PersonalWechatWorkspace,
+  type PersonalWechatWorkspaceAccount,
+  type PersonalWechatWorkspaceTask,
+} from "../components/personal-wechat-workspace";
+import type {
+  ConversationWorkbenchContext,
+  ConversationWorkbenchInbox,
+  ConversationWorkbenchThread,
+} from "../components/conversation-workbench/types";
 
 const WINDOW_SNAPSHOT_MAX_AGE_SECONDS = 30;
 const AUTO_SELECT_SKILL_SUGGESTION_MIN_SAMPLES = 2;
 const AUTO_SELECT_SKILL_SUGGESTION_MIN_CONFIDENCE = 80;
 const TRAINING_SAMPLE_PAGE_SIZE = 12;
 const TRAINING_SAMPLE_BATCH_REVIEW_LIMIT = 100;
+const MANUAL_REPLY_MAX_LENGTH = 2000;
+const CURRENT_OPERATOR = "人工客服";
+
+type ConversationMobilePane = "inbox" | "thread" | "context";
+
+function isWorkWechatConversation(conversation: Conversation) {
+  return (
+    conversation.channel === "work_wechat" ||
+    conversation.channel === "wechat_work_kf" ||
+    conversation.customer?.source === "wechat_work_kf"
+  );
+}
+
+function isPersonalWechatConversation(conversation: Conversation) {
+  return conversation.channel === "personal_wechat" || conversation.customer?.source === "personal_wechat";
+}
+
+function conversationChannelDisplayLabel(conversation: Conversation) {
+  if (isWorkWechatConversation(conversation)) return wechatConversationChannelLabel("work_wechat");
+  if (isPersonalWechatConversation(conversation)) return wechatConversationChannelLabel("personal_wechat");
+  return wechatConversationChannelLabel(conversation.channel);
+}
 
 function windowSnapshotScanSummary(result: WindowSnapshotInboxScanResult) {
   const pending = Number(result.pending || 0);
@@ -406,10 +482,12 @@ const dealProgressFilterOptions = [
 ];
 
 const workspaceNavItems = [
+  { id: "overview-center", label: "工作台", Icon: LayoutDashboard },
   { id: "design-platform-config", label: "平台配置", Icon: Settings2 },
   { id: "asset-center", label: "素材", Icon: FileUp },
   { id: "conversation-center", label: "消息", Icon: MessageCircle },
   { id: "wechat-channel-center", label: "微信接入", Icon: Network },
+  { id: "personal-wechat-center", label: "个人微信", Icon: Smartphone },
   { id: "design-center", label: "设计中心", Icon: ImageIcon },
   { id: "sku-library", label: "商品库", Icon: Store },
   { id: "notice-center", label: "提醒", Icon: Bell },
@@ -1483,13 +1561,64 @@ export default function HomePage() {
   const [selectedTrainingSampleIds, setSelectedTrainingSampleIds] = useState<string[]>([]);
   const [wechatAccounts, setWechatAccounts] = useState<WechatAccount[]>([]);
   const [wechatChannelStatus, setWechatChannelStatus] = useState<WechatChannelStatus | null>(null);
+  const [personalWechatRpaRegistry, setPersonalWechatRpaRegistry] = useState<PersonalWechatRpaRegistry | null>(null);
+  const [personalWechatRpaError, setPersonalWechatRpaError] = useState("");
+  const [wechatWorkReadiness, setWechatWorkReadiness] = useState<WechatWorkProductionReadiness | null>(null);
+  const [wechatWorkReadinessError, setWechatWorkReadinessError] = useState("");
+  const [operatorAccessStatus, setOperatorAccessStatus] = useState<OperatorAccessStatus | null>(null);
+  const [operatorAccessPolicy, setOperatorAccessPolicy] = useState<OperatorAccessPolicy | null>(null);
   const [trainingWorkbenchView, setTrainingWorkbenchView] = useState<"import" | "review" | "skills">("import");
   const [wechatWorkbenchView, setWechatWorkbenchView] = useState<"channels" | "flow" | "config">("channels");
+  const [accountWorkbenchView, setAccountWorkbenchView] = useState<"wechat" | "access">("wechat");
   const [sendWorkbenchView, setSendWorkbenchView] = useState<"queue" | "blocked" | "diagnostics">("queue");
   const [reviewWorkbenchView, setReviewWorkbenchView] = useState<"handoff" | "design" | "quote" | "order" | "logs">("handoff");
   const [highValueOrderReviewFilter, setHighValueOrderReviewFilter] = useState<(typeof highValueOrderReviewFilterOptions)[number]["value"]>("all");
   const [quoteWorkbenchView, setQuoteWorkbenchView] = useState<"overview" | "actions" | "quotes" | "orders">("overview");
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationOperationsQueue, setConversationOperationsQueue] = useState<ConversationOperationsQueue>({
+    records: [],
+    total: 0,
+    limit: 100,
+    offset: 0,
+    summary: {
+      total: 0,
+      assigned: 0,
+      unassigned: 0,
+      overdue: 0,
+      slaOverdue: 0,
+      firstResponseOverdue: 0,
+      firstResponseBreached: 0,
+      noSla: 0,
+      invalidConfiguration: 0,
+      priorities: { low: 0, normal: 0, high: 0, urgent: 0 },
+      statuses: { open: 0, pending: 0, resolved: 0, closed: 0 },
+    },
+  });
+  const [conversationOperationsError, setConversationOperationsError] = useState("");
+  const [conversationOperationsLoadState, setConversationOperationsLoadState] = useState<
+    "loading" | "ready" | "error" | "stale"
+  >("loading");
+  const [conversationOperationsLoadError, setConversationOperationsLoadError] = useState("");
+  const [conversationOperationsUpdatedAt, setConversationOperationsUpdatedAt] = useState("");
+  const [conversationTimeline, setConversationTimeline] = useState<ConversationTimelineItem[]>([]);
+  const [conversationTimelineLoading, setConversationTimelineLoading] = useState(false);
+  const [conversationTimelineError, setConversationTimelineError] = useState("");
+  const [manualReplyText, setManualReplyText] = useState("");
+  const [manualReplyFeedback, setManualReplyFeedback] = useState("");
+  const [manualReplySuggestion, setManualReplySuggestion] = useState<RouteEvaluation | null>(null);
+  const [manualReplySuggestionLoading, setManualReplySuggestionLoading] = useState(false);
+  const [manualReplySuggestionError, setManualReplySuggestionError] = useState("");
+  const [manualReplySuggestionSourceText, setManualReplySuggestionSourceText] = useState("");
+  const manualReplySuggestionRequestId = useRef(0);
+  const [conversationMobilePane, setConversationMobilePane] = useState<ConversationMobilePane>("inbox");
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationScope, setConversationScope] = useState<"all" | "manual" | "ai">("all");
+  const [conversationChannel, setConversationChannel] = useState<"all" | "work_wechat" | "personal_wechat">("all");
+  const [conversationStatus, setConversationStatus] = useState<"all" | "unassigned" | "overdue" | "manual">("all");
+  const [conversationSort, setConversationSort] = useState<"priority" | "latest" | "oldest">("priority");
+  const [conversationPage, setConversationPage] = useState(1);
+  const [conversationPageSize, setConversationPageSize] = useState(10);
+  const [conversationInboxCollapsed, setConversationInboxCollapsed] = useState(false);
   const [sendTasks, setSendTasks] = useState<SendTask[]>([]);
   const [sendAttempts, setSendAttempts] = useState<SendAttempt[]>([]);
   const [sendAdapter, setSendAdapter] = useState<SendAdapterInfo | null>(null);
@@ -1569,7 +1698,7 @@ export default function HomePage() {
   const [orderPaymentFilter, setOrderPaymentFilter] = useState<string>("all");
   const [dealNextStepFilter, setDealNextStepFilter] = useState<string>("all");
   const [dealProgressFilter, setDealProgressFilter] = useState<string>("all");
-  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<string>("design-center");
+  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<string>("overview-center");
   const [noticeWorkbenchView, setNoticeWorkbenchView] = useState<"automation" | "issues" | "history">("automation");
   const [activeAutomationIssueKey, setActiveAutomationIssueKey] = useState<string>("");
   const [skuImportText, setSkuImportText] = useState<string>(`SKU编号\t商品名称\t商品类型\t分类\t成本价\t售价\t库存\t场景标签\t主图\t多角度图\t尺寸\t重量g\t材质\t供应商\t交期天数\t替代SKU\t搭配规则
@@ -1622,7 +1751,11 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 customerId: activeConversationFilter.customerId,
               }
             : {});
-    const [jobRows, skuRows, auditRows, skuLogRows, agentRows, importRows, sampleRows, correctionSampleRows, overviewRows, suggestionRows, accountRows, channelStatusRows, conversationRows, sendRows, attemptRows, adapterInfo, bridgeRows, bridgeStatusRows, windowRows, windowObserverRows, routeRows, quoteRows, orderRows, noticeRows, reviewRows, health, readiness, configResult, automation, automationReadinessResult] = await Promise.all([
+    setConversationOperationsLoadError("");
+    setConversationOperationsLoadState((current) =>
+      current === "ready" ? "ready" : current === "stale" ? "stale" : "loading",
+    );
+    const results = await Promise.allSettled([
       getDesignJobs(identityFilters),
       getSkus(includeInactiveSkus),
       getSkuCatalogAudit(),
@@ -1639,119 +1772,192 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       getTrainingOverview(identityFilters),
       getSkillSuggestions(identityFilters),
       getWechatAccounts(),
-      getWechatChannelStatus(identityFilters).catch(() => null as WechatChannelStatus | null),
+      getWechatChannelStatus(identityFilters),
+      getPersonalWechatRpaRegistry(),
+      getWechatWorkProductionPreflight(),
       getWechatConversations(),
+      getConversationOperationsQueue(),
       getSendTasks(identityFilters),
       getSendAttempts(undefined, identityFilters),
       getSendAdapter(),
-      getBridgeOutbox(identityFilters).catch(() => ({ pending: [], ignored: [] })),
-      getBridgeStatus(identityFilters).catch(() => ({
-        adapter: {
-          name: "windows_bridge",
-          label: "Windows 微信桥接适配器",
-          realSend: true,
-          description: "桥接状态暂不可用。",
-        },
-        worker: { ok: false, status: "unavailable", message: "桥接状态接口不可用" },
-        outbox: { pendingCount: 0, ignoredCount: 0, pending: [] },
-        inbox: { pendingCount: 0, pending: [] },
-        locks: { activeCount: 0, staleCount: 0, active: [] },
-      })),
+      getBridgeOutbox(identityFilters),
+      getBridgeStatus(identityFilters),
       getWechatWindowSnapshots(identityFilters),
-      getWindowObserverStatus().catch(() => ({
-        ok: false,
-        status: "unavailable",
-        ageSeconds: null,
-        message: "窗口观察器状态接口不可用",
-      })),
+      getWindowObserverStatus(),
       getRouteEvaluations(identityFilters),
       getQuotes(identityFilters),
       getOrderDrafts(identityFilters),
       getNotifications(false, identityFilters),
       getReviewCenter(identityFilters),
-      getDesignPlatformHealth().catch((error) => ({
-        ok: false,
-        latencyMs: 0,
-        baseUrl: "",
-        adapter: "unknown",
-        errorMessage: error instanceof Error ? error.message : "设计平台健康检查失败",
-      })),
-      getDesignPlatformReadiness().catch((error) => ({
-        ok: false,
-        canSubmitFormalGeneration: false,
-        latencyMs: 0,
-        baseUrl: "",
-        adapter: "unknown",
-        checks: [],
-        nextSteps: [error instanceof Error ? error.message : "设计平台正式出图就绪检查失败"],
-        config: { hasApiKey: false, hasAccessToken: false, hasCookie: false, hasDeviceId: false },
-      })),
-      getDesignPlatformConfig().catch(() => ({
-        ok: false,
-        config: {
-          adapter: "unknown",
-          baseUrl: "",
-          hasApiKey: false,
-          hasAccessToken: false,
-          hasCookie: false,
-          hasDeviceId: false,
-        },
-      })),
+      getOperatorAccessStatus(),
+      getOperatorAccessPolicy(),
+      getDesignPlatformHealth(),
+      getDesignPlatformReadiness(),
+      getDesignPlatformConfig(),
       getAutomationStatus(),
       getAutomationReadiness(),
-    ]);
-    setJobs(jobRows);
-    setSkus(skuRows);
-    setCatalogAudit(auditRows);
-    setSkuChangeLogs(skuLogRows);
-    setAgents(agentRows);
-    setChatImports(importRows);
-    setTrainingSamples(sampleRows);
-    setLatestTrainingCorrectionSamples(correctionSampleRows);
-    setTrainingOverview(overviewRows);
-    const typedSuggestionRows = suggestionRows as SkillSuggestion[];
-    setSkillSuggestions(typedSuggestionRows);
-    setSkillSuggestionAgentFilter((current) =>
-      current === "all" || typedSuggestionRows.some((suggestion) => skillSuggestionAgentFilterKey(suggestion) === current)
-        ? current
-        : "all",
-    );
-    setSelectedSkillSuggestionKeys((current) => {
-      const nextKeys = typedSuggestionRows.map(skillSuggestionKey);
-      const safeKeys = typedSuggestionRows.filter(isSkillSuggestionAutoSelected).map(skillSuggestionKey);
-      const validKeys = new Set(nextKeys);
-      const blockedKeys = new Set(typedSuggestionRows.filter(isSkillSuggestionBlocked).map(skillSuggestionKey));
-      const kept = current.filter((key) => validKeys.has(key) && !blockedKeys.has(key));
-      return kept.length ? kept : safeKeys;
-    });
-    setWechatAccounts(accountRows);
-    if (channelStatusRows) setWechatChannelStatus(channelStatusRows);
-    setConversations(conversationRows);
-    setSendTasks(sendRows);
-    setSendAttempts(attemptRows);
-    setSendAdapter(adapterInfo);
-    setBridgeOutbox(bridgeRows);
-    setBridgeStatus(bridgeStatusRows);
-    setWindowSnapshots(windowRows);
-    setWindowObserverStatus(windowObserverRows);
-    setRouteEvaluations(routeRows);
-    setQuotes(quoteRows);
-    setOrderDrafts(orderRows);
-    setNotifications(noticeRows);
-    setReviewCenter(reviewRows);
-    setSelectedSkuCodes((current) => current.filter((skuCode) => skuRows.some((sku) => sku.skuCode === skuCode)));
-    setPlatformHealth(health);
-    setPlatformReadiness(readiness);
-    setPlatformConfig(configResult.config);
-    setPlatformConfigForm((current) => designPlatformConfigSummaryToForm(configResult.config, current));
-    setAutomationStatus(automation);
-    setAutomationReadiness(automationReadinessResult);
-    setActiveId((current) => current || jobRows[0]?.id || "");
-    setActiveConversationId((current) => {
-      if (identityFilterOverride === null) return "";
-      if (current && conversationRows.some((conversation) => conversation.id === current)) return current;
-      return conversationRows[0]?.id || "";
-    });
+    ] as const);
+    const [
+      jobResult,
+      skuResult,
+      auditResult,
+      skuLogResult,
+      agentResult,
+      importResult,
+      sampleResult,
+      correctionSampleResult,
+      trainingOverviewResult,
+      suggestionResult,
+      accountResult,
+      channelStatusResult,
+      personalWechatRpaResult,
+      wechatWorkReadinessResult,
+      conversationResult,
+      conversationOperationsResult,
+      sendResult,
+      attemptResult,
+      adapterResult,
+      bridgeResult,
+      bridgeStatusResult,
+      windowResult,
+      windowObserverResult,
+      routeResult,
+      quoteResult,
+      orderResult,
+      noticeResult,
+      reviewResult,
+      operatorAccessStatusResult,
+      operatorAccessPolicyResult,
+      healthResult,
+      readinessResult,
+      configResult,
+      automationResult,
+      automationReadinessResult,
+    ] = results;
+    const failedSections: string[] = [];
+    const failureMessage = (result: PromiseRejectedResult, fallback: string) =>
+      result.reason instanceof Error && result.reason.message.trim() ? result.reason.message : fallback;
+
+    if (jobResult.status === "fulfilled") {
+      setJobs(jobResult.value);
+      setActiveId((current) => current || jobResult.value[0]?.id || "");
+    } else failedSections.push("设计任务");
+    if (skuResult.status === "fulfilled") {
+      setSkus(skuResult.value);
+      setSelectedSkuCodes((current) => current.filter((skuCode) => skuResult.value.some((sku) => sku.skuCode === skuCode)));
+    } else failedSections.push("商品库");
+    if (auditResult.status === "fulfilled") setCatalogAudit(auditResult.value);
+    else failedSections.push("商品审计");
+    if (skuLogResult.status === "fulfilled") setSkuChangeLogs(skuLogResult.value);
+    else failedSections.push("商品变更");
+    if (agentResult.status === "fulfilled") setAgents(agentResult.value);
+    else failedSections.push("智能体");
+    if (importResult.status === "fulfilled") setChatImports(importResult.value);
+    else failedSections.push("聊天导入");
+    if (sampleResult.status === "fulfilled") setTrainingSamples(sampleResult.value);
+    else failedSections.push("训练样本");
+    if (correctionSampleResult.status === "fulfilled") setLatestTrainingCorrectionSamples(correctionSampleResult.value);
+    else failedSections.push("纠正样本");
+    if (trainingOverviewResult.status === "fulfilled") setTrainingOverview(trainingOverviewResult.value);
+    else failedSections.push("训练总览");
+    if (suggestionResult.status === "fulfilled") {
+      const typedSuggestionRows = suggestionResult.value as SkillSuggestion[];
+      setSkillSuggestions(typedSuggestionRows);
+      setSkillSuggestionAgentFilter((current) =>
+        current === "all" || typedSuggestionRows.some((suggestion) => skillSuggestionAgentFilterKey(suggestion) === current)
+          ? current
+          : "all",
+      );
+      setSelectedSkillSuggestionKeys((current) => {
+        const nextKeys = typedSuggestionRows.map(skillSuggestionKey);
+        const safeKeys = typedSuggestionRows.filter(isSkillSuggestionAutoSelected).map(skillSuggestionKey);
+        const validKeys = new Set(nextKeys);
+        const blockedKeys = new Set(typedSuggestionRows.filter(isSkillSuggestionBlocked).map(skillSuggestionKey));
+        const kept = current.filter((key) => validKeys.has(key) && !blockedKeys.has(key));
+        return kept.length ? kept : safeKeys;
+      });
+    } else failedSections.push("技能建议");
+    if (accountResult.status === "fulfilled") setWechatAccounts(accountResult.value);
+    else failedSections.push("微信账号");
+    if (channelStatusResult.status === "fulfilled") setWechatChannelStatus(channelStatusResult.value);
+    else failedSections.push("微信通道");
+    if (personalWechatRpaResult.status === "fulfilled") {
+      setPersonalWechatRpaRegistry(personalWechatRpaResult.value);
+      setPersonalWechatRpaError("");
+    } else {
+      setPersonalWechatRpaError(failureMessage(personalWechatRpaResult, "个人微信实例状态读取失败"));
+      failedSections.push("个人微信实例");
+    }
+    if (wechatWorkReadinessResult.status === "fulfilled") {
+      setWechatWorkReadiness(wechatWorkReadinessResult.value);
+      setWechatWorkReadinessError("");
+    } else {
+      setWechatWorkReadinessError(failureMessage(wechatWorkReadinessResult, "企业微信正式接入预检失败"));
+      failedSections.push("企业微信预检");
+    }
+    if (conversationResult.status === "fulfilled") {
+      setConversations(conversationResult.value);
+      setActiveConversationId((current) => {
+        if (identityFilterOverride === null) return "";
+        if (current && conversationResult.value.some((conversation) => conversation.id === current)) return current;
+        return conversationResult.value[0]?.id || "";
+      });
+    } else failedSections.push("客户会话");
+    if (conversationOperationsResult.status === "fulfilled") {
+      setConversationOperationsQueue(conversationOperationsResult.value);
+      setConversationOperationsError("");
+      setConversationOperationsLoadError("");
+      setConversationOperationsUpdatedAt(new Date().toISOString());
+      setConversationOperationsLoadState("ready");
+    } else {
+      setConversationOperationsLoadError(failureMessage(conversationOperationsResult, "会话分配与 SLA 状态读取失败"));
+      setConversationOperationsLoadState((current) => current === "stale" || current === "ready" ? "stale" : "error");
+      failedSections.push("会话 SLA");
+    }
+    if (sendResult.status === "fulfilled") setSendTasks(sendResult.value);
+    else failedSections.push("发送任务");
+    if (attemptResult.status === "fulfilled") setSendAttempts(attemptResult.value);
+    else failedSections.push("发送尝试");
+    if (adapterResult.status === "fulfilled") setSendAdapter(adapterResult.value);
+    else failedSections.push("发送适配器");
+    if (bridgeResult.status === "fulfilled") setBridgeOutbox(bridgeResult.value);
+    else failedSections.push("桥接发件箱");
+    if (bridgeStatusResult.status === "fulfilled") setBridgeStatus(bridgeStatusResult.value);
+    else failedSections.push("桥接状态");
+    if (windowResult.status === "fulfilled") setWindowSnapshots(windowResult.value);
+    else failedSections.push("微信窗口");
+    if (windowObserverResult.status === "fulfilled") setWindowObserverStatus(windowObserverResult.value);
+    else failedSections.push("窗口观察器");
+    if (routeResult.status === "fulfilled") setRouteEvaluations(routeResult.value);
+    else failedSections.push("路由评估");
+    if (quoteResult.status === "fulfilled") setQuotes(quoteResult.value);
+    else failedSections.push("报价");
+    if (orderResult.status === "fulfilled") setOrderDrafts(orderResult.value);
+    else failedSections.push("订单");
+    if (noticeResult.status === "fulfilled") setNotifications(noticeResult.value);
+    else failedSections.push("通知");
+    if (reviewResult.status === "fulfilled") setReviewCenter(reviewResult.value);
+    else failedSections.push("审核中心");
+    if (operatorAccessStatusResult.status === "fulfilled") setOperatorAccessStatus(operatorAccessStatusResult.value);
+    else failedSections.push("权限状态");
+    if (operatorAccessPolicyResult.status === "fulfilled") setOperatorAccessPolicy(operatorAccessPolicyResult.value);
+    else failedSections.push("权限策略");
+    if (healthResult.status === "fulfilled") setPlatformHealth(healthResult.value);
+    else failedSections.push("设计平台健康");
+    if (readinessResult.status === "fulfilled") setPlatformReadiness(readinessResult.value);
+    else failedSections.push("设计平台预检");
+    if (configResult.status === "fulfilled") {
+      setPlatformConfig(configResult.value.config);
+      setPlatformConfigForm((current) => designPlatformConfigSummaryToForm(configResult.value.config, current));
+    } else failedSections.push("设计平台配置");
+    if (automationResult.status === "fulfilled") setAutomationStatus(automationResult.value);
+    else failedSections.push("自动化状态");
+    if (automationReadinessResult.status === "fulfilled") setAutomationReadiness(automationReadinessResult.value);
+    else failedSections.push("自动化预检");
+
+    if (failedSections.length) {
+      setMessage(`部分数据刷新失败：${failedSections.slice(0, 6).join("、")}${failedSections.length > 6 ? `等 ${failedSections.length} 项` : ""}。其他成功数据已更新。`);
+    }
   }
 
   function activeIdentityFilters() {
@@ -1813,6 +2019,82 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  async function refreshWechatWorkReadiness() {
+    try {
+      setBusy("刷新企业微信预检");
+      setWechatWorkReadinessError("");
+      const readiness = await getWechatWorkProductionPreflight();
+      setWechatWorkReadiness(readiness);
+      setMessage(
+        readiness.local.ready
+          ? `企业微信本机预检已通过，外部验收仍有 ${readiness.external.blockers.length} 项。`
+          : `企业微信本机预检还有 ${readiness.local.checks.filter((check) => check.status !== "ready").length} 项待处理。`,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "企业微信正式接入预检失败";
+      setWechatWorkReadinessError(reason);
+      setMessage(`企业微信正式接入预检失败：${reason}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function validatePersonalWechatInstance(draft: PersonalWechatInstanceDraft) {
+    setPersonalWechatRpaError("");
+    try {
+      return await validatePersonalWechatRpaInstance(draft);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "个人微信实例验证失败";
+      setPersonalWechatRpaError(reason);
+      throw error;
+    }
+  }
+
+  async function savePersonalWechatInstance(draft: PersonalWechatInstanceDraft) {
+    try {
+      setBusy("保存个人微信实例");
+      setPersonalWechatRpaError("");
+      const result = await savePersonalWechatRpaInstance(draft);
+      setPersonalWechatRpaRegistry(result.registry);
+      setMessage(`个人微信实例已${result.operation === "created" ? "创建" : "更新"}：${result.instance.accountNickname}。`);
+      try {
+        const status = await loadWechatChannelStatusOnly(null);
+        if (status) setWechatChannelStatus(status);
+      } catch {
+        setMessage(`个人微信实例已${result.operation === "created" ? "创建" : "更新"}，通道汇总暂未刷新。`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "个人微信实例保存失败";
+      setPersonalWechatRpaError(reason);
+      setMessage(`个人微信实例保存失败：${reason}`);
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function disablePersonalWechatInstance(wechatAccountId: string) {
+    try {
+      setBusy("停用个人微信实例");
+      setPersonalWechatRpaError("");
+      const result = await disablePersonalWechatRpaInstance(wechatAccountId);
+      setPersonalWechatRpaRegistry(result.registry);
+      setMessage(`个人微信实例已停用：${result.instance.accountNickname}。桥接会保持 fail-closed，不会回退旧账号。`);
+      try {
+        await loadWechatChannelStatusOnly(null);
+      } catch {
+        setMessage(`个人微信实例已停用：${result.instance.accountNickname}。通道汇总暂未刷新。`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "个人微信实例停用失败";
+      setPersonalWechatRpaError(reason);
+      setMessage(`个人微信实例停用失败：${reason}`);
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
   function conversationIdentityExpectation(conversation: Conversation) {
     return {
       expectedWechatAccountId: conversation.wechatAccountId,
@@ -1822,10 +2104,27 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function changeActiveConversation(conversationId: string) {
+    if (conversationId && conversationId === activeConversationId) {
+      setConversationMobilePane("thread");
+      await refreshConversationMessages();
+      return;
+    }
     const conversation = conversationId
       ? conversations.find((item) => item.id === conversationId)
       : null;
+    setConversationTimeline([]);
+    setConversationTimelineError("");
+    setConversationOperationsError("");
+    setConversationTimelineLoading(Boolean(conversation));
+    setManualReplyText("");
+    setManualReplyFeedback("");
+    manualReplySuggestionRequestId.current += 1;
+    setManualReplySuggestion(null);
+    setManualReplySuggestionLoading(false);
+    setManualReplySuggestionError("");
+    setManualReplySuggestionSourceText("");
     setActiveConversationId(conversationId);
+    setConversationMobilePane(conversation ? "thread" : "inbox");
     await load(
       conversation
         ? {
@@ -3394,6 +3693,55 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     );
   }
 
+  async function saveActiveConversationOperations(patch: ConversationOperationsPanelPatch) {
+    const conversation = conversations.find((item) => item.id === activeConversationId);
+    if (!conversation) {
+      setConversationOperationsError("请先选择客户会话。");
+      return;
+    }
+    const identity = {
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+    };
+    try {
+      setBusy("保存会话分配与 SLA");
+      setConversationOperationsError("");
+      const result = await updateConversationOperations(identity, patch, CURRENT_OPERATOR);
+      setConversationOperationsQueue((current) => ({
+        ...current,
+        records: current.records.some((item) => item.id === result.conversation.id)
+          ? current.records.map((item) => item.id === result.conversation.id ? result.conversation : item)
+          : [result.conversation, ...current.records],
+      }));
+      setConversations((current) => current.map((item) => (
+        item.id === result.conversation.id ? { ...item, ...result.conversation } : item
+      )));
+      const fields = result.changedFields.length ? result.changedFields.join("、") : "无变化";
+      setMessage(`会话分配与 SLA 已保存：${fields}。`);
+      setConversationOperationsLoadError("");
+      setConversationOperationsLoadState((current) => current === "ready" ? "ready" : current === "stale" ? "stale" : "loading");
+      try {
+        const refreshedQueue = await getConversationOperationsQueue();
+        setConversationOperationsQueue(refreshedQueue);
+        setConversationOperationsUpdatedAt(new Date().toISOString());
+        setConversationOperationsLoadState("ready");
+      } catch (refreshError) {
+        setConversationOperationsLoadError(
+          refreshError instanceof Error ? refreshError.message : "会话分配与 SLA 队列汇总刷新失败",
+        );
+        setConversationOperationsLoadState((current) => current === "stale" || current === "ready" ? "stale" : "error");
+        setMessage(`会话分配与 SLA 已保存：${fields}。队列汇总暂未刷新，请勿重复提交。`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "会话分配与 SLA 保存失败";
+      setConversationOperationsError(reason);
+      setMessage(`会话分配与 SLA 保存失败：${reason}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function validateWrong(task: SendTask) {
     await runAction("错误窗口校验", () => validateSendTask(task.id, "wrong_chat", identityExpectation(task)));
   }
@@ -3757,6 +4105,152 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         setMessage(summary || "客户消息处理完成。");
       },
     );
+  }
+
+  async function generateManualReplySuggestion() {
+    const conversation = conversations.find((item) => item.id === activeConversationId);
+    const sourceText = latestInboundConversationText;
+    if (!conversation) {
+      setManualReplySuggestionError("请先选择客户会话。");
+      return;
+    }
+    if (!sourceText) {
+      setManualReplySuggestionError("当前会话还没有可用于生成建议的客户文字消息。");
+      return;
+    }
+
+    const requestId = manualReplySuggestionRequestId.current + 1;
+    manualReplySuggestionRequestId.current = requestId;
+    setManualReplySuggestion(null);
+    setManualReplySuggestionError("");
+    setManualReplySuggestionSourceText(sourceText);
+    setManualReplySuggestionLoading(true);
+    try {
+      const route = await evaluateRoute(sourceText, {
+        wechatAccountId: conversation.wechatAccountId,
+        conversationId: conversation.id,
+        customerId: conversation.customerId,
+      });
+      if (manualReplySuggestionRequestId.current !== requestId) return;
+      if (!String(route.suggestedReply || "").trim()) {
+        throw new Error("AI 没有生成可用回复，请稍后重新生成。");
+      }
+      setManualReplySuggestion(route);
+    } catch (error) {
+      if (manualReplySuggestionRequestId.current !== requestId) return;
+      setManualReplySuggestion(null);
+      setManualReplySuggestionError(error instanceof Error ? error.message : "AI 建议回复生成失败，请稍后重试。");
+    } finally {
+      if (manualReplySuggestionRequestId.current === requestId) {
+        setManualReplySuggestionLoading(false);
+      }
+    }
+  }
+
+  function insertManualReplySuggestion() {
+    const suggestionText = String(manualReplySuggestion?.suggestedReply || "").trim();
+    if (!suggestionText) return;
+    const currentText = manualReplyText.trimEnd();
+    const nextText = currentText && currentText !== suggestionText ? `${currentText}\n${suggestionText}` : suggestionText;
+    if (nextText.length > MANUAL_REPLY_MAX_LENGTH) {
+      setManualReplyFeedback(`插入后会超过 ${MANUAL_REPLY_MAX_LENGTH} 个字符，请先精简当前草稿。`);
+      return;
+    }
+    setManualReplyText(nextText);
+    setManualReplyFeedback("AI 建议已插入，请人工核对后再点击发送。");
+  }
+
+  async function enqueueManualConversationReply() {
+    const conversation = conversations.find((item) => item.id === activeConversationId);
+    const text = manualReplyText.trim();
+    if (!conversation) {
+      setMessage("请先选择要回复的客户会话。");
+      return;
+    }
+    if (!text) {
+      setMessage("请输入人工回复内容。");
+      setManualReplyFeedback("请输入回复内容后再发送。");
+      return;
+    }
+    if (text.length > MANUAL_REPLY_MAX_LENGTH) {
+      setMessage(`人工回复不能超过 ${MANUAL_REPLY_MAX_LENGTH} 个字符。`);
+      setManualReplyFeedback(`内容过长，请缩短到 ${MANUAL_REPLY_MAX_LENGTH} 个字符以内。`);
+      return;
+    }
+    const identity = {
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+    };
+    try {
+      setBusy("人工回复入队");
+      setMessage("正在将人工回复放入微信安全发送队列...");
+      setManualReplyFeedback("正在校验微信账号、客户与聊天窗口...");
+      const result = await queueManualConversationReply(identity, text);
+      setManualReplyText("");
+      const queuedSummary = `人工回复已进入安全发送队列：${result.task.id}，当前状态${sendStatusLabel(result.task.status)}。`;
+      const queuedFeedback = `已安全入队 · ${sendStatusLabel(result.task.status)} · ${result.task.id}`;
+      setMessage(queuedSummary);
+      setManualReplyFeedback(queuedFeedback);
+
+      const [timelineResult, workspaceResult] = await Promise.allSettled([
+        getConversationTimeline(identity),
+        load(identity),
+      ]);
+      const refreshFailures: string[] = [];
+      if (timelineResult.status === "fulfilled") {
+        setConversationTimeline(timelineResult.value);
+        setConversationTimelineError("");
+      } else {
+        const reason = timelineResult.reason instanceof Error ? timelineResult.reason.message : "消息时间线刷新失败";
+        setConversationTimelineError(reason);
+        refreshFailures.push("消息时间线");
+      }
+      if (workspaceResult.status === "rejected") {
+        refreshFailures.push("工作台状态");
+      }
+      if (refreshFailures.length) {
+        const refreshSummary = `${refreshFailures.join("、")}暂未刷新，可稍后点击刷新；回复任务已经成功入队，请勿重复发送。`;
+        setMessage(`${queuedSummary} ${refreshSummary}`);
+        setManualReplyFeedback(`${queuedFeedback} · ${refreshSummary}`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "未知错误";
+      setMessage(`人工回复入队失败：${reason}`);
+      setManualReplyFeedback(`发送失败：${reason}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function refreshConversationMessages() {
+    const conversation = conversations.find((item) => item.id === activeConversationId);
+    if (!conversation) {
+      await load();
+      return;
+    }
+    const identity = {
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+    };
+    try {
+      setConversationTimelineLoading(true);
+      setConversationTimelineError("");
+      const [timeline] = await Promise.all([getConversationTimeline(identity), load(identity)]);
+      setConversationTimeline(timeline);
+    } catch (error) {
+      setConversationTimelineError(error instanceof Error ? error.message : "消息历史刷新失败");
+    } finally {
+      setConversationTimelineLoading(false);
+    }
+  }
+
+  function handleManualReplyKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      void enqueueManualConversationReply();
+    }
   }
 
   async function runWechatChannelInbound(channel: WechatChannelKey) {
@@ -6677,6 +7171,153 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
     [conversations, activeConversationId],
   );
+  const activeConversationOperations = useMemo(
+    () => conversationOperationsQueue.records.find((conversation) => conversation.id === activeConversationId) || null,
+    [conversationOperationsQueue.records, activeConversationId],
+  );
+  const conversationOperationsById = useMemo(
+    () => new Map(conversationOperationsQueue.records.map((conversation) => [conversation.id, conversation])),
+    [conversationOperationsQueue.records],
+  );
+
+  const deferredConversationSearch = useDeferredValue(conversationSearch);
+  const filteredConversations = useMemo(() => {
+    const query = deferredConversationSearch.trim().toLowerCase();
+    const filtered = conversations.filter((conversation) => {
+      const isWorkWechat = isWorkWechatConversation(conversation);
+      if (conversationChannel === "work_wechat" && !isWorkWechat) return false;
+      if (conversationChannel === "personal_wechat" && !isPersonalWechatConversation(conversation)) return false;
+      if (conversationScope === "manual" && !conversation.manualLocked) return false;
+      if (conversationScope === "ai" && conversation.manualLocked) return false;
+      const operations = conversationOperationsById.get(conversation.id);
+      if (conversationStatus === "manual" && !conversation.manualLocked) return false;
+      if (conversationStatus === "unassigned" && operations?.assignmentState !== "unassigned") return false;
+      if (conversationStatus === "overdue" && !operations?.isOverdue) return false;
+      if (!query) return true;
+      return [
+        conversation.title,
+        conversation.customer?.name,
+        conversation.customer?.wechatId,
+        conversation.wechatAccount?.displayName,
+        conversation.lastMessagePreview,
+      ].some((value) => String(value || "").toLowerCase().includes(query));
+    });
+    return filtered.sort((left, right) => {
+      const leftUpdatedAt = new Date(left.lastMessageAt || 0).getTime();
+      const rightUpdatedAt = new Date(right.lastMessageAt || 0).getTime();
+      if (conversationSort === "latest") return rightUpdatedAt - leftUpdatedAt;
+      if (conversationSort === "oldest") return leftUpdatedAt - rightUpdatedAt;
+      const leftOperations = conversationOperationsById.get(left.id);
+      const rightOperations = conversationOperationsById.get(right.id);
+      const overduePriority = Number(rightOperations?.isOverdue) - Number(leftOperations?.isOverdue);
+      if (overduePriority) return overduePriority;
+      const unassignedPriority = Number(rightOperations?.assignmentState === "unassigned") - Number(leftOperations?.assignmentState === "unassigned");
+      if (unassignedPriority) return unassignedPriority;
+      const channelPriority = Number(isWorkWechatConversation(right)) - Number(isWorkWechatConversation(left));
+      if (channelPriority) return channelPriority;
+      const unreadPriority = Number(right.unreadCount || 0) - Number(left.unreadCount || 0);
+      if (unreadPriority) return unreadPriority;
+      return rightUpdatedAt - leftUpdatedAt;
+    });
+  }, [
+    conversations,
+    conversationChannel,
+    conversationOperationsById,
+    conversationScope,
+    conversationSort,
+    conversationStatus,
+    deferredConversationSearch,
+  ]);
+  const conversationPageCount = Math.max(1, Math.ceil(filteredConversations.length / conversationPageSize));
+  const safeConversationPage = Math.min(conversationPage, conversationPageCount);
+  const pagedConversations = useMemo(() => {
+    const offset = (safeConversationPage - 1) * conversationPageSize;
+    return filteredConversations.slice(offset, offset + conversationPageSize);
+  }, [conversationPageSize, filteredConversations, safeConversationPage]);
+  const totalConversationUnread = useMemo(
+    () => conversations.reduce((sum, conversation) => sum + Number(conversation.unreadCount || 0), 0),
+    [conversations],
+  );
+  const activeConversationMemory = useMemo(
+    () => conversationTimeline
+      .filter((item) => item.direction === "inbound" && String(item.text || "").trim())
+      .slice(-3)
+      .reverse(),
+    [conversationTimeline],
+  );
+  const latestInboundConversationText = useMemo(() => {
+    for (let index = conversationTimeline.length - 1; index >= 0; index -= 1) {
+      const item = conversationTimeline[index];
+      const text = item.direction === "inbound" ? String(item.text || "").trim() : "";
+      if (text) return text;
+    }
+    return "";
+  }, [conversationTimeline]);
+
+  useEffect(() => {
+    if (!activeConversation) {
+      setConversationTimeline([]);
+      setConversationTimelineError("");
+      setConversationTimelineLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const identity = {
+      wechatAccountId: activeConversation.wechatAccountId,
+      conversationId: activeConversation.id,
+      customerId: activeConversation.customerId,
+    };
+    setConversationTimelineLoading(true);
+    setConversationTimelineError("");
+    getConversationTimeline(identity)
+      .then(async (items) => {
+        if (cancelled) return;
+        setConversationTimeline(items);
+        if (activeWorkspaceSection === "conversation-center" && Number(activeConversation.unreadCount || 0) > 0) {
+          const result = await markConversationMessagesRead(identity);
+          if (cancelled) return;
+          setConversationTimeline((current) =>
+            current.map((item) =>
+              item.direction === "inbound" && !item.readAt
+                ? { ...item, readAt: result.readAt, status: "read" }
+                : item,
+            ),
+          );
+          setConversations((current) =>
+            current.map((conversation) =>
+              conversation.id === activeConversation.id ? { ...conversation, unreadCount: 0 } : conversation,
+            ),
+          );
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setConversationTimeline([]);
+          setConversationTimelineError(error instanceof Error ? error.message : "消息历史加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setConversationTimelineLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeConversation?.id,
+    activeConversation?.wechatAccountId,
+    activeConversation?.customerId,
+    activeWorkspaceSection,
+  ]);
+
+  useEffect(() => {
+    if (!manualReplySuggestionSourceText) return;
+    if (manualReplySuggestionSourceText === latestInboundConversationText) return;
+    manualReplySuggestionRequestId.current += 1;
+    setManualReplySuggestion(null);
+    setManualReplySuggestionLoading(false);
+    setManualReplySuggestionError("");
+    setManualReplySuggestionSourceText("");
+  }, [latestInboundConversationText, manualReplySuggestionSourceText]);
 
   useEffect(() => {
     let loadInFlight = false;
@@ -6814,9 +7455,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   useEffect(() => {
     const activeRailButton = document.querySelector<HTMLButtonElement>(
-      `.rail button[data-section-id="${activeWorkspaceSection}"]`
+      `button[data-section-id="${activeWorkspaceSection}"]`
     );
-    const rail = activeRailButton?.closest<HTMLElement>(".rail");
+    const rail = activeRailButton?.closest<HTMLElement>("nav");
     if (!activeRailButton || !rail) return;
     const centerActiveRailButton = () => {
       if (window.matchMedia("(max-width: 760px)").matches) {
@@ -7994,11 +8635,35 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   const activeWorkspaceLabel = workspaceSectionLabels.get(activeWorkspaceSection) || "工作台";
-  const isWechatWorkspace = activeWorkspaceSection === "wechat-channel-center";
+  const isWechatWorkspace = ["wechat-channel-center", "personal-wechat-center"].includes(activeWorkspaceSection);
   const isSendWorkspace = activeWorkspaceSection === "send-center";
   const isDesignWorkspace = ["design-platform-config", "asset-center", "design-center"].includes(activeWorkspaceSection);
   const isCustomerMessageWorkspace = ["conversation-center", "routing-center"].includes(activeWorkspaceSection);
   const pendingSendTaskCount = sendTasks.filter((task) => !["sent", "cancelled"].includes(task.status)).length;
+  const personalWechatWorkspaceAccounts: PersonalWechatWorkspaceAccount[] = (personalWechatRpaRegistry?.instances || []).map(
+    (instance) => ({
+      id: instance.wechatAccountId,
+      displayName: instance.accountNickname || instance.wechatAccountId,
+      endpoint: instance.endpoint,
+      enabled: instance.enabled,
+      tokenConfigured: instance.tokenConfigured,
+      updatedAt: instance.updatedAt,
+      windowsSessionId: null,
+    }),
+  );
+  const personalWechatWorkspaceTasks: PersonalWechatWorkspaceTask[] = sendTasks.map((task) => ({
+    id: task.id,
+    accountId: task.wechatAccountId || "unbound",
+    customerLabel: task.conversation?.title || task.conversationId || "未绑定会话",
+    summary: typeof task.payload?.text === "string" && task.payload.text.trim()
+      ? task.payload.text.trim()
+      : `发送任务 · ${task.status}`,
+    status: task.status,
+    createdAt: formatDateTime(task.createdAt),
+    deliveryState: typeof task.latestAttempt?.metadata?.deliveryState === "string"
+      ? task.latestAttempt.metadata.deliveryState
+      : null,
+  }));
   const manualReviewJobCount = jobs.filter((job) => job.status === "manual_review").length;
   const manualLockedConversations = conversations.filter((conversation) => conversation.manualLocked);
   const wechatVisualFlowSteps = wechatChannelStatus?.visualFlow?.length
@@ -8433,6 +9098,522 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             ? `${reviewCenter.logs.length} 条审核记录`
           : `${manualLockedConversations.length} 个人工接管`;
   const automationReadinessPrimaryCheck = getAutomationReadinessPrimaryCheck(automationReadiness);
+  const overviewChannelIssueCount =
+    wechatRuntimeIssueChannels.length + wechatSendAdapterIssueChannels.length + wechatConfigIssueChannels.length;
+  const conversationOperationsNeedsAttention = Number(
+    (conversationOperationsQueue.summary as typeof conversationOperationsQueue.summary & { needsAttention?: number })
+      .needsAttention || 0,
+  );
+  const conversationOperationsLastSuccessLabel = conversationOperationsUpdatedAt
+    ? formatDateTime(conversationOperationsUpdatedAt)
+    : "尚无成功更新时间";
+  const conversationOperationsFreshnessDetail =
+    conversationOperationsLoadState === "loading"
+      ? "正在读取实时会话 SLA"
+      : conversationOperationsLoadState === "error"
+        ? `读取失败：${conversationOperationsLoadError || "会话 SLA 服务暂不可用"}`
+        : conversationOperationsLoadState === "stale"
+          ? `数据可能已过期 · 最近成功 ${conversationOperationsLastSuccessLabel}`
+          : `${conversationOperationsQueue.summary.unassigned} 个未分配 · ${conversationOperationsQueue.summary.noSla} 个未设时限 · 更新 ${conversationOperationsLastSuccessLabel}`;
+  const conversationOperationsFreshnessLabel =
+    conversationOperationsLoadState === "loading"
+      ? "SLA 正在读取"
+      : conversationOperationsLoadState === "error"
+        ? "SLA 状态不可用"
+        : conversationOperationsLoadState === "stale"
+          ? "SLA 数据可能已过期"
+          : "SLA 实时数据已更新";
+  const overviewChannels: OverviewChannel[] = wechatChannels.map((channel) => {
+    const tone: OverviewTone = channel.ready
+      ? "ready"
+      : channel.status === "needs_config"
+        ? "danger"
+        : "warning";
+    const passedChecks = channel.checks.filter((check) => check.passed).length;
+    return {
+      id: channel.key,
+      label: channel.label,
+      detail: channel.description,
+      statusLabel: wechatChannelStatusLabel(channel.status),
+      tone,
+      metrics: `${passedChecks}/${channel.checks.length} 项检查通过`,
+    };
+  });
+  const overviewActions: OverviewAction[] = [
+    ...(overviewChannelIssueCount
+      ? [{
+          id: "wechat-channel-issues",
+          label: "微信通道需要处理",
+          detail: "检查运行端、发送器与必要配置，恢复客户消息闭环。",
+          count: overviewChannelIssueCount,
+          tone: "danger" as const,
+          onClick: () => {
+            setWechatWorkbenchView("config");
+            scrollToWorkspaceSection("wechat-channel-center");
+          },
+        }]
+      : []),
+    ...(blockedSendCount || manualAttentionSendTaskCount
+      ? [{
+          id: "send-attention",
+          label: "发送任务需要人工确认",
+          detail: `${blockedSendCount} 个已拦截，${manualAttentionSendTaskCount} 个需要人工处理。`,
+          count: Math.max(blockedSendCount, manualAttentionSendTaskCount),
+          tone: "danger" as const,
+          onClick: () => scrollToWorkspaceSection("send-center"),
+        }]
+      : []),
+    ...(totalConversationUnread
+      ? [{
+          id: "conversation-unread",
+          label: "客户消息等待回复",
+          detail: `${conversations.filter((conversation) => Number(conversation.unreadCount || 0) > 0).length} 个会话有未读消息。`,
+          count: totalConversationUnread,
+          tone: "warning" as const,
+          onClick: () => scrollToWorkspaceSection("conversation-center"),
+        }]
+      : []),
+    ...(conversationOperationsLoadState === "error"
+      ? [{
+          id: "conversation-sla-unavailable",
+          label: "会话 SLA 状态读取失败",
+          detail: conversationOperationsLoadError || "无法确认是否存在超时会话，请刷新后再处理。",
+          count: 1,
+          tone: "danger" as const,
+          onClick: () => scrollToWorkspaceSection("conversation-center"),
+        }]
+      : conversationOperationsNeedsAttention
+      ? [{
+          id: "conversation-sla",
+          label: conversationOperationsLoadState === "stale" ? "会话 SLA 数据可能已过期" : "会话分配与 SLA 需要处理",
+          detail: `${conversationOperationsQueue.summary.overdue} 个已超时，${conversationOperationsQueue.summary.unassigned} 个未分配。${conversationOperationsLoadState === "stale" ? `最近成功 ${conversationOperationsLastSuccessLabel}。` : ""}`,
+          count: conversationOperationsNeedsAttention,
+          tone: conversationOperationsQueue.summary.overdue ? "danger" as const : "warning" as const,
+          onClick: () => scrollToWorkspaceSection("conversation-center"),
+        }]
+      : []),
+    ...(manualLockedConversations.length || manualReviewJobCount
+      ? [{
+          id: "manual-review",
+          label: "人工接管与设计审核",
+          detail: `${manualLockedConversations.length} 个接管会话，${manualReviewJobCount} 个设计待审核。`,
+          count: manualLockedConversations.length + manualReviewJobCount,
+          tone: "warning" as const,
+          onClick: () => scrollToWorkspaceSection("review-center"),
+        }]
+      : []),
+  ];
+  const overviewMetrics: OverviewMetric[] = [
+    {
+      id: "conversations",
+      label: "客户会话",
+      value: String(conversations.length),
+      detail: `${wechatAccounts.filter((account) => account.isActive).length} 个启用微信账号`,
+    },
+    {
+      id: "unread",
+      label: "未读消息",
+      value: String(totalConversationUnread),
+      detail: totalConversationUnread ? "需要客服尽快查看" : "当前消息已处理",
+      tone: totalConversationUnread ? "warning" : "ready",
+    },
+    {
+      id: "send-queue",
+      label: "待发任务",
+      value: String(pendingSendTaskCount),
+      detail: blockedSendCount ? `${blockedSendCount} 个任务已拦截` : "安全队列无拦截",
+      tone: blockedSendCount ? "danger" : pendingSendTaskCount ? "warning" : "ready",
+    },
+    {
+      id: "service-sla",
+      label: "SLA 超时",
+      value:
+        conversationOperationsLoadState === "loading" || conversationOperationsLoadState === "error"
+          ? "—"
+          : String(conversationOperationsQueue.summary.overdue),
+      detail: conversationOperationsFreshnessDetail,
+      tone:
+        conversationOperationsLoadState === "error"
+          ? "danger"
+          : conversationOperationsLoadState !== "ready"
+            ? "warning"
+            : conversationOperationsQueue.summary.overdue
+              ? "danger"
+              : conversationOperationsQueue.summary.unassigned
+                ? "warning"
+                : "ready",
+    },
+  ];
+  const overviewConversations: OverviewConversation[] = [...conversations]
+    .sort((left, right) => new Date(right.lastMessageAt || 0).getTime() - new Date(left.lastMessageAt || 0).getTime())
+    .slice(0, 6)
+    .map((conversation) => {
+      const unreadCount = Number(conversation.unreadCount || 0);
+      const operations = conversationOperationsById.get(conversation.id);
+      const stateTone: OverviewTone = conversationOperationsLoadState === "error"
+        ? "danger"
+        : conversationOperationsLoadState === "loading"
+          ? "muted"
+          : operations?.isOverdue
+            ? "danger"
+            : conversationOperationsLoadState === "stale" || conversation.manualLocked || operations?.assignmentState === "unassigned" || unreadCount
+              ? "warning"
+              : "ready";
+      return {
+        id: conversation.id,
+        customer: conversation.customer?.name || conversation.title,
+        channel: conversationChannelDisplayLabel(conversation),
+        account: conversation.wechatAccount?.displayName || conversation.wechatAccountId,
+        state: conversationOperationsLoadState === "error"
+          ? "SLA 状态不可用"
+          : conversationOperationsLoadState === "loading"
+            ? "SLA 读取中"
+            : operations?.isOverdue
+              ? "SLA 超时"
+              : conversation.manualLocked
+                ? "人工接管"
+                : operations?.assignmentState === "unassigned"
+                  ? "待分配"
+                  : unreadCount
+                    ? "有新消息"
+                    : conversationOperationsLoadState === "stale"
+                      ? "SLA 数据可能过期"
+                      : operations?.assignee || "AI 托管",
+        stateTone,
+        preview: conversation.lastMessagePreview || "",
+        updatedAt: conversation.lastMessageAt ? formatDateTime(conversation.lastMessageAt) : "暂无",
+        unreadCount,
+        onOpen: () => void focusConversation(conversation.id, "conversation-center"),
+      };
+    });
+  const overviewAutomationTone: OverviewTone = automationStatus?.active ? "ready" : "warning";
+  const overviewAutomationDetail = automationStatus?.running
+    ? "本轮自动化正在执行"
+    : automationStatus?.active
+      ? `每 ${Math.round((automationStatus.intervalMs || 0) / 1000)} 秒检查一次低价值任务`
+      : "自动化已暂停，需要人工启动";
+
+  const workbenchNavigationGroups = useMemo(
+    () => DEFAULT_WORKBENCH_NAVIGATION.map((group) => ({
+      ...group,
+      items: group.items.map((item) => {
+        if (item.id === "conversation-center") {
+          return { ...item, badge: totalConversationUnread || undefined, badgeTone: "danger" as const };
+        }
+        if (item.id === "send-center") {
+          return { ...item, badge: pendingSendTaskCount || undefined, badgeTone: blockedSendCount ? "danger" as const : "warning" as const };
+        }
+        if (item.id === "review-center") {
+          const reviewCount = manualReviewJobCount + manualLockedConversations.length;
+          return { ...item, badge: reviewCount || undefined, badgeTone: "warning" as const };
+        }
+        return item;
+      }),
+    })),
+    [blockedSendCount, manualLockedConversations.length, manualReviewJobCount, pendingSendTaskCount, totalConversationUnread],
+  );
+
+  const conversationWorkbenchInbox: ConversationWorkbenchInbox = {
+    title: "会话管理",
+    total: filteredConversations.length,
+    pendingCount: conversations.filter((conversation) => Number(conversation.unreadCount || 0) > 0).length,
+    search: conversationSearch,
+    searchPlaceholder: "搜索客户或会话内容",
+    scope: conversationScope,
+    scopeOptions: [
+      { value: "all", label: "待处理", count: conversations.length },
+      { value: "manual", label: "进行中", count: manualLockedConversations.length },
+      { value: "ai", label: "AI 托管", count: conversations.filter((conversation) => !conversation.manualLocked).length },
+    ],
+    channel: conversationChannel,
+    channelOptions: [
+      { value: "all", label: "全部渠道" },
+      { value: "personal_wechat", label: "个人微信" },
+      { value: "work_wechat", label: "企业微信" },
+    ],
+    status: conversationStatus,
+    statusOptions: [
+      { value: "all", label: "全部状态" },
+      { value: "unassigned", label: "待分配" },
+      { value: "overdue", label: "SLA 超时" },
+      { value: "manual", label: "人工接管" },
+    ],
+    sort: conversationSort,
+    sortOptions: [
+      { value: "priority", label: "优先处理" },
+      { value: "latest", label: "最新消息" },
+      { value: "oldest", label: "最早消息" },
+    ],
+    conversations: pagedConversations.map((conversation) => {
+      const operations = conversationOperationsById.get(conversation.id);
+      const isPersonal = isPersonalWechatConversation(conversation);
+      const stateLabel = operations?.isOverdue
+        ? "SLA 超时"
+        : conversation.manualLocked
+          ? "人工接管"
+          : operations?.assignmentState === "unassigned"
+            ? "待分配"
+            : operations?.assignee || "AI 托管";
+      return {
+        id: conversation.id,
+        title: conversation.customer?.name || conversation.title,
+        subtitle: conversation.wechatAccount?.displayName || conversation.wechatAccountId,
+        avatar: {
+          fallback: (conversation.customer?.name || conversation.title || "客").slice(0, 1),
+          alt: `${conversation.customer?.name || conversation.title}头像`,
+        },
+        channelLabel: conversationChannelDisplayLabel(conversation),
+        channelTone: isPersonal ? "success" as const : "brand" as const,
+        preview: conversation.lastMessagePreview || "等待客户消息",
+        updatedAtLabel: conversation.lastMessageAt ? formatDateTime(conversation.lastMessageAt) : "",
+        unreadCount: Number(conversation.unreadCount || 0),
+        stateLabel,
+        stateTone: operations?.isOverdue
+          ? "danger" as const
+          : conversation.manualLocked || operations?.assignmentState === "unassigned"
+            ? "warning" as const
+            : "success" as const,
+      };
+    }),
+    selectedConversationId: activeConversationId,
+    page: safeConversationPage,
+    pageCount: conversationPageCount,
+    pageSize: conversationPageSize,
+    pageSizeOptions: [10, 20, 50],
+    loading: conversationTimelineLoading && !conversations.length,
+    error: !conversations.length ? conversationTimelineError : "",
+    emptyTitle: conversations.length ? "没有符合条件的会话" : "还没有微信会话",
+    emptyDetail: conversations.length ? "调整筛选条件后重试。" : "微信收到客户消息后会显示在这里。",
+  };
+
+  const activeConversationSnapshot = activeConversation
+    ? latestWindowByAccount.get(activeConversation.wechatAccountId)
+    : undefined;
+  const conversationWorkbenchThread: ConversationWorkbenchThread | null = activeConversation ? {
+    participant: {
+      name: activeConversation.customer?.name || activeConversation.title,
+      avatar: {
+        fallback: (activeConversation.customer?.name || activeConversation.title || "客").slice(0, 1),
+        alt: `${activeConversation.customer?.name || activeConversation.title}头像`,
+      },
+      accountLabel: activeConversation.wechatAccount?.displayName || activeConversation.wechatAccountId,
+      channelLabel: conversationChannelDisplayLabel(activeConversation),
+      channelTone: isPersonalWechatConversation(activeConversation) ? "success" : "brand",
+      onlineLabel: activeConversation.wechatAccount?.isActive ? "在线" : "离线",
+      online: Boolean(activeConversation.wechatAccount?.isActive),
+    },
+    serviceStatusLabel: activeConversation.manualLocked ? "人工服务中" : "AI 托管中",
+    serviceStatusTone: activeConversation.manualLocked ? "warning" : "success",
+    safetyNotice: isPersonalWechatConversation(activeConversation)
+      ? "当前为个人微信通道；所有回复先进入安全队列，校验账号和聊天窗口后才会发送。"
+      : "当前为企业微信通道；所有回复沿官方客服接口和审计队列发送。",
+    timelineLabel: "完整会话记录",
+    messages: conversationTimeline.map((item) => ({
+      id: item.id,
+      direction: item.direction,
+      senderName: item.direction === "inbound" ? activeConversation.customer?.name || "客户" : "客服工作台",
+      avatar: {
+        fallback: item.direction === "inbound"
+          ? (activeConversation.customer?.name || "客").slice(0, 1)
+          : "服",
+        alt: item.direction === "inbound" ? "客户头像" : "客服头像",
+      },
+      text: item.text,
+      createdAtLabel: formatDateTime(item.createdAt),
+      statusLabel: item.direction === "outbound" ? sendStatusLabel(item.status) : item.readAt ? "已读" : "未读",
+      statusTone: ["failed", "blocked", "uncertain"].includes(item.status)
+        ? "danger" as const
+        : item.status === "sent" || item.readAt
+          ? "success" as const
+          : "neutral" as const,
+      attachments: item.attachments.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        kind: attachment.kind,
+        detail: attachment.mimeType || attachment.status,
+      })),
+    })),
+    incidents: activeConversationSendTasks
+      .filter((task) => ["failed", "blocked", "uncertain"].includes(task.status))
+      .slice(0, 3)
+      .map((task) => ({
+        id: task.id,
+        tone: task.status === "uncertain" || task.status === "failed" ? "danger" as const : "warning" as const,
+        title: `发送${sendStatusLabel(task.status)}`,
+        occurredAtLabel: formatDateTime(task.sentAt || task.createdAt),
+        detail: task.errorMessage || task.guardSnapshot?.queueBlockedAdvice?.message || "任务被安全策略暂停，尚未送达客户。",
+        reason: task.guardSnapshot?.reason || task.guardSnapshot?.windowDiagnostic?.reason,
+        policyActionLabel: "查看发送规则",
+        retryActionLabel: "核验后重排",
+        retryDisabled: task.status === "uncertain",
+      })),
+    notices: activeConversation.manualLocked ? [{
+      id: "manual-lock",
+      tone: "warning",
+      text: "当前会话已由人工接管",
+      detail: "自动发送暂停；人工回复仍需通过安全队列。",
+    }] : [],
+    suggestion: {
+      activeTab: "ai",
+      tabs: [{ value: "ai", label: "AI 智能回复" }],
+      title: "AI 建议回复",
+      verificationLabel: manualReplySuggestion ? "已结合当前会话" : "需人工确认",
+      text: manualReplySuggestion?.suggestedReply,
+      sourceDetail: manualReplySuggestionSourceText
+        ? `依据客户最近消息：${manualReplySuggestionSourceText.slice(0, 100)}`
+        : undefined,
+      loading: manualReplySuggestionLoading,
+      error: manualReplySuggestionError,
+      useActionLabel: "使用此回复",
+      regenerateActionLabel: "重新生成",
+    },
+    safetyChecks: [
+      {
+        id: "identity",
+        label: "客户身份校验",
+        statusLabel: activeConversation.customerId && activeConversation.wechatAccountId ? "通过" : "需补齐",
+        tone: activeConversation.customerId && activeConversation.wechatAccountId ? "success" : "danger",
+      },
+      {
+        id: "window",
+        label: "聊天窗口校验",
+        statusLabel: activeConversationSnapshot?.diagnostic?.ok ? "通过" : "发送时复核",
+        tone: activeConversationSnapshot?.diagnostic?.ok ? "success" : "warning",
+      },
+      {
+        id: "bridge",
+        label: "桥接服务",
+        statusLabel: bridgeStatus?.worker?.ok ? "正常" : "待检查",
+        tone: bridgeStatus?.worker?.ok ? "success" : "warning",
+      },
+      {
+        id: "content",
+        label: "回复内容",
+        statusLabel: manualReplyText.trim() ? "已填写" : "待填写",
+        tone: manualReplyText.trim() ? "success" : "warning",
+      },
+    ],
+    composer: {
+      value: manualReplyText,
+      placeholder: "输入人工回复（提交后进入安全发送队列）",
+      maxLength: MANUAL_REPLY_MAX_LENGTH,
+      disabled: !activeConversation,
+      sending: busy === "人工回复入队",
+      sendLabel: "发送",
+      tools: [],
+      feedback: manualReplyFeedback,
+      feedbackTone: manualReplyFeedback.includes("失败") ? "danger" : "success",
+    },
+    loading: conversationTimelineLoading,
+    error: conversationTimelineError,
+    emptyTitle: "还没有消息",
+    emptyDetail: "客户发送消息或客服回复后，会显示在这里。",
+  } : null;
+
+  const conversationWorkbenchContext: ConversationWorkbenchContext | null = activeConversation ? {
+    customer: {
+      name: activeConversation.customer?.name || activeConversation.title,
+      avatar: {
+        fallback: (activeConversation.customer?.name || activeConversation.title || "客").slice(0, 1),
+        alt: `${activeConversation.customer?.name || activeConversation.title}头像`,
+      },
+      wechatId: activeConversation.customer?.wechatId || activeConversation.customerId,
+      source: activeConversation.customer?.source || "微信客户",
+      relationLabel: isPersonalWechatConversation(activeConversation) ? "个人微信" : "企业微信",
+      relationTone: isPersonalWechatConversation(activeConversation) ? "success" : "brand",
+    },
+    tags: activeConversation.customer?.tags || [],
+    notes: activeConversation.customer?.notes || undefined,
+    noteDateLabel: activeConversation.customer?.updatedAt ? formatDateTime(activeConversation.customer.updatedAt) : undefined,
+    task: activeConversationLatestDesignJob ? {
+      id: activeConversationLatestDesignJob.id,
+      title: readableScene(activeConversationLatestDesignJob.scene, "设计任务"),
+      stateLabel: statusLabel[activeConversationLatestDesignJob.status] || activeConversationLatestDesignJob.status,
+      stateTone: ["failed", "cancelled", "manual_review"].includes(activeConversationLatestDesignJob.status)
+        ? "warning"
+        : "brand",
+      taskNumber: activeConversationLatestDesignJob.requestId,
+      createdAtLabel: activeConversationLatestDesignJob.updatedAt ? formatDateTime(activeConversationLatestDesignJob.updatedAt) : undefined,
+      requirements: [
+        activeConversationLatestDesignJob.budget.perUnitAmount
+          ? `单份预算 ${activeConversationLatestDesignJob.budget.perUnitAmount} 元`
+          : "",
+        activeConversationLatestDesignJob.budget.quantity
+          ? `${activeConversationLatestDesignJob.budget.quantity} 份`
+          : "",
+      ].filter(Boolean),
+    } : null,
+    assignment: {
+      assignee: activeConversationOperations?.assignee || "未分配",
+      statusLabel: activeConversationOperations?.assignmentState === "assigned" ? "服务中" : "待分配",
+      statusTone: activeConversationOperations?.assignmentState === "assigned" ? "success" : "warning",
+    },
+    sla: {
+      stateLabel: activeConversationOperations?.isOverdue
+        ? "SLA 超时"
+        : activeConversationOperations?.slaState === "on_track"
+          ? "SLA 正常"
+          : "未设 SLA",
+      stateTone: activeConversationOperations?.isOverdue
+        ? "danger"
+        : activeConversationOperations?.slaState === "on_track"
+          ? "success"
+          : "warning",
+      priorityLabel: activeConversationOperations
+        ? ({ low: "低", normal: "普通", high: "高", urgent: "紧急" } as const)[activeConversationOperations.priority]
+        : "未配置",
+      lifecycleLabel: activeConversationOperations
+        ? ({ open: "处理中", pending: "等待中", resolved: "已解决", closed: "已关闭" } as const)[activeConversationOperations.status]
+        : "未配置",
+      firstResponseLabel: activeConversationOperations?.firstResponseAt
+        ? formatDateTime(activeConversationOperations.firstResponseAt)
+        : activeConversationOperations?.firstResponseDueAt
+          ? `截止 ${formatDateTime(activeConversationOperations.firstResponseDueAt)}`
+          : "未设置",
+      deadlineLabel: activeConversationOperations?.slaDueAt
+        ? formatDateTime(activeConversationOperations.slaDueAt)
+        : "未设置",
+      freshnessLabel: conversationOperationsFreshnessLabel,
+      freshnessTone: conversationOperationsLoadState === "ready"
+        ? "success"
+        : conversationOperationsLoadState === "error"
+          ? "danger"
+          : "warning",
+    },
+    operationsSlot: (
+      <div id="conversation-operations-editor">
+        <ConversationOperationsPanel
+          conversationTitle={activeConversation.title}
+          operations={activeConversationOperations}
+          currentOperator={CURRENT_OPERATOR}
+          busy={busy === "保存会话分配与 SLA"}
+          error={conversationOperationsError || conversationOperationsLoadError}
+          onSave={saveActiveConversationOperations}
+        />
+      </div>
+    ),
+    safetyIdentity: {
+      accountLabel: activeConversation.wechatAccount?.displayName || activeConversation.wechatAccountId,
+      accountStateLabel: activeConversation.wechatAccount?.isActive ? "在线" : "离线",
+      channelLabel: conversationChannelDisplayLabel(activeConversation),
+      windowLabel: activeConversationSnapshot?.activeConversation?.title || activeConversationSnapshot?.chatTitle || "发送时复核",
+      recentMessageLabel: activeConversation.lastMessagePreview || "暂无消息摘要",
+      bridgeLabel: bridgeStatus?.worker?.ok ? "桥接正常" : "桥接待检查",
+      bridgeTone: bridgeStatus?.worker?.ok ? "success" : "warning",
+    },
+    quickActions: activeConversationReviewActionItems.map((item) => ({
+      id: item.key,
+      label: `${item.label}${item.count ? ` (${item.count})` : ""}`,
+      tone: item.tone === "red" ? "danger" : item.tone === "amber" ? "warning" : "brand",
+    })),
+  } : null;
+
+  function focusConversationOperationsEditor() {
+    if (typeof document === "undefined") return;
+    const editor = document.getElementById("conversation-operations-editor");
+    editor?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    editor?.querySelector<HTMLElement>("input, select, button")?.focus();
+  }
 
   function renderTopStatusPills() {
     if (isWechatWorkspace) {
@@ -8649,54 +9830,96 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   return (
-    <main className="shell apple-light-shell" aria-busy={Boolean(busy)} data-busy={busy ? "true" : "false"}>
-      <aside className="rail" aria-label="工作台导航">
-        <div className="brand" aria-hidden="true">
-          <img src="/app-icon.svg" alt="" />
-        </div>
-        {workspaceNavItems.map((item) => {
-          const Icon = item.Icon;
-          return (
-            <button
-              aria-controls={item.id}
-              aria-current={activeWorkspaceSection === item.id ? "page" : undefined}
-              aria-label={item.label}
-              className={activeWorkspaceSection === item.id ? "active" : ""}
-              data-section-id={item.id}
-              key={item.id}
-              onClick={() => scrollToWorkspaceSection(item.id)}
-              title={item.label}
-              type="button"
-            >
-              <Icon size={20} aria-hidden="true" />
-              <span className="rail-label">{item.label}</span>
-            </button>
-          );
-        })}
-      </aside>
-
-      <section className="workspace" data-active-section={activeWorkspaceSection}>
-        <header className="topbar">
-          <span className="window-controls" aria-hidden="true">
-            <span className="close" />
-            <span className="minimize" />
-            <span className="zoom" />
-          </span>
-          <div className="top-title">
-            <h1>智能体客服工作台</h1>
-            <p>微信客户设计需求、礼盒搭配、效果图审核和报价草稿</p>
-          </div>
-          <div className="top-actions">
-            <div className="toolbar-group status-group">
-              {renderTopStatusPills()}
-            </div>
-            <div className="toolbar-group conversation-toolbar">{renderConversationSelect()}</div>
-            {renderTopContextActions()}
-          </div>
-        </header>
+    <WorkbenchShell
+      activeSectionId={activeWorkspaceSection}
+      className="shell apple-light-shell modular-workbench"
+      contentLabel={activeWorkspaceLabel}
+      navigationGroups={workbenchNavigationGroups}
+      onSelectSection={(sectionId) => scrollToWorkspaceSection(sectionId)}
+      sidebar={{ brandLabel: "智能体客服", brandSubtitle: "一体化客户工作台" }}
+      topbar={{
+        title: "智能体客服工作台",
+        searchValue: conversationSearch,
+        searchPlaceholder: "搜索客户、会话、工单或功能",
+        onSearchChange: setConversationSearch,
+        onSearchSubmit: () => scrollToWorkspaceSection("conversation-center"),
+        onRefresh: () => void load(),
+        busy: Boolean(busy),
+        healthItems: [
+          {
+            id: "ready-channels",
+            label: "就绪",
+            count: wechatChannelStatus?.summary.ready ?? 0,
+            tone: "ready",
+          },
+          {
+            id: "channel-issues",
+            label: "待配置",
+            count: overviewChannelIssueCount,
+            tone: overviewChannelIssueCount ? "warning" : "muted",
+          },
+          {
+            id: "send-blocked",
+            label: "发送异常",
+            count: blockedSendCount,
+            tone: blockedSendCount ? "danger" : "muted",
+          },
+        ],
+        onOpenHealth: () => {
+          setWechatWorkbenchView("config");
+          scrollToWorkspaceSection("wechat-channel-center");
+        },
+        actions: renderTopContextActions(),
+      }}
+    >
+      <section
+        className="workspace"
+        data-active-section={activeWorkspaceSection}
+        aria-busy={Boolean(busy)}
+        data-busy={busy ? "true" : "false"}
+      >
         <div className="status-line" data-busy={busy ? "true" : "false"} role="status" aria-live="polite">
           <span className="status-text">{busy ? `${busy}处理中` : message}</span>
         </div>
+        <OperationsOverview
+          updatedAt={wechatChannelStatus?.updatedAt}
+          channels={overviewChannels}
+          actions={overviewActions}
+          metrics={overviewMetrics}
+          conversations={overviewConversations}
+          automationLabel={automationStateText}
+          automationDetail={overviewAutomationDetail}
+          automationTone={overviewAutomationTone}
+          onRefresh={() => void load()}
+          onOpenConversations={() => scrollToWorkspaceSection("conversation-center")}
+          onOpenChannels={() => {
+            setWechatWorkbenchView("channels");
+            scrollToWorkspaceSection("wechat-channel-center");
+          }}
+          onRunAutomation={() => void runAutomationCycle()}
+          busy={Boolean(busy)}
+        />
+        <PersonalWechatWorkspace
+          accounts={personalWechatWorkspaceAccounts}
+          tasks={personalWechatWorkspaceTasks}
+          updatedAtLabel={personalWechatWorkspaceAccounts[0]?.updatedAt
+            ? formatDateTime(personalWechatWorkspaceAccounts[0].updatedAt)
+            : null}
+          operatorLabel={operatorAccessStatus?.principal?.displayName || CURRENT_OPERATOR}
+          organizationLabel="臻希礼业"
+          busy={Boolean(busy)}
+          onRefresh={() => void load()}
+          onOpenInstanceSettings={() => {
+            setWechatWorkbenchView("channels");
+            scrollToWorkspaceSection("wechat-channel-center");
+          }}
+          onOpenTask={(taskId) => {
+            setSendWorkbenchView("queue");
+            setMessage(`已定位个人微信发送任务：${taskId}`);
+            scrollToWorkspaceSection("send-center");
+          }}
+          onStatusMessage={setMessage}
+        />
         <section className="apple-overview" aria-label="工作台系统总览">
           <div className="overview-title">
             <span className="overview-symbol" aria-hidden="true">
@@ -9204,68 +10427,55 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
         <section className="wechat-channel-grid">
           <section className={`panel wechat-channel-panel wechat-mode-${wechatWorkbenchView}`} id="wechat-channel-center">
-            <div className="panel-head">
-              <div>
-                <h2><Network size={17} aria-hidden="true" />微信接入中心</h2>
-                <span>个人微信、企业微信、小程序分区接入，统一进入智能客服管线</span>
-              </div>
-              <div className="segmented-control wechat-view-switcher" role="tablist" aria-label="微信接入中心视图">
-                <button
-                  type="button"
-                  className={wechatWorkbenchView === "channels" ? "selected" : ""}
-                  aria-pressed={wechatWorkbenchView === "channels"}
-                  onClick={() => setWechatWorkbenchView("channels")}
-                >
-                  接入通道
-                </button>
-                <button
-                  type="button"
-                  className={wechatWorkbenchView === "flow" ? "selected" : ""}
-                  aria-pressed={wechatWorkbenchView === "flow"}
-                  onClick={() => setWechatWorkbenchView("flow")}
-                >
-                  可视化客服
-                </button>
-                <button
-                  type="button"
-                  className={wechatWorkbenchView === "config" ? "selected" : ""}
-                  aria-pressed={wechatWorkbenchView === "config"}
-                  onClick={() => setWechatWorkbenchView("config")}
-                >
-                  配置检查
-                </button>
-              </div>
-              <div className="panel-actions">
-                <button type="button" className="ghost compact-button" onClick={() => void loadWechatChannelStatusOnly()} disabled={Boolean(busy)}>
-                  <RefreshCw size={14} aria-hidden="true" />刷新状态
-                </button>
-              </div>
-            </div>
+            <IntegrationCenterHeader
+              activeView={wechatWorkbenchView}
+              busy={Boolean(busy)}
+              onRefresh={() => void loadWechatChannelStatusOnly()}
+              onViewChange={setWechatWorkbenchView}
+              summary={[
+                {
+                  id: "ready",
+                  label: "通道就绪",
+                  value: wechatChannelStatus ? `${wechatChannelStatus.summary.ready}/${wechatChannelStatus.summary.total}` : "0/3",
+                  tone: "ready",
+                },
+                {
+                  id: "pending",
+                  label: "待安全发送",
+                  value: wechatChannelStatus?.summary.pendingSendTasks ?? pendingSendTaskCount,
+                  tone: "warning",
+                },
+                {
+                  id: "adapter",
+                  label: "待发送器",
+                  value: wechatChannelStatus?.summary.needsSendAdapter ?? wechatSendAdapterIssueChannels.length,
+                  tone: "danger",
+                },
+                {
+                  id: "manual",
+                  label: "人工接管",
+                  value: wechatChannelStatus?.summary.manualLockedConversations ?? manualLockedConversations.length,
+                },
+                {
+                  id: "config",
+                  label: "待配置",
+                  value: wechatChannelStatus?.summary.needsConfig ?? 0,
+                  tone: "warning",
+                },
+              ]}
+            />
             <div className="wechat-channel-panel-body">
-              <div className="wechat-channel-summary">
-                <div>
-                  <strong>{wechatChannelStatus ? `${wechatChannelStatus.summary.ready}/${wechatChannelStatus.summary.total}` : "0/3"}</strong>
-                  <span>通道就绪</span>
-                </div>
-                <div>
-                  <strong>{wechatChannelStatus?.summary.pendingSendTasks ?? pendingSendTaskCount}</strong>
-                  <span>待安全发送</span>
-                </div>
-                <div>
-                  <strong>{wechatChannelStatus?.summary.needsSendAdapter ?? wechatSendAdapterIssueChannels.length}</strong>
-                  <span>待发送器</span>
-                </div>
-                <div>
-                  <strong>{wechatChannelStatus?.summary.manualLockedConversations ?? manualLockedConversations.length}</strong>
-                  <span>人工接管</span>
-                </div>
-                <div>
-                  <strong>{wechatChannelStatus?.summary.needsConfig ?? 0}</strong>
-                  <span>待配置</span>
-                </div>
-              </div>
               {wechatWorkbenchView === "channels" ? (
-                <div className="wechat-channel-list" aria-label="微信通道列表">
+                <div className="wechat-channel-management">
+                  <PersonalWechatInstancesPanel
+                    registry={personalWechatRpaRegistry}
+                    busy={busy === "保存个人微信实例" || busy === "停用个人微信实例"}
+                    error={personalWechatRpaError}
+                    onValidate={validatePersonalWechatInstance}
+                    onSave={savePersonalWechatInstance}
+                    onDisable={disablePersonalWechatInstance}
+                  />
+                  <div className="wechat-channel-list" aria-label="微信通道列表">
                   {wechatChannelStatus?.channels.length ? (
                     wechatChannelStatus.channels.map((channel) => (
                       <article className={`wechat-channel-card ${channel.status}`} key={channel.key}>
@@ -9377,6 +10587,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       </div>
                     </div>
                   )}
+                  </div>
                 </div>
               ) : null}
               {wechatWorkbenchView === "flow" ? (
@@ -9572,6 +10783,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               ) : null}
               {wechatWorkbenchView === "config" ? (
                 <div className="wechat-config-list" aria-label="微信通道配置检查">
+                  <div className="wechat-work-readiness-host">
+                    <WechatWorkReadinessPanel
+                      readiness={wechatWorkReadiness}
+                      busy={busy === "刷新企业微信预检"}
+                      error={wechatWorkReadinessError}
+                      onRefresh={() => void refreshWechatWorkReadiness()}
+                    />
+                  </div>
                   {wechatChannelStatus?.channels.length ? (
                     wechatChannelStatus.channels.map((channel) => (
                       <article className={`wechat-config-card ${channel.status}`} key={channel.key}>
@@ -9665,6 +10884,68 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               </div>
               {activeJob && isHighValueDesignJob(activeJob) ? <strong className="tag danger">高价值</strong> : <strong className="tag">低预算快审</strong>}
             </div>
+
+            <ConversationWorkbench
+              activePane={conversationMobilePane}
+              inbox={conversationWorkbenchInbox}
+              thread={conversationWorkbenchThread}
+              context={conversationWorkbenchContext}
+              inboxCollapsed={conversationInboxCollapsed}
+              actions={{
+                onPaneChange: setConversationMobilePane,
+                onToggleInbox: () => setConversationInboxCollapsed((current) => !current),
+                onSearchChange: (value) => {
+                  setConversationSearch(value);
+                  setConversationPage(1);
+                },
+                onScopeChange: (value) => {
+                  setConversationScope(value as "all" | "manual" | "ai");
+                  setConversationPage(1);
+                },
+                onChannelChange: (value) => {
+                  setConversationChannel(value as "all" | "work_wechat" | "personal_wechat");
+                  setConversationPage(1);
+                },
+                onStatusChange: (value) => {
+                  setConversationStatus(value as "all" | "unassigned" | "overdue" | "manual");
+                  setConversationPage(1);
+                },
+                onSortChange: (value) => {
+                  setConversationSort(value as "priority" | "latest" | "oldest");
+                  setConversationPage(1);
+                },
+                onSelectConversation: (conversationId) => void changeActiveConversation(conversationId),
+                onPageChange: setConversationPage,
+                onPageSizeChange: (pageSize) => {
+                  setConversationPageSize(pageSize);
+                  setConversationPage(1);
+                },
+                onRefresh: () => void refreshConversationMessages(),
+                onTransfer: focusConversationOperationsEditor,
+                onOpenIncidentPolicy: () => {
+                  setSendWorkbenchView("diagnostics");
+                  scrollToWorkspaceSection("send-center");
+                },
+                onRetryIncident: (incidentId) => {
+                  const task = activeConversationSendTasks.find((item) => item.id === incidentId);
+                  if (task) void requeueTask(task);
+                },
+                onSuggestionTabChange: () => undefined,
+                onUseSuggestion: insertManualReplySuggestion,
+                onRegenerateSuggestion: () => void generateManualReplySuggestion(),
+                onReplyChange: (value) => {
+                  setManualReplyText(value);
+                  setManualReplyFeedback("");
+                },
+                onSendReply: () => void enqueueManualConversationReply(),
+                onOpenTask: (taskId) => {
+                  setActiveId(taskId);
+                  scrollToWorkspaceSection("design-center");
+                },
+                onEditAssignment: focusConversationOperationsEditor,
+                onQuickAction: (actionId) => activeConversationReviewActionItems.find((item) => item.key === actionId)?.run(),
+              }}
+            />
 
             {activeJob ? (
               <div className="chat-detail">
@@ -13594,10 +14875,29 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <div className="panel-head">
               <div>
                 <h2><LockKeyhole size={17} aria-hidden="true" />多账号控制</h2>
-                <span>每个微信账号独立排队，避免焦点混乱</span>
+                <span>微信实例、窗口安全和操作员权限统一管理</span>
               </div>
-              <LockKeyhole size={20} aria-hidden="true" />
+              <div className="segmented-control" role="group" aria-label="账号与权限视图">
+                <button
+                  type="button"
+                  className={accountWorkbenchView === "wechat" ? "selected" : ""}
+                  aria-pressed={accountWorkbenchView === "wechat"}
+                  onClick={() => setAccountWorkbenchView("wechat")}
+                >
+                  微信账号
+                </button>
+                <button
+                  type="button"
+                  className={accountWorkbenchView === "access" ? "selected" : ""}
+                  aria-pressed={accountWorkbenchView === "access"}
+                  onClick={() => setAccountWorkbenchView("access")}
+                >
+                  角色权限
+                </button>
+              </div>
             </div>
+            {accountWorkbenchView === "wechat" ? (
+              <>
             <div className="window-actions">
               <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
                 <Search size={15} aria-hidden="true" />采集当前窗口
@@ -13684,6 +14984,30 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 );
               })}
             </div>
+              </>
+            ) : operatorAccessStatus && operatorAccessPolicy ? (
+              <OperatorAccessPanel
+                status={operatorAccessStatus}
+                policy={operatorAccessPolicy}
+                readiness={{
+                  trustedPrincipal: operatorAccessStatus.trustedPrincipal,
+                  enforcementReady: operatorAccessStatus.enforcementReady,
+                  blockers: operatorAccessStatus.blockers,
+                  requiredNextSteps: operatorAccessStatus.requiredNextSteps,
+                  reason: "当前桌面工作台尚未连接可信操作员身份，权限矩阵不会直接放行业务写操作。",
+                }}
+              />
+            ) : (
+              <div className="empty empty-cta" role="status">
+                <strong>权限策略状态暂不可用</strong>
+                <span>刷新工作台后会读取服务端权限模型；在可信登录接入前默认拒绝授权。</span>
+                <div className="empty-actions">
+                  <button type="button" className="primary" onClick={() => void load()} disabled={Boolean(busy)}>
+                    <RefreshCw size={16} aria-hidden="true" />刷新权限状态
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className={`panel send-workbench send-mode-${sendWorkbenchView}`} id="send-center">
@@ -15369,7 +16693,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <strong className={busy ? "busy" : undefined}>{busy ? `${busy}处理中` : "本地工作台已就绪"}</strong>
         </footer>
       </section>
-    </main>
+    </WorkbenchShell>
   );
 }
 
@@ -17891,9 +19215,10 @@ function wechatChannelLabel(channel: WechatChannelKey) {
 
 function wechatConversationChannelLabel(channel?: string | null) {
   const labels: Record<string, string> = {
-    wechat: "个人微信",
+    wechat: "微信",
     personal_wechat: "个人微信",
     work_wechat: "企业微信",
+    wechat_work_kf: "企业微信",
     mini_program: "微信小程序",
   };
   const key = String(channel || "").trim();

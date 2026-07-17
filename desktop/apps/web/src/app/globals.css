@@ -37,6 +37,1044 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
 }
 
+/* Maturity wave: multi-instance channel management stays table-led and contained. */
+.apple-light-shell .wechat-channel-management {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  gap: 14px;
+  align-content: start;
+  overflow: auto;
+}
+
+.apple-light-shell .wechat-channel-management > * {
+  min-width: 0;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-center"] .wechat-channel-management .wechat-channel-list {
+  height: auto !important;
+  overflow: visible !important;
+}
+
+.apple-light-shell .wechat-work-readiness-host {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.apple-light-shell .workspace[data-active-section="account-center"] #account-center > section {
+  margin: 0 14px 14px;
+}
+
+@media (max-width: 760px) {
+  .apple-light-shell .wechat-channel-management {
+    gap: 10px;
+  }
+
+  .apple-light-shell .workspace[data-active-section="account-center"] #account-center > section {
+    margin: 0 10px 10px;
+  }
+}
+
+/* WeChat-linked message center: three-pane inbox, timeline and customer context. */
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] > .main-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center {
+  grid-column: 1 / -1 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid #dfe5ee !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  box-shadow: 0 18px 50px rgba(32, 52, 86, 0.08) !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center > :is(.panel-head, .chat-detail, .empty) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(480px, 0.66fr) minmax(270px, 0.3fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 660px !important;
+  height: min(790px, calc(100dvh - 126px)) !important;
+  max-height: 790px !important;
+  overflow: hidden !important;
+  background: #f5f7fb !important;
+}
+
+.conversation-inbox-panel,
+.conversation-thread-panel,
+.conversation-context-panel {
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+}
+
+.conversation-inbox-panel {
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  border-right: 1px solid #e4e8ef;
+}
+
+.conversation-inbox-head,
+.conversation-thread-head,
+.conversation-context-title,
+.customer-profile-head,
+.takeover-section,
+.manual-reply-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.conversation-inbox-head {
+  padding: 18px 18px 13px;
+}
+
+.conversation-inbox-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #172033;
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.conversation-inbox-head span {
+  display: block;
+  margin-top: 5px;
+  color: #7d8798;
+  font-size: 12px;
+}
+
+.conversation-icon-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #dfe5ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #667085;
+}
+
+.conversation-icon-button:hover:not(:disabled) {
+  border-color: #007aff;
+  color: #007aff;
+}
+
+.conversation-scope-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 16px 12px;
+  padding: 4px;
+  border-radius: 11px;
+  background: #f0f2f6;
+}
+
+.conversation-scope-tabs button,
+.conversation-channel-tabs button {
+  min-width: 0;
+  border: 0;
+  box-shadow: none;
+  color: #6f7888;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.conversation-scope-tabs button {
+  padding: 8px 6px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.conversation-scope-tabs button.selected {
+  background: #007aff;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(0, 122, 255, 0.22);
+}
+
+.conversation-search-box {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 12px;
+  padding: 0 10px;
+  border: 1px solid #dfe5ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #8b95a5;
+}
+
+.conversation-search-box:focus-within {
+  border-color: #007aff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
+.conversation-search-box input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #20283a;
+  font-size: 13px;
+}
+
+.conversation-search-box button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: #eef1f5;
+  color: #7d8798;
+}
+
+.conversation-channel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.conversation-channel-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.conversation-channel-tabs button.selected {
+  background: #e8f2ff;
+  color: #006de5;
+}
+
+.conversation-inbox-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 8px !important;
+  overflow-y: auto !important;
+  background: #fff !important;
+  scrollbar-gutter: stable;
+}
+
+.conversation-inbox-list > button {
+  display: grid !important;
+  grid-template-columns: 38px minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 11px 10px !important;
+  border: 1px solid transparent !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+  color: #20283a !important;
+  text-align: left !important;
+  box-shadow: none !important;
+}
+
+.conversation-inbox-list > button:hover:not(:disabled) {
+  background: #f3f6fa !important;
+}
+
+.conversation-inbox-list > button.selected {
+  border-color: #007aff !important;
+  background: #007aff !important;
+  color: #fff !important;
+  box-shadow: 0 10px 24px rgba(0, 122, 255, 0.22) !important;
+}
+
+.conversation-avatar {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e9eef6;
+  color: #344054;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.conversation-inbox-list > button.selected .conversation-avatar {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.conversation-list-copy,
+.conversation-list-title,
+.conversation-list-badges {
+  min-width: 0;
+}
+
+.conversation-list-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.conversation-list-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conversation-list-title strong,
+.conversation-list-copy > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-list-title strong {
+  font-size: 13px;
+  font-weight: 730;
+}
+
+.conversation-list-title time,
+.conversation-list-copy > small {
+  color: #7d8798;
+  font-size: 11px;
+}
+
+.conversation-inbox-list > button.selected :is(.conversation-list-title time, .conversation-list-copy > small) {
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.conversation-inbox-list > button.selected .conversation-list-title strong {
+  color: #fff !important;
+}
+
+.conversation-list-badges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.conversation-list-badges :is(em, mark) {
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.conversation-list-badges em.work {
+  background: #e8f2ff;
+  color: #006de5;
+}
+
+.conversation-list-badges em.personal {
+  background: #eaf8ee;
+  color: #18864b;
+}
+
+.conversation-list-badges em.generic {
+  background: #f0f2f6;
+  color: #596273;
+}
+
+.conversation-list-badges em.ai {
+  background: #eef3ff;
+  color: #315ec8;
+}
+
+.conversation-list-badges em.manual,
+.conversation-list-badges mark {
+  background: #fff2e8;
+  color: #b54708;
+}
+
+.conversation-inbox-list > button.selected .conversation-list-badges :is(em, mark) {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.conversation-unread-badge {
+  display: inline-grid !important;
+  min-width: 20px !important;
+  height: 20px !important;
+  padding: 0 6px !important;
+  place-items: center !important;
+  border-radius: 999px !important;
+  background: #ff3b30 !important;
+  color: #fff !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+}
+
+.conversation-service-empty {
+  display: grid;
+  min-height: 180px;
+  padding: 24px;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  color: #7d8798;
+  text-align: center;
+}
+
+.conversation-service-empty strong {
+  color: #344054;
+}
+
+.conversation-thread-panel {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  border-right: 1px solid #e4e8ef;
+}
+
+.conversation-thread-head {
+  min-height: 72px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #e9edf3;
+}
+
+.conversation-thread-identity,
+.conversation-thread-actions,
+.conversation-mode-badge,
+.conversation-safe-note,
+.composer-tools {
+  display: flex;
+  align-items: center;
+}
+
+.conversation-thread-identity {
+  min-width: 0;
+  gap: 10px;
+}
+
+.conversation-avatar.large {
+  width: 42px;
+  height: 42px;
+  background: #dcecff;
+  color: #006de5;
+}
+
+.conversation-thread-identity > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.conversation-thread-identity strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-thread-identity span {
+  color: #7d8798;
+  font-size: 11px;
+}
+
+.conversation-thread-actions {
+  gap: 8px;
+}
+
+.conversation-mobile-nav,
+.conversation-mobile-context-head {
+  display: none;
+}
+
+.conversation-mode-badge {
+  gap: 5px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: #eaf8ee;
+  color: #18864b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.conversation-mode-badge.manual {
+  background: #fff2e8;
+  color: #b54708;
+}
+
+.conversation-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #f7f9fc;
+  scrollbar-gutter: stable;
+}
+
+.conversation-timeline-state {
+  display: grid;
+  min-height: 220px;
+  margin: auto;
+  padding: 28px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 1px dashed #d7dde7;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #7d8798;
+  text-align: center;
+}
+
+.conversation-timeline-state strong {
+  color: #344054;
+}
+
+.conversation-timeline-state.error {
+  border-color: #f2b8b5;
+  background: #fff6f5;
+  color: #b42318;
+}
+
+.conversation-bubble-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.conversation-bubble-row.outbound {
+  flex-direction: row-reverse;
+}
+
+.conversation-avatar.bubble-avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+}
+
+.conversation-bubble-row.outbound .bubble-avatar {
+  background: #1f2937;
+  color: #fff;
+}
+
+.conversation-bubble {
+  display: grid;
+  gap: 7px;
+  max-width: min(76%, 620px);
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e3e7ed;
+  border-radius: 14px 14px 14px 4px;
+  background: #fff;
+  color: #20283a;
+  box-shadow: 0 5px 14px rgba(31, 41, 55, 0.05);
+}
+
+.conversation-bubble-row.outbound .conversation-bubble {
+  border-color: #c7defa;
+  border-radius: 14px 14px 4px 14px;
+  background: #dcecff;
+  box-shadow: none;
+}
+
+.conversation-bubble-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 10px;
+}
+
+.conversation-bubble-meta strong {
+  color: #475467;
+  font-size: 10px;
+}
+
+.conversation-bubble-meta time,
+.conversation-bubble-status {
+  color: #8b95a5;
+  font-size: 10px;
+}
+
+.conversation-bubble p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.conversation-attachments {
+  display: grid;
+  gap: 6px;
+}
+
+.conversation-attachment {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.conversation-attachment span,
+.conversation-attachment :is(strong, small) {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.conversation-attachment strong {
+  font-size: 11px;
+}
+
+.conversation-attachment small {
+  margin-top: 2px;
+  color: #7d8798;
+  font-size: 10px;
+}
+
+.manual-reply-composer {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid #e9edf3;
+  background: #fff;
+}
+
+.manual-reply-composer textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 70px;
+  max-height: 150px;
+  padding: 10px 11px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #20283a;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.manual-reply-toolbar {
+  gap: 10px;
+}
+
+.composer-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-tools {
+  gap: 6px;
+  color: #7d8798;
+  font-size: 11px;
+}
+
+.conversation-character-count {
+  color: #98a2b3;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.conversation-composer-feedback {
+  color: #006de5;
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.conversation-send-button {
+  min-width: 88px;
+  justify-content: center;
+  border-color: #007aff !important;
+  background: #007aff !important;
+  color: #fff !important;
+  box-shadow: 0 8px 18px rgba(0, 122, 255, 0.2) !important;
+}
+
+.conversation-safe-note {
+  justify-content: center;
+  gap: 5px;
+  color: #8b95a5;
+  font-size: 10px;
+}
+
+.conversation-context-panel {
+  display: block;
+  overflow-y: auto;
+  background: #fff;
+}
+
+.conversation-context-section {
+  padding: 16px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.conversation-operations-host {
+  min-width: 0;
+  background: #fff;
+}
+
+.conversation-operations-freshness {
+  display: grid;
+  gap: 3px;
+  padding: 10px 16px;
+  border-top: 1px solid #e6eaf0;
+  border-bottom: 1px solid #edf0f4;
+  background: #f7f8fa;
+  color: #646a73;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.conversation-operations-freshness strong {
+  color: #1f2329;
+  font-size: 12px;
+}
+
+.conversation-operations-freshness span {
+  overflow-wrap: anywhere;
+}
+
+.conversation-operations-freshness.ready {
+  background: #effaf4;
+  color: #0f7b45;
+}
+
+.conversation-operations-freshness.stale {
+  background: #fff8eb;
+  color: #a85400;
+}
+
+.conversation-operations-freshness.error {
+  background: #fff3f2;
+  color: #b42318;
+}
+
+.conversation-operations-freshness.ready strong,
+.conversation-operations-freshness.stale strong,
+.conversation-operations-freshness.error strong {
+  color: currentColor;
+}
+
+.conversation-context-title {
+  gap: 10px;
+  margin-bottom: 13px;
+}
+
+.conversation-context-title strong {
+  color: #20283a;
+  font-size: 13px;
+}
+
+.conversation-context-title span,
+.conversation-context-title button {
+  border: 0;
+  background: transparent;
+  color: #7d8798;
+  font-size: 10px;
+}
+
+.conversation-context-title button {
+  padding: 0;
+  color: #007aff;
+}
+
+.customer-profile-head {
+  justify-content: flex-start;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.conversation-avatar.profile-avatar {
+  width: 44px;
+  height: 44px;
+  background: #eaf2ff;
+  color: #006de5;
+}
+
+.customer-profile-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.customer-profile-head strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.customer-profile-head span {
+  color: #7d8798;
+  font-size: 11px;
+}
+
+.customer-profile-grid {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.customer-profile-grid div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.customer-profile-grid :is(dt, dd) {
+  margin: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.customer-profile-grid dt {
+  color: #8b95a5;
+}
+
+.customer-profile-grid dd {
+  color: #344054;
+}
+
+.customer-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.customer-tag-list span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #eaf2ff;
+  color: #006de5;
+  font-size: 10px;
+}
+
+.customer-tag-list span.muted {
+  background: #f1f3f6;
+  color: #8b95a5;
+}
+
+.conversation-memory-list,
+.operation-history ul {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-memory-list li,
+.operation-history li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 11px;
+  border-left: 2px solid #d9e8fb;
+}
+
+.conversation-memory-list span,
+.operation-history li span {
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
+.conversation-memory-list time,
+.operation-history li time {
+  color: #98a2b3;
+  font-size: 10px;
+}
+
+.conversation-context-empty,
+.customer-note {
+  margin: 0;
+  color: #7d8798;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.takeover-section {
+  gap: 12px;
+}
+
+.takeover-section > div {
+  display: grid;
+  gap: 5px;
+}
+
+.takeover-section > div strong {
+  color: #20283a;
+  font-size: 12px;
+}
+
+.takeover-section > div span {
+  color: #7d8798;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.conversation-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 64px;
+  padding: 4px 7px 4px 4px;
+  border: 0;
+  border-radius: 999px;
+  background: #e8eef5;
+  color: #667085;
+}
+
+.conversation-switch > span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(31, 41, 55, 0.18);
+}
+
+.conversation-switch b {
+  font-size: 10px;
+}
+
+.conversation-switch.on {
+  background: #007aff;
+  color: #fff;
+}
+
+@media (max-width: 1260px) {
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+    grid-template-columns: minmax(270px, 0.34fr) minmax(440px, 0.66fr) !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .conversation-context-panel {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-top: 1px solid #e4e8ef;
+    overflow: visible;
+  }
+
+  .conversation-context-section {
+    border-right: 1px solid #edf0f4;
+  }
+}
+
+@media (max-width: 1000px) and (min-width: 761px) {
+  .conversation-context-panel > .conversation-operations-host {
+    grid-column: 1 / -1;
+    border-right: 1px solid #edf0f4;
+    border-bottom: 1px solid #edf0f4;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center {
+    border-radius: 0 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+    grid-auto-flow: row !important;
+    grid-auto-columns: auto !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: hidden !important;
+  }
+
+  .conversation-inbox-panel {
+    max-height: 420px;
+    border-right: 0;
+    border-bottom: 1px solid #e4e8ef;
+  }
+
+  .conversation-channel-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .conversation-thread-panel {
+    grid-template-rows: auto minmax(420px, 58dvh) auto !important;
+    border-right: 0;
+  }
+
+  .conversation-thread-head {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .conversation-thread-actions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .conversation-bubble {
+    max-width: 84%;
+  }
+
+  .manual-reply-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .conversation-send-button {
+    width: 100%;
+  }
+
+  .conversation-context-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Iteration 75 Final mobile topbar containment: override all earlier narrow-toolbar rules. */
 @media (max-width: 760px) {
   body .apple-light-shell.shell .topbar {
@@ -14017,6 +15055,7 @@ body:has(.apple-light-shell) {
 }
 
 .apple-light-shell .workspace > .apple-overview,
+.apple-light-shell .workspace > #overview-center,
 .apple-light-shell .workspace > .design-platform-config,
 .apple-light-shell .workspace > .dock-strip,
 .apple-light-shell .workspace > .metrics,
@@ -14031,6 +15070,10 @@ body:has(.apple-light-shell) {
 .apple-light-shell .workspace > .review-grid,
 .apple-light-shell .workspace > .quote-grid {
   display: none !important;
+}
+
+.apple-light-shell .workspace[data-active-section="overview-center"] > #overview-center {
+  display: flex !important;
 }
 
 .apple-light-shell .workspace[data-active-section="design-platform-config"] > .design-platform-config,
@@ -29039,7 +30082,8 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
     min-height: 0 !important;
     height: auto !important;
     max-height: none !important;
-    overflow: visible !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
   }
 
   body .apple-light-shell.shell .topbar .top-actions .toolbar-group.context-toolbar[data-toolbar-scope] {
@@ -29687,5 +30731,354 @@ body .apple-light-shell.shell .workspace[data-active-section="wechat-channel-cen
   body .apple-light-shell.shell .dock-strip,
   body .apple-light-shell.shell .system-footer {
     display: none !important;
+  }
+}
+
+/* Final message-center containment overrides; keep after historical workbench rules. */
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] > .main-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center {
+  grid-column: 1 / -1 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center::before,
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center::after {
+  display: none !important;
+  content: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center > :is(.panel-head, .chat-detail, .empty) {
+  display: none !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+  display: grid !important;
+  position: relative !important;
+  z-index: 2 !important;
+  grid-auto-flow: row !important;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(480px, 0.66fr) minmax(270px, 0.3fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 640px !important;
+  height: min(820px, calc(100dvh - 112px)) !important;
+  max-height: 820px !important;
+  overflow: hidden !important;
+}
+
+body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-thread-panel {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+}
+
+@media (max-width: 1260px) and (min-width: 761px) {
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+    grid-template-columns: minmax(270px, 0.34fr) minmax(440px, 0.66fr) !important;
+    grid-template-rows: minmax(660px, 1fr) auto !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center {
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    min-height: 520px !important;
+    height: calc(100dvh - 150px) !important;
+    max-height: none !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center :is(
+      .conversation-inbox-panel,
+      .conversation-thread-panel,
+      .conversation-context-panel
+    ) {
+    position: static !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: 100% !important;
+    transform: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console > :is(
+      .conversation-inbox-panel,
+      .conversation-thread-panel,
+      .conversation-context-panel
+    ) {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console[data-mobile-pane="inbox"] > .conversation-inbox-panel {
+    display: grid !important;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console[data-mobile-pane="thread"] > .conversation-thread-panel {
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-chat-console[data-mobile-pane="context"] > .conversation-context-panel {
+    display: block !important;
+    overflow-y: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-inbox-list {
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-thread-head {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+    gap: 9px !important;
+    min-height: 62px !important;
+    padding: 9px 11px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-thread-identity .conversation-avatar {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-thread-actions > :not(.conversation-context-open) {
+    display: none !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-mobile-nav {
+    display: inline-flex !important;
+    min-width: 34px !important;
+    min-height: 34px !important;
+    padding: 7px 9px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 4px !important;
+    border: 1px solid #dfe5ee !important;
+    border-radius: 10px !important;
+    background: #fff !important;
+    color: #344054 !important;
+    box-shadow: none !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-context-open {
+    border-color: #cfe3ff !important;
+    background: #eaf3ff !important;
+    color: #006de5 !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-mobile-context-head {
+    position: sticky !important;
+    z-index: 3 !important;
+    top: 0 !important;
+    display: flex !important;
+    min-height: 58px !important;
+    padding: 10px 12px !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    border-bottom: 1px solid #e9edf3 !important;
+    background: rgba(255, 255, 255, 0.96) !important;
+    backdrop-filter: blur(12px) !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .manual-reply-composer {
+    gap: 6px !important;
+    padding: 9px 11px 11px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .manual-reply-composer textarea {
+    min-height: 56px !important;
+    max-height: 100px !important;
+  }
+
+  body .apple-light-shell.shell .workspace[data-active-section="conversation-center"] #conversation-center .conversation-safe-note {
+    justify-content: flex-start !important;
+    text-align: left !important;
+  }
+}
+
+/* Modular workbench v2: shared Tencent-style chrome for every feature module. */
+.modular-workbench.shell {
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--wk-color-text);
+  background: var(--wk-color-surface);
+  font-family: var(--wk-font-family);
+}
+
+.modular-workbench.shell::before,
+.modular-workbench.shell::after,
+.modular-workbench .workspace::before,
+.modular-workbench .workspace::after {
+  display: none;
+}
+
+.modular-workbench .workspace {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+  background: var(--wk-color-surface);
+}
+
+.modular-workbench .status-line {
+  position: relative;
+  top: auto;
+  z-index: 2;
+  min-height: 30px;
+  border-bottom: 1px solid var(--wk-color-border);
+  padding: 6px 18px;
+  color: var(--wk-color-text-secondary);
+  background: var(--wk-color-brand-subtle);
+  font-size: var(--wk-font-size-xs);
+}
+
+.modular-workbench .workspace[data-active-section] > :is(
+  .asset-grid,
+  .main-grid,
+  .bottom-grid,
+  .catalog-grid,
+  .training-grid,
+  .wechat-channel-grid,
+  .send-safety-grid,
+  .routing-grid,
+  .review-grid,
+  .quote-grid
+) {
+  padding: 14px 18px 18px;
+}
+
+.modular-workbench .panel,
+.modular-workbench .design-platform-config,
+.modular-workbench .apple-overview,
+.modular-workbench .readiness-banner {
+  border-color: var(--wk-color-border) !important;
+  border-radius: var(--wk-radius-lg) !important;
+  background: var(--wk-color-surface) !important;
+  box-shadow: none !important;
+}
+
+.modular-workbench :is(button, input, select, textarea) {
+  font-family: var(--wk-font-family);
+}
+
+.modular-workbench :is(.ghost, .primary) {
+  min-height: var(--wk-control-height);
+  border-radius: var(--wk-radius-md);
+  font-size: var(--wk-font-size-sm);
+}
+
+.modular-workbench .primary {
+  border-color: var(--wk-color-brand);
+  background: var(--wk-color-brand);
+}
+
+.modular-workbench .primary:hover:not(:disabled) {
+  border-color: var(--wk-color-brand-hover);
+  background: var(--wk-color-brand-hover);
+}
+
+.modular-workbench .system-footer {
+  min-height: 34px;
+  border: 0;
+  border-top: 1px solid var(--wk-color-border);
+  border-radius: 0;
+  padding: 4px 14px;
+  background: var(--wk-color-surface);
+  box-shadow: none;
+  font-size: var(--wk-font-size-xs);
+}
+
+@media (max-width: 760px) {
+  .modular-workbench .workspace {
+    padding-bottom: calc(58px + env(safe-area-inset-bottom));
+  }
+
+  .modular-workbench .status-line {
+    padding-inline: 10px;
+  }
+
+  .modular-workbench .workspace[data-active-section] > :is(
+    .asset-grid,
+    .main-grid,
+    .bottom-grid,
+    .catalog-grid,
+    .training-grid,
+    .wechat-channel-grid,
+    .send-safety-grid,
+    .routing-grid,
+    .review-grid,
+    .quote-grid
+  ) {
+    padding: 10px 10px 14px;
+  }
+
+  .modular-workbench .system-footer {
+    display: none;
+  }
+}
+
+/* Modular message center: reserve one real mobile viewport between the topbar and bottom navigation. */
+@media (max-width: 760px) {
+  body .apple-light-shell.shell.modular-workbench .workspace[data-active-section="conversation-center"] {
+    box-sizing: border-box;
+    height: calc(100dvh - 112px) !important;
+    min-height: 0 !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell.modular-workbench .workspace[data-active-section="conversation-center"] > .main-grid {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    align-items: stretch !important;
+    padding: 8px 10px 10px !important;
+    overflow: hidden !important;
+  }
+
+  body .apple-light-shell.shell.modular-workbench .workspace[data-active-section="conversation-center"] #conversation-center {
+    display: grid !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    justify-self: stretch !important;
+  }
+
+  body .apple-light-shell.shell.modular-workbench .workspace[data-active-section="conversation-center"]
+    #conversation-center
+    > section[aria-label="会话管理工作台"] {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
   }
 }

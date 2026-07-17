@@ -1,0 +1,53 @@
+:root {
+  --wk-color-brand: #1677ff;
+  --wk-color-brand-hover: #0f68e8;
+  --wk-color-brand-active: #0958d9;
+  --wk-color-brand-soft: #eaf3ff;
+  --wk-color-brand-subtle: #f4f8ff;
+  --wk-color-text: #171a21;
+  --wk-color-text-secondary: #4f5663;
+  --wk-color-text-tertiary: #8b93a1;
+  --wk-color-border: #e4e8ef;
+  --wk-color-border-strong: #d7dde7;
+  --wk-color-surface: #ffffff;
+  --wk-color-surface-subtle: #f7f8fa;
+  --wk-color-surface-hover: #f5f8fd;
+  --wk-color-success: #16b364;
+  --wk-color-success-soft: #eaf8f0;
+  --wk-color-warning: #f79009;
+  --wk-color-warning-soft: #fff4e5;
+  --wk-color-danger: #f04438;
+  --wk-color-danger-soft: #fff0ef;
+  --wk-color-neutral-soft: #f0f2f5;
+  --wk-font-family: Inter, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --wk-font-size-xs: 11px;
+  --wk-font-size-sm: 12px;
+  --wk-font-size-md: 13px;
+  --wk-font-size-lg: 15px;
+  --wk-font-size-xl: 20px;
+  --wk-font-size-title: 24px;
+  --wk-line-height-tight: 1.25;
+  --wk-line-height-base: 1.5;
+  --wk-radius-sm: 4px;
+  --wk-radius-md: 6px;
+  --wk-radius-lg: 8px;
+  --wk-shadow-popover: 0 10px 30px rgba(26, 39, 63, 0.1);
+  --wk-sidebar-width: 212px;
+  --wk-topbar-height: 60px;
+  --wk-control-height: 32px;
+  --wk-space-1: 4px;
+  --wk-space-2: 8px;
+  --wk-space-3: 12px;
+  --wk-space-4: 16px;
+  --wk-space-5: 20px;
+  --wk-space-6: 24px;
+  --wk-motion-fast: 120ms ease;
+  --wk-motion-base: 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --wk-motion-fast: 0ms;
+    --wk-motion-base: 0ms;
+  }
+}
