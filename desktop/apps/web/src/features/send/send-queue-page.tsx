@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Send, ShieldCheck } from "lucide-react";
 import {
@@ -16,6 +17,7 @@ import {
 import { SendEmpty, SendLoading, SendNotice, SendPageFrame, errorMessage } from "./send-page-frame";
 import { canExecuteSendTask, isQueueSendTask, operationBlockReason } from "./send-policy";
 import { SendConfirmation, SendTaskCard } from "./send-task-card";
+import { SendTaskListItem } from "./send-task-list-item";
 import styles from "./send-pages.module.css";
 
 type QueueConfirmation = { kind: "execute"; taskId: string } | { kind: "process" } | null;
@@ -48,8 +50,8 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
     const errors: string[] = [];
     if (results[0].status === "fulfilled") {
       setTasks(results[0].value);
-      if (initialTaskId && !results[0].value.some((task) => task.id === initialTaskId)) {
-        errors.push(`未找到发送任务 ${initialTaskId}，请返回队列重新选择。`);
+      if (initialTaskId && !results[0].value.some((task) => task.id === initialTaskId && isQueueSendTask(task))) {
+        errors.push(`未找到待发送任务 ${initialTaskId}，请返回队列重新选择。`);
       }
     }
     else errors.push(errorMessage(results[0].reason, "发送队列读取失败"));
@@ -124,7 +126,9 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
     }
   }
 
-  const queueTasks = prioritizeTask(tasks.filter(isQueueSendTask), initialTaskId);
+  const queueTasks = initialTaskId
+    ? tasks.filter((task) => task.id === initialTaskId && isQueueSendTask(task))
+    : tasks.filter(isQueueSendTask);
   const operationBusy = Boolean(operationId);
   const confirmationTask = pendingConfirmation?.kind === "execute"
     ? tasks.find((task) => task.id === pendingConfirmation.taskId) || null
@@ -138,15 +142,18 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
       icon={<Send size={20} />}
       busy={busy || operationBusy}
       actions={(
-        <button
-          type="button"
-          data-action-id="send.queue.refresh"
-          aria-label="刷新安全发送队列"
-          onClick={() => void refreshQueue()}
-          disabled={busy || operationBusy}
-        >
-          <RefreshCw size={15} aria-hidden="true" /> 刷新队列
-        </button>
+        <>
+          {initialTaskId ? <Link className={styles.secondaryLink} href="/send/queue">返回队列</Link> : null}
+          <button
+            type="button"
+            data-action-id="send.queue.refresh"
+            aria-label="刷新安全发送队列"
+            onClick={() => void refreshQueue()}
+            disabled={busy || operationBusy}
+          >
+            <RefreshCw size={15} aria-hidden="true" /> 刷新
+          </button>
+        </>
       )}
     >
       {error ? <SendNotice tone="error" title="发送队列操作未完成">{error}</SendNotice> : null}
@@ -182,8 +189,8 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
 
       <section className={styles.panel} aria-labelledby="send-queue-list-title">
         <header className={styles.panelHeader}>
-          <div><h2 id="send-queue-list-title">待处理任务</h2><p>发送中任务只等待回执，不提供重复执行。</p></div>
-          <div className={styles.toolbar}>
+          <div><h2 id="send-queue-list-title">{initialTaskId ? "当前发送任务" : "待处理任务"}</h2><p>{initialTaskId ? "只核对并处理这一项真实发送任务。" : "发送中任务只等待回执；逐项操作需要进入任务详情。"}</p></div>
+          {!initialTaskId ? <div className={styles.toolbar}>
             <button
               type="button"
               className={styles.primaryButton}
@@ -194,13 +201,16 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
             >
               <ShieldCheck size={15} aria-hidden="true" /> 处理安全队列
             </button>
-          </div>
+          </div> : null}
         </header>
         {busy && !tasks.length ? <SendLoading label="正在读取发送队列" /> : null}
         {!busy && !queueTasks.length ? <SendEmpty title="发送队列为空" detail="本页不创建演示任务；业务页面生成真实发送任务后会显示在这里。" /> : null}
         {queueTasks.length ? (
           <div className={styles.taskList}>
             {queueTasks.map((task) => {
+              if (!initialTaskId) {
+                return <SendTaskListItem key={task.id} task={task} href={"/send/queue/" + encodeURIComponent(task.id)} />;
+              }
               const executable = canExecuteSendTask(task, adapter);
               const hint = task.status === "sending"
                 ? "任务正在等待桥接回执，禁止重复执行。"
@@ -243,9 +253,4 @@ export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePag
       </section>
     </SendPageFrame>
   );
-}
-
-function prioritizeTask(tasks: SendTask[], taskId: string) {
-  if (!taskId) return tasks;
-  return [...tasks].sort((left, right) => Number(right.id === taskId) - Number(left.id === taskId));
 }

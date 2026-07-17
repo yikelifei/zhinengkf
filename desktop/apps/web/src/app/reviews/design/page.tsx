@@ -1,10 +1,10 @@
-import { ReviewDesignPage } from "../../../features/reviews/review-design-page";
+import { ReviewDesignQueuePage } from "../../../features/reviews/review-queue-pages";
 import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
   return (
     <FeatureRouteShell routeId="reviewDesign">
-      <ReviewDesignPage />
+      <ReviewDesignQueuePage />
     </FeatureRouteShell>
   );
 }

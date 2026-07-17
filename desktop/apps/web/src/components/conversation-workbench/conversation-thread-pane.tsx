@@ -26,9 +26,18 @@ import { ComposerToolIcon, WorkbenchAvatar, WorkbenchToneTag } from "./workbench
 type ConversationThreadPaneProps = {
   thread: ConversationWorkbenchThread | null;
   actions: ConversationWorkbenchActions;
+  showBackButton?: boolean;
+  showContextButton?: boolean;
+  showTransferButton?: boolean;
 };
 
-export function ConversationThreadPane({ thread, actions }: ConversationThreadPaneProps) {
+export function ConversationThreadPane({
+  thread,
+  actions,
+  showBackButton = true,
+  showContextButton = true,
+  showTransferButton = true,
+}: ConversationThreadPaneProps) {
   if (!thread) {
     return (
       <section className={styles.threadPane} aria-label="会话详情">
@@ -53,9 +62,9 @@ export function ConversationThreadPane({ thread, actions }: ConversationThreadPa
   return (
     <section className={styles.threadPane} aria-label={`与 ${thread.participant.name} 的会话`}>
       <header className={styles.threadHeader}>
-        <button type="button" className={`${styles.iconButton} ${styles.mobileOnly}`} onClick={() => actions.onPaneChange("inbox")} aria-label="返回会话列表">
+        {showBackButton ? <button type="button" className={`${styles.iconButton} ${styles.mobileOnly}`} onClick={() => actions.onPaneChange("inbox")} aria-label="返回会话列表">
           <ArrowLeft size={17} aria-hidden="true" />
-        </button>
+        </button> : null}
         <WorkbenchAvatar avatar={thread.participant.avatar} size="large" />
         <div className={styles.participantCopy}>
           <div>
@@ -72,9 +81,9 @@ export function ConversationThreadPane({ thread, actions }: ConversationThreadPa
         <div className={styles.threadHeaderActions}>
           {thread.manualTakeoverLabel ? <WorkbenchToneTag tone="brand">{thread.manualTakeoverLabel}</WorkbenchToneTag> : null}
           <WorkbenchToneTag tone={thread.serviceStatusTone}>{thread.serviceStatusLabel}</WorkbenchToneTag>
-          <button type="button" className={styles.headerButton} onClick={actions.onTransfer}>
+          {showTransferButton ? <button type="button" className={styles.headerButton} onClick={actions.onTransfer}>
             <UserRoundCheck size={14} aria-hidden="true" />转接
-          </button>
+          </button> : null}
           {actions.onEndConversation ? (
             <button type="button" className={styles.headerButton} onClick={actions.onEndConversation}>
               <CircleX size={14} aria-hidden="true" />结束会话
@@ -85,9 +94,9 @@ export function ConversationThreadPane({ thread, actions }: ConversationThreadPa
               <MoreHorizontal size={16} aria-hidden="true" />
             </button>
           ) : null}
-          <button type="button" className={`${styles.iconButton} ${styles.contextButton}`} onClick={() => actions.onPaneChange("context")} aria-label="打开客户资料">
+          {showContextButton ? <button type="button" className={`${styles.iconButton} ${styles.contextButton}`} onClick={() => actions.onPaneChange("context")} aria-label="打开客户资料">
             <PanelRightOpen size={16} aria-hidden="true" />
-          </button>
+          </button> : null}
         </div>
       </header>
 

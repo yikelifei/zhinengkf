@@ -19,10 +19,16 @@ const productionRoutes = [
   "/overview",
   "/conversations",
   "/conversations/[id]",
+  "/conversations/[id]/context",
+  "/conversations/[id]/assignment",
   "/routing",
+  "/routing/process",
   "/send/queue",
+  "/send/queue/[id]",
   "/send/blocked",
+  "/send/blocked/[id]",
   "/send/diagnostics",
+  "/send/diagnostics/operations",
   "/integrations/channels",
   "/integrations/wechat-work",
   "/integrations/wechat-work/flow",
@@ -56,8 +62,11 @@ const productionRoutes = [
   "/training/skills",
   "/reviews/inbox",
   "/reviews/design",
+  "/reviews/design/[id]",
   "/reviews/quotes",
+  "/reviews/quotes/[id]",
   "/reviews/orders",
+  "/reviews/orders/[id]",
   "/reviews/logs",
   "/settings/access",
 ];
@@ -109,6 +118,10 @@ test("pathname resolver handles exact routes, entity detail routes, trailing sla
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview").id, "overview");
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview/").id, "overview");
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id?from=notification").id, "conversationDetail");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/context").id, "conversationContext");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/assignment").id, "conversationAssignment");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/send/queue/task-42").id, "sendQueueTask");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/reviews/design/job-42").id, "reviewDesignDecision");
   assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42").id, "designJobDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/quotes/quote-42").id, "salesQuoteDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/orders/order-42").id, "salesOrderDetail");

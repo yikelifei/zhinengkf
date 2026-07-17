@@ -129,11 +129,23 @@
 }
 
 .page button:focus-visible,
+.page a:focus-visible,
 .page input:focus-visible,
 .page select:focus-visible,
 .page textarea:focus-visible {
   outline: 2px solid #7aa7ff;
   outline-offset: 2px;
+}
+
+.page a.button,
+.page a.primaryButton,
+.page a.quietButton {
+  text-decoration: none;
+}
+
+.queueCount {
+  color: var(--governance-brand);
+  font-size: 24px;
 }
 
 .page button:disabled {
@@ -580,9 +592,14 @@
   }
 
   .pageHeader > button,
+  .pageHeader > a,
   .actionBar > button,
   .actionBar .buttonRow,
   .actionBar .buttonRow > button {
+    width: 100%;
+  }
+
+  .record > a {
     width: 100%;
   }
 

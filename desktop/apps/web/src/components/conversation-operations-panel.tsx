@@ -147,6 +147,8 @@ export function ConversationOperationsPanel({
         <button
           type="button"
           className={styles.assignButton}
+          data-action-id="conversations-assignment-assign-self"
+          aria-label="将当前会话分配给我"
           onClick={() => setAssignee(currentOperator.trim())}
           disabled={busy || !currentOperator.trim()}
         >
@@ -191,10 +193,10 @@ export function ConversationOperationsPanel({
       {error ? <div className={styles.error} role="alert">{error}</div> : null}
 
       <div className={styles.footer}>
-        <button type="button" className={styles.clearButton} onClick={() => setAssignee("")} disabled={busy || !assignee}>
+        <button type="button" className={styles.clearButton} data-action-id="conversations-assignment-clear" aria-label="取消当前会话分配" onClick={() => setAssignee("")} disabled={busy || !assignee}>
           取消分配
         </button>
-        <button type="button" className={styles.saveButton} onClick={() => void save()} disabled={busy || !changed}>
+        <button type="button" className={styles.saveButton} data-action-id="conversations-assignment-save" aria-label="保存会话分配与服务时限" onClick={() => void save()} disabled={busy || !changed}>
           <Save size={15} aria-hidden="true" />{busy ? "保存中" : "保存变更"}
         </button>
       </div>

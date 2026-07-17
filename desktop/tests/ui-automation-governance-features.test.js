@@ -34,7 +34,7 @@ test("automation separates run control from issue handling", () => {
 });
 
 test("notifications, agents, and overview are independent route-ready pages", () => {
-  const notifications = read("apps/web/src/features/notifications/notifications-page.tsx");
+  const notifications = combined("notifications");
   const agents = read("apps/web/src/features/agents/agents-page.tsx");
   const overview = read("apps/web/src/features/overview/overview-page.tsx");
   assert.match(notifications, /getNotifications/);
@@ -70,8 +70,11 @@ test("reviews expose one page for each approval responsibility", () => {
   const index = read("apps/web/src/features/reviews/index.ts");
   for (const page of [
     "ReviewInboxPage",
+    "ReviewDesignQueuePage",
     "ReviewDesignPage",
+    "ReviewQuotesQueuePage",
     "ReviewQuotesPage",
+    "ReviewOrdersQueuePage",
     "ReviewOrdersPage",
     "ReviewLogsPage",
   ]) {
@@ -83,6 +86,8 @@ test("reviews expose one page for each approval responsibility", () => {
   }
   assert.match(source, /identityExpectation/);
   assert.match(source, /pendingConfirmation/);
+  assert.match(source, /encodeURIComponent\(item\.id\)/);
+  assert.match(source, /打开审核决策/);
   assert.doesNotMatch(source, /createFailureDemo|createTimeoutDemo|createDemo/i);
 });
 

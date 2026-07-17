@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Ban, RefreshCw, ShieldAlert } from "lucide-react";
 import {
@@ -18,6 +19,7 @@ import {
   operationBlockReason,
 } from "./send-policy";
 import { SendConfirmation, SendTaskCard } from "./send-task-card";
+import { SendTaskListItem } from "./send-task-list-item";
 import styles from "./send-pages.module.css";
 
 type BlockedConfirmation = { kind: "requeue" | "cancel"; taskId: string } | null;
@@ -51,7 +53,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       });
       if (sequence === requestSequence.current) {
         setTasks(next);
-        if (initialTaskId && !next.some((task) => task.id === initialTaskId)) {
+        if (initialTaskId && !next.some((task) => task.id === initialTaskId && isBlockedSendTask(task))) {
           setError(`未找到被阻断任务 ${initialTaskId}，请返回列表重新选择。`);
         }
       }
@@ -108,7 +110,9 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
     }
   }
 
-  const blockedTasks = prioritizeTask(tasks.filter(isBlockedSendTask), initialTaskId);
+  const blockedTasks = initialTaskId
+    ? tasks.filter((task) => task.id === initialTaskId && isBlockedSendTask(task))
+    : tasks.filter(isBlockedSendTask);
   const confirmationTask = pendingConfirmation
     ? tasks.find((task) => task.id === pendingConfirmation.taskId) || null
     : null;
@@ -122,15 +126,18 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       icon={<ShieldAlert size={20} />}
       busy={busy || operationBusy}
       actions={(
-        <button
-          type="button"
-          data-action-id="send.blocked.refresh"
-          aria-label="刷新拦截与失败任务"
-          onClick={() => void refreshBlocked()}
-          disabled={busy || operationBusy}
-        >
-          <RefreshCw size={15} aria-hidden="true" /> 刷新列表
-        </button>
+        <>
+          {initialTaskId ? <Link className={styles.secondaryLink} href="/send/blocked">返回列表</Link> : null}
+          <button
+            type="button"
+            data-action-id="send.blocked.refresh"
+            aria-label="刷新拦截与失败任务"
+            onClick={() => void refreshBlocked()}
+            disabled={busy || operationBusy}
+          >
+            <RefreshCw size={15} aria-hidden="true" /> 刷新
+          </button>
+        </>
       )}
     >
       {error ? <SendNotice tone="error" title="拦截任务操作未完成">{error}</SendNotice> : null}
@@ -155,13 +162,16 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       ) : null}
       <section className={styles.panel} aria-labelledby="blocked-send-task-list-title">
         <header className={styles.panelHeader}>
-          <div><h2 id="blocked-send-task-list-title">需要人工判断的任务</h2><p>页面不提供解除会话人工接管或修改路由策略的捷径。</p></div>
+          <div><h2 id="blocked-send-task-list-title">{initialTaskId ? "当前拦截任务" : "需要人工判断的任务"}</h2><p>{initialTaskId ? "只判断这一项任务应重新排队还是取消。" : "列表只负责选择；不会解除人工接管或修改路由策略。"}</p></div>
         </header>
         {busy && !tasks.length ? <SendLoading label="正在读取拦截任务" /> : null}
         {!busy && !blockedTasks.length ? <SendEmpty title="没有需要处理的拦截任务" detail="当前没有服务端阻断、失败或投递不确定任务。" /> : null}
         {blockedTasks.length ? (
           <div className={styles.taskList}>
             {blockedTasks.map((task) => {
+              if (!initialTaskId) {
+                return <SendTaskListItem key={task.id} task={task} href={"/send/blocked/" + encodeURIComponent(task.id)} />;
+              }
               const canRequeue = canRequeueSendTask(task);
               const canCancel = canCancelSendTask(task);
               const hint = canRequeue || canCancel
@@ -207,9 +217,4 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       </section>
     </SendPageFrame>
   );
-}
-
-function prioritizeTask(tasks: SendTask[], taskId: string) {
-  if (!taskId) return tasks;
-  return [...tasks].sort((left, right) => Number(right.id === taskId) - Number(left.id === taskId));
 }

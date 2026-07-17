@@ -22,6 +22,27 @@
   padding-bottom: var(--wk-space-3);
 }
 
+.headerActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secondaryLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wk-color-border-strong);
+  border-radius: var(--wk-radius-md);
+  padding: 6px 11px;
+  color: var(--wk-color-text-secondary);
+  background: var(--wk-color-surface);
+  font-weight: 600;
+  text-decoration: none;
+}
+
 .header h1 {
   margin: 2px 0 4px;
   font-size: var(--wk-font-size-title);
@@ -492,9 +513,16 @@
   }
 
   .refreshButton,
+  .secondaryLink,
+  .headerActions,
   .confirmationActions,
   .confirmationActions button {
     width: 100%;
+  }
+
+  .headerActions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .confirmationActions {

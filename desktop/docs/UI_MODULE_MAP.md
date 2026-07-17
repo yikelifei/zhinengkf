@@ -19,11 +19,17 @@
 | --- | --- | --- | --- |
 | 总览 | `/overview` | 查看全局经营、通道、发送与自动化状态 | 刷新总览 |
 | 会话 | `/conversations` | 筛选并选择客户会话 | 打开会话 |
-| 会话 | `/conversations/[id]` | 处理一条会话及其人工接管、分配和回复入队 | 人工回复入队 |
-| 路由 | `/routing` | 评估或纠正消息路由 | 判断谁来处理 |
-| 发送 | `/send/queue` | 处理已通过守卫的发送队列 | 安全处理队列 |
-| 发送 | `/send/blocked` | 处理阻塞或不确定投递 | 解除明确阻塞并重排 |
-| 发送 | `/send/diagnostics` | 诊断适配器、窗口和回执 | 刷新诊断 |
+| 会话 | `/conversations/[id]` | 阅读一条会话并提交人工回复 | 人工回复入队 |
+| 会话 | `/conversations/[id]/context` | 只读查看客户、任务和发送身份 | 查看上下文 |
+| 会话 | `/conversations/[id]/assignment` | 修改负责人、优先级、状态和 SLA | 保存分配 |
+| 路由 | `/routing` | 只读评估消息路由 | 评估路由 |
+| 路由 | `/routing/process` | 写入一条消息并执行路由计划 | 确认处理 |
+| 发送 | `/send/queue` | 选择安全发送任务或处理整个安全队列 | 打开任务 |
+| 发送 | `/send/queue/[id]` | 核对并执行一项安全发送任务 | 执行当前任务 |
+| 发送 | `/send/blocked` | 选择阻塞或失败任务 | 打开任务 |
+| 发送 | `/send/blocked/[id]` | 判断一项任务应重排还是取消 | 提交判断 |
+| 发送 | `/send/diagnostics` | 只读诊断适配器、窗口和回执 | 刷新诊断 |
+| 发送 | `/send/diagnostics/operations` | 运行桥接回执与发送异常扫描 | 扫描异常 |
 | 接入 | `/integrations/channels` | 查看所有通道状态并导航到配置或验收页 | 刷新通道 |
 | 企业微信 | `/integrations/wechat-work` | 做本地配置检查和只读上线预检 | 运行只读预检 |
 | 个人微信 | `/integrations/personal-wechat/instances` | 管理 RPA 实例、端点与账号绑定 | 保存实例 |
@@ -54,9 +60,12 @@
 | 训练 | `/training/review` | 复核训练样本 | 确认所选样本 |
 | 训练 | `/training/skills` | 审核和应用 Skill 建议 | 应用已审核建议 |
 | 审核 | `/reviews/inbox` | 处理人工接管队列 | 处理第一项 |
-| 审核 | `/reviews/design` | 审核设计结果 | 批准或要求改图 |
-| 审核 | `/reviews/quotes` | 审核报价 | 通过并入队 |
-| 审核 | `/reviews/orders` | 审核订单确认和跟进 | 审核当前动作 |
+| 审核 | `/reviews/design` | 选择待审核设计 | 打开审核对象 |
+| 审核 | `/reviews/design/[id]` | 提交一项设计审核决策 | 提交设计决策 |
+| 审核 | `/reviews/quotes` | 选择待审核报价 | 打开审核对象 |
+| 审核 | `/reviews/quotes/[id]` | 提交一项报价审核决策 | 提交报价决策 |
+| 审核 | `/reviews/orders` | 选择待审核订单 | 打开审核对象 |
+| 审核 | `/reviews/orders/[id]` | 提交一项订单审核决策 | 提交订单决策 |
 | 审核 | `/reviews/logs` | 查询审核轨迹 | 刷新记录 |
 | 权限 | `/settings/access` | 查看操作者身份和角色能力 | 刷新权限 |
 
@@ -72,7 +81,7 @@
 
 ## 动态详情迁移
 
-`/conversations/[id]`、`/design/jobs/[id]`、`/sales/quotes/[id]`、`/sales/orders/[id]` 已把 URL 实体 ID 传入各自 controller；不存在的 ID 显示明确未找到状态，不再静默选中列表第一项。`/send/queue?taskId=`、`/send/blocked?taskId=` 和 `/integrations/personal-wechat/instances?accountId=` 同样把查询选择传到所属页面。
+会话、发送任务、设计任务、销售对象和审核对象均使用路径级实体 ID；不存在的 ID 显示明确未找到状态，不再静默选中列表第一项。个人微信实例继续通过 `/integrations/personal-wechat/instances?accountId=` 把查询选择传到所属页面。
 
 后续若增加个人微信实例详情，应使用 `/integrations/personal-wechat/instances/[id]`，由个人微信 feature 分支实现，不能塞进控制面或安全页。
 

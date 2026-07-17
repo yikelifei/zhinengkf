@@ -113,6 +113,44 @@
   background: var(--wk-color-brand, #2457d6) !important;
 }
 
+.primaryLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wk-color-brand, #2457d6);
+  border-radius: 11px;
+  padding: 0 15px;
+  color: #fff;
+  background: var(--wk-color-brand, #2457d6);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.primaryLink:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.secondaryLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 11px;
+  padding: 0 15px;
+  color: var(--wk-color-text, #172033);
+  background: var(--wk-color-surface, #fff);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.secondaryLink:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
 .dangerButton {
   border-color: #dc2626 !important;
   color: #fff !important;
@@ -192,6 +230,38 @@
   padding: 0;
   margin: 14px 0 0;
   list-style: none;
+}
+
+.taskListItem {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+  padding: 14px 0;
+}
+
+.taskListItem:first-child {
+  border-top: 0;
+}
+
+.taskListItem h3,
+.taskListItem p {
+  margin: 0;
+}
+
+.taskListItem small {
+  display: block;
+  margin-top: 5px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.taskListItemActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
 }
 
 .taskCard {
@@ -442,7 +512,16 @@
 
   .runtimeList li,
   .attemptList li,
-  .guardItem {
+  .guardItem,
+  .taskListItem {
     flex-direction: column;
+  }
+
+  .taskListItem {
+    align-items: stretch;
+  }
+
+  .taskListItemActions {
+    justify-content: space-between;
   }
 }

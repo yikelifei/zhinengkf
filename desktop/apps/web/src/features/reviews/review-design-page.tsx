@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { identityExpectation, reviewDesignJob, type DesignJob } from "../../lib/api";
 import styles from "../governance-pages.module.css";
@@ -19,13 +20,14 @@ const decisions: Array<{ id: DesignDecision; label: string; danger?: boolean }> 
   { id: "reject", label: "驳回", danger: true },
 ];
 
-export function ReviewDesignPage({ identityFilters, reviewer }: ReviewMutationPageProps) {
+export function ReviewDesignPage({ identityFilters, reviewer, reviewId }: ReviewMutationPageProps & { reviewId: string }) {
   const { center, busy, error, setError, refresh } = useReviewCenter(identityFilters);
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState("");
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingDesignReview | null>(null);
   const operator = trustedReviewer(reviewer);
+  const activeJob = center?.designJobs.find((job) => job.id === reviewId) || null;
 
   const requestReview = (job: DesignJob, decision: DesignDecision) => {
     setError("");
@@ -78,18 +80,9 @@ export function ReviewDesignPage({ identityFilters, reviewer }: ReviewMutationPa
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Reviews</span>
           <h1 id="review-design-title">设计审核</h1>
-          <p className={styles.description}>只处理图稿、修改与发送前决策；每次写操作绑定任务身份并二次确认。</p>
+          <p className={styles.description}>本页只处理一项设计审核决策；每次写操作绑定任务身份并二次确认。</p>
         </div>
-        <button
-          type="button"
-          className={styles.button}
-          data-action-id="review-design-refresh"
-          aria-label="刷新设计审核队列"
-          onClick={() => void refresh()}
-          disabled={disabled}
-        >
-          刷新队列
-        </button>
+        <Link className={styles.button} href="/reviews/design">返回设计队列</Link>
       </header>
 
       {!operator ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信操作人，本页保持只读。审核人必须由宿主身份系统传入。</div> : null}
@@ -107,11 +100,11 @@ export function ReviewDesignPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       <section className={styles.panel} aria-labelledby="design-review-list-title">
-        <header className={styles.panelHeader}><div><h2 id="design-review-list-title">待审核设计</h2><p>当前返回 {center?.designJobs.length ?? 0} 个任务。</p></div></header>
+        <header className={styles.panelHeader}><div><h2 id="design-review-list-title">当前设计任务</h2><p>任务 ID：{reviewId}</p></div></header>
         <div className={styles.panelBody}>
-          {center?.designJobs.length ? (
+          {activeJob ? (
             <div className={styles.recordList}>
-              {center.designJobs.map((job) => (
+              {[activeJob].map((job) => (
                 <article className={styles.record} key={job.id}>
                   <div className={styles.recordHeader}>
                     <div><h3>{job.customer?.name || job.requestId}</h3><p>{job.scene || "未标注场景"} · {job.conversation?.title || "未标注会话"}</p></div>
@@ -142,7 +135,7 @@ export function ReviewDesignPage({ identityFilters, reviewer }: ReviewMutationPa
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>当前没有设计审核待办。</div>}
+          ) : <div className={styles.empty}>未找到该设计审核任务，请返回队列重新选择。</div>}
         </div>
       </section>
 

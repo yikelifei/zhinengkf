@@ -35,21 +35,29 @@ test("conversations feature is an isolated controller over the existing API cont
   assert.match(controller, /expectedCustomerId/);
 });
 
-test("conversations page composes the existing workbench and operations editor", () => {
-  const page = read("apps/web/src/features/conversations/conversations-feature-page.tsx");
+test("conversation list, reply, context, and assignment are independent page blocks", () => {
+  const list = read("apps/web/src/features/conversations/conversation-list-page.tsx");
+  const detail = read("apps/web/src/features/conversations/conversation-detail-page.tsx");
+  const context = read("apps/web/src/features/conversations/conversation-context-page.tsx");
+  const assignment = read("apps/web/src/features/conversations/conversation-assignment-page.tsx");
   const index = read("apps/web/src/features/conversations/index.ts");
 
-  assert.match(index, /ConversationsFeaturePage/);
-  assert.match(page, /<ConversationWorkbench/);
-  assert.match(page, /<ConversationOperationsPanel/);
-  assert.match(page, /role="region"/);
-  assert.match(page, /aria-live="polite"/);
-  assert.doesNotMatch(page, /aria-modal="true"|role="alertdialog"/);
-  assert.match(page, /data-action-id="conversations-refresh"/);
-  assert.match(page, /data-action-id="conversations-manual-takeover"/);
-  assert.match(page, /data-action-id="conversations-manual-release-confirm"/);
-  assert.match(page, /aria-label="会话处理"/);
-  assert.doesNotMatch(page, /(?:演示|demo|mock|示例客户)/i);
+  for (const page of ["ConversationListPage", "ConversationDetailPage", "ConversationContextPage", "ConversationAssignmentPage"]) {
+    assert.match(index, new RegExp(`\\b${page}\\b`));
+  }
+  assert.match(list, /href=\{"\/conversations\/" \+ encodeURIComponent\(conversation\.id\)\}/);
+  assert.doesNotMatch(list, /ConversationThreadPane|ConversationOperationsPanel/);
+  assert.match(detail, /<ConversationThreadPane/);
+  assert.match(detail, /\/context/);
+  assert.match(detail, /\/assignment/);
+  assert.doesNotMatch(detail, /ConversationOperationsPanel|ConversationContextPane/);
+  assert.match(context, /客户与会话资料/);
+  assert.doesNotMatch(context, /onSave=|queueManualConversationReply/);
+  assert.match(assignment, /<ConversationOperationsPanel/);
+  assert.doesNotMatch(assignment, /ConversationThreadPane/);
+  assert.match(detail, /role="region"/);
+  assert.match(detail, /aria-live="polite"/);
+  assert.doesNotMatch(`${list}\n${detail}\n${context}\n${assignment}`, /aria-modal="true"|role="alertdialog"|(?:演示|demo|mock|示例客户)/i);
 });
 
 test("conversations model filters, paginates and maps live records without demo data", () => {
@@ -96,10 +104,10 @@ test("conversations model filters, paginates and maps live records without demo 
   });
 });
 
-test("conversations feature CSS keeps a 390px single-pane layout", () => {
-  const css = read("apps/web/src/features/conversations/conversations-feature-page.module.css");
-  assert.match(css, /max-width:\s*100%/);
-  assert.match(css, /overflow:\s*hidden/);
+test("conversation page CSS keeps focused routes usable at 390px", () => {
+  const css = read("apps/web/src/features/conversations/conversation-pages.module.css");
+  assert.match(css, /min-width:\s*0/);
+  assert.match(css, /min-height:\s*44px/);
   assert.match(css, /var\(--wk-color-brand\)/);
   assert.match(css, /@media\s*\(max-width:\s*760px\)/);
   assert.doesNotMatch(css, /linear-gradient|radial-gradient|overflow-x:\s*(?:auto|scroll)/i);

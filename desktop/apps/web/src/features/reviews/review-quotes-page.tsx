@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { identityExpectation, reviewQuote, type QuoteDraft } from "../../lib/api";
 import styles from "../governance-pages.module.css";
@@ -18,13 +19,14 @@ const decisions: Array<{ id: QuoteDecision; label: string; danger?: boolean }> =
   { id: "reject_quote", label: "驳回报价", danger: true },
 ];
 
-export function ReviewQuotesPage({ identityFilters, reviewer }: ReviewMutationPageProps) {
+export function ReviewQuotesPage({ identityFilters, reviewer, reviewId }: ReviewMutationPageProps & { reviewId: string }) {
   const { center, busy, error, setError, refresh } = useReviewCenter(identityFilters);
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState("");
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingQuoteReview | null>(null);
   const operator = trustedReviewer(reviewer);
+  const activeQuote = center?.quoteDrafts.find((quote) => quote.id === reviewId) || null;
 
   const requestReview = (quote: QuoteDraft, decision: QuoteDecision) => {
     setError("");
@@ -77,9 +79,9 @@ export function ReviewQuotesPage({ identityFilters, reviewer }: ReviewMutationPa
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Reviews</span>
           <h1 id="review-quotes-title">报价审核</h1>
-          <p className={styles.description}>只负责金额、利润与报价跟进决策；所有操作绑定报价身份并二次确认。</p>
+          <p className={styles.description}>本页只处理一项报价审核决策；所有操作绑定报价身份并二次确认。</p>
         </div>
-        <button type="button" className={styles.button} data-action-id="review-quotes-refresh" aria-label="刷新报价审核队列" onClick={() => void refresh()} disabled={disabled}>刷新队列</button>
+        <Link className={styles.button} href="/reviews/quotes">返回报价队列</Link>
       </header>
 
       {!operator ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信操作人，本页保持只读。审核人必须由宿主身份系统传入。</div> : null}
@@ -92,11 +94,11 @@ export function ReviewQuotesPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       <section className={styles.panel} aria-labelledby="quote-review-list-title">
-        <header className={styles.panelHeader}><div><h2 id="quote-review-list-title">待审核报价</h2><p>当前返回 {center?.quoteDrafts.length ?? 0} 个报价。</p></div></header>
+        <header className={styles.panelHeader}><div><h2 id="quote-review-list-title">当前报价</h2><p>报价 ID：{reviewId}</p></div></header>
         <div className={styles.panelBody}>
-          {center?.quoteDrafts.length ? (
+          {activeQuote ? (
             <div className={styles.recordList}>
-              {center.quoteDrafts.map((quote) => (
+              {[activeQuote].map((quote) => (
                 <article className={styles.record} key={quote.id}>
                   <div className={styles.recordHeader}><div><h3>{quote.customer?.name || quote.id}</h3><p>{quote.customerNotes || "未填写客户备注。"}</p></div><span className={styles.badge}>{quote.status}</span></div>
                   <dl className={styles.definitionList}>
@@ -125,7 +127,7 @@ export function ReviewQuotesPage({ identityFilters, reviewer }: ReviewMutationPa
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>当前没有报价审核待办。</div>}
+          ) : <div className={styles.empty}>未找到该报价审核对象，请返回队列重新选择。</div>}
         </div>
       </section>
 

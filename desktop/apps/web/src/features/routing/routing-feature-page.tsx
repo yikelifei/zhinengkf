@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { AlertTriangle, CheckCircle2, PlayCircle, RefreshCw, Route, SearchCheck, ShieldAlert, X } from "lucide-react";
 import type { RoutingFeatureApi } from "./api";
 import { presentInboundProcess, presentRouteEvaluation } from "./model";
@@ -9,9 +10,10 @@ import { useRoutingController } from "./use-routing-controller";
 export type RoutingFeaturePageProps = {
   api?: RoutingFeatureApi;
   className?: string;
+  mode?: "evaluate" | "process";
 };
 
-export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePageProps) {
+export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: RoutingFeaturePageProps) {
   const controller = useRoutingController(api);
 
   if (controller.accessPhase === "loading") {
@@ -49,19 +51,24 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
       <header className={styles.header}>
         <div>
           <span className={styles.eyebrow}>消息分流</span>
-          <h1>路由判断</h1>
-          <p>只负责判断客户消息应进入哪个场景、价值层级和处理动作。</p>
+          <h1>{mode === "evaluate" ? "路由评估" : "处理客户消息"}</h1>
+          <p>{mode === "evaluate" ? "只返回场景、价值层级和处理动作，不写入客户消息。" : "写入一条客户消息并执行服务端路由计划。"}</p>
         </div>
-        <button
-          type="button"
-          className={styles.refreshButton}
-          data-action-id="routing-refresh"
-          aria-label="刷新可选会话"
-          disabled={Boolean(controller.busy)}
-          onClick={() => void controller.refresh()}
-        >
-          <RefreshCw size={16} aria-hidden="true" />刷新会话
-        </button>
+        <div className={styles.headerActions}>
+          <Link className={styles.secondaryLink} href={mode === "evaluate" ? "/routing/process" : "/routing"}>
+            {mode === "evaluate" ? "前往消息处理" : "返回只读评估"}
+          </Link>
+          <button
+            type="button"
+            className={styles.refreshButton}
+            data-action-id="routing-refresh"
+            aria-label="刷新可选会话"
+            disabled={Boolean(controller.busy)}
+            onClick={() => void controller.refresh()}
+          >
+            <RefreshCw size={16} aria-hidden="true" />刷新会话
+          </button>
+        </div>
       </header>
 
       {controller.conversationsError ? <div className={styles.errorNotice} role="alert">{controller.conversationsError}</div> : null}
@@ -109,10 +116,10 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
       <section className={styles.actionSection} aria-labelledby="routing-action-title">
         <div className={styles.sectionHeading}>
           <span>2</span>
-          <div><h2 id="routing-action-title">选择执行方式</h2><p>两种操作的业务影响不同，请按真实目的选择。</p></div>
+          <div><h2 id="routing-action-title">{mode === "evaluate" ? "执行只读评估" : "执行消息处理"}</h2><p>{mode === "evaluate" ? "本页不会写入消息或触发业务流程。" : "本页可能创建任务、报价、订单或发送任务。"}</p></div>
         </div>
         <div className={styles.actionGrid}>
-          <article className={styles.evaluateCard}>
+          {mode === "evaluate" ? <article className={styles.evaluateCard}>
             <SearchCheck size={22} aria-hidden="true" />
             <div>
               <strong>仅评估</strong>
@@ -128,8 +135,7 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
               <SearchCheck size={16} aria-hidden="true" />
               {controller.busy === "evaluate" ? "评估中" : "仅评估路由"}
             </button>
-          </article>
-          <article className={styles.processCard}>
+          </article> : <article className={styles.processCard}>
             <PlayCircle size={22} aria-hidden="true" />
             <div>
               <strong>处理客户消息</strong>
@@ -146,11 +152,11 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
               <PlayCircle size={16} aria-hidden="true" />
               {controller.busy === "process" ? "处理中" : "处理客户消息"}
             </button>
-          </article>
+          </article>}
         </div>
       </section>
 
-      {controller.processConfirmationOpen ? (
+      {mode === "process" && controller.processConfirmationOpen ? (
         <div
           className={styles.confirmation}
           role="region"
@@ -197,7 +203,7 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
         <section className={styles.emptyResult} aria-label="路由判断结果" role="status">
           <Route size={24} aria-hidden="true" />
           <strong>尚未执行路由判断</strong>
-          <p>完成会话与消息输入后，选择“仅评估”或“处理客户消息”。</p>
+          <p>{mode === "evaluate" ? "完成输入后执行只读评估。" : "完成输入后确认处理客户消息。"}</p>
         </section>
       )}
     </section>

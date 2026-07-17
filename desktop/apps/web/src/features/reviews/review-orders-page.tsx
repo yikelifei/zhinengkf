@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { identityExpectation, reviewOrder, type OrderDraft } from "../../lib/api";
 import styles from "../governance-pages.module.css";
@@ -21,7 +22,7 @@ const decisions: Array<{ id: OrderDecision; label: string; danger?: boolean }> =
   { id: "reject_order", label: "驳回订单", danger: true },
 ];
 
-export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPageProps) {
+export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: ReviewMutationPageProps & { reviewId: string }) {
   const { center, busy, error, setError, refresh } = useReviewCenter(identityFilters);
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState("");
@@ -29,6 +30,7 @@ export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPa
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingOrderReview | null>(null);
   const operator = trustedReviewer(reviewer);
+  const activeOrder = center?.orderDrafts.find((order) => order.id === reviewId) || null;
 
   const requestReview = (order: OrderDraft, decision: OrderDecision) => {
     setError("");
@@ -96,9 +98,9 @@ export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPa
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Reviews</span>
           <h1 id="review-orders-title">订单审核</h1>
-          <p className={styles.description}>只负责订单确认、生产或交付跟进决策；可能产生发送任务的操作必须二次确认。</p>
+          <p className={styles.description}>本页只处理一项订单审核决策；可能产生发送任务的操作必须二次确认。</p>
         </div>
-        <button type="button" className={styles.button} data-action-id="review-orders-refresh" aria-label="刷新订单审核队列" onClick={() => void refresh()} disabled={disabled}>刷新队列</button>
+        <Link className={styles.button} href="/reviews/orders">返回订单队列</Link>
       </header>
 
       {!operator ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信操作人，本页保持只读。审核人必须由宿主身份系统传入。</div> : null}
@@ -126,11 +128,11 @@ export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       <section className={styles.panel} aria-labelledby="order-review-list-title">
-        <header className={styles.panelHeader}><div><h2 id="order-review-list-title">待审核订单</h2><p>当前返回 {center?.orderDrafts.length ?? 0} 个订单。</p></div></header>
+        <header className={styles.panelHeader}><div><h2 id="order-review-list-title">当前订单</h2><p>订单 ID：{reviewId}</p></div></header>
         <div className={styles.panelBody}>
-          {center?.orderDrafts.length ? (
+          {activeOrder ? (
             <div className={styles.recordList}>
-              {center.orderDrafts.map((order) => (
+              {[activeOrder].map((order) => (
                 <article className={styles.record} key={order.id}>
                   <div className={styles.recordHeader}><div><h3>{order.customer?.name || order.id}</h3><p>{order.customerNotes || "未填写客户备注。"}</p></div><span className={styles.badge}>{order.status}</span></div>
                   <dl className={styles.definitionList}>
@@ -159,7 +161,7 @@ export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPa
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>当前没有订单审核待办。</div>}
+          ) : <div className={styles.empty}>未找到该订单审核对象，请返回队列重新选择。</div>}
         </div>
       </section>
 

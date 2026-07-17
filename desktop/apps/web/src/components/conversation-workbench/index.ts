@@ -1,4 +1,5 @@
 export { ConversationWorkbench } from "./conversation-workbench";
+export { ConversationThreadPane } from "./conversation-thread-pane";
 export type {
   ConversationWorkbenchActions,
   ConversationWorkbenchAssignment,

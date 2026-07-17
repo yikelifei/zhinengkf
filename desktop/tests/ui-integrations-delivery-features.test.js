@@ -78,11 +78,12 @@ test("integration controllers reuse existing production components and real cont
   assert.match(inboundDrill, /confirmed/);
 });
 
-test("send feature barrel exports queue, blocked, and diagnostics pages", () => {
+test("send feature barrel exports queue, blocked, read-only diagnostics, and diagnostic operations", () => {
   const source = read("features/send/index.ts");
   assert.match(source, /SendQueuePage/);
   assert.match(source, /SendBlockedPage/);
   assert.match(source, /SendDiagnosticsPage/);
+  assert.match(source, /SendDiagnosticsOperationsPage/);
 });
 
 test("send pages preserve identity binding, explicit confirmation, and fail-closed execution", () => {
@@ -106,17 +107,21 @@ test("send pages preserve identity binding, explicit confirmation, and fail-clos
   assert.match(policy, /task\.status === "sending"/);
 });
 
-test("diagnostics reads each runtime source independently and only exposes real operational scans", () => {
-  const source = read("features/send/send-diagnostics-page.tsx");
-  assert.match(source, /Promise\.allSettled/);
-  assert.match(source, /getBridgeStatus/);
-  assert.match(source, /getBridgeOutbox/);
-  assert.match(source, /getWindowObserverStatus/);
-  assert.match(source, /getSendAttempts/);
-  assert.match(source, /scanSendOperations/);
-  assert.match(source, /scanBridgeInbox/);
-  assert.match(source, /scanWindowSnapshotInbox/);
-  assert.match(source, /captureWindowObserverOnce/);
+test("read-only diagnostics, send scans, and window ingestion are separate responsibilities", () => {
+  const diagnostics = read("features/send/send-diagnostics-page.tsx");
+  const operations = read("features/send/send-diagnostics-operations-page.tsx");
+  const inbound = read("features/integrations/window-inbound-operations-page.tsx");
+  assert.match(diagnostics, /Promise\.allSettled/);
+  assert.match(diagnostics, /getBridgeStatus/);
+  assert.match(diagnostics, /getBridgeOutbox/);
+  assert.match(diagnostics, /getWindowObserverStatus/);
+  assert.match(diagnostics, /getSendAttempts/);
+  assert.doesNotMatch(diagnostics, /scanSendOperations|scanBridgeInbox|scanWindowSnapshotInbox|captureWindowObserverOnce/);
+  assert.match(operations, /scanSendOperations/);
+  assert.match(operations, /scanBridgeInbox/);
+  assert.doesNotMatch(operations, /scanWindowSnapshotInbox|captureWindowObserverOnce/);
+  assert.match(inbound, /scanWindowSnapshotInbox/);
+  assert.match(inbound, /captureWindowObserverOnce/);
 });
 
 test("new production feature controllers contain no demo, wrong-window, timeout injection, or global load", () => {

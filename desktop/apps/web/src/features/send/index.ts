@@ -4,6 +4,7 @@ export { SendBlockedPage } from "./send-blocked-page";
 export type { SendBlockedPageProps } from "./send-blocked-page";
 export { SendDiagnosticsPage } from "./send-diagnostics-page";
 export type { SendDiagnosticsPageProps } from "./send-diagnostics-page";
+export { SendDiagnosticsOperationsPage } from "./send-diagnostics-operations-page";
 export {
   canCancelSendTask,
   canExecuteSendTask,

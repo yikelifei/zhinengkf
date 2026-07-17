@@ -31,6 +31,7 @@ import {
 } from "./model";
 
 type AccessPhase = "loading" | "ready" | "denied" | "error";
+export type ConversationsControllerMode = "list" | "detail" | "context" | "assignment";
 
 export function isCapabilityAllowed(status: OperatorAccessStatus, capability: OperatorCapability) {
   return status.enforcementReady && status.capabilities.includes(capability);
@@ -39,6 +40,7 @@ export function isCapabilityAllowed(status: OperatorAccessStatus, capability: Op
 export function useConversationsController(
   api: ConversationsFeatureApi = conversationsFeatureApi,
   initialConversationId: string | null = null,
+  mode: ConversationsControllerMode = initialConversationId ? "detail" : "list",
 ) {
   const [accessPhase, setAccessPhase] = useState<AccessPhase>("loading");
   const [accessStatus, setAccessStatus] = useState<OperatorAccessStatus | null>(null);
@@ -97,9 +99,10 @@ export function useConversationsController(
       }
       setAccessPhase("ready");
       setListLoading(true);
+      const needsOperations = mode === "context" || mode === "assignment";
       const [conversationResult, operationsResult] = await Promise.allSettled([
         api.getWechatConversations(),
-        api.getConversationOperationsQueue(),
+        needsOperations ? api.getConversationOperationsQueue() : Promise.resolve({ records: [] }),
       ]);
       if (sequence !== refreshSequence.current) return;
       if (conversationResult.status === "fulfilled") {
@@ -120,7 +123,7 @@ export function useConversationsController(
       }
       if (operationsResult.status === "fulfilled") {
         setOperations(operationsResult.value.records);
-      } else {
+      } else if (needsOperations) {
         setOperationsLoadError(errorMessage(operationsResult.reason, "会话分配与 SLA 读取失败"));
       }
     } catch (error) {
@@ -131,7 +134,7 @@ export function useConversationsController(
     } finally {
       if (sequence === refreshSequence.current) setListLoading(false);
     }
-  }, [api, initialConversationId]);
+  }, [api, initialConversationId, mode]);
 
   useEffect(() => {
     void refreshWorkspace();
@@ -165,7 +168,7 @@ export function useConversationsController(
     setActionError("");
     setManualLockTarget(null);
     setReadNotice("");
-    if (!selectedConversation || accessPhase !== "ready") {
+    if (mode !== "detail" || !selectedConversation || accessPhase !== "ready") {
       setTimeline([]);
       setTimelineError("");
       setTimelineLoading(false);
@@ -198,10 +201,10 @@ export function useConversationsController(
       }
       setTimelineLoading(false);
     });
-  }, [accessPhase, api, selectedIdentityKey]);
+  }, [accessPhase, api, mode, selectedIdentityKey]);
 
   const refreshTimeline = useCallback(async () => {
-    if (!selectedConversation) return;
+    if (mode !== "detail" || !selectedConversation) return;
     const sequence = ++timelineSequence.current;
     setTimelineLoading(true);
     setTimelineError("");
@@ -213,7 +216,7 @@ export function useConversationsController(
     } finally {
       if (sequence === timelineSequence.current) setTimelineLoading(false);
     }
-  }, [api, selectedConversation]);
+  }, [api, mode, selectedConversation]);
 
   const updateFilters = useCallback((patch: Partial<ConversationListFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
@@ -308,8 +311,10 @@ export function useConversationsController(
     : null, [canReply, replyBusy, replyFeedback, replyText, selectedConversation, suggestion, timeline, timelineError, timelineLoading]);
 
   const context = useMemo<ConversationWorkbenchContext | null>(() =>
-    selectedConversation ? toWorkbenchContext(selectedConversation, activeOperations || undefined) : null,
-  [activeOperations, selectedConversation]);
+    mode === "detail" || mode === "list" || !selectedConversation
+      ? null
+      : toWorkbenchContext(selectedConversation, activeOperations || undefined),
+  [activeOperations, mode, selectedConversation]);
 
   const selectConversation = useCallback((conversationId: string) => {
     setSelectedConversationId(conversationId);
@@ -436,6 +441,10 @@ export function useConversationsController(
   const saveOperations = useCallback(async (patch: OperationsPanelPatch) => {
     const conversation = selectedConversation;
     if (!conversation) return;
+    if (mode !== "assignment") {
+      setOperationsActionError("当前页面不负责修改会话分配。");
+      return;
+    }
     if (!canManageAssignments || !currentOperator) {
       setOperationsActionError("当前操作员没有管理会话分配的权限。");
       return;
@@ -460,7 +469,7 @@ export function useConversationsController(
     } finally {
       setOperationsBusy(false);
     }
-  }, [api, canManageAssignments, currentOperator, selectedConversation]);
+  }, [api, canManageAssignments, currentOperator, mode, selectedConversation]);
 
   const actions = useMemo<ConversationWorkbenchActions>(() => ({
     onPaneChange: setActivePane,

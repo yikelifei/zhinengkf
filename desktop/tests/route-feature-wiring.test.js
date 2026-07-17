@@ -24,12 +24,18 @@ const redirectedRouteIds = new Set([
 
 const featureByRouteId = {
   overview: "OverviewRouteFeature",
-  conversations: "ConversationsFeaturePage",
-  conversationDetail: "ConversationsFeaturePage",
+  conversations: "ConversationListPage",
+  conversationDetail: "ConversationDetailPage",
+  conversationContext: "ConversationContextPage",
+  conversationAssignment: "ConversationAssignmentPage",
   routing: "RoutingFeaturePage",
+  routingProcess: "RoutingFeaturePage",
   sendQueue: "SendQueuePage",
+  sendQueueTask: "SendQueuePage",
   sendBlocked: "SendBlockedPage",
+  sendBlockedTask: "SendBlockedPage",
   sendDiagnostics: "SendDiagnosticsPage",
+  sendDiagnosticOperations: "SendDiagnosticsOperationsPage",
   integrationChannels: "ChannelsStatusPage",
   wechatWorkChannels: "WechatWorkPreflightPage",
   wechatWorkFlow: "WechatWorkFlowPage",
@@ -47,9 +53,12 @@ const featureByRouteId = {
   designJobs: "DesignJobsPage",
   designJobDetail: "DesignJobsPage",
   reviewInbox: "ReviewInboxPage",
-  reviewDesign: "ReviewDesignPage",
-  reviewQuotes: "ReviewQuotesPage",
-  reviewOrders: "ReviewOrdersPage",
+  reviewDesign: "ReviewDesignQueuePage",
+  reviewDesignDecision: "ReviewDesignPage",
+  reviewQuotes: "ReviewQuotesQueuePage",
+  reviewQuoteDecision: "ReviewQuotesPage",
+  reviewOrders: "ReviewOrdersQueuePage",
+  reviewOrderDecision: "ReviewOrdersPage",
   reviewLogs: "ReviewLogsPage",
   catalogProducts: "CatalogProductsPage",
   catalogRepair: "CatalogRepairPage",
@@ -123,14 +132,19 @@ test("the shared route shell contains layout only and no domain registry", () =>
 });
 
 test("entity and query selections reach the owning feature instead of only changing the URL", () => {
-  assert.match(read("apps/web/src/app/conversations/[id]/page.tsx"), /ConversationsFeaturePage key=\{id\} initialConversationId=\{id\}/);
+  assert.match(read("apps/web/src/app/conversations/[id]/page.tsx"), /ConversationDetailPage key=\{id\} conversationId=\{id\}/);
+  assert.match(read("apps/web/src/app/conversations/[id]/context/page.tsx"), /ConversationContextPage key=\{id\} conversationId=\{id\}/);
+  assert.match(read("apps/web/src/app/conversations/[id]/assignment/page.tsx"), /ConversationAssignmentPage key=\{id\} conversationId=\{id\}/);
   assert.match(read("apps/web/src/app/design/jobs/[id]/page.tsx"), /DesignJobsPage key=\{id\} initialJobId=\{id\}/);
   assert.match(read("apps/web/src/app/sales/quotes/[id]/page.tsx"), /SalesQuotesPage key=\{id\} initialQuoteId=\{id\}/);
   assert.match(read("apps/web/src/app/sales/orders/[id]/page.tsx"), /SalesOrdersPage key=\{id\} initialOrderId=\{id\}/);
   assert.match(read("apps/web/src/app/agents/[id]/page.tsx"), /AgentDetailPage key=\{id\} agentId=\{id\}/);
   assert.match(read("apps/web/src/app/training/review/[id]/page.tsx"), /TrainingReviewDetailPage key=\{id\} sampleId=\{id\}/);
-  assert.match(read("apps/web/src/app/send/queue/page.tsx"), /SendQueuePage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
-  assert.match(read("apps/web/src/app/send/blocked/page.tsx"), /SendBlockedPage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
+  assert.match(read("apps/web/src/app/send/queue/[id]/page.tsx"), /SendQueuePage key=\{id\} initialTaskId=\{id\}/);
+  assert.match(read("apps/web/src/app/send/blocked/[id]/page.tsx"), /SendBlockedPage key=\{id\} initialTaskId=\{id\}/);
+  assert.match(read("apps/web/src/app/reviews/design/[id]/page.tsx"), /ReviewDesignPage key=\{id\} reviewId=\{id\}/);
+  assert.match(read("apps/web/src/app/reviews/quotes/[id]/page.tsx"), /ReviewQuotesPage key=\{id\} reviewId=\{id\}/);
+  assert.match(read("apps/web/src/app/reviews/orders/[id]/page.tsx"), /ReviewOrdersPage key=\{id\} reviewId=\{id\}/);
   assert.match(read("apps/web/src/app/integrations/personal-wechat/instances/configure/page.tsx"), /accountId=\{initialAccountId\}/);
 });
 
