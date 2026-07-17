@@ -35,6 +35,7 @@ export function MessageSafetyGovernance({
   quarantinedDeliveries,
   auditEvents,
   busy = false,
+  readOnly = false,
   onRequestGlobalStop,
   onRequestResume,
   onOpenConsentRecord,
@@ -59,11 +60,25 @@ export function MessageSafetyGovernance({
             {globallyStopped ? "全局已停止" : "治理已启用"}
           </span>
           {globallyStopped ? (
-            <button type="button" className={styles.secondaryButton} onClick={onRequestResume} disabled={busy}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              data-action-id="integrations.personal-wechat.safety.request-resume"
+              aria-label="申请恢复个人微信发送治理"
+              onClick={onRequestResume}
+              disabled={busy || readOnly}
+            >
               <PlayCircle size={15} aria-hidden="true" />申请恢复
             </button>
           ) : (
-            <button type="button" className={styles.stopButton} onClick={onRequestGlobalStop} disabled={busy}>
+            <button
+              type="button"
+              className={styles.stopButton}
+              data-action-id="integrations.personal-wechat.safety.global-stop"
+              aria-label="停止全部个人微信外发操作"
+              onClick={onRequestGlobalStop}
+              disabled={busy || readOnly}
+            >
               <PauseCircle size={15} aria-hidden="true" />全局停止
             </button>
           )}
@@ -80,7 +95,7 @@ export function MessageSafetyGovernance({
       <div className={styles.summaryGrid} aria-label="治理摘要">
         <SummaryCard icon={<UserCheck size={17} />} label="明确退订" value={unsubscribedCustomers} tone="danger" />
         <SummaryCard icon={<ClipboardCheck size={17} />} label="待人工审批" value={pendingApprovals} tone="warning" />
-        <SummaryCard icon={<Ban size={17} />} label="内容阻断" value={sensitiveContent.blockedToday} tone="danger" />
+        <SummaryCard icon={<Ban size={17} />} label="内容阻断" value={sensitiveContent.blockedToday ?? "未接通"} tone="danger" />
         <SummaryCard icon={<FileClock size={17} />} label="隔离待处理" value={isolatedDeliveries} tone="warning" />
       </div>
 
@@ -99,7 +114,7 @@ export function MessageSafetyGovernance({
           <CardHeader icon={<ShieldCheck size={16} />} title="敏感内容阻断" id="content-control-title" />
           <div className={styles.policySummary}>
             <div><span>策略版本</span><strong>{sensitiveContent.policyVersion}</strong></div>
-            <div><span>启用规则</span><strong>{sensitiveContent.activeRuleCount}</strong></div>
+            <div><span>启用规则</span><strong>{sensitiveContent.activeRuleCount ?? "未接通"}</strong></div>
             <div><span>最近检查</span><strong>{sensitiveContent.lastEvaluatedAt}</strong></div>
           </div>
           <div className={styles.chipList} aria-label="受保护内容类别">
@@ -124,7 +139,14 @@ export function MessageSafetyGovernance({
                 <StatusBadge kind={record.state} label={consentLabel(record.state)} />
                 <span>{record.source}</span>
                 <span>{record.unsubscribedAt || record.recordedAt}</span>
-                <button type="button" className={styles.textButton} onClick={() => onOpenConsentRecord(record.customerId)} disabled={busy}>查看凭据</button>
+                <button
+                  type="button"
+                  className={styles.textButton}
+                  data-action-id={`integrations.personal-wechat.safety.consent.${record.customerId}`}
+                  aria-label={`查看客户 ${record.customerLabel} 的同意凭据`}
+                  onClick={() => onOpenConsentRecord(record.customerId)}
+                  disabled={busy || readOnly}
+                >查看凭据</button>
               </div>
             )) : <EmptyRow text="暂无客户同意记录" />}
           </div>
@@ -134,7 +156,7 @@ export function MessageSafetyGovernance({
           <CardHeader icon={<ClipboardCheck size={16} />} title="人工审批" id="approval-title" />
           <div className={styles.stackList}>
             {approvalQueue.length ? approvalQueue.map((item) => (
-              <ApprovalRow key={item.id} item={item} busy={busy} onReview={onReviewApproval} />
+              <ApprovalRow key={item.id} item={item} busy={busy || readOnly} onReview={onReviewApproval} />
             )) : <EmptyRow text="暂无待审批内容" />}
           </div>
         </section>
@@ -146,7 +168,16 @@ export function MessageSafetyGovernance({
               <article className={styles.stackItem} key={item.id}>
                 <div className={styles.stackItemHeader}><strong>{item.customerLabel}</strong><StatusBadge kind={item.state} label={quarantineLabel(item.state)} /></div>
                 <p>{item.contentDigest}</p><small>{item.accountId} · {item.reason} · {item.detectedAt}</small>
-                {item.state !== "resolved" ? <button type="button" className={styles.textButton} onClick={() => onResolveQuarantine(item.id)} disabled={busy}>进入人工处理</button> : null}
+                {item.state !== "resolved" ? (
+                  <button
+                    type="button"
+                    className={styles.textButton}
+                    data-action-id={`integrations.personal-wechat.safety.quarantine.${item.id}`}
+                    aria-label={`人工处理隔离投递 ${item.id}`}
+                    onClick={() => onResolveQuarantine(item.id)}
+                    disabled={busy || readOnly}
+                  >进入人工处理</button>
+                ) : null}
               </article>
             )) : <EmptyRow text="当前没有隔离记录" />}
           </div>
@@ -157,7 +188,16 @@ export function MessageSafetyGovernance({
             icon={<FileClock size={16} />}
             title="审计事件"
             id="audit-title"
-            action={<button type="button" className={styles.secondaryButton} onClick={onExportAudit} disabled={busy}><Download size={14} aria-hidden="true" />导出审计</button>}
+            action={(
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                data-action-id="integrations.personal-wechat.safety.export-audit"
+                aria-label="导出个人微信发送治理审计"
+                onClick={onExportAudit}
+                disabled={busy || readOnly}
+              ><Download size={14} aria-hidden="true" />导出审计</button>
+            )}
           />
           <div className={styles.auditList}>
             {auditEvents.length ? auditEvents.map((event) => (
@@ -177,7 +217,7 @@ export function MessageSafetyGovernance({
   );
 }
 
-function SummaryCard({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: "warning" | "danger" }) {
+function SummaryCard({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number | string; tone: "warning" | "danger" }) {
   return <div className={`${styles.summaryCard} ${styles[tone]}`}>{icon}<div><strong>{value}</strong><span>{label}</span></div></div>;
 }
 
@@ -203,7 +243,16 @@ function ApprovalRow({ item, busy, onReview }: { item: ApprovalItem; busy: boole
     <article className={styles.stackItem}>
       <div className={styles.stackItemHeader}><strong>{item.customerLabel}</strong><StatusBadge kind={item.state} label={reviewLabel(item.state)} /></div>
       <p>{item.contentSummary}</p><small>{item.accountId} · {item.reason} · {item.requestedBy} · {item.requestedAt}</small>
-      {item.state === "pending" ? <button type="button" className={styles.textButton} onClick={() => onReview(item.id)} disabled={busy}>进入审批</button> : null}
+      {item.state === "pending" ? (
+        <button
+          type="button"
+          className={styles.textButton}
+          data-action-id={`integrations.personal-wechat.safety.approval.${item.id}`}
+          aria-label={`复核个人微信发送任务 ${item.id}`}
+          onClick={() => onReview(item.id)}
+          disabled={busy}
+        >进入审批</button>
+      ) : null}
     </article>
   );
 }

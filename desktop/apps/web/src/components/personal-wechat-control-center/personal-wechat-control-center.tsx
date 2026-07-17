@@ -38,6 +38,7 @@ export function PersonalWechatControlCenter({
   voicePolicy = "disabled",
   updatedAtLabel,
   busy = false,
+  readOnly = false,
   actions,
   className,
 }: PersonalWechatControlCenterProps) {
@@ -65,7 +66,13 @@ export function PersonalWechatControlCenter({
         </div>
         <div className={styles.headerActions}>
           {updatedAtLabel ? <span>更新于 {updatedAtLabel}</span> : null}
-          <button type="button" onClick={actions.onRefresh} disabled={busy}>
+          <button
+            type="button"
+            data-action-id="integrations.personal-wechat.control.refresh"
+            aria-label="刷新个人微信账号控制状态"
+            onClick={actions.onRefresh}
+            disabled={busy}
+          >
             <RefreshCw size={15} aria-hidden="true" />刷新状态
           </button>
         </div>
@@ -92,16 +99,24 @@ export function PersonalWechatControlCenter({
         <label className={styles.modeField}>
           <span>全局发送模式</span>
           <select
+            aria-label="个人微信全局发送模式"
             value={globalSendMode}
             onChange={(event) => actions.onGlobalSendModeChange(event.target.value as PersonalWechatGlobalSendMode)}
-            disabled={busy}
+            disabled={busy || readOnly}
           >
             <option value="disabled">禁用发送（默认）</option>
             <option value="approval_only">逐条人工审批</option>
             <option value="operator_assisted">仅人工接管</option>
           </select>
         </label>
-        <button type="button" className={styles.policyLink} onClick={actions.onOpenSafetyPolicy} disabled={!actions.onOpenSafetyPolicy}>
+        <button
+          type="button"
+          className={styles.policyLink}
+          data-action-id="integrations.personal-wechat.control.open-safety-policy"
+          aria-label="打开个人微信发送安全治理页"
+          onClick={actions.onOpenSafetyPolicy}
+          disabled={!actions.onOpenSafetyPolicy}
+        >
           查看安全边界<ChevronRight size={14} aria-hidden="true" />
         </button>
       </section>
@@ -115,7 +130,7 @@ export function PersonalWechatControlCenter({
         />
         <AccountInspectorPane
           account={selectedAccount}
-          busy={busy}
+          busy={busy || readOnly}
           onRequestManualTakeover={actions.onRequestManualTakeover}
           onReleaseManualTakeover={actions.onReleaseManualTakeover}
           onIsolateAccount={actions.onIsolateAccount}
@@ -138,6 +153,8 @@ export function PersonalWechatControlCenter({
                 <button
                   type="button"
                   key={approval.id}
+                  data-action-id={`integrations.personal-wechat.control.open-approval.${approval.id}`}
+                  aria-label={`打开个人微信发送审批 ${approval.id}`}
                   onClick={() => actions.onOpenApproval(approval.id)}
                   disabled={busy}
                 >

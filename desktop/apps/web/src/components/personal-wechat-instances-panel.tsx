@@ -205,7 +205,14 @@ export function PersonalWechatInstancesPanel({
         </div>
         <div className={styles.headerActions}>
           <ReadinessState registry={registry} />
-          <button type="button" className={styles.primaryButton} onClick={openCreate} disabled={operationBusy}>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            data-action-id="integrations.personal-wechat.instances.open-create"
+            aria-label="新增个人微信实例"
+            onClick={openCreate}
+            disabled={operationBusy}
+          >
             <Plus size={15} aria-hidden="true" />新增实例
           </button>
         </div>
@@ -235,7 +242,14 @@ export function PersonalWechatInstancesPanel({
               <strong>{editorMode === "create" ? "新增实例" : "编辑实例"}</strong>
               <span>{editorMode === "edit" ? "令牌留空时保留当前令牌。" : "所有连接信息仅用于本机 RPA。"}</span>
             </div>
-            <button type="button" className={styles.iconButton} onClick={closeEditor} disabled={operationBusy} aria-label="关闭实例表单">
+            <button
+              type="button"
+              className={styles.iconButton}
+              data-action-id="integrations.personal-wechat.instances.close-editor"
+              onClick={closeEditor}
+              disabled={operationBusy}
+              aria-label="关闭实例表单"
+            >
               <X size={16} aria-hidden="true" />
             </button>
           </div>
@@ -303,12 +317,32 @@ export function PersonalWechatInstancesPanel({
           ) : null}
 
           <div className={styles.editorFooter}>
-            <button type="button" className={styles.secondaryButton} onClick={closeEditor} disabled={operationBusy}>取消</button>
-            <button type="button" className={styles.secondaryButton} onClick={() => void validateDraft()} disabled={operationBusy}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              data-action-id="integrations.personal-wechat.instances.cancel-edit"
+              aria-label="取消编辑个人微信实例"
+              onClick={closeEditor}
+              disabled={operationBusy}
+            >取消</button>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              data-action-id="integrations.personal-wechat.instances.validate"
+              aria-label="验证个人微信实例配置"
+              onClick={() => void validateDraft()}
+              disabled={operationBusy}
+            >
               {pendingAction === "validate" ? <LoaderCircle className={styles.spinner} size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}
               验证配置
             </button>
-            <button type="submit" className={styles.primaryButton} disabled={operationBusy}>
+            <button
+              type="submit"
+              className={styles.primaryButton}
+              data-action-id="integrations.personal-wechat.instances.save"
+              aria-label="保存个人微信实例"
+              disabled={operationBusy}
+            >
               {pendingAction === "save" ? <LoaderCircle className={styles.spinner} size={15} aria-hidden="true" /> : null}
               {pendingAction === "save" ? "保存中" : "保存实例"}
             </button>
@@ -341,13 +375,22 @@ export function PersonalWechatInstancesPanel({
                 <small>{instance.tokenConfigured ? "令牌已配置" : "令牌未配置"}</small>
               </div>
               <div className={styles.rowActions}>
-                <button type="button" className={styles.textButton} onClick={() => openEdit(instance)} disabled={operationBusy}>
+                <button
+                  type="button"
+                  className={styles.textButton}
+                  data-action-id={`integrations.personal-wechat.instances.edit.${instance.wechatAccountId}`}
+                  aria-label={`编辑个人微信实例 ${instance.accountNickname || instance.wechatAccountId}`}
+                  onClick={() => openEdit(instance)}
+                  disabled={operationBusy}
+                >
                   <PencilLine size={14} aria-hidden="true" />编辑
                 </button>
                 {instance.enabled ? (
                   <button
                     type="button"
                     className={styles.dangerButton}
+                    data-action-id={`integrations.personal-wechat.instances.request-disable.${instance.wechatAccountId}`}
+                    aria-label={`请求停用个人微信实例 ${instance.accountNickname || instance.wechatAccountId}`}
                     onClick={() => setConfirmDisableId(instance.wechatAccountId)}
                     disabled={operationBusy}
                   >
@@ -367,8 +410,22 @@ export function PersonalWechatInstancesPanel({
                 <div className={styles.disableConfirm} role="alertdialog" aria-label={`确认停用 ${instance.accountNickname}`}>
                   <span>停用后该账号将立即停止路由。确认停用？</span>
                   <div>
-                    <button type="button" className={styles.secondaryButton} onClick={() => setConfirmDisableId(null)} disabled={operationBusy}>取消</button>
-                    <button type="button" className={styles.confirmDangerButton} onClick={() => void confirmDisable()} disabled={operationBusy}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      data-action-id={`integrations.personal-wechat.instances.cancel-disable.${instance.wechatAccountId}`}
+                      aria-label={`取消停用个人微信实例 ${instance.accountNickname || instance.wechatAccountId}`}
+                      onClick={() => setConfirmDisableId(null)}
+                      disabled={operationBusy}
+                    >取消</button>
+                    <button
+                      type="button"
+                      className={styles.confirmDangerButton}
+                      data-action-id={`integrations.personal-wechat.instances.confirm-disable.${instance.wechatAccountId}`}
+                      aria-label={`确认停用个人微信实例 ${instance.accountNickname || instance.wechatAccountId}`}
+                      onClick={() => void confirmDisable()}
+                      disabled={operationBusy}
+                    >
                       {disabling ? <LoaderCircle className={styles.spinner} size={14} aria-hidden="true" /> : null}
                       {disabling ? "停用中" : "确认停用"}
                     </button>
@@ -382,7 +439,14 @@ export function PersonalWechatInstancesPanel({
             <ShieldCheck size={22} aria-hidden="true" />
             <strong>{registry?.mode === "legacy_single" ? "当前仍使用旧版单实例配置" : "尚未配置个人微信实例"}</strong>
             <span>{registry?.mode === "legacy_single" ? "新增实例后即可按微信账号独立管理。" : "先新增一个本机 RPA 实例。"}</span>
-            <button type="button" className={styles.primaryButton} onClick={openCreate} disabled={operationBusy}>新增实例</button>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              data-action-id="integrations.personal-wechat.instances.empty-create"
+              aria-label="新增第一个个人微信实例"
+              onClick={openCreate}
+              disabled={operationBusy}
+            >新增实例</button>
           </div>
         )}
       </div>

@@ -3,4 +3,5 @@ export type {
   PersonalWechatWorkspaceAccount,
   PersonalWechatWorkspaceProps,
   PersonalWechatWorkspaceTask,
+  PersonalWechatWorkspaceView,
 } from "./types";
