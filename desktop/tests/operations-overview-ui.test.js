@@ -16,7 +16,7 @@ test("operations overview exposes an accessible overview-center workspace", () =
     component,
     /<section[\s\S]*?className=\{styles\.page\}[\s\S]*?id="overview-center"[\s\S]*?aria-labelledby="operations-overview-title"[\s\S]*?aria-busy=\{busy\}/,
   );
-  assert.match(component, /<h2\s+id="operations-overview-title">运营总览<\/h2>/);
+  assert.match(component, /<h1\s+id="operations-overview-title">运营总览<\/h1>/);
   assert.match(component, /<div\s+className=\{styles\.metricGrid\}\s+aria-label="实时运营指标">/);
   assert.match(component, /<th\s+scope="col">客户<\/th>/);
   assert.match(component, /<span\s+className=\{styles\.srOnly\}>操作<\/span>/);
@@ -29,7 +29,7 @@ test("overview follows the dense Tencent-style operational information hierarchy
   assert.match(component, /渠道状态/);
   assert.match(component, /待处理事项/);
   assert.match(component, /自动化与训练/);
-  assert.match(component, /快捷操作/);
+  assert.doesNotMatch(component, /快捷操作|quickActions|footerActions/);
   assert.match(component, /最近会话/);
 
   assert.match(css, /--overview-brand:\s*var\(--wk-color-brand\);/);
@@ -62,9 +62,10 @@ test("overview actions delegate refresh, navigation, conversation, and automatio
   assert.match(component, /onClick=\{onOpenChannels\}/);
   assert.match(component, /onClick=\{onRunAutomation\}\s+disabled=\{busy\}/);
 
-  assert.ok(
-    (component.match(/onClick=\{onRunAutomation\}/g) || []).length >= 2,
-    "automation should be available from both the metric panel and quick actions",
+  assert.equal(
+    (component.match(/onClick=\{onRunAutomation\}/g) || []).length,
+    1,
+    "automation should have one clear navigation entry instead of duplicate quick actions",
   );
   assert.ok(
     (component.match(/onClick=\{onOpenChannels\}/g) || []).length >= 2,
@@ -85,8 +86,9 @@ test("responsive CSS breakpoint covers a 390px viewport with a usable single-col
   assert.ok(matchingRules.length > 0, "a max-width breakpoint must include a 390px viewport");
 
   const mobileCss = matchingRules.map((match) => match[2]).join("\n");
-  assert.match(mobileCss, /\.page\s*\{[\s\S]*?padding:\s*11px 9px 14px;/);
+  assert.match(mobileCss, /\.page\s*\{[\s\S]*?gap:\s*9px;[\s\S]*?padding:\s*0;/);
   assert.match(mobileCss, /\.priorityGrid,\s*\n\s*\.insightGrid,\s*\n\s*\.metricGrid\s*\{\s*grid-template-columns:\s*1fr;/);
   assert.match(mobileCss, /\.tableWrap table,[\s\S]*?\.tableWrap td\s*\{\s*display:\s*block;/);
-  assert.match(mobileCss, /\.footerActions\s*\{\s*display:\s*grid;/);
+  assert.match(css, /@media\s*\(max-width:\s*390px\)[\s\S]*?\.page\s*\{[\s\S]*?padding-right:\s*7px;[\s\S]*?padding-left:\s*7px;/);
+  assert.doesNotMatch(css, /\.quickActions|\.footerActions/);
 });

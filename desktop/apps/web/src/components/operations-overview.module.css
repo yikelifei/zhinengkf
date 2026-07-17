@@ -30,8 +30,7 @@
 .headerActions,
 .channelRow,
 .actionRow,
-.automationBody,
-.footerActions {
+.automationBody {
   display: flex;
   align-items: center;
 }
@@ -74,7 +73,6 @@
 }
 
 .headerActions button,
-.footerActions button,
 .emptyState button {
   display: inline-flex;
   min-height: 30px;
@@ -91,7 +89,6 @@
 }
 
 .headerActions button:hover,
-.footerActions button:hover,
 .emptyState button:hover {
   border-color: #b9c8e7;
   color: var(--overview-brand);
@@ -399,42 +396,6 @@
   height: 34px;
 }
 
-.quickActions {
-  display: grid;
-  padding: 5px 0;
-}
-
-.quickActions > button {
-  display: grid;
-  min-height: 43px;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  border-bottom: 1px solid #f0f1f3;
-  padding: 0 12px;
-  color: #4e5969;
-  text-align: left;
-  background: #ffffff;
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.quickActions > button:last-child {
-  border-bottom: 0;
-}
-
-.quickActions > button:hover {
-  color: var(--overview-brand);
-  background: #f7faff;
-}
-
-.quickActions > button > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .conversationPanel {
   flex: 1 1 auto;
   min-height: 242px;
@@ -531,11 +492,6 @@
 
 .emptyState button {
   margin-top: 4px;
-}
-
-.footerActions {
-  display: none;
-  gap: 6px;
 }
 
 .srOnly {
@@ -637,10 +593,6 @@
     display: none;
   }
 
-  .quickPanel {
-    display: none;
-  }
-
   .conversationPanel {
     min-height: 0;
   }
@@ -698,16 +650,6 @@
     max-width: 100%;
   }
 
-  .footerActions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .footerActions button {
-    min-width: 0;
-    padding: 0 5px;
-    font-size: 10px;
-  }
 }
 
 @media (max-width: 390px) {
