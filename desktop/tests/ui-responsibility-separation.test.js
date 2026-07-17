@@ -61,3 +61,35 @@ test("agent directory links to one-agent detail instead of expanding every skill
   assert.match(detail, /agent\.skills\.map/);
   assert.match(detail, /!agent[\s\S]*未回退展示其他记录/);
 });
+
+test("responsibility documents list the focused workflow URLs and no longer describe them as redirects", () => {
+  const moduleMap = read("docs/UI_MODULE_MAP.md");
+  const acceptance = read("docs/UI_ACCEPTANCE_MATRIX.md");
+  const focusedRoutes = [
+    "/integrations/wechat-work/flow",
+    "/integrations/wechat-work/settings",
+    "/integrations/personal-wechat/instances/configure",
+    "/integrations/personal-wechat/inbound-drill",
+    "/design/jobs/[id]/submit",
+    "/design/jobs/[id]/status",
+    "/catalog/products/[skuCode]",
+    "/catalog/repair/[skuCode]",
+    "/sales/quotes/[id]/send",
+    "/sales/quotes/[id]/create-order",
+    "/sales/orders/[id]/edit",
+    "/sales/orders/[id]/messages/confirmation",
+    "/automation/control",
+    "/automation/history",
+    "/agents/[id]",
+    "/training/import/history",
+    "/training/review/[id]",
+    "/training/review/batch",
+  ];
+  for (const route of focusedRoutes) {
+    assert.ok(moduleMap.includes(`\`${route}\``), `module map missing ${route}`);
+    assert.ok(acceptance.includes(`\`${route}\``), `acceptance matrix missing ${route}`);
+  }
+  assert.doesNotMatch(moduleMap, /`\/automation\/control` 和 `\/automation\/history` 永久转到/);
+  assert.doesNotMatch(moduleMap, /`\/integrations\/wechat-work\/flow\|settings` 转到/);
+  assert.doesNotMatch(moduleMap, /`\/catalog\/editor` 转到/);
+});

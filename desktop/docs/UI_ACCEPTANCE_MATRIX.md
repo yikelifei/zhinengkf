@@ -30,32 +30,53 @@
 | `/send/diagnostics/operations` | 运行发送诊断扫描 | 扫描发送异常 | 桥接回执入库、异常扫描 | 直接绕过守卫发送 |
 | `/integrations/channels` | 查看接入通道状态 | 刷新通道 | 打开对应配置或验收页 | 会话、发送和业务自动化 |
 | `/integrations/wechat-work` | 企业微信本地配置与上线预检 | 运行只读预检 | 查看缺项、刷新状态、入站验收 | 将本地预检宣称为平台验收通过 |
-| `/integrations/personal-wechat/instances` | 管理个人微信 RPA 实例 | 保存实例 | 校验、停用、查看端点与账号 | 暴露 token、自动重试不确定发送 |
-| `/integrations/personal-wechat/control` | 查看账号/Windows 会话/窗口隔离 | 刷新账号控制面 | 人工接管、审批状态 | 隐式切号、跨账号发送 |
-| `/integrations/personal-wechat/window-inbound` | 验证真实窗口与受控入站链路 | 采集当前窗口 | 快照入库、身份绑定入站验证 | 无身份入站、自动外发 |
-| `/integrations/personal-wechat/safety` | 查看同意、频控、敏感内容与审计 | 全局停止 | 账号预算、人工复核、未知投递隔离 | 规避平台限制、模拟真人身份 |
+| `/integrations/wechat-work/flow` | 核对企业微信接入流程 | 检查接入流程 | 回调、入站、路由、发送流程 | 修改本机配置或伪造验收 |
+| `/integrations/wechat-work/settings` | 只读核对企业微信配置 | 刷新配置检查 | 回调地址、身份策略、本机配置 | 在前端写入环境配置 |
+| `/integrations/personal-wechat/instances` | 查看个人微信 RPA 实例 | 刷新实例状态 | 查看端点、身份和状态，进入配置页 | 保存、停用或发送 |
+| `/integrations/personal-wechat/instances/configure` | 配置一个个人微信 RPA 实例 | 保存当前实例 | 校验、保存、明确确认停用 | 暴露 token、自动重试不确定发送 |
+| `/integrations/personal-wechat/control` | 查看账号可用状态 | 刷新账号状态 | 导航到实例、证据、演练和安全页 | 隐式切号、跨账号发送 |
+| `/integrations/personal-wechat/window-inbound` | 采集真实窗口证据 | 采集当前窗口 | 查看已入库快照和身份 | 受控入站演练、自动外发 |
+| `/integrations/personal-wechat/inbound-drill` | 提交带身份的受控入站演练 | 提交入站演练 | 身份核对、明确确认 | 无身份入站、自动外发 |
+| `/integrations/personal-wechat/safety` | 审阅阻断和不确定投递证据 | 刷新安全证据 | 查看 fail-closed 依据 | 规避平台限制、模拟真人身份 |
 | `/design/settings` | 配置设计平台连接 | 保存配置 | 清凭证、健康检查、回调状态、试跑 | 设备激活、账号登录、素材和任务 |
 | `/design/activation` | 绑定本机设计设备 | 激活设备 | 生成/填写设备 ID、填写后台激活码 | 账号登录、连接参数和任务 |
 | `/design/account` | 登录设计平台账号 | 登录账号 | 填写账号、密码和已激活设备 ID | 设备激活、连接参数和任务 |
 | `/design/assets` | 上传并管理客户素材 | 上传素材 | 选择、绑定设计任务、预览 | 设计任务状态推进 |
-| `/design/jobs` | 筛选和创建设计任务 | 新建设计任务 | 状态筛选、批量轮询 | 商品和报价编辑 |
-| `/design/jobs/[id]` | 完成一条设计任务 | 提交或重试当前任务 | 预检、轮询、选图、改图、取消 | 跨客户选图、直接付款处理 |
-| `/catalog/products` | 管理商品资料 | 新增商品 | 筛选、编辑、上下架、批量修改 | 图片修复队列和导入向导 |
-| `/catalog/repair` | 处理资料与图片问题 | 保存当前修复 | 严重度/路径筛选、复制交接、导出 | 商品批量导入 |
+| `/design/jobs` | 查找并打开设计任务 | 查看任务详情 | 状态筛选、任务摘要 | 提交、轮询或修改任务 |
+| `/design/jobs/[id]` | 只读核对一条设计任务 | 选择后续操作 | 身份、预算、候选图、本地图 | 提交或更新远端状态 |
+| `/design/jobs/[id]/submit` | 预检并提交一条设计任务 | 确认正式提交 | 就绪检查、身份核对、二次确认 | 其他任务操作 |
+| `/design/jobs/[id]/status` | 同步一条任务的远端状态 | 同步远端状态 | 查看远端结果和错误 | 正式提交或编辑商品 |
+| `/catalog/products` | 查找并打开商品 | 查看商品详情 | 搜索、状态和库存摘要 | 新增、编辑或修复 |
+| `/catalog/products/[skuCode]` | 只读核对一个 SKU | 打开商品编辑 | 价格、库存、供应和状态 | 保存或批量修改 |
+| `/catalog/editor` | 新增或编辑单个 SKU | 保存商品 | 单 SKU 字段、校验、二次确认 | 修复队列和批量导入 |
+| `/catalog/repair` | 查看商品修复队列 | 打开修复任务 | 严重度、字段和 SKU 定位 | 直接修改商品 |
+| `/catalog/repair/[skuCode]` | 修复一个 SKU | 确认提交修复 | 库存、供应商、交期 | 其他 SKU 或批量导入 |
 | `/catalog/import` | 完成商品导入向导 | 确认入库 | 文件选择、字段映射、预览、校验 | 在线商品编辑和报价 |
 | `/catalog/audit` | 查看商品库可自动化程度 | 刷新体检 | 库存、利润、规格、交期、图片问题筛选 | 直接修改设计或订单 |
 | `/catalog/bundles` | 验证预算/场景搭配 | 生成搭配建议 | 查看组合依据和阻塞项 | 自动承诺库存或交期 |
 | `/sales/actions` | 在报价与订单两个独立流程之间选择目标 | 打开目标流程 | 查看两个流程的职责边界 | 在同页混合报价和订单状态机 |
-| `/sales/quotes` | 管理报价 | 新建或发送报价 | 搜索、筛选、修订选图、付款凭证核验 | 订单生产/交付状态 |
-| `/sales/quotes/[id]` | 处理一条报价 | 发送报价或建单 | 预览话术、修订、核验定金/全款 | 跳过身份与付款证据 |
-| `/sales/orders` | 管理订单跟进 | 打开待处理订单 | 搜索、阶段、付款和下一步筛选 | 报价批量发送 |
-| `/sales/orders/[id]` | 推进一条订单 | 执行当前可用下一步 | 确认、收款、生产、交付、取消、记录跟进 | 跳阶段或跨客户操作 |
-| `/automation/runs` | 控制和查看自动化运行 | 运行一轮 | 启停、查看阶段与最近运行 | 直接修改训练样本 |
+| `/sales/quotes` | 查找并打开报价 | 查看报价详情 | 搜索、状态、金额摘要 | 发送、建单或修改订单 |
+| `/sales/quotes/[id]` | 只读核对一条报价 | 选择后续操作 | 金额、身份、状态和证据 | 发送或建单 |
+| `/sales/quotes/[id]/send` | 发送一条报价 | 确认报价入队 | 身份、内容和守卫核对 | 创建订单或发送其他报价 |
+| `/sales/quotes/[id]/create-order` | 由一条报价创建订单草稿 | 确认创建订单 | 身份与前置状态核对 | 发送客户消息 |
+| `/sales/orders` | 查找并打开订单 | 查看订单详情 | 搜索、状态、付款摘要 | 编辑或发送跟进 |
+| `/sales/orders/[id]` | 只读核对一条订单 | 选择后续操作 | 金额、身份、付款和状态 | 编辑或发送消息 |
+| `/sales/orders/[id]/edit` | 编辑一条订单字段 | 确认保存字段 | 状态、付款、负责人、备注 | 发送客户消息 |
+| `/sales/orders/[id]/messages/confirmation` | 发送一条订单确认 | 确认消息入队 | 身份、内容和守卫核对 | 生产或发货跟进 |
+| `/sales/orders/[id]/messages/production` | 发送一条生产跟进 | 确认消息入队 | 身份、内容和守卫核对 | 订单确认或发货跟进 |
+| `/sales/orders/[id]/messages/delivery` | 发送一条发货跟进 | 确认消息入队 | 身份、内容和守卫核对 | 订单确认或生产跟进 |
+| `/automation/runs` | 查看自动化状态 | 刷新状态 | 就绪结论和责任页入口 | 启停或执行一次 |
+| `/automation/control` | 控制自动化运行 | 执行一次 | 启动、停止、明确确认 | 查看历史或修改训练样本 |
+| `/automation/history` | 查看自动化运行历史 | 刷新记录 | 结果、耗时、推进、阻断和错误 | 启停或处理卡点 |
 | `/automation/issues` | 处理自动化卡点 | 处理第一项 | 错误、缺字段、发送对象、人工接管筛选 | 静默忽略失败 |
 | `/notifications` | 阅读和定位提醒 | 全部已读 | 单条已读、定位目标 | 执行跨域危险动作 |
 | `/agents` | 查看 Agent 与适用范围 | 打开 Agent | 场景、状态和能力筛选 | 直接应用未审核 Skill |
+| `/agents/[id]` | 查看一个 Agent 的职责和技能 | 返回 Agent 目录 | 训练覆盖、技能状态 | 修改 Agent 或应用 Skill |
 | `/training/import` | 导入对话训练材料 | 导入训练 | 预览、批次查看、字段检查 | 样本最终审核 |
-| `/training/review` | 复核训练样本 | 确认所选样本 | 缺项/风险/场景筛选、编辑、退回、禁用 | 自动确认风险样本 |
+| `/training/import/history` | 查看训练导入历史 | 刷新记录 | 解析数量、警告和批次结果 | 再次导入或样本复核 |
+| `/training/review` | 筛选并定位待复核样本 | 打开样本详情 | 缺项、风险和场景筛选 | 单条或批量提交复核 |
+| `/training/review/[id]` | 复核地址指定的一条样本 | 提交当前复核 | 说明、可用、保持复核、驳回 | 其他样本操作 |
+| `/training/review/batch` | 复核人工勾选的多条样本 | 提交所选复核 | 明确范围、统一结论、二次确认 | 未勾选样本或静默全选 |
 | `/training/skills` | 审核和应用 Skill 建议 | 应用已审核建议 | 可信度、Agent、证据筛选 | 应用被阻塞或跨范围建议 |
 | `/reviews/inbox` | 处理人工接管队列 | 处理第一项 | 会话、阻塞发送、接管时间筛选 | 设计/报价/订单审批 |
 | `/reviews/design` | 选择待审核设计 | 打开审核对象 | 状态、结果数、更新时间 | 直接提交审核 |

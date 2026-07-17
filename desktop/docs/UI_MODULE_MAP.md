@@ -32,32 +32,53 @@
 | 发送 | `/send/diagnostics/operations` | 运行桥接回执与发送异常扫描 | 扫描异常 |
 | 接入 | `/integrations/channels` | 查看所有通道状态并导航到配置或验收页 | 刷新通道 |
 | 企业微信 | `/integrations/wechat-work` | 做本地配置检查和只读上线预检 | 运行只读预检 |
-| 个人微信 | `/integrations/personal-wechat/instances` | 管理 RPA 实例、端点与账号绑定 | 保存实例 |
-| 个人微信 | `/integrations/personal-wechat/control` | 查看账号状态、待处理发送与人工接管边界 | 刷新账号控制面 |
-| 个人微信 | `/integrations/personal-wechat/window-inbound` | 验证真实窗口证据与带身份的受控入站 | 采集当前窗口 |
-| 个人微信 | `/integrations/personal-wechat/safety` | 查看同意、频控、敏感内容和审计 | 全局停止 |
+| 企业微信 | `/integrations/wechat-work/flow` | 核对回调、入站、路由和发送流程 | 检查接入流程 |
+| 企业微信 | `/integrations/wechat-work/settings` | 只读核对本机配置、回调地址和身份策略 | 刷新配置检查 |
+| 个人微信 | `/integrations/personal-wechat/instances` | 查看实例、端点、登录身份和实时状态 | 刷新实例状态 |
+| 个人微信 | `/integrations/personal-wechat/instances/configure` | 校验并保存一个本机 RPA 实例 | 保存当前实例 |
+| 个人微信 | `/integrations/personal-wechat/control` | 查看账号可用状态并导航到独立操作页 | 刷新账号状态 |
+| 个人微信 | `/integrations/personal-wechat/window-inbound` | 采集真实微信窗口证据并查看快照 | 采集当前窗口 |
+| 个人微信 | `/integrations/personal-wechat/inbound-drill` | 提交带完整身份的受控入站演练 | 提交入站演练 |
+| 个人微信 | `/integrations/personal-wechat/safety` | 审阅阻断任务与不确定投递证据 | 刷新安全证据 |
 | 设计 | `/design/settings` | 配置设计平台连接并检查健康、回调与就绪状态 | 保存配置 |
 | 设计 | `/design/activation` | 生成设备 ID 并绑定后台激活码 | 激活设备 |
 | 设计 | `/design/account` | 在设备激活后登录设计平台账号 | 登录账号 |
 | 设计 | `/design/assets` | 上传、选择和预览客户素材 | 上传素材 |
-| 设计 | `/design/jobs` | 筛选和创建设计任务 | 新建设计任务 |
-| 设计 | `/design/jobs/[id]` | 完成一条设计任务的预检、提交、轮询、选图或取消 | 提交当前任务 |
-| 商品 | `/catalog/products` | 管理商品资料 | 新增商品 |
-| 商品 | `/catalog/repair` | 修复资料和图片问题 | 保存当前修复 |
+| 设计 | `/design/jobs` | 查找并打开设计任务 | 查看任务详情 |
+| 设计 | `/design/jobs/[id]` | 只读核对一条任务的身份、预算和候选图 | 选择后续操作 |
+| 设计 | `/design/jobs/[id]/submit` | 预检并正式提交一条设计任务 | 确认正式提交 |
+| 设计 | `/design/jobs/[id]/status` | 查询并更新一条任务的远端状态 | 同步远端状态 |
+| 商品 | `/catalog/products` | 查找并打开商品，不执行写操作 | 查看商品详情 |
+| 商品 | `/catalog/products/[skuCode]` | 只读核对一个 SKU 的价格、库存和状态 | 打开商品编辑 |
+| 商品 | `/catalog/editor` | 新增或编辑单个 SKU 的业务字段 | 保存商品 |
+| 商品 | `/catalog/repair` | 查看商品修复队列 | 打开修复任务 |
+| 商品 | `/catalog/repair/[skuCode]` | 只修复一个 SKU 的库存、供应商或交期 | 确认提交修复 |
 | 商品 | `/catalog/import` | 完成商品导入向导 | 确认入库 |
 | 商品 | `/catalog/audit` | 查看商品库的自动化资格 | 刷新体检 |
 | 商品 | `/catalog/bundles` | 验证预算和场景搭配 | 生成搭配建议 |
 | 销售 | `/sales/actions` | 在报价与订单两个独立流程之间选择目标 | 打开目标流程 |
-| 销售 | `/sales/quotes` | 管理报价 | 新建或发送报价 |
-| 销售 | `/sales/quotes/[id]` | 处理一条报价的修订、核验、发送或建单 | 发送当前报价 |
-| 销售 | `/sales/orders` | 管理订单跟进 | 打开待处理订单 |
-| 销售 | `/sales/orders/[id]` | 按真实前置条件推进一条订单 | 执行当前可用下一步 |
-| 自动化 | `/automation/runs` | 控制自动化并查看当前与最近运行 | 运行一轮 |
+| 销售 | `/sales/quotes` | 查找并打开报价，不执行发送或建单 | 查看报价详情 |
+| 销售 | `/sales/quotes/[id]` | 只读核对一条报价的金额、身份和状态 | 选择后续操作 |
+| 销售 | `/sales/quotes/[id]/send` | 把一条已核对报价加入微信发送队列 | 确认报价入队 |
+| 销售 | `/sales/quotes/[id]/create-order` | 只由一条报价创建订单草稿 | 确认创建订单 |
+| 销售 | `/sales/orders` | 查找并打开订单，不执行编辑或跟进 | 查看订单详情 |
+| 销售 | `/sales/orders/[id]` | 只读核对一条订单的金额、付款和状态 | 选择后续操作 |
+| 销售 | `/sales/orders/[id]/edit` | 保存一条订单的字段 | 确认保存字段 |
+| 销售 | `/sales/orders/[id]/messages/confirmation` | 只把订单确认消息加入发送队列 | 确认消息入队 |
+| 销售 | `/sales/orders/[id]/messages/production` | 只把生产跟进消息加入发送队列 | 确认消息入队 |
+| 销售 | `/sales/orders/[id]/messages/delivery` | 只把发货跟进消息加入发送队列 | 确认消息入队 |
+| 自动化 | `/automation/runs` | 只查看当前状态、就绪结论和责任入口 | 刷新状态 |
+| 自动化 | `/automation/control` | 经人工确认后启动、停止或执行一次自动化 | 执行一次 |
+| 自动化 | `/automation/history` | 查看真实运行结果、耗时、阻断和错误 | 刷新记录 |
 | 自动化 | `/automation/issues` | 处理自动化卡点 | 处理第一项 |
 | 提醒 | `/notifications` | 阅读并定位业务提醒 | 全部已读 |
 | Agent | `/agents` | 查看 Agent 及其适用范围 | 打开 Agent |
+| Agent | `/agents/[id]` | 查看一个 Agent 的职责、训练覆盖和技能 | 返回 Agent 目录 |
 | 训练 | `/training/import` | 导入对话训练材料 | 导入训练 |
-| 训练 | `/training/review` | 复核训练样本 | 确认所选样本 |
+| 训练 | `/training/import/history` | 查看聊天导入结果、解析数量和警告 | 刷新记录 |
+| 训练 | `/training/review` | 筛选并定位待复核样本 | 打开样本详情 |
+| 训练 | `/training/review/[id]` | 核对并复核地址指定的一条样本 | 提交当前复核 |
+| 训练 | `/training/review/batch` | 对人工勾选的多条样本提交同一结论 | 提交所选复核 |
 | 训练 | `/training/skills` | 审核和应用 Skill 建议 | 应用已审核建议 |
 | 审核 | `/reviews/inbox` | 处理人工接管队列 | 处理第一项 |
 | 审核 | `/reviews/design` | 选择待审核设计 | 打开审核对象 |
@@ -72,18 +93,14 @@
 ## 兼容入口
 
 - `/reviews/handoff` 永久转到 `/reviews/inbox`。
-- `/automation/control` 和 `/automation/history` 永久转到 `/automation/runs`。
 - 旧 `#section[:view]` 书签只由根页面解析并转到类型化清单中的生产 URL。
-- `/integrations/wechat-work/flow|settings` 转到 `/integrations/wechat-work`。
-- `/catalog/editor` 转到 `/catalog/products`，`/catalog/preview` 转到 `/catalog/import`。
+- `/catalog/preview` 转到 `/catalog/import`。
 - `/sales/overview` 转到 `/sales/quotes`，`/settings/accounts` 转到 `/integrations/personal-wechat/instances`。
 - 上述兼容路由在 manifest 中保留旧书签解析能力，但通过 `showInModuleNav: false` 从模块导航隐藏，避免出现多个入口负责同一件事。
 
 ## 动态详情迁移
 
-会话、发送任务、设计任务、销售对象和审核对象均使用路径级实体 ID；不存在的 ID 显示明确未找到状态，不再静默选中列表第一项。个人微信实例继续通过 `/integrations/personal-wechat/instances?accountId=` 把查询选择传到所属页面。
-
-后续若增加个人微信实例详情，应使用 `/integrations/personal-wechat/instances/[id]`，由个人微信 feature 分支实现，不能塞进控制面或安全页。
+会话、发送任务、设计任务、商品、报价、订单、训练样本、Agent 和审核对象均使用路径级实体 ID；不存在的 ID 显示明确未找到状态，不再静默选中列表第一项。个人微信实例写操作统一进入 `/integrations/personal-wechat/instances/configure?accountId=`，实例列表保持只读。
 
 ## 按钮合同
 
