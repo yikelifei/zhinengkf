@@ -44,7 +44,7 @@ test("dry run execution is not mapped to real sent status", () => {
 test("wechat channel status distinguishes runtime from real send adapter readiness", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const statusSection = sliceBetween(service, /function channelStatus\(/, /function maskSecret/);
   const topbarSection = sliceBetween(page, /<div className="top-actions">/, /<\/header>/);
@@ -256,7 +256,7 @@ test("bridge outbox list exposes preview instead of raw outbox data", () => {
 });
 
 test("web send task cards show dispatch instruction state", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
@@ -336,7 +336,7 @@ test("web send task cards show dispatch instruction state", () => {
 });
 
 test("web send task cards expose trusted bridge ack rejection audit", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const attemptSummarySection = sliceBetween(page, /\nfunction SendAttemptSummary\(/, /\nfunction BridgeOutboxPreview\(/);
   const ackAuditSection = sliceBetween(page, /\nfunction sendAttemptBridgeAckRejected\(/, /\nfunction windowSnapshotStatus\(/);
@@ -390,7 +390,7 @@ test("frontend list APIs pass identity filters to multi-account resources", () =
 });
 
 test("frontend conversation picker reloads business lists with selected conversation identity", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const loadSection = page.slice(page.indexOf("  async function load("), page.indexOf("  async function runAction"));
   const pickerSection = page.slice(page.indexOf("  function renderConversationSelect()"), page.indexOf("  const manualLockLogByConversationId"));
 
@@ -410,7 +410,7 @@ test("frontend conversation picker reloads business lists with selected conversa
 });
 
 test("frontend conversation focus actions refresh scoped business lists", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const allowedDirectSetters = (page.match(/setActiveConversationId\(/g) || []).length;
   const sendTaskSection = page.slice(
     page.indexOf("<div className=\"send-task-list\">"),
@@ -437,7 +437,7 @@ test("frontend conversation focus actions refresh scoped business lists", () => 
 });
 
 test("notice center exposes manual selection targets for operator follow-up", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const quotesService = readProjectFile("apps/api/src/quotes/quotes.service.ts");
@@ -527,7 +527,7 @@ test("notice center exposes manual selection targets for operator follow-up", ()
 });
 
 test("order payment buttons must verify the linked quote before confirmation queueing", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const wechatService = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const verifyOrderPaymentProofSection = page.slice(
     page.indexOf("async function verifyOrderPaymentProof"),
@@ -563,7 +563,7 @@ test("order payment buttons must verify the linked quote before confirmation que
 
 test("manual mutation APIs carry and enforce expected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const quoteService = readProjectFile("apps/api/src/quotes/quotes.service.ts");
   const orderService = readProjectFile("apps/api/src/orders/orders.service.ts");
   const reviewsService = readProjectFile("apps/api/src/reviews/reviews.service.ts");
@@ -680,7 +680,7 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
 
 test("send attempt lists are filtered by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -702,7 +702,7 @@ test("send attempt lists are filtered by selected conversation identity", () => 
 
 test("manual send operation scans are scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
 
@@ -732,7 +732,7 @@ test("manual send operation scans are scoped by selected conversation identity",
 
 test("bridge outbox, dispatch and status are scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
 
@@ -773,7 +773,7 @@ test("bridge outbox, dispatch and status are scoped by selected conversation ide
 
 test("wechat window snapshots are scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -808,7 +808,7 @@ test("wechat window snapshot diagnosis only uses conversations from the snapshot
 
 test("notifications and review center are scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const notificationsController = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
   const notificationsService = readProjectFile("apps/api/src/notifications/notifications.service.ts");
   const reviewsController = readProjectFile("apps/api/src/reviews/reviews.controller.ts");
@@ -900,7 +900,7 @@ test("manual review logs persist complete account conversation and customer iden
 
 test("notification bulk read is scoped by selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
   const service = readProjectFile("apps/api/src/notifications/notifications.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -919,7 +919,7 @@ test("notification bulk read is scoped by selected conversation identity", () =>
 
 test("review decisions carry and enforce expected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/reviews/reviews.controller.ts");
   const service = readProjectFile("apps/api/src/reviews/reviews.service.ts");
 
@@ -975,7 +975,7 @@ test("review decisions carry and enforce expected conversation identity", () => 
 
 test("design job manual actions carry and enforce expected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/design-jobs/design-jobs.controller.ts");
   const service = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
 
@@ -1059,7 +1059,7 @@ test("design job manual actions carry and enforce expected conversation identity
 });
 
 test("design preflight panel exposes bundle automation readiness", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const preflightSection = page.slice(page.indexOf("function PreflightPanel"), page.indexOf("function CandidateImages"));
 
   assert.match(preflightSection, /const bundleAutomation = job\.bundle\?\.automation \|\| null/);
@@ -1071,7 +1071,7 @@ test("design preflight panel exposes bundle automation readiness", () => {
 
 test("design assets and conversation manual locks carry expected identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const assetsController = readProjectFile("apps/api/src/assets/assets.controller.ts");
   const assetsService = readProjectFile("apps/api/src/assets/assets.service.ts");
   const localStore = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -1219,7 +1219,7 @@ test("design assets and conversation manual locks carry expected identity", () =
 
 test("routing decisions and chat imports stay bound to selected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const routingController = readProjectFile("apps/api/src/routing/routing.controller.ts");
   const routingService = readProjectFile("apps/api/src/routing/routing.service.ts");
   const trainingController = readProjectFile("apps/api/src/training/training.controller.ts");
@@ -1281,7 +1281,7 @@ test("routing decisions and chat imports stay bound to selected conversation ide
 
 test("training sample review actions carry and enforce expected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/training/training.controller.ts");
   const service = readProjectFile("apps/api/src/training/training.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -1336,7 +1336,7 @@ test("training sample review actions carry and enforce expected conversation ide
 
 test("single notification read carries and enforces expected conversation identity", () => {
   const api = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const controller = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
   const service = readProjectFile("apps/api/src/notifications/notifications.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
@@ -1396,7 +1396,7 @@ test("window observer public endpoints expose summaries without local paths", ()
 });
 
 test("send diagnostics view exposes live worker readiness without changing send execution", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const sendSection = sliceBetween(page, /id="send-center"/, /<section className="routing-grid">/);
 
@@ -1427,7 +1427,7 @@ test("send diagnostics view exposes live worker readiness without changing send 
 
 test("web client no longer exposes or renders direct mark-sent actions", () => {
   const apiClient = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.doesNotMatch(apiClient, /markSendTaskSent/);
   assert.doesNotMatch(apiClient, /mark-sent/);
@@ -1439,7 +1439,7 @@ test("web client no longer exposes or renders direct mark-sent actions", () => {
 
 test("web client cannot manually forge bridge acknowledgements", () => {
   const apiClient = readProjectFile("apps/web/src/lib/api.ts");
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.doesNotMatch(apiClient, /acknowledgeBridgeSend/);
   assert.doesNotMatch(apiClient, /\/bridge-ack/);
@@ -1452,7 +1452,7 @@ test("web client cannot manually forge bridge acknowledgements", () => {
 });
 
 test("web client confirms before releasing manual conversation lock", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const toggleSection = page.slice(
     page.indexOf("async function toggleConversationManualLock"),
     page.indexOf("async function validateWrong"),
@@ -1476,7 +1476,7 @@ test("web client confirms before releasing manual conversation lock", () => {
 });
 
 test("web client confirms before releasing manual lock and requeueing send task", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const apiClient = readProjectFile("apps/web/src/lib/api.ts");
   const releaseAndRequeueSection = page.slice(
     page.indexOf("async function releaseManualLockAndRequeueTask"),
@@ -1540,7 +1540,7 @@ test("web client confirms before releasing manual lock and requeueing send task"
 });
 
 test("review center renders manual lock audit details", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const reviewSection = page.slice(
     page.indexOf("<div className=\"review-log-list\">"),
@@ -1624,7 +1624,7 @@ test("review center renders manual lock audit details", () => {
 });
 
 test("review center exposes current manual locked conversations", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const reviewCenterIdIndex = page.indexOf("id=\"review-center\"");
@@ -1986,7 +1986,7 @@ test("review center exposes current manual locked conversations", () => {
 });
 
 test("web deal flow bulk action only progresses low-value quotes", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const section = page.slice(
     page.indexOf("async function progressQuoteDealFlow"),
     page.indexOf("async function evaluateCustomerRoute"),
@@ -2011,7 +2011,7 @@ test("web deal flow bulk action only progresses low-value quotes", () => {
 });
 
 test("web deal flow queues same-cycle order confirmations after order creation", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const section = page.slice(
     page.indexOf("async function progressQuoteDealFlow"),
     page.indexOf("async function evaluateCustomerRoute"),
@@ -2044,7 +2044,7 @@ test("inbound quote acceptance carries conversation identity into order mutation
 });
 
 test("web quote center renders guarded next-step guidance", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const quotesController = readProjectFile("apps/api/src/quotes/quotes.controller.ts");
   const quotesService = readProjectFile("apps/api/src/quotes/quotes.service.ts");
@@ -2314,7 +2314,7 @@ test("web quote center renders guarded next-step guidance", () => {
 });
 
 test("web quote center can filter records by next-step actionability", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const css = readProjectFile("apps/web/src/app/globals.css");
   const quoteFilterSection = page.slice(
@@ -2673,7 +2673,7 @@ test("web quote center can filter records by next-step actionability", () => {
 });
 
 test("web active quote panel uses guarded next-step actions", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const quoteRunSectionStart = page.indexOf("async function runQuoteDealNextStep");
   const quoteRunSection = page.slice(
     quoteRunSectionStart,

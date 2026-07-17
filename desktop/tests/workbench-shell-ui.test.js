@@ -27,7 +27,7 @@ test("workbench shell exports modular sidebar, topbar, shell, navigation, and sh
 });
 
 test("default navigation uses the seven required groups and only existing page section IDs", () => {
-  const groupLabels = [...navigation.matchAll(/\n\s+label: "([^"]+)",\n\s+items:/g)].map((match) => match[1]);
+  const groupLabels = [...navigation.matchAll(/\r?\n\s+label: "([^"]+)",\r?\n\s+items:/g)].map((match) => match[1]);
   assert.deepEqual(groupLabels, [
     "工作台",
     "消息",

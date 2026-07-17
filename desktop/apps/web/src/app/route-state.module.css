@@ -1,0 +1,96 @@
+.viewport {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+  color: var(--wk-color-text-primary, #1d2129);
+  background: var(--wk-color-bg-canvas, #f5f6f7);
+}
+
+.card {
+  display: grid;
+  width: min(100%, 520px);
+  gap: 12px;
+  border: 1px solid var(--wk-color-border, #e5e6eb);
+  border-radius: var(--wk-radius-lg, 10px);
+  padding: 28px;
+  background: var(--wk-color-surface, #ffffff);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 6%);
+}
+
+.eyebrow {
+  color: var(--wk-color-brand, #0052d9);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card h1,
+.card p {
+  margin: 0;
+}
+
+.card h1 {
+  font-size: 22px;
+  line-height: 1.35;
+}
+
+.card p {
+  color: var(--wk-color-text-secondary, #6b7785);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.progress {
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--wk-color-brand-soft, #edf4ff);
+}
+
+.progress::after {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--wk-color-brand, #0052d9);
+  content: "";
+  animation: route-loading 1.1s ease-in-out infinite alternate;
+}
+
+.action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action :is(a, button) {
+  min-height: 36px;
+  border: 1px solid var(--wk-color-brand, #0052d9);
+  border-radius: var(--wk-radius-md, 6px);
+  padding: 7px 14px;
+  color: #ffffff;
+  background: var(--wk-color-brand, #0052d9);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+
+.viewport[data-tone="error"] .eyebrow {
+  color: var(--wk-color-danger, #d54941);
+}
+
+@keyframes route-loading {
+  from { transform: translateX(0); }
+  to { transform: translateX(164%); }
+}
+
+@media (max-width: 390px) {
+  .viewport { padding: 14px; }
+  .card { padding: 20px; }
+  .card h1 { font-size: 19px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress::after { animation: none; }
+}

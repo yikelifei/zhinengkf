@@ -31,6 +31,7 @@ export type WorkbenchNavigationGroupId =
 
 export type WorkbenchNavigationItem = {
   id: WorkspaceSectionId;
+  href: `/${string}`;
   label: string;
   icon: LucideIcon;
   controlsId?: string;

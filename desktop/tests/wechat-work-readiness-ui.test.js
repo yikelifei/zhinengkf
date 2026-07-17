@@ -35,7 +35,7 @@ test("readiness panel separates local checks from external acceptance blockers",
 });
 
 test("workbench loads the real preflight and mounts it only in WeChat configuration view", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const configStart = page.indexOf('{wechatWorkbenchView === "config" ? (');
   const configEnd = page.indexOf('id="conversation-center"', configStart);
   const section = page.slice(configStart, configEnd);

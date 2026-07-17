@@ -26,6 +26,8 @@ export type PersonalWechatWorkspaceProps = {
   operatorLabel?: string;
   organizationLabel?: string;
   busy?: boolean;
+  activeView?: PersonalWechatWorkspaceView;
+  onActiveViewChange?: (view: PersonalWechatWorkspaceView) => void;
   onRefresh: () => void;
   onOpenInstanceSettings: (accountId?: string) => void;
   onOpenTask: (taskId: string) => void;

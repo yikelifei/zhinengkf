@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Grid2X2, Sparkles, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_WORKBENCH_NAVIGATION } from "./navigation";
 import styles from "./workbench-shell.module.css";
@@ -20,7 +21,7 @@ export function AppSidebar({
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLElement>(null);
-  const firstMobileItemRef = useRef<HTMLButtonElement>(null);
+  const firstMobileItemRef = useRef<HTMLAnchorElement>(null);
   const primaryMobileItems = useMemo(
     () => groups.flatMap((group) => group.items)
       .filter((item) => item.mobilePriority !== undefined)
@@ -42,7 +43,9 @@ export function AppSidebar({
       if (event.key !== "Tab") return;
 
       const focusable = Array.from(
-        mobileDrawerRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") || [],
+        mobileDrawerRef.current?.querySelectorAll<HTMLElement>(
+          'a[href]:not([aria-disabled="true"]), button:not(:disabled)',
+        ) || [],
       );
       if (!focusable.length) return;
       const first = focusable[0];
@@ -118,18 +121,24 @@ export function AppSidebar({
           const Icon = item.icon;
           const active = activeSectionId === item.id;
           return (
-            <button
-              type="button"
+            <Link
+              href={item.href}
               key={item.id}
               className={active ? styles.mobileNavActive : undefined}
               aria-current={active ? "page" : undefined}
               aria-controls={item.controlsId}
-              disabled={item.disabled}
-              onClick={() => selectSection(item.id)}
+              aria-disabled={item.disabled || undefined}
+              onClick={(event) => {
+                if (item.disabled) {
+                  event.preventDefault();
+                  return;
+                }
+                selectSection(item.id);
+              }}
             >
               <Icon size={18} aria-hidden="true" />
               <span>{item.label}</span>
-            </button>
+            </Link>
           );
         })}
         <button
@@ -189,19 +198,25 @@ export function AppSidebar({
                       const Icon = item.icon;
                       const active = activeSectionId === item.id;
                       return (
-                        <button
-                          type="button"
+                        <Link
+                          href={item.href}
                           key={item.id}
                           ref={groupIndex === 0 && itemIndex === 0 ? firstMobileItemRef : undefined}
                           className={active ? styles.mobileDrawerItemActive : undefined}
                           aria-current={active ? "page" : undefined}
                           aria-controls={item.controlsId}
-                          disabled={item.disabled}
-                          onClick={() => selectSection(item.id, true)}
+                          aria-disabled={item.disabled || undefined}
+                          onClick={(event) => {
+                            if (item.disabled) {
+                              event.preventDefault();
+                              return;
+                            }
+                            selectSection(item.id, true);
+                          }}
                         >
                           <Icon size={17} aria-hidden="true" />
                           <span>{item.label}</span>
-                        </button>
+                        </Link>
                       );
                     })}
                   </div>
@@ -225,22 +240,28 @@ type NavigationButtonProps = {
 function NavigationButton({ item, active, collapsed, onSelect }: NavigationButtonProps) {
   const Icon = item.icon;
   return (
-    <button
-      type="button"
+    <Link
+      href={item.href}
       className={active ? styles.navItemActive : undefined}
       aria-current={active ? "page" : undefined}
       aria-controls={item.controlsId}
       aria-label={collapsed ? item.label : undefined}
       title={collapsed ? item.label : undefined}
       data-section-id={item.id}
-      disabled={item.disabled}
-      onClick={() => onSelect(item.id)}
+      aria-disabled={item.disabled || undefined}
+      onClick={(event) => {
+        if (item.disabled) {
+          event.preventDefault();
+          return;
+        }
+        onSelect(item.id);
+      }}
     >
       <Icon size={16} aria-hidden="true" />
       <span>{item.label}</span>
       {item.badge !== undefined ? (
         <b className={styles.navBadge} data-tone={item.badgeTone || "neutral"}>{item.badge}</b>
       ) : null}
-    </button>
+    </Link>
   );
 }

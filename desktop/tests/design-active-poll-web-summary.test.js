@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const webApi = fs.readFileSync(path.join(__dirname, "../apps/web/src/lib/api.ts"), "utf8");
-const webPage = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/page.tsx"), "utf8");
+const webPage = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/legacy-workbench.tsx"), "utf8");
 
 test("web design active poll result exposes retried jobs", () => {
   assert.match(webApi, /export type DesignActivePollResult = \{[\s\S]*retried: DesignJob\[\];[\s\S]*errors: Array/);

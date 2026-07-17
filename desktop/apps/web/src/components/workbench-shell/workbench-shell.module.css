@@ -133,7 +133,7 @@
   list-style: none;
 }
 
-.navGroup li > button {
+.navGroup li > :is(a, button) {
   display: grid;
   width: 100%;
   min-width: 0;
@@ -149,25 +149,27 @@
   background: transparent;
   cursor: pointer;
   font-size: 13px;
+  text-decoration: none;
 }
 
-.navGroup li > button:hover {
+.navGroup li > :is(a, button):hover {
   color: var(--workbench-brand, #0052d9);
   background: #f2f3f5;
 }
 
-.navGroup li > button.navItemActive {
+.navGroup li > :is(a, button).navItemActive {
   color: var(--workbench-brand, #0052d9);
   background: var(--workbench-brand-soft, #edf4ff);
   font-weight: 600;
 }
 
-.navGroup li > button:disabled {
+.navGroup li > :is(a, button):disabled,
+.navGroup li > a[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-.navGroup li > button > span {
+.navGroup li > :is(a, button) > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -223,7 +225,7 @@
 
 .sidebar[data-collapsed="true"] .brandCopy,
 .sidebar[data-collapsed="true"] .navGroup h2,
-.sidebar[data-collapsed="true"] .navGroup li > button > span,
+.sidebar[data-collapsed="true"] .navGroup li > :is(a, button) > span,
 .sidebar[data-collapsed="true"] .navBadge,
 .sidebar[data-collapsed="true"] .collapseButton span {
   display: none;
@@ -491,7 +493,7 @@ button.healthSummary:hover .healthDetail {
     background: #ffffff;
   }
 
-  .mobileNav > button {
+  .mobileNav > :is(a, button) {
     display: flex;
     min-width: 0;
     min-height: 50px;
@@ -505,9 +507,10 @@ button.healthSummary:hover .healthDetail {
     color: #6b7785;
     background: transparent;
     cursor: pointer;
+    text-decoration: none;
   }
 
-  .mobileNav > button > span {
+  .mobileNav > :is(a, button) > span {
     width: 100%;
     overflow: hidden;
     font-size: 10px;
@@ -517,7 +520,7 @@ button.healthSummary:hover .healthDetail {
     white-space: nowrap;
   }
 
-  .mobileNav > button.mobileNavActive {
+  .mobileNav > :is(a, button).mobileNavActive {
     color: #0052d9;
     background: #edf4ff;
     font-weight: 600;
@@ -611,7 +614,7 @@ button.healthSummary:hover .healthDetail {
     gap: 6px;
   }
 
-  .mobileDrawerGroups section button {
+  .mobileDrawerGroups section :is(a, button) {
     display: flex;
     min-width: 0;
     min-height: 42px;
@@ -624,15 +627,16 @@ button.healthSummary:hover .healthDetail {
     background: #ffffff;
     cursor: pointer;
     font-size: 11px;
+    text-decoration: none;
   }
 
-  .mobileDrawerGroups section button > span {
+  .mobileDrawerGroups section :is(a, button) > span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .mobileDrawerGroups section button.mobileDrawerItemActive {
+  .mobileDrawerGroups section :is(a, button).mobileDrawerItemActive {
     border-color: #b9d1ff;
     color: #0052d9;
     background: #edf4ff;
@@ -684,7 +688,7 @@ button.healthSummary:hover .healthDetail {
     padding-left: 2px;
   }
 
-  .mobileNav > button {
+  .mobileNav > :is(a, button) {
     padding-right: 1px;
     padding-left: 1px;
   }

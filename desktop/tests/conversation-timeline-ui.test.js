@@ -37,7 +37,7 @@ test("WeChat account and conversation clients surface API failures instead of re
 });
 
 test("manual reply keeps the authoritative queued result when follow-up refreshes fail", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const start = page.indexOf("async function enqueueManualConversationReply");
   const end = page.indexOf("async function refreshConversationMessages", start);
   const section = page.slice(start, end);
@@ -55,7 +55,7 @@ test("manual reply keeps the authoritative queued result when follow-up refreshe
 });
 
 test("AI reply assistant uses the latest inbound message and never sends automatically", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const latestStart = page.indexOf("const latestInboundConversationText = useMemo");
   const latestEnd = page.indexOf("useEffect(() =>", latestStart);
   const latest = page.slice(latestStart, latestEnd);
@@ -87,7 +87,7 @@ test("AI reply assistant uses the latest inbound message and never sends automat
 });
 
 test("message center renders a three-pane WeChat workbench with real timeline and safe composer", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const component = read("apps/web/src/components/conversation-workbench/conversation-workbench.tsx");
   const section = page.slice(page.indexOf("const conversationWorkbenchInbox"), page.indexOf("function renderTopStatusPills"));
   assert.match(page, /<ConversationWorkbench/);
@@ -110,7 +110,7 @@ test("message center renders a three-pane WeChat workbench with real timeline an
 });
 
 test("message center prioritizes Enterprise WeChat before unread count and recency", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const start = page.indexOf("const filteredConversations = useMemo");
   const section = page.slice(start, page.indexOf("const totalConversationUnread", start));
   assert.match(section, /isWorkWechatConversation/);
@@ -120,7 +120,7 @@ test("message center prioritizes Enterprise WeChat before unread count and recen
 });
 
 test("legacy WeChat conversations are not mislabeled as Personal WeChat", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   assert.match(page, /function isPersonalWechatConversation/);
   assert.match(page, /wechat:\s*"微信"/);
   assert.match(page, /function conversationChannelDisplayLabel/);
@@ -129,7 +129,7 @@ test("legacy WeChat conversations are not mislabeled as Personal WeChat", () => 
 });
 
 test("conversation history loading cancels stale requests and marks selected conversation read", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const switchStart = page.indexOf("async function changeActiveConversation");
   const switchHandler = page.slice(switchStart, page.indexOf("async function focusConversation", switchStart));
   assert.match(switchHandler, /conversationId === activeConversationId/);

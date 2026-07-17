@@ -14,7 +14,7 @@ const css = fs.readFileSync(
   path.join(root, "apps/web/src/components/integration-center/integration-center-header.module.css"),
   "utf8",
 );
-const page = fs.readFileSync(path.join(root, "apps/web/src/app/page.tsx"), "utf8");
+const page = fs.readFileSync(path.join(root, "apps/web/src/app/legacy-workbench.tsx"), "utf8");
 
 test("integration center header is controlled and delegates every action", () => {
   assert.match(component, /activeView:\s*IntegrationCenterView;/);

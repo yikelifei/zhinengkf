@@ -12,7 +12,7 @@ require("ts-node").register({
 
 const { mergeAutomationStatusRun } = require("../apps/web/src/lib/api");
 const webApi = fs.readFileSync(path.join(__dirname, "../apps/web/src/lib/api.ts"), "utf8");
-const webPage = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/page.tsx"), "utf8");
+const webPage = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/legacy-workbench.tsx"), "utf8");
 const webCss = fs.readFileSync(path.join(__dirname, "../apps/web/src/app/globals.css"), "utf8");
 
 function baseStatus(overrides = {}) {

@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/page.tsx"), "utf8");
+const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/legacy-workbench.tsx"), "utf8");
 const cssSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/globals.css"), "utf8");
 
 test("design workbench auto-polls active submitted and generating jobs", () => {

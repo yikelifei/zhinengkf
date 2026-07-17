@@ -21,6 +21,8 @@ export function PersonalWechatWorkspace({
   operatorLabel = "本机管理员",
   organizationLabel = "当前企业",
   busy = false,
+  activeView: controlledActiveView,
+  onActiveViewChange,
   onRefresh,
   onOpenInstanceSettings,
   onOpenTask,
@@ -28,8 +30,8 @@ export function PersonalWechatWorkspace({
   fixedView,
   onOpenSafetyPolicy,
 }: PersonalWechatWorkspaceProps) {
-  const [selectedView, setSelectedView] = useState<PersonalWechatWorkspaceView>("accounts");
-  const activeView = fixedView || selectedView;
+  const [localActiveView, setLocalActiveView] = useState<PersonalWechatWorkspaceView>("accounts");
+  const activeView = fixedView || controlledActiveView || localActiveView;
   const [selectedAccountState, setSelectedAccountState] = useState<string | null>(null);
   const selectedAccountId = accounts.some((account) => account.id === selectedAccountState)
     ? selectedAccountState
@@ -44,7 +46,8 @@ export function PersonalWechatWorkspace({
       if (view === "safety") onOpenSafetyPolicy?.();
       return;
     }
-    setSelectedView(view);
+    setLocalActiveView(view);
+    onActiveViewChange?.(view);
   }
 
   const controlAccounts = accounts.map((account) => ({

@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/page.tsx"), "utf8");
+const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/legacy-workbench.tsx"), "utf8");
 const apiSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/lib/api.ts"), "utf8");
 const cssSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/globals.css"), "utf8");
 const quoteServiceSource = fs.readFileSync(path.join(desktopRoot, "apps/api/src/quotes/quotes.service.ts"), "utf8");

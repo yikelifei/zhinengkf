@@ -38,7 +38,7 @@ test("conversation operations panel exposes assignment, lifecycle, priority and 
 });
 
 test("workbench loads live queue data, surfaces SLA attention and mounts the editor in conversation context", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /Promise\.allSettled\(/);
   assert.match(page, /getConversationOperationsQueue\(\)/);
@@ -77,7 +77,7 @@ test("conversation operations layout collapses around 1000px and therefore cover
 });
 
 test("auto-selected conversations are only marked read after the message center is actually open", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const markRead = page.indexOf("markConversationMessagesRead(identity)");
   const guard = page.lastIndexOf('activeWorkspaceSection === "conversation-center"', markRead);
 
@@ -87,7 +87,7 @@ test("auto-selected conversations are only marked read after the message center 
 });
 
 test("segmented account and channel controls use button-group semantics instead of incomplete tabs", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const integrationHeader = read("apps/web/src/components/integration-center/integration-center-header.tsx");
   assert.match(integrationHeader, /role="group" aria-label="微信接入中心视图"/);
   assert.match(page, /role="group" aria-label="账号与权限视图"/);
@@ -95,7 +95,7 @@ test("segmented account and channel controls use button-group semantics instead 
 });
 
 test("global load settles each source independently instead of withholding every successful response", () => {
-  const page = read("apps/web/src/app/page.tsx");
+  const page = read("apps/web/src/app/legacy-workbench.tsx");
   const start = page.indexOf("async function load(");
   const end = page.indexOf("function activeIdentityFilters", start);
   const loadSection = page.slice(start, end);

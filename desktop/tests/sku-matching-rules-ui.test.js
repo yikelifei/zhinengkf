@@ -10,7 +10,7 @@ function readProjectFile(relativePath) {
 }
 
 test("sku repair queue can be filtered by operational issue type", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /const skuRepairFilterOptions = \[/);
@@ -66,7 +66,7 @@ test("sku repair queue can be filtered by operational issue type", () => {
 });
 
 test("sku image problems can be searched and exported as the visible repair list", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /const \[skuImageProblemSearch, setSkuImageProblemSearch\] = useState<string>\(""\)/);
@@ -564,7 +564,7 @@ test("sku image problems can be searched and exported as the visible repair list
 });
 
 test("sku editor shows active repair guidance for the selected product", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /const activeSkuRepairItem = useMemo\(\(\) => \{/);
@@ -584,7 +584,7 @@ test("sku editor shows active repair guidance for the selected product", () => {
 });
 
 test("sku repair guidance can focus the exact editor field", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormFieldTargetId\(field: string\)/);
@@ -604,7 +604,7 @@ test("sku repair guidance can focus the exact editor field", () => {
 });
 
 test("sku editor shows live repair progress after field edits", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormFieldHasUsableValue\(form: SkuForm, field: string\)/);
@@ -627,7 +627,7 @@ test("sku editor shows live repair progress after field edits", () => {
 });
 
 test("sku save blocks invalid references and confirms review risks", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /const readinessWarnings = validateSkuFormReadiness\(skuForm\)/);
   assert.match(page, /const blockingWarnings = readinessWarnings\.filter\(\(warning\) => warning\.severity === "error"\)/);
@@ -641,7 +641,7 @@ test("sku save blocks invalid references and confirms review risks", () => {
 });
 
 test("sku save success message includes automation outcome and next actions", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /function skuSavedOutcomeMessage\(/);
   assert.match(page, /const automationStatus = skuFormAutomationPreview\(skuForm, readinessWarnings\)/);
@@ -675,7 +675,7 @@ test("sku save success message includes automation outcome and next actions", ()
 });
 
 test("sku change log shows operational impact for real catalog audit", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuChangeImpactSummary\(log: SkuChangeLog\)/);
@@ -696,7 +696,7 @@ test("sku change log shows operational impact for real catalog audit", () => {
 });
 
 test("sku change log impact can route operators to the right repair workflow", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function handleSkuChangeImpact\(log: SkuChangeLog, impact: ReturnType<typeof skuChangeImpactSummary>\)/);
@@ -716,7 +716,7 @@ test("sku change log impact can route operators to the right repair workflow", (
 });
 
 test("sku change logs can be exported for operational handoff", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function exportSkuChangeLogs\(\)/);
@@ -733,7 +733,7 @@ test("sku change logs can be exported for operational handoff", () => {
 });
 
 test("sku change logs can be filtered by operational impact", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /const skuChangeImpactFilterOptions = \[/);
@@ -767,7 +767,7 @@ test("sku change logs can be filtered by operational impact", () => {
 });
 
 test("sku editor exposes structured matching rule inputs while keeping advanced JSON", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function matchingRuleListText\(value: string, key: "mustWith" \| "preferWith" \| "cannotWith"\)/);
@@ -788,7 +788,7 @@ test("sku editor exposes structured matching rule inputs while keeping advanced 
 });
 
 test("sku import preview can export blocking rows for spreadsheet repair", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /function exportSkuImportBlockedRows\(\)/);
   assert.match(page, /const blockedRows = rows[\s\S]*?\.filter\(\(item\) => item\.readiness\.tone === "blocked"\)/);
@@ -805,7 +805,7 @@ test("sku import preview can export blocking rows for spreadsheet repair", () =>
 });
 
 test("sku list shows per-item automation readiness summary", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuAutomationSummary\(sku: Sku, issues: SkuCatalogAudit\["issues"\]\)/);
@@ -823,7 +823,7 @@ test("sku list shows per-item automation readiness summary", () => {
 });
 
 test("sku editor previews automation readiness before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormAutomationPreview\(form: SkuForm, warnings: SkuFormReadinessWarning\[\]\)/);
@@ -840,7 +840,7 @@ test("sku editor previews automation readiness before saving", () => {
 });
 
 test("sku editor checks replacement and matching rule references before save", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function validateSkuFormReferences\(form: SkuForm, knownSkuCodes: Set<string>\)/);
@@ -858,7 +858,7 @@ test("sku editor checks replacement and matching rule references before save", (
 });
 
 test("sku editor shows recognized valid references with product names", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormReferenceSummary\(form: SkuForm, skuNameByCode: Map<string, string>\)/);
@@ -874,7 +874,7 @@ test("sku editor shows recognized valid references with product names", () => {
 });
 
 test("sku editor offers existing SKU codes as reference suggestions", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /const skuReferenceOptions = useMemo\(/);
   assert.match(page, /\.map\(\(sku\) => \(\{\s+skuCode: sku\.skuCode,\s+label: \[sku\.name, sku\.category \|\| sku\.type\]/);
@@ -887,7 +887,7 @@ test("sku editor offers existing SKU codes as reference suggestions", () => {
 });
 
 test("sku editor can append existing SKU references without duplicate typing", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function appendSkuCodeTextList\(value: string, skuCode: string\)/);
@@ -907,7 +907,7 @@ test("sku editor can append existing SKU references without duplicate typing", (
 });
 
 test("sku editor previews price margin before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormPricingPreview\(form: SkuForm\)/);
@@ -928,7 +928,7 @@ test("sku editor previews price margin before saving", () => {
 });
 
 test("sku editor previews specification and delivery readiness before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuFormSpecificationPreview\(form: SkuForm\)/);
@@ -950,7 +950,7 @@ test("sku editor previews specification and delivery readiness before saving", (
 });
 
 test("sku import preview shows commercial automation readiness before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /skuImportPreview\.audit\?\.commercialReadiness/);
@@ -974,7 +974,7 @@ test("sku import preview shows commercial automation readiness before saving", (
 });
 
 test("sku import preview shows row-level readiness before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuImportRowReadiness\(row: SkuPayload, issues: SkuCatalogAudit\["issues"\] = \[\]\)/);
@@ -1000,7 +1000,7 @@ test("sku import preview shows row-level readiness before saving", () => {
 });
 
 test("sku import preview summarizes batch row readiness before saving", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
   const css = readProjectFile("apps/web/src/app/globals.css");
 
   assert.match(page, /function skuImportPreviewReadinessSummary\(rows: SkuPayload\[\] = \[\], issues: SkuCatalogAudit\["issues"\] = \[\]\)/);
@@ -1024,7 +1024,7 @@ test("sku import preview summarizes batch row readiness before saving", () => {
 });
 
 test("sku import confirmation is blocked when preview has blocking rows", () => {
-  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const page = readProjectFile("apps/web/src/app/legacy-workbench.tsx");
 
   assert.match(page, /if \(\(skuImportReadinessSummary\?\.blocked \|\| 0\) > 0\) \{/);
   assert.ok(page.includes("\u5148\u4fee\u6b63\u56fe\u7247\u3001\u4ef7\u683c\u3001\u5e93\u5b58\u3001\u89c4\u683c\u6216\u4ea4\u671f\u540e\u518d\u5165\u5e93"));
