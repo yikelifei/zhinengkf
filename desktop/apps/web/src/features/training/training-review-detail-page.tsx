@@ -75,14 +75,14 @@ export function TrainingReviewDetailPage({ sampleId, identityFilters, reviewer }
           </article>
           <label className={styles.field}><span>复核说明</span><textarea className={styles.textarea} value={note} onChange={(event) => setNote(event.target.value)} placeholder="说明判断依据与后续处理" /></label>
           <div className={styles.buttonRow}>
-            <button type="button" className={styles.primaryButton} onClick={() => requestReview("ready")} disabled={busy || !operator || !note.trim() || !isReadyEligible(sample)}>标记可用</button>
-            <button type="button" className={styles.button} onClick={() => requestReview("review")} disabled={busy || !operator || !note.trim()}>保持复核</button>
-            <button type="button" className={styles.dangerButton} onClick={() => requestReview("rejected")} disabled={busy || !operator || !note.trim()}>驳回样本</button>
+            <button type="button" className={styles.primaryButton} data-action-id="training.sample.ready.request" onClick={() => requestReview("ready")} disabled={busy || !operator || !note.trim() || !isReadyEligible(sample)}>标记可用</button>
+            <button type="button" className={styles.button} data-action-id="training.sample.review.request" onClick={() => requestReview("review")} disabled={busy || !operator || !note.trim()}>保持复核</button>
+            <button type="button" className={styles.dangerButton} data-action-id="training.sample.reject.request" onClick={() => requestReview("rejected")} disabled={busy || !operator || !note.trim()}>驳回样本</button>
           </div>
         </>
       ) : null}
 
-      {pending ? <section className={styles.confirmation} role="region" aria-live="polite"><strong>确认提交“{sampleStatusLabel(pending)}”</strong><p>复核人：{operator}。说明：{note.trim()}</p><div className={styles.buttonRow}><button type="button" className={pending === "rejected" ? styles.dangerButton : styles.primaryButton} onClick={() => void confirmReview()} disabled={busy}>确认提交</button><button type="button" className={styles.button} onClick={() => setPending(null)} disabled={busy}>取消</button></div></section> : null}
+      {pending ? <section className={styles.confirmation} role="region" aria-live="polite"><strong>确认提交“{sampleStatusLabel(pending)}”</strong><p>复核人：{operator}。说明：{note.trim()}</p><div className={styles.buttonRow}><button type="button" className={pending === "rejected" ? styles.dangerButton : styles.primaryButton} data-action-id="training.sample.review.confirm" onClick={() => void confirmReview()} disabled={busy}>确认提交</button><button type="button" className={styles.button} data-action-id="training.sample.review.cancel" onClick={() => setPending(null)} disabled={busy}>取消</button></div></section> : null}
     </section>
   );
 }

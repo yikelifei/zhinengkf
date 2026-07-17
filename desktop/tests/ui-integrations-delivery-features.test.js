@@ -107,10 +107,11 @@ test("send pages preserve identity binding, explicit confirmation, and fail-clos
   assert.match(policy, /task\.status === "sending"/);
 });
 
-test("read-only diagnostics, send scans, and window ingestion are separate responsibilities", () => {
+test("read-only diagnostics, send scans, window evidence, and inbound drill are separate responsibilities", () => {
   const diagnostics = read("features/send/send-diagnostics-page.tsx");
   const operations = read("features/send/send-diagnostics-operations-page.tsx");
-  const inbound = read("features/integrations/window-inbound-operations-page.tsx");
+  const windowEvidence = read("features/integrations/window-evidence-page.tsx");
+  const inboundDrill = read("features/integrations/personal-wechat-inbound-drill-page.tsx");
   assert.match(diagnostics, /Promise\.allSettled/);
   assert.match(diagnostics, /getBridgeStatus/);
   assert.match(diagnostics, /getBridgeOutbox/);
@@ -120,8 +121,10 @@ test("read-only diagnostics, send scans, and window ingestion are separate respo
   assert.match(operations, /scanSendOperations/);
   assert.match(operations, /scanBridgeInbox/);
   assert.doesNotMatch(operations, /scanWindowSnapshotInbox|captureWindowObserverOnce/);
-  assert.match(inbound, /scanWindowSnapshotInbox/);
-  assert.match(inbound, /captureWindowObserverOnce/);
+  assert.match(windowEvidence, /captureWindowObserverOnce/);
+  assert.doesNotMatch(windowEvidence, /scanWindowSnapshotInbox|testWechatChannelInbound/);
+  assert.match(inboundDrill, /testWechatChannelInbound\("personal_wechat"/);
+  assert.doesNotMatch(inboundDrill, /scanWindowSnapshotInbox|captureWindowObserverOnce/);
 });
 
 test("new production feature controllers contain no demo, wrong-window, timeout injection, or global load", () => {

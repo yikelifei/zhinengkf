@@ -35,7 +35,7 @@ test("automation separates run control from issue handling", () => {
 
 test("notifications, agents, and overview are independent route-ready pages", () => {
   const notifications = combined("notifications");
-  const agents = read("apps/web/src/features/agents/agents-page.tsx");
+  const agents = combined("agents");
   const overview = read("apps/web/src/features/overview/overview-page.tsx");
   assert.match(notifications, /getNotifications/);
   assert.match(notifications, /markNotificationRead/);
