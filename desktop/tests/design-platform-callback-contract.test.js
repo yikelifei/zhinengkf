@@ -20,7 +20,7 @@ test("design platform callback endpoint is surfaced in config UI and submit payl
   );
   const appConfigSource = read("apps", "api", "src", "shared", "app-config.ts");
   const webApiSource = read("apps", "web", "src", "lib", "api.ts");
-  const webPageSource = read("apps", "web", "src", "app", "page.tsx");
+  const webPageSource = read("apps", "web", "src", "features", "design", "design-settings-page.tsx");
   const mockPlatformSource = read("tools", "mock-design-platform.js");
 
   assert.match(appConfigSource, /customerServicePublicBaseUrl/);

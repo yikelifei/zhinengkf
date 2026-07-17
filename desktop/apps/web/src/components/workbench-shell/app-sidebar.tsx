@@ -63,7 +63,7 @@ export function AppSidebar({
   }, [mobileNavigationOpen]);
 
   const selectSection = (sectionId: WorkspaceSectionId, closeMobileNavigation = false) => {
-    onSelect(sectionId);
+    onSelect?.(sectionId);
     if (closeMobileNavigation) {
       setMobileNavigationOpen(false);
       mobileTriggerRef.current?.focus();
@@ -126,7 +126,6 @@ export function AppSidebar({
               key={item.id}
               className={active ? styles.mobileNavActive : undefined}
               aria-current={active ? "page" : undefined}
-              aria-controls={item.controlsId}
               aria-disabled={item.disabled || undefined}
               onClick={(event) => {
                 if (item.disabled) {
@@ -204,7 +203,6 @@ export function AppSidebar({
                           ref={groupIndex === 0 && itemIndex === 0 ? firstMobileItemRef : undefined}
                           className={active ? styles.mobileDrawerItemActive : undefined}
                           aria-current={active ? "page" : undefined}
-                          aria-controls={item.controlsId}
                           aria-disabled={item.disabled || undefined}
                           onClick={(event) => {
                             if (item.disabled) {
@@ -234,7 +232,7 @@ type NavigationButtonProps = {
   item: WorkbenchNavigationItem;
   active: boolean;
   collapsed: boolean;
-  onSelect: (sectionId: WorkspaceSectionId) => void;
+  onSelect?: (sectionId: WorkspaceSectionId) => void;
 };
 
 function NavigationButton({ item, active, collapsed, onSelect }: NavigationButtonProps) {
@@ -244,7 +242,6 @@ function NavigationButton({ item, active, collapsed, onSelect }: NavigationButto
       href={item.href}
       className={active ? styles.navItemActive : undefined}
       aria-current={active ? "page" : undefined}
-      aria-controls={item.controlsId}
       aria-label={collapsed ? item.label : undefined}
       title={collapsed ? item.label : undefined}
       data-section-id={item.id}
@@ -254,7 +251,7 @@ function NavigationButton({ item, active, collapsed, onSelect }: NavigationButto
           event.preventDefault();
           return;
         }
-        onSelect(item.id);
+        onSelect?.(item.id);
       }}
     >
       <Icon size={16} aria-hidden="true" />

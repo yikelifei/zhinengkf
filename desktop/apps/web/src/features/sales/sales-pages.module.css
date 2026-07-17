@@ -146,6 +146,40 @@
   gap: var(--wk-space-4);
 }
 
+.actionChoiceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.actionChoice {
+  display: grid;
+  min-width: 0;
+  min-height: 132px;
+  align-content: center;
+  gap: 8px;
+  border: 1px solid var(--wk-color-border);
+  border-radius: var(--wk-radius-lg);
+  padding: 20px;
+  color: var(--wk-color-text);
+  background: var(--wk-color-surface);
+  text-decoration: none;
+}
+
+.actionChoice:hover {
+  border-color: var(--wk-color-brand);
+  background: var(--wk-color-brand-subtle);
+}
+
+.actionChoice strong {
+  color: var(--wk-color-brand-active);
+  font-size: var(--wk-font-size-lg);
+}
+
+.actionChoice span {
+  color: var(--wk-color-text-secondary);
+}
+
 .card {
   min-width: 0;
   border: 1px solid var(--wk-color-border);
@@ -373,6 +407,7 @@
 @media (max-width: 640px) {
   .pageHeader,
   .masterDetail,
+  .actionChoiceGrid,
   .confirmation,
   .formGrid,
   .factGrid {

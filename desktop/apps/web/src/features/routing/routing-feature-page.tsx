@@ -153,8 +153,8 @@ export function RoutingFeaturePage({ api, className = "" }: RoutingFeaturePagePr
       {controller.processConfirmationOpen ? (
         <div
           className={styles.confirmation}
-          role="alertdialog"
-          aria-modal="true"
+          role="region"
+          aria-live="polite"
           aria-labelledby="routing-process-confirm-title"
           aria-describedby="routing-process-confirm-detail"
         >
@@ -298,7 +298,7 @@ function RoutingState({
     <section className={`${styles.page} ${className}`.trim()} aria-label="路由判断">
       <div className={`${styles.stateCard} ${styles[`state-${tone}`]}`} role={tone === "danger" ? "alert" : "status"} aria-busy={busy || undefined}>
         {tone === "neutral" ? <RefreshCw size={24} aria-hidden="true" /> : <ShieldAlert size={24} aria-hidden="true" />}
-        <strong>{title}</strong><p>{detail}</p>
+        <h1>{title}</h1><p>{detail}</p>
         {actionLabel && onAction ? <button type="button" data-action-id={actionId} aria-label={actionLabel} onClick={onAction}>{actionLabel}</button> : null}
       </div>
     </section>

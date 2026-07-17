@@ -312,7 +312,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="training-review-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="training-review-confirm-title">
           <strong id="training-review-confirm-title">确认提交样本复核</strong>
           <p>将由“{operator}”把 {pendingConfirmation.ids.length} 条样本标记为“{statusLabel(pendingConfirmation.status)}”。服务端会按每条样本身份期望进行校验。</p>
           <p>说明：{note.trim()}</p>

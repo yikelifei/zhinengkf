@@ -220,7 +220,8 @@
   text-align: center;
 }
 
-.stateCard strong {
+.stateCard h1 {
+  margin: 0;
   color: var(--wk-color-text);
   font-size: var(--wk-font-size-lg);
 }
@@ -244,6 +245,10 @@
 @media (max-width: 760px) {
   .page {
     gap: var(--wk-space-2);
+  }
+
+  .page :is(button, input, select) {
+    min-height: 44px;
   }
 
   .header {

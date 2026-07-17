@@ -212,7 +212,7 @@ export function AutomationRunsPage({ identityFilters, allowGlobalRun = false }: 
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="automation-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="automation-confirm-title">
           <strong id="automation-confirm-title">{actionCopy[pendingConfirmation].title}</strong>
           <p>{actionCopy[pendingConfirmation].detail}</p>
           <p>{pendingConfirmation === "run" ? `运行范围：${hasIdentityScope ? formatIdentityScope(stableIdentityFilters) : "全局范围（宿主已明确允许）"}` : "作用范围：全局周期自动化服务，不受当前页面身份筛选限制"}</p>

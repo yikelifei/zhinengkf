@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { DesignJobsPage } from "../../../features/design/design-jobs-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="designJobs" />;
+  return (
+    <FeatureRouteShell routeId="designJobs">
+      <DesignJobsPage />
+    </FeatureRouteShell>
+  );
 }

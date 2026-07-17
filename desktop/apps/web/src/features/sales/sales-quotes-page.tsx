@@ -20,6 +20,7 @@ import {
   salesError,
 } from "./sales-ui";
 import styles from "./sales-pages.module.css";
+import { resolveSalesSelection } from "./sales-selection";
 
 type QuoteConfirmation = {
   kind: "queue-send" | "create-order";
@@ -30,9 +31,13 @@ function replaceQuote(rows: QuoteDraft[], next: QuoteDraft) {
   return rows.map((row) => (row.id === next.id ? next : row));
 }
 
-export function SalesQuotesPage() {
+export type SalesQuotesPageProps = {
+  initialQuoteId?: string;
+};
+
+export function SalesQuotesPage({ initialQuoteId = "" }: SalesQuotesPageProps) {
   const [quotes, setQuotes] = useState<QuoteDraft[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(initialQuoteId);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [initializing, setInitializing] = useState(true);
@@ -48,9 +53,11 @@ export function SalesQuotesPage() {
       const rows = await getQuotes();
       setQuotes(rows);
       setUncertainEmpty(rows.length === 0);
-      setSelectedId((current) => (
-        rows.some((row) => row.id === current) ? current : rows[0]?.id || ""
-      ));
+      const initialQuoteExists = Boolean(initialQuoteId && rows.some((row) => row.id === initialQuoteId));
+      setSelectedId((current) => resolveSalesSelection(rows, current, initialQuoteId));
+      if (initialQuoteId && !initialQuoteExists) {
+        setError(`未找到报价 ${initialQuoteId}，请返回报价列表重新选择。`);
+      }
     } catch (cause) {
       setQuotes([]);
       setSelectedId("");
@@ -59,7 +66,7 @@ export function SalesQuotesPage() {
     } finally {
       setInitializing(false);
     }
-  }, []);
+  }, [initialQuoteId]);
 
   useEffect(() => {
     void refreshQuotes();

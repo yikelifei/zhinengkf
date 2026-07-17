@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../../route-page";
+import { PersonalWechatControlPage } from "../../../../features/integrations/personal-wechat-control-page";
+import { FeatureRouteShell } from "../../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="personalWechatControl" />;
+  return (
+    <FeatureRouteShell routeId="personalWechatControl">
+      <PersonalWechatControlPage />
+    </FeatureRouteShell>
+  );
 }

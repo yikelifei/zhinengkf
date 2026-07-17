@@ -37,7 +37,9 @@ test("routing page makes evaluation and real processing visibly different", () =
   assert.match(page, /不会写入客户消息或触发后续业务流程/);
   assert.match(page, /处理客户消息/);
   assert.match(page, /会写入客户消息，并可能创建任务、报价、订单或发送任务/);
-  assert.match(page, /role="alertdialog"/);
+  assert.match(page, /role="region"/);
+  assert.match(page, /aria-live="polite"/);
+  assert.doesNotMatch(page, /aria-modal="true"|role="alertdialog"/);
   assert.match(page, /data-action-id="routing-evaluate-only"/);
   assert.match(page, /data-action-id="routing-process-message"/);
   assert.match(page, /data-action-id="routing-process-confirm"/);

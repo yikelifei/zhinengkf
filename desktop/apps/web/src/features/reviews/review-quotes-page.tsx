@@ -130,7 +130,7 @@ export function ReviewQuotesPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="quote-review-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="quote-review-confirm-title">
           <strong id="quote-review-confirm-title">确认报价审核决策</strong>
           <p>操作人“{operator}”将对报价 {pendingConfirmation.quoteId} 执行“{quoteDecisionLabel(pendingConfirmation.decision)}”。</p>
           <p>说明：{note.trim()}</p>

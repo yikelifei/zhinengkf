@@ -42,7 +42,9 @@ test("conversations page composes the existing workbench and operations editor",
   assert.match(index, /ConversationsFeaturePage/);
   assert.match(page, /<ConversationWorkbench/);
   assert.match(page, /<ConversationOperationsPanel/);
-  assert.match(page, /role="alertdialog"/);
+  assert.match(page, /role="region"/);
+  assert.match(page, /aria-live="polite"/);
+  assert.doesNotMatch(page, /aria-modal="true"|role="alertdialog"/);
   assert.match(page, /data-action-id="conversations-refresh"/);
   assert.match(page, /data-action-id="conversations-manual-takeover"/);
   assert.match(page, /data-action-id="conversations-manual-release-confirm"/);

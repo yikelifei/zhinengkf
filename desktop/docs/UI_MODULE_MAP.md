@@ -5,10 +5,13 @@
 ## 路由地基
 
 - `apps/web/src/app/route-manifest.ts` 是唯一的类型化路由清单，记录页面标题、唯一职责、主操作、工作台模块和旧书签。
-- `apps/web/src/app/**/page.tsx` 只能选择一个路由或做明确的兼容重定向，不承载业务状态、请求或样式。
-- `apps/web/src/app/legacy-workbench.tsx` 是迁移期兼容层；新功能不得继续加入该文件。功能分支应逐页迁往 `features/<domain>`。
-- 侧栏使用真实 `Link`。模块内切换使用 `router.push`，旧根页面哈希只在 `/` 转换一次，因此深链、刷新、前进和后退都由 URL 驱动。
+- `apps/web/src/app/**/page.tsx` 只能直接组合一个归属明确的 `features/<domain>` 页面，或做一个明确的兼容重定向；不得承载业务状态、请求或样式。
+- `apps/web/src/app/feature-route-shell.tsx` 只提供共享工作台薄壳。它不包含 feature 注册表，不保存业务状态，也不调用业务接口，因此页面不会把其他模块打进同一个客户端包。
+- `apps/web/src/app/legacy-workbench.tsx` 已退出运行链路，仅作为未引用的迁移档案保留。任何新功能都不得继续加入该文件。
+- 新路由只加载 `workbench-tokens.css`、小型 `styles/base.css` 和组件 CSS Modules；31,000 行旧 `globals.css` 已从根布局解除引用。
+- 侧栏和模块内导航使用真实 `Link`，跨域动作使用 `router.push`。旧根页面哈希只在 `/` 转换一次，因此深链、刷新、前进和后退都由 URL 驱动。
 - `loading.tsx`、`error.tsx`、`not-found.tsx` 与 `route-state.tsx` 提供路由级状态。业务 feature 仍需独立实现权限态和本域空态。
+- `tools/check-modular-ui-bundles.js` 读取 Next 客户端引用清单，阻止一个路由引用多个业务域、旧工作台或超过阈值的客户端脚本。
 
 ## 生产页面责任
 
@@ -24,9 +27,12 @@
 | 接入 | `/integrations/channels` | 查看所有通道状态并导航到配置或验收页 | 刷新通道 |
 | 企业微信 | `/integrations/wechat-work` | 做本地配置检查和只读上线预检 | 运行只读预检 |
 | 个人微信 | `/integrations/personal-wechat/instances` | 管理 RPA 实例、端点与账号绑定 | 保存实例 |
-| 个人微信 | `/integrations/personal-wechat/control` | 查看账号、Windows 会话和窗口隔离 | 刷新控制面 |
+| 个人微信 | `/integrations/personal-wechat/control` | 查看账号状态、待处理发送与人工接管边界 | 刷新账号控制面 |
+| 个人微信 | `/integrations/personal-wechat/window-inbound` | 验证真实窗口证据与带身份的受控入站 | 采集当前窗口 |
 | 个人微信 | `/integrations/personal-wechat/safety` | 查看同意、频控、敏感内容和审计 | 全局停止 |
-| 设计 | `/design/settings` | 配置设计平台连接 | 保存配置 |
+| 设计 | `/design/settings` | 配置设计平台连接并检查健康、回调与就绪状态 | 保存配置 |
+| 设计 | `/design/activation` | 生成设备 ID 并绑定后台激活码 | 激活设备 |
+| 设计 | `/design/account` | 在设备激活后登录设计平台账号 | 登录账号 |
 | 设计 | `/design/assets` | 上传、选择和预览客户素材 | 上传素材 |
 | 设计 | `/design/jobs` | 筛选和创建设计任务 | 新建设计任务 |
 | 设计 | `/design/jobs/[id]` | 完成一条设计任务的预检、提交、轮询、选图或取消 | 提交当前任务 |
@@ -35,6 +41,7 @@
 | 商品 | `/catalog/import` | 完成商品导入向导 | 确认入库 |
 | 商品 | `/catalog/audit` | 查看商品库的自动化资格 | 刷新体检 |
 | 商品 | `/catalog/bundles` | 验证预算和场景搭配 | 生成搭配建议 |
+| 销售 | `/sales/actions` | 在报价与订单两个独立流程之间选择目标 | 打开目标流程 |
 | 销售 | `/sales/quotes` | 管理报价 | 新建或发送报价 |
 | 销售 | `/sales/quotes/[id]` | 处理一条报价的修订、核验、发送或建单 | 发送当前报价 |
 | 销售 | `/sales/orders` | 管理订单跟进 | 打开待处理订单 |
@@ -58,11 +65,14 @@
 - `/reviews/handoff` 永久转到 `/reviews/inbox`。
 - `/automation/control` 和 `/automation/history` 永久转到 `/automation/runs`。
 - 旧 `#section[:view]` 书签只由根页面解析并转到类型化清单中的生产 URL。
-- `/integrations/wechat-work/flow|settings`、`/catalog/editor|preview`、`/sales/overview|actions` 和 `/settings/accounts` 暂时保留为迁移期子视图；后续功能分支应按验收矩阵决定合并或移除，不能将其当作新增业务的默认落点。
+- `/integrations/wechat-work/flow|settings` 转到 `/integrations/wechat-work`。
+- `/catalog/editor` 转到 `/catalog/products`，`/catalog/preview` 转到 `/catalog/import`。
+- `/sales/overview` 转到 `/sales/quotes`，`/settings/accounts` 转到 `/integrations/personal-wechat/instances`。
+- 上述兼容路由在 manifest 中保留旧书签解析能力，但通过 `showInModuleNav: false` 从模块导航隐藏，避免出现多个入口负责同一件事。
 
 ## 动态详情迁移
 
-当前 `/conversations/[id]`、`/design/jobs/[id]`、`/sales/quotes/[id]`、`/sales/orders/[id]` 已有真实 App Router 页面并由通用详情 resolver 打开对应单一职责兼容视图，因此深链和刷新不再 404。对应 feature 分支负责把实体 ID 接入本域 controller，并替换兼容视图；路由路径、manifest ID 和页面职责不得改变。
+`/conversations/[id]`、`/design/jobs/[id]`、`/sales/quotes/[id]`、`/sales/orders/[id]` 已把 URL 实体 ID 传入各自 controller；不存在的 ID 显示明确未找到状态，不再静默选中列表第一项。`/send/queue?taskId=`、`/send/blocked?taskId=` 和 `/integrations/personal-wechat/instances?accountId=` 同样把查询选择传到所属页面。
 
 后续若增加个人微信实例详情，应使用 `/integrations/personal-wechat/instances/[id]`，由个人微信 feature 分支实现，不能塞进控制面或安全页。
 
@@ -77,7 +87,7 @@
 
 ## 功能分支边界
 
-每个功能分支只拥有自己的 `features/<domain>`、对应 App Router 页面和模块测试。建议结构：
+每个功能分支只拥有自己的 `features/<domain>` 和模块测试；最终集成分支统一维护薄 App Router 页面与 `feature-route-shell.tsx`。每个 `page.tsx` 必须直接导入且只导入一个 feature。建议结构：
 
 ```text
 features/<domain>/
@@ -90,12 +100,12 @@ features/<domain>/
   <domain>.module.css
 ```
 
-路由地基分支拥有 manifest、共享导航、路由状态和兼容入口。功能分支不得修改共享 manifest、导航、`globals.css` 或兼容层；需要新路由时先在集成分支确认职责。API 路径、请求语义和现有视觉 token 在本次拆分中保持不变。
+路由地基分支拥有 manifest、共享导航、路由状态和兼容入口。功能分支不得修改共享 manifest、导航、旧 `globals.css` 或迁移档案；需要新路由时先在集成分支确认职责。API 路径、请求语义和现有视觉 token 在本次拆分中保持不变。
 
 ## 上线合并顺序
 
-1. 合入 router foundation，先保证所有生产 URL 可直接打开和刷新。
-2. 各 feature 分支只替换本域薄页面的唯一 import，并完成本域 controller 清理。
-3. 集成分支核对 `UI_ACCEPTANCE_MATRIX.md`，运行定向测试、TypeScript、Next 生产构建和 `git diff --check`。
-4. 在 1440、1280、1024、760、390px 检查深链、刷新、前进后退、空态、错误态、权限态、键盘与核心操作。
-5. 证明离开页面后，本域轮询、请求和事件监听已经停止，再移除该域旧兼容代码。
+1. router foundation 提供真实 URL、共享壳和兼容重定向。
+2. conversations/routing、integrations/send、design/catalog/sales、automation/governance 分支分别交付独立 feature。
+3. 集成分支让每个 App Router 页面直接组合一个 feature，并通过客户端引用清单证明路由包彼此隔离。
+4. 核对 `UI_ACCEPTANCE_MATRIX.md`，运行定向测试、TypeScript、Next 生产构建、模块包隔离检查和 `git diff --check`。
+5. 在 1440、1280、1024、760、390px 检查深链、刷新、前进后退、空态、错误态、权限态、键盘与核心操作，并证明页面切换后本域副作用停止。

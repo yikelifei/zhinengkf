@@ -22,9 +22,10 @@ type QueueConfirmation = { kind: "execute"; taskId: string } | { kind: "process"
 
 export type SendQueuePageProps = {
   filters?: IdentityFilters;
+  initialTaskId?: string;
 };
 
-export function SendQueuePage({ filters = {} }: SendQueuePageProps) {
+export function SendQueuePage({ filters = {}, initialTaskId = "" }: SendQueuePageProps) {
   const [tasks, setTasks] = useState<SendTask[]>([]);
   const [adapter, setAdapter] = useState<SendAdapterInfo | null>(null);
   const [busy, setBusy] = useState(true);
@@ -45,13 +46,18 @@ export function SendQueuePage({ filters = {} }: SendQueuePageProps) {
     const results = await Promise.allSettled([getSendTasks(scopedFilters), getSendAdapter()] as const);
     if (sequence !== requestSequence.current) return;
     const errors: string[] = [];
-    if (results[0].status === "fulfilled") setTasks(results[0].value);
+    if (results[0].status === "fulfilled") {
+      setTasks(results[0].value);
+      if (initialTaskId && !results[0].value.some((task) => task.id === initialTaskId)) {
+        errors.push(`未找到发送任务 ${initialTaskId}，请返回队列重新选择。`);
+      }
+    }
     else errors.push(errorMessage(results[0].reason, "发送队列读取失败"));
     if (results[1].status === "fulfilled") setAdapter(results[1].value);
     else errors.push(errorMessage(results[1].reason, "发送适配器读取失败"));
     setError(errors.join("；"));
     setBusy(false);
-  }, [accountFilter, conversationFilter, customerFilter]);
+  }, [accountFilter, conversationFilter, customerFilter, initialTaskId]);
 
   useEffect(() => {
     void refreshQueue();
@@ -118,7 +124,7 @@ export function SendQueuePage({ filters = {} }: SendQueuePageProps) {
     }
   }
 
-  const queueTasks = tasks.filter(isQueueSendTask);
+  const queueTasks = prioritizeTask(tasks.filter(isQueueSendTask), initialTaskId);
   const operationBusy = Boolean(operationId);
   const confirmationTask = pendingConfirmation?.kind === "execute"
     ? tasks.find((task) => task.id === pendingConfirmation.taskId) || null
@@ -237,4 +243,9 @@ export function SendQueuePage({ filters = {} }: SendQueuePageProps) {
       </section>
     </SendPageFrame>
   );
+}
+
+function prioritizeTask(tasks: SendTask[], taskId: string) {
+  if (!taskId) return tasks;
+  return [...tasks].sort((left, right) => Number(right.id === taskId) - Number(left.id === taskId));
 }

@@ -88,8 +88,8 @@ export function SalesConfirmation({
   return (
     <div
       className={styles.confirmation}
-      role="alertdialog"
-      aria-modal="true"
+      role="region"
+      aria-live="polite"
       aria-labelledby={`${confirmActionId}-title`}
       aria-describedby={`${confirmActionId}-detail`}
     >

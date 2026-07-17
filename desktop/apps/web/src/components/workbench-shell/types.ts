@@ -58,7 +58,7 @@ export type WorkbenchHealthItem = {
 
 export type AppSidebarProps = {
   activeSectionId: WorkspaceSectionId | string;
-  onSelect: (sectionId: WorkspaceSectionId) => void;
+  onSelect?: (sectionId: WorkspaceSectionId) => void;
   groups?: WorkbenchNavigationGroup[];
   brandLabel?: string;
   brandSubtitle?: string;
@@ -82,7 +82,7 @@ export type AppTopbarProps = {
 export type WorkbenchShellProps = {
   className?: string;
   activeSectionId: WorkspaceSectionId | string;
-  onSelectSection: (sectionId: WorkspaceSectionId) => void;
+  onSelectSection?: (sectionId: WorkspaceSectionId) => void;
   children: ReactNode;
   navigationGroups?: WorkbenchNavigationGroup[];
   sidebar?: Omit<AppSidebarProps, "activeSectionId" | "onSelect" | "groups">;

@@ -130,12 +130,14 @@ test("design image local preview rejects a local file outside the bound design j
 
 test("web image tiles prefer the scoped design-image local preview endpoint", () => {
   const apiSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "lib", "api.ts"), "utf8");
-  const pageSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "app", "page.tsx"), "utf8");
+  const pageSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "features", "design", "design-jobs-page.tsx"), "utf8");
+  const modelSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "features", "design", "model.ts"), "utf8");
   const controllerSource = fs.readFileSync(path.join(__dirname, "..", "apps", "api", "src", "design-jobs", "design-jobs.controller.ts"), "utf8");
 
   assert.match(apiSource, /localDesignImageUrl/);
   assert.match(apiSource, /\/design-jobs\/\$\{encodeURIComponent\(jobId\)\}\/images\/\$\{encodeURIComponent\(imageKey\)\}\/local-file/);
-  assert.match(pageSource, /src=\{designImagePreviewSrc\(activeJob, image\)\}/);
-  assert.match(pageSource, /function designImagePreviewSrc\(job: DesignJob,[\s\S]*localDesignImageUrl\(job\.id, image, identityExpectation\(job\)\) \|\| image\.downloadUrl/);
+  assert.match(pageSource, /designImagePreviewSrc\(selected, image\)/);
+  assert.match(pageSource, /<img src=\{src\}/);
+  assert.match(modelSource, /function designImagePreviewSrc[\s\S]*localDesignImageUrl\(job\.id, image, identityExpectation\(job\)\) \|\| image\.downloadUrl/);
   assert.match(controllerSource, /@Get\(":id\/images\/:imageId\/local-file"\)/);
 });

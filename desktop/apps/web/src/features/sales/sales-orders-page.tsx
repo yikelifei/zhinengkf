@@ -21,6 +21,7 @@ import {
   salesError,
 } from "./sales-ui";
 import styles from "./sales-pages.module.css";
+import { resolveSalesSelection } from "./sales-selection";
 
 type OrderConfirmation = {
   kind: "save" | "queue-confirmation" | "queue-production" | "queue-delivery";
@@ -48,9 +49,13 @@ function replaceOrder(rows: OrderDraft[], next: OrderDraft) {
   return rows.map((row) => (row.id === next.id ? next : row));
 }
 
-export function SalesOrdersPage() {
+export type SalesOrdersPageProps = {
+  initialOrderId?: string;
+};
+
+export function SalesOrdersPage({ initialOrderId = "" }: SalesOrdersPageProps) {
   const [orders, setOrders] = useState<OrderDraft[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(initialOrderId);
   const [query, setQuery] = useState("");
   const [form, setForm] = useState<OrderForm | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,9 +72,11 @@ export function SalesOrdersPage() {
       const rows = await getOrderDrafts();
       setOrders(rows);
       setUncertainEmpty(rows.length === 0);
-      setSelectedId((current) => (
-        rows.some((row) => row.id === current) ? current : rows[0]?.id || ""
-      ));
+      const initialOrderExists = Boolean(initialOrderId && rows.some((row) => row.id === initialOrderId));
+      setSelectedId((current) => resolveSalesSelection(rows, current, initialOrderId));
+      if (initialOrderId && !initialOrderExists) {
+        setError(`未找到订单 ${initialOrderId}，请返回订单列表重新选择。`);
+      }
     } catch (cause) {
       setOrders([]);
       setSelectedId("");
@@ -78,7 +85,7 @@ export function SalesOrdersPage() {
     } finally {
       setInitializing(false);
     }
-  }, []);
+  }, [initialOrderId]);
 
   useEffect(() => {
     void refreshOrders();

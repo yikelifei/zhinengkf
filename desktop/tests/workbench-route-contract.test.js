@@ -27,6 +27,7 @@ const productionRoutes = [
   "/integrations/wechat-work",
   "/integrations/personal-wechat/instances",
   "/integrations/personal-wechat/control",
+  "/integrations/personal-wechat/window-inbound",
   "/integrations/personal-wechat/safety",
   "/design/settings",
   "/design/assets",
@@ -37,6 +38,7 @@ const productionRoutes = [
   "/catalog/import",
   "/catalog/audit",
   "/catalog/bundles",
+  "/sales/actions",
   "/sales/quotes",
   "/sales/quotes/[id]",
   "/sales/orders",
@@ -55,6 +57,15 @@ const productionRoutes = [
   "/reviews/logs",
   "/settings/access",
 ];
+
+const redirectedManifestRoutes = new Map([
+  ["/integrations/wechat-work/flow", "/integrations/wechat-work"],
+  ["/integrations/wechat-work/settings", "/integrations/wechat-work"],
+  ["/catalog/editor", "/catalog/products"],
+  ["/catalog/preview", "/catalog/import"],
+  ["/sales/overview", "/sales/quotes"],
+  ["/settings/accounts", "/integrations/personal-wechat/instances"],
+]);
 
 const sectionIds = [
   "overview-center",
@@ -81,7 +92,7 @@ test("typed route manifest covers every production URL and all 17 workbench sect
   const hrefs = routeList.map((route) => route.href);
   const sections = new Set(routeList.map((route) => route.sectionId));
 
-  assert.ok(routeList.length >= 38, "the route seam must cover major module subviews");
+  assert.ok(routeList.length >= 39, "the route seam must cover major module subviews");
   assert.equal(new Set(hrefs).size, hrefs.length, "route hrefs must be unique");
   for (const href of productionRoutes) assert.ok(hrefs.includes(href), `missing production route: ${href}`);
   for (const sectionId of sectionIds) assert.ok(sections.has(sectionId), `missing section: ${sectionId}`);
@@ -109,23 +120,34 @@ test("every manifest entry has a real thin App Router page", () => {
     const pagePath = path.join(appRoot, routePath, "page.tsx");
     assert.ok(fs.existsSync(pagePath), `missing Next page for ${route.href}`);
     const source = fs.readFileSync(pagePath, "utf8");
-    assert.match(source, /Workbench(?:Detail)?RoutePage/);
-    assert.ok(source.split(/\r?\n/).length <= 12, `${route.href} page must stay thin`);
+    const redirectTarget = redirectedManifestRoutes.get(route.href);
+    if (redirectTarget) {
+      assert.match(source, new RegExp(`redirect\\("${redirectTarget.replaceAll("/", "\\/")}\"\\)`));
+    } else {
+      assert.match(source, /FeatureRouteShell/);
+      assert.match(source, new RegExp(`routeId="${route.id}"`));
+      const featureImports = source.match(/from\s+"[^"]+(?:features\/|overview-route-feature)/g) || [];
+      assert.equal(featureImports.length, 1, `${route.href} must import exactly one owning feature`);
+    }
+    assert.ok(source.split(/\r?\n/).length <= 24, `${route.href} page must stay thin`);
   }
 });
 
 test("root only converts legacy hashes while module routes own browser navigation", () => {
   const rootPage = read("apps/web/src/app/page.tsx");
-  const legacy = read("apps/web/src/app/legacy-workbench.tsx");
+  const featureRouteShell = read("apps/web/src/app/feature-route-shell.tsx");
+  const layout = read("apps/web/src/app/layout.tsx");
   const sidebar = read("apps/web/src/components/workbench-shell/app-sidebar.tsx");
   const navigation = read("apps/web/src/components/workbench-shell/navigation.ts");
 
   assert.ok(rootPage.length < 2500, "root redirect page must not regain workbench business logic");
   assert.match(rootPage, /getWorkbenchRouteFromLegacyHash\(window\.location\.hash\)/);
   assert.match(rootPage, /router\.replace\(nextTarget\)/);
-  assert.doesNotMatch(legacy, /location\.hash|hashchange|history\.replaceState/);
-  assert.match(legacy, /router\.(?:push|replace)\(/);
-  assert.match(legacy, /activeWorkspaceSection === "personal-wechat-center"/);
+  assert.match(featureRouteShell, /ModularWorkbenchShell/);
+  assert.doesNotMatch(featureRouteShell, /features\/|LegacyWorkbench|legacy-workbench/);
+  assert.equal(fs.existsSync(path.join(appRoot, "route-page.tsx")), false);
+  assert.match(layout, /styles\/base\.css/);
+  assert.doesNotMatch(layout, /globals\.css/);
   assert.match(sidebar, /import Link from "next\/link"/);
   assert.match(sidebar, /href=\{item\.href\}/);
   assert.match(navigation, /href: WORKBENCH_ROUTES\./);
@@ -135,6 +157,10 @@ test("legacy aliases redirect to the accepted production URLs", () => {
   assert.match(read("apps/web/src/app/reviews/handoff/page.tsx"), /redirect\("\/reviews\/inbox"\)/);
   assert.match(read("apps/web/src/app/automation/control/page.tsx"), /redirect\("\/automation\/runs"\)/);
   assert.match(read("apps/web/src/app/automation/history/page.tsx"), /redirect\("\/automation\/runs"\)/);
+  for (const [sourceRoute, destination] of redirectedManifestRoutes) {
+    const relativePage = `apps/web/src/app${sourceRoute}/page.tsx`;
+    assert.match(read(relativePage), new RegExp(`redirect\\("${destination.replaceAll("/", "\\/")}\"\\)`));
+  }
 });
 
 test("route boundary provides loading, empty, error, and not-found states", () => {

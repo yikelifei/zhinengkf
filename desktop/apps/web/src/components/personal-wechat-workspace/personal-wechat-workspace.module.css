@@ -142,6 +142,11 @@
     flex-direction: column;
   }
 
+  .headerActions button,
+  .tabs button {
+    min-height: 44px;
+  }
+
   .tabs button {
     flex: 1 0 auto;
     justify-content: center;

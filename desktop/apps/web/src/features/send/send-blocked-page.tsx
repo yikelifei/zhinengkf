@@ -24,9 +24,10 @@ type BlockedConfirmation = { kind: "requeue" | "cancel"; taskId: string } | null
 
 export type SendBlockedPageProps = {
   filters?: IdentityFilters;
+  initialTaskId?: string;
 };
 
-export function SendBlockedPage({ filters = {} }: SendBlockedPageProps) {
+export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlockedPageProps) {
   const [tasks, setTasks] = useState<SendTask[]>([]);
   const [busy, setBusy] = useState(true);
   const [operationId, setOperationId] = useState("");
@@ -48,13 +49,18 @@ export function SendBlockedPage({ filters = {} }: SendBlockedPageProps) {
         conversationId: conversationFilter,
         customerId: customerFilter,
       });
-      if (sequence === requestSequence.current) setTasks(next);
+      if (sequence === requestSequence.current) {
+        setTasks(next);
+        if (initialTaskId && !next.some((task) => task.id === initialTaskId)) {
+          setError(`未找到被阻断任务 ${initialTaskId}，请返回列表重新选择。`);
+        }
+      }
     } catch (refreshError) {
       if (sequence === requestSequence.current) setError(errorMessage(refreshError, "拦截任务读取失败"));
     } finally {
       if (sequence === requestSequence.current) setBusy(false);
     }
-  }, [accountFilter, conversationFilter, customerFilter]);
+  }, [accountFilter, conversationFilter, customerFilter, initialTaskId]);
 
   useEffect(() => {
     void refreshBlocked();
@@ -102,7 +108,7 @@ export function SendBlockedPage({ filters = {} }: SendBlockedPageProps) {
     }
   }
 
-  const blockedTasks = tasks.filter(isBlockedSendTask);
+  const blockedTasks = prioritizeTask(tasks.filter(isBlockedSendTask), initialTaskId);
   const confirmationTask = pendingConfirmation
     ? tasks.find((task) => task.id === pendingConfirmation.taskId) || null
     : null;
@@ -201,4 +207,9 @@ export function SendBlockedPage({ filters = {} }: SendBlockedPageProps) {
       </section>
     </SendPageFrame>
   );
+}
+
+function prioritizeTask(tasks: SendTask[], taskId: string) {
+  if (!taskId) return tasks;
+  return [...tasks].sort((left, right) => Number(right.id === taskId) - Number(left.id === taskId));
 }

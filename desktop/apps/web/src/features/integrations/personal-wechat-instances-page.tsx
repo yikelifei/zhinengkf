@@ -16,7 +16,11 @@ import {
 } from "../../lib/api";
 import { FeatureNotice, FeaturePage, errorMessage } from "./feature-page";
 
-export function PersonalWechatInstancesPage() {
+export type PersonalWechatInstancesPageProps = {
+  initialAccountId?: string;
+};
+
+export function PersonalWechatInstancesPage({ initialAccountId = "" }: PersonalWechatInstancesPageProps) {
   const [registry, setRegistry] = useState<PersonalWechatRpaRegistry | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -103,6 +107,7 @@ export function PersonalWechatInstancesPage() {
       {feedback ? <FeatureNotice tone="success" title="实例配置已更新">{feedback}</FeatureNotice> : null}
       <PersonalWechatInstancesPanel
         registry={registry}
+        initialAccountId={initialAccountId}
         busy={busy}
         error={error}
         onValidate={validateInstance}

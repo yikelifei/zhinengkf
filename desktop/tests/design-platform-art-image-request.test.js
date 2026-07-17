@@ -25,7 +25,8 @@ const controllerSourcePath = path.join(
 );
 const appConfigSourcePath = path.join(process.cwd(), "apps", "api", "src", "shared", "app-config.ts");
 const webApiSourcePath = path.join(process.cwd(), "apps", "web", "src", "lib", "api.ts");
-const webPageSourcePath = path.join(process.cwd(), "apps", "web", "src", "app", "page.tsx");
+const webActivationSourcePath = path.join(process.cwd(), "apps", "web", "src", "features", "design", "design-activation-page.tsx");
+const webDesignModelSourcePath = path.join(process.cwd(), "apps", "web", "src", "features", "design", "model.ts");
 
 test("art image local adapter keeps customer-facing generation prompt in readable Chinese", () => {
   const source = fs.readFileSync(clientSourcePath, "utf8");
@@ -71,7 +72,8 @@ test("design platform activation redeem is wired before account login", () => {
   const clientSource = fs.readFileSync(clientSourcePath, "utf8");
   const controllerSource = fs.readFileSync(controllerSourcePath, "utf8");
   const webApiSource = fs.readFileSync(webApiSourcePath, "utf8");
-  const webPageSource = fs.readFileSync(webPageSourcePath, "utf8");
+  const webActivationSource = fs.readFileSync(webActivationSourcePath, "utf8");
+  const webDesignModelSource = fs.readFileSync(webDesignModelSourcePath, "utf8");
 
   assert.match(clientSource, /redeemArtImageLocalActivation/);
   assert.match(clientSource, /"\/api\/activation\/redeem"/);
@@ -80,8 +82,9 @@ test("design platform activation redeem is wired before account login", () => {
   assert.match(controllerSource, /updateDesignPlatformRuntimeConfig\(\{\s*adapter: "art_image_local",\s*deviceId,/);
   assert.match(webApiSource, /redeemDesignPlatformActivation/);
   assert.match(webApiSource, /"\/integrations\/design-platform\/activation\/redeem"/);
-  assert.match(webPageSource, /createDesignPlatformDeviceId/);
-  assert.match(webPageSource, /生成设备 ID/);
-  assert.match(webPageSource, /激活设备/);
-  assert.match(webPageSource, /设计平台后台生成的激活码/);
+  assert.match(webDesignModelSource, /createDesignPlatformDeviceId/);
+  assert.match(webActivationSource, /redeemDesignPlatformActivation/);
+  assert.match(webActivationSource, /生成设备 ID/);
+  assert.match(webActivationSource, /激活设备/);
+  assert.match(webActivationSource, /设计平台后台生成的激活码/);
 });

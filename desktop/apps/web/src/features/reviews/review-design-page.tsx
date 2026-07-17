@@ -147,7 +147,7 @@ export function ReviewDesignPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="design-review-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="design-review-confirm-title">
           <strong id="design-review-confirm-title">确认设计审核决策</strong>
           <p>操作人“{operator}”将对任务 {pendingConfirmation.jobId} 执行“{designDecisionLabel(pendingConfirmation.decision)}”。批准发送可能创建发送任务，请再次核对身份与说明。</p>
           <p>说明：{note.trim()}</p>

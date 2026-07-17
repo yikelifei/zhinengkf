@@ -18,7 +18,7 @@ function featureSource(domain) {
 
 test("design exports one page per operator goal", () => {
   const index = read("apps/web/src/features/design/index.ts");
-  for (const page of ["DesignSettingsPage", "DesignAssetsPage", "DesignJobsPage"]) {
+  for (const page of ["DesignSettingsPage", "DesignActivationPage", "DesignAccountPage", "DesignAssetsPage", "DesignJobsPage"]) {
     assert.match(index, new RegExp(`\\b${page}\\b`));
   }
 
@@ -28,6 +28,8 @@ test("design exports one page per operator goal", () => {
     "getDesignPlatformHealth",
     "getDesignPlatformReadiness",
     "updateDesignPlatformConfig",
+    "redeemDesignPlatformActivation",
+    "loginDesignPlatform",
     "runDesignPlatformSmokeTest",
     "getAssets",
     "uploadAsset",

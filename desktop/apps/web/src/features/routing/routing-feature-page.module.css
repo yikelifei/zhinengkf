@@ -436,9 +436,13 @@
 }
 
 .emptyResult strong,
-.stateCard strong {
+.stateCard h1 {
   color: var(--wk-color-text);
   font-size: var(--wk-font-size-lg);
+}
+
+.stateCard h1 {
+  margin: 0;
 }
 
 .emptyResult p,
@@ -468,6 +472,10 @@
 @media (max-width: 640px) {
   .page {
     gap: var(--wk-space-3);
+  }
+
+  .page :is(button, input, select) {
+    min-height: 44px;
   }
 
   .header,

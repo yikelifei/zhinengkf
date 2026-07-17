@@ -171,6 +171,47 @@
 .factGrid dt { color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); }
 .factGrid dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
 
+.endpoint {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  margin-top: var(--wk-space-3);
+  border: 1px solid var(--wk-color-border);
+  border-radius: var(--wk-radius-md);
+  padding: 10px;
+  background: var(--wk-color-surface-subtle);
+}
+.endpoint strong { font-size: var(--wk-font-size-sm); }
+.endpoint code { overflow-wrap: anywhere; color: var(--wk-color-brand); font-size: var(--wk-font-size-xs); }
+.endpoint span { color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-xs); }
+
+.imageGallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: var(--wk-space-2);
+  margin-top: var(--wk-space-3);
+}
+.imageTile {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin: 0;
+  border: 1px solid var(--wk-color-border);
+  border-radius: var(--wk-radius-md);
+  padding: 6px;
+  background: var(--wk-color-surface-subtle);
+}
+.imageTile img,
+.imageUnavailable {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: calc(var(--wk-radius-md) - 2px);
+  object-fit: contain;
+  background: var(--wk-color-surface);
+}
+.imageUnavailable { display: grid; place-items: center; padding: 8px; color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); text-align: center; }
+.imageTile figcaption { overflow: hidden; color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+
 .checkList,
 .recordList,
 .selectionList,

@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../route-page";
+import { AgentsPage } from "../../features/agents/agents-page";
+import { FeatureRouteShell } from "../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="agents" />;
+  return (
+    <FeatureRouteShell routeId="agents">
+      <AgentsPage />
+    </FeatureRouteShell>
+  );
 }

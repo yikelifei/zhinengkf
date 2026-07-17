@@ -6,6 +6,7 @@ const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const WebSocket = require("next/dist/compiled/ws");
 
 const VIEWPORTS = Object.freeze([
   Object.freeze({ id: "desktop", width: 1440, height: 900, mobile: false }),
@@ -52,6 +53,20 @@ const DOM_PROBE_SOURCE = String.raw`(() => {
   const bodyTextLength = (document.body?.innerText || "").trim().length;
   const main = document.querySelector("main");
   const mainTextLength = (main?.innerText || "").trim().length;
+  const touchTargetSelector = 'button, [role="button"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea';
+  const undersizedTouchTargets = [];
+  for (const root of roots) {
+    for (const element of root.querySelectorAll(touchTargetSelector)) {
+      if (!visible(element)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width >= 44 && rect.height >= 44) continue;
+      undersizedTouchTargets.push({
+        label: element.getAttribute("aria-label") || element.dataset.actionId || (element.innerText || element.getAttribute("name") || element.tagName).trim().slice(0, 80),
+        width: Math.round(rect.width * 10) / 10,
+        height: Math.round(rect.height * 10) / 10,
+      });
+    }
+  }
   const documentWidth = document.documentElement?.scrollWidth || 0;
   const bodyWidth = document.body?.scrollWidth || 0;
   const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
@@ -68,6 +83,7 @@ const DOM_PROBE_SOURCE = String.raw`(() => {
     horizontalOverflow: Math.max(documentWidth, bodyWidth) > viewportWidth + 1,
     nextErrorOverlay: overlayMarkers.length > 0,
     overlayMarkers: Array.from(new Set(overlayMarkers)),
+    undersizedTouchTargets: undersizedTouchTargets.slice(0, 12),
     readyState: document.readyState,
   };
 })()`;
@@ -236,10 +252,12 @@ function discoverRouteInventory(appRoot) {
     if (path.basename(filePath) !== "page.tsx") return;
     const relativeDirectory = path.relative(appRoot, path.dirname(filePath));
     const rawSegments = relativeDirectory === "" ? [] : relativeDirectory.split(path.sep);
-    if (rawSegments.some((segment) => segment.startsWith("[") || segment.startsWith("@") || segment.startsWith("_"))) {
+    if (rawSegments.some((segment) => segment.startsWith("@") || segment.startsWith("_"))) {
       return;
     }
-    const segments = rawSegments.filter((segment) => !/^\(.+\)$/.test(segment));
+    const segments = rawSegments
+      .filter((segment) => !/^\(.+\)$/.test(segment))
+      .map((segment) => /^\[.+\]$/.test(segment) ? "__ui-smoke-missing__" : segment);
     pageRoutes.push(segments.length ? `/${segments.join("/")}` : "/");
   });
 
@@ -247,7 +265,8 @@ function discoverRouteInventory(appRoot) {
   const manifestRoutes = fs.existsSync(manifestPath)
     ? Array.from(fs.readFileSync(manifestPath, "utf8").matchAll(/\bhref:\s*["'`]([^"'`]+)["'`]/g))
       .map((match) => match[1])
-      .filter((route) => route.startsWith("/") && !route.includes("["))
+      .filter((route) => route.startsWith("/") && !route.includes("${"))
+      .map((route) => route.replace(/\[[^\]]+\]/g, "__ui-smoke-missing__"))
     : [];
   const uniquePages = Array.from(new Set(pageRoutes));
   const uniqueManifest = Array.from(new Set(manifestRoutes));
@@ -310,9 +329,7 @@ async function runSmoke(options) {
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
-        "--disable-extensions",
         "--disable-features=Translate,BackForwardCache",
-        "--remote-allow-origins=*",
         `--remote-debugging-port=${port}`,
         `--user-data-dir=${profileDir}`,
         "about:blank",
@@ -326,8 +343,9 @@ async function runSmoke(options) {
 
     const version = await waitForJson(`http://127.0.0.1:${port}/json/version`, 80, 250, () => spawnError);
     const page = await createPage(port, "about:blank");
-    const websocketUrl = page.webSocketDebuggerUrl || version.webSocketDebuggerUrl;
-    if (!websocketUrl) throw new Error("Edge DevTools websocket URL was not available.");
+    const rawWebsocketUrl = page.webSocketDebuggerUrl || version.webSocketDebuggerUrl;
+    if (!rawWebsocketUrl) throw new Error("Edge DevTools websocket URL was not available.");
+    const websocketUrl = normalizeDebuggerWebsocketUrl(rawWebsocketUrl, port);
     session = await CdpSession.connect(websocketUrl);
     await session.send("Page.enable");
     await session.send("Runtime.enable");
@@ -463,18 +481,22 @@ async function inspectRoute(session, route, viewport, delayMs) {
     : [];
   const responses = loaderResponses.length ? loaderResponses : documentResponses;
   const response = responses.at(-1) || null;
+  const criticalResourceFailures = session.responses.slice(responseMarker)
+    .filter((candidate) => ["Stylesheet", "Script", "Font"].includes(candidate.type))
+    .filter((candidate) => Number(candidate.status) >= 400);
   const diagnostics = session.diagnosticsSince(diagnosticMarker);
   return summarizeInspection({
     route: route.route,
     viewport: viewport.id,
     httpStatus: response?.status ?? null,
     dom,
+    criticalResourceFailures,
     runtimeExceptions: diagnostics.runtimeExceptions,
     consoleErrors: diagnostics.consoleErrors,
   });
 }
 
-function summarizeInspection({ route, viewport, httpStatus, dom, runtimeExceptions = [], consoleErrors = [] }) {
+function summarizeInspection({ route, viewport, httpStatus, dom, criticalResourceFailures = [], runtimeExceptions = [], consoleErrors = [] }) {
   const checks = {
     httpStatus: Number.isFinite(httpStatus) && httpStatus >= 200 && httpStatus < 400,
     title: Boolean(dom?.title?.trim()),
@@ -483,7 +505,9 @@ function summarizeInspection({ route, viewport, httpStatus, dom, runtimeExceptio
     nonEmpty: (dom?.bodyTextLength || 0) >= 20 && (dom?.mainTextLength || 0) >= 10,
     horizontalOverflow: dom?.horizontalOverflow === false,
     nextErrorOverlay: dom?.nextErrorOverlay === false,
+    criticalResources: criticalResourceFailures.length === 0,
     runtimeExceptions: runtimeExceptions.length === 0,
+    mobileTouchTargets: viewport !== "mobile" || (dom?.undersizedTouchTargets || []).length === 0,
   };
   return {
     route,
@@ -501,6 +525,18 @@ function summarizeInspection({ route, viewport, httpStatus, dom, runtimeExceptio
     documentWidth: dom?.documentWidth ?? null,
     bodyWidth: dom?.bodyWidth ?? null,
     overlayMarkers: Array.isArray(dom?.overlayMarkers) ? dom.overlayMarkers.map((value) => sanitizeText(value, 120)) : [],
+    criticalResourceFailures: criticalResourceFailures.map((resource) => ({
+      type: sanitizeText(resource?.type || "resource", 40),
+      status: Number(resource?.status) || 0,
+      url: redactUrl(resource?.url || ""),
+    })).slice(0, 10),
+    undersizedTouchTargets: Array.isArray(dom?.undersizedTouchTargets)
+      ? dom.undersizedTouchTargets.map((target) => ({
+        label: sanitizeText(target?.label || "unknown", 120),
+        width: Number(target?.width) || 0,
+        height: Number(target?.height) || 0,
+      })).slice(0, 12)
+      : [],
     runtimeExceptionCount: runtimeExceptions.length,
     runtimeExceptions: runtimeExceptions.map((value) => sanitizeText(value, 500)).slice(0, 10),
     consoleErrorCount: consoleErrors.length,
@@ -521,7 +557,9 @@ function failedRouteResult(route, viewport, error) {
       nonEmpty: false,
       horizontalOverflow: false,
       nextErrorOverlay: false,
+      criticalResources: false,
       runtimeExceptions: false,
+      mobileTouchTargets: false,
     },
     error: sanitizeText(error?.message || error),
   };
@@ -668,12 +706,15 @@ class CdpSession {
     this.runtimeExceptions = [];
     this.consoleErrors = [];
     socket.addEventListener("message", (event) => this.handleMessage(event));
-    socket.addEventListener("close", () => this.failPending(new Error("Edge DevTools websocket closed.")));
-    socket.addEventListener("error", () => this.failPending(new Error("Edge DevTools websocket failed.")));
+    socket.addEventListener("close", (event) => {
+      const detail = event?.reason ? `: ${event.reason}` : event?.code ? ` (code ${event.code})` : "";
+      this.failPending(new Error(`Edge DevTools websocket closed${detail}.`));
+    });
+    socket.addEventListener("error", (event) => this.failPending(websocketFailure("Edge DevTools websocket failed", event)));
   }
 
   static async connect(websocketUrl) {
-    if (typeof WebSocket !== "function") throw new Error("This tool requires Node.js with built-in WebSocket support.");
+    if (typeof WebSocket !== "function") throw new Error("This tool requires the workspace Next.js WebSocket implementation.");
     const socket = new WebSocket(websocketUrl);
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -688,7 +729,7 @@ class CdpSession {
       }, { once: true });
       socket.addEventListener("error", (error) => {
         clearTimeout(timer);
-        reject(error);
+        reject(websocketFailure("Edge DevTools websocket connection failed", error));
       }, { once: true });
     });
     return new CdpSession(socket);
@@ -844,6 +885,24 @@ function getFreePort() {
   });
 }
 
+function websocketFailure(prefix, event) {
+  const detail = event?.error?.message || event?.message || "";
+  return new Error(detail ? `${prefix}: ${detail}` : `${prefix}.`);
+}
+
+function normalizeDebuggerWebsocketUrl(value, port) {
+  const url = new URL(String(value || ""));
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error("Edge DevTools URL must use ws or wss.");
+  }
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+    throw new Error("Edge DevTools URL must stay on loopback.");
+  }
+  url.hostname = "127.0.0.1";
+  if (port) url.port = String(port);
+  return url.href;
+}
+
 async function waitForJson(url, attempts, delayMs, getFatalError = () => null) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -885,13 +944,13 @@ function requestJson(url, options = {}) {
 }
 
 async function createPage(port, url) {
+  const pages = await requestJson(`http://127.0.0.1:${port}/json/list`);
+  const existingPage = (Array.isArray(pages) ? pages : []).find((item) => item.type === "page");
+  if (existingPage) return existingPage;
   try {
     return await requestJson(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: "PUT" });
   } catch {
-    const pages = await requestJson(`http://127.0.0.1:${port}/json/list`);
-    const page = (Array.isArray(pages) ? pages : []).find((item) => item.type === "page");
-    if (!page) throw new Error("No Edge page target was available.");
-    return page;
+    throw new Error("No Edge page target was available.");
   }
 }
 
@@ -993,6 +1052,7 @@ module.exports = {
   buildRunnerFailureReport,
   discoverDefaultRoutes,
   discoverRouteInventory,
+  normalizeDebuggerWebsocketUrl,
   normalizeOptions,
   parseArgs,
   redactReport,

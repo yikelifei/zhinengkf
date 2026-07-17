@@ -231,7 +231,7 @@ export function TrainingSkillsPage({ identityFilters }: TrainingSkillsPageProps)
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="training-skills-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="training-skills-confirm-title">
           <strong id="training-skills-confirm-title">确认应用技能建议</strong>
           <p>将应用 {selectedSuggestions.length} 条人工勾选的建议；{includeNeedsReview ? "其中允许包含已明确复核的风险建议" : "不包含需复核建议"}。</p>
           <p>身份范围：{identityScopeLabel(stableIdentityFilters)}</p>

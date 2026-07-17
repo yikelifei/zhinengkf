@@ -10,10 +10,15 @@ import { useConversationsController } from "./use-conversations-controller";
 export type ConversationsFeaturePageProps = {
   api?: ConversationsFeatureApi;
   className?: string;
+  initialConversationId?: string;
 };
 
-export function ConversationsFeaturePage({ api, className = "" }: ConversationsFeaturePageProps) {
-  const controller = useConversationsController(api);
+export function ConversationsFeaturePage({
+  api,
+  className = "",
+  initialConversationId,
+}: ConversationsFeaturePageProps) {
+  const controller = useConversationsController(api, initialConversationId || null);
 
   if (controller.accessPhase === "loading") {
     return (
@@ -131,8 +136,8 @@ export function ConversationsFeaturePage({ api, className = "" }: ConversationsF
       {controller.manualLockTarget !== null ? (
         <div
           className={styles.confirmation}
-          role="alertdialog"
-          aria-modal="true"
+          role="region"
+          aria-live="polite"
           aria-labelledby="manual-lock-confirmation-title"
           aria-describedby="manual-lock-confirmation-detail"
         >
@@ -218,7 +223,7 @@ function FeatureState({
     <section className={`${styles.page} ${className}`.trim()} aria-label="会话处理">
       <div className={`${styles.stateCard} ${styles[`state-${tone}`]}`} role={tone === "danger" ? "alert" : "status"} aria-busy={busy || undefined}>
         {tone === "danger" || tone === "warning" ? <ShieldAlert size={24} aria-hidden="true" /> : <RefreshCw size={24} aria-hidden="true" />}
-        <strong>{title}</strong>
+        <h1>{title}</h1>
         <p>{detail}</p>
         {actionLabel && onAction ? (
           <button type="button" data-action-id={actionId} aria-label={actionLabel} onClick={onAction}>{actionLabel}</button>

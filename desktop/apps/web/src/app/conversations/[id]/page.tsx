@@ -1,8 +1,13 @@
-import { WorkbenchDetailRoutePage } from "../../route-page";
+import { ConversationsFeaturePage } from "../../../features/conversations/conversations-feature-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 type PageProps = { params: Promise<{ id: string }> };
 
 export default async function Page({ params }: PageProps) {
   const { id } = await params;
-  return <WorkbenchDetailRoutePage routeId="conversationDetail" entityId={id} />;
+  return (
+    <FeatureRouteShell routeId="conversationDetail">
+      <ConversationsFeaturePage key={id} initialConversationId={id} />
+    </FeatureRouteShell>
+  );
 }

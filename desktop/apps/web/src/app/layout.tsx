@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "../styles/workbench-tokens.css";
-import "./globals.css";
+import "../styles/base.css";
 
 export const metadata: Metadata = {
   title: "智能体客服",
@@ -24,7 +24,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   themeColor: "#ffffff",
 };
 

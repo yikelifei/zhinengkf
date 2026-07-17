@@ -36,7 +36,10 @@ export function isCapabilityAllowed(status: OperatorAccessStatus, capability: Op
   return status.enforcementReady && status.capabilities.includes(capability);
 }
 
-export function useConversationsController(api: ConversationsFeatureApi = conversationsFeatureApi) {
+export function useConversationsController(
+  api: ConversationsFeatureApi = conversationsFeatureApi,
+  initialConversationId: string | null = null,
+) {
   const [accessPhase, setAccessPhase] = useState<AccessPhase>("loading");
   const [accessStatus, setAccessStatus] = useState<OperatorAccessStatus | null>(null);
   const [accessError, setAccessError] = useState("");
@@ -45,7 +48,7 @@ export function useConversationsController(api: ConversationsFeatureApi = conver
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState("");
   const [operationsLoadError, setOperationsLoadError] = useState("");
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(initialConversationId);
   const [timeline, setTimeline] = useState<ConversationTimelineItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState("");
@@ -101,9 +104,17 @@ export function useConversationsController(api: ConversationsFeatureApi = conver
       if (sequence !== refreshSequence.current) return;
       if (conversationResult.status === "fulfilled") {
         setConversations(conversationResult.value);
-        setSelectedConversationId((current) =>
-          current && conversationResult.value.some((conversation) => conversation.id === current) ? current : null,
+        const initialConversationExists = Boolean(
+          initialConversationId
+          && conversationResult.value.some((conversation) => conversation.id === initialConversationId),
         );
+        setSelectedConversationId((current) => {
+          if (current && conversationResult.value.some((conversation) => conversation.id === current)) return current;
+          return initialConversationExists ? initialConversationId : null;
+        });
+        if (initialConversationId && !initialConversationExists) {
+          setListError(`未找到会话 ${initialConversationId}，请返回会话列表重新选择。`);
+        }
       } else {
         setListError(errorMessage(conversationResult.reason, "会话列表读取失败"));
       }
@@ -120,7 +131,7 @@ export function useConversationsController(api: ConversationsFeatureApi = conver
     } finally {
       if (sequence === refreshSequence.current) setListLoading(false);
     }
-  }, [api]);
+  }, [api, initialConversationId]);
 
   useEffect(() => {
     void refreshWorkspace();

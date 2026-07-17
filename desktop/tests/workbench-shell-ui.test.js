@@ -64,7 +64,7 @@ test("default navigation uses the seven required groups and only existing page s
 
 test("sidebar stays caller-controlled and provides keyboard-accessible desktop and mobile navigation", () => {
   assert.match(sidebar, /activeSectionId,/);
-  assert.match(sidebar, /onSelect\(sectionId\);/);
+  assert.match(sidebar, /onSelect\?\.\(sectionId\);/);
   assert.match(sidebar, /<nav id="workbench-desktop-navigation" className=\{styles\.sidebarNav\} aria-label="工作台主导航">/);
   assert.match(sidebar, /aria-current=\{active \? "page" : undefined\}/);
   assert.match(sidebar, /aria-expanded=\{mobileNavigationOpen\}/);
@@ -76,6 +76,7 @@ test("sidebar stays caller-controlled and provides keyboard-accessible desktop a
   assert.match(sidebar, /firstMobileItemRef\.current\?\.focus\(\)/);
   assert.match(sidebar, /mobileTriggerRef\.current\?\.focus\(\)/);
   assert.doesNotMatch(sidebar, /location\.hash|history\.|scrollIntoView/);
+  assert.doesNotMatch(sidebar, /aria-controls=\{item\.controlsId\}/);
   assert.doesNotMatch(sidebar, /role="menu"|role="tablist"/);
 });
 

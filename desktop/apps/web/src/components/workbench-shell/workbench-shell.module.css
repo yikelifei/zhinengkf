@@ -278,7 +278,7 @@
   background: #ffffff;
 }
 
-.topbar h1 {
+.topbarTitle {
   flex: 0 0 auto;
   margin: 0;
   color: #1d2129;
@@ -585,8 +585,8 @@ button.healthSummary:hover .healthDetail {
 
   .mobileDrawer > header button {
     display: inline-flex;
-    width: 34px;
-    height: 34px;
+    width: 44px;
+    height: 44px;
     align-items: center;
     justify-content: center;
     border: 0;
@@ -617,7 +617,7 @@ button.healthSummary:hover .healthDetail {
   .mobileDrawerGroups section :is(a, button) {
     display: flex;
     min-width: 0;
-    min-height: 42px;
+    min-height: 44px;
     align-items: center;
     gap: 7px;
     border: 1px solid #e5e6eb;
@@ -656,7 +656,7 @@ button.healthSummary:hover .healthDetail {
     padding: 0 12px;
   }
 
-  .topbar h1 {
+  .topbarTitle {
     overflow: hidden;
     font-size: 16px;
     text-overflow: ellipsis;

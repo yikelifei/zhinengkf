@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { CatalogBundlesPage } from "../../../features/catalog/catalog-bundles-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="catalogBundles" />;
+  return (
+    <FeatureRouteShell routeId="catalogBundles">
+      <CatalogBundlesPage />
+    </FeatureRouteShell>
+  );
 }

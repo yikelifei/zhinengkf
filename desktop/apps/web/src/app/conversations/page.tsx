@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../route-page";
+import { ConversationsFeaturePage } from "../../features/conversations/conversations-feature-page";
+import { FeatureRouteShell } from "../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="conversations" />;
+  return (
+    <FeatureRouteShell routeId="conversations">
+      <ConversationsFeaturePage />
+    </FeatureRouteShell>
+  );
 }

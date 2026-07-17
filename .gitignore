@@ -30,6 +30,8 @@ venv/
 data/*.db
 data/*.db-*
 logs/
+!desktop/apps/web/src/app/reviews/logs/
+!desktop/apps/web/src/app/reviews/logs/page.tsx
 *.log
 .smart_bot_backend.pid
 backups/

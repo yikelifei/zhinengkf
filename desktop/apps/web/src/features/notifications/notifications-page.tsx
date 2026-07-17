@@ -169,7 +169,7 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="notifications-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="notifications-confirm-title">
           <strong id="notifications-confirm-title">确认全部标为已读</strong>
           <p>此操作只作用于当前页面绑定的身份范围，共 {unreadCount} 条未读通知。操作后需重新读取服务端结果。</p>
           <div className={styles.buttonRow}>

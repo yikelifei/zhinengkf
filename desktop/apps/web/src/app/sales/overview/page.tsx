@@ -1,5 +1,5 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="salesOverview" />;
+  redirect("/sales/quotes");
 }

@@ -59,7 +59,7 @@ export function AppTopbar({
 
   return (
     <header className={styles.topbar}>
-      <h1>{title}</h1>
+      <strong className={styles.topbarTitle}>{title}</strong>
       <div className={styles.topbarTools}>
         {searchEnabled ? (
           <form className={styles.topbarSearch} role="search" onSubmit={submitSearch}>

@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { TrainingSkillsPage } from "../../../features/training/training-skills-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="trainingSkills" />;
+  return (
+    <FeatureRouteShell routeId="trainingSkills">
+      <TrainingSkillsPage />
+    </FeatureRouteShell>
+  );
 }

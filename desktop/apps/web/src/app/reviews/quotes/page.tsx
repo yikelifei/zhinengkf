@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { ReviewQuotesPage } from "../../../features/reviews/review-quotes-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="reviewQuotes" />;
+  return (
+    <FeatureRouteShell routeId="reviewQuotes">
+      <ReviewQuotesPage />
+    </FeatureRouteShell>
+  );
 }

@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../route-page";
+import { NotificationsPage } from "../../features/notifications/notifications-page";
+import { FeatureRouteShell } from "../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="notifications" />;
+  return (
+    <FeatureRouteShell routeId="notifications">
+      <NotificationsPage />
+    </FeatureRouteShell>
+  );
 }

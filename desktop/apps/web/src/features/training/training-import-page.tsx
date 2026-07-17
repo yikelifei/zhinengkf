@@ -174,7 +174,7 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="training-import-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="training-import-confirm-title">
           <strong id="training-import-confirm-title">确认导入聊天记录</strong>
           <p>将向服务端提交 {transcript.trim().length} 个字符，并由服务端生成可追溯的导入记录与待复核样本。</p>
           <div className={styles.buttonRow}>

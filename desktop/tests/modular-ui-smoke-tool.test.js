@@ -36,6 +36,11 @@ test("default routes are the union of real static Next pages and the typed manif
   assert.ok(routes.includes("/catalog/products"));
   assert.ok(routes.includes("/sales/quotes"));
   assert.ok(routes.includes("/reviews/logs"));
+  assert.ok(routes.includes("/conversations/__ui-smoke-missing__"));
+  assert.ok(routes.includes("/design/jobs/__ui-smoke-missing__"));
+  assert.ok(routes.includes("/sales/quotes/__ui-smoke-missing__"));
+  assert.ok(routes.includes("/sales/orders/__ui-smoke-missing__"));
+  assert.equal(routes.includes("/${string}"), false);
   assert.equal(routes.some((route) => route.includes("[id]")), false);
   assert.equal(new Set(routes).size, routes.length);
 });
@@ -45,6 +50,7 @@ test("route inventory reports manifest holes without hiding page-only aliases", 
   try {
     fs.mkdirSync(path.join(fixture, "overview"), { recursive: true });
     fs.mkdirSync(path.join(fixture, "legacy-alias"), { recursive: true });
+    fs.mkdirSync(path.join(fixture, "conversations", "[id]"), { recursive: true });
     fs.writeFileSync(
       path.join(fixture, "overview", "page.tsx"),
       "export default function Page() { return null; }\n",
@@ -53,7 +59,12 @@ test("route inventory reports manifest holes without hiding page-only aliases", 
       path.join(fixture, "legacy-alias", "page.tsx"),
       "export default function Page() { return null; }\n",
     );
+    fs.writeFileSync(
+      path.join(fixture, "conversations", "[id]", "page.tsx"),
+      "export default function Page() { return null; }\n",
+    );
     fs.writeFileSync(path.join(fixture, "route-manifest.ts"), [
+      'type Route = { href: `/${string}` };',
       'const routes = {',
       '  overview: { href: "/overview" },',
       '  missing: { href: "/reviews/logs" },',
@@ -62,7 +73,7 @@ test("route inventory reports manifest holes without hiding page-only aliases", 
       "",
     ].join("\n"));
     const inventory = smoke.discoverRouteInventory(fixture);
-    assert.deepEqual(inventory.routes, ["/legacy-alias", "/overview", "/reviews/logs"]);
+    assert.deepEqual(inventory.routes, ["/conversations/__ui-smoke-missing__", "/legacy-alias", "/overview", "/reviews/logs"]);
     assert.deepEqual(inventory.manifestWithoutPage, ["/reviews/logs"]);
     assert.deepEqual(inventory.pageOnlyRoutes, ["/legacy-alias"]);
     assert.equal(smoke.summarizeRouteContract(inventory).ok, false);
@@ -118,7 +129,7 @@ test("route summary enforces every release layout invariant", () => {
     },
   });
   assert.equal(passing.ok, true);
-  assert.deepEqual(Object.values(passing.checks), [true, true, true, true, true, true, true, true]);
+  assert.deepEqual(Object.values(passing.checks), [true, true, true, true, true, true, true, true, true, true]);
 
   const failing = smoke.summarizeInspection({
     route: "/overview",
@@ -133,7 +144,9 @@ test("route summary enforces every release layout invariant", () => {
       horizontalOverflow: true,
       nextErrorOverlay: true,
       overlayMarkers: ["nextjs-portal:error-text"],
+      undersizedTouchTargets: [{ label: "close", width: 34, height: 34 }],
     },
+    criticalResourceFailures: [{ type: "Stylesheet", status: 404, url: "http://127.0.0.1:3100/_next/static/missing.css" }],
     runtimeExceptions: ["Runtime exception token=secret"],
   });
   assert.equal(failing.ok, false);
@@ -158,11 +171,28 @@ test("Edge CDP contract covers both viewports, route health, screenshots, and hi
   assert.match(smoke.DOM_PROBE_SOURCE, /querySelectorAll\("h1"\)/);
   assert.match(smoke.DOM_PROBE_SOURCE, /querySelectorAll\("main"\)/);
   assert.match(smoke.DOM_PROBE_SOURCE, /horizontalOverflow/);
+  assert.match(smoke.DOM_PROBE_SOURCE, /undersizedTouchTargets/);
   assert.match(smoke.DOM_PROBE_SOURCE, /nextjs-portal/);
+  assert.match(source, /\["Stylesheet", "Script", "Font"\]/);
   assert.match(source, /history\.back\(\)/);
   assert.match(source, /history\.forward\(\)/);
+  assert.doesNotMatch(source, /--remote-allow-origins=/);
+  assert.doesNotMatch(source, /--disable-extensions/);
+  assert.match(source, /json\/list[\s\S]*existingPage[\s\S]*json\/new/);
   assert.doesNotThrow(() => new Function(`return ${smoke.DOM_PROBE_SOURCE}`));
   assert.doesNotThrow(() => new Function(`return ${smoke.SAFE_NAVIGATION_SOURCE}`));
+});
+
+test("Edge CDP websocket stays on the IPv4 loopback endpoint", () => {
+  assert.match(source, /require\("next\/dist\/compiled\/ws"\)/);
+  assert.equal(
+    smoke.normalizeDebuggerWebsocketUrl("ws://localhost:9222/devtools/page/test", 9333),
+    "ws://127.0.0.1:9333/devtools/page/test",
+  );
+  assert.throws(
+    () => smoke.normalizeDebuggerWebsocketUrl("ws://example.com/devtools/page/test", 9333),
+    /loopback/,
+  );
 });
 
 test("the only automated click is a guarded navigation anchor", () => {

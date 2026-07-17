@@ -39,7 +39,9 @@ test("token stays in a password field and is cleared instead of being read from 
 test("save validates first and disable requires an explicit second confirmation", () => {
   assert.match(component, /const result = await onValidate\(draft\);[\s\S]*?if \(!result\.ok\) return;[\s\S]*?await onSave\(draft\);/);
   assert.match(component, /onClick=\{\(\) => setConfirmDisableId\(instance\.wechatAccountId\)\}/);
-  assert.match(component, /role="alertdialog"/);
+  assert.match(component, /role="region"/);
+  assert.match(component, /aria-live="polite"/);
+  assert.doesNotMatch(component, /aria-modal="true"|role="alertdialog"/);
   assert.match(component, /onClick=\{\(\) => void confirmDisable\(\)\}/);
   assert.match(component, /await onDisable\(accountId\);/);
   assert.doesNotMatch(component, /window\.confirm|confirm\s*\(/);

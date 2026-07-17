@@ -1,5 +1,7 @@
 "use client";
 
+// Legacy migration archive. Modular routes do not import or render this component.
+
 import { useRouter } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";

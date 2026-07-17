@@ -1,5 +1,10 @@
-import { WorkbenchRoutePage } from "../../route-page";
+import { CatalogRepairPage } from "../../../features/catalog/catalog-repair-page";
+import { FeatureRouteShell } from "../../feature-route-shell";
 
 export default function Page() {
-  return <WorkbenchRoutePage routeId="catalogRepair" />;
+  return (
+    <FeatureRouteShell routeId="catalogRepair">
+      <CatalogRepairPage />
+    </FeatureRouteShell>
+  );
 }

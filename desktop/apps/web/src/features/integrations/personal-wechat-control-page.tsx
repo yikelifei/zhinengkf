@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Users } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { PersonalWechatWorkspace } from "../../components/personal-wechat-workspace";
 import {
   getPersonalWechatRpaRegistry,
@@ -26,6 +27,7 @@ export function PersonalWechatControlPage({
   onOpenSendTask,
   onOpenSafetyPolicy,
 }: PersonalWechatControlPageProps) {
+  const router = useRouter();
   const [registry, setRegistry] = useState<PersonalWechatRpaRegistry | null>(null);
   const [tasks, setTasks] = useState<SendTask[]>([]);
   const [busy, setBusy] = useState(true);
@@ -103,15 +105,23 @@ export function PersonalWechatControlPage({
           onRefresh={() => void refreshControl()}
           onOpenInstanceSettings={(accountId) => {
             if (onOpenInstances) onOpenInstances(accountId);
-            else setFeedback("实例设置已拆为独立页面；请由上层路由连接该页面后再打开。");
+            else router.push(accountId
+              ? `/integrations/personal-wechat/instances?accountId=${encodeURIComponent(accountId)}`
+              : "/integrations/personal-wechat/instances");
           }}
           onOpenTask={(taskId) => {
             if (onOpenSendTask) onOpenSendTask(taskId);
-            else setFeedback(`发送任务 ${taskId} 应由上层路由打开独立发送页面；本页未执行发送。`);
+            else {
+              const task = tasks.find((candidate) => candidate.id === taskId);
+              const route = task && ["blocked", "failed", "uncertain"].includes(task.status)
+                ? "/send/blocked"
+                : "/send/queue";
+              router.push(`${route}?taskId=${encodeURIComponent(taskId)}`);
+            }
           }}
           onOpenSafetyPolicy={() => {
             if (onOpenSafetyPolicy) onOpenSafetyPolicy();
-            else setFeedback("发送安全治理已拆为独立页面；请由上层路由连接后查看。");
+            else router.push("/integrations/personal-wechat/safety");
           }}
           onStatusMessage={setFeedback}
         />

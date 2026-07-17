@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -64,6 +64,7 @@ export type PersonalWechatInstanceValidation = {
 
 export type PersonalWechatInstancesPanelProps = {
   registry: PersonalWechatRegistryReadiness | null;
+  initialAccountId?: string;
   busy?: boolean;
   error?: string;
   onValidate: (draft: PersonalWechatInstanceDraft) => Promise<PersonalWechatInstanceValidation>;
@@ -75,6 +76,7 @@ type PendingAction = "validate" | "save" | `disable:${string}` | null;
 
 export function PersonalWechatInstancesPanel({
   registry,
+  initialAccountId = "",
   busy = false,
   error,
   onValidate,
@@ -91,6 +93,7 @@ export function PersonalWechatInstancesPanel({
   const [localError, setLocalError] = useState("");
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [confirmDisableId, setConfirmDisableId] = useState<string | null>(null);
+  const initialSelectionHandled = useRef("");
 
   const operationBusy = busy || pendingAction !== null;
   const readinessErrors = collectReadinessErrors(registry);
@@ -118,6 +121,17 @@ export function PersonalWechatInstancesPanel({
     setLocalError("");
     setConfirmDisableId(null);
   }
+
+  useEffect(() => {
+    if (!initialAccountId || !registry || initialSelectionHandled.current === initialAccountId) return;
+    initialSelectionHandled.current = initialAccountId;
+    const instance = registry.instances.find((candidate) => candidate.wechatAccountId === initialAccountId);
+    if (!instance) {
+      setLocalError(`未找到个人微信实例 ${initialAccountId}，请返回实例列表重新选择。`);
+      return;
+    }
+    openEdit(instance);
+  }, [initialAccountId, registry]);
 
   function closeEditor() {
     setEditorMode(null);
@@ -407,7 +421,12 @@ export function PersonalWechatInstancesPanel({
               ) : null}
 
               {confirmDisableId === instance.wechatAccountId ? (
-                <div className={styles.disableConfirm} role="alertdialog" aria-label={`确认停用 ${instance.accountNickname}`}>
+                <div
+                  className={styles.disableConfirm}
+                  role="region"
+                  aria-live="polite"
+                  aria-label={`确认停用 ${instance.accountNickname || instance.wechatAccountId}`}
+                >
                   <span>停用后该账号将立即停止路由。确认停用？</span>
                   <div>
                     <button

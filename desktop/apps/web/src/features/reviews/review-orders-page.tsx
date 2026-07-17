@@ -164,7 +164,7 @@ export function ReviewOrdersPage({ identityFilters, reviewer }: ReviewMutationPa
       </section>
 
       {pendingConfirmation ? (
-        <section className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="order-review-confirm-title">
+          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="order-review-confirm-title">
           <strong id="order-review-confirm-title">确认订单审核决策</strong>
           <p>操作人“{operator}”将对订单 {pendingConfirmation.orderId} 执行“{orderDecisionLabel(pendingConfirmation.decision)}”{pendingConfirmation.followupType ? `，跟进类型为${followupTypeLabel(pendingConfirmation.followupType)}` : ""}。</p>
           <p>说明：{note.trim()}</p>

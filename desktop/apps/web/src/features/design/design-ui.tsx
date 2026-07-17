@@ -50,7 +50,7 @@ export function DesignConfirmation({
   onCancel: () => void;
 }) {
   return (
-    <div className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby={`${confirmActionId}-title`} aria-describedby={`${confirmActionId}-detail`}>
+      <div className={styles.confirmation} role="region" aria-live="polite" aria-labelledby={`${confirmActionId}-title`} aria-describedby={`${confirmActionId}-detail`}>
       <AlertTriangle size={20} aria-hidden="true" />
       <div><strong id={`${confirmActionId}-title`}>{title}</strong><p id={`${confirmActionId}-detail`}>{detail}</p></div>
       <div className={styles.confirmationActions}>
