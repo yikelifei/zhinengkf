@@ -47,8 +47,8 @@ export type ApprovalItem = {
 
 export type SensitiveContentControl = {
   policyVersion: string;
-  activeRuleCount: number;
-  blockedToday: number;
+  activeRuleCount: number | null;
+  blockedToday: number | null;
   lastEvaluatedAt: string;
   protectedCategories: string[];
 };
@@ -84,6 +84,7 @@ export type MessageSafetyGovernanceProps = {
   quarantinedDeliveries: QuarantinedDelivery[];
   auditEvents: GovernanceAuditEvent[];
   busy?: boolean;
+  readOnly?: boolean;
   onRequestGlobalStop: () => void;
   onRequestResume: () => void;
   onOpenConsentRecord: (customerId: string) => void;

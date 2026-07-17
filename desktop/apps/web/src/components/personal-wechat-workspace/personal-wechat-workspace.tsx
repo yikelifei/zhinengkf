@@ -5,12 +5,10 @@ import { useState } from "react";
 import { MessageSafetyGovernance } from "../message-safety-governance";
 import { PersonalWechatControlCenter } from "../personal-wechat-control-center";
 import { VoiceAssistCenter } from "../voice-assist-center";
-import type { PersonalWechatWorkspaceProps } from "./types";
+import type { PersonalWechatWorkspaceProps, PersonalWechatWorkspaceView } from "./types";
 import styles from "./personal-wechat-workspace.module.css";
 
-type WorkspaceView = "accounts" | "voice" | "safety";
-
-const NAVIGATION: Array<{ id: WorkspaceView; label: string; icon: typeof Users }> = [
+const NAVIGATION: Array<{ id: PersonalWechatWorkspaceView; label: string; icon: typeof Users }> = [
   { id: "accounts", label: "账号控制台", icon: Users },
   { id: "voice", label: "语音辅助", icon: AudioLines },
   { id: "safety", label: "发送治理", icon: ShieldCheck },
@@ -27,8 +25,11 @@ export function PersonalWechatWorkspace({
   onOpenInstanceSettings,
   onOpenTask,
   onStatusMessage,
+  fixedView,
+  onOpenSafetyPolicy,
 }: PersonalWechatWorkspaceProps) {
-  const [activeView, setActiveView] = useState<WorkspaceView>("accounts");
+  const [selectedView, setSelectedView] = useState<PersonalWechatWorkspaceView>("accounts");
+  const activeView = fixedView || selectedView;
   const [selectedAccountState, setSelectedAccountState] = useState<string | null>(null);
   const selectedAccountId = accounts.some((account) => account.id === selectedAccountState)
     ? selectedAccountState
@@ -37,6 +38,14 @@ export function PersonalWechatWorkspace({
   const pendingTasks = tasks.filter((task) => !["sent", "cancelled"].includes(task.status));
   const unknownTasks = pendingTasks.filter((task) => task.deliveryState === "unknown" || task.status === "uncertain");
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null;
+
+  function openView(view: PersonalWechatWorkspaceView) {
+    if (fixedView) {
+      if (view === "safety") onOpenSafetyPolicy?.();
+      return;
+    }
+    setSelectedView(view);
+  }
 
   const controlAccounts = accounts.map((account) => ({
     id: account.id,
@@ -86,25 +95,32 @@ export function PersonalWechatWorkspace({
         </div>
         <div className={styles.headerActions}>
           <span className={styles.lockedStatus}><MessageSquareWarning size={14} aria-hidden="true" />真实发送保持关闭</span>
-          <button type="button" onClick={() => onOpenInstanceSettings(selectedAccountId || undefined)}>
+          <button
+            type="button"
+            data-action-id="integrations.personal-wechat.workspace.open-instance-settings"
+            aria-label="打开当前个人微信实例设置"
+            onClick={() => onOpenInstanceSettings(selectedAccountId || undefined)}
+          >
             <Settings2 size={14} aria-hidden="true" />实例设置
           </button>
         </div>
       </header>
 
-      <nav className={styles.tabs} aria-label="个人微信工作区模块">
+      {!fixedView ? <nav className={styles.tabs} aria-label="个人微信工作区模块">
         {NAVIGATION.map(({ id, label, icon: Icon }) => (
           <button
             type="button"
             key={id}
+            data-action-id={`integrations.personal-wechat.workspace.view.${id}`}
+            aria-label={`打开个人微信${label}`}
             data-active={activeView === id}
             aria-current={activeView === id ? "page" : undefined}
-            onClick={() => setActiveView(id)}
+            onClick={() => openView(id)}
           >
             <Icon size={15} aria-hidden="true" />{label}
           </button>
         ))}
-      </nav>
+      </nav> : null}
 
       {activeView === "accounts" ? (
         <PersonalWechatControlCenter
@@ -113,6 +129,7 @@ export function PersonalWechatWorkspace({
           selectedAccountId={selectedAccountId}
           globalSendMode="disabled"
           voicePolicy="disabled"
+          readOnly
           updatedAtLabel={updatedAtLabel}
           busy={busy}
           actions={{
@@ -124,7 +141,7 @@ export function PersonalWechatWorkspace({
             onIsolateAccount: (accountId) => report(`账号 ${accountId} 的隔离需要有权限的操作员确认；本次未执行。`),
             onRequestReleaseIsolation: (accountId) => report(`账号 ${accountId} 需要重新探测身份后才能申请解除隔离。`),
             onOpenApproval: onOpenTask,
-            onOpenSafetyPolicy: () => setActiveView("safety"),
+            onOpenSafetyPolicy: () => openView("safety"),
           }}
         />
       ) : null}

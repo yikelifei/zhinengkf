@@ -67,6 +67,7 @@ export type PersonalWechatControlCenterProps = {
   voicePolicy?: PersonalWechatVoicePolicy;
   updatedAtLabel?: string | null;
   busy?: boolean;
+  readOnly?: boolean;
   actions: PersonalWechatControlCenterActions;
   className?: string;
 };

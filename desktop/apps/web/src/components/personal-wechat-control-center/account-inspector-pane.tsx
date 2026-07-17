@@ -75,12 +75,20 @@ export function AccountInspectorPane({
 
       <div className={styles.controlActions} aria-label="账号控制操作">
         {account.state === "manual" ? (
-          <button type="button" onClick={() => onReleaseManualTakeover(account.id)} disabled={busy}>
+          <button
+            type="button"
+            data-action-id={`integrations.personal-wechat.control.release-takeover.${account.id}`}
+            aria-label={`结束账号 ${account.displayName} 的人工接管`}
+            onClick={() => onReleaseManualTakeover(account.id)}
+            disabled={busy}
+          >
             <Hand size={15} aria-hidden="true" />结束人工接管
           </button>
         ) : (
           <button
             type="button"
+            data-action-id={`integrations.personal-wechat.control.request-takeover.${account.id}`}
+            aria-label={`请求人工接管账号 ${account.displayName}`}
             onClick={() => onRequestManualTakeover(account.id)}
             disabled={busy || account.state === "isolated" || account.state === "offline"}
           >
@@ -92,6 +100,8 @@ export function AccountInspectorPane({
           <button
             type="button"
             className={styles.secondaryAction}
+            data-action-id={`integrations.personal-wechat.control.release-isolation.${account.id}`}
+            aria-label={`申请解除账号 ${account.displayName} 的隔离`}
             onClick={() => onRequestReleaseIsolation(account.id)}
             disabled={busy}
           >
@@ -101,6 +111,8 @@ export function AccountInspectorPane({
           <button
             type="button"
             className={styles.dangerAction}
+            data-action-id={`integrations.personal-wechat.control.isolate-account.${account.id}`}
+            aria-label={`隔离个人微信账号 ${account.displayName}`}
             onClick={() => onIsolateAccount(account.id)}
             disabled={busy}
           >

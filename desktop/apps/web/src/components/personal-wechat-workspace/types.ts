@@ -17,6 +17,8 @@ export type PersonalWechatWorkspaceTask = {
   deliveryState?: string | null;
 };
 
+export type PersonalWechatWorkspaceView = "accounts" | "voice" | "safety";
+
 export type PersonalWechatWorkspaceProps = {
   accounts: PersonalWechatWorkspaceAccount[];
   tasks: PersonalWechatWorkspaceTask[];
@@ -28,4 +30,6 @@ export type PersonalWechatWorkspaceProps = {
   onOpenInstanceSettings: (accountId?: string) => void;
   onOpenTask: (taskId: string) => void;
   onStatusMessage?: (message: string) => void;
+  fixedView?: PersonalWechatWorkspaceView;
+  onOpenSafetyPolicy?: () => void;
 };

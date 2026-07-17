@@ -1,0 +1,479 @@
+.page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  color: var(--wk-color-text, #172033);
+}
+
+.pageHeader,
+.panel,
+.notice,
+.channelCard,
+.runtimeCard,
+.confirmation {
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 16px;
+  background: var(--wk-color-surface, #ffffff);
+  box-shadow: 0 8px 24px rgb(20 34 55 / 5%);
+}
+
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+}
+
+.heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.headingIcon {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--wk-color-brand, #2457d6);
+  background: color-mix(in srgb, var(--wk-color-brand, #2457d6) 10%, white);
+}
+
+.heading h1,
+.heading h2,
+.panel h2,
+.panel h3,
+.channelCard h3,
+.runtimeCard h3 {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.heading h1,
+.heading h2 {
+  font-size: 20px;
+}
+
+.heading p,
+.panel p,
+.channelCard p,
+.runtimeCard p,
+.notice p {
+  margin: 5px 0 0;
+  color: var(--wk-color-text-muted, #667085);
+  line-height: 1.55;
+}
+
+.pageActions,
+.buttonRow,
+.inlineActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.page button,
+.page input,
+.page select,
+.page textarea {
+  font: inherit;
+}
+
+.page button {
+  min-height: 44px;
+  padding: 0 15px;
+  border: 1px solid var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 11px;
+  color: var(--wk-color-text, #172033);
+  background: var(--wk-color-surface, #fff);
+  cursor: pointer;
+}
+
+.page button:hover:not(:disabled) {
+  border-color: var(--wk-color-brand, #2457d6);
+  color: var(--wk-color-brand, #2457d6);
+}
+
+.page button:focus-visible,
+.page input:focus-visible,
+.page select:focus-visible,
+.page textarea:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.primaryButton {
+  border-color: var(--wk-color-brand, #2457d6) !important;
+  color: #fff !important;
+  background: var(--wk-color-brand, #2457d6) !important;
+}
+
+.dangerButton {
+  border-color: #dc2626 !important;
+  color: #fff !important;
+  background: #dc2626 !important;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.notice strong {
+  display: block;
+}
+
+.noticeInfo {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.noticeWarning {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.noticeError {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.noticeSuccess {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.summaryGrid,
+.channelGrid,
+.runtimeGrid,
+.formGrid,
+.snapshotGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.summaryGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.summaryItem {
+  padding: 14px;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 12px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
+}
+
+.summaryItem dt {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 12px;
+}
+
+.summaryItem dd {
+  margin: 6px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.channelGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.channelCard,
+.runtimeCard {
+  min-width: 0;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: #92400e;
+  background: #fef3c7;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.statusReady {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.statusDanger {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.checkList,
+.snapshotList,
+.detailList {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 14px 0 0;
+  list-style: none;
+}
+
+.checkItem,
+.snapshotItem,
+.detailRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+}
+
+.checkItem span,
+.snapshotItem span,
+.detailRow span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkItem small,
+.snapshotItem small,
+.detailRow small {
+  display: block;
+  margin-top: 3px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.passedText {
+  color: #166534;
+}
+
+.failedText {
+  color: #b91c1c;
+}
+
+.flowList {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0;
+  margin: 14px 0 0;
+  list-style: none;
+}
+
+.flowList li {
+  padding: 12px;
+  border-left: 3px solid var(--wk-color-brand, #2457d6);
+  border-radius: 9px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
+}
+
+.flowList small {
+  display: block;
+  margin-top: 4px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.runtimeGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.formGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.field,
+.checkboxField {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.field span,
+.checkboxField span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 10px;
+  color: var(--wk-color-text, #172033);
+  background: #fff;
+}
+
+.field textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.checkboxField {
+  grid-template-columns: 22px 1fr;
+  align-items: flex-start;
+  grid-column: 1 / -1;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.checkboxField input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+
+.checkboxField small {
+  display: block;
+  margin-top: 3px;
+  color: var(--wk-color-text-muted, #667085);
+  font-weight: 400;
+}
+
+.runtimeMeta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.runtimeMeta div {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
+}
+
+.runtimeMeta dt {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 12px;
+}
+
+.runtimeMeta dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
+
+.emptyState,
+.loadingState {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.emptyState strong,
+.loadingState strong {
+  display: block;
+  color: var(--wk-color-text, #172033);
+}
+
+.embeddedPanel {
+  min-width: 0;
+}
+
+.voiceUnavailable {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.compatibilityNote {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+@media (max-width: 900px) {
+  .summaryGrid,
+  .channelGrid,
+  .flowList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .pageHeader,
+  .panelHeader,
+  .cardHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pageActions,
+  .buttonRow,
+  .inlineActions {
+    width: 100%;
+  }
+
+  .pageActions button,
+  .buttonRow button,
+  .inlineActions button {
+    width: 100%;
+  }
+
+  .summaryGrid,
+  .channelGrid,
+  .runtimeGrid,
+  .formGrid,
+  .snapshotGrid,
+  .flowList,
+  .runtimeMeta {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldWide,
+  .checkboxField {
+    grid-column: auto;
+  }
+
+  .checkItem,
+  .snapshotItem,
+  .detailRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

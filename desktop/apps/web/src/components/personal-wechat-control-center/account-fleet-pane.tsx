@@ -34,6 +34,8 @@ export function AccountFleetPane({
                 role="listitem"
                 key={account.id}
                 className={`${styles.accountRow} ${selected ? styles.selected : ""}`}
+                data-action-id={`integrations.personal-wechat.control.select-account.${account.id}`}
+                aria-label={`查看个人微信账号 ${account.displayName}`}
                 aria-pressed={selected}
                 onClick={() => onSelectAccount(account.id)}
                 disabled={busy}

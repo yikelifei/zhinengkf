@@ -1,0 +1,448 @@
+.page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  color: var(--wk-color-text, #172033);
+}
+
+.header,
+.panel,
+.taskCard,
+.notice,
+.confirmation,
+.metricCard,
+.runtimeCard {
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 16px;
+  background: var(--wk-color-surface, #fff);
+  box-shadow: 0 8px 24px rgb(20 34 55 / 5%);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+}
+
+.heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.headingIcon {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--wk-color-brand, #2457d6);
+  background: color-mix(in srgb, var(--wk-color-brand, #2457d6) 10%, white);
+}
+
+.heading h1,
+.panel h2,
+.taskCard h2,
+.taskCard h3,
+.confirmation h2,
+.confirmation h3,
+.runtimeCard h2,
+.runtimeCard h3 {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.heading h1 {
+  font-size: 20px;
+}
+
+.heading p,
+.panel p,
+.taskCard p,
+.confirmation p,
+.runtimeCard p,
+.notice p {
+  margin: 5px 0 0;
+  color: var(--wk-color-text-muted, #667085);
+  line-height: 1.55;
+}
+
+.headerActions,
+.toolbar,
+.buttonRow,
+.taskActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.page button {
+  min-height: 44px;
+  padding: 0 15px;
+  border: 1px solid var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 11px;
+  color: var(--wk-color-text, #172033);
+  background: var(--wk-color-surface, #fff);
+  font: inherit;
+  cursor: pointer;
+}
+
+.page button:hover:not(:disabled) {
+  border-color: var(--wk-color-brand, #2457d6);
+  color: var(--wk-color-brand, #2457d6);
+}
+
+.page button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.primaryButton {
+  border-color: var(--wk-color-brand, #2457d6) !important;
+  color: #fff !important;
+  background: var(--wk-color-brand, #2457d6) !important;
+}
+
+.dangerButton {
+  border-color: #dc2626 !important;
+  color: #fff !important;
+  background: #dc2626 !important;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.notice strong {
+  display: block;
+}
+
+.noticeInfo {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.noticeWarning {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.noticeError {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.noticeSuccess {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.panelHeader,
+.taskHeader,
+.confirmationHeader,
+.runtimeHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.adapterBanner {
+  display: grid;
+  gap: 4px;
+  padding: 13px 15px;
+  border-left: 4px solid #d97706;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.adapterReady {
+  border-left-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.adapterBanner span {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 13px;
+}
+
+.taskList,
+.attemptList,
+.runtimeList {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 14px 0 0;
+  list-style: none;
+}
+
+.taskCard {
+  min-width: 0;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.identityGrid,
+.metricGrid,
+.runtimeGrid,
+.guardGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.identityGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 14px 0;
+}
+
+.identityGrid div,
+.guardItem {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
+}
+
+.identityGrid dt,
+.metricCard dt,
+.guardItem span {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 12px;
+}
+
+.identityGrid dd,
+.metricCard dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.messagePreview {
+  padding: 12px;
+  border-radius: 10px;
+  color: var(--wk-color-text, #172033);
+  background: #f8fafc;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: #92400e;
+  background: #fef3c7;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.statusSuccess {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.statusDanger {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.statusMuted {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.guardGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.guardItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.passedText {
+  color: #166534;
+}
+
+.failedText,
+.dangerText {
+  color: #b91c1c !important;
+}
+
+.warningText {
+  color: #92400e !important;
+}
+
+.taskHint {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: #92400e;
+  background: #fffbeb;
+  line-height: 1.5;
+}
+
+.confirmation {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.confirmationIdentity {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.confirmationIdentity div {
+  padding: 10px;
+  border: 1px solid #fde68a;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.confirmationIdentity span {
+  display: block;
+  color: #78716c;
+  font-size: 12px;
+}
+
+.confirmationIdentity strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.emptyState,
+.loadingState {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.emptyState strong,
+.loadingState strong {
+  display: block;
+  color: var(--wk-color-text, #172033);
+}
+
+.metricGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.metricCard {
+  padding: 14px;
+  box-shadow: none;
+}
+
+.metricCard dd {
+  font-size: 22px;
+}
+
+.runtimeGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtimeCard {
+  min-width: 0;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.runtimeList li,
+.attemptList li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+}
+
+.runtimeList small,
+.attemptList small {
+  display: block;
+  margin-top: 3px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.runtimeList span,
+.attemptList span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .identityGrid,
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .header,
+  .panelHeader,
+  .taskHeader,
+  .confirmationHeader,
+  .runtimeHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions,
+  .toolbar,
+  .buttonRow,
+  .taskActions {
+    width: 100%;
+  }
+
+  .headerActions button,
+  .toolbar button,
+  .buttonRow button,
+  .taskActions button {
+    width: 100%;
+  }
+
+  .identityGrid,
+  .metricGrid,
+  .runtimeGrid,
+  .guardGrid,
+  .confirmationIdentity {
+    grid-template-columns: 1fr;
+  }
+
+  .runtimeList li,
+  .attemptList li,
+  .guardItem {
+    flex-direction: column;
+  }
+}

@@ -28,7 +28,13 @@ export function WechatWorkReadinessPanel({
             <p>本机代码检查与公网验收分开呈现，不把外部阻塞误报为失败或成功。</p>
           </div>
         </div>
-        <button type="button" onClick={onRefresh} disabled={busy}>
+        <button
+          type="button"
+          data-action-id="integrations.wechat-work.preflight.refresh"
+          aria-label="刷新企业微信生产预检"
+          onClick={onRefresh}
+          disabled={busy}
+        >
           <RefreshCw size={14} aria-hidden="true" />刷新预检
         </button>
       </header>
