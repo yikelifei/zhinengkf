@@ -34,8 +34,12 @@ test("integration feature barrel exports route-ready independent page modules", 
   for (const page of [
     "ChannelsStatusPage",
     "WechatWorkPreflightPage",
-    "WindowInboundOperationsPage",
+    "WechatWorkConfigurationPage",
+    "WechatWorkFlowPage",
+    "WindowEvidencePage",
+    "PersonalWechatInboundDrillPage",
     "PersonalWechatInstancesPage",
+    "PersonalWechatInstanceConfigPage",
     "PersonalWechatControlPage",
     "PersonalWechatSafetyPage",
   ]) {
@@ -45,28 +49,33 @@ test("integration feature barrel exports route-ready independent page modules", 
 
 test("integration controllers reuse existing production components and real contracts", () => {
   const instances = read("features/integrations/personal-wechat-instances-page.tsx");
+  const instanceConfig = read("features/integrations/personal-wechat-instance-config-page.tsx");
   const control = read("features/integrations/personal-wechat-control-page.tsx");
   const safety = read("features/integrations/personal-wechat-safety-page.tsx");
   const channels = read("features/integrations/channels-status-page.tsx");
   const preflight = read("features/integrations/wechat-work-preflight-page.tsx");
-  const inbound = read("features/integrations/window-inbound-operations-page.tsx");
+  const configuration = read("features/integrations/wechat-work-configuration-page.tsx");
+  const flow = read("features/integrations/wechat-work-flow-page.tsx");
+  const windowEvidence = read("features/integrations/window-evidence-page.tsx");
+  const inboundDrill = read("features/integrations/personal-wechat-inbound-drill-page.tsx");
 
-  assert.match(instances, /PersonalWechatInstancesPanel/);
   assert.match(instances, /getPersonalWechatRpaRegistry/);
-  assert.match(instances, /validatePersonalWechatRpaInstance/);
-  assert.match(instances, /savePersonalWechatRpaInstance/);
-  assert.match(instances, /disablePersonalWechatRpaInstance/);
-  assert.match(control, /PersonalWechatWorkspace/);
-  assert.match(control, /fixedView="accounts"/);
-  assert.match(control, /语音能力未接入/);
-  assert.match(safety, /MessageSafetyGovernance/);
-  assert.match(safety, /globallyStopped/);
-  assert.match(channels, /getWechatChannelStatus/);
+  assert.doesNotMatch(instances, /savePersonalWechatRpaInstance|disablePersonalWechatRpaInstance/);
+  assert.match(instanceConfig, /validatePersonalWechatRpaInstance/);
+  assert.match(instanceConfig, /savePersonalWechatRpaInstance/);
+  assert.match(instanceConfig, /disablePersonalWechatRpaInstance/);
+  assert.doesNotMatch(control, /getSendTasks|PersonalWechatWorkspace/);
+  assert.match(safety, /不确定投递继续禁止自动重试/);
+  assert.doesNotMatch(safety, /MessageSafetyGovernance/);
+  assert.match(channels, /loadWechatChannelStatus/);
   assert.match(preflight, /getWechatWorkProductionPreflight/);
-  assert.match(inbound, /captureWindowObserverOnce/);
-  assert.match(inbound, /scanWindowSnapshotInbox/);
-  assert.match(inbound, /testWechatChannelInbound/);
-  assert.match(inbound, /drillConfirmed/);
+  assert.match(configuration, /readiness\.local\.checks/);
+  assert.match(flow, /status\.visualFlow/);
+  assert.match(windowEvidence, /captureWindowObserverOnce/);
+  assert.doesNotMatch(windowEvidence, /scanWindowSnapshotInbox|testWechatChannelInbound/);
+  assert.match(inboundDrill, /testWechatChannelInbound\("personal_wechat"/);
+  assert.match(inboundDrill, /identityExpectation\(identity\)/);
+  assert.match(inboundDrill, /confirmed/);
 });
 
 test("send feature barrel exports queue, blocked, and diagnostics pages", () => {

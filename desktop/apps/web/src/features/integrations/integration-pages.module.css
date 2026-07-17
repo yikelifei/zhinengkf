@@ -112,6 +112,35 @@
   opacity: 0.55;
 }
 
+.actionLink,
+.operationLinks a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 11px;
+  padding: 0 15px;
+  color: var(--wk-color-brand, #2457d6);
+  background: var(--wk-color-surface, #fff);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.actionLink:hover,
+.operationLinks a:hover {
+  border-color: var(--wk-color-brand, #2457d6);
+  background: var(--wk-color-brand-soft, #eff6ff);
+}
+
+.actionLink:focus-visible,
+.operationLinks a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
 .primaryButton {
   border-color: var(--wk-color-brand, #2457d6) !important;
   color: #fff !important;
@@ -201,6 +230,117 @@
 
 .channelGrid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.channelList,
+.accountList,
+.controlList {
+  display: grid;
+  gap: 10px;
+}
+
+.channelRow,
+.accountRow,
+.controlRow {
+  min-width: 0;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 14px;
+  background: var(--wk-color-surface, #fff);
+}
+
+.channelRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.channelIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.channelIdentity h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.channelIdentity p {
+  margin: 5px 0 0;
+  color: var(--wk-color-text-muted, #667085);
+  line-height: 1.5;
+}
+
+.unavailableAction {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 13px;
+}
+
+.accountRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(210px, 1.3fr) minmax(130px, 0.7fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px;
+}
+
+.accountIdentity,
+.accountEndpoint,
+.accountState,
+.controlRow > div,
+.safetyTaskList li > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.accountIdentity span,
+.accountEndpoint small,
+.accountState small,
+.controlRow span,
+.controlRow small,
+.safetyTaskList span,
+.safetyTaskList small {
+  color: var(--wk-color-text-muted, #667085);
+  overflow-wrap: anywhere;
+}
+
+.accountEndpoint code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.accountAction {
+  justify-self: end;
+}
+
+.rowWarning {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.controlRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(210px, 1.2fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px;
+}
+
+.operationLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
 }
 
 .channelCard,
@@ -372,6 +512,78 @@
   font-weight: 400;
 }
 
+.field small {
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 12px;
+}
+
+.validation {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid;
+  border-radius: 10px;
+}
+
+.validationSuccess {
+  border-color: #bbf7d0;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.validationError,
+.formError {
+  color: #b91c1c;
+}
+
+.validationError {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.formError {
+  margin: 12px 0;
+}
+
+.dangerZone {
+  border-color: #fecaca;
+  background: #fffafa;
+}
+
+.confirmation {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.mutedText {
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.safetyTaskList {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.safetyTaskList li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+}
+
+.safetyTaskList li:first-child {
+  border-top: 0;
+}
+
 .runtimeMeta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -450,8 +662,11 @@
   }
 
   .pageActions button,
+  .pageActions a,
   .buttonRow button,
-  .inlineActions button {
+  .inlineActions button,
+  .actionLink,
+  .operationLinks a {
     width: 100%;
   }
 
@@ -475,5 +690,25 @@
   .detailRow {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .channelRow,
+  .accountRow,
+  .controlRow,
+  .safetyTaskList li {
+    grid-template-columns: 1fr;
+  }
+
+  .channelIdentity {
+    flex-direction: column;
+  }
+
+  .accountAction {
+    justify-self: stretch;
+  }
+
+  .operationLinks {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }

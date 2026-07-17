@@ -45,11 +45,14 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const api = readProjectFile("apps/web/src/lib/api.ts");
   const channelsPage = readProjectFile("apps/web/src/features/integrations/channels-status-page.tsx");
+  const flowPage = readProjectFile("apps/web/src/features/integrations/wechat-work-flow-page.tsx");
   const preflightPage = readProjectFile("apps/web/src/features/integrations/wechat-work-preflight-page.tsx");
-  const inboundPage = readProjectFile("apps/web/src/features/integrations/window-inbound-operations-page.tsx");
+  const windowPage = readProjectFile("apps/web/src/features/integrations/window-evidence-page.tsx");
+  const inboundPage = readProjectFile("apps/web/src/features/integrations/personal-wechat-inbound-drill-page.tsx");
   const channelsRoute = readProjectFile("apps/web/src/app/integrations/channels/page.tsx");
   const preflightRoute = readProjectFile("apps/web/src/app/integrations/wechat-work/page.tsx");
-  const inboundRoute = readProjectFile("apps/web/src/app/integrations/personal-wechat/window-inbound/page.tsx");
+  const windowRoute = readProjectFile("apps/web/src/app/integrations/personal-wechat/window-inbound/page.tsx");
+  const inboundRoute = readProjectFile("apps/web/src/app/integrations/personal-wechat/inbound-drill/page.tsx");
   const styles = readProjectFile("apps/web/src/features/integrations/integration-pages.module.css");
   const statusSection = sliceBetween(service, /function channelStatus\(/, /function maskSecret/);
 
@@ -62,8 +65,8 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(api, /"needs_send_adapter"/);
   assert.match(channelsPage, /needs_send_adapter:\s*"待发送适配器"/);
   assert.match(channelsPage, /channel\.ready \? "已就绪" : channelStatusLabel\(channel\.status\)/);
-  assert.match(channelsPage, /channel\.checks\.map/);
-  assert.match(channelsPage, /链路只展示服务端返回的真实步骤，不在前端推断通道能力/);
+  assert.doesNotMatch(channelsPage, /channel\.checks\.map|status\.visualFlow/);
+  assert.match(flowPage, /status\.visualFlow\.map/);
   assert.doesNotMatch(channelsPage, /executeSend|processSafeQueue|runWechatChannelInbound/);
 
   assert.match(preflightPage, /readiness && !readiness\.productionReady/);
@@ -71,14 +74,17 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.doesNotMatch(preflightPage, /startAutomation|executeSend/);
 
   assert.match(inboundPage, /identityExpectation\(identity\)/);
-  assert.match(inboundPage, /!identity\.wechatAccountId \|\| !identity\.conversationId \|\| !identity\.customerId/);
-  assert.match(inboundPage, /drillConfirmed/);
-  assert.match(inboundPage, /data-action-id="integrations\.window\.capture-current"/);
-  assert.match(inboundPage, /data-action-id="integrations\.inbound\.run-controlled-drill"/);
+  assert.match(inboundPage, /wechatAccountId\.trim\(\) && conversationId\.trim\(\) && customerId\.trim\(\)/);
+  assert.match(inboundPage, /confirmed/);
+  assert.match(inboundPage, /data-action-id="integrations\.personal-wechat\.inbound-drill\.submit"/);
+  assert.doesNotMatch(inboundPage, /captureWindowObserverOnce|scanWindowSnapshotInbox/);
+  assert.match(windowPage, /data-action-id="integrations\.window\.capture-current"/);
+  assert.doesNotMatch(windowPage, /testWechatChannelInbound/);
 
   assert.match(channelsRoute, /routeId="integrationChannels"[\s\S]*<ChannelsStatusPage/);
   assert.match(preflightRoute, /routeId="wechatWorkChannels"[\s\S]*<WechatWorkPreflightPage/);
-  assert.match(inboundRoute, /routeId="personalWechatInbound"[\s\S]*<WindowInboundOperationsPage/);
+  assert.match(windowRoute, /routeId="personalWechatInbound"[\s\S]*<WindowEvidencePage/);
+  assert.match(inboundRoute, /routeId="personalWechatInboundDrill"[\s\S]*<PersonalWechatInboundDrillPage/);
   assert.match(styles, /\.page button \{[\s\S]*min-height: 44px/);
   assert.match(styles, /@media \(max-width: 520px\)[\s\S]*grid-template-columns: 1fr/);
 });

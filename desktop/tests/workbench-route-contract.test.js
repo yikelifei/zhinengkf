@@ -25,9 +25,13 @@ const productionRoutes = [
   "/send/diagnostics",
   "/integrations/channels",
   "/integrations/wechat-work",
+  "/integrations/wechat-work/flow",
+  "/integrations/wechat-work/settings",
   "/integrations/personal-wechat/instances",
+  "/integrations/personal-wechat/instances/configure",
   "/integrations/personal-wechat/control",
   "/integrations/personal-wechat/window-inbound",
+  "/integrations/personal-wechat/inbound-drill",
   "/integrations/personal-wechat/safety",
   "/design/settings",
   "/design/assets",
@@ -59,8 +63,6 @@ const productionRoutes = [
 ];
 
 const redirectedManifestRoutes = new Map([
-  ["/integrations/wechat-work/flow", "/integrations/wechat-work"],
-  ["/integrations/wechat-work/settings", "/integrations/wechat-work"],
   ["/catalog/editor", "/catalog/products"],
   ["/catalog/preview", "/catalog/import"],
   ["/sales/overview", "/sales/quotes"],

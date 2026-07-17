@@ -16,8 +16,6 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const routes = require("../apps/web/src/app/route-manifest");
 
 const redirectedRouteIds = new Set([
-  "wechatWorkFlow",
-  "wechatWorkSettings",
   "catalogEditor",
   "catalogPreview",
   "salesOverview",
@@ -34,9 +32,13 @@ const featureByRouteId = {
   sendDiagnostics: "SendDiagnosticsPage",
   integrationChannels: "ChannelsStatusPage",
   wechatWorkChannels: "WechatWorkPreflightPage",
+  wechatWorkFlow: "WechatWorkFlowPage",
+  wechatWorkSettings: "WechatWorkConfigurationPage",
   personalWechatInstances: "PersonalWechatInstancesPage",
+  personalWechatInstanceConfig: "PersonalWechatInstanceConfigPage",
   personalWechatControl: "PersonalWechatControlPage",
-  personalWechatInbound: "WindowInboundOperationsPage",
+  personalWechatInbound: "WindowEvidencePage",
+  personalWechatInboundDrill: "PersonalWechatInboundDrillPage",
   personalWechatSafety: "PersonalWechatSafetyPage",
   designSettings: "DesignSettingsPage",
   designActivation: "DesignActivationPage",
@@ -129,7 +131,7 @@ test("entity and query selections reach the owning feature instead of only chang
   assert.match(read("apps/web/src/app/training/review/[id]/page.tsx"), /TrainingReviewDetailPage key=\{id\} sampleId=\{id\}/);
   assert.match(read("apps/web/src/app/send/queue/page.tsx"), /SendQueuePage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
   assert.match(read("apps/web/src/app/send/blocked/page.tsx"), /SendBlockedPage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
-  assert.match(read("apps/web/src/app/integrations/personal-wechat/instances/page.tsx"), /initialAccountId=\{initialAccountId\}/);
+  assert.match(read("apps/web/src/app/integrations/personal-wechat/instances/configure/page.tsx"), /accountId=\{initialAccountId\}/);
 });
 
 test("overview actions are connected to real routes by a small client adapter", () => {

@@ -1,132 +1,120 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { RefreshCw, ShieldAlert } from "lucide-react";
-import { MessageSafetyGovernance } from "../../components/message-safety-governance";
-import {
-  getPersonalWechatRpaRegistry,
-  getSendTasks,
-  type PersonalWechatRpaRegistry,
-  type SendTask,
-} from "../../lib/api";
-import { FeatureNotice, FeaturePage, errorMessage } from "./feature-page";
+import { getPersonalWechatRpaRegistry, getSendTasks, type SendTask } from "../../lib/api";
+import { EmptyState, FeatureNotice, FeaturePage } from "./feature-page";
+import styles from "./integration-pages.module.css";
+import { useAsyncResource } from "./use-async-resource";
 
-export type PersonalWechatSafetyPageProps = {
-  operatorLabel?: string;
-  operatorRole?: string;
-  organizationLabel?: string;
-  businessPurpose?: string;
-};
-
-export function PersonalWechatSafetyPage({
-  operatorLabel = "可信操作员身份未接入",
-  operatorRole = "角色未接入",
-  organizationLabel = "组织身份未接入",
-  businessPurpose = "业务目的未声明",
-}: PersonalWechatSafetyPageProps) {
-  const [registry, setRegistry] = useState<PersonalWechatRpaRegistry | null>(null);
-  const [tasks, setTasks] = useState<SendTask[]>([]);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const requestSequence = useRef(0);
-
-  const refreshSafety = useCallback(async () => {
-    const sequence = ++requestSequence.current;
-    setBusy(true);
-    setError("");
-    const results = await Promise.allSettled([getPersonalWechatRpaRegistry(), getSendTasks()] as const);
-    if (sequence !== requestSequence.current) return;
-    const errors: string[] = [];
-    if (results[0].status === "fulfilled") setRegistry(results[0].value);
-    else errors.push(errorMessage(results[0].reason, "个人微信实例读取失败"));
-    if (results[1].status === "fulfilled") setTasks(results[1].value);
-    else errors.push(errorMessage(results[1].reason, "发送任务读取失败"));
-    setError(errors.join("；"));
-    setBusy(false);
-  }, []);
-
-  useEffect(() => {
-    void refreshSafety();
-    return () => { requestSequence.current += 1; };
-  }, [refreshSafety]);
-
+export function PersonalWechatSafetyPage() {
+  const registry = useAsyncResource(getPersonalWechatRpaRegistry, "个人微信实例读取失败");
+  const sendTasks = useAsyncResource(getSendTasks, "发送任务读取失败");
+  const personalAccountIds = new Set(registry.data?.instances.map((instance) => instance.wechatAccountId) || []);
+  const tasks = (sendTasks.data || []).filter((task) => {
+    const accountId = task.wechatAccountId;
+    return typeof accountId === "string" && personalAccountIds.has(accountId);
+  });
   const blockedTasks = tasks.filter((task) => task.status === "blocked");
   const quarantinedTasks = tasks.filter(isUncertainDelivery);
-  const activeAccountId = registry?.instances.find((instance) => instance.enabled)?.wechatAccountId || "未选择账号";
+  const errors = [registry.error, sendTasks.error].filter(Boolean).join("；");
+  const busy = registry.busy || sendTasks.busy;
+
+  async function refreshSafetyEvidence() {
+    await Promise.all([registry.refresh(), sendTasks.refresh()]);
+  }
 
   return (
     <FeaturePage
       id="personal-wechat-safety-page"
-      title="个人微信发送安全治理"
-      description="只展示真实实例与发送任务证据；治理写操作在服务端契约接通前保持关闭。"
+      title="个人微信发送安全"
+      description="只审阅阻断与不确定投递证据；发送、实例编辑和治理配置由各自页面负责。"
       icon={<ShieldAlert size={20} />}
       busy={busy}
       actions={(
         <button
           type="button"
           data-action-id="integrations.personal-wechat.safety.refresh"
-          aria-label="刷新个人微信发送治理数据"
-          onClick={() => void refreshSafety()}
+          aria-label="刷新个人微信发送安全证据"
+          onClick={() => void refreshSafetyEvidence()}
           disabled={busy}
         >
-          <RefreshCw size={15} aria-hidden="true" /> 刷新治理数据
+          <RefreshCw size={15} aria-hidden="true" /> 刷新安全证据
         </button>
       )}
     >
-      {error ? <FeatureNotice tone="error" title="治理数据读取不完整">{error}</FeatureNotice> : null}
-      <FeatureNotice tone="warning" title="治理能力只读且 fail-closed">
-        当前 API 未提供客户同意凭据、账号业务预算、敏感策略版本、治理审计导出和恢复发送写接口；这些区域不伪造数据，相关按钮保持禁用。
+      {errors ? <FeatureNotice tone="error" title="安全证据读取不完整">{errors}</FeatureNotice> : null}
+      <FeatureNotice tone="warning" title="恢复外发保持关闭">
+        当前没有客户同意、预算、敏感策略版本或恢复发送写接口；页面不伪造这些能力，不确定投递继续禁止自动重试。
       </FeatureNotice>
-      <MessageSafetyGovernance
-        identity={{
-          operatorName: operatorLabel,
-          operatorRole,
-          organizationName: organizationLabel,
-          businessPurpose,
-          activeAccountId,
-        }}
-        globallyStopped
-        globalStopReason="治理写接口与可信操作员授权尚未接通，本页面禁止恢复外发。"
-        consentRecords={[]}
-        accountBudgets={[]}
-        approvalQueue={blockedTasks.slice(0, 30).map((task) => ({
-          id: task.id,
-          accountId: task.wechatAccountId,
-          customerLabel: customerLabel(task),
-          contentSummary: taskSummary(task),
-          reason: task.guardSnapshot?.reason || task.errorMessage || "发送任务已被服务端安全守卫阻断",
-          requestedBy: "服务端安全守卫",
-          requestedAt: task.createdAt,
-          state: "pending" as const,
-        }))}
-        sensitiveContent={{
-          policyVersion: "服务端未提供",
-          activeRuleCount: null,
-          blockedToday: null,
-          lastEvaluatedAt: "治理查询接口未接通",
-          protectedCategories: [],
-        }}
-        quarantinedDeliveries={quarantinedTasks.slice(0, 30).map((task) => ({
-          id: task.id,
-          accountId: task.wechatAccountId,
-          customerLabel: customerLabel(task),
-          contentDigest: taskSummary(task),
-          reason: "投递状态不确定，禁止自动重试",
-          detectedAt: task.latestAttempt?.completedAt || task.latestAttempt?.createdAt || task.createdAt,
-          state: "isolated" as const,
-        }))}
-        auditEvents={[]}
-        busy={busy}
-        readOnly
-        onRequestGlobalStop={() => undefined}
-        onRequestResume={() => undefined}
-        onOpenConsentRecord={() => undefined}
-        onReviewApproval={() => undefined}
-        onResolveQuarantine={() => undefined}
-        onExportAudit={() => undefined}
+      <dl className={styles.summaryGrid} aria-label="个人微信安全摘要">
+        <Summary label="启用实例" value={registry.data?.activeCount ?? "—"} />
+        <Summary label="被阻断任务" value={blockedTasks.length} />
+        <Summary label="隔离投递" value={quarantinedTasks.length} />
+        <Summary label="自动重试" value="禁止" />
+      </dl>
+      <SafetyTaskSection
+        id="blocked-send-tasks"
+        title="服务端阻断任务"
+        detail="身份、人工锁或安全守卫未通过的任务。"
+        tasks={blockedTasks}
+        emptyTitle="当前没有被阻断任务"
+      />
+      <SafetyTaskSection
+        id="uncertain-send-tasks"
+        title="不确定投递隔离"
+        detail="缺少明确 ACK 或结果未知的投递，必须人工核对。"
+        tasks={quarantinedTasks}
+        emptyTitle="当前没有不确定投递"
       />
     </FeaturePage>
   );
+}
+
+function SafetyTaskSection({
+  id,
+  title,
+  detail,
+  tasks,
+  emptyTitle,
+}: {
+  id: string;
+  title: string;
+  detail: string;
+  tasks: SendTask[];
+  emptyTitle: string;
+}) {
+  return (
+    <section className={styles.panel} aria-labelledby={`${id}-title`}>
+      <header className={styles.panelHeader}>
+        <div><h2 id={`${id}-title`}>{title}</h2><p>{detail}</p></div>
+      </header>
+      {tasks.length ? (
+        <ul className={styles.safetyTaskList}>
+          {tasks.slice(0, 30).map((task) => (
+            <li key={task.id}>
+              <div>
+                <strong>{customerLabel(task)}</strong>
+                <span>{taskSummary(task)}</span>
+                <small>{task.guardSnapshot?.reason || task.errorMessage || "需要人工核对服务端证据"}</small>
+              </div>
+              <Link
+                className={styles.actionLink}
+                href={`/send/blocked?taskId=${encodeURIComponent(task.id)}`}
+                aria-label={`查看安全任务 ${task.id}`}
+              >
+                查看阻断详情
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : <EmptyState title={emptyTitle} detail="页面只展示真实服务端任务。" />}
+    </section>
+  );
+}
+
+function Summary({ label, value }: { label: string; value: string | number }) {
+  return <div className={styles.summaryItem}><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
 function customerLabel(task: SendTask) {

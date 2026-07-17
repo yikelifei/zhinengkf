@@ -1,37 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2 } from "lucide-react";
 import { WechatWorkReadinessPanel } from "../../components/wechat-work-readiness-panel";
-import { getWechatWorkProductionPreflight, type WechatWorkProductionReadiness } from "../../lib/api";
-import { FeatureNotice, FeaturePage, errorMessage } from "./feature-page";
+import { getWechatWorkProductionPreflight } from "../../lib/api";
+import { FeatureNotice, FeaturePage } from "./feature-page";
+import { useAsyncResource } from "./use-async-resource";
 
 export function WechatWorkPreflightPage() {
-  const [readiness, setReadiness] = useState<WechatWorkProductionReadiness | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const requestSequence = useRef(0);
-
-  const refreshPreflight = useCallback(async () => {
-    const sequence = ++requestSequence.current;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await getWechatWorkProductionPreflight();
-      if (sequence === requestSequence.current) setReadiness(next);
-    } catch (refreshError) {
-      if (sequence === requestSequence.current) {
-        setError(errorMessage(refreshError, "企业微信生产预检失败"));
-      }
-    } finally {
-      if (sequence === requestSequence.current) setBusy(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshPreflight();
-    return () => { requestSequence.current += 1; };
-  }, [refreshPreflight]);
+  const { data: readiness, busy, error, refresh } = useAsyncResource(
+    getWechatWorkProductionPreflight,
+    "企业微信生产预检失败",
+  );
 
   return (
     <FeaturePage
@@ -50,7 +29,7 @@ export function WechatWorkPreflightPage() {
         readiness={readiness}
         busy={busy}
         error={error}
-        onRefresh={() => void refreshPreflight()}
+        onRefresh={() => void refresh()}
       />
     </FeaturePage>
   );

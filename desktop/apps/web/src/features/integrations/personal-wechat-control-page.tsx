@@ -1,143 +1,84 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Users } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { PersonalWechatWorkspace } from "../../components/personal-wechat-workspace";
-import {
-  getPersonalWechatRpaRegistry,
-  getSendTasks,
-  type PersonalWechatRpaRegistry,
-  type SendTask,
-} from "../../lib/api";
-import { EmptyState, FeatureNotice, FeaturePage, errorMessage } from "./feature-page";
+import Link from "next/link";
+import { RefreshCw, Users } from "lucide-react";
+import { getPersonalWechatRpaRegistry } from "../../lib/api";
+import { EmptyState, FeatureNotice, FeaturePage, LoadingState } from "./feature-page";
+import styles from "./integration-pages.module.css";
+import { useAsyncResource } from "./use-async-resource";
 
-export type PersonalWechatControlPageProps = {
-  operatorLabel?: string;
-  organizationLabel?: string;
-  onOpenInstances?: (wechatAccountId?: string) => void;
-  onOpenSendTask?: (sendTaskId: string) => void;
-  onOpenSafetyPolicy?: () => void;
-};
-
-export function PersonalWechatControlPage({
-  operatorLabel = "可信操作员身份未接入",
-  organizationLabel = "组织身份未接入",
-  onOpenInstances,
-  onOpenSendTask,
-  onOpenSafetyPolicy,
-}: PersonalWechatControlPageProps) {
-  const router = useRouter();
-  const [registry, setRegistry] = useState<PersonalWechatRpaRegistry | null>(null);
-  const [tasks, setTasks] = useState<SendTask[]>([]);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const [feedback, setFeedback] = useState("");
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const requestSequence = useRef(0);
-
-  const refreshControl = useCallback(async () => {
-    const sequence = ++requestSequence.current;
-    setBusy(true);
-    setError("");
-    const results = await Promise.allSettled([getPersonalWechatRpaRegistry(), getSendTasks()] as const);
-    if (sequence !== requestSequence.current) return;
-    const errors: string[] = [];
-    if (results[0].status === "fulfilled") setRegistry(results[0].value);
-    else errors.push(errorMessage(results[0].reason, "个人微信实例读取失败"));
-    if (results[1].status === "fulfilled") setTasks(results[1].value);
-    else errors.push(errorMessage(results[1].reason, "发送任务读取失败"));
-    setError(errors.join("；"));
-    setUpdatedAt(new Date().toLocaleString("zh-CN", { hour12: false }));
-    setBusy(false);
-  }, []);
-
-  useEffect(() => {
-    void refreshControl();
-    return () => { requestSequence.current += 1; };
-  }, [refreshControl]);
-
-  const accounts = (registry?.instances || []).map((instance) => ({
-    id: instance.wechatAccountId,
-    displayName: instance.accountNickname || instance.wechatAccountId,
-    endpoint: instance.endpoint,
-    enabled: instance.enabled,
-    tokenConfigured: instance.tokenConfigured,
-    updatedAt: instance.updatedAt,
-  }));
-  const workspaceTasks = tasks.map((task) => ({
-    id: task.id,
-    accountId: task.wechatAccountId,
-    customerLabel: task.conversation?.customer?.name || task.conversation?.title || task.conversationId,
-    summary: taskSummary(task),
-    status: task.status,
-    createdAt: task.createdAt,
-    deliveryState: deliveryState(task),
-  }));
+export function PersonalWechatControlPage() {
+  const { data: registry, busy, error, refresh } = useAsyncResource(
+    getPersonalWechatRpaRegistry,
+    "个人微信账号状态读取失败",
+  );
 
   return (
     <FeaturePage
       id="personal-wechat-control-page"
       title="个人微信账号控制"
-      description="只负责实例状态、待处理发送任务和人工接管边界；真实发送保持服务端复核。"
+      description="只查看当前账号是否可用并进入对应操作页，不再混入发送任务、实例编辑或安全策略。"
       icon={<Users size={20} />}
       busy={busy}
-    >
-      {error ? <FeatureNotice tone="error" title="个人微信控制数据不完整">{error}</FeatureNotice> : null}
-      {feedback ? <FeatureNotice tone="info" title="操作说明">{feedback}</FeatureNotice> : null}
-      <FeatureNotice tone="info" title="控制写操作未接入">
-        账号隔离、人工接管和全局发送模式尚无真实写 API，本页将相关控件保持禁用，只允许刷新、选择账号和跳转查看。
-      </FeatureNotice>
-      <FeatureNotice tone="warning" title="语音能力未接入">
-        当前没有真实麦克风采集、STT、授权音色或语音发送 API，本页不提供启动、录制或发送按钮。
-      </FeatureNotice>
-      {!busy && !accounts.length ? (
-        <EmptyState title="尚未配置个人微信实例" detail="请由路由层进入独立的个人微信实例设置页完成真实端点配置。" />
-      ) : (
-        <PersonalWechatWorkspace
-          fixedView="accounts"
-          accounts={accounts}
-          tasks={workspaceTasks}
-          updatedAtLabel={updatedAt}
-          operatorLabel={operatorLabel}
-          organizationLabel={organizationLabel}
-          busy={busy}
-          onRefresh={() => void refreshControl()}
-          onOpenInstanceSettings={(accountId) => {
-            if (onOpenInstances) onOpenInstances(accountId);
-            else router.push(accountId
-              ? `/integrations/personal-wechat/instances?accountId=${encodeURIComponent(accountId)}`
-              : "/integrations/personal-wechat/instances");
-          }}
-          onOpenTask={(taskId) => {
-            if (onOpenSendTask) onOpenSendTask(taskId);
-            else {
-              const task = tasks.find((candidate) => candidate.id === taskId);
-              const route = task && ["blocked", "failed", "uncertain"].includes(task.status)
-                ? "/send/blocked"
-                : "/send/queue";
-              router.push(`${route}?taskId=${encodeURIComponent(taskId)}`);
-            }
-          }}
-          onOpenSafetyPolicy={() => {
-            if (onOpenSafetyPolicy) onOpenSafetyPolicy();
-            else router.push("/integrations/personal-wechat/safety");
-          }}
-          onStatusMessage={setFeedback}
-        />
+      actions={(
+        <button
+          type="button"
+          data-action-id="integrations.personal-wechat.control.refresh"
+          aria-label="刷新个人微信账号控制状态"
+          onClick={() => void refresh()}
+          disabled={busy}
+        >
+          <RefreshCw size={15} aria-hidden="true" /> 刷新账号
+        </button>
       )}
+    >
+      {error ? <FeatureNotice tone="error" title="个人微信账号状态读取失败">{error}</FeatureNotice> : null}
+      <FeatureNotice tone="info" title="控制写操作尚未接入">
+        当前没有可信的账号隔离或人工接管写 API，因此本页不显示无效开关；发送继续由服务端身份和窗口校验兜底。
+      </FeatureNotice>
+      {busy && !registry ? <LoadingState label="正在读取个人微信账号状态" /> : null}
+      {!busy && registry && !registry.instances.length ? (
+        <EmptyState title="尚未配置个人微信实例" detail="先到实例页新增真实本机端点。" />
+      ) : null}
+      {registry?.instances.length ? (
+        <section className={styles.panel} aria-labelledby="personal-wechat-control-list-title">
+          <header className={styles.panelHeader}>
+            <div>
+              <h2 id="personal-wechat-control-list-title">账号可用状态</h2>
+              <p>选择账号后进入独立配置页；本页不执行发送。</p>
+            </div>
+          </header>
+          <div className={styles.controlList}>
+            {registry.instances.map((instance) => (
+              <article className={styles.controlRow} key={instance.wechatAccountId}>
+                <div>
+                  <strong>{instance.accountNickname || "未命名微信"}</strong>
+                  <span>{instance.wechatAccountId}</span>
+                </div>
+                <div>
+                  <span className={`${styles.statusBadge} ${instance.enabled && instance.tokenConfigured ? styles.statusReady : ""}`}>
+                    {instance.enabled && instance.tokenConfigured ? "可进入安全校验" : "不可发送"}
+                  </span>
+                  <small>{instance.endpoint || "端点未配置"}</small>
+                </div>
+                <Link
+                  className={styles.actionLink}
+                  href={`/integrations/personal-wechat/instances/configure?accountId=${encodeURIComponent(instance.wechatAccountId)}`}
+                  aria-label={`打开个人微信实例配置 ${instance.accountNickname || instance.wechatAccountId}`}
+                >
+                  打开实例配置
+                </Link>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <nav className={styles.operationLinks} aria-label="个人微信独立操作页">
+        <Link href="/send/queue">发送队列</Link>
+        <Link href="/integrations/personal-wechat/window-inbound">窗口证据</Link>
+        <Link href="/integrations/personal-wechat/inbound-drill">入站演练</Link>
+        <Link href="/integrations/personal-wechat/safety">安全治理</Link>
+      </nav>
     </FeaturePage>
   );
-}
-
-function taskSummary(task: SendTask) {
-  const text = typeof task.payload?.text === "string" ? task.payload.text.trim() : "";
-  if (!text) return `发送任务 ${task.id}`;
-  return text.length > 96 ? `${text.slice(0, 96)}…` : text;
-}
-
-function deliveryState(task: SendTask) {
-  if (task.status === "uncertain") return "unknown";
-  const attemptStatus = String(task.latestAttempt?.status || task.attempts?.[0]?.status || "").toLowerCase();
-  return ["unknown", "uncertain"].includes(attemptStatus) ? "unknown" : attemptStatus || null;
 }

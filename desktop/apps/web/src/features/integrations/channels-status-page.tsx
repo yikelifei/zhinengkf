@@ -1,44 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Network, RefreshCw, XCircle } from "lucide-react";
-import { getWechatChannelStatus, type WechatChannelStatus } from "../../lib/api";
-import { EmptyState, FeatureNotice, FeaturePage, LoadingState, errorMessage } from "./feature-page";
+import Link from "next/link";
+import { Network, RefreshCw } from "lucide-react";
+import { type WechatChannelKey } from "../../lib/api";
+import { EmptyState, FeatureNotice, FeaturePage, LoadingState } from "./feature-page";
+import { loadWechatChannelStatus } from "./integration-loaders";
 import styles from "./integration-pages.module.css";
+import { useAsyncResource } from "./use-async-resource";
+
+const CHANNEL_DESTINATIONS: Partial<Record<WechatChannelKey, { href: string; label: string }>> = {
+  personal_wechat: { href: "/integrations/personal-wechat/instances", label: "查看个人微信实例" },
+  work_wechat: { href: "/integrations/wechat-work", label: "进入企业微信预检" },
+};
 
 export function ChannelsStatusPage() {
-  const [status, setStatus] = useState<WechatChannelStatus | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const requestSequence = useRef(0);
-
-  const refreshStatus = useCallback(async () => {
-    const sequence = ++requestSequence.current;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await getWechatChannelStatus();
-      if (sequence !== requestSequence.current) return;
-      if (!next) throw new Error("未取得微信通道状态，请确认本机 API 已启动后重试。");
-      setStatus(next);
-    } catch (refreshError) {
-      if (sequence !== requestSequence.current) return;
-      setError(errorMessage(refreshError, "微信通道状态读取失败"));
-    } finally {
-      if (sequence === requestSequence.current) setBusy(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshStatus();
-    return () => { requestSequence.current += 1; };
-  }, [refreshStatus]);
+  const { data: status, busy, error, refresh } = useAsyncResource(
+    loadWechatChannelStatus,
+    "微信通道状态读取失败",
+  );
 
   return (
     <FeaturePage
       id="integration-channels-status-page"
       title="接入通道状态"
-      description="只负责查看个人微信、企业微信和小程序的真实接入状态与配置检查。"
+      description="只负责汇总个人微信、企业微信和小程序的真实状态，并导航到各自操作页。"
       icon={<Network size={20} />}
       busy={busy}
       actions={(
@@ -46,7 +31,7 @@ export function ChannelsStatusPage() {
           type="button"
           data-action-id="integrations.channels.refresh"
           aria-label="刷新接入通道状态"
-          onClick={() => void refreshStatus()}
+          onClick={() => void refresh()}
           disabled={busy}
         >
           <RefreshCw size={15} aria-hidden="true" /> 刷新状态
@@ -62,45 +47,36 @@ export function ChannelsStatusPage() {
             <Summary label="通道总数" value={status.summary.total} />
             <Summary label="已就绪" value={status.summary.ready} />
             <Summary label="待配置" value={status.summary.needsConfig} />
-            <Summary label="待发送任务" value={status.summary.pendingSendTasks} />
+            <Summary label="异常或降级" value={status.summary.degraded} />
           </dl>
-          <div className={styles.channelGrid} aria-label="微信通道列表">
+          <div className={styles.channelList} aria-label="微信通道列表">
             {status.channels.map((channel) => (
-              <article className={styles.channelCard} key={channel.key}>
-                <header className={styles.cardHeader}>
-                  <div><h3>{channel.label}</h3><p>{channel.description}</p></div>
+              <article className={styles.channelRow} key={channel.key}>
+                <div className={styles.channelIdentity}>
+                  <div><h2>{channel.label}</h2><p>{channel.description}</p></div>
                   <span className={`${styles.statusBadge} ${channel.ready ? styles.statusReady : ""}`}>
                     {channel.ready ? "已就绪" : channelStatusLabel(channel.status)}
                   </span>
-                </header>
-                <ul className={styles.checkList} aria-label={`${channel.label}配置检查`}>
-                  {channel.checks.map((check) => (
-                    <li className={styles.checkItem} key={check.key}>
-                      <span>
-                        <strong>{check.label}</strong>
-                        {check.detail ? <small>{check.detail}</small> : null}
-                      </span>
-                      <b className={check.passed ? styles.passedText : styles.failedText}>
-                        {check.passed ? <CheckCircle2 size={15} aria-label="通过" /> : <XCircle size={15} aria-label="未通过" />}
-                      </b>
-                    </li>
-                  ))}
-                </ul>
+                </div>
+                <ChannelDestination channelKey={channel.key} label={channel.label} />
               </article>
             ))}
           </div>
-          {status.visualFlow.length ? (
-            <section className={styles.panel} aria-labelledby="integration-flow-title">
-              <h2 id="integration-flow-title">客服接入链路</h2>
-              <p>链路只展示服务端返回的真实步骤，不在前端推断通道能力。</p>
-              <ol className={styles.flowList}>
-                {status.visualFlow.map((step) => <li key={step.key}><strong>{step.label}</strong><small>{step.detail}</small></li>)}
-              </ol>
-            </section>
-          ) : null}
         </>
       ) : null}
     </FeaturePage>
+  );
+}
+
+function ChannelDestination({ channelKey, label }: { channelKey: WechatChannelKey; label: string }) {
+  const destination = CHANNEL_DESTINATIONS[channelKey];
+  if (!destination) {
+    return <span className={styles.unavailableAction}>尚无独立操作页</span>;
+  }
+  return (
+    <Link className={styles.actionLink} href={destination.href} aria-label={`${destination.label}：${label}`}>
+      {destination.label}
+    </Link>
   );
 }
 

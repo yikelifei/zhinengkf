@@ -1,5 +1,10 @@
-import { redirect } from "next/navigation";
+import { WechatWorkConfigurationPage } from "../../../../features/integrations/wechat-work-configuration-page";
+import { FeatureRouteShell } from "../../../feature-route-shell";
 
 export default function Page() {
-  redirect("/integrations/wechat-work");
+  return (
+    <FeatureRouteShell routeId="wechatWorkSettings">
+      <WechatWorkConfigurationPage />
+    </FeatureRouteShell>
+  );
 }
