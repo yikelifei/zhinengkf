@@ -1,5 +1,8 @@
 export { TrainingImportPage } from "./training-import-page";
+export { TrainingImportHistoryPage } from "./training-import-history-page";
 export { TrainingReviewPage } from "./training-review-page";
+export { TrainingReviewQueuePage } from "./training-review-queue-page";
+export { TrainingReviewDetailPage } from "./training-review-detail-page";
 export { TrainingSkillsPage } from "./training-skills-page";
 export type { TrainingImportPageProps } from "./training-import-page";
 export type { TrainingReviewPageProps } from "./training-review-page";

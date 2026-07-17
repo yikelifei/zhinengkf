@@ -1,12 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   getAgents,
-  getChatImports,
   importChatTranscript,
   type Agent,
-  type ChatImport,
   type IdentityFilters,
 } from "../../lib/api";
 import styles from "../governance-pages.module.css";
@@ -16,7 +15,6 @@ export type TrainingImportPageProps = {
 };
 
 export function TrainingImportPage({ identityFilters }: TrainingImportPageProps) {
-  const [imports, setImports] = useState<ChatImport[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [name, setName] = useState("");
   const [source, setSource] = useState("");
@@ -38,19 +36,16 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
-    const [importResult, agentResult] = await Promise.allSettled([
-      getChatImports(stableIdentityFilters),
-      getAgents(stableIdentityFilters),
-    ]);
+    const agentResult = await Promise.resolve(getAgents(stableIdentityFilters))
+      .then((value) => ({ status: "fulfilled" as const, value }))
+      .catch((reason: unknown) => ({ status: "rejected" as const, reason }));
     if (sequence !== refreshSequence.current) return;
-    const nextImports = importResult.status === "fulfilled" ? importResult.value : [];
     const nextAgents = agentResult.status === "fulfilled" ? agentResult.value : [];
-    setImports(nextImports);
     setAgents(nextAgents);
-    if (importResult.status === "rejected" || agentResult.status === "rejected") {
-      setError("训练导入页未取得完整服务端数据，请检查服务后重试。");
-    } else if (!nextImports.length || !nextAgents.length) {
-      setError("导入记录或智能体接口返回空结果；当前客户端无法区分真实空数据与读取失败，状态保持未确认。");
+    if (agentResult.status === "rejected") {
+      setError("训练导入页未取得智能体选项，请检查服务后重试。");
+    } else if (!nextAgents.length) {
+      setError("智能体接口返回空结果；当前客户端无法区分真实空目录与读取失败，状态保持未确认。");
     }
     if (sequence === refreshSequence.current) setBusy(false);
   }, [stableIdentityFilters]);
@@ -90,7 +85,6 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
         agentId: agentId || undefined,
         text,
       });
-      setImports((current) => [result, ...current.filter((item) => item.id !== result.id)]);
       setTranscript("");
       setPendingConfirmation(false);
       setNotice(`导入完成：解析 ${result.messageCount} 条消息，生成 ${result.pairCount} 组训练对话。`);
@@ -109,16 +103,10 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
           <h1 id="training-import-title">聊天记录导入</h1>
           <p className={styles.description}>这里只负责提交真实聊天记录并查看导入结果；样本复核在独立页面完成。</p>
         </div>
-        <button
-          type="button"
-          className={styles.button}
-          data-action-id="training-import-refresh"
-          aria-label="刷新训练导入记录"
-          onClick={() => void refresh()}
-          disabled={busy}
-        >
-          刷新记录
-        </button>
+        <div className={styles.buttonRow}>
+          <Link className={styles.button} href="/training/import/history">查看导入历史</Link>
+          <button type="button" className={styles.button} data-action-id="training-import-refresh" aria-label="刷新智能体选项" onClick={() => void refresh()} disabled={busy}>刷新选项</button>
+        </div>
       </header>
 
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
@@ -201,38 +189,6 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
           </div>
         </section>
       ) : null}
-
-      <section className={styles.panel} aria-labelledby="training-import-history-title">
-        <header className={styles.panelHeader}><div><h2 id="training-import-history-title">导入历史</h2><p>展示服务端已有导入及解析警告。</p></div></header>
-        <div className={styles.panelBody}>
-          {imports.length ? (
-            <div className={styles.recordList}>
-              {imports.map((item) => (
-                <article className={styles.record} key={item.id}>
-                  <div className={styles.recordHeader}>
-                    <div><h3>{item.name || item.source || item.id}</h3><p>{item.source || "未标注来源"} · {item.channel || "未标注渠道"}</p></div>
-                    <span className={`${styles.badge} ${item.warnings.length ? styles.toneWarning : styles.toneOk}`}>{item.warnings.length ? `${item.warnings.length} 条警告` : "解析完成"}</span>
-                  </div>
-                  <div className={styles.recordMeta}><span>{item.messageCount} 条消息</span><span>{item.pairCount} 组对话</span><span>{formatDateTime(item.createdAt)}</span></div>
-                  {item.sceneSummary ? (
-                    <div className={styles.recordMeta}>
-                      <span>可用 {item.sceneSummary.readyCount ?? 0}</span>
-                      <span>待复核 {item.sceneSummary.reviewCount ?? 0}</span>
-                      <span>场景不确定 {item.sceneSummary.sceneUncertainCount}</span>
-                    </div>
-                  ) : null}
-                  {item.warnings.length ? <ul className={styles.helpText}>{item.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-                </article>
-              ))}
-            </div>
-          ) : <div className={styles.empty}>服务端没有返回导入记录。</div>}
-        </div>
-      </section>
     </section>
   );
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
 }

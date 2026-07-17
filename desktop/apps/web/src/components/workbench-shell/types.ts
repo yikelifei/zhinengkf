@@ -86,6 +86,6 @@ export type WorkbenchShellProps = {
   children: ReactNode;
   navigationGroups?: WorkbenchNavigationGroup[];
   sidebar?: Omit<AppSidebarProps, "activeSectionId" | "onSelect" | "groups">;
-  topbar: AppTopbarProps;
+  topbar?: AppTopbarProps;
   contentLabel?: string;
 };

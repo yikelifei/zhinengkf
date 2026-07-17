@@ -61,10 +61,16 @@ const featureByRouteId = {
   salesOrderDetail: "SalesOrdersPage",
   notifications: "NotificationsPage",
   automationRuns: "AutomationRunsPage",
+  automationControl: "AutomationControlPage",
+  automationHistory: "AutomationHistoryPage",
   automationIssues: "AutomationIssuesPage",
   agents: "AgentsPage",
+  agentDetail: "AgentDetailPage",
   trainingImport: "TrainingImportPage",
-  trainingReview: "TrainingReviewPage",
+  trainingImportHistory: "TrainingImportHistoryPage",
+  trainingReview: "TrainingReviewQueuePage",
+  trainingReviewBatch: "TrainingReviewPage",
+  trainingReviewDetail: "TrainingReviewDetailPage",
   trainingSkills: "TrainingSkillsPage",
   settingsAccess: "AccessPage",
 };
@@ -119,6 +125,8 @@ test("entity and query selections reach the owning feature instead of only chang
   assert.match(read("apps/web/src/app/design/jobs/[id]/page.tsx"), /DesignJobsPage key=\{id\} initialJobId=\{id\}/);
   assert.match(read("apps/web/src/app/sales/quotes/[id]/page.tsx"), /SalesQuotesPage key=\{id\} initialQuoteId=\{id\}/);
   assert.match(read("apps/web/src/app/sales/orders/[id]/page.tsx"), /SalesOrdersPage key=\{id\} initialOrderId=\{id\}/);
+  assert.match(read("apps/web/src/app/agents/[id]/page.tsx"), /AgentDetailPage key=\{id\} agentId=\{id\}/);
+  assert.match(read("apps/web/src/app/training/review/[id]/page.tsx"), /TrainingReviewDetailPage key=\{id\} sampleId=\{id\}/);
   assert.match(read("apps/web/src/app/send/queue/page.tsx"), /SendQueuePage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
   assert.match(read("apps/web/src/app/send/blocked/page.tsx"), /SendBlockedPage key=\{initialTaskId \|\| "index"\} initialTaskId=\{initialTaskId\}/);
   assert.match(read("apps/web/src/app/integrations/personal-wechat/instances/page.tsx"), /initialAccountId=\{initialAccountId\}/);

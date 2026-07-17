@@ -5,17 +5,21 @@ import {
   batchReviewTrainingSamples,
   getTrainingSamples,
   identityExpectation,
-  reviewTrainingSample,
   type IdentityFilters,
   type TrainingSample,
   type TrainingSampleQualityApiFilter,
 } from "../../lib/api";
 import styles from "../governance-pages.module.css";
-
-type SampleReviewStatus = "ready" | "review" | "rejected";
+import {
+  formatTrainingScore,
+  isReadyEligible,
+  sampleBlocked,
+  sampleNeedsReview,
+  sampleStatusLabel,
+  type SampleReviewStatus,
+} from "./training-review-model";
 
 type PendingSampleReview = {
-  mode: "single" | "batch";
   ids: string[];
   status: SampleReviewStatus;
 };
@@ -84,7 +88,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
     });
   };
 
-  const requestReview = (targets: TrainingSample[], status: SampleReviewStatus, mode: PendingSampleReview["mode"]) => {
+  const requestReview = (targets: TrainingSample[], status: SampleReviewStatus) => {
     setError("");
     setNotice("");
     if (!targets.length) {
@@ -99,7 +103,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       setError("所选样本包含 needsReview、blocked 或其他未明确安全的数据，不能标记为可用。");
       return;
     }
-    setPendingConfirmation({ mode, ids: targets.map((sample) => sample.id), status });
+    setPendingConfirmation({ ids: targets.map((sample) => sample.id), status });
   };
 
   const confirmReview = useCallback(async () => {
@@ -120,27 +124,17 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
     setError("");
     setNotice("");
     try {
-      if (pendingConfirmation.mode === "single") {
-        const sample = targets[0];
-        await reviewTrainingSample(sample.id, {
-          status: pendingConfirmation.status,
-          reviewer: operator,
-          note: note.trim(),
-          ...identityExpectation(sample),
-        });
-      } else {
-        const expectedBySampleId = Object.fromEntries(
-          targets.map((sample) => [sample.id, identityExpectation(sample)]),
-        );
-        await batchReviewTrainingSamples({
-          sampleIds: targets.map((sample) => sample.id),
-          status: pendingConfirmation.status,
-          reviewer: operator,
-          note: note.trim(),
-          expectedBySampleId,
-        });
-      }
-      setNotice(`已提交 ${targets.length} 条样本的“${statusLabel(pendingConfirmation.status)}”复核结果。`);
+      const expectedBySampleId = Object.fromEntries(
+        targets.map((sample) => [sample.id, identityExpectation(sample)]),
+      );
+      await batchReviewTrainingSamples({
+        sampleIds: targets.map((sample) => sample.id),
+        status: pendingConfirmation.status,
+        reviewer: operator,
+        note: note.trim(),
+        expectedBySampleId,
+      });
+      setNotice(`已提交 ${targets.length} 条样本的“${sampleStatusLabel(pendingConfirmation.status)}”复核结果。`);
       setPendingConfirmation(null);
       setNote("");
       setSelectedIds(new Set());
@@ -157,8 +151,8 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       <header className={styles.pageHeader}>
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Training</span>
-          <h1 id="training-review-title">训练样本复核</h1>
-          <p className={styles.description}>逐条核对客户问题、理想回复、场景与质量风险，再通过显式确认写入复核结果。</p>
+          <h1 id="training-review-title">批量复核</h1>
+          <p className={styles.description}>只处理人工勾选的多条样本；逐条判断请进入样本详情页。</p>
         </div>
         <button
           type="button"
@@ -206,7 +200,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 className={styles.primaryButton}
                 data-action-id="training-review-batch-ready-request"
                 aria-label="请求将所选样本标记为可用"
-                onClick={() => requestReview(selectedSamples, "ready", "batch")}
+                onClick={() => requestReview(selectedSamples, "ready")}
                 disabled={busy || !operator || !note.trim() || !selectedSamples.length || selectedSamples.some((sample) => !isReadyEligible(sample))}
               >
                 所选标记可用
@@ -216,7 +210,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 className={styles.button}
                 data-action-id="training-review-batch-review-request"
                 aria-label="请求将所选样本保持待复核"
-                onClick={() => requestReview(selectedSamples, "review", "batch")}
+                onClick={() => requestReview(selectedSamples, "review")}
                 disabled={busy || !operator || !note.trim() || !selectedSamples.length}
               >
                 所选保持复核
@@ -226,7 +220,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 className={styles.dangerButton}
                 data-action-id="training-review-batch-reject-request"
                 aria-label="请求驳回所选训练样本"
-                onClick={() => requestReview(selectedSamples, "rejected", "batch")}
+                onClick={() => requestReview(selectedSamples, "rejected")}
                 disabled={busy || !operator || !note.trim() || !selectedSamples.length}
               >
                 驳回所选
@@ -265,44 +259,12 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                       <div><strong>理想回复</strong><p>{sample.idealReply || "内容为空"}</p></div>
                     </div>
                     <div className={styles.recordMeta}>
-                      <span>评分 {formatScore(sample.score)}</span>
+                      <span>评分 {formatTrainingScore(sample.score)}</span>
                       <span>状态 {sample.status}</span>
                       <span>{sample.quality?.label || "质量未知"}</span>
                       <span>{sample.sceneCheck?.status || "场景检查未知"}</span>
                     </div>
                     <p className={styles.helpText}>{sample.quality?.reason || sample.sceneCheck?.reason || "服务端未提供质量判断依据。"}</p>
-                    <div className={styles.buttonRow}>
-                      <button
-                        type="button"
-                        className={styles.primaryButton}
-                        data-action-id={`training-sample-ready-${sample.id}`}
-                        aria-label={`请求将训练样本${sample.id}标记为可用`}
-                        onClick={() => requestReview([sample], "ready", "single")}
-                        disabled={busy || !operator || !note.trim() || !isReadyEligible(sample)}
-                      >
-                        标记可用
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.button}
-                        data-action-id={`training-sample-review-${sample.id}`}
-                        aria-label={`请求将训练样本${sample.id}保持待复核`}
-                        onClick={() => requestReview([sample], "review", "single")}
-                        disabled={busy || !operator || !note.trim()}
-                      >
-                        保持复核
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.dangerButton}
-                        data-action-id={`training-sample-reject-${sample.id}`}
-                        aria-label={`请求驳回训练样本${sample.id}`}
-                        onClick={() => requestReview([sample], "rejected", "single")}
-                        disabled={busy || !operator || !note.trim()}
-                      >
-                        驳回
-                      </button>
-                    </div>
                   </article>
                 );
               })}
@@ -314,7 +276,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       {pendingConfirmation ? (
           <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="training-review-confirm-title">
           <strong id="training-review-confirm-title">确认提交样本复核</strong>
-          <p>将由“{operator}”把 {pendingConfirmation.ids.length} 条样本标记为“{statusLabel(pendingConfirmation.status)}”。服务端会按每条样本身份期望进行校验。</p>
+          <p>将由“{operator}”把 {pendingConfirmation.ids.length} 条样本标记为“{sampleStatusLabel(pendingConfirmation.status)}”。服务端会按每条样本身份期望进行校验。</p>
           <p>说明：{note.trim()}</p>
           <div className={styles.buttonRow}>
             <button
@@ -342,28 +304,4 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       ) : null}
     </section>
   );
-}
-
-function sampleNeedsReview(sample: TrainingSample) {
-  const needsReview = sample.sceneCheck?.needsReview === true || sample.quality?.attention?.needsAttention === true;
-  return needsReview || sample.quality?.level === "review" || sample.quality?.level === "risk" || !sample.quality;
-}
-
-function sampleBlocked(sample: TrainingSample) {
-  return sample.quality?.level === "blocked" || sample.quality?.trainable === false;
-}
-
-function isReadyEligible(sample: TrainingSample) {
-  return sample.quality?.level === "safe" && sample.quality.trainable === true && !sampleNeedsReview(sample) && !sampleBlocked(sample);
-}
-
-function statusLabel(status: SampleReviewStatus) {
-  if (status === "ready") return "可用";
-  if (status === "review") return "待复核";
-  return "已驳回";
-}
-
-function formatScore(value: number) {
-  if (!Number.isFinite(value)) return "未知";
-  return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(1);
 }

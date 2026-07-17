@@ -29,7 +29,6 @@ export function ModularWorkbenchShell({ route, children }: ModularWorkbenchShell
         collapsed: sidebarCollapsed,
         onCollapsedChange: setSidebarCollapsed,
       }}
-      topbar={{ title: route.title }}
       contentLabel={`${route.title}页面`}
     >
       <div className={styles.routeContent} data-route-id={route.id}>

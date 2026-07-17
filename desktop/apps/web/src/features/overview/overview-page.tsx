@@ -221,12 +221,7 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       : "danger";
 
   return (
-    <section className={styles.page} aria-labelledby="overview-page-title">
-      <div className={styles.heading}>
-        <span className={styles.eyebrow}>Overview</span>
-        <h1 id="overview-page-title">运营总览</h1>
-        <p className={styles.description}>总览只汇总真实状态并导航到责任页面，不在这里直接执行审核、发送或自动化写操作。</p>
-      </div>
+    <section className={styles.page} aria-labelledby="operations-overview-title">
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
       {notice ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">{notice}</div> : null}
       <OperationsOverview

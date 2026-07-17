@@ -11,8 +11,6 @@ import {
   MessageCircle,
   Radio,
   RefreshCw,
-  Send,
-  Zap,
 } from "lucide-react";
 import styles from "./operations-overview.module.css";
 
@@ -106,7 +104,7 @@ export function OperationsOverview({
     >
       <header className={styles.pageHeader}>
         <div className={styles.headingLine}>
-          <h2 id="operations-overview-title">运营总览</h2>
+          <h1 id="operations-overview-title">运营总览</h1>
           <span>实时运营态势</span>
         </div>
         <div className={styles.headerActions}>
@@ -229,27 +227,7 @@ export function OperationsOverview({
               <small>{automationDetail}</small>
             </div>
             <button type="button" onClick={onRunAutomation} disabled={busy}>
-              运行一轮<ChevronRight size={14} aria-hidden="true" />
-            </button>
-          </div>
-        </article>
-
-        <article className={`${styles.panel} ${styles.quickPanel}`} aria-labelledby="overview-quick-title">
-          <div className={styles.panelHeader}>
-            <div>
-              <Zap size={16} aria-hidden="true" />
-              <h3 id="overview-quick-title">快捷操作</h3>
-            </div>
-          </div>
-          <div className={styles.quickActions}>
-            <button type="button" onClick={onOpenConversations}>
-              <MessageCircle size={16} aria-hidden="true" /><span>进入会话管理</span><ChevronRight size={14} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={onOpenChannels}>
-              <Radio size={16} aria-hidden="true" /><span>管理微信接入</span><ChevronRight size={14} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={onRunAutomation} disabled={busy}>
-              <Send size={16} aria-hidden="true" /><span>运行自动化</span><ChevronRight size={14} aria-hidden="true" />
+              查看自动化<ChevronRight size={14} aria-hidden="true" />
             </button>
           </div>
         </article>
@@ -308,12 +286,6 @@ export function OperationsOverview({
           </div>
         )}
       </article>
-
-      <footer className={styles.footerActions} aria-label="移动端快捷操作">
-        <button type="button" onClick={onOpenConversations}><MessageCircle size={15} aria-hidden="true" />处理消息</button>
-        <button type="button" onClick={onOpenChannels}><Radio size={15} aria-hidden="true" />微信接入</button>
-        <button type="button" onClick={onRunAutomation} disabled={busy}><Send size={15} aria-hidden="true" />运行自动化</button>
-      </footer>
     </section>
   );
 }

@@ -18,8 +18,9 @@
   z-index: 6;
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--wk-color-border);
   padding: 8px 16px;
   background: color-mix(in srgb, var(--wk-color-surface) 96%, transparent);
@@ -27,6 +28,7 @@
 
 .moduleNavigation a {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 34px;
   align-items: center;
   justify-content: center;
@@ -55,7 +57,6 @@
 .featureContent {
   min-width: 0;
   min-height: 0;
-  padding: 16px;
 }
 
 @media (max-width: 760px) {
@@ -63,16 +64,18 @@
     position: static;
     gap: 4px;
     padding: 8px 10px;
+    scrollbar-width: none;
+  }
+
+  .moduleNavigation::-webkit-scrollbar {
+    display: none;
   }
 
   .moduleNavigation a {
     min-height: 44px;
-    flex: 1 1 132px;
+    flex: 0 0 auto;
     padding: 0 8px;
     text-align: center;
   }
 
-  .featureContent {
-    padding: 12px 10px 16px;
-  }
 }

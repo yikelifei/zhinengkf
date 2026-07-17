@@ -155,8 +155,6 @@ test("root only converts legacy hashes while module routes own browser navigatio
 
 test("legacy aliases redirect to the accepted production URLs", () => {
   assert.match(read("apps/web/src/app/reviews/handoff/page.tsx"), /redirect\("\/reviews\/inbox"\)/);
-  assert.match(read("apps/web/src/app/automation/control/page.tsx"), /redirect\("\/automation\/runs"\)/);
-  assert.match(read("apps/web/src/app/automation/history/page.tsx"), /redirect\("\/automation\/runs"\)/);
   for (const [sourceRoute, destination] of redirectedManifestRoutes) {
     const relativePage = `apps/web/src/app${sourceRoute}/page.tsx`;
     assert.match(read(relativePage), new RegExp(`redirect\\("${destination.replaceAll("/", "\\/")}\"\\)`));

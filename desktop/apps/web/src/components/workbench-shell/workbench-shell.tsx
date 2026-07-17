@@ -22,7 +22,7 @@ export function WorkbenchShell({
         groups={navigationGroups}
       />
       <div className={styles.mainColumn}>
-        <AppTopbar {...topbar} />
+        {topbar ? <AppTopbar {...topbar} /> : null}
         <main className={styles.shellContent} aria-label={contentLabel}>
           {children}
         </main>

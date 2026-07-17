@@ -1,6 +1,6 @@
 import type { WorkspaceSectionId } from "../components/workbench-shell/types";
 
-export type TrainingWorkbenchView = "import" | "review" | "skills";
+export type TrainingWorkbenchView = "import" | "history" | "review" | "batch" | "skills";
 export type WechatWorkbenchView = "channels" | "flow" | "config";
 export type PersonalWechatRouteView = "instances" | "control" | "inbound" | "safety";
 export type AccountWorkbenchView = "wechat" | "access";
@@ -9,7 +9,7 @@ export type ReviewWorkbenchView = "handoff" | "design" | "quote" | "order" | "lo
 export type SalesWorkbenchView = "overview" | "actions" | "quotes" | "orders";
 export type SkuWorkbenchView = "catalog" | "repair" | "editor";
 export type CatalogWorkbenchView = "import" | "preview" | "audit" | "bundle";
-export type AutomationWorkbenchView = "automation" | "issues" | "history";
+export type AutomationWorkbenchView = "automation" | "control" | "issues" | "history";
 
 export type WorkbenchRouteSelection = {
   training?: TrainingWorkbenchView;
@@ -435,11 +435,31 @@ export const WORKBENCH_ROUTES = {
     id: "automationRuns",
     href: "/automation/runs",
     sectionId: "notice-center",
-    title: "自动化运行",
-    responsibility: "控制自动化启停并查看当前阶段与最近一次真实运行。",
-    primaryAction: "运行一轮",
+    title: "自动化状态",
+    responsibility: "只查看自动化当前状态、就绪结论和责任页面入口。",
+    primaryAction: "刷新状态",
     legacyHash: "notice-center:automation",
     initialView: { automation: "automation" },
+  },
+  automationControl: {
+    id: "automationControl",
+    href: "/automation/control",
+    sectionId: "notice-center",
+    title: "运行控制",
+    responsibility: "经人工确认后启动、停止或执行一次自动化。",
+    primaryAction: "执行一次",
+    legacyHash: "notice-center:automation:control",
+    initialView: { automation: "control" },
+  },
+  automationHistory: {
+    id: "automationHistory",
+    href: "/automation/history",
+    sectionId: "notice-center",
+    title: "运行历史",
+    responsibility: "查看服务端真实运行结果、耗时、推进、阻断和错误。",
+    primaryAction: "刷新记录",
+    legacyHash: "notice-center:automation:history",
+    initialView: { automation: "history" },
   },
   automationIssues: {
     id: "automationIssues",
@@ -456,9 +476,18 @@ export const WORKBENCH_ROUTES = {
     href: "/agents",
     sectionId: "agent-center",
     title: "智能客服 Agent",
-    responsibility: "管理 Agent 身份、角色、技能和启停状态。",
-    primaryAction: "保存 Agent",
+    responsibility: "定位智能体并查看启用状态、场景和训练摘要。",
+    primaryAction: "打开智能体详情",
     legacyHash: "agent-center",
+  },
+  agentDetail: {
+    id: "agentDetail",
+    href: "/agents/[id]",
+    sectionId: "agent-center",
+    title: "智能体详情",
+    responsibility: "查看一个智能体的职责、训练覆盖和技能状态。",
+    primaryAction: "返回智能体目录",
+    legacyHash: "agent-center:detail",
   },
   trainingImport: {
     id: "trainingImport",
@@ -470,14 +499,44 @@ export const WORKBENCH_ROUTES = {
     legacyHash: "training-center:import",
     initialView: { training: "import" },
   },
+  trainingImportHistory: {
+    id: "trainingImportHistory",
+    href: "/training/import/history",
+    sectionId: "training-center",
+    title: "导入历史",
+    responsibility: "查看聊天记录导入结果、解析数量和警告。",
+    primaryAction: "刷新记录",
+    legacyHash: "training-center:import:history",
+    initialView: { training: "history" },
+  },
   trainingReview: {
     id: "trainingReview",
     href: "/training/review",
     sectionId: "training-center",
-    title: "样本审核",
-    responsibility: "审核训练样本质量、身份和安全标记。",
-    primaryAction: "保存审核",
+    title: "样本队列",
+    responsibility: "筛选并定位需要复核的训练样本。",
+    primaryAction: "打开样本详情",
     legacyHash: "training-center:review",
+    initialView: { training: "review" },
+  },
+  trainingReviewBatch: {
+    id: "trainingReviewBatch",
+    href: "/training/review/batch",
+    sectionId: "training-center",
+    title: "批量复核",
+    responsibility: "仅对人工勾选的多条样本提交同一复核结论。",
+    primaryAction: "提交所选复核",
+    legacyHash: "training-center:review:batch",
+    initialView: { training: "batch" },
+  },
+  trainingReviewDetail: {
+    id: "trainingReviewDetail",
+    href: "/training/review/[id]",
+    sectionId: "training-center",
+    title: "单条样本复核",
+    responsibility: "核对并复核地址指定的一条训练样本。",
+    primaryAction: "提交当前样本复核",
+    legacyHash: "training-center:review:detail",
     initialView: { training: "review" },
   },
   trainingSkills: {
@@ -580,12 +639,15 @@ const CATALOG_ROUTE_BY_VIEW: Record<CatalogWorkbenchView, WorkbenchRouteId> = {
 };
 const AUTOMATION_ROUTE_BY_VIEW: Record<AutomationWorkbenchView, WorkbenchRouteId> = {
   automation: "automationRuns",
+  control: "automationControl",
   issues: "automationIssues",
-  history: "automationRuns",
+  history: "automationHistory",
 };
 const TRAINING_ROUTE_BY_VIEW: Record<TrainingWorkbenchView, WorkbenchRouteId> = {
   import: "trainingImport",
+  history: "trainingImportHistory",
   review: "trainingReview",
+  batch: "trainingReviewBatch",
   skills: "trainingSkills",
 };
 const ACCOUNT_ROUTE_BY_VIEW: Record<AccountWorkbenchView, WorkbenchRouteId> = {
