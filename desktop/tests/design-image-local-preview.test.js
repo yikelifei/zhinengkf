@@ -130,7 +130,7 @@ test("design image local preview rejects a local file outside the bound design j
 
 test("web image tiles prefer the scoped design-image local preview endpoint", () => {
   const apiSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "lib", "api.ts"), "utf8");
-  const pageSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "features", "design", "design-jobs-page.tsx"), "utf8");
+  const pageSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "features", "design", "design-job-detail-page.tsx"), "utf8");
   const modelSource = fs.readFileSync(path.join(__dirname, "..", "apps", "web", "src", "features", "design", "model.ts"), "utf8");
   const controllerSource = fs.readFileSync(path.join(__dirname, "..", "apps", "api", "src", "design-jobs", "design-jobs.controller.ts"), "utf8");
 

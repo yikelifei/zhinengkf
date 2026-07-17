@@ -43,16 +43,27 @@ const productionRoutes = [
   "/design/assets",
   "/design/jobs",
   "/design/jobs/[id]",
+  "/design/jobs/[id]/submit",
+  "/design/jobs/[id]/status",
   "/catalog/products",
+  "/catalog/products/[skuCode]",
   "/catalog/repair",
+  "/catalog/repair/[skuCode]",
+  "/catalog/editor",
   "/catalog/import",
   "/catalog/audit",
   "/catalog/bundles",
   "/sales/actions",
   "/sales/quotes",
   "/sales/quotes/[id]",
+  "/sales/quotes/[id]/send",
+  "/sales/quotes/[id]/create-order",
   "/sales/orders",
   "/sales/orders/[id]",
+  "/sales/orders/[id]/edit",
+  "/sales/orders/[id]/messages/confirmation",
+  "/sales/orders/[id]/messages/production",
+  "/sales/orders/[id]/messages/delivery",
   "/automation/runs",
   "/automation/issues",
   "/notifications",
@@ -72,7 +83,6 @@ const productionRoutes = [
 ];
 
 const redirectedManifestRoutes = new Map([
-  ["/catalog/editor", "/catalog/products"],
   ["/catalog/preview", "/catalog/import"],
   ["/sales/overview", "/sales/quotes"],
   ["/settings/accounts", "/integrations/personal-wechat/instances"],
@@ -123,8 +133,12 @@ test("pathname resolver handles exact routes, entity detail routes, trailing sla
   assert.equal(routes.getWorkbenchRouteFromPathname("/send/queue/task-42").id, "sendQueueTask");
   assert.equal(routes.getWorkbenchRouteFromPathname("/reviews/design/job-42").id, "reviewDesignDecision");
   assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42").id, "designJobDetail");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42/submit").id, "designJobSubmit");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/catalog/products/SKU-42").id, "catalogProductDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/quotes/quote-42").id, "salesQuoteDetail");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/sales/quotes/quote-42/send").id, "salesQuoteSend");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/orders/order-42").id, "salesOrderDetail");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/sales/orders/order-42/messages/delivery").id, "salesOrderDelivery");
   assert.equal(routes.getWorkbenchRouteFromPathname("/unknown/module"), null);
   assert.equal(routes.getWorkbenchRouteFromLegacyHash("#%E0%A4%A").id, "overview");
 });

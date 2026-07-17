@@ -180,6 +180,24 @@
   color: var(--wk-color-text-secondary);
 }
 
+.actionChoice > svg {
+  color: var(--wk-color-brand);
+}
+
+.backLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-top: var(--wk-space-3);
+  color: var(--wk-color-brand);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  text-decoration: underline;
+}
+
 .card {
   min-width: 0;
   border: 1px solid var(--wk-color-border);
@@ -250,7 +268,7 @@
   list-style: none;
 }
 
-.selectionList li button {
+.selectionList li :is(button, a) {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -263,15 +281,16 @@
   color: var(--wk-color-text);
   background: var(--wk-color-surface);
   text-align: left;
+  text-decoration: none;
 }
 
-.selectionList li button:hover,
-.selectionList li button.selected {
+.selectionList li :is(button, a):hover,
+.selectionList li :is(button, a).selected {
   border-color: var(--wk-color-brand);
   background: var(--wk-color-brand-soft);
 }
 
-.selectionList li button > span:first-child {
+.selectionList li :is(button, a) > span:first-child {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -437,6 +456,11 @@
 
   .card {
     padding: var(--wk-space-3);
+  }
+
+  .backLink {
+    width: 100%;
+    justify-content: center;
   }
 
   .formGrid .fullField {

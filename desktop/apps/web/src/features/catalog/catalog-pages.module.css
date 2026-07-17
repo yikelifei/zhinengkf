@@ -12,9 +12,13 @@
 .pageHeader h1 { margin: 2px 0 4px; font-size: var(--wk-font-size-title); line-height: 1.25; }
 .pageHeader p { margin: 0; color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-md); }
 .headerActions, .formActions, .confirmationActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wk-space-2); }
-.pageHeader button, .formActions button, .confirmationActions button, .segmented button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--wk-color-border-strong); border-radius: var(--wk-radius-md); padding: 8px 12px; color: var(--wk-color-text-secondary); background: var(--wk-color-surface); }
-.pageHeader button:hover:not(:disabled), .formActions button:hover:not(:disabled) { border-color: var(--wk-color-brand); color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
+.pageHeader button, .pageHeader .buttonLink, .formActions button, .formActions .primaryLink, .confirmationActions button, .segmented button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--wk-color-border-strong); border-radius: var(--wk-radius-md); padding: 8px 12px; color: var(--wk-color-text-secondary); background: var(--wk-color-surface); text-decoration: none; }
+.pageHeader button:hover:not(:disabled), .pageHeader .buttonLink:hover, .formActions button:hover:not(:disabled), .formActions .primaryLink:hover { border-color: var(--wk-color-brand); color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
 .formActions .primaryButton, .confirmationActions .primaryButton, .page .primaryButton { border-color: var(--wk-color-brand); color: #fff; background: var(--wk-color-brand); }
+.formActions .primaryLink { border-color: var(--wk-color-brand); color: #fff; background: var(--wk-color-brand); }
+
+.backLink { display: inline-flex; min-height: 44px; align-items: center; margin-top: var(--wk-space-3); color: var(--wk-color-brand); font-weight: 650; text-decoration: none; }
+.backLink:hover { text-decoration: underline; }
 
 .notice { display: flex; min-width: 0; align-items: flex-start; gap: var(--wk-space-2); border: 1px solid; border-radius: var(--wk-radius-md); padding: 9px 11px; font-size: var(--wk-font-size-sm); }
 .notice span { min-width: 0; overflow-wrap: anywhere; }
@@ -41,9 +45,9 @@
 .formActions { justify-content: flex-end; margin-top: var(--wk-space-4); }
 
 .selectionList, .issueList, .previewList { display: grid; gap: var(--wk-space-2); margin: 0; padding: 0; list-style: none; }
-.selectionList li button { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: var(--wk-space-3); border: 1px solid var(--wk-color-border); border-radius: var(--wk-radius-md); padding: 10px; color: var(--wk-color-text); background: var(--wk-color-surface); text-align: left; }
-.selectionList li button:hover, .selectionList li button.selected { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
-.selectionList li button > span:first-child { display: grid; min-width: 0; gap: 2px; }
+.selectionList li :is(button, a) { display: flex; width: 100%; min-width: 0; min-height: 44px; align-items: center; justify-content: space-between; gap: var(--wk-space-3); border: 1px solid var(--wk-color-border); border-radius: var(--wk-radius-md); padding: 10px; color: var(--wk-color-text); background: var(--wk-color-surface); text-align: left; text-decoration: none; }
+.selectionList li :is(button, a):hover, .selectionList li :is(button, a).selected { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
+.selectionList li :is(button, a) > span:first-child { display: grid; min-width: 0; gap: 2px; }
 .selectionList small { color: var(--wk-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .selectionList em { color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); font-style: normal; }
 .selectionList em.blocking { color: var(--wk-color-danger); font-weight: 700; }
@@ -84,6 +88,7 @@
   .pageHeader, .twoColumn, .masterDetail, .confirmation, .formGrid, .factGrid, .metricGrid, .issueList li, .previewList li { display: grid; grid-template-columns: 1fr; }
   .pageHeader h1 { font-size: var(--wk-font-size-xl); }
   .headerActions, .headerActions button, .formActions, .formActions button, .confirmationActions, .confirmationActions button { width: 100%; }
+  .headerActions .buttonLink, .formActions .primaryLink, .backLink { width: 100%; justify-content: center; }
   .headerActions, .formActions, .confirmationActions { display: grid; grid-template-columns: 1fr; }
   .card { padding: var(--wk-space-3); }
   .formGrid .fullField { grid-column: auto; }

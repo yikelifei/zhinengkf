@@ -18,7 +18,7 @@ function featureSource(domain) {
 
 test("design exports one page per operator goal", () => {
   const index = read("apps/web/src/features/design/index.ts");
-  for (const page of ["DesignSettingsPage", "DesignActivationPage", "DesignAccountPage", "DesignAssetsPage", "DesignJobsPage"]) {
+  for (const page of ["DesignSettingsPage", "DesignActivationPage", "DesignAccountPage", "DesignAssetsPage", "DesignJobsPage", "DesignJobDetailPage", "DesignJobSubmitPage", "DesignJobStatusPage"]) {
     assert.match(index, new RegExp(`\\b${page}\\b`));
   }
 
@@ -51,6 +51,9 @@ test("catalog exports separate product, repair, import, audit, and bundle pages"
     "CatalogImportPage",
     "CatalogAuditPage",
     "CatalogBundlesPage",
+    "CatalogProductDetailPage",
+    "CatalogProductEditorPage",
+    "CatalogRepairDetailPage",
   ]) {
     assert.match(index, new RegExp(`\\b${page}\\b`));
   }
@@ -76,8 +79,19 @@ test("sales keeps quote and order controllers independent", () => {
   assert.match(index, /SalesQuotesPage/);
   assert.match(index, /SalesOrdersPage/);
 
-  const quotes = read("apps/web/src/features/sales/sales-quotes-page.tsx");
-  const orders = read("apps/web/src/features/sales/sales-orders-page.tsx");
+  const quotes = [
+    read("apps/web/src/features/sales/sales-quotes-page.tsx"),
+    read("apps/web/src/features/sales/sales-quote-detail-page.tsx"),
+    read("apps/web/src/features/sales/sales-quote-action-page.tsx"),
+    read("apps/web/src/features/sales/use-sales-records.ts"),
+  ].join("\n");
+  const orders = [
+    read("apps/web/src/features/sales/sales-orders-page.tsx"),
+    read("apps/web/src/features/sales/sales-order-detail-page.tsx"),
+    read("apps/web/src/features/sales/sales-order-edit-page.tsx"),
+    read("apps/web/src/features/sales/sales-order-message-page.tsx"),
+    read("apps/web/src/features/sales/use-sales-records.ts"),
+  ].join("\n");
   assert.match(quotes, /getQuotes/);
   assert.match(quotes, /queueQuoteSend/);
   assert.match(quotes, /createOrderDraftFromQuote/);
@@ -86,7 +100,8 @@ test("sales keeps quote and order controllers independent", () => {
   assert.match(orders, /queueOrderConfirmation/);
   assert.match(orders, /queueOrderFollowup/);
   assert.match(`${quotes}\n${orders}`, /identityExpectation/);
-  assert.match(`${quotes}\n${orders}`, /pendingConfirmation/);
+  assert.match(`${quotes}\n${orders}`, /SalesConfirmation/);
+  assert.match(`${quotes}\n${orders}`, /confirming/);
   assert.doesNotMatch(`${quotes}\n${orders}`, /createDemo|mock|示例客户/i);
 });
 
@@ -97,7 +112,7 @@ test("feature pages expose stable actions and remain bounded modules", () => {
     assert.ok(pages.length > 0, `${domain} must expose page modules`);
     for (const name of pages) {
       const source = read(`apps/web/src/features/${domain}/${name}`);
-      assert.ok(source.split(/\r?\n/).length < 850, `${domain}/${name} is becoming another giant page`);
+      assert.ok(source.split(/\r?\n/).length < 250, `${domain}/${name} is becoming another giant page`);
       for (const button of source.matchAll(/<button\b[\s\S]*?>/g)) {
         assert.match(button[0], /data-action-id=/, `${domain}/${name} button needs a stable action id`);
       }

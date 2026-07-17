@@ -119,6 +119,42 @@
 .masterDetail { grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr); }
 .stack { display: grid; min-width: 0; gap: var(--wk-space-3); }
 
+.actionChoiceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--wk-space-3);
+  margin-top: var(--wk-space-4);
+}
+
+.actionChoice {
+  display: grid;
+  min-width: 0;
+  min-height: 124px;
+  align-content: center;
+  gap: 7px;
+  border: 1px solid var(--wk-color-border);
+  border-radius: var(--wk-radius-lg);
+  padding: var(--wk-space-4);
+  color: var(--wk-color-text);
+  background: var(--wk-color-surface);
+  text-decoration: none;
+}
+
+.actionChoice:hover { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
+.actionChoice > svg, .actionChoice strong { color: var(--wk-color-brand); }
+.actionChoice span { color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-sm); }
+
+.backLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-top: var(--wk-space-3);
+  color: var(--wk-color-brand);
+  font-weight: 650;
+  text-decoration: none;
+}
+.backLink:hover { text-decoration: underline; }
+
 .card {
   min-width: 0;
   border: 1px solid var(--wk-color-border);
@@ -244,7 +280,7 @@
 .muted { color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-sm); }
 
 .selectionList { margin-top: 0; }
-.selectionList li button {
+.selectionList li :is(button, a) {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -257,11 +293,13 @@
   color: var(--wk-color-text);
   background: var(--wk-color-surface);
   text-align: left;
+  text-decoration: none;
 }
-.selectionList li button span { display: grid; min-width: 0; gap: 2px; }
-.selectionList li button small { color: var(--wk-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.selectionList li button em { flex: 0 0 auto; color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); font-style: normal; }
-.selectionList li button.selected { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
+.selectionList li :is(button, a) span { display: grid; min-width: 0; gap: 2px; }
+.selectionList li :is(button, a) small { color: var(--wk-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selectionList li :is(button, a) em { flex: 0 0 auto; color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); font-style: normal; }
+.selectionList li :is(button, a):hover,
+.selectionList li :is(button, a).selected { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
 
 .statusPill {
   border-radius: var(--wk-radius-sm);
@@ -311,6 +349,7 @@
     display: grid;
     grid-template-columns: 1fr;
   }
+  .actionChoiceGrid { grid-template-columns: 1fr; }
   .pageHeader h1 { font-size: var(--wk-font-size-xl); }
   .headerActions,
   .headerActions button,
@@ -325,6 +364,7 @@
   .formActions,
   .confirmationActions { display: grid; grid-template-columns: 1fr; }
   .card { padding: var(--wk-space-3); }
+  .backLink { width: 100%; justify-content: center; }
   .checkList li,
   .recordList li,
   .preflight li { display: grid; grid-template-columns: 1fr; }

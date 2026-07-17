@@ -16,7 +16,6 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const routes = require("../apps/web/src/app/route-manifest");
 
 const redirectedRouteIds = new Set([
-  "catalogEditor",
   "catalogPreview",
   "salesOverview",
   "settingsAccounts",
@@ -51,7 +50,9 @@ const featureByRouteId = {
   designAccount: "DesignAccountPage",
   designAssets: "DesignAssetsPage",
   designJobs: "DesignJobsPage",
-  designJobDetail: "DesignJobsPage",
+  designJobDetail: "DesignJobDetailPage",
+  designJobSubmit: "DesignJobSubmitPage",
+  designJobStatus: "DesignJobStatusPage",
   reviewInbox: "ReviewInboxPage",
   reviewDesign: "ReviewDesignQueuePage",
   reviewDesignDecision: "ReviewDesignPage",
@@ -61,15 +62,24 @@ const featureByRouteId = {
   reviewOrderDecision: "ReviewOrdersPage",
   reviewLogs: "ReviewLogsPage",
   catalogProducts: "CatalogProductsPage",
+  catalogProductDetail: "CatalogProductDetailPage",
   catalogRepair: "CatalogRepairPage",
+  catalogRepairDetail: "CatalogRepairDetailPage",
+  catalogEditor: "CatalogProductEditorPage",
   catalogImport: "CatalogImportPage",
   catalogAudit: "CatalogAuditPage",
   catalogBundles: "CatalogBundlesPage",
   salesActions: "SalesActionsPage",
   salesQuotes: "SalesQuotesPage",
-  salesQuoteDetail: "SalesQuotesPage",
+  salesQuoteDetail: "SalesQuoteDetailPage",
+  salesQuoteSend: "SalesQuoteActionPage",
+  salesQuoteCreateOrder: "SalesQuoteActionPage",
   salesOrders: "SalesOrdersPage",
-  salesOrderDetail: "SalesOrdersPage",
+  salesOrderDetail: "SalesOrderDetailPage",
+  salesOrderEdit: "SalesOrderEditPage",
+  salesOrderConfirmation: "SalesOrderMessagePage",
+  salesOrderProduction: "SalesOrderMessagePage",
+  salesOrderDelivery: "SalesOrderMessagePage",
   notifications: "NotificationsPage",
   automationRuns: "AutomationRunsPage",
   automationControl: "AutomationControlPage",
@@ -135,9 +145,11 @@ test("entity and query selections reach the owning feature instead of only chang
   assert.match(read("apps/web/src/app/conversations/[id]/page.tsx"), /ConversationDetailPage key=\{id\} conversationId=\{id\}/);
   assert.match(read("apps/web/src/app/conversations/[id]/context/page.tsx"), /ConversationContextPage key=\{id\} conversationId=\{id\}/);
   assert.match(read("apps/web/src/app/conversations/[id]/assignment/page.tsx"), /ConversationAssignmentPage key=\{id\} conversationId=\{id\}/);
-  assert.match(read("apps/web/src/app/design/jobs/[id]/page.tsx"), /DesignJobsPage key=\{id\} initialJobId=\{id\}/);
-  assert.match(read("apps/web/src/app/sales/quotes/[id]/page.tsx"), /SalesQuotesPage key=\{id\} initialQuoteId=\{id\}/);
-  assert.match(read("apps/web/src/app/sales/orders/[id]/page.tsx"), /SalesOrdersPage key=\{id\} initialOrderId=\{id\}/);
+  assert.match(read("apps/web/src/app/design/jobs/[id]/page.tsx"), /DesignJobDetailPage key=\{id\} jobId=\{id\}/);
+  assert.match(read("apps/web/src/app/sales/quotes/[id]/page.tsx"), /SalesQuoteDetailPage key=\{id\} quoteId=\{id\}/);
+  assert.match(read("apps/web/src/app/sales/orders/[id]/page.tsx"), /SalesOrderDetailPage key=\{id\} orderId=\{id\}/);
+  assert.match(read("apps/web/src/app/catalog/products/[skuCode]/page.tsx"), /CatalogProductDetailPage key=\{skuCode\} skuCode=\{skuCode\}/);
+  assert.match(read("apps/web/src/app/catalog/repair/[skuCode]/page.tsx"), /CatalogRepairDetailPage key=\{skuCode\} skuCode=\{skuCode\}/);
   assert.match(read("apps/web/src/app/agents/[id]/page.tsx"), /AgentDetailPage key=\{id\} agentId=\{id\}/);
   assert.match(read("apps/web/src/app/training/review/[id]/page.tsx"), /TrainingReviewDetailPage key=\{id\} sampleId=\{id\}/);
   assert.match(read("apps/web/src/app/send/queue/[id]/page.tsx"), /SendQueuePage key=\{id\} initialTaskId=\{id\}/);
