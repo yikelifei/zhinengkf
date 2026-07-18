@@ -38,7 +38,6 @@ test("workbench interaction surface is callback-only and has no hidden data or s
     "onPageChange",
     "onRefresh",
     "onTransfer",
-    "onSuggestionTabChange",
     "onUseSuggestion",
     "onRegenerateSuggestion",
     "onReplyChange",
@@ -130,7 +129,7 @@ test("workbench exposes mature inbox, incident, AI suggestion and customer conte
   assert.match(files.inbox, /inbox\.channelOptions/);
   assert.match(files.inbox, /inbox\.statusOptions/);
   assert.match(files.thread, /thread\.incidents\.map/);
-  assert.match(files.thread, /thread\.suggestion\.tabs\.map/);
+  assert.match(files.thread, /thread\.suggestion\.tabs\.find/);
   assert.match(files.thread, /thread\.safetyChecks\.map/);
   assert.match(files.context, /context\.tags\.map/);
   assert.match(files.context, /context\.assignment/);

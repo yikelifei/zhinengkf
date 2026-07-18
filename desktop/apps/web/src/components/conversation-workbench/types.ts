@@ -251,7 +251,6 @@ export type ConversationWorkbenchActions = {
   onOpenIncidentPolicy?: (incidentId: string) => void;
   onRetryIncident?: (incidentId: string) => void;
   onDismissNotice?: (noticeId: string) => void;
-  onSuggestionTabChange: (value: string) => void;
   onUseSuggestion: () => void;
   onRegenerateSuggestion: () => void;
   onReplyChange: (value: string) => void;

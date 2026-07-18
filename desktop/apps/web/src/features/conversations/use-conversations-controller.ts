@@ -490,7 +490,6 @@ export function useConversationsController(
       else void refreshWorkspace();
     },
     onTransfer: openAssignment,
-    onSuggestionTabChange: () => undefined,
     onUseSuggestion: useSuggestion,
     onRegenerateSuggestion: () => void generateSuggestion(),
     onReplyChange: setReplyText,
