@@ -2,7 +2,7 @@ import type { WorkspaceSectionId } from "../components/workbench-shell/types";
 
 export type TrainingWorkbenchView = "import" | "history" | "review" | "batch" | "skills";
 export type WechatWorkbenchView = "channels" | "flow" | "config";
-export type PersonalWechatRouteView = "instances" | "control" | "inbound" | "safety";
+export type PersonalWechatRouteView = "instances" | "control" | "voice" | "inbound" | "safety";
 export type AccountWorkbenchView = "wechat" | "access";
 export type SendWorkbenchView = "queue" | "blocked" | "diagnostics";
 export type ReviewWorkbenchView = "handoff" | "design" | "quote" | "order" | "logs";
@@ -235,6 +235,16 @@ export const WORKBENCH_ROUTES = {
     primaryAction: "刷新账号状态",
     legacyHash: "personal-wechat-center:control",
     initialView: { personalWechat: "control" },
+  },
+  personalWechatVoiceAssist: {
+    id: "personalWechatVoiceAssist",
+    href: "/integrations/personal-wechat/voice-assist",
+    sectionId: "personal-wechat-center",
+    title: "个人微信语音辅助",
+    responsibility: "处理授权录音、人工校对、中性合成音试听与人工审批。",
+    primaryAction: "完成人工语音审批",
+    legacyHash: "personal-wechat-center:voice",
+    initialView: { personalWechat: "voice" },
   },
   personalWechatInbound: {
     id: "personalWechatInbound",
@@ -834,6 +844,7 @@ const WECHAT_ROUTE_BY_VIEW: Record<WechatWorkbenchView, WorkbenchRouteId> = {
 const PERSONAL_WECHAT_ROUTE_BY_VIEW: Record<PersonalWechatRouteView, WorkbenchRouteId> = {
   instances: "personalWechatInstances",
   control: "personalWechatControl",
+  voice: "personalWechatVoiceAssist",
   inbound: "personalWechatInbound",
   safety: "personalWechatSafety",
 };

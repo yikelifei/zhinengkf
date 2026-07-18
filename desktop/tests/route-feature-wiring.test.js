@@ -42,6 +42,7 @@ const featureByRouteId = {
   personalWechatInstances: "PersonalWechatInstancesPage",
   personalWechatInstanceConfig: "PersonalWechatInstanceConfigPage",
   personalWechatControl: "PersonalWechatControlPage",
+  personalWechatVoiceAssist: "PersonalWechatVoiceAssistPage",
   personalWechatInbound: "WindowEvidencePage",
   personalWechatInboundDrill: "PersonalWechatInboundDrillPage",
   personalWechatSafety: "PersonalWechatSafetyPage",

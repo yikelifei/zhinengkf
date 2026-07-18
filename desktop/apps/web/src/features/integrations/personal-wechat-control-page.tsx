@@ -74,6 +74,7 @@ export function PersonalWechatControlPage() {
         </section>
       ) : null}
       <nav className={styles.operationLinks} aria-label="个人微信独立操作页">
+        <Link href="/integrations/personal-wechat/voice-assist">语音辅助</Link>
         <Link href="/send/queue">发送队列</Link>
         <Link href="/integrations/personal-wechat/window-inbound">窗口证据</Link>
         <Link href="/integrations/personal-wechat/inbound-drill">入站演练</Link>

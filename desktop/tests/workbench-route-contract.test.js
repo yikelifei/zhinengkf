@@ -36,6 +36,7 @@ const productionRoutes = [
   "/integrations/personal-wechat/instances",
   "/integrations/personal-wechat/instances/configure",
   "/integrations/personal-wechat/control",
+  "/integrations/personal-wechat/voice-assist",
   "/integrations/personal-wechat/window-inbound",
   "/integrations/personal-wechat/inbound-drill",
   "/integrations/personal-wechat/safety",
@@ -150,6 +151,30 @@ test("sales, automation, and notifications own separate navigation sections", ()
   assert.deepEqual(moduleRouteIds("notice-center"), ["notifications"]);
 });
 
+test("personal WeChat operations stay on independent module pages", () => {
+  const moduleRouteIds = routes.WORKBENCH_ROUTE_LIST
+    .filter((route) => (
+      route.sectionId === "personal-wechat-center"
+      && !route.href.includes("[")
+      && route.showInModuleNav !== false
+    ))
+    .map((route) => route.id);
+
+  assert.deepEqual(moduleRouteIds, [
+    "personalWechatInstances",
+    "personalWechatControl",
+    "personalWechatVoiceAssist",
+    "personalWechatInbound",
+    "personalWechatInboundDrill",
+    "personalWechatSafety",
+  ]);
+  assert.equal(routes.WORKBENCH_ROUTES.personalWechatVoiceAssist.initialView.personalWechat, "voice");
+  assert.equal(
+    routes.getWorkbenchRouteFromLegacyHash("#personal-wechat-center:voice").id,
+    "personalWechatVoiceAssist",
+  );
+});
+
 test("legacy quote and automation hashes keep resolving after section separation", () => {
   assert.equal(routes.getWorkbenchRouteFromLegacyHash("#quote-center").id, "salesOverview");
   assert.equal(routes.getWorkbenchRouteFromLegacyHash("#quote-center:quotes").id, "salesQuotes");
@@ -162,6 +187,10 @@ test("legacy quote and automation hashes keep resolving after section separation
 test("pathname resolver handles exact routes, entity detail routes, trailing slashes, and unknown paths", () => {
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview").id, "overview");
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview/").id, "overview");
+  assert.equal(
+    routes.getWorkbenchRouteFromPathname("/integrations/personal-wechat/voice-assist").id,
+    "personalWechatVoiceAssist",
+  );
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id?from=notification").id, "conversationDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/context").id, "conversationContext");
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/assignment").id, "conversationAssignment");
