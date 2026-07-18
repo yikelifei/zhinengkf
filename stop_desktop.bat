@@ -18,7 +18,7 @@ if not exist "%DESKTOP_DIR%\package.json" (
 )
 
 cd /d "%DESKTOP_DIR%"
-set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
 set "FORCE_PORTS_SWEEP=1"
 call npm.cmd run ports:stop
 if errorlevel 1 (

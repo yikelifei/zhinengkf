@@ -3,7 +3,7 @@
 const { app, BrowserWindow, Notification, ipcMain, nativeTheme } = require("electron");
 const path = require("node:path");
 
-const WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100";
+const WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
 const APP_TITLE = "智能体客服工作台";
 
 let mainWindow = null;
@@ -24,7 +24,7 @@ function startupErrorHtml(message) {
   <h2>${APP_TITLE} 启动失败</h2>
   <p>无法打开 ${escapeHtml(WEB_URL)}</p>
   <pre style="white-space:pre-wrap;background:#fff;border:1px solid #d2d2d7;border-radius:8px;padding:16px">${escapeHtml(message)}</pre>
-  <p>请先运行 C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd，并保持服务窗口打开，再重新打开桌面端。</p>
+  <p>请先运行项目目录中的 repair-stable-desktop.cmd，并保持服务窗口打开，再重新打开桌面端。</p>
 </body>
 </html>`,
   )}`;

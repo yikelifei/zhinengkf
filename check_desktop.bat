@@ -25,7 +25,7 @@ if errorlevel 1 (
 )
 
 cd /d "%DESKTOP_DIR%"
-set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
 call npm.cmd run stable:doctor
 echo.
 pause

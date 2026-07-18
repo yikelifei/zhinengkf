@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Root = "D:\zhinengkefu\desktop"
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RuntimeDir = if ($env:DESKTOP_RUNTIME_DIR) { $env:DESKTOP_RUNTIME_DIR } else { Join-Path $Root ".runtime-stable" }
 $LogDir = Join-Path $RuntimeDir "logs"
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
@@ -12,6 +12,8 @@ $KeepAliveErrLog = Join-Path $LogDir "stable-runtime-launcher.err.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 $SupervisorMode = $env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"
+$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"
+$env:STABLE_PERSONAL_WECHAT_SEND = "0"
 
 function Write-StableStartLog($Message) {
   try {
@@ -68,7 +70,7 @@ function Test-StableHttp($Url) {
 }
 
 function Test-StableRuntimeHealthy {
-  $webReady = Test-StableHttp "http://127.0.0.1:3100/"
+  $webReady = Test-StableHttp "http://127.0.0.1:3100/overview"
   $apiReady = Test-StableHttp "http://127.0.0.1:3200/api/health"
   $designReady = Test-StableHttp "http://127.0.0.1:3700/v1/health"
   return $webReady -and $apiReady -and $designReady
@@ -114,8 +116,8 @@ function Start-StableSupervisorProcess {
   $command = @"
 `$env:DESKTOP_RUNTIME_DIR = "$RuntimeDir"
 `$env:STABLE_KEEPALIVE_SUPERVISOR = "1"
-`$env:STABLE_WECHAT_BRIDGE_MODE = "$(if ($env:STABLE_WECHAT_BRIDGE_MODE) { $env:STABLE_WECHAT_BRIDGE_MODE } else { "dispatch" })"
-`$env:STABLE_PERSONAL_WECHAT_SEND = "$(if ($env:STABLE_PERSONAL_WECHAT_SEND) { $env:STABLE_PERSONAL_WECHAT_SEND } else { "0" })"
+`$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"
+`$env:STABLE_PERSONAL_WECHAT_SEND = "0"
 & "$PSCommandPath"
 "@
   return Start-Process `
