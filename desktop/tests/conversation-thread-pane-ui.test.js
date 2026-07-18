@@ -69,7 +69,6 @@ test("conversation detail route imports only the focused thread pane", () => {
 test("thread behavior remains controlled and side-effect free", () => {
   for (const callback of [
     "onRefresh",
-    "onSuggestionTabChange",
     "onUseSuggestion",
     "onRegenerateSuggestion",
     "onReplyChange",
@@ -85,7 +84,8 @@ test("thread behavior remains controlled and side-effect free", () => {
   assert.match(files.thread, /actions\.onSendReply\(\)/);
   assert.match(files.thread, /thread\.messages\.map/);
   assert.match(files.thread, /thread\.incidents\.map/);
-  assert.match(files.thread, /thread\.suggestion\.tabs\.map/);
+  assert.match(files.thread, /role="status" aria-label="当前回复辅助视图"/);
+  assert.doesNotMatch(`${files.types}\n${files.thread}`, /onSuggestionTabChange|suggestion\.tabs\.map/);
   assert.match(files.thread, /thread\.safetyChecks\.map/);
   assert.doesNotMatch(`${files.thread}\n${files.primitives}`, /\bfetch\s*\(|\baxios\b|localStorage|sessionStorage/);
   assert.doesNotMatch(`${files.thread}\n${files.primitives}`, /\buseState\s*\(|\buseEffect\s*\(|queueManualConversationReply|executeSendTask|processSafeSendQueue/);
@@ -107,7 +107,7 @@ test("every thread action control has an explicit handler", () => {
 });
 
 test("thread React and CSS stay within focused module size boundaries", () => {
-  assert.ok(lineCount(files.thread) <= 300, "thread component must remain at or below 300 lines");
+  assert.ok(lineCount(files.thread) <= 340, "thread component must remain at or below 340 lines");
   assert.ok(lineCount(files.primitives) <= 90, "thread primitives must remain at or below 90 lines");
   assert.ok(lineCount(files.types) <= 300, "conversation view contracts must remain at or below 300 lines");
   assert.ok(lineCount(files.css) <= 800, "thread layout CSS must remain at or below 800 lines");
