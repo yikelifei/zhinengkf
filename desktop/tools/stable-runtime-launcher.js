@@ -3,6 +3,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const {
+  ensureInternalApiToken,
+  internalApiServiceEnv,
+  withoutInternalApiToken,
+} = require("./internal-api-session");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
@@ -17,6 +22,7 @@ const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const webNextDir = path.join(root, "apps", "web", ".next");
 const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
+const internalApiToken = ensureInternalApiToken();
 
 const ports = {
   web: Number(process.env.WEB_PORT || 3100),
@@ -34,8 +40,20 @@ const specs = [
   }),
   processServiceSpec("wechat-bridge-worker", [path.join(root, "tools", "wechat-bridge-worker.js"), "--watch"], {
     BRIDGE_API_BASE: `http://127.0.0.1:${ports.api}/api`,
-    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "noop",
+    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "dispatch",
     BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
+  }),
+  processServiceSpec("personal-wechat-bridge", [path.join(root, "tools", "personal-wechat-bridge.js"), "--watch"], {
+    PERSONAL_WECHAT_API_BASE: `http://127.0.0.1:${ports.api}/api`,
+    WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
+    WECHAT_BRIDGE_INBOX_DIR: path.join(runtimeDir, "wechat-inbox"),
+    WECHAT_BRIDGE_LOCK_DIR: path.join(runtimeDir, "wechat-bridge-locks"),
+    PERSONAL_WECHAT_BLOCKED_DIR: path.join(runtimeDir, "personal-wechat-blocked"),
+    PERSONAL_WECHAT_BRIDGE_STATUS_FILE: path.join(runtimeDir, "personal-wechat-bridge-status.json"),
+    PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-accounts.json"),
+    PERSONAL_WECHAT_DRIVER: process.env.PERSONAL_WECHAT_DRIVER || "wechatauto_rpa",
+    PERSONAL_WECHAT_RPA_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-rpa.json"),
+    PERSONAL_WECHAT_SEND: process.env.STABLE_PERSONAL_WECHAT_SEND || process.env.PERSONAL_WECHAT_SEND || "0",
   }),
 ];
 
@@ -156,7 +174,7 @@ function startService(spec) {
     append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
     const child = spawn(spec.command, spec.args, {
       cwd: root,
-      env: { ...serviceEnv(spec.port || ports.api), ...(spec.env || {}) },
+      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
       detached: process.platform === "win32",
       stdio: ["ignore", out, err],
       windowsHide: true,
@@ -183,6 +201,7 @@ function startWindowsWrappedPortService(spec) {
     append(spec.name, `starting wrapper ${wrapperPath}`);
     const child = spawn("cmd.exe", ["/d", "/c", wrapperPath], {
       cwd: root,
+      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -201,7 +220,7 @@ function startWindowsWrappedPortService(spec) {
 }
 
 function buildWindowsPortServiceWrapper(spec) {
-  const env = { ...serviceEnv(spec.port), ...(spec.env || {}) };
+  const env = withoutInternalApiToken({ ...serviceEnv(spec.port, spec.name), ...(spec.env || {}) });
   return [
     "@echo off",
     "setlocal",
@@ -265,8 +284,8 @@ function webStandaloneBuildReady() {
   ].every((filePath) => fs.existsSync(filePath));
 }
 
-function serviceEnv(port) {
-  return {
+function serviceEnv(port, serviceName) {
+  return internalApiServiceEnv({
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
@@ -290,7 +309,7 @@ function serviceEnv(port) {
     WECHAT_BRIDGE_WORKER_STATUS_FILE: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
     WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
-  };
+  }, serviceName, internalApiToken);
 }
 
 function acquireSingleInstanceLock() {

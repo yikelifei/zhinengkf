@@ -138,6 +138,7 @@ model Message {
   text           String?
   attachments    Json?
   externalId     String?
+  readAt          DateTime?
   createdAt      DateTime         @default(now())
   conversation   Conversation     @relation(fields: [conversationId], references: [id])
 

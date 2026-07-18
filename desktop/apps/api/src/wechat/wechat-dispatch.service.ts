@@ -55,6 +55,14 @@ type IdentityFilter = {
 
 type WechatChannelKey = "personal_wechat" | "work_wechat" | "mini_program";
 
+function isManualReplySendTask(task: any) {
+  return Boolean(
+    task?.payload?.source === "manual_reply" &&
+      task?.payload?.manualReply === true &&
+      task?.guardSnapshot?.manualReply === true,
+  );
+}
+
 @Injectable()
 export class WechatDispatchService {
   constructor(
@@ -168,18 +176,23 @@ export class WechatDispatchService {
   async enqueueTextMessage(params: {
     wechatAccountId: string;
     conversationId: string;
+    customerId?: string;
     designJobId?: string;
     quoteDraftId?: string;
     text: string;
     reason?: string;
     automation?: Prisma.InputJsonObject;
+    manualReply?: boolean;
+    queuedBy?: string;
   }) {
-    await this.assertConversationCanQueueSend(params.conversationId);
+    await this.assertConversationCanQueueSend(params.conversationId, { allowManualReply: params.manualReply === true });
     const binding = await this.assertSendTaskBinding({
       wechatAccountId: params.wechatAccountId,
       conversationId: params.conversationId,
+      customerId: params.customerId,
       designJobId: params.designJobId,
       quoteDraftId: params.quoteDraftId,
+      manualReply: params.manualReply,
     });
     const guardSnapshot: Prisma.InputJsonObject = {
       requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
@@ -187,8 +200,22 @@ export class WechatDispatchService {
       binding,
       ...(params.reason ? { reason: params.reason } : {}),
       ...(params.automation ? { automation: params.automation } : {}),
+      ...(params.manualReply ? { manualReply: true, queuedBy: params.queuedBy || "manual_operator" } : {}),
     };
-    const payload = { kind: "text", text: params.text };
+    const payload = {
+      kind: "text",
+      text: params.text,
+      ...(params.manualReply
+        ? {
+            source: "manual_reply",
+            manualReply: true,
+            queuedBy: params.queuedBy || "manual_operator",
+            wechatAccountId: params.wechatAccountId,
+            conversationId: params.conversationId,
+            customerId: params.customerId || binding.customerId,
+          }
+        : {}),
+    };
 
     if (appConfig.useLocalStore) {
       return this.createLocalSendTask({
@@ -746,6 +773,52 @@ export class WechatDispatchService {
     return this.localStore.listConversations(wechatAccountId);
   }
 
+  async listConversationTimeline(filter: IdentityFilter & { limit?: number }) {
+    if (!appConfig.useLocalStore) throw new Error("conversation timeline prisma mode is not implemented yet");
+    const conversation = await this.requireCompleteConversationIdentity(filter, "message history");
+    try {
+      return this.localStore.listConversationTimeline({
+        wechatAccountId: conversation.wechatAccountId,
+        conversationId: conversation.id,
+        customerId: conversation.customerId,
+        limit: filter.limit,
+      });
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "message history identity invalid");
+    }
+  }
+
+  async markConversationMessagesRead(filter: IdentityFilter) {
+    if (!appConfig.useLocalStore) throw new Error("conversation read state prisma mode is not implemented yet");
+    const conversation = await this.requireCompleteConversationIdentity(filter, "mark messages read");
+    try {
+      return this.localStore.markConversationMessagesRead({
+        wechatAccountId: conversation.wechatAccountId,
+        conversationId: conversation.id,
+        customerId: conversation.customerId,
+      });
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "mark messages read identity invalid");
+    }
+  }
+
+  async enqueueManualReply(payload: IdentityFilter & { text?: string; operator?: string }) {
+    const conversation = await this.requireCompleteConversationIdentity(payload, "manual reply");
+    const text = String(payload.text || "").trim();
+    if (!text) throw new BadRequestException("manual reply text is required");
+    if (text.length > 2000) throw new BadRequestException("manual reply text exceeds 2000 characters");
+    const task = await this.enqueueTextMessage({
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      text,
+      reason: "manual-agent-reply",
+      manualReply: true,
+      queuedBy: String(payload.operator || "人工客服").trim() || "人工客服",
+    });
+    return { queued: true, task };
+  }
+
   async setConversationManualLock(
     id: string,
     payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload = {},
@@ -856,6 +929,7 @@ export class WechatDispatchService {
     externalId?: string;
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
+    createdAt?: string;
   }) {
     if (!appConfig.useLocalStore) throw new Error("inbound message prisma mode is not implemented yet");
     const conversation = this.resolveInboundConversation(payload);
@@ -863,12 +937,13 @@ export class WechatDispatchService {
     this.validateInboundAssetBinding(conversation, assetIds);
     const message = this.localStore.createMessage({
       conversationId: conversation.id,
-      customerId: conversation.customerId,
+      customerId: payload.customerId || conversation.customerId,
       wechatAccountId: payload.wechatAccountId,
       direction: "inbound",
       text: payload.text || "",
       externalId: payload.externalId,
       attachments: payload.attachments || [],
+      createdAt: payload.createdAt,
       metadata: { assetIds },
     });
     const clarificationContext = this.findLatestSceneClarification(conversation.id);
@@ -1291,10 +1366,18 @@ export class WechatDispatchService {
       ),
     ];
     const workChecks = [
-      channelCheck("normalized_inbound", "标准入站管线", true, "复用 /api/wechat/inbound/messages"),
+      channelCheck("normalized_inbound", "标准入站管线", true, "回调 + kf/sync_msg 归一化后复用现有入站管线"),
       channelCheck("corp_id", "企业 ID", Boolean(appConfig.wechatWorkCorpId), maskSecret(appConfig.wechatWorkCorpId)),
-      channelCheck("agent_id", "应用 Agent", Boolean(appConfig.wechatWorkAgentId), maskSecret(appConfig.wechatWorkAgentId)),
+      channelCheck("customer_service_secret", "微信客服 Secret", Boolean(appConfig.wechatWorkSecret), appConfig.wechatWorkSecret ? "已配置" : "未配置"),
       channelCheck("callback_token", "回调 Token", Boolean(appConfig.wechatWorkToken), appConfig.wechatWorkToken ? "已配置" : "未配置"),
+      channelCheck("encoding_aes_key", "回调 EncodingAESKey", Boolean(appConfig.wechatWorkEncodingAesKey), appConfig.wechatWorkEncodingAesKey ? "已配置" : "未配置"),
+      channelCheck("public_https", "公网 HTTPS 回调", /^https:\/\//i.test(appConfig.customerServicePublicBaseUrl), appConfig.customerServicePublicBaseUrl),
+      channelCheck(
+        "official_send_adapter",
+        "企业微信官方发送适配器",
+        configuredSendAdapter?.name === "wechat_work_kf" && Boolean(configuredSendAdapter?.realSend),
+        configuredSendAdapter?.label || "未配置",
+      ),
     ];
     const miniChecks = [
       channelCheck("normalized_inbound", "标准入站管线", true, "复用 /api/wechat/inbound/messages"),
@@ -1339,11 +1422,12 @@ export class WechatDispatchService {
         kind: "official_account_callback",
         status: workStatus,
         ready: checksReady(workChecks),
-        description: "企业微信侧完成应用凭证和回调后，消息进入同一套智能客服入站管线。",
+        description: "企业微信官方客服通过回调和 sync_msg 入站，并在既有安全队列通过后调用 kf/send_msg。",
         entrypoints: {
-          inbound: "/api/wechat/inbound/messages",
-          testInbound: "/api/wechat/channels/work_wechat/inbound/test",
-          safeSend: "/api/wechat/send-tasks",
+          inbound: "/api/wechat-work/callback",
+          status: "/api/wechat-work/status",
+          sync: "/api/wechat-work/kf/sync",
+          safeSend: "/api/wechat/send-tasks/process-safe-queue",
         },
         metrics: {
           conversations: conversations.filter((conversation: any) => conversation.channel === "work_wechat").length,
@@ -2006,7 +2090,7 @@ export class WechatDispatchService {
         continue;
       }
 
-      if (freshTask.conversation?.manualLocked) {
+      if (freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask)) {
         const advice = buildSendQueueSkipAdvice({
           reason: "conversation_manual_locked",
           task: freshTask,
@@ -2059,9 +2143,21 @@ export class WechatDispatchService {
         continue;
       }
 
+      const nextRetryAt = String(freshTask.guardSnapshot?.wechatWorkNextRetryAt || "");
+      if (nextRetryAt && Date.parse(nextRetryAt) > Date.now()) {
+        skipped.push({
+          sendTaskId: freshTask.id,
+          wechatAccountId: freshTask.wechatAccountId,
+          reason: "wechat_work_retry_not_due",
+          nextRetryAt,
+        });
+        continue;
+      }
+
       try {
-        const result = this.executeSend(freshTask.id, { adapter: params.adapter });
+        const result = await this.executeQueuedSend(freshTask.id, { adapter: params.adapter });
         if (result.task.status === "blocked") blocked.push(result);
+        else if (result.task.status === "failed" || result.retryScheduled) failed.push(result);
         else processed.push(result);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown error";
@@ -2141,8 +2237,10 @@ export class WechatDispatchService {
   private async assertSendTaskBinding(params: {
     wechatAccountId: string;
     conversationId: string;
+    customerId?: string | null;
     designJobId?: string | null;
     quoteDraftId?: string | null;
+    manualReply?: boolean;
   }, options: { internal?: boolean } = {}) {
     const context = await this.loadSendTaskBindingContext(params);
     const designJobId = params.designJobId || context.quoteDraft?.designJobId || undefined;
@@ -2150,6 +2248,14 @@ export class WechatDispatchService {
       task: {
         ...params,
         designJobId,
+        payload: params.manualReply
+          ? {
+              source: "manual_reply",
+              manualReply: true,
+              customerId: params.customerId,
+            }
+          : {},
+        guardSnapshot: params.manualReply ? { manualReply: true } : {},
       },
       conversation: context.conversation,
       designJob: context.designJob,
@@ -2187,12 +2293,12 @@ export class WechatDispatchService {
     return { conversation, designJob, quoteDraft };
   }
 
-  private async assertConversationCanQueueSend(conversationId: string) {
+  private async assertConversationCanQueueSend(conversationId: string, options: { allowManualReply?: boolean } = {}) {
     const conversation = appConfig.useLocalStore
       ? this.localStore.listConversations().find((item) => item.id === conversationId)
       : await this.prisma.conversation.findUnique({ where: { id: conversationId } });
     if (!conversation) throw new BadRequestException(`conversation not found: ${conversationId}`);
-    if (conversation.manualLocked) {
+    if (conversation.manualLocked && !options.allowManualReply) {
       throw new BadRequestException("会话已人工接管，解除锁定后才能创建新的发送任务。");
     }
   }
@@ -2313,6 +2419,12 @@ export class WechatDispatchService {
     return this.executeSend(id, { ...payload, adapter: "dry_run" });
   }
 
+  async executeQueuedSend(id: string, params: { adapter?: string } & ExpectedIdentityPayload = {}) {
+    const result = this.executeSend(id, params);
+    if (result.attempt?.adapter !== "wechat_work_kf" || result.task?.status !== "sending") return result;
+    return this.completeWechatWorkKfSend(result);
+  }
+
   executeSend(id: string, params: { adapter?: string } & ExpectedIdentityPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("send execution prisma mode is not implemented yet");
     const adapter = this.sendAdapter.describe(params.adapter);
@@ -2422,7 +2534,9 @@ export class WechatDispatchService {
       });
       return { task: blockedTask, attempt, adapter };
     }
-    const validated = this.validateSendTaskWithCurrentWindow(id, params);
+    const validated = adapter.capabilities.requiresWindowGuard
+      ? this.validateSendTaskWithCurrentWindow(id, params)
+      : this.validateWechatWorkKfSendTask(id);
     const startedAt = new Date().toISOString();
     const guardStatus = validated.guardSnapshot?.status || "blocked";
     const windowSnapshotId = validated.guardSnapshot?.windowSnapshotId || null;
@@ -2485,6 +2599,152 @@ export class WechatDispatchService {
     });
     if (taskStatus === "sent") this.markLinkedQuoteSent(task);
     return { task, attempt, adapter };
+  }
+
+  private validateWechatWorkKfSendTask(id: string) {
+    const task = this.localStore.getSendTask(id);
+    if (!task) throw new Error(`send task not found: ${id}`);
+    const binding = this.localStore.findWechatWorkBindingByIdentity({
+      wechatAccountId: task.wechatAccountId,
+      conversationId: task.conversationId,
+      customerId: task.conversation?.customerId || task.customerId,
+    });
+    const text = String(task.payload?.textBeforeImages || task.payload?.text || "").trim();
+    const imagePaths = Array.isArray(task.payload?.imagePaths) ? task.payload.imagePaths.filter(Boolean) : [];
+    const checks = [
+      { key: "wechatWorkBinding", passed: Boolean(binding), detail: binding ? "mapping found" : "mapping missing" },
+      { key: "wechatWorkCorpId", passed: Boolean(appConfig.wechatWorkCorpId), detail: "WECHAT_WORK_CORP_ID" },
+      { key: "wechatWorkSecret", passed: Boolean(appConfig.wechatWorkSecret), detail: "WECHAT_WORK_SECRET" },
+      { key: "textPayload", passed: Boolean(text), detail: "text or textBeforeImages" },
+      { key: "textLength", passed: Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
+      { key: "textOnly", passed: imagePaths.length === 0, detail: "wechat_work_kf adapter currently supports text only" },
+    ];
+    const failedKeys = checks.filter((item) => !item.passed).map((item) => item.key);
+    if (failedKeys.length) {
+      return this.blockSendTask(id, `enterprise wechat send guard blocked: ${failedKeys.join(", ")}`, {
+        status: "blocked",
+        adapter: "wechat_work_kf",
+        checks,
+        failedKeys,
+        binding: binding || null,
+        validatedAt: new Date().toISOString(),
+      });
+    }
+    return this.localStore.updateSendTask(id, {
+      errorMessage: "",
+      guardSnapshot: {
+        ...(task.guardSnapshot || {}),
+        status: "passed",
+        adapter: "wechat_work_kf",
+        checks,
+        failedKeys: [],
+        wechatWorkBindingId: binding.id,
+        validatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  private async completeWechatWorkKfSend(result: any) {
+    const task = this.localStore.getSendTask(result.task.id);
+    const binding = this.localStore.findWechatWorkBindingByIdentity({
+      wechatAccountId: task?.wechatAccountId,
+      conversationId: task?.conversationId,
+      customerId: task?.conversation?.customerId || task?.customerId,
+    });
+    const attemptNumber = this.localStore.listSendAttempts({ sendTaskId: task.id, limit: 300 })
+      .filter((attempt: any) => attempt.adapter === "wechat_work_kf").length;
+    const wechatWorkMsgId = `kf_${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    try {
+      if (!binding) throw new Error("wechat work mapping disappeared after send guard");
+      const response = await this.sendAdapter.deliverWechatWorkKf(task, binding, wechatWorkMsgId);
+      const completedAt = new Date().toISOString();
+      const attempt = this.localStore.updateSendAttempt(result.attempt.id, {
+        status: "sent",
+        errorMessage: "",
+        completedAt,
+        metadata: {
+          bridgeState: "api_accepted",
+          attemptNumber,
+          wechatWorkBindingId: binding.id,
+          openKfid: binding.openKfid,
+          externalUserId: binding.externalUserId,
+          wechatWorkMsgId,
+          apiMsgId: response.msgid || wechatWorkMsgId,
+          apiResponse: response,
+          finalDeliveryPendingFailureEvent: true,
+        },
+      });
+      const updatedTask = this.localStore.updateSendTask(task.id, {
+        status: "sent",
+        sentAt: completedAt,
+        errorMessage: "",
+        guardSnapshot: {
+          ...(task.guardSnapshot || {}),
+          wechatWorkRetryCount: Math.max(0, attemptNumber - 1),
+          wechatWorkNextRetryAt: null,
+          wechatWorkMsgId: response.msgid || wechatWorkMsgId,
+          apiAcceptedAt: completedAt,
+        },
+      });
+      this.markLinkedQuoteSent(updatedTask);
+      this.localStore.recordWechatWorkAudit({
+        action: "send_api_accepted",
+        status: "sent",
+        sendTaskId: task.id,
+        sendAttemptId: attempt.id,
+        openKfid: binding.openKfid,
+        externalUserId: binding.externalUserId,
+        msgid: response.msgid || wechatWorkMsgId,
+        attemptNumber,
+      });
+      return { ...result, task: updatedTask, attempt, retryScheduled: false };
+    } catch (error) {
+      const completedAt = new Date().toISOString();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const retryScheduled = attemptNumber < appConfig.wechatWorkSendMaxAttempts;
+      const nextRetryAt = retryScheduled
+        ? new Date(Date.now() + appConfig.wechatWorkSendRetryDelaySeconds * 1000).toISOString()
+        : null;
+      const attempt = this.localStore.updateSendAttempt(result.attempt.id, {
+        status: "failed",
+        errorMessage,
+        completedAt,
+        metadata: {
+          bridgeState: retryScheduled ? "retry_scheduled" : "api_failed",
+          attemptNumber,
+          maxAttempts: appConfig.wechatWorkSendMaxAttempts,
+          retryScheduled,
+          nextRetryAt,
+          wechatWorkBindingId: binding?.id || null,
+          openKfid: binding?.openKfid || null,
+          externalUserId: binding?.externalUserId || null,
+          wechatWorkMsgId,
+        },
+      });
+      const updatedTask = this.localStore.updateSendTask(task.id, {
+        status: retryScheduled ? "queued" : "failed",
+        errorMessage,
+        guardSnapshot: {
+          ...(task.guardSnapshot || {}),
+          wechatWorkRetryCount: attemptNumber,
+          wechatWorkNextRetryAt: nextRetryAt,
+          wechatWorkLastErrorAt: completedAt,
+        },
+      });
+      this.localStore.recordWechatWorkAudit({
+        action: retryScheduled ? "send_retry_scheduled" : "send_api_failed",
+        status: retryScheduled ? "retrying" : "failed",
+        sendTaskId: task.id,
+        sendAttemptId: attempt.id,
+        openKfid: binding?.openKfid || null,
+        externalUserId: binding?.externalUserId || null,
+        msgid: wechatWorkMsgId,
+        attemptNumber,
+        nextRetryAt,
+        errorMessage,
+      });
+      return { ...result, task: updatedTask, attempt, retryScheduled, nextRetryAt };
+    }
   }
 
   private validateExistingSendTaskBinding(task: any) {
@@ -2730,8 +2990,10 @@ export class WechatDispatchService {
     const binding = await this.assertSendTaskBinding({
       wechatAccountId: task.wechatAccountId,
       conversationId: task.conversationId,
+      customerId: task.customerId || task.payload?.customerId || null,
       designJobId: task.designJobId,
       quoteDraftId: task.quoteDraftId,
+      manualReply: Boolean(task.payload?.manualReply || task.guardSnapshot?.manualReply),
     });
     this.assertOrderSendTaskStillQueueable(task);
     const now = new Date().toISOString();
@@ -2872,7 +3134,7 @@ export class WechatDispatchService {
     );
   }
 
-  private resolveInboundConversation(payload: { wechatAccountId?: string; conversationId?: string }) {
+  private resolveInboundConversation(payload: { wechatAccountId?: string; conversationId?: string; customerId?: string }) {
     const allConversations = this.localStore.listConversations();
     const conversation = payload.conversationId
       ? allConversations.find((item) => item.id === payload.conversationId)
@@ -2884,6 +3146,31 @@ export class WechatDispatchService {
     });
     if (!binding.ok) {
       throw new BadRequestException(`inbound conversation binding invalid: ${binding.reason}`);
+    }
+    if (payload.customerId && payload.customerId !== conversation?.customerId) {
+      throw new BadRequestException("inbound customer binding invalid: requested customer does not match conversation");
+    }
+    return conversation;
+  }
+
+  private async requireCompleteConversationIdentity(filter: IdentityFilter, label: string) {
+    const missing = [
+      !String(filter.wechatAccountId || "").trim() ? "wechatAccountId" : "",
+      !String(filter.conversationId || "").trim() ? "conversationId" : "",
+      !String(filter.customerId || "").trim() ? "customerId" : "",
+    ].filter(Boolean);
+    if (missing.length) throw new BadRequestException(`${label} requires complete conversation identity: ${missing.join(", ")}`);
+    const conversation = appConfig.useLocalStore
+      ? this.localStore
+          .listConversations(filter.wechatAccountId)
+          .find((item) => item.id === filter.conversationId) || null
+      : await this.prisma.conversation.findUnique({ where: { id: filter.conversationId } });
+    if (!conversation) throw new BadRequestException(`${label} conversation not found`);
+    if (conversation.wechatAccountId !== filter.wechatAccountId) {
+      throw new BadRequestException(`${label} wechat account binding invalid`);
+    }
+    if (conversation.customerId !== filter.customerId) {
+      throw new BadRequestException(`${label} customer binding invalid`);
     }
     return conversation;
   }
@@ -3635,7 +3922,12 @@ export class WechatDispatchService {
     if (appConfig.useLocalStore) {
       const tasks = this.localStore
         .listSendTasks()
-        .filter((task) => task.conversationId === conversation.id && task.status === "queued");
+        .filter(
+          (task) =>
+            task.conversationId === conversation.id &&
+            task.status === "queued" &&
+            !isManualReplySendTask(task),
+        );
       return tasks.map((task) => {
         const updated = this.localStore.updateSendTask(task.id, {
           status: "blocked",
@@ -3704,7 +3996,9 @@ export class WechatDispatchService {
     if (!appConfig.useLocalStore) return [];
     return this.localStore
       .listSendTasks()
-      .filter((task) => task.conversationId === conversationId && task.status === "sending");
+      .filter(
+        (task) => task.conversationId === conversationId && task.status === "sending" && !isManualReplySendTask(task),
+      );
   }
 
   private cancelInFlightSendTasksForManualLock(conversationId: string, reviewer: string) {

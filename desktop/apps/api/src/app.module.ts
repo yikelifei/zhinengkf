@@ -8,6 +8,8 @@ import { AssetsService } from "./assets/assets.service";
 import { HealthController } from "./health.controller";
 import { CatalogController } from "./catalog/catalog.controller";
 import { CatalogService } from "./catalog/catalog.service";
+import { ConversationOperationsController } from "./conversation-ops/conversation-operations.controller";
+import { ConversationOperationsService } from "./conversation-ops/conversation-operations.service";
 import { DesignJobsController } from "./design-jobs/design-jobs.controller";
 import { DesignJobsService } from "./design-jobs/design-jobs.service";
 import { DesignPlatformController } from "./integrations/design-platform/design-platform.controller";
@@ -15,8 +17,13 @@ import { DesignPlatformClient } from "./integrations/design-platform/design-plat
 import { LocalStoreService } from "./local-store/local-store.service";
 import { NotificationsController } from "./notifications/notifications.controller";
 import { NotificationsService } from "./notifications/notifications.service";
+import { OperatorAccessController } from "./operator-access/operator-access.controller";
+import { OperatorAccessGuard } from "./operator-access/operator-access.guard";
+import { OperatorAccessService } from "./operator-access/operator-access.service";
 import { OrdersController } from "./orders/orders.controller";
 import { OrdersService } from "./orders/orders.service";
+import { PersonalWechatRpaController } from "./personal-wechat-rpa/personal-wechat-rpa.controller";
+import { PersonalWechatRpaService } from "./personal-wechat-rpa/personal-wechat-rpa.service";
 import { PrismaService } from "./prisma/prisma.service";
 import { QuotesController } from "./quotes/quotes.controller";
 import { QuotesService } from "./quotes/quotes.service";
@@ -30,6 +37,9 @@ import { TrainingService } from "./training/training.service";
 import { WechatController } from "./wechat/wechat.controller";
 import { WechatDispatchService } from "./wechat/wechat-dispatch.service";
 import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
+import { WechatWorkController } from "./wechat-work/wechat-work.controller";
+import { WechatWorkApiClient } from "./wechat-work/wechat-work-api.client";
+import { WechatWorkService } from "./wechat-work/wechat-work.service";
 
 @Module({
   controllers: [
@@ -38,26 +48,34 @@ import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
     AssetsController,
     HealthController,
     CatalogController,
+    ConversationOperationsController,
     DesignJobsController,
     DesignPlatformController,
     NotificationsController,
+    OperatorAccessController,
     OrdersController,
+    PersonalWechatRpaController,
     QuotesController,
     ReviewsController,
     RoutingController,
     TrainingController,
     WechatController,
+    WechatWorkController,
   ],
   providers: [
     AgentsService,
     AutomationService,
     AssetsService,
     CatalogService,
+    ConversationOperationsService,
     DesignJobsService,
     DesignPlatformClient,
     LocalStoreService,
     NotificationsService,
+    OperatorAccessGuard,
+    OperatorAccessService,
     OrdersService,
+    PersonalWechatRpaService,
     PrismaService,
     {
       provide: QuotesService,
@@ -75,6 +93,8 @@ import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
     TrainingService,
     WechatDispatchService,
     WechatSendAdapterService,
+    WechatWorkApiClient,
+    WechatWorkService,
   ],
 })
 export class AppModule {}

@@ -4,6 +4,8 @@ set DESKTOP_RUNTIME_DIR=D:\zhinengkefu\desktop\.runtime-stable
 set SKIP_EXISTING_API_BUILD=1
 set SKIP_EXISTING_WEB_BUILD=1
 set FORCE_PORTS_SWEEP=1
+set STABLE_WECHAT_BRIDGE_MODE=dispatch
+set STABLE_PERSONAL_WECHAT_SEND=0
 set STABLE_STOP_REQUEST=D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request
 cd /d D:\zhinengkefu\desktop
 if not exist "D:\zhinengkefu\desktop\.runtime-stable" mkdir "D:\zhinengkefu\desktop\.runtime-stable"

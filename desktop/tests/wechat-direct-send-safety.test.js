@@ -68,11 +68,9 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.doesNotMatch(channelsPage, /channel\.checks\.map|status\.visualFlow/);
   assert.match(flowPage, /status\.visualFlow\.map/);
   assert.doesNotMatch(channelsPage, /executeSend|processSafeQueue|runWechatChannelInbound/);
-
   assert.match(preflightPage, /readiness && !readiness\.productionReady/);
   assert.match(preflightPage, /不把离线检查误报为上线成功/);
   assert.doesNotMatch(preflightPage, /startAutomation|executeSend/);
-
   assert.match(inboundPage, /identityExpectation\(identity\)/);
   assert.match(inboundPage, /wechatAccountId\.trim\(\) && conversationId\.trim\(\) && customerId\.trim\(\)/);
   assert.match(inboundPage, /confirmed/);
@@ -80,7 +78,6 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.doesNotMatch(inboundPage, /captureWindowObserverOnce|scanWindowSnapshotInbox/);
   assert.match(windowPage, /data-action-id="integrations\.window\.capture-current"/);
   assert.doesNotMatch(windowPage, /testWechatChannelInbound/);
-
   assert.match(channelsRoute, /routeId="integrationChannels"[\s\S]*<ChannelsStatusPage/);
   assert.match(preflightRoute, /routeId="wechatWorkChannels"[\s\S]*<WechatWorkPreflightPage/);
   assert.match(windowRoute, /routeId="personalWechatInbound"[\s\S]*<WindowEvidencePage/);

@@ -654,9 +654,10 @@ test("wechat safe worker launcher is explicit and defaults to no real send", () 
   assert.match(bridgeWorker, /expectedCustomerId: dispatchTarget\.customerId/);
   assert.match(bridgeWorker, /requiredCustomerId: dispatchTarget\.customerId/);
   assert.match(bridgeWorker, /customerId: String\(entry\.customerId \|\| target\.customerId \|\| ""\)/);
-  assert.match(bridgeWorker, /\{ key: "customerId", passed: Boolean\(entry\.customerId\) \}/);
-  assert.match(bridgeWorker, /preview\.customerId === entry\.customerId/);
-  assert.match(bridgeWorker, /const entryCustomerId = String\(entry\.customerId \|\| ""\)/);
+  assert.match(bridgeWorker, /const customerId = resolveEntryCustomerId\(entry\)/);
+  assert.match(bridgeWorker, /\{ key: "customerId", passed: Boolean\(customerId\) \}/);
+  assert.match(bridgeWorker, /preview\.customerId === customerId/);
+  assert.match(bridgeWorker, /const entryCustomerId = resolveEntryCustomerId\(entry\)/);
   assert.match(bridgeWorker, /!payload\.customerId \|\| String\(payload\.customerId \|\| ""\) === entryCustomerId/);
   assert.match(bridgeWorker, /String\(target\.customerId \|\| ""\) === entryCustomerId/);
   assert.match(bridgeWorker, /String\(sendPlanTarget\.customerId \|\| ""\) === entryCustomerId/);
@@ -773,6 +774,11 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /-ArgumentList @\(\$StableRuntimeLauncherArgument\)/);
   assert.match(stableKeepalivePs1, /-RedirectStandardOutput \$KeepAliveOutLog/);
   assert.match(stableKeepalivePs1, /-RedirectStandardError \$KeepAliveErrLog/);
+  assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "\$\(if \(\$env:STABLE_WECHAT_BRIDGE_MODE\) \{ \$env:STABLE_WECHAT_BRIDGE_MODE \} else \{ "dispatch" \}\)"/);
+  assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "\$\(if \(\$env:STABLE_PERSONAL_WECHAT_SEND\) \{ \$env:STABLE_PERSONAL_WECHAT_SEND \} else \{ "0" \}\)"/);
+  assert.match(stableKeepalivePs1, /function Normalize-ProcessPathEnvironment/);
+  assert.match(stableKeepalivePs1, /SetEnvironmentVariable\("Path", \$pathValue, "Process"\)/);
+  assert.doesNotMatch(stableKeepalivePs1, /-UseNewEnvironment/);
   assert.doesNotMatch(stableKeepalivePs1, /-FilePath "cmd\.exe"/);
   assert.match(stableKeepalivePs1, /\$StopRequestFile = Join-Path \$RuntimeDir "stable-runtime-stop-request"/);
   assert.match(stableKeepalivePs1, /Remove-Item -Force -ErrorAction Stop -Path \$StopRequestFile/);
@@ -896,8 +902,11 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /\{ name: "api", command: process\.execPath, args: \[path\.join\(root, "dist", "apps", "api", "main\.js"\)\], port: ports\.api, expected: normalize\(path\.join\(root, "dist", "apps", "api", "main\.js"\)\) \}/);
   assert.match(stableRuntime, /processServiceSpec\("wechat-window-observer", \[path\.join\(root, "tools", "wechat-window-observer\.js"\), "--watch", "--scan"\]/);
   assert.match(stableRuntime, /processServiceSpec\("wechat-bridge-worker", \[path\.join\(root, "tools", "wechat-bridge-worker\.js"\), "--watch"\]/);
-  assert.match(stableRuntime, /BRIDGE_MODE: process\.env\.STABLE_WECHAT_BRIDGE_MODE \|\| "noop"/);
+  assert.match(stableRuntime, /BRIDGE_MODE: process\.env\.STABLE_WECHAT_BRIDGE_MODE \|\| "dispatch"/);
   assert.match(stableRuntime, /BRIDGE_ACK_TRANSPORT: process\.env\.BRIDGE_ACK_TRANSPORT \|\| "file_scan"/);
+  assert.match(stableRuntime, /processServiceSpec\("personal-wechat-bridge", \[path\.join\(root, "tools", "personal-wechat-bridge\.js"\), "--watch"\]/);
+  assert.match(stableRuntime, /PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path\.join\(runtimeDir, "personal-wechat-accounts\.json"\)/);
+  assert.match(stableRuntime, /PERSONAL_WECHAT_SEND: process\.env\.STABLE_PERSONAL_WECHAT_SEND \|\| process\.env\.PERSONAL_WECHAT_SEND \|\| "0"/);
   assert.match(stableRuntime, /for \(const spec of specs\) ensureService\(spec\);/);
   assert.match(stableRuntime, /killStaleRuntimeProcesses\(\);/);
   assert.match(stableRuntime, /setInterval\(\(\) => \{[\s\S]*stop request received; stopping[\s\S]*killStaleRuntimeProcesses\(\);[\s\S]*for \(const spec of specs\) ensureService\(spec\);[\s\S]*\}, 5000\);/);

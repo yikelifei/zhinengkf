@@ -29,6 +29,22 @@ function Write-StableStartingLock {
   }
 }
 
+function Normalize-ProcessPathEnvironment {
+  $environment = [Environment]::GetEnvironmentVariables()
+  $pathKeys = @($environment.Keys | Where-Object {
+    [string]::Equals([string]$_, "Path", [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if (-not $pathKeys.Count) {
+    return
+  }
+
+  $pathValue = [string]$environment[$pathKeys[0]]
+  foreach ($pathKey in $pathKeys) {
+    [Environment]::SetEnvironmentVariable([string]$pathKey, $null, "Process")
+  }
+  [Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+}
+
 function Find-KeepAliveProcess {
   try {
     Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
@@ -98,6 +114,8 @@ function Start-StableSupervisorProcess {
   $command = @"
 `$env:DESKTOP_RUNTIME_DIR = "$RuntimeDir"
 `$env:STABLE_KEEPALIVE_SUPERVISOR = "1"
+`$env:STABLE_WECHAT_BRIDGE_MODE = "$(if ($env:STABLE_WECHAT_BRIDGE_MODE) { $env:STABLE_WECHAT_BRIDGE_MODE } else { "dispatch" })"
+`$env:STABLE_PERSONAL_WECHAT_SEND = "$(if ($env:STABLE_PERSONAL_WECHAT_SEND) { $env:STABLE_PERSONAL_WECHAT_SEND } else { "0" })"
 & "$PSCommandPath"
 "@
   return Start-Process `
@@ -129,6 +147,7 @@ function Invoke-StableSupervisorLoop {
 }
 
 try {
+  Normalize-ProcessPathEnvironment
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   try {

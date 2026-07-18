@@ -19,6 +19,8 @@ set STABLE_SERVICE_LOG=D:\zhinengkefu\desktop\.runtime-stable\stable-service-win
 echo [%date% %time%] service window entered >> "%STABLE_SERVICE_LOG%"
 set SKIP_EXISTING_WEB_BUILD=1
 set FORCE_PORTS_SWEEP=1
+set STABLE_WECHAT_BRIDGE_MODE=dispatch
+set STABLE_PERSONAL_WECHAT_SEND=0
 cd /d D:\zhinengkefu\desktop
 if not exist "D:\zhinengkefu\desktop\dist\apps\api\main.js" call npm.cmd run build:api
 if %ERRORLEVEL% NEQ 0 (

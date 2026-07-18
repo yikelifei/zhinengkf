@@ -171,3 +171,16 @@ Configuration:
 - `BRIDGE_LIMIT`: max outbox tasks per run
 
 Do not enable `simulate_sent` in production. A real bridge must keep the current account lock, account identity, conversation identity, window snapshot, and ack-token validation flow intact.
+
+## Personal WeChat Windows Operator
+
+The repository implementation is `tools/personal-wechat-bridge.js` plus `tools/personal-wechat-window.ps1`. It consumes dispatch files produced by the worker and does not add a parallel API or database path.
+
+- Every `wechatAccountId` must be uniquely bound to an explicit process id, window handle, Windows session id and configured session id.
+- Account identity, active chat title and recent-message evidence must all be verified inside that exact window through configured UI Automation elements.
+- Same-account actions are locked and serialized. Accounts in isolated Windows sessions may run concurrently; accounts sharing one Windows session also share an input lock and remain serialized.
+- Text and local-storage image actions are supported.
+- A `sent` acknowledgement is written only after every UI action has observable success evidence.
+- Unsafe or uncertain operations create a local blocked marker and write no acknowledgement. Existing sent acknowledgements awaiting inbox scan are scanned again without resending.
+
+Configuration and operating steps are documented in `docs/PERSONAL_WECHAT_BRIDGE.md`.

@@ -1,6 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { WechatDispatchService } from "./wechat-dispatch.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("wechat")
 export class WechatController {
@@ -16,12 +22,62 @@ export class WechatController {
     return this.wechat.listConversations(wechatAccountId);
   }
 
+  @Get("conversations/:id/messages")
+  listConversationTimeline(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("customerId") customerId?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.wechat.listConversationTimeline({
+      wechatAccountId,
+      conversationId: id,
+      customerId,
+      limit: Number(limit || 300),
+    });
+  }
+
+  @Post("conversations/:id/read")
+  markConversationMessagesRead(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
+    if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
+      throw new BadRequestException("mark messages read requires matching expectedConversationId");
+    }
+    return this.wechat.markConversationMessagesRead({
+      wechatAccountId: payload.expectedWechatAccountId,
+      conversationId: id,
+      customerId: payload.expectedCustomerId,
+    });
+  }
+
+  @Post("conversations/:id/manual-replies")
+  @RequireOperatorCapability("reply_conversations")
+  @UseGuards(OperatorAccessGuard)
+  enqueueManualReply(
+    @Param("id") id: string,
+    @Body() payload: { text?: string; operator?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
+      throw new BadRequestException("manual reply requires matching expectedConversationId");
+    }
+    return this.wechat.enqueueManualReply({
+      wechatAccountId: payload.expectedWechatAccountId,
+      conversationId: id,
+      customerId: payload.expectedCustomerId,
+      text: payload.text,
+      operator: principal.id,
+    });
+  }
+
   @Post("conversations/:id/manual-lock")
+  @RequireOperatorCapability("manage_assignments")
+  @UseGuards(OperatorAccessGuard)
   setConversationManualLock(
     @Param("id") id: string,
     @Body() payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.setConversationManualLock(id, payload || {});
+    return this.wechat.setConversationManualLock(id, { ...(payload || {}), reviewer: principal.id });
   }
 
   @Post("inbound/messages")
@@ -71,6 +127,8 @@ export class WechatController {
   }
 
   @Post("channels/:channel/inbound/test")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
   processChannelInboundTest(
     @Param("channel") channel: "personal_wechat" | "work_wechat" | "mini_program",
     @Body() payload: {
@@ -133,6 +191,8 @@ export class WechatController {
   }
 
   @Post("window-observer/capture-once")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
   captureWindowObserverOnce() {
     return this.wechat.captureWindowObserverOnce();
   }
@@ -148,6 +208,8 @@ export class WechatController {
   }
 
   @Post("window-snapshots/demo")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
   createDemoWindowSnapshot(
     @Body()
     payload: {
@@ -160,11 +222,15 @@ export class WechatController {
   }
 
   @Post("send-tasks/demo")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   createDemoSendTask(@Body() payload: { wechatAccountId?: string; conversationId?: string; text?: string } & ExpectedIdentityPayload) {
     return this.wechat.createDemoSendTask(payload || {});
   }
 
   @Post("orders/:id/queue-confirmation")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   queueOrderConfirmation(
     @Param("id") id: string,
     @Body()
@@ -175,11 +241,14 @@ export class WechatController {
       releaseManualLock?: boolean;
       releaseReason?: string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.queueOrderConfirmation(id, payload || {});
+    return this.wechat.queueOrderConfirmation(id, { ...(payload || {}), owner: principal.id });
   }
 
   @Post("orders/:id/queue-followup")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   queueOrderFollowup(
     @Param("id") id: string,
     @Body()
@@ -190,16 +259,21 @@ export class WechatController {
       releaseManualLock?: boolean;
       releaseReason?: string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.queueOrderFollowup(id, payload || {});
+    return this.wechat.queueOrderFollowup(id, { ...(payload || {}), owner: principal.id });
   }
 
   @Post("send-tasks/scan-ops")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   scanSendOperations(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     return this.wechat.scanSendOperations(payload || {});
   }
 
   @Post("send-tasks/process-safe-queue")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   processSafeSendQueue(
     @Body() payload: { adapter?: string; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string },
   ) {
@@ -207,6 +281,8 @@ export class WechatController {
   }
 
   @Post("send-tasks/:id/validate")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   validateSendTask(
     @Param("id") id: string,
     @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> } & ExpectedIdentityPayload,
@@ -215,11 +291,15 @@ export class WechatController {
   }
 
   @Post("send-tasks/:id/validate-current-window")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   validateWithCurrentWindow(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
     return this.wechat.validateSendTaskWithCurrentWindow(id, payload || {});
   }
 
   @Post("send-tasks/:id/mark-sent")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   markSent(
     @Param("id") id: string,
     @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> },
@@ -228,26 +308,36 @@ export class WechatController {
   }
 
   @Post("send-tasks/:id/mark-sent-current-window")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   markSentWithCurrentWindow(@Param("id") id: string) {
     return this.wechat.markSentAfterCurrentWindowGuard(id);
   }
 
   @Post("send-tasks/:id/execute-dry-run")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   executeDryRun(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
     return this.wechat.executeDryRunSend(id, payload || {});
   }
 
   @Post("send-tasks/:id/execute")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   executeSend(@Param("id") id: string, @Body() payload: { adapter?: string } & ExpectedIdentityPayload) {
-    return this.wechat.executeSend(id, payload || {});
+    return this.wechat.executeQueuedSend(id, payload || {});
   }
 
   @Post("send-tasks/:id/requeue")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   requeueSendTask(@Param("id") id: string, @Body() payload: { reason?: string } & ExpectedIdentityPayload) {
     return this.wechat.requeueSendTask(id, payload || {});
   }
 
   @Post("send-tasks/:id/cancel")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   cancelSendTask(@Param("id") id: string, @Body() payload: { reason?: string } & ExpectedIdentityPayload) {
     return this.wechat.cancelSendTask(id, payload || {});
   }

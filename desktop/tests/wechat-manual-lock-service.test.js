@@ -1010,6 +1010,43 @@ test("requeue records explicit manual audit reason", async () => {
   assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
 });
 
+test("requeue allows manual reply task while conversation remains manually locked", async () => {
+  const { localStore, service } = setupService();
+  localStore.updateConversation("conversation_demo_1", { manualLocked: true });
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "blocked",
+    payload: {
+      kind: "text",
+      text: "manual reply should requeue while locked",
+      source: "manual_reply",
+      manualReply: true,
+      customerId: "customer_demo_1",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      manualReply: true,
+      history: [{ action: "manual_reply_blocked", fromStatus: "queued", reason: "expired window snapshot" }],
+    },
+  });
+
+  const updated = await service.requeueSendTask(task.id, {
+    ...demoExpectedIdentity(),
+    reason: "manual_reply_retry_after_fresh_window_snapshot",
+  });
+
+  assert.equal(updated.status, "queued");
+  assert.equal(updated.guardSnapshot.binding.ok, true);
+  assert.equal(updated.guardSnapshot.binding.reason, "发送任务绑定关系正确");
+  assert.equal(updated.guardSnapshot.manualReply, true);
+  assert.equal(updated.guardSnapshot.requeueReason, "manual_reply_retry_after_fresh_window_snapshot");
+  assert.equal(localStore.listConversations().find((item) => item.id === "conversation_demo_1").manualLocked, true);
+});
+
 test("low-value failed send task retries once before human alert", async () => {
   const { localStore, service } = setupService();
   seedStoredOrderDraft(localStore, { id: "order_demo_1", status: "processing", paymentStatus: "deposit_paid" });
