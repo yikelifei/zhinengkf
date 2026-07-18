@@ -1,0 +1,74 @@
+.avatar {
+  display: inline-grid;
+  flex: 0 0 auto;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid #dde2ea;
+  border-radius: 50%;
+  color: #4e5969;
+  background: #eef1f5;
+  font-weight: 650;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-small {
+  width: 30px;
+  height: 30px;
+  font-size: 10px;
+}
+
+.avatar-medium {
+  width: 38px;
+  height: 38px;
+  font-size: 11px;
+}
+
+.avatar-large {
+  width: 44px;
+  height: 44px;
+  font-size: 13px;
+}
+
+.toneTag {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.tone-neutral {
+  color: #646a73;
+  background: #f2f3f5;
+}
+
+.tone-brand {
+  color: var(--cw-brand);
+  background: var(--cw-brand-soft);
+}
+
+.tone-success {
+  color: #07834f;
+  background: #eaf7f0;
+}
+
+.tone-warning {
+  color: #b54708;
+  background: #fff3e5;
+}
+
+.tone-danger {
+  color: #c93535;
+  background: #fff0ef;
+}

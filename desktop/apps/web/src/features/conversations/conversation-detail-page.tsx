@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AlertTriangle, UserRoundCheck, X } from "lucide-react";
-import { ConversationThreadPane } from "../../components/conversation-workbench";
+import { ConversationThreadPane } from "../../components/conversation-workbench/conversation-thread-pane";
 import type { ConversationsFeatureApi } from "./api";
 import { ConversationPageState } from "./conversation-page-state";
 import styles from "./conversation-pages.module.css";

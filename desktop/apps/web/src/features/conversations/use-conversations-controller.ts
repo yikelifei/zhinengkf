@@ -8,7 +8,7 @@ import type {
   ConversationWorkbenchInbox,
   ConversationWorkbenchPane,
   ConversationWorkbenchThread,
-} from "../../components/conversation-workbench";
+} from "../../components/conversation-workbench/types";
 import type {
   Conversation,
   ConversationOperations,

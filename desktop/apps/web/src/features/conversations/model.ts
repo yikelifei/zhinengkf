@@ -4,7 +4,7 @@ import type {
   ConversationWorkbenchMessage,
   ConversationWorkbenchThread,
   ConversationWorkbenchTone,
-} from "../../components/conversation-workbench";
+} from "../../components/conversation-workbench/types";
 import type {
   Conversation,
   ConversationIdentity,

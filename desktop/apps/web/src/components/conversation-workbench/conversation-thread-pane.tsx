@@ -14,7 +14,7 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import type { FormEvent } from "react";
-import styles from "./conversation-workbench.module.css";
+import styles from "./conversation-thread-pane.module.css";
 import type {
   ConversationWorkbenchActions,
   ConversationWorkbenchIncident,
@@ -84,7 +84,7 @@ export function ConversationThreadPane({
         <div className={styles.participantCopy}>
           <div>
             <h2>{thread.participant.name}</h2>
-            <WorkbenchToneTag tone={thread.participant.channelTone}>{thread.participant.channelLabel}</WorkbenchToneTag>
+            <WorkbenchToneTag className={styles.channelTag} tone={thread.participant.channelTone}>{thread.participant.channelLabel}</WorkbenchToneTag>
           </div>
           <span>账号：{thread.participant.accountLabel}</span>
           {thread.participant.onlineLabel ? (
@@ -94,8 +94,8 @@ export function ConversationThreadPane({
           ) : null}
         </div>
         <div className={styles.threadHeaderActions}>
-          {thread.manualTakeoverLabel ? <WorkbenchToneTag tone="brand">{thread.manualTakeoverLabel}</WorkbenchToneTag> : null}
-          <WorkbenchToneTag tone={thread.serviceStatusTone}>{thread.serviceStatusLabel}</WorkbenchToneTag>
+          {thread.manualTakeoverLabel ? <WorkbenchToneTag className={styles.headerStatus} tone="brand">{thread.manualTakeoverLabel}</WorkbenchToneTag> : null}
+          <WorkbenchToneTag className={styles.headerStatus} tone={thread.serviceStatusTone}>{thread.serviceStatusLabel}</WorkbenchToneTag>
           {showTransferButton ? <button type="button" className={styles.headerButton} data-action-id="conversations.assignment.open-transfer" onClick={actions.onTransfer} aria-label="转接当前会话">
             <UserRoundCheck size={14} aria-hidden="true" />转接
           </button> : null}

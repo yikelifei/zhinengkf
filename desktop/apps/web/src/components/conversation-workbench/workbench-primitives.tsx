@@ -10,7 +10,7 @@ import {
   UserRound,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import styles from "./conversation-workbench.module.css";
+import styles from "./conversation-thread-primitives.module.css";
 import type {
   ConversationWorkbenchAvatar,
   ConversationWorkbenchComposerTool,
