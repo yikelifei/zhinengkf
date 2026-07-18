@@ -201,4 +201,5 @@ test("compatibility aliases are hidden from module navigation", () => {
   for (const routeId of redirectedRouteIds) {
     assert.equal(routes.WORKBENCH_ROUTES[routeId].showInModuleNav, false, `${routeId} must stay hidden`);
   }
+  assert.equal(routes.WORKBENCH_ROUTES.salesActions.showInModuleNav, false, "salesActions is a direct workflow chooser, not a module tab");
 });

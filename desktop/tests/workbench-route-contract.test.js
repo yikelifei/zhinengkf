@@ -65,6 +65,8 @@ const productionRoutes = [
   "/sales/orders/[id]/messages/production",
   "/sales/orders/[id]/messages/delivery",
   "/automation/runs",
+  "/automation/control",
+  "/automation/history",
   "/automation/issues",
   "/notifications",
   "/agents",
@@ -101,14 +103,15 @@ const sectionIds = [
   "review-center",
   "sku-library",
   "catalog-center",
-  "quote-center",
+  "sales-center",
+  "automation-center",
   "notice-center",
   "agent-center",
   "training-center",
   "account-center",
 ];
 
-test("typed route manifest covers every production URL and all 17 workbench sections", () => {
+test("typed route manifest covers every production URL and all 18 active workbench sections", () => {
   const routeList = routes.WORKBENCH_ROUTE_LIST;
   const hrefs = routeList.map((route) => route.href);
   const sections = new Set(routeList.map((route) => route.sectionId));
@@ -122,6 +125,38 @@ test("typed route manifest covers every production URL and all 17 workbench sect
     assert.ok(route.responsibility.trim(), `${route.id} must define one responsibility`);
     assert.ok(route.primaryAction.trim(), `${route.id} must define one primary action`);
   }
+});
+
+test("sales, automation, and notifications own separate navigation sections", () => {
+  const salesRoutes = routes.WORKBENCH_ROUTE_LIST.filter((route) => route.href.startsWith("/sales/"));
+  const automationRoutes = routes.WORKBENCH_ROUTE_LIST.filter((route) => route.href.startsWith("/automation/"));
+  const moduleRouteIds = (sectionId) => routes.WORKBENCH_ROUTE_LIST
+    .filter((route) => route.sectionId === sectionId && !route.href.includes("[") && route.showInModuleNav !== false)
+    .map((route) => route.id);
+
+  assert.ok(salesRoutes.length > 0);
+  assert.ok(automationRoutes.length > 0);
+  assert.ok(salesRoutes.every((route) => route.sectionId === "sales-center"));
+  assert.ok(automationRoutes.every((route) => route.sectionId === "automation-center"));
+  assert.equal(routes.WORKBENCH_ROUTES.notifications.sectionId, "notice-center");
+  assert.equal(routes.WORKBENCH_ROUTES.salesActions.showInModuleNav, false);
+  assert.deepEqual(moduleRouteIds("sales-center"), ["salesQuotes", "salesOrders"]);
+  assert.deepEqual(moduleRouteIds("automation-center"), [
+    "automationRuns",
+    "automationControl",
+    "automationHistory",
+    "automationIssues",
+  ]);
+  assert.deepEqual(moduleRouteIds("notice-center"), ["notifications"]);
+});
+
+test("legacy quote and automation hashes keep resolving after section separation", () => {
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#quote-center").id, "salesOverview");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#quote-center:quotes").id, "salesQuotes");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#quote-center:actions").id, "salesActions");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#notice-center").id, "notifications");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#notice-center:automation").id, "automationRuns");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#notice-center:automation:control").id, "automationControl");
 });
 
 test("pathname resolver handles exact routes, entity detail routes, trailing slashes, and unknown paths", () => {

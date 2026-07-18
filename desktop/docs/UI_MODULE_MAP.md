@@ -12,6 +12,8 @@
 - 侧栏和模块内导航使用真实 `Link`，跨域动作使用 `router.push`。旧根页面哈希只在 `/` 转换一次，因此深链、刷新、前进和后退都由 URL 驱动。
 - `loading.tsx`、`error.tsx`、`not-found.tsx` 与 `route-state.tsx` 提供路由级状态。业务 feature 仍需独立实现权限态和本域空态。
 - `tools/check-modular-ui-bundles.js` 读取 Next 客户端引用清单，阻止一个路由引用多个业务域、旧工作台或超过阈值的客户端脚本。
+- 侧栏以 `sales-center` 承载全部 `/sales/*` 页面，以 `automation-center` 承载四个 `/automation/*` 页面；`notice-center` 只归属 `/notifications`，提醒与自动化不再共用模块状态。
+- 销售模块导航只展示报价与订单两个持续工作流。`/sales/actions` 保留为可深链的流程选择页，但通过 `showInModuleNav: false` 隐藏，避免第三个重复入口。
 
 ## 生产页面责任
 
@@ -96,6 +98,7 @@
 - 旧 `#section[:view]` 书签只由根页面解析并转到类型化清单中的生产 URL。
 - `/catalog/preview` 转到 `/catalog/import`。
 - `/sales/overview` 转到 `/sales/quotes`，`/settings/accounts` 转到 `/integrations/personal-wechat/instances`。
+- 旧 `#quote-center[:view]` 和 `#notice-center:automation[:view]` 书签继续解析；新页面状态分别使用 `sales-center` 和 `automation-center`。
 - 上述兼容路由在 manifest 中保留旧书签解析能力，但通过 `showInModuleNav: false` 从模块导航隐藏，避免出现多个入口负责同一件事。
 
 ## 动态详情迁移

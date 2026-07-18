@@ -16,6 +16,7 @@ import {
   Shield,
   SlidersHorizontal,
   Smartphone,
+  Workflow,
 } from "lucide-react";
 import { WORKBENCH_ROUTES } from "../../app/route-manifest";
 import type { WorkbenchNavigationGroup } from "./types";
@@ -100,7 +101,7 @@ export const DEFAULT_WORKBENCH_NAVIGATION: WorkbenchNavigationGroup[] = [
     items: [
       { id: "sku-library", href: WORKBENCH_ROUTES.catalogProducts.href, label: "商品库", icon: Package, controlsId: "sku-library" },
       { id: "catalog-center", href: WORKBENCH_ROUTES.catalogImport.href, label: "搭配目录", icon: Library, controlsId: "catalog-center" },
-      { id: "quote-center", href: WORKBENCH_ROUTES.salesQuotes.href, label: "报价管理", icon: FileText, controlsId: "quote-center" },
+      { id: "sales-center", href: WORKBENCH_ROUTES.salesQuotes.href, label: "销售管理", icon: FileText, controlsId: "sales-center" },
     ],
   },
   {
@@ -108,6 +109,7 @@ export const DEFAULT_WORKBENCH_NAVIGATION: WorkbenchNavigationGroup[] = [
     label: "自动化与训练",
     items: [
       { id: "notice-center", href: WORKBENCH_ROUTES.notifications.href, label: "提醒中心", icon: Bell, controlsId: "notice-center" },
+      { id: "automation-center", href: WORKBENCH_ROUTES.automationRuns.href, label: "自动化管理", icon: Workflow, controlsId: "automation-center" },
       { id: "agent-center", href: WORKBENCH_ROUTES.agents.href, label: "智能客服 Agent", icon: Bot, controlsId: "agent-center" },
       { id: "training-center", href: WORKBENCH_ROUTES.trainingImport.href, label: "模型训练", icon: GraduationCap, controlsId: "training-center" },
     ],
