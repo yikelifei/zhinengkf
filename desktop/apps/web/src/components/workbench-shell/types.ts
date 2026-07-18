@@ -16,7 +16,7 @@ export type WorkspaceSectionId =
   | "catalog-center"
   | "sales-center"
   | "automation-center"
-  // Archived legacy-workbench compatibility only. New routes and navigation use sales-center.
+  // Archived quote hash compatibility only. New routes and navigation use sales-center.
   | "quote-center"
   | "notice-center"
   | "agent-center"
