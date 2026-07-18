@@ -34,20 +34,18 @@ test("readiness panel separates local checks from external acceptance blockers",
   assert.doesNotMatch(component, /fetch\(|sendCustomerService|dispatchCustomerService|syncCustomerService/);
 });
 
-test("workbench loads the real preflight and mounts it only in WeChat configuration view", () => {
-  const page = read("apps/web/src/app/legacy-workbench.tsx");
-  const configStart = page.indexOf('{wechatWorkbenchView === "config" ? (');
-  const configEnd = page.indexOf('id="conversation-center"', configStart);
-  const section = page.slice(configStart, configEnd);
+test("the Enterprise WeChat preflight route owns the real readiness loader and panel", () => {
+  const page = read("apps/web/src/features/integrations/wechat-work-preflight-page.tsx");
+  const route = read("apps/web/src/app/integrations/wechat-work/page.tsx");
 
-  assert.match(page, /Promise\.allSettled/);
-  assert.match(page, /getWechatWorkProductionPreflight\(\)/);
-  assert.match(page, /wechatWorkReadinessResult\.status === "fulfilled"/);
-  assert.match(page, /setWechatWorkReadiness\(wechatWorkReadinessResult\.value\)/);
-  assert.match(page, /setWechatWorkReadinessError\(failureMessage/);
-  assert.match(section, /<WechatWorkReadinessPanel/);
-  assert.match(section, /readiness=\{wechatWorkReadiness\}/);
-  assert.match(section, /onRefresh=\{\(\) => void refreshWechatWorkReadiness\(\)\}/);
+  assert.match(page, /getWechatWorkProductionPreflight/);
+  assert.match(page, /useAsyncResource\(/);
+  assert.match(page, /<WechatWorkReadinessPanel/);
+  assert.match(page, /readiness=\{readiness\}/);
+  assert.match(page, /onRefresh=\{\(\) => void refresh\(\)\}/);
+  assert.match(page, /不把离线检查误报为上线成功/);
+  assert.match(route, /routeId="wechatWorkChannels"/);
+  assert.match(route, /<WechatWorkPreflightPage/);
 });
 
 test("Enterprise WeChat readiness layout covers a 390px viewport", () => {
