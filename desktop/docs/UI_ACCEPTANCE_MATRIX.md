@@ -36,8 +36,8 @@
 | `/integrations/wechat-work/settings` | 只读核对企业微信配置 | 刷新配置检查 | 回调地址、身份策略、本机配置 | 在前端写入环境配置 |
 | `/integrations/personal-wechat/instances` | 查看个人微信 RPA 实例 | 刷新实例状态 | 查看端点、身份和状态，进入配置页 | 保存、停用或发送 |
 | `/integrations/personal-wechat/instances/configure` | 配置一个个人微信 RPA 实例 | 保存当前实例 | 校验、保存、明确确认停用 | 暴露 token、自动重试不确定发送 |
-| `/integrations/personal-wechat/control` | 查看账号可用状态 | 刷新账号状态 | 导航到实例、证据、演练和安全页 | 隐式切号、跨账号发送 |
-| `/integrations/personal-wechat/voice-assist` | 生成受控语音草稿 | 完成人工语音审批 | 授权录音、人工校对、中性合成音试听与审批 | 后台录音、声音克隆、自动外发 |
+| `/integrations/personal-wechat/control` | 账号状态与入口 | 刷新账号状态 | 只读查看状态并导航到实例、证据、演练和安全页 | 账号控制写操作、隐式切号、跨账号发送 |
+| `/integrations/personal-wechat/voice-assist` | 语音辅助（未启用） | 查看启用条件 | 只读查看授权、校对、试听与审批的安全边界 | 录音、合成、人工审批、后台采集、声音克隆、自动外发 |
 | `/integrations/personal-wechat/window-inbound` | 采集真实窗口证据 | 采集当前窗口 | 查看已入库快照和身份 | 受控入站演练、自动外发 |
 | `/integrations/personal-wechat/inbound-drill` | 提交带身份的受控入站演练 | 提交入站演练 | 身份核对、明确确认 | 无身份入站、自动外发 |
 | `/integrations/personal-wechat/safety` | 审阅阻断和不确定投递证据 | 刷新安全证据 | 查看 fail-closed 依据 | 规避平台限制、模拟真人身份 |
