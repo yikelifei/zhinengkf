@@ -850,7 +850,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableLaunch, /repair-stable-desktop\.cmd/);
   assert.doesNotMatch(stableLaunch, /keep that service window open/);
   assert.match(stableLaunch, /pause/);
-  assert.match(stableLaunch, /electron\.cmd apps\\electron\\main\.js/);
+  assert.match(stableLaunch, /electron\\dist\\electron\.exe" apps\\electron\\main\.js/);
   const stableLogs = readText("logs-stable-desktop.cmd");
   assert.match(stableLogs, /set "LOG_DIR=%DESKTOP_RUNTIME_DIR%\\logs"/);
   assert.match(stableLogs, /Get-ChildItem/);
@@ -933,6 +933,8 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   const stableForeground = readText("start-stable-desktop-foreground.cmd");
   const stableKeepalivePs1 = readText("tools/start-stable-keepalive.ps1");
   const electronMain = readText("apps/electron/main.js");
+  const dependencyResolver = readText("tools/resolve-worktree-node-modules.js");
+  const dependencyBootstrap = readText("prepare-stable-dependencies.cmd");
   assert.match(stableLaunch, /WEB_URL=http:\/\/127\.0\.0\.1:3100\/overview/);
   assert.match(electronMain, /process\.env\.WEB_URL \|\| "http:\/\/127\.0\.0\.1:3100\/overview"/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/overview"/);
@@ -949,6 +951,13 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"/);
   assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "0"/);
   assert.doesNotMatch(stableKeepalivePs1, /if \(\$env:STABLE_PERSONAL_WECHAT_SEND\)/);
+  for (const source of [stableLaunch, stableStart, stableKeepalive, stableForeground]) {
+    assert.match(source, /prepare-stable-dependencies\.cmd/);
+  }
+  assert.match(dependencyBootstrap, /resolve-worktree-node-modules\.js/);
+  assert.match(dependencyResolver, /function resolveWorktreeNodeModules\(root\)/);
+  assert.doesNotMatch(dependencyResolver, /D:\\zhinengkefu|C:\\Users\\27808/i);
+  assert.match(stableLaunch, /%NODE_PATH%\\electron\\dist\\electron\.exe/);
 });
 
 test("stable runtime launcher owns one stable runtime and required services", () => {
@@ -1058,10 +1067,16 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /ports:keepalive:mock/);
   assert.match(stableRuntime, /tools\/start-dev-ports\.js/);
   assert.match(stableRuntime, /commandLine\.includes\(stableMarker\)/);
+  assert.match(stableRuntime, /require\("\.\/stable-runtime-process-classifier"\)/);
+  assert.match(stableRuntime, /commandLineReferencesNestedLegacyRuntime\(commandLine, normalizedRoot, legacyRuntimeMarker\)/);
   const stableDoctor = readText("tools/stable-desktop-doctor.js");
   assert.match(stableDoctor, /checkStableRuntimeVersion\(portOwners\)/);
   assert.match(stableDoctor, /direct service mode healthy pid=/);
   assert.match(stableDoctor, /directServicePids\.length >= 3/);
+  assert.match(stableDoctor, /\$outsideCurrentRoot = \$normalizedCommand\.Replace\(\$root, ''\)/);
+  assert.match(stableDoctor, /\$outsideCurrentRoot\.Contains\('\/\.runtime\/'\)/);
+  assert.match(stableDoctor, /\$isNamedLegacyRuntime -or \$isNestedLegacyRuntime/);
+  assert.doesNotMatch(stableDoctor, /"\s+\([^"\r\n]+\) -or",/);
 });
 
 test("electron startup failure points beginners to stable repair script", () => {

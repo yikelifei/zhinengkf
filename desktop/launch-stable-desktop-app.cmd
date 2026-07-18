@@ -2,6 +2,8 @@
 setlocal
 for %%I in ("%~dp0.") do set "DESKTOP_ROOT=%%~fI"
 if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\.runtime-stable"
+call "%DESKTOP_ROOT%\prepare-stable-dependencies.cmd"
+if errorlevel 1 exit /b %ERRORLEVEL%
 set "SKIP_EXISTING_API_BUILD=1"
 set "SKIP_EXISTING_WEB_BUILD=1"
 set "STABLE_WECHAT_BRIDGE_MODE=dispatch"
@@ -18,4 +20,8 @@ if not %ERRORLEVEL% EQU 0 (
   pause
   exit /b %ERRORLEVEL%
 )
-start "Smart Kefu App" cmd /c ".\node_modules\.bin\electron.cmd apps\electron\main.js"
+if not exist "%NODE_PATH%\electron\dist\electron.exe" (
+  echo [error] Electron runtime was not found under "%NODE_PATH%".
+  exit /b 1
+)
+start "Smart Kefu App" "%NODE_PATH%\electron\dist\electron.exe" apps\electron\main.js

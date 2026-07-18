@@ -74,6 +74,32 @@ test("local store de-duplicates automation run persistence by identity", () => {
   assert.equal(runs[0].durationMs, 1200);
 });
 
+test("local store keeps the previous JSON intact when atomic replacement fails", () => {
+  const { store, tempDir } = createStore();
+  store.listAutomationRuns(10);
+  const before = fs.readFileSync(store.filePath, "utf8");
+  const originalRenameSync = fs.renameSync;
+  fs.renameSync = () => {
+    throw new Error("simulated atomic replace failure");
+  };
+
+  try {
+    assert.throws(
+      () => store.saveAutomationRun(automationRun(), 10),
+      /simulated atomic replace failure/,
+    );
+  } finally {
+    fs.renameSync = originalRenameSync;
+  }
+
+  assert.equal(fs.readFileSync(store.filePath, "utf8"), before);
+  assert.doesNotThrow(() => JSON.parse(before));
+  assert.deepEqual(
+    fs.readdirSync(tempDir).filter((name) => name.endsWith(".tmp")),
+    [],
+  );
+});
+
 test("local store normalizes legacy data without automation run history", () => {
   const { store } = createStore({
     wechatAccounts: [],

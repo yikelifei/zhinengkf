@@ -2,6 +2,8 @@
 setlocal
 for %%I in ("%~dp0.") do set "DESKTOP_ROOT=%%~fI"
 if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\.runtime-stable"
+call "%DESKTOP_ROOT%\prepare-stable-dependencies.cmd"
+if errorlevel 1 exit /b %ERRORLEVEL%
 if not "%STABLE_SERVICE_WINDOW%"=="1" (
   cd /d "%DESKTOP_ROOT%"
   node tools\stable-start-needed.js

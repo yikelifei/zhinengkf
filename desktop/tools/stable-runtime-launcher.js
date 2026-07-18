@@ -8,6 +8,7 @@ const {
   internalApiServiceEnv,
   withoutInternalApiToken,
 } = require("./internal-api-session");
+const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
@@ -494,7 +495,7 @@ function findLegacyRuntimeProcesses() {
     if (!commandLine.includes(normalizedRoot)) continue;
     if (commandLine.includes(stableMarker)) continue;
     if (
-      commandLine.includes(legacyRuntimeMarker) ||
+      commandLineReferencesNestedLegacyRuntime(commandLine, normalizedRoot, legacyRuntimeMarker) ||
       commandLine.includes("tools/start-dev-ports.js") ||
       commandLine.includes("tools\\start-dev-ports.js") ||
       commandLine.includes("ports:keepalive:mock") ||

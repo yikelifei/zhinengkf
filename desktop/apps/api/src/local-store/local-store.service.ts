@@ -2801,7 +2801,13 @@ export class LocalStoreService {
 
   private write(data: StoreData) {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      fs.renameSync(tempPath, this.filePath);
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
   }
 
   private ensure() {

@@ -315,11 +315,12 @@ function findStaleRuntimeProcesses() {
     `$root = ${psQuote(normalizedRoot)}`,
     "$items = Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'cmd.exe'\"",
     "$items | Where-Object {",
-    "  $_.CommandLine -and",
-    "  (",
-    "    ($_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo') -or",
-    "    ((($_.CommandLine -replace '\\\\','/').ToLowerInvariant().Contains($root)) -and ($_.CommandLine -like '*.runtime*') -and ($_.CommandLine -notlike '*.runtime-stable*'))",
-    "  )",
+    "  if (-not $_.CommandLine) { return $false }",
+    "  $normalizedCommand = (($_.CommandLine -replace '\\\\','/').ToLowerInvariant())",
+    "  $outsideCurrentRoot = $normalizedCommand.Replace($root, '')",
+    "  $isNamedLegacyRuntime = $_.CommandLine -match 'zhinengkefu_restore_work|runtime-d-repo'",
+    "  $isNestedLegacyRuntime = $normalizedCommand.Contains($root) -and $outsideCurrentRoot.Contains('/.runtime/') -and -not $outsideCurrentRoot.Contains('/.runtime-stable/')",
+    "  $isNamedLegacyRuntime -or $isNestedLegacyRuntime",
     "} | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {

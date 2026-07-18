@@ -2,6 +2,8 @@
 setlocal
 for %%I in ("%~dp0.") do set "DESKTOP_ROOT=%%~fI"
 if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\.runtime-stable"
+call "%DESKTOP_ROOT%\prepare-stable-dependencies.cmd"
+if errorlevel 1 exit /b %ERRORLEVEL%
 set "SKIP_EXISTING_API_BUILD=1"
 set "SKIP_EXISTING_WEB_BUILD=1"
 set "FORCE_PORTS_SWEEP=1"
