@@ -44,13 +44,15 @@ test("default navigation uses the seven required groups and only existing page s
     "routing-center",
     "send-center",
     "wechat-channel-center",
+    "personal-wechat-center",
     "design-platform-config",
     "asset-center",
     "design-center",
     "review-center",
     "sku-library",
     "catalog-center",
-    "quote-center",
+    "sales-center",
+    "automation-center",
     "notice-center",
     "agent-center",
     "training-center",
@@ -58,6 +60,9 @@ test("default navigation uses the seven required groups and only existing page s
   ];
   for (const id of expectedIds) assert.match(navigation, new RegExp(`id: "${id}"`));
 
+  assert.match(navigation, /id: "sales-center"[\s\S]*?label: "销售管理"/);
+  assert.match(navigation, /id: "automation-center"[\s\S]*?label: "自动化管理"/);
+  assert.doesNotMatch(navigation, /id: "quote-center"/);
   assert.doesNotMatch(navigation, /customer-center|order-center|after-sales-center|knowledge-center/);
   assert.doesNotMatch(navigation, /客户管理|订单管理|售后管理|知识库/);
 });

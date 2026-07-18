@@ -519,7 +519,7 @@ export const WORKBENCH_ROUTES = {
   salesOverview: {
     id: "salesOverview",
     href: "/sales/overview",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "销售总览",
     responsibility: "查看报价、订单、付款和下一步动作。",
     primaryAction: "推进成交",
@@ -530,17 +530,18 @@ export const WORKBENCH_ROUTES = {
   salesActions: {
     id: "salesActions",
     href: "/sales/actions",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "销售动作",
     responsibility: "处理报价、确认、付款、建单和生产动作。",
     primaryAction: "执行下一步",
     legacyHash: "quote-center:actions",
     initialView: { sales: "actions" },
+    showInModuleNav: false,
   },
   salesQuotes: {
     id: "salesQuotes",
     href: "/sales/quotes",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "报价管理",
     responsibility: "查找并打开报价记录，不执行发送或建单。",
     primaryAction: "查看报价详情",
@@ -550,7 +551,7 @@ export const WORKBENCH_ROUTES = {
   salesQuoteDetail: {
     id: "salesQuoteDetail",
     href: "/sales/quotes/[id]",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "报价详情",
     responsibility: "只读核对一条报价的金额、身份与状态。",
     primaryAction: "选择后续操作",
@@ -560,7 +561,7 @@ export const WORKBENCH_ROUTES = {
   salesQuoteSend: {
     id: "salesQuoteSend",
     href: "/sales/quotes/[id]/send",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "发送报价",
     responsibility: "把一条已核对身份的报价加入微信发送队列。",
     primaryAction: "确认报价入队",
@@ -571,7 +572,7 @@ export const WORKBENCH_ROUTES = {
   salesQuoteCreateOrder: {
     id: "salesQuoteCreateOrder",
     href: "/sales/quotes/[id]/create-order",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "创建订单草稿",
     responsibility: "只由一条报价创建订单草稿，不发送客户消息。",
     primaryAction: "确认创建订单",
@@ -582,7 +583,7 @@ export const WORKBENCH_ROUTES = {
   salesOrders: {
     id: "salesOrders",
     href: "/sales/orders",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "订单管理",
     responsibility: "查找并打开订单记录，不执行编辑或客户跟进。",
     primaryAction: "查看订单详情",
@@ -592,7 +593,7 @@ export const WORKBENCH_ROUTES = {
   salesOrderDetail: {
     id: "salesOrderDetail",
     href: "/sales/orders/[id]",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "订单详情",
     responsibility: "只读核对一条订单的金额、身份、付款与状态。",
     primaryAction: "选择后续操作",
@@ -602,7 +603,7 @@ export const WORKBENCH_ROUTES = {
   salesOrderEdit: {
     id: "salesOrderEdit",
     href: "/sales/orders/[id]/edit",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "编辑订单字段",
     responsibility: "只保存一条订单的状态、付款状态、负责人和备注。",
     primaryAction: "确认保存字段",
@@ -613,7 +614,7 @@ export const WORKBENCH_ROUTES = {
   salesOrderConfirmation: {
     id: "salesOrderConfirmation",
     href: "/sales/orders/[id]/messages/confirmation",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "发送订单确认",
     responsibility: "只把一条订单的确认消息加入微信发送队列。",
     primaryAction: "确认消息入队",
@@ -624,7 +625,7 @@ export const WORKBENCH_ROUTES = {
   salesOrderProduction: {
     id: "salesOrderProduction",
     href: "/sales/orders/[id]/messages/production",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "发送生产跟进",
     responsibility: "只把一条订单的生产跟进加入微信发送队列。",
     primaryAction: "确认消息入队",
@@ -635,7 +636,7 @@ export const WORKBENCH_ROUTES = {
   salesOrderDelivery: {
     id: "salesOrderDelivery",
     href: "/sales/orders/[id]/messages/delivery",
-    sectionId: "quote-center",
+    sectionId: "sales-center",
     title: "发送发货跟进",
     responsibility: "只把一条订单的发货跟进加入微信发送队列。",
     primaryAction: "确认消息入队",
@@ -655,7 +656,7 @@ export const WORKBENCH_ROUTES = {
   automationRuns: {
     id: "automationRuns",
     href: "/automation/runs",
-    sectionId: "notice-center",
+    sectionId: "automation-center",
     title: "自动化状态",
     responsibility: "只查看自动化当前状态、就绪结论和责任页面入口。",
     primaryAction: "刷新状态",
@@ -665,7 +666,7 @@ export const WORKBENCH_ROUTES = {
   automationControl: {
     id: "automationControl",
     href: "/automation/control",
-    sectionId: "notice-center",
+    sectionId: "automation-center",
     title: "运行控制",
     responsibility: "经人工确认后启动、停止或执行一次自动化。",
     primaryAction: "执行一次",
@@ -675,7 +676,7 @@ export const WORKBENCH_ROUTES = {
   automationHistory: {
     id: "automationHistory",
     href: "/automation/history",
-    sectionId: "notice-center",
+    sectionId: "automation-center",
     title: "运行历史",
     responsibility: "查看服务端真实运行结果、耗时、推进、阻断和错误。",
     primaryAction: "刷新记录",
@@ -685,7 +686,7 @@ export const WORKBENCH_ROUTES = {
   automationIssues: {
     id: "automationIssues",
     href: "/automation/issues",
-    sectionId: "notice-center",
+    sectionId: "automation-center",
     title: "自动化问题",
     responsibility: "处理阻断自动化的身份、商品、设计与发送问题。",
     primaryAction: "处理首个问题",
@@ -811,8 +812,10 @@ const DEFAULT_ROUTE_BY_SECTION: Record<WorkspaceSectionId, WorkbenchRouteId> = {
   "review-center": "reviewInbox",
   "sku-library": "catalogProducts",
   "catalog-center": "catalogImport",
+  "sales-center": "salesQuotes",
+  "automation-center": "automationRuns",
   "quote-center": "salesOverview",
-  "notice-center": "automationRuns",
+  "notice-center": "notifications",
   "agent-center": "agents",
   "training-center": "trainingImport",
   "account-center": "settingsAccess",
@@ -895,10 +898,12 @@ export function getWorkbenchRouteForSection(
     routeId = PERSONAL_WECHAT_ROUTE_BY_VIEW[selection.personalWechat];
   }
   if (sectionId === "review-center" && selection.review) routeId = REVIEW_ROUTE_BY_VIEW[selection.review];
-  if (sectionId === "quote-center" && selection.sales) routeId = SALES_ROUTE_BY_VIEW[selection.sales];
+  if ((sectionId === "sales-center" || sectionId === "quote-center") && selection.sales) {
+    routeId = SALES_ROUTE_BY_VIEW[selection.sales];
+  }
   if (sectionId === "sku-library" && selection.sku) routeId = SKU_ROUTE_BY_VIEW[selection.sku];
   if (sectionId === "catalog-center" && selection.catalog) routeId = CATALOG_ROUTE_BY_VIEW[selection.catalog];
-  if (sectionId === "notice-center" && selection.automation) routeId = AUTOMATION_ROUTE_BY_VIEW[selection.automation];
+  if (sectionId === "automation-center" && selection.automation) routeId = AUTOMATION_ROUTE_BY_VIEW[selection.automation];
   if (sectionId === "training-center" && selection.training) routeId = TRAINING_ROUTE_BY_VIEW[selection.training];
   if (sectionId === "account-center" && selection.account) routeId = ACCOUNT_ROUTE_BY_VIEW[selection.account];
   return getWorkbenchRoute(routeId);

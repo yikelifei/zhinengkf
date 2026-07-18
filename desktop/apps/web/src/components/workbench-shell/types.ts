@@ -14,6 +14,9 @@ export type WorkspaceSectionId =
   | "review-center"
   | "sku-library"
   | "catalog-center"
+  | "sales-center"
+  | "automation-center"
+  // Archived legacy-workbench compatibility only. New routes and navigation use sales-center.
   | "quote-center"
   | "notice-center"
   | "agent-center"
