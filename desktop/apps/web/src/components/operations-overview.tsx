@@ -109,7 +109,14 @@ export function OperationsOverview({
         </div>
         <div className={styles.headerActions}>
           {updatedAt ? <time dateTime={updatedAt}>更新于 {formatOverviewTime(updatedAt)}</time> : null}
-          <button type="button" onClick={onRefresh} disabled={busy} aria-label="刷新运营总览">
+          <button
+            type="button"
+            data-action-id="overview.workspace.refresh"
+            data-disabled-reason={busy ? "运营数据正在刷新，请稍候" : undefined}
+            onClick={onRefresh}
+            disabled={busy}
+            aria-label="刷新运营总览"
+          >
             <RefreshCw size={15} aria-hidden="true" />
             <span>刷新</span>
           </button>
@@ -123,7 +130,13 @@ export function OperationsOverview({
               <Radio size={16} aria-hidden="true" />
               <h3 id="overview-channel-title">渠道状态</h3>
             </div>
-            <button type="button" className={styles.linkButton} onClick={onOpenChannels}>
+            <button
+              type="button"
+              className={styles.linkButton}
+              data-action-id="overview.channels.open-management"
+              onClick={onOpenChannels}
+              aria-label="打开渠道接入管理"
+            >
               管理接入<ChevronRight size={15} aria-hidden="true" />
             </button>
           </div>
@@ -165,8 +178,11 @@ export function OperationsOverview({
                   type="button"
                   className={styles.actionRow}
                   key={action.id}
+                  data-action-id={`overview.pending-${action.id}.open`}
+                  data-disabled-reason={busy ? "运营数据正在刷新，请稍候" : undefined}
                   onClick={action.onClick}
                   disabled={busy}
+                  aria-label={`处理待办：${action.label}`}
                 >
                   <span className={`${styles.actionIcon} ${styles[action.tone]}`}>
                     <ToneIcon size={15} aria-hidden="true" />
@@ -226,7 +242,14 @@ export function OperationsOverview({
               <strong>{automationLabel}</strong>
               <small>{automationDetail}</small>
             </div>
-            <button type="button" onClick={onRunAutomation} disabled={busy}>
+            <button
+              type="button"
+              data-action-id="overview.automation.open"
+              data-disabled-reason={busy ? "运营数据正在刷新，请稍候" : undefined}
+              onClick={onRunAutomation}
+              disabled={busy}
+              aria-label="打开自动化管理"
+            >
               查看自动化<ChevronRight size={14} aria-hidden="true" />
             </button>
           </div>
@@ -239,7 +262,13 @@ export function OperationsOverview({
             <MessageCircle size={16} aria-hidden="true" />
             <h3 id="overview-conversations-title">最近会话</h3>
           </div>
-          <button type="button" className={styles.linkButton} onClick={onOpenConversations}>
+          <button
+            type="button"
+            className={styles.linkButton}
+            data-action-id="overview.conversations.open-list"
+            onClick={onOpenConversations}
+            aria-label="打开全部会话"
+          >
             全部会话<ChevronRight size={15} aria-hidden="true" />
           </button>
         </div>
@@ -268,7 +297,13 @@ export function OperationsOverview({
                     <td data-label="最后消息" className={styles.preview}>{conversation.preview || "暂无消息摘要"}</td>
                     <td data-label="更新时间">{conversation.updatedAt}</td>
                     <td>
-                      <button type="button" className={styles.tableAction} onClick={conversation.onOpen}>
+                      <button
+                        type="button"
+                        className={styles.tableAction}
+                        data-action-id={`overview.conversation-${conversation.id}.open`}
+                        onClick={conversation.onOpen}
+                        aria-label={`打开与 ${conversation.customer} 的会话`}
+                      >
                         打开<ChevronRight size={14} aria-hidden="true" />
                       </button>
                     </td>
@@ -282,7 +317,12 @@ export function OperationsOverview({
             <MessageCircle size={22} aria-hidden="true" />
             <strong>还没有客户会话</strong>
             <span>完成微信通道接入后，新会话会出现在这里。</span>
-            <button type="button" onClick={onOpenChannels}>检查微信接入</button>
+            <button
+              type="button"
+              data-action-id="overview.channels.connect-empty"
+              onClick={onOpenChannels}
+              aria-label="检查微信渠道接入"
+            >检查微信接入</button>
           </div>
         )}
       </article>
