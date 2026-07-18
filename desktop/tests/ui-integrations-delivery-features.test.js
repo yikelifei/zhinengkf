@@ -140,15 +140,9 @@ test("new production feature controllers contain no demo, wrong-window, timeout 
   assertStableButtonContracts(files);
 });
 
-test("reused integration controls expose stable action ids and accessible button names", () => {
+test("retained shared integration controls expose stable action ids and accessible button names", () => {
   const files = [
     "components/wechat-work-readiness-panel.tsx",
-    "components/personal-wechat-instances-panel.tsx",
-    "components/personal-wechat-workspace/personal-wechat-workspace.tsx",
-    "components/personal-wechat-control-center/personal-wechat-control-center.tsx",
-    "components/personal-wechat-control-center/account-fleet-pane.tsx",
-    "components/personal-wechat-control-center/account-inspector-pane.tsx",
-    "components/message-safety-governance/message-safety-governance.tsx",
   ].map((name) => ({ name, source: read(name) }));
   assertStableButtonContracts(files);
 });
