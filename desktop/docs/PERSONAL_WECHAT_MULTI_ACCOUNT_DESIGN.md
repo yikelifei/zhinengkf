@@ -111,25 +111,15 @@ preflight -> uncertain -> quarantined
 ## 最小 UI 模块
 
 ```text
-personal-wechat-control-center/
-  account-fleet-pane
-  approval-queue-pane
-  compliance-inspector
-  audit-timeline
-
-voice-assist-center/
-  dictation-panel
-  human-recording-panel
-  disclosed-synthetic-preview
-
-message-safety-governance/
-  send-policy-summary
-  consent-and-opt-out
-  approval-gate
-  emergency-stop
+features/integrations/
+  personal-wechat-control-page.tsx              # 账号状态与入口
+  personal-wechat-voice-assist-page.tsx         # 语音辅助（未启用）
+  personal-wechat-voice-assist-model.ts          # fail-closed 条件模型
+  personal-wechat-voice-assist-stages.tsx        # 只读流程预览
+  personal-wechat-safety-page.tsx                # 发送安全证据
 ```
 
-这些模块必须是受控 React 组件，不在挂载时请求接口或发送消息。`page.tsx` 只负责数据适配和组合，真实发送与权限判断始终留在 API 服务端。
+这些模块必须是受控 React 组件，不在挂载时发送消息。`page.tsx` 只负责数据适配和组合，真实发送与权限判断始终留在 API 服务端。语音辅助路由当前没有控制器、录音或审批 API，默认 `enabled=false` 且不传入任何 actions，因此所有动作保持禁用；不能把流程预览描述成已可完成审批。
 
 ## 验收条件
 

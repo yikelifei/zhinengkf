@@ -38,8 +38,8 @@
 | 企业微信 | `/integrations/wechat-work/settings` | 只读核对本机配置、回调地址和身份策略 | 刷新配置检查 |
 | 个人微信 | `/integrations/personal-wechat/instances` | 查看实例、端点、登录身份和实时状态 | 刷新实例状态 |
 | 个人微信 | `/integrations/personal-wechat/instances/configure` | 校验并保存一个本机 RPA 实例 | 保存当前实例 |
-| 个人微信 | `/integrations/personal-wechat/control` | 查看账号可用状态并导航到独立操作页 | 刷新账号状态 |
-| 个人微信 | `/integrations/personal-wechat/voice-assist` | 处理授权录音、人工校对、中性合成音试听与人工审批 | 完成人工语音审批 |
+| 个人微信 | `/integrations/personal-wechat/control` | 账号状态与入口：只读查看状态并导航到独立操作页 | 刷新账号状态 |
+| 个人微信 | `/integrations/personal-wechat/voice-assist` | 语音辅助（未启用）：只读查看启用条件与安全边界 | 查看启用条件 |
 | 个人微信 | `/integrations/personal-wechat/window-inbound` | 采集真实微信窗口证据并查看快照 | 采集当前窗口 |
 | 个人微信 | `/integrations/personal-wechat/inbound-drill` | 提交带完整身份的受控入站演练 | 提交入站演练 |
 | 个人微信 | `/integrations/personal-wechat/safety` | 审阅阻断任务与不确定投递证据 | 刷新安全证据 |

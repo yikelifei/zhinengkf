@@ -42,10 +42,13 @@ export function PersonalWechatVoiceAssistPage({
   return (
     <FeaturePage
       id="personal-wechat-voice-assist-page"
-      title="个人微信语音辅助"
-      description="只处理授权录音、人工校对、试听与审批；真实发送由独立发送页面负责。"
+      title="语音辅助（未启用）"
+      description="当前仅只读展示启用条件与安全边界；未接入控制器、录音设备、合成服务或人工审批动作。"
       icon={<Volume2 size={20} />}
     >
+      <FeatureNotice tone="warning" title="语音辅助当前未启用">
+        当前路由没有语音控制器，所有录音、校对、试听和审批动作永久保持禁用；下方流程只用于说明未来启用前必须满足的条件。
+      </FeatureNotice>
       <FeatureNotice tone="warning" title="录音授权边界">
         只能录制当前操作员主动口述，且必须取得本次明确授权；禁止后台采集客户通话、克隆第三方声音或冒充真人。
       </FeatureNotice>
@@ -56,8 +59,8 @@ export function PersonalWechatVoiceAssistPage({
       <section className={styles.panel} aria-labelledby="personal-wechat-voice-flow-title">
         <header className={styles.panelHeader}>
           <div>
-            <h2 id="personal-wechat-voice-flow-title">受控语音草稿流程</h2>
-            <p>一次只处理一个语音草稿；任一步缺少授权、人工确认或回调时都会保持禁用。</p>
+            <h2 id="personal-wechat-voice-flow-title">启用条件预览</h2>
+            <p>当前没有可执行流程；任一步缺少授权、人工确认、回调或控制器时都会保持禁用。</p>
           </div>
           <span className={`${styles.statusBadge} ${styles.statusDanger}`}>真实发送关闭</span>
         </header>

@@ -36,6 +36,7 @@ const removedProductionPaths = [
   "components/integration-center/integration-center-header.module.css",
   "components/message-safety-governance",
   "components/personal-wechat-control-center",
+  "components/voice-assist-center",
   "components/personal-wechat-instances-panel.tsx",
   "components/personal-wechat-instances-panel.module.css",
   "components/personal-wechat-workspace",
@@ -47,6 +48,8 @@ const bannedLegacyReferences = [
   /personal-wechat-workspace/,
   /PersonalWechatControlCenter/,
   /personal-wechat-control-center/,
+  /VoiceAssistCenter/,
+  /voice-assist-center/,
   /MessageSafetyGovernance/,
   /message-safety-governance/,
   /PersonalWechatInstancesPanel/,
@@ -65,9 +68,9 @@ test("retired aggregate workbench files stay outside the production source tree"
   }
 
   assert.equal(
-    fs.existsSync(path.join(webRoot, "components/voice-assist-center/voice-assist-center.tsx")),
+    fs.existsSync(path.join(webRoot, "features/integrations/personal-wechat-voice-assist-page.tsx")),
     true,
-    "voice assist remains a reusable feature for its independent route",
+    "the independent voice route keeps one canonical feature implementation",
   );
 });
 

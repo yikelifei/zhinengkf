@@ -16,15 +16,15 @@ export function PersonalWechatControlPage() {
   return (
     <FeaturePage
       id="personal-wechat-control-page"
-      title="个人微信账号控制"
-      description="只查看当前账号是否可用并进入对应操作页，不再混入发送任务、实例编辑或安全策略。"
+      title="账号状态与入口"
+      description="只读查看个人微信账号是否可用，并进入对应的独立操作页；本页没有账号控制写操作。"
       icon={<Users size={20} />}
       busy={busy}
       actions={(
         <button
           type="button"
           data-action-id="integrations.personal-wechat.control.refresh"
-          aria-label="刷新个人微信账号控制状态"
+          aria-label="刷新个人微信账号状态与入口"
           onClick={() => void refresh()}
           disabled={busy}
         >
@@ -33,7 +33,7 @@ export function PersonalWechatControlPage() {
       )}
     >
       {error ? <FeatureNotice tone="error" title="个人微信账号状态读取失败">{error}</FeatureNotice> : null}
-      <FeatureNotice tone="info" title="控制写操作尚未接入">
+      <FeatureNotice tone="info" title="账号控制写操作未启用">
         当前没有可信的账号隔离或人工接管写 API，因此本页不显示无效开关；发送继续由服务端身份和窗口校验兜底。
       </FeatureNotice>
       {busy && !registry ? <LoadingState label="正在读取个人微信账号状态" /> : null}
@@ -74,7 +74,7 @@ export function PersonalWechatControlPage() {
         </section>
       ) : null}
       <nav className={styles.operationLinks} aria-label="个人微信独立操作页">
-        <Link href="/integrations/personal-wechat/voice-assist">语音辅助</Link>
+        <Link href="/integrations/personal-wechat/voice-assist">语音辅助（未启用）</Link>
         <Link href="/send/queue">发送队列</Link>
         <Link href="/integrations/personal-wechat/window-inbound">窗口证据</Link>
         <Link href="/integrations/personal-wechat/inbound-drill">入站演练</Link>

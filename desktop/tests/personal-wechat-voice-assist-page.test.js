@@ -19,6 +19,15 @@ const files = {
   stages: read("personal-wechat-voice-assist-stages.tsx"),
 };
 const combined = Object.values(files).join("\n");
+const routeManifest = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/route-manifest.ts"), "utf8");
+const routePage = fs.readFileSync(
+  path.join(desktopRoot, "apps/web/src/app/integrations/personal-wechat/voice-assist/page.tsx"),
+  "utf8",
+);
+const controlPage = read("personal-wechat-control-page.tsx");
+const uiDocs = ["UI_ACCEPTANCE_MATRIX.md", "UI_MODULE_MAP.md"]
+  .map((name) => fs.readFileSync(path.join(desktopRoot, "docs", name), "utf8"))
+  .join("\n");
 
 test("personal WeChat voice assist is an independent fail-closed feature", () => {
   assert.match(files.page, /export function PersonalWechatVoiceAssistPage/);
@@ -28,6 +37,28 @@ test("personal WeChat voice assist is an independent fail-closed feature", () =>
   assert.match(files.model, /previewStatus: "unavailable"/);
   assert.match(files.page, /真实发送关闭/);
   assert.match(files.stages, /本页没有发送按钮/);
+});
+
+test("the production route honestly exposes an unavailable read-only capability", () => {
+  assert.match(routeManifest, /title: "语音辅助（未启用）"/);
+  assert.match(routeManifest, /primaryAction: "查看启用条件"/);
+  assert.doesNotMatch(routeManifest, /primaryAction: "完成人工语音审批"/);
+  assert.match(files.page, /title="语音辅助（未启用）"/);
+  assert.match(files.page, /语音辅助当前未启用/);
+  assert.match(files.page, /当前路由没有语音控制器/);
+  assert.match(routePage, /<PersonalWechatVoiceAssistPage\s*\/>/);
+  assert.doesNotMatch(routePage, /enabled=|actions=|controller|use[A-Z]/);
+  assert.match(controlPage, />语音辅助（未启用）<\/Link>/);
+  assert.match(uiDocs, /语音辅助（未启用）/);
+  assert.match(uiDocs, /查看启用条件/);
+  assert.doesNotMatch(uiDocs, /完成人工语音审批/);
+});
+
+test("account navigation is named for its actual read-only status capability", () => {
+  assert.match(routeManifest, /title: "账号状态与入口"/);
+  assert.match(controlPage, /title="账号状态与入口"/);
+  assert.match(controlPage, /data-action-id="integrations\.personal-wechat\.control\.refresh"/);
+  assert.doesNotMatch(controlPage, /title="个人微信账号控制"/);
 });
 
 test("model, guards, action primitives, stages and page composition remain separated", () => {
