@@ -59,6 +59,6 @@ if errorlevel 1 (
 echo.
 echo Repair completed.
 echo Desktop services are running now.
-echo Open workbench: http://127.0.0.1:3100/
+echo Open workbench: http://127.0.0.1:3100/overview
 echo.
 pause

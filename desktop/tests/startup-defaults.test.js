@@ -712,7 +712,8 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(repairBat, /ports:repair/);
 
   const stableForeground = readText("start-stable-desktop-foreground.cmd");
-  assert.match(stableForeground, /DESKTOP_RUNTIME_DIR=D:\\zhinengkefu\\desktop\\.runtime-stable/);
+  assert.match(stableForeground, /DESKTOP_ROOT=%%~fI/);
+  assert.match(stableForeground, /if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\\\.runtime-stable"/);
   assert.match(stableForeground, /ports:stop/);
   assert.doesNotMatch(stableForeground, /call npm\.cmd run build:web/);
   assert.match(stableForeground, /web standalone missing; runtime will use Next dev fallback/);
@@ -744,11 +745,11 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableStartNeeded, /Date\.now\(\) - heartbeatUpdatedAt > 30000/);
   assert.match(stableStartNeeded, /isStableRuntimeLauncherPid\(heartbeatPid\)/);
   assert.match(stableStart, /if errorlevel 1/);
-  assert.match(stableStart, /if not exist "D:\\zhinengkefu\\desktop\\dist\\apps\\api\\main\.js" call npm\.cmd run build:api/);
+  assert.match(stableStart, /if not exist "%DESKTOP_ROOT%\\dist\\apps\\api\\main\.js" call npm\.cmd run build:api/);
   assert.doesNotMatch(stableStart, /call npm\.cmd run build:web/);
   assert.match(stableStart, /web standalone missing; runtime will use Next dev fallback/);
   assert.doesNotMatch(stableStart, /stable:doctor -- --wait --wait-ms=15000 --interval-ms=3000/);
-  assert.match(stableStart, /call "D:\\zhinengkefu\\desktop\\keepalive-stable-desktop\.cmd"/);
+  assert.match(stableStart, /call "%DESKTOP_ROOT%\\keepalive-stable-desktop\.cmd"/);
   const startDevPorts = readText("tools/start-dev-ports.js");
   assert.match(startDevPorts, /SKIP_EXISTING_WEB_BUILD === "1"/);
   assert.match(startDevPorts, /web rebuild skipped for stable startup/);
@@ -756,11 +757,12 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableStart, /run-stable-service-window\.cmd/);
   assert.doesNotMatch(stableStart, /SKIP_EXISTING_API_BUILD=1/);
   const stableServiceWindow = readText("run-stable-service-window.cmd");
-  assert.match(stableServiceWindow, /set STABLE_SERVICE_WINDOW=1/);
+  assert.match(stableServiceWindow, /set "STABLE_SERVICE_WINDOW=1"/);
   assert.match(stableServiceWindow, /start-stable-desktop\.cmd/);
   const stableKeepalive = readText("keepalive-stable-desktop.cmd");
-  assert.match(stableKeepalive, /DESKTOP_RUNTIME_DIR=D:\\zhinengkefu\\desktop\\.runtime-stable/);
-  assert.match(stableKeepalive, /if not exist "D:\\zhinengkefu\\desktop\\dist\\apps\\api\\main\.js" call npm\.cmd run build:api/);
+  assert.match(stableKeepalive, /DESKTOP_ROOT=%%~fI/);
+  assert.match(stableKeepalive, /if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\\\.runtime-stable"/);
+  assert.match(stableKeepalive, /if not exist "%DESKTOP_ROOT%\\dist\\apps\\api\\main\.js" call npm\.cmd run build:api/);
   assert.match(stableKeepalive, /stable-runtime-launcher\.js/);
   assert.match(stableKeepalive, /set STABLE_RUNTIME_EXIT_CODE=%ERRORLEVEL%/);
   assert.match(stableKeepalive, /if %STABLE_RUNTIME_EXIT_CODE% EQU 0 \(/);
@@ -768,14 +770,16 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalive, /stable-runtime exited cleanly while services are healthy; continuing guard/);
   assert.doesNotMatch(stableKeepalive, /ports:keepalive:mock/);
   const stableKeepalivePs1 = readText("tools/start-stable-keepalive.ps1");
+  assert.match(stableKeepalivePs1, /\$Root = \(Resolve-Path \(Join-Path \$PSScriptRoot "\.\."\)\)\.Path/);
   assert.match(stableKeepalivePs1, /\$StableRuntimeLauncherScript = Join-Path \$Root "tools\\stable-runtime-launcher\.js"/);
   assert.match(stableKeepalivePs1, /\$StableRuntimeLauncherArgument = "tools\\stable-runtime-launcher\.js"/);
   assert.match(stableKeepalivePs1, /-FilePath \$NodeExe/);
   assert.match(stableKeepalivePs1, /-ArgumentList @\(\$StableRuntimeLauncherArgument\)/);
   assert.match(stableKeepalivePs1, /-RedirectStandardOutput \$KeepAliveOutLog/);
   assert.match(stableKeepalivePs1, /-RedirectStandardError \$KeepAliveErrLog/);
-  assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "\$\(if \(\$env:STABLE_WECHAT_BRIDGE_MODE\) \{ \$env:STABLE_WECHAT_BRIDGE_MODE \} else \{ "dispatch" \}\)"/);
-  assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "\$\(if \(\$env:STABLE_PERSONAL_WECHAT_SEND\) \{ \$env:STABLE_PERSONAL_WECHAT_SEND \} else \{ "0" \}\)"/);
+  assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"/);
+  assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "0"/);
+  assert.doesNotMatch(stableKeepalivePs1, /if \(\$env:STABLE_PERSONAL_WECHAT_SEND\)/);
   assert.match(stableKeepalivePs1, /function Normalize-ProcessPathEnvironment/);
   assert.match(stableKeepalivePs1, /SetEnvironmentVariable\("Path", \$pathValue, "Process"\)/);
   assert.doesNotMatch(stableKeepalivePs1, /-UseNewEnvironment/);
@@ -818,7 +822,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableKeepalivePs1, /\$LASTEXITCODE -eq 0 -or \(Test-StableRuntimeHealthy\)/);
   assert.match(stableKeepalivePs1, /RedirectStandardOutput/);
   assert.match(stableKeepalivePs1, /RedirectStandardError/);
-  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/"/);
+  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/overview"/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3200\/api\/health"/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3700\/v1\/health"/);
   assert.match(stableKeepalivePs1, /curl\.exe -s -o NUL -w "%\{http_code\}" --max-time 3 \$Url/);
@@ -829,11 +833,11 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableKeepalivePs1, /"-NoExit"/);
   assert.doesNotMatch(stableKeepalivePs1, /System\.Diagnostics\.ProcessStartInfo/);
   const stableStatus = readText("status-stable-desktop.cmd");
-  assert.match(stableStatus, /DESKTOP_RUNTIME_DIR=D:\\zhinengkefu\\desktop\\.runtime-stable/);
+  assert.match(stableStatus, /if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\\\.runtime-stable"/);
   assert.match(stableStatus, /stable:doctor/);
   assert.doesNotMatch(stableStatus, /ports:status:mock/);
   const stableStop = readText("stop-stable-desktop.cmd");
-  assert.match(stableStop, /DESKTOP_RUNTIME_DIR=D:\\zhinengkefu\\desktop\\.runtime-stable/);
+  assert.match(stableStop, /if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\\\.runtime-stable"/);
   assert.match(stableStop, /FORCE_PORTS_SWEEP=1/);
   assert.match(stableStop, /schtasks\.exe \/Delete \/TN zhinengkefu_stable_runtime \/F/);
   assert.match(stableStop, /ports:stop/);
@@ -848,27 +852,103 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableLaunch, /pause/);
   assert.match(stableLaunch, /electron\.cmd apps\\electron\\main\.js/);
   const stableLogs = readText("logs-stable-desktop.cmd");
-  assert.match(stableLogs, /D:\\zhinengkefu\\desktop\\.runtime-stable\\logs/);
+  assert.match(stableLogs, /set "LOG_DIR=%DESKTOP_RUNTIME_DIR%\\logs"/);
   assert.match(stableLogs, /Get-ChildItem/);
   assert.match(stableLogs, /Get-Content/);
   assert.match(stableLogs, /-Tail 40/);
 
-  const desktopStableForeground = fs.readFileSync(
-    "C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop-foreground.cmd",
-    "utf8",
-  );
-  assert.match(desktopStableForeground, /D:\\zhinengkefu\\desktop\\start-stable-desktop-foreground\.cmd/);
-  const desktopStableStatus = fs.readFileSync("C:\\Users\\27808\\Desktop\\zhinengkefu\\status-stable-desktop.cmd", "utf8");
-  assert.match(desktopStableStatus, /D:\\zhinengkefu\\desktop\\status-stable-desktop\.cmd/);
-  const desktopStableRepair = fs.readFileSync("C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd", "utf8");
-  assert.match(desktopStableRepair, /D:\\zhinengkefu\\desktop\\repair-stable-desktop\.cmd/);
-  const desktopStableLaunch = fs.readFileSync("C:\\Users\\27808\\Desktop\\zhinengkefu\\launch-stable-desktop-app.cmd", "utf8");
-  assert.match(desktopStableLaunch, /D:\\zhinengkefu\\desktop\\launch-stable-desktop-app\.cmd/);
-  const desktopStableLogs = fs.readFileSync("C:\\Users\\27808\\Desktop\\zhinengkefu\\logs-stable-desktop.cmd", "utf8");
-  assert.match(desktopStableLogs, /D:\\zhinengkefu\\desktop\\logs-stable-desktop\.cmd/);
-  const desktopStableStart = fs.readFileSync("C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop.cmd", "utf8");
-  assert.match(desktopStableStart, /D:\\zhinengkefu\\desktop\\start-stable-desktop\.cmd/);
+  const projectRoot = path.join(root, "..");
+  const desktopStableForeground = fs.readFileSync(path.join(projectRoot, "start-stable-desktop-foreground.cmd"), "utf8");
+  assert.match(desktopStableForeground, /%PROJECT_ROOT%\\desktop\\start-stable-desktop-foreground\.cmd/);
+  const desktopStableStatus = fs.readFileSync(path.join(projectRoot, "status-stable-desktop.cmd"), "utf8");
+  assert.match(desktopStableStatus, /%PROJECT_ROOT%\\desktop\\status-stable-desktop\.cmd/);
+  const desktopStableRepair = fs.readFileSync(path.join(projectRoot, "repair-stable-desktop.cmd"), "utf8");
+  assert.match(desktopStableRepair, /%PROJECT_ROOT%\\desktop\\repair-stable-desktop\.cmd/);
+  const desktopStableLaunch = fs.readFileSync(path.join(projectRoot, "launch-stable-desktop-app.cmd"), "utf8");
+  assert.match(desktopStableLaunch, /%PROJECT_ROOT%\\desktop\\launch-stable-desktop-app\.cmd/);
+  const desktopStableLogs = fs.readFileSync(path.join(projectRoot, "logs-stable-desktop.cmd"), "utf8");
+  assert.match(desktopStableLogs, /%PROJECT_ROOT%\\desktop\\logs-stable-desktop\.cmd/);
+  const desktopStableStart = fs.readFileSync(path.join(projectRoot, "start-stable-desktop.cmd"), "utf8");
+  assert.match(desktopStableStart, /%PROJECT_ROOT%\\desktop\\start-stable-desktop\.cmd/);
   assert.doesNotMatch(desktopStableStart, /stable-runtime-launcher-local\.js/);
+});
+
+test("stable startup entrypoints resolve the active worktree and stay fail-closed", () => {
+  const projectRoot = path.resolve(root, "..");
+  const readProjectText = (relativePath) => fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
+  const projectEntrypoints = [
+    "launch-stable-desktop-app.cmd",
+    "start-stable-desktop.cmd",
+    "start-stable-desktop-foreground.cmd",
+    "status-stable-desktop.cmd",
+    "repair-stable-desktop.cmd",
+    "logs-stable-desktop.cmd",
+    "run_desktop.bat",
+    "verify_desktop.bat",
+    "check_desktop.bat",
+    "repair_desktop.bat",
+    "stop_desktop.bat",
+  ];
+  const desktopEntrypoints = [
+    "launch-stable-desktop-app.cmd",
+    "start-stable-desktop.cmd",
+    "keepalive-stable-desktop.cmd",
+    "start-stable-desktop-foreground.cmd",
+    "status-stable-desktop.cmd",
+    "stop-stable-desktop.cmd",
+    "repair-stable-desktop.cmd",
+    "run-stable-service-window.cmd",
+    "logs-stable-desktop.cmd",
+    "tools/start-stable-keepalive.ps1",
+    "apps/electron/main.js",
+  ];
+  const allEntrypoints = [
+    ...projectEntrypoints.map((relativePath) => [relativePath, readProjectText(relativePath)]),
+    ...desktopEntrypoints.map((relativePath) => [`desktop/${relativePath}`, readText(relativePath)]),
+  ];
+
+  for (const [relativePath, source] of allEntrypoints) {
+    assert.doesNotMatch(source, /D:\\zhinengkefu\\desktop|C:\\Users\\27808\\Desktop\\zhinengkefu/i, relativePath);
+  }
+
+  for (const relativePath of desktopEntrypoints.filter((value) => value.endsWith(".cmd"))) {
+    const source = readText(relativePath);
+    assert.match(source, /DESKTOP_ROOT=%%~fI/, relativePath);
+    assert.match(source, /if not defined DESKTOP_RUNTIME_DIR/, relativePath);
+  }
+
+  for (const relativePath of projectEntrypoints.slice(0, 6)) {
+    const source = readProjectText(relativePath);
+    assert.match(source, /PROJECT_ROOT=%%~fI/, relativePath);
+    assert.match(source, /%PROJECT_ROOT%\\desktop\\/, relativePath);
+  }
+
+  for (const relativePath of ["run_desktop.bat", "verify_desktop.bat", "check_desktop.bat", "stop_desktop.bat"]) {
+    assert.match(readProjectText(relativePath), /if not defined DESKTOP_RUNTIME_DIR/, relativePath);
+  }
+
+  const stableLaunch = readText("launch-stable-desktop-app.cmd");
+  const stableStart = readText("start-stable-desktop.cmd");
+  const stableKeepalive = readText("keepalive-stable-desktop.cmd");
+  const stableForeground = readText("start-stable-desktop-foreground.cmd");
+  const stableKeepalivePs1 = readText("tools/start-stable-keepalive.ps1");
+  const electronMain = readText("apps/electron/main.js");
+  assert.match(stableLaunch, /WEB_URL=http:\/\/127\.0\.0\.1:3100\/overview/);
+  assert.match(electronMain, /process\.env\.WEB_URL \|\| "http:\/\/127\.0\.0\.1:3100\/overview"/);
+  assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/overview"/);
+
+  for (const [relativePath, source] of [
+    ["launch-stable-desktop-app.cmd", stableLaunch],
+    ["start-stable-desktop.cmd", stableStart],
+    ["keepalive-stable-desktop.cmd", stableKeepalive],
+    ["start-stable-desktop-foreground.cmd", stableForeground],
+  ]) {
+    assert.match(source, /STABLE_WECHAT_BRIDGE_MODE=dispatch/, relativePath);
+    assert.match(source, /STABLE_PERSONAL_WECHAT_SEND=0/, relativePath);
+  }
+  assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"/);
+  assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "0"/);
+  assert.doesNotMatch(stableKeepalivePs1, /if \(\$env:STABLE_PERSONAL_WECHAT_SEND\)/);
 });
 
 test("stable runtime launcher owns one stable runtime and required services", () => {

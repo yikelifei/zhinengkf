@@ -1,9 +1,10 @@
 @echo off
 setlocal
-set DESKTOP_RUNTIME_DIR=D:\zhinengkefu\desktop\.runtime-stable
-set FORCE_PORTS_SWEEP=1
-if not exist "D:\zhinengkefu\desktop\.runtime-stable" mkdir "D:\zhinengkefu\desktop\.runtime-stable"
-echo stop> "D:\zhinengkefu\desktop\.runtime-stable\stable-runtime-stop-request"
+for %%I in ("%~dp0.") do set "DESKTOP_ROOT=%%~fI"
+if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\.runtime-stable"
+set "FORCE_PORTS_SWEEP=1"
+if not exist "%DESKTOP_RUNTIME_DIR%" mkdir "%DESKTOP_RUNTIME_DIR%"
+echo stop> "%DESKTOP_RUNTIME_DIR%\stable-runtime-stop-request"
 schtasks.exe /Delete /TN zhinengkefu_stable_runtime /F >nul 2>nul
-cd /d D:\zhinengkefu\desktop
+cd /d "%DESKTOP_ROOT%"
 call npm.cmd run ports:stop

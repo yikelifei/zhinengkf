@@ -33,7 +33,7 @@ set "USE_LOCAL_STORE=true"
 set "START_MOCK_DESIGN_PLATFORM=true"
 set "DESIGN_PLATFORM_ADAPTER=standard_v1"
 set "DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3700"
-set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
 set "DESIGN_PLATFORM_RUNTIME_CONFIG=%DESKTOP_RUNTIME_DIR%\design-platform-config.json"
 
 if not exist node_modules (
@@ -48,13 +48,13 @@ if not exist node_modules (
 
 echo.
 echo [start] Starting desktop services in stable foreground mode...
-echo Open workbench: http://127.0.0.1:3100/
+echo Open workbench: http://127.0.0.1:3100/overview
 echo Keep this window open while using the app.
 echo.
 call "%DESKTOP_DIR%\start-stable-desktop-foreground.cmd"
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime-stable\logs.
-  echo You can also run C:\Users\27808\Desktop\zhinengkefu\repair-stable-desktop.cmd.
+  echo You can also run "%ROOT_DIR%repair-stable-desktop.cmd".
   pause
   exit /b 1
 )

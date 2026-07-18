@@ -33,7 +33,7 @@ set "USE_LOCAL_STORE=true"
 set "START_MOCK_DESIGN_PLATFORM=true"
 set "DESIGN_PLATFORM_ADAPTER=standard_v1"
 set "DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3700"
-set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
+if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_DIR%\.runtime-stable"
 set "DESIGN_PLATFORM_RUNTIME_CONFIG=%DESKTOP_RUNTIME_DIR%\design-platform-config.json"
 
 if not exist node_modules (
@@ -51,13 +51,13 @@ call npm.cmd run stable:doctor
 if errorlevel 1 (
   echo.
   echo [warn] Stable services are not running yet.
-  echo Run C:\Users\27808\Desktop\zhinengkefu\repair-stable-desktop.cmd and keep that window open.
+  echo Run "%ROOT_DIR%repair-stable-desktop.cmd" and keep that window open.
   pause
   exit /b 1
 )
 
 echo.
 echo [ok] Desktop startup verification passed.
-echo You can now open http://127.0.0.1:3100/ or run launch-stable-desktop-app.cmd.
+echo You can now open http://127.0.0.1:3100/overview or run launch-stable-desktop-app.cmd.
 echo.
 pause

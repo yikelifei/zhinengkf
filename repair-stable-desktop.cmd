@@ -1,2 +1,4 @@
 @echo off
-call "D:\zhinengkefu\desktop\repair-stable-desktop.cmd" %*
+setlocal
+for %%I in ("%~dp0.") do set "PROJECT_ROOT=%%~fI"
+call "%PROJECT_ROOT%\desktop\repair-stable-desktop.cmd" %*
