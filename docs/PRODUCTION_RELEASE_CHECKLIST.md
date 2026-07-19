@@ -24,13 +24,23 @@ npm.cmd run release:gate
 
 这些文件位于已忽略的 `.runtime` 目录，不进入 Git。
 
+本地门禁通过后，在隔离预发布环境继续运行可审计的只读证据检查：
+
+```powershell
+cd desktop
+npm.cmd run staging:readiness
+npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-domain.cn/api
+```
+
+第一条命令只做本地脱敏配置盘点；第二条必须显式加入 `--execute`，且只运行 `prisma migrate status` 和现有 API 的固定 `GET` 就绪接口，不部署迁移、不真实发送、不提交设计任务。报告写入 `desktop/.runtime/staging-readiness-evidence/`。完整口径见 `docs/STAGING_READINESS_EVIDENCE.md`。
+
 ## 状态口径
 
 - `PASS`：本机可重复执行的代码、构建、测试和静态安全检查通过。
 - `BLOCKED`：代码检查未必失败，但缺少真实外部环境、授权、数据库证据或空闲端口；禁止发布。
 - `FAIL`：仓库、构建、测试、安全或本地工具链检查失败；禁止发布。
 
-Windows 入口退出码为：`PASS=0`、`FAIL=1`、`BLOCKED=2`。默认不接入真实密钥，因此即使所有本地检查通过，真实生产依赖仍会保留为 `BLOCKED`，直到发布负责人完成下面的人工证据清单。
+Windows 入口退出码为：`PASS=0`、`FAIL=1`、`BLOCKED=2`。默认不接入真实密钥，因此即使所有本地检查通过，真实生产依赖仍会保留为 `BLOCKED`。在预发布环境用 `staging:readiness -- --execute` 收集可重复的只读证据，再由发布负责人完成下面无法自动化的人工证据清单。
 
 ## 自动门禁范围
 
@@ -52,6 +62,7 @@ Windows 入口退出码为：`PASS=0`、`FAIL=1`、`BLOCKED=2`。默认不接入
 ### 数据库与队列
 
 - [ ] 已确认目标 PostgreSQL 的现有基线与仓库迁移历史一致。
+- [ ] `staging:readiness -- --execute` 的 `prisma migrate status` 为 `PASS`，报告已附到变更单。
 - [ ] 已在隔离的预发布数据库执行并留存 `prisma migrate deploy --schema prisma/schema.prisma` 输出。
 - [ ] 已备份数据库并完成一次迁移回滚/恢复演练。
 - [ ] 若启用 BullMQ/Redis，已验证目标 Redis 的连接、权限、持久化和故障提示。
@@ -73,6 +84,7 @@ npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
 ### Windows 桌面与渠道
 
 - [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
+- [ ] 预发布证据报告中的企业微信、个人微信桥和设计平台只读检查均为 `PASS`。
 - [ ] 微信客户端版本、登录账号、窗口识别和人工接管流程已由授权操作员验收。
 - [ ] 真实发送保持显式授权和审计，未通过测试代码或本地脚本绕过发送护栏。
 - [ ] 端口 3100、3200、3700 的占用来源已确认，发布前无未知进程。
