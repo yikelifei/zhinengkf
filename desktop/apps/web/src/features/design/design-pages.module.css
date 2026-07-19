@@ -247,6 +247,20 @@
 }
 .imageUnavailable { display: grid; place-items: center; padding: 8px; color: var(--wk-color-text-tertiary); font-size: var(--wk-font-size-xs); text-align: center; }
 .imageTile figcaption { overflow: hidden; color: var(--wk-color-text-secondary); font-size: var(--wk-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.imageRepairButton {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--wk-color-border-strong);
+  border-radius: var(--wk-radius-sm);
+  padding: 6px 8px;
+  color: var(--wk-color-brand);
+  background: var(--wk-color-surface);
+  font-size: var(--wk-font-size-xs);
+}
+.imageRepairButton:hover:not(:disabled) { border-color: var(--wk-color-brand); background: var(--wk-color-brand-soft); }
 
 .checkList,
 .recordList,

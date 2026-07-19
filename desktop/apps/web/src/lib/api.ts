@@ -34,6 +34,16 @@ export type DesignJob = {
     downloadUrl?: string;
     fingerprint?: string;
     selected?: boolean;
+    localFile?: {
+      state: "ready" | "not_saved" | "stale_record" | "missing_file";
+      code:
+        | "DESIGN_IMAGE_LOCAL_FILE_READY"
+        | "DESIGN_IMAGE_LOCAL_FILE_NOT_SAVED"
+        | "DESIGN_IMAGE_LOCAL_FILE_STALE_RECORD"
+        | "DESIGN_IMAGE_LOCAL_FILE_MISSING";
+      message: string;
+      canRepair: boolean;
+    };
   }>;
   assets?: DesignAsset[];
   revisions?: DesignRevision[];
@@ -1918,6 +1928,21 @@ export function localDesignImageUrl(
   if (!jobId || !imageKey || !image?.localPath) return "";
   const query = expectedIdentityQuery(expected);
   return `${API_BASE}/design-jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageKey)}/local-file${query}`;
+}
+
+export async function repairLocalDesignImage(
+  designJobId: string,
+  imageKey: string,
+  expected: IdentityExpectation = {},
+): Promise<{
+  repaired: boolean;
+  image: NonNullable<DesignJob["images"]>[number];
+  job: DesignJob;
+}> {
+  return postJson(
+    `/design-jobs/${encodeURIComponent(designJobId)}/images/${encodeURIComponent(imageKey)}/repair-local-file`,
+    expected,
+  );
 }
 
 export async function createDemoCustomerLogo(customerId: string, expected: IdentityExpectation = {}): Promise<DesignAsset> {

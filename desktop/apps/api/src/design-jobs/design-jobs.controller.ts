@@ -102,6 +102,30 @@ export class DesignJobsController {
     return reply.send(file.stream);
   }
 
+  @Get(":id/images/:imageId/local-file-status")
+  localImageFileStatus(
+    @Param("id") id: string,
+    @Param("imageId") imageId: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("conversationId") conversationId: string,
+    @Query("customerId") customerId: string,
+  ) {
+    return this.designJobs.inspectLocalDesignImage(id, imageId, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
+
+  @Post(":id/images/:imageId/repair-local-file")
+  repairLocalImageFile(
+    @Param("id") id: string,
+    @Param("imageId") imageId: string,
+    @Body() body: ExpectedIdentityPayload = {},
+  ) {
+    return this.designJobs.repairLocalDesignImage(id, imageId, body || {});
+  }
+
   @Get(":id/revisions")
   listRevisions(
     @Param("id") id: string,

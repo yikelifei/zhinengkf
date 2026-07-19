@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  GoneException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -102,6 +109,19 @@ type IdentityFilter = {
   customerId?: string;
 };
 
+type DesignImageLocalFileState = "ready" | "not_saved" | "stale_record" | "missing_file";
+
+type DesignImageLocalFileStatus = {
+  state: DesignImageLocalFileState;
+  code:
+    | "DESIGN_IMAGE_LOCAL_FILE_READY"
+    | "DESIGN_IMAGE_LOCAL_FILE_NOT_SAVED"
+    | "DESIGN_IMAGE_LOCAL_FILE_STALE_RECORD"
+    | "DESIGN_IMAGE_LOCAL_FILE_MISSING";
+  message: string;
+  canRepair: boolean;
+};
+
 type DesignPlatformSmokeStep = {
   key: string;
   label: string;
@@ -148,14 +168,16 @@ export class DesignJobsService {
     private readonly orders: OrdersService,
   ) {}
 
-  list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
-    if (appConfig.useLocalStore) return this.localStore.listDesignJobs(filter);
-    return this.prisma.designJob.findMany({
-      where: cleanIdentityWhere(filter),
-      include: { images: true, customer: true, conversation: true, assets: true },
-      orderBy: { updatedAt: "desc" },
-      take: 200,
-    });
+  async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    const jobs = appConfig.useLocalStore
+      ? this.localStore.listDesignJobs(filter)
+      : await this.prisma.designJob.findMany({
+          where: cleanIdentityWhere(filter),
+          include: { images: true, customer: true, conversation: true, assets: true },
+          orderBy: { updatedAt: "desc" },
+          take: 200,
+        });
+    return Promise.all(jobs.map((job: any) => this.decorateDesignJobLocalFileStatuses(job)));
   }
 
   async runDesignPlatformSmokeTest(): Promise<DesignPlatformSmokeTestResult> {
@@ -1206,20 +1228,112 @@ export class DesignJobsService {
   }
 
   async readLocalDesignImage(id: string, imageId: string, expected: ExpectedIdentityPayload = {}) {
-    const job = appConfig.useLocalStore
-      ? this.localStore.getDesignJob(id)
-      : await this.prisma.designJob.findUnique({
-          where: { id },
-          include: { images: true },
-        });
-    if (!job) throw new BadRequestException(`design job not found: ${id}`);
-    assertExpectedIdentity(job, expected, "design job image");
+    const inspection = await this.inspectLocalDesignImage(id, imageId, expected);
+    if (inspection.localFile.state !== "ready") {
+      throw this.localDesignImageStatusException(inspection.localFile);
+    }
+    const image = inspection.image;
+    return this.storage.readLocalAsset(image.localPath);
+  }
+
+  async inspectLocalDesignImage(id: string, imageId: string, expected: ExpectedIdentityPayload = {}) {
+    const job = await this.findDesignJobWithImages(id);
+    if (!job) {
+      throw new NotFoundException({
+        code: "DESIGN_JOB_NOT_FOUND",
+        state: "record_missing",
+        message: `design job not found: ${id}`,
+      });
+    }
+    try {
+      assertExpectedIdentity(job, expected, "design job image");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "design job image identity mismatch";
+      throw new ForbiddenException({
+        code: "DESIGN_IMAGE_IDENTITY_MISMATCH",
+        state: "identity_mismatch",
+        message,
+      });
+    }
 
     const image = (job.images || []).find((item: any) => item.id === imageId || item.imageId === imageId);
-    if (!image) throw new BadRequestException(`design image not found in design job: ${imageId}`);
-    if (!image.localPath) throw new BadRequestException("design image has no local file");
-    this.assertDesignImageLocalPathBelongsToJob(job, image.localPath);
-    return this.storage.readLocalAsset(image.localPath);
+    if (!image) {
+      throw new NotFoundException({
+        code: "DESIGN_IMAGE_NOT_FOUND",
+        state: "record_missing",
+        message: `design image not found in design job: ${imageId}`,
+      });
+    }
+    return {
+      designJobId: job.id,
+      imageId: image.imageId || image.id,
+      image,
+      localFile: await this.inspectDesignImageLocalFile(job, image),
+    };
+  }
+
+  async repairLocalDesignImage(id: string, imageId: string, expected: ExpectedIdentityPayload = {}) {
+    const inspection = await this.inspectLocalDesignImage(id, imageId, expected);
+    if (inspection.localFile.state === "ready") {
+      return {
+        repaired: false,
+        image: { ...inspection.image, localFile: inspection.localFile },
+        job: await this.decorateDesignJobLocalFileStatuses(await this.findDesignJobWithImages(id)),
+      };
+    }
+
+    const downloadUrl = String(inspection.image.downloadUrl || "").trim();
+    if (!downloadUrl) {
+      throw new ConflictException({
+        code: "DESIGN_IMAGE_REPAIR_SOURCE_UNAVAILABLE",
+        state: inspection.localFile.state,
+        message: "design image has no download source; poll the design result or regenerate it",
+      });
+    }
+
+    let localPath = "";
+    try {
+      localPath = await this.storage.saveDesignImage(
+        inspection.designJobId,
+        String(inspection.image.imageId || inspection.image.id),
+        downloadUrl,
+      );
+    } catch (error) {
+      throw new ConflictException({
+        code: "DESIGN_IMAGE_REPAIR_DOWNLOAD_FAILED",
+        state: inspection.localFile.state,
+        message: error instanceof Error ? error.message : "design image download failed",
+      });
+    }
+
+    if (appConfig.useLocalStore) {
+      this.localStore.upsertDesignImages(inspection.designJobId, [{ ...inspection.image, localPath }]);
+    } else {
+      await this.prisma.designImageCandidate.upsert({
+        where: {
+          designJobId_imageId: {
+            designJobId: inspection.designJobId,
+            imageId: String(inspection.image.imageId || inspection.image.id),
+          },
+        },
+        update: { localPath } as any,
+        create: {
+          designJobId: inspection.designJobId,
+          imageId: String(inspection.image.imageId || inspection.image.id),
+          downloadUrl,
+          localPath,
+          position: Number(inspection.image.position || 0),
+          fingerprint: inspection.image.fingerprint,
+        } as any,
+      });
+    }
+
+    const job = await this.findDesignJobWithImages(id);
+    const decoratedJob = await this.decorateDesignJobLocalFileStatuses(job);
+    const image = (decoratedJob?.images || []).find(
+      (item: any) => item.id === inspection.image.id || item.imageId === inspection.image.imageId,
+    );
+    return { repaired: true, image, job: decoratedJob };
   }
 
   async listRevisions(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -2622,13 +2736,83 @@ export class DesignJobsService {
     return [...(payload.assets || []), ...assetIds];
   }
 
-  private assertDesignImageLocalPathBelongsToJob(job: any, localPath: string) {
+  private async findDesignJobWithImages(id: string) {
+    return appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : this.prisma.designJob.findUnique({
+          where: { id },
+          include: { images: true },
+        });
+  }
+
+  private async decorateDesignJobLocalFileStatuses(job: any) {
+    if (!job) return job;
+    const images = await Promise.all(
+      (job.images || []).map(async (image: any) => ({
+        ...image,
+        localFile: await this.inspectDesignImageLocalFile(job, image),
+      })),
+    );
+    return { ...job, images };
+  }
+
+  private async inspectDesignImageLocalFile(job: any, image: any): Promise<DesignImageLocalFileStatus> {
+    const canRepair = Boolean(String(image?.downloadUrl || "").trim());
+    if (!image?.localPath) {
+      return {
+        state: "not_saved",
+        code: "DESIGN_IMAGE_LOCAL_FILE_NOT_SAVED",
+        message: canRepair ? "本地文件尚未保存，可从原始出图地址重新下载。" : "本地文件尚未保存，且原始出图地址不可用。",
+        canRepair,
+      };
+    }
+
+    const binding = this.designImageLocalPathBinding(job, image.localPath);
+    if (binding !== "valid") {
+      return {
+        state: "stale_record",
+        code: "DESIGN_IMAGE_LOCAL_FILE_STALE_RECORD",
+        message:
+          binding === "outside_storage"
+            ? "图片记录仍指向旧的运行目录，可重新下载到当前存储目录。"
+            : "图片记录指向其他设计任务目录，可重新下载并修复绑定。",
+        canRepair,
+      };
+    }
+
+    try {
+      const stat = await fs.stat(path.resolve(String(image.localPath)));
+      if (stat.isFile()) {
+        return {
+          state: "ready",
+          code: "DESIGN_IMAGE_LOCAL_FILE_READY",
+          message: "本地文件可用。",
+          canRepair: false,
+        };
+      }
+    } catch {
+      // The record is valid but the file has been removed from disk.
+    }
+    return {
+      state: "missing_file",
+      code: "DESIGN_IMAGE_LOCAL_FILE_MISSING",
+      message: canRepair ? "图片记录有效，但磁盘文件已缺失，可重新下载。" : "图片记录有效，但磁盘文件已缺失。",
+      canRepair,
+    };
+  }
+
+  private localDesignImageStatusException(status: DesignImageLocalFileStatus) {
+    const body = { code: status.code, state: status.state, message: status.message, canRepair: status.canRepair };
+    if (status.state === "not_saved") return new GoneException(body);
+    if (status.state === "stale_record") return new ConflictException(body);
+    return new NotFoundException(body);
+  }
+
+  private designImageLocalPathBinding(job: any, localPath: string): "valid" | "outside_storage" | "wrong_job" {
     const resolved = path.resolve(String(localPath || ""));
     const root = path.resolve(appConfig.localStorageRoot);
     const relativeToRoot = path.relative(root, resolved);
-    if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
-      throw new BadRequestException("design image file is outside local storage");
-    }
+    if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) return "outside_storage";
 
     const allowedDirs = [job.id, job.requestId]
       .map((value) => String(value || "").trim())
@@ -2636,9 +2820,17 @@ export class DesignJobsService {
       .map((value) => path.resolve(root, "design-jobs", value));
     const belongsToJob = allowedDirs.some((dir) => {
       const relative = path.relative(dir, resolved);
-      return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+      return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
     });
-    if (!belongsToJob) throw new BadRequestException("design image file is not bound to this design job");
+    return belongsToJob ? "valid" : "wrong_job";
+  }
+
+  private assertDesignImageLocalPathBelongsToJob(job: any, localPath: string) {
+    const binding = this.designImageLocalPathBinding(job, localPath);
+    if (binding === "outside_storage") {
+      throw new BadRequestException("design image file is outside local storage");
+    }
+    if (binding === "wrong_job") throw new BadRequestException("design image file is not bound to this design job");
   }
 
   private scheduleResultPoll(requestId: string, externalJobId: string) {
