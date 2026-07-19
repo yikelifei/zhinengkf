@@ -113,23 +113,22 @@ export class OrdersService {
       }
     }
 
-    const updated = appConfig.useLocalStore
-      ? this.localStore.updateOrderDraft(id, data)
-      : await (this.prisma as any).orderDraft.update({
-          where: { id },
-          data,
-          include: this.orderInclude(),
-        });
-
-    if (current.quoteDraftId && Object.keys(quotePatch).length) {
-      await this.updateQuote(current.quoteDraftId, quotePatch);
-    }
-
-    const orderSendInvalidation = this.orderSendInvalidationForUpdate(data, { ...current, ...updated });
-    const cancelledSendTasks =
-      appConfig.useLocalStore && orderSendInvalidation
+    let updated: any;
+    let cancelledSendTasks: any[] = [];
+    if (appConfig.useLocalStore) {
+      updated = this.localStore.updateOrderDraft(id, data);
+      if (current.quoteDraftId && Object.keys(quotePatch).length) {
+        await this.updateQuote(current.quoteDraftId, quotePatch);
+      }
+      const orderSendInvalidation = this.orderSendInvalidationForUpdate(data, { ...current, ...updated });
+      cancelledSendTasks = orderSendInvalidation
         ? this.cancelPendingOrderSendTasksForInvalidatedOrder({ ...current, ...updated }, orderSendInvalidation)
         : [];
+    } else {
+      const result = await this.updatePrismaOrderAndQuoteWithSendInvalidation(id, data, patch);
+      updated = result.updated;
+      cancelledSendTasks = result.cancelledSendTasks;
+    }
 
     await this.notifications.create(
       "info",
@@ -587,14 +586,15 @@ export class OrdersService {
       (automation.source === "manual_order_review" && !automation.followupType) ||
       task.guardSnapshot?.reason === "order-confirmation" ||
       task.guardSnapshot?.reason === "low_value_order_confirmation";
-    if (automation.orderDraftId === order.id) return isConfirmation;
+    if (automation.orderDraftId) return automation.orderDraftId === order.id && isConfirmation;
     if (task.quoteDraftId !== order.quoteDraftId) return false;
     return isConfirmation;
   }
 
   private isOrderFollowupSendTask(task: any, order: any) {
     const automation = task.guardSnapshot?.automation || {};
-    if (automation.orderDraftId !== order.id && task.quoteDraftId !== order.quoteDraftId) return false;
+    if (automation.orderDraftId && automation.orderDraftId !== order.id) return false;
+    if (!automation.orderDraftId && task.quoteDraftId !== order.quoteDraftId) return false;
     return (
       automation.source === "order_followup" ||
       (automation.source === "manual_order_review" && Boolean(automation.followupType)) ||
@@ -611,6 +611,142 @@ export class OrdersService {
   private async updateQuote(id: string, patch: any) {
     if (appConfig.useLocalStore) return this.localStore.updateQuoteDraft(id, patch);
     return (this.prisma as any).quoteDraft.update({ where: { id }, data: patch });
+  }
+
+  private async updatePrismaOrderAndQuoteWithSendInvalidation(
+    id: string,
+    data: OrderDraftUpdatePatch,
+    expected: ExpectedIdentityPayload,
+  ) {
+    const prisma = this.prisma as any;
+    return prisma.$transaction(async (tx: any) => {
+      const transactionCurrent = await tx.orderDraft.findUnique({
+        where: { id },
+        include: this.orderInclude(),
+      });
+      if (!transactionCurrent) throw new BadRequestException(`没有找到订单草稿：${id}`);
+      assertExpectedIdentity(transactionCurrent, expected, "order draft");
+      assertOrderStatusPaymentReady(transactionCurrent, data);
+      assertOrderStatusCommercialReady(transactionCurrent, data);
+
+      const quotePatch = quotePatchForOrderDraft(transactionCurrent, data);
+      if (transactionCurrent.quoteDraftId && Object.keys(quotePatch).length) {
+        const binding = validateOrderDraftQuoteBinding({
+          orderDraft: transactionCurrent,
+          quoteDraft: transactionCurrent.quoteDraft,
+          designJob: transactionCurrent.designJob,
+          conversation: transactionCurrent.conversation,
+          selectedImage: transactionCurrent.selectedImage,
+        });
+        if (!binding.ok) {
+          throw new BadRequestException(`订单草稿绑定校验失败：${orderBindingReasonLabel(binding.reason)}`);
+        }
+      }
+
+      const updated = await tx.orderDraft.update({
+        where: { id },
+        data,
+        include: this.orderInclude(),
+      });
+      if (transactionCurrent.quoteDraftId && Object.keys(quotePatch).length) {
+        await tx.quoteDraft.update({ where: { id: transactionCurrent.quoteDraftId }, data: quotePatch });
+      }
+
+      const mergedOrder = { ...transactionCurrent, ...updated };
+      const invalidation = this.orderSendInvalidationForUpdate(data, mergedOrder);
+      const cancelledSendTasks = invalidation
+        ? await this.cancelPendingPrismaOrderSendTasks(tx, mergedOrder, invalidation)
+        : [];
+      const invalidationStateChanged = Boolean(
+        (data.status === "cancelled" && transactionCurrent.status !== updated.status) ||
+          (Object.prototype.hasOwnProperty.call(data, "paymentStatus") &&
+            orderDraftPaymentStatus(transactionCurrent) !== orderDraftPaymentStatus(updated)),
+      );
+      if (invalidation && (invalidationStateChanged || cancelledSendTasks.length > 0)) {
+        await tx.reviewLog.create({
+          data: {
+            targetType: "order",
+            targetId: id,
+            decision: "invalidate_pending_order_send_tasks",
+            reviewer: "system_order_invalidation",
+            note: `order_send_invalidation:${invalidation.cancelReason};cancelled_count:${cancelledSendTasks.length}`,
+            beforeStatus: String(transactionCurrent.status || ""),
+            afterStatus: String(updated.status || transactionCurrent.status || ""),
+            metadata: {
+              source: "prisma_order_update_transaction",
+              orderDraftId: id,
+              quoteDraftId: transactionCurrent.quoteDraftId || null,
+              invalidationReason: invalidation.cancelReason,
+              orderSendStateReason: invalidation.orderSendStateReason,
+              eligibleStatuses: ["queued", "blocked", "failed"],
+              cancelledSendTaskIds: cancelledSendTasks.map((task: any) => task.id),
+            },
+          },
+        });
+      }
+      return { updated, cancelledSendTasks };
+    });
+  }
+
+  private async cancelPendingPrismaOrderSendTasks(
+    tx: any,
+    order: any,
+    invalidation: { errorMessage: string; cancelReason: string; orderSendStateReason: string },
+  ) {
+    if (!order.quoteDraftId || !order.wechatAccountId || !order.conversationId) return [];
+    const candidates = await tx.wechatSendTask.findMany({
+      where: {
+        quoteDraftId: order.quoteDraftId,
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        status: { in: ["queued", "blocked", "failed"] },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    const now = new Date().toISOString();
+    const cancelled: any[] = [];
+    for (const task of candidates.filter((item: any) => this.isPendingOrderSendTaskForOrder(item, order))) {
+      const guardSnapshot = task.guardSnapshot && typeof task.guardSnapshot === "object" ? task.guardSnapshot : {};
+      const history = Array.isArray(guardSnapshot.history) ? guardSnapshot.history : [];
+      const taskPatch = {
+        status: "cancelled",
+        sentAt: null,
+        errorMessage: invalidation.errorMessage,
+        guardSnapshot: {
+          ...guardSnapshot,
+          status: "cancelled",
+          cancelledAt: now,
+          cancelReason: invalidation.cancelReason,
+          orderSendState: {
+            status: "blocked",
+            reason: invalidation.orderSendStateReason,
+            orderDraftId: order.id,
+            checkedAt: now,
+          },
+          history: [
+            ...history,
+            {
+              action: "cancel",
+              fromStatus: task.status,
+              reason: invalidation.cancelReason,
+              at: now,
+            },
+          ],
+        },
+      };
+      const claimed = await tx.wechatSendTask.updateMany({
+        where: {
+          id: task.id,
+          quoteDraftId: order.quoteDraftId,
+          wechatAccountId: order.wechatAccountId,
+          conversationId: order.conversationId,
+          status: task.status,
+        },
+        data: taskPatch,
+      });
+      if (claimed.count === 1) cancelled.push({ ...task, ...taskPatch });
+    }
+    return cancelled;
   }
 
   private async createReviewLog(payload: {

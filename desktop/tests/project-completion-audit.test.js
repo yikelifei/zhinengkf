@@ -41,6 +41,7 @@ function createPassingFixture() {
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", "handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\n");
+  write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
@@ -132,6 +133,18 @@ test("Prisma Agent initializer must keep zero-write plan, explicit confirmation 
   assert.equal(initializer.status, STATUS.FAIL);
   assert.ok(initializer.evidence.missing.length > 0);
   assert.ok(initializer.evidence.forbidden.length > 0);
+});
+
+test("Prisma order invalidation requires one transaction, guarded task statuses and a fixed audit actor", () => {
+  const root = createPassingFixture();
+  let report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.prisma_order_send_invalidation").status, STATUS.PASS);
+
+  write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\ntx.wechatSendTask.updateMany();\nreviewer: data.owner;\n');
+  report = buildAudit(root, { includeExternal: false });
+  const contract = report.results.find((item) => item.id === "contract.prisma_order_send_invalidation");
+  assert.equal(contract.status, STATUS.FAIL);
+  assert.ok(contract.evidence.missing.length >= 5);
 });
 
 test("report output is confined to the ignored runtime path and remains sanitized Chinese Markdown plus JSON", () => {
