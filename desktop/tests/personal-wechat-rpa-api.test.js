@@ -23,12 +23,25 @@ function setup(options = {}) {
   } else {
     process.env.PERSONAL_WECHAT_RPA_ACCOUNT_NICKNAME = "设计3号ai出图";
     process.env.PERSONAL_WECHAT_RPA_TOKEN = "test-rpa-token";
+    fs.writeFileSync(configFile, JSON.stringify({ ownerWxId: "wxid_design_3" }), "utf8");
   }
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
   const dispatch = {
     calls: [],
     async processInboundMessage(payload) {
+      const existing = localStore.findMessageByExternalId(payload.conversationId, payload.externalId);
+      if (existing) {
+        return {
+          duplicate: true,
+          message: {
+            ...existing,
+            customerId: payload.customerId,
+            wechatAccountId: payload.wechatAccountId,
+          },
+          sendTask: null,
+        };
+      }
       this.calls.push(payload);
       return {
         message: localStore.createMessage({ ...payload, direction: "inbound" }),
@@ -77,7 +90,7 @@ test("RPA inbound rejects any account other than the dedicated nickname", async 
   const { service } = setup();
   await assert.rejects(
     service.processInbound(inbound({ accountNickname: "其他微信号" }), "test-rpa-token"),
-    /does not match the dedicated configured account/,
+    /invalid or ambiguous personal WeChat RPA token/,
   );
 });
 
@@ -91,8 +104,8 @@ test("RPA inbound ignores self messages before creating a customer binding", asy
 
 test("RPA status and inbound require the shared local token", async () => {
   const { service } = setup();
-  assert.throws(() => service.getStatus("wrong-token"), /invalid personal WeChat RPA token/);
-  await assert.rejects(service.processInbound(inbound(), "wrong-token"), /invalid personal WeChat RPA token/);
+  await assert.rejects(service.getStatus("wrong-token"), /invalid or ambiguous personal WeChat RPA token/);
+  await assert.rejects(service.processInbound(inbound(), "wrong-token"), /invalid or ambiguous personal WeChat RPA token/);
 });
 
 test("RPA instance validation requires identity, token and an explicit loopback port", () => {
@@ -100,6 +113,7 @@ test("RPA instance validation requires identity, token and an explicit loopback 
   const missing = service.validateInstance({ wechatAccountId: "account_1", endpoint: "http://127.0.0.1:3211" });
   assert.equal(missing.ok, false);
   assert.match(missing.errors.join(" "), /accountNickname is required/);
+  assert.match(missing.errors.join(" "), /ownerWxId is required/);
   assert.match(missing.errors.join(" "), /token is required/);
 
   const external = service.validateInstance(instanceInput({ endpoint: "http://example.com:3211" }));
@@ -122,6 +136,7 @@ test("RPA registry atomically creates and updates unique account instances witho
   const { tempDir, configFile, service } = setup({ legacy: false });
   fs.writeFileSync(configFile, JSON.stringify({
     accountNickname: "旧单账号",
+    ownerWxId: "wxid_legacy_owner",
     token: "legacy-root-secret",
     port: 4555,
     unrelatedSetting: "preserve-me",
@@ -138,6 +153,7 @@ test("RPA registry atomically creates and updates unique account instances witho
     wechatAccountId: "account_2",
     endpoint: "http://localhost:3212",
     accountNickname: "客服二号",
+    ownerWxId: "wxid_owner_2",
     token: "instance-secret-2",
   }));
   const updated = service.upsertInstance({
@@ -210,6 +226,7 @@ test("disabling an RPA instance writes a fail-closed tombstone and supports cred
     endpoint: "",
     token: "",
     accountNickname: "客服一号",
+    ownerWxId: "wxid_owner_1",
     enabled: false,
     tombstone: true,
     updatedAt: savedDisabled.instances[0].updatedAt,
@@ -236,11 +253,12 @@ test("disabling an RPA instance writes a fail-closed tombstone and supports cred
 
 test("RPA inbound authentication binds each registry token to its account nickname", async () => {
   const { service } = setup({ legacy: false });
-  service.upsertInstance(instanceInput({ accountNickname: "设计3号ai出图" }));
+  service.upsertInstance(instanceInput({ accountNickname: "设计3号ai出图", ownerWxId: "wxid_design_3" }));
   service.upsertInstance(instanceInput({
     wechatAccountId: "account_2",
     endpoint: "http://127.0.0.1:3212",
     accountNickname: "设计4号ai出图",
+    ownerWxId: "wxid_design_4",
     token: "instance-secret-2",
   }));
 
@@ -248,9 +266,9 @@ test("RPA inbound authentication binds each registry token to its account nickna
   assert.equal(result.ok, true);
   await assert.rejects(
     service.processInbound(inbound({ externalId: "wrong-account-token" }), "instance-secret-2"),
-    /does not match the dedicated configured account/,
+    /invalid or ambiguous personal WeChat RPA token/,
   );
-  const status = service.getStatus("instance-secret-2");
+  const status = await service.getStatus("instance-secret-2");
   assert.equal(status.expectedAccountNickname, "设计4号ai出图");
   assert.doesNotMatch(JSON.stringify(status), /instance-secret-1|instance-secret-2/);
 });
@@ -260,6 +278,7 @@ function instanceInput(overrides = {}) {
     wechatAccountId: "account_1",
     endpoint: "http://127.0.0.1:3211",
     accountNickname: "客服一号",
+    ownerWxId: "wxid_owner_1",
     token: "instance-secret-1",
     enabled: true,
     ...overrides,

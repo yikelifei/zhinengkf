@@ -56,6 +56,21 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "运营域 Prisma 契约测试",
     file: "desktop/tests/prisma-operations.test.js",
   },
+  {
+    id: "prisma.personal_wechat_migration",
+    title: "个人微信业务绑定与审计迁移",
+    file: "desktop/prisma/migrations/20260719210000_personal_wechat_rpa_persistence/migration.sql",
+  },
+  {
+    id: "prisma.personal_wechat_persistence",
+    title: "个人微信业务持久化适配器",
+    file: "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence.ts",
+  },
+  {
+    id: "prisma.personal_wechat_tests",
+    title: "个人微信 Prisma 安全契约测试",
+    file: "desktop/tests/personal-wechat-rpa-prisma.test.js",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -204,6 +219,50 @@ const CONTRACTS = Object.freeze([
       /this\.requirePrisma\(\)\.updateConversationOperations/,
     ],
   },
+  {
+    id: "contract.personal_wechat_prisma_route",
+    title: "个人微信绑定与审计 Prisma 路由",
+    file: "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service.ts",
+    patterns: [
+      /PersonalWechatRpaPersistence/,
+      /this\.persistence\.listBindings/,
+      /this\.persistence\.listAudit/,
+      /this\.persistence\.upsertBinding/,
+      /this\.persistence\.recordAudit/,
+      /assertProductionIdentity/,
+    ],
+    forbidden: [
+      /this\.localStore\.listPersonalWechatRpaBindings/,
+      /this\.localStore\.listPersonalWechatRpaAuditLogs/,
+      /this\.localStore\.recordPersonalWechatRpaAudit/,
+      /this\.localStore\.upsertPersonalWechatRpaBinding/,
+    ],
+  },
+  {
+    id: "contract.personal_wechat_prisma_models",
+    title: "个人微信业务模型与主机机密边界",
+    file: "desktop/prisma/schema.prisma",
+    patterns: [
+      /personal_wechat/,
+      /model PersonalWechatRpaBinding/,
+      /model PersonalWechatRpaAuditLog/,
+      /personalWechatOwnerWxId\s+String\?\s+@unique/,
+      /personalWechatRpaBindingKey\s+String\?\s+@unique/,
+    ],
+  },
+  {
+    id: "contract.personal_wechat_business_secret_boundary",
+    title: "个人微信业务持久化不包含主机凭据",
+    file: "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence.ts",
+    patterns: [
+      /prisma\.\$transaction/,
+      /hydrateBinding/,
+      /sanitizeError/,
+    ],
+    forbidden: [
+      /\b(?:endpoint|token|windowsSessionId|sessionId|processId|windowHandle|configPath|executablePath|localPath)\s*\??\s*:/,
+    ],
+  },
 ]);
 
 const FIXED_LOCAL_INVENTORY = Object.freeze([
@@ -234,8 +293,15 @@ const FIXED_LOCAL_INVENTORY = Object.freeze([
     title: "个人微信 RPA 绑定与审计业务记录",
     file: "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service.ts",
     classification: "production_gap",
-    reason: "账号绑定和 RPA 审计记录固定读取 LocalStore；这不同于允许保存在本机的 RPA 主机注册表。",
+    reason: "本地演示可继续使用 LocalStore；生产账号绑定与 RPA 审计必须经适配器持久化到 Prisma，这不同于允许保存在本机的 RPA 主机注册表。",
     activePatterns: [/listPersonalWechatRpaBindings/, /listPersonalWechatRpaAuditLogs/],
+    resolutionPatterns: [
+      /PersonalWechatRpaPersistence/,
+      /this\.persistence\.listBindings/,
+      /this\.persistence\.listAudit/,
+      /this\.persistence\.upsertBinding/,
+      /this\.persistence\.recordAudit/,
+    ],
   },
   {
     id: "local_store.personal_wechat_host_registry",

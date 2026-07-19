@@ -1,9 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { LocalStoreService } from "../local-store/local-store.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { appConfig } from "../shared/app-config";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
+import { PersonalWechatRpaPersistence } from "./personal-wechat-rpa.persistence";
 
 const EVENT_VERSION = "personal_wechat_rpa_event_v1";
 const REGISTRY_VERSION = "personal_wechat_rpa_registry_v1";
@@ -27,6 +30,7 @@ export type PersonalWechatRpaInstanceInput = {
   endpoint?: string;
   token?: string;
   accountNickname?: string;
+  ownerWxId?: string;
   enabled?: boolean;
 };
 
@@ -35,6 +39,7 @@ type StoredRpaInstance = {
   endpoint: string;
   token: string;
   accountNickname: string;
+  ownerWxId: string;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -47,14 +52,20 @@ type RpaRegistryDocument = Record<string, unknown> & {
 
 @Injectable()
 export class PersonalWechatRpaService {
+  private readonly persistence: PersonalWechatRpaPersistence;
+
   constructor(
     private readonly localStore: LocalStoreService,
     private readonly wechatDispatch: WechatDispatchService,
-  ) {}
+    prisma: PrismaService,
+  ) {
+    this.persistence = new PersonalWechatRpaPersistence(prisma, localStore);
+  }
 
-  getStatus(token?: string) {
+  async getStatus(token?: string) {
     const identity = this.assertToken(token);
-    const bindings = this.localStore.listPersonalWechatRpaBindings();
+    this.assertProductionIdentity(identity);
+    const bindings = await this.persistence.listBindings({ wechatAccountId: identity.wechatAccountId, take: 100 });
     const registry = this.getRegistry();
     return {
       ok: registry.ready,
@@ -63,7 +74,7 @@ export class PersonalWechatRpaService {
       expectedAccountNickname: identity.accountNickname || null,
       bindingCount: bindings.length,
       bindings,
-      recentAudit: this.localStore.listPersonalWechatRpaAuditLogs(20),
+      recentAudit: await this.persistence.listAudit({ wechatAccountId: identity.wechatAccountId, take: 20 }),
       registry,
     };
   }
@@ -87,7 +98,8 @@ export class PersonalWechatRpaService {
     const accountId = String(payload?.wechatAccountId || "").trim();
     const existing = findLogicalInstance(parsed, accountId);
     const validation = normalizeInstanceInput(payload, existing?.instance);
-    const errors = [...parsed.errors, ...validation.errors];
+    const identityErrors = validation.instance ? registryIdentityConflicts(parsed, validation.instance) : [];
+    const errors = [...parsed.errors, ...validation.errors, ...identityErrors];
     return {
       ok: errors.length === 0,
       operation: existing ? "update" : "create",
@@ -106,8 +118,9 @@ export class PersonalWechatRpaService {
     const accountId = String(payload?.wechatAccountId || "").trim();
     const existing = findLogicalInstance(parsed, accountId);
     const validation = normalizeInstanceInput(payload, existing?.instance);
-    if (!validation.instance || validation.errors.length > 0) {
-      throw new BadRequestException(validation.errors.join("; ") || "invalid RPA instance");
+    const identityErrors = validation.instance ? registryIdentityConflicts(parsed, validation.instance) : [];
+    if (!validation.instance || validation.errors.length > 0 || identityErrors.length > 0) {
+      throw new BadRequestException([...validation.errors, ...identityErrors].join("; ") || "invalid RPA instance");
     }
 
     const now = new Date().toISOString();
@@ -162,9 +175,11 @@ export class PersonalWechatRpaService {
 
   async processInbound(payload: PersonalWechatRpaInboundPayload, token?: string) {
     const identity = this.assertToken(token, payload?.accountNickname);
-    const normalized = this.validateInbound(payload, identity.accountNickname);
+    this.assertProductionIdentity(identity);
+    const normalized = this.validateInbound(payload, identity);
+    const sensitiveValues = this.sensitiveRegistryValues();
     if (normalized.ignored) {
-      const audit = this.localStore.recordPersonalWechatRpaAudit({
+      const audit = await this.persistence.recordAudit({
         direction: "inbound",
         status: "ignored",
         reason: normalized.reason,
@@ -172,11 +187,13 @@ export class PersonalWechatRpaService {
         ownerWxId: normalized.ownerWxId,
         chatTitle: normalized.chatTitle,
         externalId: normalized.externalId,
-      });
+        wechatAccountId: identity.wechatAccountId,
+      }, sensitiveValues);
       return { ok: true, ignored: true, reason: normalized.reason, audit };
     }
 
-    const binding = this.localStore.upsertPersonalWechatRpaBinding({
+    const binding = await this.persistence.upsertBinding({
+      wechatAccountId: identity.wechatAccountId,
       accountNickname: normalized.accountNickname,
       ownerWxId: normalized.ownerWxId,
       chatTitle: normalized.chatTitle,
@@ -184,22 +201,6 @@ export class PersonalWechatRpaService {
       senderName: normalized.senderName,
       receivedAt: normalized.createdAt,
     });
-    const existing = this.localStore.findMessageByExternalId(binding.conversationId, normalized.externalId);
-    if (existing) {
-      const audit = this.localStore.recordPersonalWechatRpaAudit({
-        direction: "inbound",
-        status: "duplicate",
-        accountNickname: normalized.accountNickname,
-        ownerWxId: normalized.ownerWxId,
-        chatTitle: normalized.chatTitle,
-        externalId: normalized.externalId,
-        wechatAccountId: binding.wechatAccountId,
-        conversationId: binding.conversationId,
-        customerId: binding.customerId,
-        messageId: existing.id,
-      });
-      return { ok: true, duplicate: true, binding, message: existing, audit };
-    }
 
     try {
       const result = await this.wechatDispatch.processInboundMessage({
@@ -211,7 +212,23 @@ export class PersonalWechatRpaService {
         attachments: normalized.attachments,
         createdAt: normalized.createdAt,
       });
-      const audit = this.localStore.recordPersonalWechatRpaAudit({
+      if (result?.duplicate || result?.deduplicated) {
+        this.assertDuplicateMatches(result?.message, binding, normalized);
+        const audit = await this.persistence.recordAudit({
+          direction: "inbound",
+          status: "duplicate",
+          accountNickname: normalized.accountNickname,
+          ownerWxId: normalized.ownerWxId,
+          chatTitle: normalized.chatTitle,
+          externalId: normalized.externalId,
+          wechatAccountId: binding.wechatAccountId,
+          conversationId: binding.conversationId,
+          customerId: binding.customerId,
+          messageId: result?.message?.id || null,
+        }, sensitiveValues);
+        return { ok: true, duplicate: true, binding, message: result?.message || null, audit };
+      }
+      const audit = await this.persistence.recordAudit({
         direction: "inbound",
         status: "processed",
         accountNickname: normalized.accountNickname,
@@ -223,10 +240,10 @@ export class PersonalWechatRpaService {
         customerId: binding.customerId,
         messageId: result?.message?.id || null,
         sendTaskId: result?.sendTask?.id || null,
-      });
+      }, sensitiveValues);
       return { ok: true, duplicate: false, binding, result, audit };
     } catch (error) {
-      this.localStore.recordPersonalWechatRpaAudit({
+      await this.persistence.recordAudit({
         direction: "inbound",
         status: "failed",
         accountNickname: normalized.accountNickname,
@@ -237,12 +254,15 @@ export class PersonalWechatRpaService {
         conversationId: binding.conversationId,
         customerId: binding.customerId,
         errorMessage: error instanceof Error ? error.message : "unknown error",
-      });
+      }, sensitiveValues);
       throw error;
     }
   }
 
-  private validateInbound(payload: PersonalWechatRpaInboundPayload, expectedNickname: string) {
+  private validateInbound(
+    payload: PersonalWechatRpaInboundPayload,
+    identity: { wechatAccountId: string; accountNickname: string; ownerWxId: string; token: string; endpoint?: string },
+  ) {
     if (!payload || typeof payload !== "object") throw new BadRequestException("payload must be an object");
     if (payload.version !== EVENT_VERSION) throw new BadRequestException(`version must be ${EVENT_VERSION}`);
     const accountNickname = String(payload.accountNickname || "").trim();
@@ -256,9 +276,12 @@ export class PersonalWechatRpaService {
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
     const createdAt = String(payload.createdAt || "").trim() || new Date().toISOString();
 
-    if (!expectedNickname) throw new BadRequestException("personal WeChat RPA account nickname is not configured");
-    if (accountNickname !== expectedNickname) {
+    if (!identity.accountNickname) throw new BadRequestException("personal WeChat RPA account nickname is not configured");
+    if (accountNickname !== identity.accountNickname) {
       throw new BadRequestException("RPA event account nickname does not match the dedicated configured account");
+    }
+    if (identity.ownerWxId && ownerWxId !== identity.ownerWxId) {
+      throw new BadRequestException("RPA event ownerWxId does not match the dedicated configured account");
     }
     if (!ownerWxId || !chatTitle || !senderName || !externalId) {
       throw new BadRequestException("ownerWxId, chatTitle, senderName and externalId are required");
@@ -294,11 +317,49 @@ export class PersonalWechatRpaService {
     const expectedNickname = String(accountNickname || "").trim();
     const candidates = authenticationCandidates(this.readRegistryState());
     const tokenMatches = candidates.filter((candidate) => safeTokenEqual(candidate.token, actual));
-    const identity = expectedNickname
-      ? tokenMatches.find((candidate) => candidate.accountNickname === expectedNickname) || tokenMatches[0]
-      : tokenMatches[0];
-    if (!identity) throw new UnauthorizedException("invalid personal WeChat RPA token");
+    const exactMatches = expectedNickname
+      ? tokenMatches.filter((candidate) => candidate.accountNickname === expectedNickname)
+      : tokenMatches;
+    if (exactMatches.length !== 1) throw new UnauthorizedException("invalid or ambiguous personal WeChat RPA token");
+    const identity = exactMatches[0];
     return identity;
+  }
+
+  private assertProductionIdentity(identity: { wechatAccountId?: string; accountNickname?: string; ownerWxId?: string }) {
+    if (appConfig.useLocalStore) return;
+    if (
+      !identity.wechatAccountId ||
+      identity.wechatAccountId === "legacy" ||
+      !identity.accountNickname ||
+      !identity.ownerWxId
+    ) {
+      throw new BadRequestException("production personal WeChat RPA requires an explicit registry account id, nickname and ownerWxId");
+    }
+  }
+
+  private sensitiveRegistryValues() {
+    const state = this.readRegistryState();
+    const parsed = parseRegistryDocument(state.document);
+    const legacy = legacyInstance(state.document);
+    return [
+      ...parsed.active.flatMap((instance) => [instance.token, instance.endpoint]),
+      ...parsed.disabled.flatMap((instance) => [instance.token, instance.endpoint]),
+      legacy.token,
+      legacy.endpoint,
+    ].filter(Boolean);
+  }
+
+  private assertDuplicateMatches(message: any, binding: any, inbound: ReturnType<PersonalWechatRpaService["validateInbound"]>) {
+    if (
+      !message ||
+      String(message.conversationId || "") !== String(binding.conversationId || "") ||
+      String(message.customerId || "") !== String(binding.customerId || "") ||
+      String(message.wechatAccountId || "") !== String(binding.wechatAccountId || "") ||
+      String(message.text || "") !== String(inbound.message || "") ||
+      String(message.externalId || "") !== String(inbound.externalId || "")
+    ) {
+      throw new BadRequestException("duplicate inbound externalId conflict: account, conversation, customer or text changed");
+    }
   }
 
   private readRegistryState() {
@@ -350,6 +411,7 @@ function parseRegistryDocument(document: RpaRegistryDocument): ParsedRegistry {
   const active: StoredRpaInstance[] = [];
   const disabled: StoredRpaInstance[] = [];
   const tombstoneIds = new Set<string>();
+  const tombstoneIdentity = new Map<string, { accountNickname: string; ownerWxId: string }>();
   const rawInstances = document.instances;
   const rawDisabled = document.disabledInstances;
 
@@ -364,12 +426,14 @@ function parseRegistryDocument(document: RpaRegistryDocument): ParsedRegistry {
     if (raw.enabled === false || raw.tombstone === true) {
       const accountId = String(raw.wechatAccountId || "").trim();
       const nickname = String(raw.accountNickname || "").trim();
-      if (!accountId || !nickname || raw.tombstone !== true || String(raw.endpoint || "").trim() || String(raw.token || "").trim()) {
-        errors.push(`instances[${index}] disabled entry must be a credential-free tombstone with wechatAccountId and accountNickname`);
+      const ownerWxId = String(raw.ownerWxId || "").trim();
+      if (!accountId || !nickname || !ownerWxId || raw.tombstone !== true || String(raw.endpoint || "").trim() || String(raw.token || "").trim()) {
+        errors.push(`instances[${index}] disabled entry must be a credential-free tombstone with wechatAccountId, accountNickname and ownerWxId`);
         continue;
       }
       if (tombstoneIds.has(accountId)) errors.push(`wechatAccountId ${accountId} has duplicate disabled tombstones`);
       tombstoneIds.add(accountId);
+      tombstoneIdentity.set(accountId, { accountNickname: nickname, ownerWxId });
       continue;
     }
     const normalized = normalizeStoredInstance(raw, true);
@@ -401,12 +465,27 @@ function parseRegistryDocument(document: RpaRegistryDocument): ParsedRegistry {
   for (const instance of disabled) {
     if (!tombstoneIds.has(instance.wechatAccountId)) {
       errors.push(`disabled RPA instance ${instance.wechatAccountId} requires a fail-closed tombstone`);
+    } else {
+      const tombstone = tombstoneIdentity.get(instance.wechatAccountId);
+      if (tombstone?.accountNickname !== instance.accountNickname || tombstone?.ownerWxId !== instance.ownerWxId) {
+        errors.push(`disabled tombstone ${instance.wechatAccountId} identity does not match the retained instance`);
+      }
     }
   }
   for (const accountId of tombstoneIds) {
     if (!disabled.some((instance) => instance.wechatAccountId === accountId)) {
       errors.push(`disabled tombstone ${accountId} has no retained disabled instance`);
     }
+  }
+
+  for (const [label, values] of [
+    ["wechatAccountId", [...active, ...disabled].map((item) => item.wechatAccountId)],
+    ["accountNickname", [...active, ...disabled].map((item) => item.accountNickname)],
+    ["ownerWxId", [...active, ...disabled].map((item) => item.ownerWxId)],
+    ["token", [...active, ...disabled].map((item) => createHash("sha256").update(item.token, "utf8").digest("hex"))],
+  ] as const) {
+    const duplicates = duplicateValues(values);
+    if (duplicates.length) errors.push(`${label} must be unique across RPA instances`);
   }
 
   return {
@@ -424,6 +503,7 @@ function normalizeStoredInstance(raw: Record<string, unknown>, enabled: boolean)
     endpoint: String(raw.endpoint || ""),
     token: String(raw.token || ""),
     accountNickname: String(raw.accountNickname || ""),
+    ownerWxId: String(raw.ownerWxId || ""),
     enabled,
   });
   if (normalized.instance) {
@@ -439,12 +519,14 @@ function normalizeInstanceInput(input: PersonalWechatRpaInstanceInput, existing?
   const has = (key: keyof PersonalWechatRpaInstanceInput) => Object.prototype.hasOwnProperty.call(input, key);
   const wechatAccountId = String(has("wechatAccountId") ? input.wechatAccountId || "" : existing?.wechatAccountId || "").trim();
   const accountNickname = String(has("accountNickname") ? input.accountNickname || "" : existing?.accountNickname || "").trim();
+  const ownerWxId = String(has("ownerWxId") ? input.ownerWxId || "" : existing?.ownerWxId || "").trim();
   const token = String(has("token") ? input.token || "" : existing?.token || "").trim();
   const rawEndpoint = String(has("endpoint") ? input.endpoint || "" : existing?.endpoint || "").trim();
   const enabledValue = has("enabled") ? input.enabled : existing?.enabled ?? true;
 
   if (!wechatAccountId) errors.push("wechatAccountId is required");
   if (!accountNickname) errors.push("accountNickname is required");
+  if (!ownerWxId) errors.push("ownerWxId is required");
   if (!token) errors.push("token is required when creating an instance or replacing its token");
   if (typeof enabledValue !== "boolean") errors.push("enabled must be a boolean");
   const endpoint = normalizeLoopbackEndpoint(rawEndpoint, true);
@@ -456,6 +538,7 @@ function normalizeInstanceInput(input: PersonalWechatRpaInstanceInput, existing?
         endpoint: endpoint.ok ? endpoint.endpoint : "",
         token,
         accountNickname,
+        ownerWxId,
         enabled: typeof enabledValue === "boolean" ? enabledValue : true,
       } as StoredRpaInstance
     : null;
@@ -528,6 +611,7 @@ function writeLogicalRegistry(
     endpoint: "",
     token: "",
     accountNickname: instance.accountNickname,
+    ownerWxId: instance.ownerWxId,
     enabled: false,
     tombstone: true,
     updatedAt: instance.updatedAt,
@@ -565,6 +649,7 @@ function buildRegistryReadiness(state: RegistryState) {
       port: legacy.port,
       accountNickname: legacy.accountNickname || null,
       tokenConfigured: Boolean(legacy.token),
+      ownerWxId: legacy.ownerWxId || null,
     },
     checks: [
       { key: "configReadable", ok: !state.readError, detail: state.readError || "readable" },
@@ -590,14 +675,16 @@ function legacyInstance(document: RpaRegistryDocument) {
   const accountNickname = String(
     process.env.PERSONAL_WECHAT_RPA_ACCOUNT_NICKNAME || document.accountNickname || "",
   ).trim();
-  const present = Boolean(token || accountNickname || document.endpoint || document.port);
+  const ownerWxId = String(document.ownerWxId || "").trim();
+  const present = Boolean(token || accountNickname || ownerWxId || document.endpoint || document.port);
   return {
     present,
-    ready: Boolean(token && accountNickname && normalized.ok),
+    ready: Boolean(token && accountNickname && ownerWxId && normalized.ok),
     endpoint: normalized.ok ? normalized.endpoint : "",
     port: normalized.ok ? normalized.port : null,
     token,
     accountNickname,
+    ownerWxId,
   };
 }
 
@@ -608,12 +695,14 @@ function authenticationCandidates(state: RegistryState) {
     return parsed.active.map((instance) => ({
       wechatAccountId: instance.wechatAccountId,
       accountNickname: instance.accountNickname,
+      ownerWxId: instance.ownerWxId,
       token: instance.token,
+      endpoint: instance.endpoint,
     }));
   }
   const legacy = legacyInstance(state.document);
   return legacy.ready
-    ? [{ wechatAccountId: "legacy", accountNickname: legacy.accountNickname, token: legacy.token }]
+    ? [{ wechatAccountId: "legacy", accountNickname: legacy.accountNickname, ownerWxId: legacy.ownerWxId, token: legacy.token, endpoint: legacy.endpoint }]
     : [];
 }
 
@@ -624,6 +713,7 @@ function redactInstance(instance: StoredRpaInstance) {
     endpoint: endpoint.ok ? endpoint.endpoint : "",
     port: endpoint.ok ? endpoint.port : null,
     accountNickname: instance.accountNickname,
+    ownerWxId: instance.ownerWxId,
     enabled: instance.enabled,
     tokenConfigured: Boolean(String(instance.token || "").trim()),
     createdAt: instance.createdAt || null,
@@ -658,6 +748,31 @@ function atomicWriteJson(filePath: string, document: RpaRegistryDocument) {
 function optionalIsoDate(value: unknown) {
   const text = String(value || "").trim();
   return text && Number.isFinite(Date.parse(text)) ? text : undefined;
+}
+
+function registryIdentityConflicts(parsed: ParsedRegistry, candidate: StoredRpaInstance) {
+  const others = [...parsed.active, ...parsed.disabled].filter((instance) => instance.wechatAccountId !== candidate.wechatAccountId);
+  const errors: string[] = [];
+  if (others.some((instance) => instance.accountNickname === candidate.accountNickname)) {
+    errors.push("accountNickname must be unique across RPA instances");
+  }
+  if (others.some((instance) => instance.ownerWxId === candidate.ownerWxId)) {
+    errors.push("ownerWxId must be unique across RPA instances");
+  }
+  if (others.some((instance) => safeTokenEqual(instance.token, candidate.token))) {
+    errors.push("token must be unique across RPA instances");
+  }
+  return errors;
+}
+
+function duplicateValues(values: readonly string[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values.map((item) => String(item || "").trim()).filter(Boolean)) {
+    if (seen.has(value)) duplicates.add(value);
+    seen.add(value);
+  }
+  return [...duplicates];
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {

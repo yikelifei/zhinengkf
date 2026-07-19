@@ -42,6 +42,8 @@
 已经具备：
 
 - `personal-wechat-rpa.service.ts` 支持多实例注册、每账号独立 loopback endpoint/token 和停用状态。
+- `USE_LOCAL_STORE=false` 时，认证后的注册表 `wechatAccountId` 作为 `WechatAccount.id`，个人微信账号、客户、会话、入站消息、业务绑定和审计通过 Prisma 事务持久化；生产路径不会回退到 LocalStore。
+- 本机 endpoint/token、进程、窗口、Windows 会话和配置路径只留在主机注册表，Prisma 业务表、审计明细和绑定接口响应均不保存这些主机凭据。
 - `personal-wechat-bridge.js` 已按 Windows 会话分组；同一会话的出站任务串行，不同会话可独立处理。
 - RPA Host 在发送前核对账号、进程、窗口、Windows 会话、聊天标题和最近客户消息，并在发送后观察聊天历史再确认结果。
 - `wechat-dispatch.service.ts` 已有人工接管和任务暂停能力。
@@ -50,7 +52,7 @@
 
 - 实例心跳、实时能力探测、账号/端点/Windows 会话唯一性约束和任意 N 个实例的 supervisor。
 - 同 Windows 会话覆盖入站扫描、窗口探测和出站发送的统一仲裁器；不能只锁发送动作。
-- 持久化入站日志和幂等重放，避免内存有界队列在洪峰时丢弃旧消息。
+- 在真实 PostgreSQL 预发布环境完成 migration、并发首次绑定、唯一冲突和幂等重放验收；仓库内 fake Prisma 契约测试不等于生产数据库证据。
 - 一次性 `operationId + attemptId + expiresAt + nonce`，阻止本机发送请求被重复执行。
 - `UNCERTAIN_QUARANTINED` 未知投递状态；进入实际交互后若无法证明送达，禁止自动重试。
 - 每账号业务预算、静默时段、客户退订、敏感场景人工审批、连续失败熔断和全局停止。
@@ -59,7 +61,7 @@
 
 ## 多账号隔离
 
-- 一个账号绑定一个逻辑账号 ID、微信昵称、OwnerWxId、进程、窗口句柄、Windows 会话、loopback 端点和令牌。
+- 一个账号绑定一个逻辑账号 ID、微信昵称、OwnerWxId、进程、窗口句柄、Windows 会话、loopback 端点和令牌；逻辑 ID、昵称、OwnerWxId 和令牌在启用与停用实例之间都必须唯一。
 - 同一 Windows 桌面会话共享焦点、剪贴板和输入资源，只允许串行操作，不能声称并行发送。
 - 需要真正并行时，每个账号使用独立 Windows 用户会话、远程桌面会话或隔离虚拟机，并为每个实例分配独立端点和凭据。
 - 调度任务必须同时绑定账号、客户、会话、最近一条客户消息和发送尝试 ID；任何证据变化都要重新人工确认。
