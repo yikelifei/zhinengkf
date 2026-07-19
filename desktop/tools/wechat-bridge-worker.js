@@ -2,8 +2,8 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
+const { acquireAccountLock, writeFileAtomic } = require("./wechat-bridge-durable-fs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -287,10 +287,26 @@ function writeDispatchFile(dispatchDir, entry, outbox, config = {}) {
   fs.mkdirSync(dispatchDir, { recursive: true });
   const fileName = `${safeFileSegment(entry.wechatAccountId)}-${safeFileSegment(entry.taskId)}-${safeFileSegment(entry.attemptId)}.dispatch.json`;
   const filePath = path.join(dispatchDir, fileName);
-  if (fs.existsSync(filePath)) return filePath;
+  const existing = findExistingDispatchFile(dispatchDir, fileName);
+  if (existing) return existing;
   const payload = buildDispatchPayload(entry, outbox, config);
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeFileAtomic(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return filePath;
+}
+
+function findExistingDispatchFile(dispatchDir, fileName) {
+  for (const state of ["", "processing", "processed", "failed", "uncertain", "cancelled"]) {
+    const candidate = state ? path.join(dispatchDir, state, fileName) : path.join(dispatchDir, fileName);
+    if (fs.existsSync(candidate)) return candidate;
+    if (state) {
+      const stateDir = path.dirname(candidate);
+      if (!fs.existsSync(stateDir)) continue;
+      const legacy = fs.readdirSync(stateDir, { withFileTypes: true })
+        .find((entry) => entry.isFile() && entry.name.endsWith(`-${fileName}`));
+      if (legacy) return path.join(stateDir, legacy.name);
+    }
+  }
+  return "";
 }
 
 function buildAckPayload(entry, mode, outboxPayload = {}) {
@@ -567,7 +583,7 @@ function writeAckFile(inboxDir, ackPayload) {
   fs.mkdirSync(inboxDir, { recursive: true });
   const fileName = buildAckFileName(ackPayload, ackPayload.status);
   const filePath = path.join(inboxDir, fileName);
-  fs.writeFileSync(filePath, `${JSON.stringify(ackPayload, null, 2)}\n`, "utf8");
+  writeFileAtomic(filePath, `${JSON.stringify(ackPayload, null, 2)}\n`, "utf8");
   return filePath;
 }
 
@@ -627,46 +643,8 @@ function summarizeWorkerItem(item) {
 }
 
 function writeWorkerStatus(statusFile, status) {
-  fs.mkdirSync(path.dirname(statusFile), { recursive: true });
-  fs.writeFileSync(statusFile, `${JSON.stringify(status, null, 2)}\n`, "utf8");
+  writeFileAtomic(statusFile, `${JSON.stringify(status, null, 2)}\n`, "utf8");
   return statusFile;
-}
-
-function acquireAccountLock(accountId, config) {
-  fs.mkdirSync(config.lockDir, { recursive: true });
-  const lockPath = path.join(config.lockDir, accountLockFileName(accountId));
-  removeStaleLock(lockPath, config.lockStaleMs);
-  try {
-    const fd = fs.openSync(lockPath, "wx");
-    fs.writeFileSync(
-      fd,
-      `${JSON.stringify({ accountId, pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf8",
-    );
-    fs.closeSync(fd);
-    return {
-      lockPath,
-      release() {
-        fs.rmSync(lockPath, { force: true });
-      },
-    };
-  } catch (error) {
-    if (error && error.code === "EEXIST") return null;
-    throw error;
-  }
-}
-
-function removeStaleLock(lockPath, staleMs) {
-  if (!fs.existsSync(lockPath)) return;
-  const stat = fs.statSync(lockPath);
-  if (Date.now() - stat.mtimeMs > staleMs) {
-    fs.rmSync(lockPath, { force: true });
-  }
-}
-
-function accountLockFileName(accountId) {
-  const digest = createHash("sha256").update(String(accountId || "")).digest("hex").slice(0, 16);
-  return `${safeFileSegment(accountId)}-${digest}.lock`;
 }
 
 async function fetchJson(url) {

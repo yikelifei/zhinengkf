@@ -3,8 +3,8 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { acquireAccountLock, acquireNamedLock, writeFileAtomic } = require("./wechat-bridge-durable-fs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -66,8 +66,9 @@ async function main() {
 
 async function runOnce(config = readConfig()) {
   for (const directory of [config.dispatchDir, config.inboxDir, config.lockDir, config.blockedDir]) {
-    fs.mkdirSync(directory, { recursive: true });
+    if (directory) fs.mkdirSync(directory, { recursive: true });
   }
+  const ackRecovery = await recoverPendingAcks(config);
   const files = selectDispatchFiles(listDispatchFiles(config.dispatchDir), config.limit);
   const groups = groupDispatchFilesByAccount(files);
   const sessionQueues = groupAccountQueuesByWindowsSession(groups, config);
@@ -83,10 +84,11 @@ async function runOnce(config = readConfig()) {
   const items = sessionResults.flat();
   return {
     scanned: files.length,
-    processed: items.filter((item) => ["sent_ack_written", "ack_scan_completed"].includes(item.status)),
+    processed: items.filter((item) => ["sent_ack_written", "ack_scan_completed", "delivery_unknown"].includes(item.status)),
     skipped: items.filter((item) => ["skipped", "account_lock_busy", "ack_pending_scan"].includes(item.status)),
     blocked: items.filter((item) => ["blocked", "blocked_existing"].includes(item.status)),
     failed: items.filter((item) => item.status === "failed"),
+    ackRecovery,
     dispatchDir: config.dispatchDir,
     inboxDir: config.inboxDir,
   };
@@ -155,7 +157,10 @@ async function processAccountQueue(accountId, files, config) {
   }
   const account = config.accountsConfig?.accounts?.find((item) => String(item.wechatAccountId) === String(accountId));
   const sessionLock = config.sendEnabled && account
-    ? acquireNamedLock(`windows-session-${Number(account.windowsSessionId)}`, config, "personal-wechat-session")
+    ? acquireNamedLock(`windows-session-${Number(account.windowsSessionId)}`, config, {
+      owner: "personal-wechat-session",
+      metadata: { windowsSessionId: Number(account.windowsSessionId) },
+    })
     : null;
   if (config.sendEnabled && account && !sessionLock) {
     lock.release();
@@ -169,7 +174,43 @@ async function processAccountQueue(accountId, files, config) {
   }
   try {
     const results = [];
-    for (const filePath of files) results.push(await processDispatchFile(filePath, config));
+    for (const filePath of files) {
+      let claimedPath = filePath;
+      if (config.sendEnabled) {
+        claimedPath = claimDispatchFile(filePath, config.dispatchDir);
+        if (!claimedPath) {
+          results.push({
+            fileName: path.basename(filePath),
+            taskId: "",
+            wechatAccountId: accountId,
+            status: "skipped",
+            reason: "dispatch_already_claimed",
+          });
+          continue;
+        }
+      }
+      try {
+        const result = await processDispatchFile(claimedPath, config);
+        if (config.sendEnabled && result.archiveOutcome) {
+          result.archivedDispatchPath = archiveDispatchFile(claimedPath, config.dispatchDir, result.archiveOutcome);
+        } else if (claimedPath !== filePath) {
+          result.restoredDispatchPath = restoreClaimedDispatchFile(claimedPath, config.dispatchDir);
+        }
+        results.push(result);
+      } catch (error) {
+        const result = {
+          fileName: path.basename(filePath),
+          taskId: "",
+          wechatAccountId: accountId,
+          status: "failed",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        };
+        if (claimedPath !== filePath && fs.existsSync(claimedPath)) {
+          result.archivedDispatchPath = archiveDispatchFile(claimedPath, config.dispatchDir, "uncertain");
+        }
+        results.push(result);
+      }
+    }
     return results;
   } finally {
     sessionLock?.release();
@@ -194,17 +235,6 @@ async function processDispatchFile(filePath, config) {
     return blockDispatch(filePath, dispatch, config, "ack inbox scanning must stay enabled for real personal WeChat sends", "ack_scan_required");
   }
 
-  const pendingAck = findPendingSentAck(config.inboxDir, dispatch);
-  if (pendingAck) {
-    try {
-      const scanResult = await scanAckInbox(config);
-      assertScanAcceptedAck(scanResult, dispatch);
-      return { ...summarizeDispatch(filePath, dispatch, "ack_scan_completed", "existing sent ack was accepted"), ackFile: pendingAck, scanResult };
-    } catch (error) {
-      return { ...summarizeDispatch(filePath, dispatch, "ack_pending_scan", singleLine(error.message)), ackFile: pendingAck };
-    }
-  }
-
   const blockedFile = blockedMarkerPath(config.blockedDir, dispatch, filePath);
   if (fs.existsSync(blockedFile)) {
     const marker = readJsonIfExists(blockedFile) || {};
@@ -223,6 +253,28 @@ async function processDispatchFile(filePath, config) {
     return blockDispatch(filePath, dispatch, config, `invalid source outbox: ${outboxValidation.reason}`, "invalid_source_outbox");
   }
 
+  const pendingAck = findPendingSentAck(config.inboxDir, dispatch, sourceOutbox.payload);
+  if (pendingAck) {
+    const scanResult = await safeScanAckInbox(config);
+    return {
+      ...summarizeDispatch(filePath, dispatch, "ack_scan_completed", "existing sent ack remains durable"),
+      ackFile: pendingAck,
+      scanResult,
+      archiveOutcome: "processed",
+    };
+  }
+
+  const pendingVerification = await verifyPendingDispatch(dispatch, sourceOutbox.payload, config);
+  if (!pendingVerification.ok) {
+    return {
+      fileName: path.basename(filePath),
+      taskId: dispatch.taskId || "",
+      status: "delivery_unknown",
+      reason: `dispatch is no longer a trusted pending item: ${pendingVerification.reason}`,
+      archiveOutcome: "uncertain",
+    };
+  }
+
   const binding = resolveAccountBinding(dispatch, config);
   if (!binding.ok) return blockDispatch(filePath, dispatch, config, binding.reason, binding.code || "account_binding_invalid");
   const actionPlan = buildActionPlan(dispatch.sendPlan.actions, config);
@@ -234,10 +286,15 @@ async function processDispatchFile(filePath, config) {
     const executor = typeof config.operationExecutor === "function" ? config.operationExecutor : executeBoundWechatActions;
     sendResult = await Promise.resolve(executor(operationPayload, config, "send"));
   } catch (error) {
-    return blockDispatch(filePath, dispatch, config, `personal WeChat operation failed: ${error.message}`, "operation_failed");
+    return deliveryUnknown(filePath, dispatch, `personal WeChat operation failed after dispatch claim: ${error.message}`);
   }
   if (!sendResult?.ok) {
-    return blockDispatch(filePath, dispatch, config, sendResult?.errorMessage || "personal WeChat operation could not be verified", sendResult?.code || "operation_unverified");
+    return deliveryUnknown(
+      filePath,
+      dispatch,
+      sendResult?.errorMessage || "personal WeChat operation could not be verified after dispatch claim",
+      sendResult?.code || "operation_unverified",
+    );
   }
   const operationVerified =
     sendResult.operationVerified === true &&
@@ -246,7 +303,12 @@ async function processDispatchFile(filePath, config) {
     sendResult.recentMessageVerified === true &&
     Number(sendResult.actionCount) === actionPlan.actions.length;
   if (!operationVerified) {
-    return blockDispatch(filePath, dispatch, config, "personal WeChat operation returned incomplete verification proof", "operation_proof_incomplete");
+    return deliveryUnknown(
+      filePath,
+      dispatch,
+      "personal WeChat operation returned incomplete verification proof after dispatch claim",
+      "operation_proof_incomplete",
+    );
   }
 
   const ackPayload = buildAckPayload(dispatch, sourceOutbox.payload, "sent", {
@@ -257,13 +319,59 @@ async function processDispatchFile(filePath, config) {
     operationVerified: true,
   });
   const ackFile = writeAckFile(config.inboxDir, ackPayload);
-  try {
-    const scanResult = await scanAckInbox(config);
-    assertScanAcceptedAck(scanResult, dispatch);
-    return { ...summarizeDispatch(filePath, dispatch, "sent_ack_written", "verified send ack accepted"), ackFile, scanResult };
-  } catch (error) {
-    return { ...summarizeDispatch(filePath, dispatch, "ack_pending_scan", singleLine(error.message)), ackFile };
+  const scanResult = await safeScanAckInbox(config);
+  return {
+    fileName: path.basename(filePath),
+    taskId: dispatch.taskId || "",
+    status: "sent_ack_written",
+    ackFile,
+    scanResult,
+    archiveOutcome: "processed",
+  };
+}
+
+async function verifyPendingDispatch(dispatch, outboxPayload, config) {
+  if (typeof config.verifyPendingDispatch === "function") {
+    try {
+      const result = await config.verifyPendingDispatch({ dispatch, outboxPayload });
+      return result?.ok ? { ok: true, source: result.source || "external_verifier" } : { ok: false, reason: String(result?.reason || "pending verifier rejected dispatch") };
+    } catch (error) {
+      return { ok: false, reason: `pending verifier failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
   }
+  try {
+    const url = new URL(`${config.apiBase}/wechat/bridge/outbox`);
+    url.searchParams.set("wechatAccountId", String(dispatch.wechatAccountId || ""));
+    url.searchParams.set("conversationId", String(dispatch.conversationId || ""));
+    const customerId = String(outboxPayload?.target?.customerId || "");
+    if (customerId) url.searchParams.set("customerId", customerId);
+    const response = await getJson(url.toString());
+    const pending = Array.isArray(response?.pending) ? response.pending : [];
+    const match = pending.find((entry) =>
+      String(entry?.taskId || "") === String(dispatch.taskId || "") &&
+      String(entry?.attemptId || "") === String(dispatch.attemptId || "") &&
+      String(entry?.wechatAccountId || "") === String(dispatch.wechatAccountId || "") &&
+      String(entry?.conversationId || "") === String(dispatch.conversationId || "") &&
+      String(entry?.customerId || "") === customerId &&
+      String(entry?.fileName || "") === String(dispatch.sourceOutboxFileName || ""),
+    );
+    return match ? { ok: true, source: "bridge_outbox_api" } : { ok: false, reason: "matching task and attempt are absent from bridge outbox pending" };
+  } catch (error) {
+    return { ok: false, reason: `bridge outbox pending check failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+function deliveryUnknown(filePath, dispatch, reason, code = "delivery_unknown") {
+  return {
+    fileName: path.basename(filePath),
+    taskId: String(dispatch?.taskId || ""),
+    wechatAccountId: String(dispatch?.wechatAccountId || ""),
+    conversationId: String(dispatch?.conversationId || ""),
+    status: "delivery_unknown",
+    code,
+    reason: singleLine(reason),
+    archiveOutcome: "uncertain",
+  };
 }
 
 function validateDispatchPayload(dispatch, filePath) {
@@ -639,12 +747,13 @@ function writeAckFile(inboxDir, ackPayload) {
   fs.mkdirSync(inboxDir, { recursive: true });
   const fileName = `${Date.now()}-${safeFileSegment(ackPayload.wechatAccountId)}-${safeFileSegment(ackPayload.taskId)}-${safeFileSegment(ackPayload.attemptId || "attempt")}-${ackPayload.status}.ack.json`;
   const filePath = path.join(inboxDir, fileName);
-  fs.writeFileSync(filePath, `${JSON.stringify(ackPayload, null, 2)}\n`, "utf8");
+  writeFileAtomic(filePath, `${JSON.stringify(ackPayload, null, 2)}\n`, "utf8");
   return filePath;
 }
 
-function findPendingSentAck(inboxDir, dispatch) {
+function findPendingSentAck(inboxDir, dispatch, outboxPayload) {
   if (!fs.existsSync(inboxDir)) return "";
+  const customerId = String(dispatch.target?.customerId || outboxPayload?.target?.customerId || "");
   for (const entry of fs.readdirSync(inboxDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".ack.json")) continue;
     const filePath = path.join(inboxDir, entry.name);
@@ -653,7 +762,11 @@ function findPendingSentAck(inboxDir, dispatch) {
       ack?.status === "sent" &&
       String(ack.taskId || "") === String(dispatch.taskId || "") &&
       String(ack.attemptId || "") === String(dispatch.attemptId || "") &&
-      String(ack.wechatAccountId || "") === String(dispatch.wechatAccountId || "")
+      String(ack.wechatAccountId || "") === String(dispatch.wechatAccountId || "") &&
+      String(ack.conversationId || "") === String(dispatch.conversationId || "") &&
+      String(ack.customerId || "") === customerId &&
+      String(ack.outboxFileName || "") === String(dispatch.sourceOutboxFileName || "") &&
+      String(ack.ackToken || "") === String(outboxPayload?.ackToken || "")
     ) return filePath;
   }
   return "";
@@ -702,41 +815,6 @@ function blockedMarkerPath(blockedDir, dispatch, filePath) {
   return path.join(blockedDir, name);
 }
 
-function acquireAccountLock(accountId, config) {
-  return acquireNamedLock(`account-${accountId}`, config, "personal-wechat-account", accountLockFileName(accountId), { accountId });
-}
-
-function acquireNamedLock(identity, config, owner, fileName = namedLockFileName(identity), metadata = {}) {
-  fs.mkdirSync(config.lockDir, { recursive: true });
-  const lockPath = path.join(config.lockDir, fileName);
-  removeStaleLock(lockPath, config.lockStaleMs);
-  try {
-    const fd = fs.openSync(lockPath, "wx");
-    fs.writeFileSync(fd, `${JSON.stringify({ ...metadata, identity, owner, pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
-    fs.closeSync(fd);
-    return { lockPath, release: () => fs.rmSync(lockPath, { force: true }) };
-  } catch (error) {
-    if (error?.code === "EEXIST") return null;
-    throw error;
-  }
-}
-
-function removeStaleLock(lockPath, staleMs) {
-  if (!fs.existsSync(lockPath)) return;
-  const stat = fs.statSync(lockPath);
-  if (Date.now() - stat.mtimeMs > staleMs) fs.rmSync(lockPath, { force: true });
-}
-
-function accountLockFileName(accountId) {
-  const digest = createHash("sha256").update(String(accountId || "")).digest("hex").slice(0, 16);
-  return `${safeFileSegment(accountId)}-${digest}.lock`;
-}
-
-function namedLockFileName(identity) {
-  const digest = createHash("sha256").update(String(identity || "")).digest("hex").slice(0, 16);
-  return `${safeFileSegment(identity)}-${digest}.lock`;
-}
-
 function loadSourceOutbox(dispatch) {
   const sourcePath = resolveSourceOutboxPath(dispatch);
   return { filePath: sourcePath, payload: readJsonFile(sourcePath) };
@@ -767,11 +845,69 @@ function scanAckInbox(config) {
   return postJson(`${config.apiBase}/wechat/bridge/inbox/scan`, {});
 }
 
+async function safeScanAckInbox(config) {
+  try {
+    return await scanAckInbox(config);
+  } catch (error) {
+    return { ok: false, errorMessage: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function recoverPendingAcks(config) {
+  if (!config.scanAckInbox || !fs.existsSync(config.inboxDir)) return null;
+  const pending = fs.readdirSync(config.inboxDir, { withFileTypes: true })
+    .some((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".ack.json"));
+  return pending ? safeScanAckInbox(config) : null;
+}
+
 function listDispatchFiles(dispatchDir) {
   return fs.readdirSync(dispatchDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".dispatch.json"))
     .map((entry) => path.join(dispatchDir, entry.name))
     .sort();
+}
+
+function claimDispatchFile(filePath, dispatchDir) {
+  const source = path.resolve(filePath);
+  const root = path.resolve(dispatchDir);
+  if (path.dirname(source) !== root || !fs.existsSync(source)) return "";
+  const processingDir = path.join(root, "processing");
+  fs.mkdirSync(processingDir, { recursive: true });
+  const claimed = path.join(processingDir, path.basename(source));
+  if (fs.existsSync(claimed)) return "";
+  try {
+    fs.renameSync(source, claimed);
+    return claimed;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "EEXIST" || error?.code === "EPERM") return "";
+    throw error;
+  }
+}
+
+function archiveDispatchFile(filePath, dispatchDir, outcome) {
+  const source = path.resolve(filePath);
+  const root = path.resolve(dispatchDir);
+  const relative = path.relative(root, source);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("dispatch archive source is outside dispatch directory");
+  if (!fs.existsSync(source)) return "";
+  const safeOutcome = ["processed", "failed", "uncertain"].includes(outcome) ? outcome : "uncertain";
+  const targetDir = path.join(root, safeOutcome);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const target = path.join(targetDir, path.basename(source));
+  if (fs.existsSync(target)) throw new Error(`dispatch archive already exists: ${path.basename(source)}`);
+  fs.renameSync(source, target);
+  return target;
+}
+
+function restoreClaimedDispatchFile(filePath, dispatchDir) {
+  const source = path.resolve(filePath);
+  const root = path.resolve(dispatchDir);
+  const processingDir = path.join(root, "processing");
+  if (path.dirname(source) !== processingDir || !fs.existsSync(source)) return "";
+  const target = path.join(root, path.basename(source));
+  if (fs.existsSync(target)) return "";
+  fs.renameSync(source, target);
+  return target;
 }
 
 function readConfig() {
@@ -848,6 +984,7 @@ function buildStatus(result, config, startedAt, error) {
     rpaInstances: config.driver === "wechatauto_rpa" ? rpaInstances : [],
     rpaConfigFile: config.driver === "wechatauto_rpa" ? config.rpaConfigFile : "",
     accountsConfigFile: config.accountsConfigFile,
+    activeWindowVerificationRequired: true,
     dispatchDir: config.dispatchDir,
     inboxDir: config.inboxDir,
     lockDir: config.lockDir,
@@ -889,8 +1026,7 @@ function summarizeDispatch(filePath, dispatch, status, reason) {
 }
 
 function writeStatus(filePath, status) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(status, null, 2)}\n`, "utf8");
+  writeFileAtomic(filePath, `${JSON.stringify(status, null, 2)}\n`, "utf8");
 }
 
 function postJson(url, payload, options = {}) {
@@ -966,7 +1102,33 @@ Safety behavior:
   Account, chat title and recent-message UI Automation evidence are mandatory.
   Same-account dispatches are serialized; different account queues run in parallel.
   Text and local image actions are supported. A sent ack is written only after UI-observed success.
-  Unsafe or uncertain operations create a blocked marker and require manual review.`);
+  The API pending identity is rechecked immediately before UI automation.
+  Uncertain sends are quarantined and never retried automatically.
+  Unsafe pre-send validation creates a blocked marker and requires manual review.`);
+}
+
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(url, { method: "GET", timeout: 10000 }, (response) => {
+      let data = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { data += chunk; });
+      response.on("end", () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(data || `GET ${url} failed with ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(data ? JSON.parse(data) : null);
+        } catch {
+          reject(new Error(`GET ${url} returned invalid JSON`));
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 module.exports = {

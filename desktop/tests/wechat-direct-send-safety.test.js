@@ -1348,7 +1348,7 @@ test("bridge acknowledgement fails trusted sent ack when queued order state chan
   );
 });
 
-test("bridge ack and cancellation archive dispatch instruction files", () => {
+test("bridge ack, cancellation, and unknown delivery archive dispatch instruction files", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const adapter = readProjectFile("apps/api/src/wechat/wechat-send-adapter.service.ts");
   const ackSection = service.slice(
@@ -1371,7 +1371,7 @@ test("bridge ack and cancellation archive dispatch instruction files", () => {
   assert.match(dispatchArchiveSection, /resolveBridgeDispatchFileName/);
   assert.match(dispatchArchiveSection, /safeBridgeFileSegment/);
   assert.match(dispatchArchiveSection, /appConfig\.wechatBridgeDispatchDir/);
-  assert.match(adapter, /moveBridgeDispatchFile\(filePath: string, outcome: "processed" \| "failed" \| "cancelled"\)/);
+  assert.match(adapter, /moveBridgeDispatchFile\(filePath: string, outcome: "processed" \| "failed" \| "cancelled" \| "uncertain"\)/);
   assert.match(adapter, /resolveBridgeChildFile\(filePath, appConfig\.wechatBridgeDispatchDir, "bridge dispatch"\)/);
 });
 
@@ -1426,7 +1426,7 @@ test("backend bridge outbox payload validation checks ack protocol, identity and
   assert.match(validationSection, /guardSnapshot/);
 });
 
-test("send operations scan is the only internal simplified failed bridge ack path", () => {
+test("send operations scan protects unknown bridge delivery without fabricating a failed ack", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const scanOpsSection = service.slice(
     service.indexOf("  async scanSendOperations("),
@@ -1434,17 +1434,21 @@ test("send operations scan is the only internal simplified failed bridge ack pat
   );
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
 
-  assert.match(scanOpsSection, /acknowledgeBridgeSend\([\s\S]*\{ internal: true \}/);
+  assert.doesNotMatch(scanOpsSection, /acknowledgeBridgeSend\([\s\S]*\{ internal: true \}/);
+  assert.match(scanOpsSection, /markBridgeDeliveryUnknown\(task, "bridge_outbox_unavailable"/);
+  assert.match(scanOpsSection, /markBridgeDeliveryUnknown\(task, "bridge_ack_timeout"/);
   assert.match(scanOpsSection, /const bridgeDispatchExpired: any\[\] = \[\]/);
   assert.match(scanOpsSection, /const autoRetriedLowValue: any\[\] = \[\]/);
   assert.match(scanOpsSection, /findPendingBridgeDispatchForTask\(task, pendingBridgeAttempt\)/);
   assert.match(scanOpsSection, /dispatchState\?\.expired/);
-  assert.match(scanOpsSection, /recovery: "bridge_dispatch_expired"/);
+  assert.match(scanOpsSection, /markBridgeDeliveryUnknown\(task, "bridge_dispatch_expired"/);
   assert.match(scanOpsSection, /dispatchFileName: dispatchState\.fileName/);
   assert.match(scanOpsSection, /bridgeDispatchExpired: bridgeDispatchExpired\.length/);
   assert.match(scanOpsSection, /autoRetriedLowValue: autoRetriedLowValue\.length/);
   assert.match(scanOpsSection, /tasks: \{[\s\S]*autoRetriedLowValue/);
   assert.match(scanOpsSection, /微信桥接发送指令过期/);
+  assert.match(service, /deliveryState: "unknown"/);
+  assert.match(service, /automaticRetryBlocked: true/);
   assert.match(service, /private findPendingBridgeDispatchForTask\(task: any, attempt: any\)/);
   assert.match(service, /listBridgeDispatch\(\)[\s\S]*buildBridgeDispatchListItem\(entry\)[\s\S]*entry\.taskId === task\.id[\s\S]*entry\.attemptId === attempt\?\.id/);
   assert.doesNotMatch(controller, /internal:\s*true/);

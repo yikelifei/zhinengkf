@@ -2178,6 +2178,21 @@ export class LocalStoreService {
     return { ...message, customerId: conversation?.customerId || null };
   }
 
+  findInboundMessageByExternalId(wechatAccountId: string, externalId: string) {
+    const safeAccountId = String(wechatAccountId || "").trim();
+    const safeExternalId = String(externalId || "").trim();
+    if (!safeAccountId || !safeExternalId) return null;
+    const data = this.read();
+    const message = data.messages.find((item) =>
+      item.direction === "inbound" &&
+      String(item.wechatAccountId || "") === safeAccountId &&
+      String(item.externalId || "") === safeExternalId,
+    );
+    if (!message) return null;
+    const conversation = data.conversations.find((item) => item.id === message.conversationId);
+    return { ...message, customerId: conversation?.customerId || message.customerId || null };
+  }
+
   listAccountQueueTaskIds(wechatAccountId: string) {
     const data = this.read();
     return data.sendTasks
@@ -2801,13 +2816,7 @@ export class LocalStoreService {
 
   private write(data: StoreData) {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-      fs.renameSync(tempPath, this.filePath);
-    } finally {
-      fs.rmSync(tempPath, { force: true });
-    }
+    writeFileAtomic(this.filePath, `${JSON.stringify(data, null, 2)}\n`);
   }
 
   private ensure() {
@@ -2878,6 +2887,32 @@ function timelineTaskAttachments(task: any) {
     ],
     String(task?.status || "queued"),
   );
+}
+
+function writeFileAtomic(filePath: string, contents: string) {
+  const resolved = path.resolve(filePath);
+  const tempPath = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(tempPath, contents, "utf8");
+    const fd = fs.openSync(tempPath, "r");
+    try {
+      bestEffortFsync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tempPath, resolved);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function bestEffortFsync(fd: number) {
+  try {
+    fs.fsyncSync(fd);
+  } catch (error: any) {
+    if (!["EPERM", "EINVAL", "ENOTSUP"].includes(error?.code)) throw error;
+  }
 }
 
 const SKU_TRACKED_FIELDS = [

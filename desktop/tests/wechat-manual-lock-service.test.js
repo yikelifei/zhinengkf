@@ -3584,7 +3584,7 @@ test("external failed bridge ack still requires outbox proof while internal time
   assert.equal(fs.readdirSync(failedDir).some((fileName) => fileName.endsWith("external-failed-ack.json")), true);
 });
 
-test("send operation scan fails bridge task when pending outbox file is missing", async () => {
+test("send operation scan protects bridge task as delivery-unknown when pending outbox file is missing", async () => {
   const { localStore, service } = setupService();
 
   const task = localStore.createSendTask({
@@ -3614,10 +3614,11 @@ test("send operation scan fails bridge task when pending outbox file is missing"
 
   assert.equal(scan.bridgeOutboxBroken, 1);
   assert.equal(scan.tasks.bridgeOutboxBroken[0].id, task.id);
-  assert.equal(updated.status, "failed");
+  assert.equal(updated.status, "sending");
   assert.match(updated.errorMessage, /outbox_file_missing/);
-  assert.equal(updatedAttempt.status, "failed");
-  assert.match(updatedAttempt.errorMessage, /outbox_file_missing/);
+  assert.equal(updated.guardSnapshot.deliveryState, "unknown");
+  assert.equal(updated.guardSnapshot.deliveryUnknownReason, "bridge_outbox_unavailable");
+  assert.equal(updatedAttempt.status, "started");
   assert.equal(localStore.listNotifications().some((notice) => notice.target?.sendTaskId === task.id), true);
 });
 

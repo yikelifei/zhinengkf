@@ -138,6 +138,25 @@ For external acknowledgements, the platform checks:
 
 If any check fails, the task is not marked `sent` or externally `failed`. The ack file is archived to `failed` and the task remains protected for manual handling.
 
+An exact replay of a previously accepted acknowledgement is idempotent. The backend compares the completed task and attempt identity, account, conversation, customer, outbox file, and a SHA-256 hash of the original `ackToken`. A conflicting replay is rejected.
+
+The task outcome is persisted before the attempt is completed and before outbox or dispatch files are archived. A crash during the later bookkeeping steps therefore cannot make a successfully acknowledged task requeueable.
+
+## Restart and Delivery-Unknown Rules
+
+- A dispatch file is atomically claimed from the dispatch root into `processing` before any UI action. Terminal files move to `processed`, `failed`, or `uncertain`; only root files are eligible for a new send.
+- A dispatch filename is unique across the root and all terminal directories. Restarting a worker cannot recreate or execute the same dispatch.
+- Legacy terminal files with a timestamp prefix are treated as the same dispatch identity, so an upgrade cannot recreate an already archived instruction.
+- Worker status, ack, dispatch, outbox, and local-store JSON use same-directory temporary files plus atomic rename. An interrupted write must leave the previous complete target in place.
+- Account locks contain an owner token and process id and are refreshed while held. Age alone is insufficient to steal a lock from a live process.
+- If a UI action may have crossed the send boundary, the bridge writes no `failed` acknowledgement and archives the dispatch to `uncertain`.
+- An ack scan failure leaves the durable ack in the inbox. The next run scans pending acks before claiming another dispatch.
+- Ack timeout, missing outbox, or expired dispatch means delivery is unknown, not failed. The task remains `sending`, the attempt remains `started`, the outbox is removed from the worker's `pending` list, a root dispatch is quarantined to `uncertain`, and automatic or direct requeue is blocked.
+- Immediately before any personal-WeChat UI action, the bridge re-queries the existing outbox API and matches task, attempt, account, conversation, customer, and file identity. An unavailable API or missing pending entry produces no failed ack and quarantines the dispatch as `uncertain`.
+- A personal-WeChat UI action requires a trusted active-window verifier to match account, conversation, and customer. `PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW` is ignored.
+
+See `WECHAT_RESTART_RECOVERY.md` for the operator procedure. Never move a `processing` or `uncertain` dispatch back into the root to force a retry.
+
 ## Worker Modes
 
 `tools/wechat-bridge-worker.js` defaults to `noop`: it only reads pending outbox tasks and does not write send results.

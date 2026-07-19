@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { Injectable, Optional } from "@nestjs/common";
 import { appConfig } from "../shared/app-config";
 import { WechatWorkApiClient } from "../wechat-work/wechat-work-api.client";
@@ -194,13 +194,14 @@ export class WechatSendAdapterService {
     return targetPath;
   }
 
-  moveBridgeDispatchFile(filePath: string, outcome: "processed" | "failed" | "cancelled") {
+  moveBridgeDispatchFile(filePath: string, outcome: "processed" | "failed" | "cancelled" | "uncertain") {
     const checked = resolveBridgeChildFile(filePath, appConfig.wechatBridgeDispatchDir, "bridge dispatch");
     if (!checked) return null;
     const { resolved, root: dispatchRoot } = checked;
     const targetDir = path.join(dispatchRoot, outcome);
     fs.mkdirSync(targetDir, { recursive: true });
-    const targetPath = path.join(targetDir, `${Date.now()}-${path.basename(resolved)}`);
+    const targetPath = path.join(targetDir, path.basename(resolved));
+    if (fs.existsSync(targetPath)) return targetPath;
     fs.renameSync(resolved, targetPath);
     return targetPath;
   }
@@ -249,7 +250,7 @@ export class WechatSendAdapterService {
     const safeId = String(task?.id || "send").replace(/[^a-zA-Z0-9_-]/g, "_");
     const filePath = path.join(appConfig.wechatBridgeOutboxDir, `${Date.now()}-${safeId}.json`);
     const target = this.buildBridgeTarget(task, context);
-    fs.writeFileSync(
+    writeFileAtomic(
       filePath,
       `${JSON.stringify(
         {
@@ -268,7 +269,6 @@ export class WechatSendAdapterService {
         null,
         2,
       )}\n`,
-      "utf8",
     );
     return filePath;
   }
@@ -409,4 +409,30 @@ function resolveBridgeChildFile(filePath: string, rootDir: string, label: string
     throw new Error(`${label} file resolves outside ${label.includes("outbox") ? "outbox" : "inbox"} directory`);
   }
   return { resolved, root };
+}
+
+function writeFileAtomic(filePath: string, contents: string) {
+  const resolved = path.resolve(filePath);
+  const tempPath = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(tempPath, contents, "utf8");
+    const fd = fs.openSync(tempPath, "r");
+    try {
+      bestEffortFsync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tempPath, resolved);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function bestEffortFsync(fd: number) {
+  try {
+    fs.fsyncSync(fd);
+  } catch (error: any) {
+    if (!["EPERM", "EINVAL", "ENOTSUP"].includes(error?.code)) throw error;
+  }
 }
