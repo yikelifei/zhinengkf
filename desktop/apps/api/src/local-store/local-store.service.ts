@@ -359,6 +359,7 @@ export class LocalStoreService {
       fileName: payload.fileName,
       mimeType: payload.mimeType || "application/octet-stream",
       localPath: payload.localPath,
+      normalizedLocalPath: payload.normalizedLocalPath || null,
       sizeBytes: payload.sizeBytes || 0,
       source: payload.source || "manual_upload",
       wechatAccountId: payload.wechatAccountId || null,

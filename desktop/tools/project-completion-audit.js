@@ -86,6 +86,21 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "Prisma 订单发送失效事务测试",
     file: "desktop/tests/order-prisma-send-invalidation.test.js",
   },
+  {
+    id: "prisma.catalog_asset_parity_migration",
+    title: "商品审计与素材规范路径迁移",
+    file: "desktop/prisma/migrations/20260719230000_catalog_asset_prisma_parity/migration.sql",
+  },
+  {
+    id: "prisma.catalog_change_log_tests",
+    title: "商品 Prisma 变更审计测试",
+    file: "desktop/tests/catalog-prisma-change-log.test.js",
+  },
+  {
+    id: "prisma.asset_identity_tests",
+    title: "素材 Prisma 身份与路径测试",
+    file: "desktop/tests/asset-prisma-identity.test.js",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -357,6 +372,46 @@ const CONTRACTS = Object.freeze([
     ],
     forbidden: [
       /\b(?:endpoint|token|windowsSessionId|sessionId|processId|windowHandle|configPath|executablePath|localPath)\s*\??\s*:/,
+    ],
+  },
+  {
+    id: "contract.catalog_prisma_change_log",
+    title: "商品 Prisma 变更与审计原子性",
+    file: "desktop/apps/api/src/catalog/catalog.service.ts",
+    patterns: [
+      /this\.prisma\.\$transaction/,
+      /tx\.skuChangeLog\.create/,
+      /changedFields/,
+      /reason:\s*context\.reason/,
+      /reason:\s*"no_change"/,
+      /skuChangeLog\.findMany/,
+    ],
+    forbidden: [/if \(appConfig\.useLocalStore\) return this\.localStore\.listSkuChangeLogs\(filter\);\s*return \[\];/s],
+  },
+  {
+    id: "contract.asset_prisma_identity",
+    title: "素材 Prisma 规范路径与会话身份",
+    file: "desktop/apps/api/src/assets/assets.service.ts",
+    patterns: [
+      /normalizedLocalPath/,
+      /await fs\.realpath\(input\)/,
+      /local asset path must be absolute/,
+      /this\.prisma\.conversation\.findFirst/,
+      /normalizedLocalPath:\s*normalized/,
+      /ambiguous persisted identities/,
+      /no unambiguous persisted identity/,
+    ],
+    forbidden: [/this\.prisma\.designAsset\.findFirst\(\{\s*where:\s*\{\s*localPath/s],
+  },
+  {
+    id: "contract.catalog_asset_prisma_models",
+    title: "商品审计与素材路径 Prisma 模型",
+    file: "desktop/prisma/schema.prisma",
+    patterns: [
+      /model SkuChangeLog/,
+      /changedFields\s+Json/,
+      /before\s+Json\?/,
+      /normalizedLocalPath\s+String\?\s+@unique/,
     ],
   },
 ]);

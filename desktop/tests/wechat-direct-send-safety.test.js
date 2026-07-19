@@ -799,11 +799,11 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(assetsService, /!payload\.expectedCustomerId \? "expectedCustomerId" : ""/);
   assert.match(assetsService, /assertExpectedIdentity\(\{ customerId: payload\.ownerId \}, \{ expectedCustomerId: payload\.expectedCustomerId \}, "customer asset"\)/);
   assert.match(assetsService, /async readLocalAsset\(localPath: string, expected: ExpectedIdentityPayload = \{\}\)/);
-  assert.match(assetsService, /await this\.assertLocalAssetReadIdentity\(localPath, expected\)/);
+  assert.match(assetsService, /await this\.assertLocalAssetReadIdentity\(canonicalLocalPath, expected\)/);
   assert.match(assetsService, /local customer asset requires conversation identity: \$\{missing\.join\(", "\)\}/);
   assert.match(assetsService, /assertExpectedIdentity\(asset, expected, "local asset"\)/);
   assert.match(assetsService, /private async findDesignAssetByLocalPath\(localPath: string\)/);
-  assert.match(assetsService, /this\.localStore\.listConversations\(payload\.expectedWechatAccountId\)/);
+  assert.match(assetsService, /this\.localStore\.listConversations\(wechatAccountId\)/);
   assert.match(assetsService, /conversation \? \{ \.\.\.conversation, conversationId: conversation\.id \} : conversation/);
   assert.match(assetsService, /"customer asset conversation customer"/);
   assert.match(prismaSchema, /model DesignAsset \{[\s\S]*wechatAccountId String\?/);

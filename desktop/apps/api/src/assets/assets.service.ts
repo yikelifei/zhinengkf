@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import path from "node:path";
+import fs from "node:fs/promises";
+import { BadRequestException, ForbiddenException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
@@ -16,8 +18,15 @@ export class AssetsService {
   ) {}
 
   list(filter: { ownerType?: string; ownerId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
-    this.assertCustomerAssetListIdentity(filter);
-    if (appConfig.useLocalStore) return this.localStore.listDesignAssets(filter);
+    if (appConfig.useLocalStore) {
+      this.assertCustomerAssetListIdentityLocal(filter);
+      return this.localStore.listDesignAssets(filter);
+    }
+    return this.listPrisma(filter);
+  }
+
+  private async listPrisma(filter: { ownerType?: string; ownerId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string }) {
+    await this.assertCustomerAssetListIdentity(filter);
     return this.prisma.designAsset.findMany({
       where: {
         ownerType: filter.ownerType,
@@ -33,15 +42,17 @@ export class AssetsService {
 
   async upload(payload: UploadAssetPayload) {
     this.assertPayload(payload);
-    this.assertCustomerAssetIdentity(payload);
+    await this.assertCustomerAssetIdentity(payload);
     const saved = await this.savePayload(payload);
+    const canonicalSavedPath = await this.resolveCanonicalLocalAssetPath(saved.localPath, true);
     const record = {
       ownerType: payload.ownerType,
       ownerId: payload.ownerId,
       role: payload.role || "reference",
       fileName: payload.fileName,
       mimeType: payload.mimeType || guessMimeType(payload.fileName),
-      localPath: saved.localPath,
+      localPath: canonicalSavedPath,
+      normalizedLocalPath: this.normalizeLocalAssetPath(canonicalSavedPath),
       sizeBytes: saved.sizeBytes,
       source: payload.source || (payload.url ? "url" : "manual_upload"),
       wechatAccountId: payload.expectedWechatAccountId || null,
@@ -56,6 +67,7 @@ export class AssetsService {
         fileName: record.fileName,
         mimeType: record.mimeType,
         localPath: record.localPath,
+        normalizedLocalPath: record.normalizedLocalPath,
         sizeBytes: record.sizeBytes,
         source: record.source,
         wechatAccountId: record.wechatAccountId,
@@ -79,8 +91,9 @@ export class AssetsService {
   }
 
   async readLocalAsset(localPath: string, expected: ExpectedIdentityPayload = {}) {
-    await this.assertLocalAssetReadIdentity(localPath, expected);
-    return this.storage.readLocalAsset(localPath);
+    const canonicalLocalPath = await this.resolveCanonicalLocalAssetPath(localPath);
+    await this.assertLocalAssetReadIdentity(canonicalLocalPath, expected);
+    return this.storage.readLocalAsset(canonicalLocalPath);
   }
 
   private assertPayload(payload: UploadAssetPayload) {
@@ -92,7 +105,7 @@ export class AssetsService {
     }
   }
 
-  private assertCustomerAssetIdentity(payload: UploadAssetPayload & ExpectedIdentityPayload) {
+  private async assertCustomerAssetIdentity(payload: UploadAssetPayload & ExpectedIdentityPayload) {
     if (payload.ownerType !== "customer") return;
     const missing = [
       !payload.expectedWechatAccountId ? "expectedWechatAccountId" : "",
@@ -103,11 +116,10 @@ export class AssetsService {
       throw new BadRequestException(`customer asset requires conversation identity: ${missing.join(", ")}`);
     }
     assertExpectedIdentity({ customerId: payload.ownerId }, { expectedCustomerId: payload.expectedCustomerId }, "customer asset");
-    if (!appConfig.useLocalStore) return;
-    const conversations = this.localStore.listConversations(payload.expectedWechatAccountId);
-    const conversation =
-      conversations.find((item: any) => item.id === payload.expectedConversationId) ||
-      this.localStore.listConversations().find((item: any) => item.id === payload.expectedConversationId);
+    const conversation = await this.findConversationForIdentity(
+      payload.expectedConversationId || "",
+      payload.expectedWechatAccountId || "",
+    );
     assertExpectedIdentity(
       conversation ? { ...conversation, conversationId: conversation.id } : conversation,
       payload,
@@ -120,14 +132,61 @@ export class AssetsService {
     );
   }
 
-  private assertCustomerAssetListIdentity(filter: {
+  private async assertCustomerAssetListIdentity(filter: {
     ownerType?: string;
     ownerId?: string;
     wechatAccountId?: string;
     conversationId?: string;
     customerId?: string;
   }) {
-    if (filter.ownerType !== "customer") return;
+    const expected = this.assertCustomerAssetListRequest(filter);
+    if (!expected) return;
+    const conversation = await this.findConversationForIdentity(filter.conversationId || "", filter.wechatAccountId || "");
+    assertExpectedIdentity(
+      conversation ? { ...conversation, conversationId: conversation.id } : conversation,
+      expected,
+      "customer asset list conversation",
+    );
+    assertExpectedIdentity(
+      { customerId: conversation?.customerId },
+      { expectedCustomerId: filter.customerId },
+      "customer asset list conversation customer",
+    );
+  }
+
+  private assertCustomerAssetListIdentityLocal(filter: {
+    ownerType?: string;
+    ownerId?: string;
+    wechatAccountId?: string;
+    conversationId?: string;
+    customerId?: string;
+  }) {
+    const expected = this.assertCustomerAssetListRequest(filter);
+    if (!expected) return;
+    const conversation =
+      this.localStore.listConversations(filter.wechatAccountId).find((item: any) => item.id === filter.conversationId) ||
+      this.localStore.listConversations().find((item: any) => item.id === filter.conversationId) ||
+      null;
+    assertExpectedIdentity(
+      conversation ? { ...conversation, conversationId: conversation.id } : conversation,
+      expected,
+      "customer asset list conversation",
+    );
+    assertExpectedIdentity(
+      { customerId: conversation?.customerId },
+      { expectedCustomerId: filter.customerId },
+      "customer asset list conversation customer",
+    );
+  }
+
+  private assertCustomerAssetListRequest(filter: {
+    ownerType?: string;
+    ownerId?: string;
+    wechatAccountId?: string;
+    conversationId?: string;
+    customerId?: string;
+  }) {
+    if (filter.ownerType !== "customer") return null;
     const expected = {
       expectedWechatAccountId: filter.wechatAccountId,
       expectedConversationId: filter.conversationId,
@@ -148,27 +207,22 @@ export class AssetsService {
         "customer asset list owner",
       );
     }
-    if (!appConfig.useLocalStore) return;
-    const conversation =
-      this.localStore.listConversations(filter.wechatAccountId).find((item: any) => item.id === filter.conversationId) ||
-      this.localStore.listConversations().find((item: any) => item.id === filter.conversationId);
-    assertExpectedIdentity(
-      conversation ? { ...conversation, conversationId: conversation.id } : conversation,
-      expected,
-      "customer asset list conversation",
-    );
-    assertExpectedIdentity(
-      { customerId: conversation?.customerId },
-      { expectedCustomerId: filter.customerId },
-      "customer asset list conversation customer",
-    );
+    return expected;
   }
 
   private async assertLocalAssetReadIdentity(localPath: string, expected: ExpectedIdentityPayload = {}) {
+    const normalized = this.normalizeLocalAssetPath(localPath);
     const asset = await this.findDesignAssetByLocalPath(localPath);
-    if (!asset) return;
+    if (!asset) {
+      if (this.isCustomerAssetPath(normalized)) {
+        throw new ForbiddenException("customer asset path has no unambiguous persisted identity");
+      }
+      return;
+    }
     const scopedToCustomer =
-      asset.ownerType === "customer" || Boolean(asset.wechatAccountId || asset.conversationId || asset.customerId);
+      this.isCustomerAssetPath(normalized) ||
+      asset.ownerType === "customer" ||
+      Boolean(asset.wechatAccountId || asset.conversationId || asset.customerId);
     if (!scopedToCustomer) return;
     const missing = [
       !expected.expectedWechatAccountId ? "expectedWechatAccountId" : "",
@@ -191,16 +245,58 @@ export class AssetsService {
           .find((asset: any) => this.normalizeLocalAssetPath(asset.localPath) === normalized) || null
       );
     }
-    const direct = await this.prisma.designAsset.findFirst({ where: { localPath } });
-    if (direct) return direct;
-    return null;
+    const matches = await this.prisma.designAsset.findMany({
+      where: { normalizedLocalPath: normalized },
+      take: 2,
+    });
+    if (matches.length > 1) {
+      throw new ForbiddenException("local asset path resolves to ambiguous persisted identities");
+    }
+    return matches[0] || null;
   }
 
   private normalizeLocalAssetPath(value?: string | null) {
-    return String(value || "")
-      .trim()
-      .replace(/[\\/]+/g, "/")
-      .toLowerCase();
+    let input = String(value || "").trim();
+    if (!input) return "";
+    input = input
+      .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+      .replace(/^\\\\\?\\/i, "")
+      .replace(/\//g, "\\");
+    if (!path.win32.isAbsolute(input)) {
+      throw new BadRequestException("local asset path must be absolute");
+    }
+    return path.win32.resolve(input).replace(/[\\]+$/g, "").replace(/\\/g, "/").toLowerCase();
+  }
+
+  private async resolveCanonicalLocalAssetPath(value: string, allowTrustedRelative = false) {
+    let input = String(value || "").trim();
+    if (allowTrustedRelative && input && !path.win32.isAbsolute(input)) input = path.resolve(input);
+    this.normalizeLocalAssetPath(input);
+    try {
+      return await fs.realpath(input);
+    } catch {
+      return input;
+    }
+  }
+
+  private isCustomerAssetPath(normalizedLocalPath: string) {
+    if (!normalizedLocalPath) return false;
+    const customerRoot = `${this.normalizeLocalAssetPath(path.join(appConfig.localStorageRoot, "assets", "customer"))}/`;
+    return normalizedLocalPath.startsWith(customerRoot);
+  }
+
+  private async findConversationForIdentity(conversationId: string, wechatAccountId: string) {
+    if (appConfig.useLocalStore) {
+      return (
+        this.localStore.listConversations(wechatAccountId).find((item: any) => item.id === conversationId) ||
+        this.localStore.listConversations().find((item: any) => item.id === conversationId) ||
+        null
+      );
+    }
+    return this.prisma.conversation.findFirst({
+      where: { id: conversationId, wechatAccountId },
+      select: { id: true, wechatAccountId: true, customerId: true },
+    });
   }
 
   private savePayload(payload: UploadAssetPayload) {

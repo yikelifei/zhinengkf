@@ -814,7 +814,7 @@ test("local customer asset read requires matching account conversation identity"
     role: "customer_logo",
     fileName: "logo.png",
     mimeType: "image/png",
-    localPath: path.join("storage", "assets", "customer", "customer_demo_1", "logo.png"),
+    localPath: path.resolve("storage", "assets", "customer", "customer_demo_1", "logo.png"),
     source: "test",
   });
 
@@ -863,7 +863,7 @@ test("local sku asset read stays available without customer identity", async () 
     role: "sku_image",
     fileName: "sku.png",
     mimeType: "image/png",
-    localPath: path.join("storage", "assets", "sku", "sku_demo_1", "sku.png"),
+    localPath: path.resolve("storage", "assets", "sku", "sku_demo_1", "sku.png"),
     source: "test",
   });
 

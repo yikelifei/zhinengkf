@@ -299,6 +299,26 @@ model Sku {
   isActive            Boolean  @default(true)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+  changeLogs          SkuChangeLog[]
+}
+
+model SkuChangeLog {
+  id            String   @id @default(cuid())
+  skuId         String
+  skuCode       String
+  name          String
+  action        String
+  source        String
+  operator      String
+  reason        String
+  changedFields Json
+  before        Json?
+  after         Json
+  createdAt     DateTime @default(now())
+  sku           Sku      @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  @@index([skuCode, createdAt])
+  @@index([createdAt])
 }
 
 model DesignAsset {
@@ -308,6 +328,7 @@ model DesignAsset {
   fileName        String
   mimeType        String
   localPath       String
+  normalizedLocalPath String? @unique
   sizeBytes       Int?
   source          String
   wechatAccountId String?

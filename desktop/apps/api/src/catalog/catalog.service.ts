@@ -20,6 +20,33 @@ const {
   recommendBundle,
 } = rules;
 
+const SKU_TRACKED_FIELDS = [
+  "name",
+  "type",
+  "category",
+  "costPrice",
+  "salePrice",
+  "stock",
+  "supplier",
+  "leadTimeDays",
+  "sceneTags",
+  "mainImagePath",
+  "angleImages",
+  "dimensions",
+  "weightGram",
+  "material",
+  "matchingRules",
+  "replacementSkuCodes",
+  "isActive",
+] as const;
+
+type SkuChangeContext = {
+  action?: string;
+  source: string;
+  operator?: string;
+  reason?: string;
+};
+
 @Injectable()
 export class CatalogService {
   constructor(
@@ -50,8 +77,14 @@ export class CatalogService {
   }
 
   async listSkuChangeLogs(filter: { skuCode?: string; limit?: number } = {}) {
-    if (appConfig.useLocalStore) return this.localStore.listSkuChangeLogs(filter);
-    return [];
+    const limit = this.normalizeLogLimit(filter.limit);
+    const skuCode = String(filter.skuCode || "").trim() || undefined;
+    if (appConfig.useLocalStore) return this.localStore.listSkuChangeLogs({ skuCode, limit });
+    return this.prisma.skuChangeLog.findMany({
+      where: skuCode ? { skuCode } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit,
+    });
   }
 
   getSkuImportFields() {
@@ -106,12 +139,12 @@ export class CatalogService {
           }),
         );
       } else {
-        updated.push(
-          await this.prisma.sku.update({
-            where: { skuCode: sku.skuCode },
-            data: this.toPrismaSku(merged as SkuPayload) as any,
-          }),
-        );
+        updated.push(await this.prisma.$transaction((tx) => this.persistSkuMutation(tx, merged as SkuPayload, {
+          action: "update",
+          source: "demo_sku_images",
+          operator: "system",
+          reason: "prepare real design demo materials",
+        })));
       }
     }
     return {
@@ -124,21 +157,25 @@ export class CatalogService {
   async upsertSku(payload: SkuPayload) {
     this.assertSkuPayload(payload);
     if (appConfig.useLocalStore) return this.localStore.upsertSku(payload, { source: "manual_form", operator: "客服工作台" });
-    const data = this.toPrismaSku(payload) as any;
-    return this.prisma.sku.upsert({
-      where: { skuCode: payload.skuCode },
-      update: data,
-      create: data,
-    });
+    return this.prisma.$transaction((tx) => this.persistSkuMutation(tx, payload, {
+      source: "manual_form",
+      operator: "客服工作台",
+    }));
   }
 
   async bulkUpsert(rows: SkuPayload[]) {
     if (appConfig.useLocalStore) return this.localStore.bulkUpsertSkus(rows, { source: "import_confirm", operator: "客服工作台" });
-    const results = [];
-    for (const row of rows) {
-      results.push(await this.upsertSku(row));
-    }
-    return { count: results.length, results };
+    rows.forEach((row) => this.assertSkuPayload(row));
+    return this.prisma.$transaction(async (tx) => {
+      const results = [];
+      for (const row of rows) {
+        results.push(await this.persistSkuMutation(tx, row, {
+          source: "import_confirm",
+          operator: "客服工作台",
+        }));
+      }
+      return { count: results.length, results };
+    });
   }
 
   async updateSkuStatus(skuCode: string, isActive: boolean) {
@@ -146,11 +183,18 @@ export class CatalogService {
     if (!code) throw new BadRequestException("skuCode is required");
     if (appConfig.useLocalStore) return this.localStore.updateSkuStatus(code, isActive, { source: "manual_status", operator: "客服工作台" });
 
-    const current = await this.prisma.sku.findUnique({ where: { skuCode: code } });
-    if (!current) throw new NotFoundException(`sku not found: ${code}`);
-    return this.prisma.sku.update({
-      where: { skuCode: code },
-      data: { isActive },
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.sku.findUnique({ where: { skuCode: code } });
+      if (!current) throw new NotFoundException(`sku not found: ${code}`);
+      if (current.isActive === isActive) return current;
+      const updated = await tx.sku.update({ where: { skuCode: code }, data: { isActive } });
+      await this.createSkuChangeLog(tx, current, updated, {
+        action: "status_change",
+        source: "manual_status",
+        operator: "客服工作台",
+        reason: isActive ? "恢复商品" : "下架商品",
+      });
+      return updated;
     });
   }
 
@@ -164,43 +208,31 @@ export class CatalogService {
       return this.localStore.batchUpdateSkus(skuCodes, patch, { source: "batch_update", operator: "客服工作台" });
     }
 
-    const updated = [];
-    const skipped = [];
-    for (const skuCode of skuCodes) {
-      const current = await this.prisma.sku.findUnique({ where: { skuCode } });
-      if (!current) {
-        skipped.push({ skuCode, reason: "not_found" });
-        continue;
+    return this.prisma.$transaction(async (tx) => {
+      const updated = [];
+      const skipped = [];
+      for (const skuCode of skuCodes) {
+        const current = await tx.sku.findUnique({ where: { skuCode } });
+        if (!current) {
+          skipped.push({ skuCode, reason: "not_found" });
+          continue;
+        }
+        const merged = { ...this.toSkuPayload(current), ...patch } as SkuPayload;
+        const changedFields = this.buildSkuChangedFields(current, merged);
+        if (!changedFields.length) {
+          skipped.push({ skuCode, reason: "no_change" });
+          continue;
+        }
+        const next = await tx.sku.update({ where: { skuCode }, data: this.toPrismaSku(merged) as any });
+        await this.createSkuChangeLog(tx, current, next, {
+          action: "batch_update",
+          source: "batch_update",
+          operator: "客服工作台",
+        }, changedFields);
+        updated.push(next);
       }
-      const merged = {
-        skuCode: current.skuCode,
-        name: current.name,
-        type: current.type as any,
-        category: current.category || undefined,
-        sceneTags: Array.isArray(current.sceneTags) ? (current.sceneTags as string[]) : [],
-        costPrice: Number(current.costPrice),
-        salePrice: Number(current.salePrice),
-        stock: current.stock,
-        dimensions: (current.dimensions as Record<string, unknown>) || {},
-        weightGram: current.weightGram || undefined,
-        material: current.material || undefined,
-        supplier: current.supplier || undefined,
-        leadTimeDays: current.leadTimeDays || undefined,
-        mainImagePath: current.mainImagePath || undefined,
-        angleImages: Array.isArray(current.angleImages) ? (current.angleImages as string[]) : [],
-        matchingRules: (current.matchingRules as Record<string, unknown>) || {},
-        replacementSkuCodes: Array.isArray(current.replacementSkuCodes) ? (current.replacementSkuCodes as string[]) : [],
-        isActive: current.isActive,
-        ...patch,
-      };
-      updated.push(
-        await this.prisma.sku.update({
-          where: { skuCode },
-          data: this.toPrismaSku(merged) as any,
-        }),
-      );
-    }
-    return { count: updated.length, updated, skipped };
+      return { count: updated.length, updated, skipped };
+    });
   }
 
   async previewImportText(text: string) {
@@ -279,6 +311,127 @@ export class CatalogService {
       replacementSkuCodes: payload.replacementSkuCodes || [],
       isActive: payload.isActive !== false,
     };
+  }
+
+  private async persistSkuMutation(tx: any, payload: SkuPayload, context: SkuChangeContext) {
+    const current = await tx.sku.findUnique({ where: { skuCode: payload.skuCode } });
+    if (!current) {
+      const created = await tx.sku.create({ data: this.toPrismaSku(payload) as any });
+      await this.createSkuChangeLog(tx, null, created, {
+        ...context,
+        action: context.action || "create",
+      });
+      return created;
+    }
+    const merged = { ...this.toSkuPayload(current), ...payload } as SkuPayload;
+    const changedFields = this.buildSkuChangedFields(current, merged);
+    if (!changedFields.length) return current;
+    const updated = await tx.sku.update({
+      where: { skuCode: payload.skuCode },
+      data: this.toPrismaSku(merged) as any,
+    });
+    await this.createSkuChangeLog(tx, current, updated, {
+      ...context,
+      action: context.action || "update",
+    }, changedFields);
+    return updated;
+  }
+
+  private async createSkuChangeLog(
+    tx: any,
+    before: Record<string, unknown> | null,
+    after: Record<string, unknown>,
+    context: SkuChangeContext,
+    knownChanges?: Array<{ field: string; before: unknown; after: unknown }>,
+  ) {
+    const changedFields = knownChanges || this.buildSkuChangedFields(before, after);
+    if (before && !changedFields.length) return null;
+    const afterSnapshot = this.pickSkuSnapshot(after);
+    return tx.skuChangeLog.create({
+      data: {
+        skuId: String(after.id || before?.id || ""),
+        skuCode: String(after.skuCode || before?.skuCode || ""),
+        name: String(after.name || before?.name || ""),
+        action: context.action || (before ? "update" : "create"),
+        source: context.source,
+        operator: context.operator || "system",
+        reason: context.reason || "",
+        changedFields: this.toJsonValue(changedFields),
+        before: before ? this.toJsonValue(this.pickSkuSnapshot(before)) : undefined,
+        after: this.toJsonValue(afterSnapshot),
+      },
+    });
+  }
+
+  private buildSkuChangedFields(before: Record<string, unknown> | null, after: Record<string, unknown>) {
+    const beforeSnapshot = before ? this.pickSkuSnapshot(before) : null;
+    const afterSnapshot = this.pickSkuSnapshot(after);
+    return SKU_TRACKED_FIELDS
+      .filter((field) => !beforeSnapshot || !this.sameSkuValue(beforeSnapshot[field], afterSnapshot[field]))
+      .filter((field) => beforeSnapshot || afterSnapshot[field] !== undefined && afterSnapshot[field] !== "")
+      .map((field) => ({
+        field,
+        before: beforeSnapshot ? beforeSnapshot[field] ?? null : null,
+        after: afterSnapshot[field] ?? null,
+      }));
+  }
+
+  private pickSkuSnapshot(value: Record<string, unknown>) {
+    const normalized = this.toSkuPayload(value);
+    return Object.fromEntries(
+      ["skuCode", ...SKU_TRACKED_FIELDS]
+        .filter((field) => normalized[field as keyof SkuPayload] !== undefined)
+        .map((field) => [field, this.toJsonValue(normalized[field as keyof SkuPayload])]),
+    ) as Record<string, unknown>;
+  }
+
+  private toSkuPayload(value: Record<string, any>): SkuPayload {
+    return {
+      skuCode: String(value.skuCode || ""),
+      name: String(value.name || ""),
+      type: value.type,
+      category: value.category ?? undefined,
+      sceneTags: Array.isArray(value.sceneTags) ? value.sceneTags : [],
+      costPrice: Number(value.costPrice || 0),
+      salePrice: Number(value.salePrice || 0),
+      stock: Number(value.stock || 0),
+      dimensions: value.dimensions || {},
+      weightGram: value.weightGram ?? undefined,
+      material: value.material ?? undefined,
+      supplier: value.supplier ?? undefined,
+      leadTimeDays: value.leadTimeDays ?? undefined,
+      mainImagePath: value.mainImagePath ?? undefined,
+      angleImages: Array.isArray(value.angleImages) ? value.angleImages : [],
+      matchingRules: value.matchingRules || {},
+      replacementSkuCodes: Array.isArray(value.replacementSkuCodes) ? value.replacementSkuCodes : [],
+      isActive: value.isActive !== false,
+    };
+  }
+
+  private sameSkuValue(left: unknown, right: unknown) {
+    return JSON.stringify(this.toJsonValue(left)) === JSON.stringify(this.toJsonValue(right));
+  }
+
+  private toJsonValue(value: any): any {
+    if (value === undefined) return undefined;
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value?.toNumber === "function") return value.toNumber();
+    if (value instanceof Date) return value.toISOString();
+    if (Array.isArray(value)) return value.map((item) => this.toJsonValue(item));
+    if (typeof value === "object") {
+      return Object.fromEntries(
+        Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => [key, this.toJsonValue(value[key])]),
+      );
+    }
+    return String(value);
+  }
+
+  private normalizeLogLimit(value?: number) {
+    if (value === undefined) return 30;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) throw new BadRequestException("limit must be a positive number");
+    return Math.min(Math.floor(numeric), 200);
   }
 
   private async toAuditSku(payload: Partial<SkuPayload>) {
