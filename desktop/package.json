@@ -23,6 +23,8 @@
     "ci:release-quality": "node tools/ci-release-quality.js",
     "release:gate": "node tools/production-release-gate.js",
     "staging:readiness": "node tools/staging-readiness-evidence.js",
+    "database:recovery:plan": "node tools/database-recovery-rehearsal.js",
+    "database:recovery:execute": "node tools/database-recovery-rehearsal.js --execute",
     "qa:responsive": "node tools/run-responsive-layout-qa.js",
     "acceptance:e2e": "node tools/run-product-acceptance.js",
     "acceptance:e2e:mock": "node tools/run-product-acceptance.js --mode mock",

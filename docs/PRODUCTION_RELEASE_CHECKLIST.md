@@ -34,6 +34,16 @@ npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-d
 
 第一条命令只做本地脱敏配置盘点；第二条必须显式加入 `--execute`，且只运行 `prisma migrate status` 和现有 API 的固定 `GET` 就绪接口，不部署迁移、不真实发送、不提交设计任务。报告写入 `desktop/.runtime/staging-readiness-evidence/`。完整口径见 `docs/STAGING_READINESS_EVIDENCE.md`。
 
+数据库备份/恢复证据使用独立的安全演练入口：
+
+```powershell
+cd desktop
+npm.cmd run database:recovery:plan
+npm.cmd run database:recovery:execute -- --confirm "RESTORE ISOLATED REHEARSAL DATABASE: <恢复目标数据库名>"
+```
+
+默认 `plan` 不执行命令或数据库连接；`execute` 仅允许源库之外、名称明确为 rehearsal/sandbox 且不含生产标识的隔离目标。报告不记录 URL、用户名、密码或业务数据，临时备份在演练结束前删除。完整操作和审批边界见 `desktop/docs/DATABASE_RECOVERY_REHEARSAL.md`。
+
 ## 状态口径
 
 - `PASS`：本机可重复执行的代码、构建、测试和静态安全检查通过。
@@ -77,7 +87,7 @@ CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真�
 - [ ] 已确认目标 PostgreSQL 的现有基线与仓库迁移历史一致。
 - [ ] `staging:readiness -- --execute` 的 `prisma migrate status` 为 `PASS`，报告已附到变更单。
 - [ ] 已在隔离的预发布数据库执行并留存 `prisma migrate deploy --schema prisma/schema.prisma` 输出。
-- [ ] 已备份数据库并完成一次迁移回滚/恢复演练。
+- [ ] 已运行安全备份/恢复演练，脱敏报告为 `PASS`，SHA-256、命令版本、源/恢复库迁移状态以及最小结构一致性证据已附到变更单。
 - [ ] 若启用 BullMQ/Redis，已验证目标 Redis 的连接、权限、持久化和故障提示。
 
 不要在本地门禁中传入生产 `DATABASE_URL`。数据库迁移必须在受控预发布环境执行：
