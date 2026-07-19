@@ -401,18 +401,19 @@ test("different accounts in the same Windows session share a serialized input la
   assert.equal(maxActive, 1);
 });
 
-test("unsafe UI result blocks dispatch and writes no acknowledgement", async () => {
+test("unsafe UI result is quarantined and writes no acknowledgement", async () => {
   const fixture = createRuntimeFixture();
   const dispatchFile = writeTaskFixture(fixture, "account_1", "conversation_1", "customer_1", "Chat 1", "task_block", "attempt_block");
   fixture.config.operationExecutor = () => ({ ok: false, code: "chat_identity_mismatch", errorMessage: "wrong chat" });
   fixture.config.scanAckExecutor = () => assert.fail("scan must not run without a verified send");
 
   const result = await runOnce(fixture.config);
-  assert.equal(result.blocked.length, 1);
-  assert.equal(result.processed.length, 0);
+  assert.equal(result.blocked.length, 0);
+  assert.equal(result.processed.length, 1);
+  assert.equal(result.processed[0].status, "delivery_unknown");
   assert.equal(fs.readdirSync(fixture.inboxDir).length, 0);
-  assert.equal(fs.existsSync(dispatchFile), true);
-  assert.equal(fs.readdirSync(fixture.blockedDir).filter((name) => name.endsWith(".blocked.json")).length, 1);
+  assert.equal(fs.existsSync(dispatchFile), false);
+  assert.equal(fs.readdirSync(path.join(fixture.dispatchDir, "uncertain")).filter((name) => name.endsWith(".dispatch.json")).length, 1);
 });
 
 test("implementation has no unverified-window escape hatch or first-process activation", () => {
@@ -453,6 +454,7 @@ function createRuntimeFixture() {
       lockStaleMs: 300000,
       sendEnabled: true,
       scanAckInbox: true,
+      verifyPendingDispatch: () => ({ ok: true, source: "test_fixture" }),
       pasteDelayMs: 100,
       confirmDelayMs: 300,
     },
@@ -564,18 +566,20 @@ function buildDispatch(overrides = {}) {
 }
 
 function buildOutbox(overrides = {}) {
-  return {
+  const base = {
     version: "wechat_bridge_outbox_v1",
     ackToken: "a".repeat(64),
     taskId: "task_1",
     wechatAccountId: "account_1",
     conversationId: "conversation_1",
+    customerId: "customer_1",
     target: buildTarget("account_1", "conversation_1", "customer_1", "Chat 1"),
     sendPlan: buildSendPlan("account_1", "conversation_1", "customer_1", "hello"),
     guardSnapshot: { status: "passed", ok: true },
     context: { guardStatus: "passed", windowSnapshotId: "window_1" },
     ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function buildTarget(accountId, conversationId, customerId, conversationTitle) {

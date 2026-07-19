@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AiProviderService } from "../ai/ai-provider.service";
@@ -935,6 +936,35 @@ export class WechatDispatchService {
   }) {
     if (!appConfig.useLocalStore) throw new Error("inbound message prisma mode is not implemented yet");
     const conversation = this.resolveInboundConversation(payload);
+    const externalId = String(payload.externalId || "").trim();
+    const duplicate = externalId
+      ? this.localStore.findInboundMessageByExternalId(conversation.wechatAccountId, externalId)
+      : null;
+    if (duplicate) {
+      const sameIdentity =
+        String(duplicate.conversationId || "") === String(conversation.id || "") &&
+        String(duplicate.customerId || "") === String(conversation.customerId || "");
+      const sameContent = String(duplicate.text || "") === String(payload.text || "");
+      if (!sameIdentity || !sameContent) {
+        throw new BadRequestException("duplicate inbound externalId conflict: identity or content changed");
+      }
+      return {
+        duplicate: true,
+        message: duplicate,
+        route: null,
+        plan: {
+          type: "duplicate_ignored",
+          reason: "inbound_external_id_already_processed",
+          shouldQueueReply: false,
+          shouldCreateDesignJob: false,
+          shouldNotifyHuman: false,
+        },
+        sendTask: null,
+        designJob: null,
+        notification: null,
+        bundleRecommendation: null,
+      };
+    }
     const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
     this.validateInboundAssetBinding(conversation, assetIds);
     const message = this.localStore.createMessage({
@@ -1630,11 +1660,20 @@ export class WechatDispatchService {
         : null;
       if (!this.matchesBridgeEntryIdentity(entry, task, filter)) continue;
       const item = this.buildBridgeOutboxListItem(entry, task, attempt);
-      if (!entry.errorMessage && task?.status === "sending" && attempt) pending.push(item);
+      const deliveryRetryBlocked =
+        task?.guardSnapshot?.automaticRetryBlocked === true ||
+        task?.guardSnapshot?.deliveryState === "unknown";
+      if (!entry.errorMessage && task?.status === "sending" && attempt && !deliveryRetryBlocked) pending.push(item);
       else {
         ignored.push({
           ...item,
-          ignoreReason: entry.errorMessage || (!task ? "task_not_found" : task.status !== "sending" ? "task_not_sending" : "pending_bridge_attempt_missing"),
+          ignoreReason: entry.errorMessage || (!task
+            ? "task_not_found"
+            : task.status !== "sending"
+              ? "task_not_sending"
+              : deliveryRetryBlocked
+                ? "delivery_unknown_retry_blocked"
+                : "pending_bridge_attempt_missing"),
         });
       }
     }
@@ -1666,6 +1705,7 @@ export class WechatDispatchService {
       taskId: entry.taskId,
       wechatAccountId: entry.wechatAccountId,
       conversationId: entry.conversationId,
+      customerId: task?.conversation?.customerId || entry?.customerId || entry?.data?.target?.customerId || "",
       payloadKind: entry.payloadKind,
       actionCount: entry.actionCount,
       createdAt: entry.createdAt,
@@ -1872,21 +1912,11 @@ export class WechatDispatchService {
         const outboxState = this.inspectPendingBridgeOutbox(task);
         if (!outboxState.ok) {
           const reason = `Windows 桥接待发送文件不可用：${outboxState.reason}`;
-          const ack = this.acknowledgeBridgeSend(
-            task.id,
-            {
-              status: "failed",
-              errorMessage: reason,
-              metadata: {
-                source: "send_ops_scan",
-                recovery: "bridge_outbox_unavailable",
-                outboxFileName: outboxState.fileName || undefined,
-              },
-            },
-            { internal: true },
-          );
-          bridgeOutboxBroken.push(ack.task);
-          await this.notifications.create("error", "微信桥接待发送文件异常", `${task.conversation?.title || task.conversationId} 的发送任务已转失败，请人工核查后重新排队。`, {
+          const protectedTask = this.markBridgeDeliveryUnknown(task, "bridge_outbox_unavailable", reason, {
+            outboxFileName: outboxState.fileName || undefined,
+          });
+          bridgeOutboxBroken.push(protectedTask);
+          if (task.guardSnapshot?.deliveryUnknownReason !== "bridge_outbox_unavailable") await this.notifications.create("error", "微信桥接待发送文件异常", `${task.conversation?.title || task.conversationId} 的发送结果未知，任务保持发送中并禁止重排；请先人工核查微信窗口。`, {
             sendTaskId: task.id,
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
@@ -1903,22 +1933,12 @@ export class WechatDispatchService {
           : null;
         if (dispatchState?.expired) {
           const reason = `Windows 桥接发送指令已过期：${dispatchState.expiresAt || dispatchState.fileName || "unknown"}`;
-          const ack = this.acknowledgeBridgeSend(
-            task.id,
-            {
-              status: "failed",
-              errorMessage: reason,
-              metadata: {
-                source: "send_ops_scan",
-                recovery: "bridge_dispatch_expired",
-                dispatchFileName: dispatchState.fileName || undefined,
-                expiresAt: dispatchState.expiresAt || undefined,
-              },
-            },
-            { internal: true },
-          );
-          bridgeDispatchExpired.push(ack.task);
-          await this.notifications.create("warning", "微信桥接发送指令过期", `${task.conversation?.title || task.conversationId} 的发送任务已转失败，请重新校验窗口并生成新的发送指令。`, {
+          const protectedTask = this.markBridgeDeliveryUnknown(task, "bridge_dispatch_expired", reason, {
+            dispatchFileName: dispatchState.fileName || undefined,
+            expiresAt: dispatchState.expiresAt || undefined,
+          });
+          bridgeDispatchExpired.push(protectedTask);
+          if (task.guardSnapshot?.deliveryUnknownReason !== "bridge_dispatch_expired") await this.notifications.create("warning", "微信桥接发送指令过期", `${task.conversation?.title || task.conversationId} 的发送结果未知，任务保持发送中并禁止重排；请先人工核查微信窗口。`, {
             sendTaskId: task.id,
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
@@ -1931,17 +1951,9 @@ export class WechatDispatchService {
 
       if (task.status === "sending" && this.isBridgeAckTimedOut(task, now)) {
         const reason = `Windows 桥接回执超过 ${appConfig.sendBridgeAckTimeoutMinutes} 分钟未返回`;
-        const ack = this.acknowledgeBridgeSend(
-          task.id,
-          {
-            status: "failed",
-            errorMessage: reason,
-            metadata: { source: "send_ops_scan" },
-          },
-          { internal: true },
-        );
-        bridgeTimedOut.push(ack.task);
-        await this.notifications.create("warning", "微信桥接回执超时", `${task.conversation?.title || task.conversationId} 的发送任务已转失败，请人工处理。`, {
+        const protectedTask = this.markBridgeDeliveryUnknown(task, "bridge_ack_timeout", reason);
+        bridgeTimedOut.push(protectedTask);
+        if (task.guardSnapshot?.deliveryUnknownReason !== "bridge_ack_timeout") await this.notifications.create("warning", "微信桥接回执超时", `${task.conversation?.title || task.conversationId} 的发送结果未知，任务保持发送中并禁止重排；请先人工核查微信窗口。`, {
           sendTaskId: task.id,
           wechatAccountId: task.wechatAccountId,
           conversationId: task.conversationId,
@@ -2931,10 +2943,12 @@ export class WechatDispatchService {
     if (!appConfig.useLocalStore) throw new Error("send bridge ack prisma mode is not implemented yet");
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
+    const status = payload.status === "sent" ? "sent" : "failed";
     if (task.status !== "sending") {
+      const replay = this.resolveIdempotentBridgeAckReplay(task, payload, status);
+      if (replay) return replay;
       throw new BadRequestException(`bridge ack rejected: send task is no longer waiting for bridge ack (${task.status || "unknown"})`);
     }
-    const status = payload.status === "sent" ? "sent" : "failed";
     const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
     if (!pendingAttempt || pendingAttempt.status !== "started") {
       throw new BadRequestException("bridge ack rejected: no active bridge send attempt is waiting for ack");
@@ -2977,17 +2991,7 @@ export class WechatDispatchService {
     const outboxPayloadValidation = shouldValidateOutboxPayload
       ? this.validateBridgeAckOutboxPayload(task, pendingAttempt, payload, outboxFileName)
       : null;
-    const archivedOutboxPath = outboxFileName
-      ? this.archiveBridgeOutboxFile(outboxFileName, status === "sent" ? "processed" : "failed")
-      : null;
-    const archivedDispatchPath = this.archiveBridgeDispatchFile(
-      task,
-      pendingAttempt,
-      status === "sent" ? "processed" : "failed",
-    );
-    const attempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
-      status,
-      errorMessage: payload.errorMessage || "",
+    const preparedAttempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
       metadata: {
         ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
         bridgeAck: sanitizeBridgeAckMetadata(payload.metadata),
@@ -2998,6 +3002,8 @@ export class WechatDispatchService {
         },
         bridgeAckAt: now,
         bridgeAckOutboxFileName: outboxFileName,
+        bridgeAckTokenHash: hashBridgeAckToken(payload),
+        bridgeAckCommitPreparedAt: now,
         bridgeOutboxPayloadValidation: outboxPayloadValidation
           ? {
               ok: outboxPayloadValidation.ok,
@@ -3005,10 +3011,7 @@ export class WechatDispatchService {
               checkedAt: now,
             }
           : undefined,
-        archivedOutboxPath,
-        archivedDispatchPath,
       },
-      completedAt: now,
     });
     const sentAt = status === "sent" ? payload.sentAt || now : null;
     const updatedTask = this.localStore.updateSendTask(id, {
@@ -3018,6 +3021,27 @@ export class WechatDispatchService {
     });
     if (status === "sent") this.markLinkedQuoteSent(updatedTask);
     else this.markLinkedQuoteFailed(updatedTask, payload.errorMessage || "Windows 桥接发送失败");
+
+    const completedAttempt = this.localStore.updateSendAttempt(preparedAttempt.id, {
+      status,
+      errorMessage: payload.errorMessage || "",
+      completedAt: now,
+    });
+    const archivedOutboxPath = outboxFileName
+      ? this.archiveBridgeOutboxFile(outboxFileName, status === "sent" ? "processed" : "failed")
+      : null;
+    const archivedDispatchPath = this.archiveBridgeDispatchFile(
+      task,
+      pendingAttempt,
+      status === "sent" ? "processed" : "failed",
+    );
+    const attempt = this.localStore.updateSendAttempt(completedAttempt.id, {
+      metadata: {
+        ...(isPlainObject(completedAttempt.metadata) ? completedAttempt.metadata : {}),
+        archivedOutboxPath,
+        archivedDispatchPath,
+      },
+    });
     return { task: this.localStore.getSendTask(id), attempt, binding, currentBinding };
   }
 
@@ -4171,6 +4195,42 @@ export class WechatDispatchService {
       isOlderThan(latestAttempt.startedAt || latestAttempt.createdAt, now, appConfig.sendBridgeAckTimeoutMinutes);
   }
 
+  private markBridgeDeliveryUnknown(task: any, reasonCode: string, message: string, details: Record<string, unknown> = {}) {
+    const now = new Date().toISOString();
+    const guardSnapshot = isPlainObject(task?.guardSnapshot) ? task.guardSnapshot : {};
+    const previousDetails = isPlainObject(guardSnapshot.deliveryUnknownDetails) ? guardSnapshot.deliveryUnknownDetails : {};
+    const pendingAttempt = this.localStore.getLatestSendAttempt(task.id, {
+      adapter: "windows_bridge",
+      status: "started",
+    });
+    const deliveryUnknownDetails = { ...previousDetails, ...details };
+    const protectedTask = this.localStore.updateSendTask(task.id, {
+      status: "sending",
+      sentAt: null,
+      errorMessage: `${message}；发送结果未知，禁止自动或直接重新排队`,
+      guardSnapshot: {
+        ...guardSnapshot,
+        deliveryState: "unknown",
+        deliveryUnknownReason: reasonCode,
+        deliveryUnknownAt: guardSnapshot.deliveryUnknownAt || now,
+        automaticRetryBlocked: true,
+        deliveryUnknownDetails,
+      },
+    });
+    if (previousDetails.archivedDispatchPath || !pendingAttempt) return protectedTask;
+    const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingAttempt, "uncertain");
+    if (!archivedDispatchPath) return protectedTask;
+    return this.localStore.updateSendTask(task.id, {
+      guardSnapshot: {
+        ...(isPlainObject(protectedTask.guardSnapshot) ? protectedTask.guardSnapshot : {}),
+        deliveryUnknownDetails: {
+          ...deliveryUnknownDetails,
+          archivedDispatchPath,
+        },
+      },
+    });
+  }
+
   private hasOrderDraftBinding(task: any) {
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     return Boolean(String(automation.orderDraftId || ""));
@@ -4473,6 +4533,66 @@ export class WechatDispatchService {
     return { ok: true, fileName: safeName, filePath: resolved };
   }
 
+  private resolveIdempotentBridgeAckReplay(task: any, payload: any, status: "sent" | "failed") {
+    if (String(task?.status || "") !== status) return null;
+    const attemptId = String(payload?.attemptId || "");
+    if (!attemptId) return null;
+    let attempt = this.localStore
+      .listSendAttempts({ sendTaskId: task.id })
+      .find((item: any) => item.id === attemptId && item.adapter === "windows_bridge" && ["started", status].includes(item.status));
+    if (!attempt) return null;
+    const metadata = isPlainObject(attempt.metadata) ? attempt.metadata : {};
+    const identity = isPlainObject(metadata.bridgeAckIdentity) ? metadata.bridgeAckIdentity : {};
+    const taskCustomerId = String(task?.conversation?.customerId || task?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "");
+    const expectedOutboxFileName = bridgeFileName(metadata.bridgeAckOutboxFileName);
+    const checks = [
+      payload?.version === BRIDGE_ACK_VERSION || payload?.protocolVersion === BRIDGE_ACK_VERSION,
+      String(payload?.taskId || "") === String(task.id || ""),
+      String(payload?.wechatAccountId || "") === String(task.wechatAccountId || ""),
+      String(payload?.conversationId || "") === String(task.conversationId || ""),
+      Boolean(taskCustomerId) && String(payload?.customerId || "") === taskCustomerId,
+      String(identity.wechatAccountId || "") === String(task.wechatAccountId || ""),
+      String(identity.conversationId || "") === String(task.conversationId || ""),
+      String(identity.customerId || "") === taskCustomerId,
+      Boolean(expectedOutboxFileName) && bridgeFileName(payload?.outboxFileName || payload?.outboxFile) === expectedOutboxFileName,
+      Boolean(metadata.bridgeAckTokenHash) && hashBridgeAckToken(payload) === metadata.bridgeAckTokenHash,
+    ];
+    if (checks.some((passed) => !passed)) return null;
+    if (attempt.status === "started") {
+      if (status === "sent") this.markLinkedQuoteSent(task);
+      else this.markLinkedQuoteFailed(task, payload.errorMessage || "Windows 桥接发送失败");
+      const completedAt = new Date().toISOString();
+      const completedAttempt = this.localStore.updateSendAttempt(attempt.id, {
+        status,
+        errorMessage: payload.errorMessage || "",
+        completedAt,
+      });
+      const archivedOutboxPath = expectedOutboxFileName
+        ? this.archiveBridgeOutboxFile(expectedOutboxFileName, status === "sent" ? "processed" : "failed")
+        : null;
+      const archivedDispatchPath = this.archiveBridgeDispatchFile(
+        task,
+        completedAttempt,
+        status === "sent" ? "processed" : "failed",
+      );
+      attempt = this.localStore.updateSendAttempt(completedAttempt.id, {
+        metadata: {
+          ...(isPlainObject(completedAttempt.metadata) ? completedAttempt.metadata : {}),
+          bridgeAckCommitRecoveredAt: completedAt,
+          archivedOutboxPath,
+          archivedDispatchPath,
+        },
+      });
+    }
+    return {
+      task,
+      attempt,
+      idempotent: true,
+      binding: { ok: true, status: "passed", reason: "duplicate bridge ack matches completed attempt" },
+      currentBinding: this.validateExistingSendTaskBinding(task),
+    };
+  }
+
   private resolveBridgeAckAttempt(task: any, payload: { attemptId?: string }) {
     if (payload.attemptId) {
       return this.localStore
@@ -4502,7 +4622,7 @@ export class WechatDispatchService {
     return this.sendAdapter.moveBridgeOutboxFile(path.join(appConfig.wechatBridgeOutboxDir, safeName), outcome);
   }
 
-  private archiveBridgeDispatchFile(task: any, attempt: any, outcome: "processed" | "failed" | "cancelled") {
+  private archiveBridgeDispatchFile(task: any, attempt: any, outcome: "processed" | "failed" | "cancelled" | "uncertain") {
     const fileName = this.resolveBridgeDispatchFileName(task, attempt);
     if (!fileName) return null;
     return this.sendAdapter.moveBridgeDispatchFile(path.join(appConfig.wechatBridgeDispatchDir, fileName), outcome);
@@ -4657,6 +4777,15 @@ function manualReviewReasonLabel(reason?: string) {
 function sanitizeBridgeAckMetadata(value: unknown): Record<string, unknown> {
   const sanitized = redactBridgeAckSecrets(isPlainObject(value) ? value : {});
   return isPlainObject(sanitized) ? sanitized : {};
+}
+
+function hashBridgeAckToken(payload: any) {
+  const token = typeof payload?.ackToken === "string"
+    ? payload.ackToken
+    : typeof payload?.bridgeAckToken === "string"
+      ? payload.bridgeAckToken
+      : "";
+  return token ? createHash("sha256").update(token).digest("hex") : "";
 }
 
 function sanitizeWindowObserverStatus(value: unknown) {

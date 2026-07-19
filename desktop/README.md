@@ -414,8 +414,9 @@ POST /api/wechat/bridge/inbox/scan
 - 桥接程序可以把回执 JSON 放到 `.runtime/wechat-inbox`，字段包括 `version: wechat_bridge_ack_v1`、`ackToken`、`taskId`、`attemptId`、`wechatAccountId`、`conversationId`、`outboxFileName`、`status`、`errorMessage`、`metadata`、`sentAt`。
 - 回执 `metadata` 只放桥接程序名、模式、worker id 这类运行信息，不放客户聊天标题、微信显示名、密钥、Cookie 或 Authorization；后端保存审计前会继续过滤常见敏感字段。
 - `bridge/inbox/scan` 会读取回执，复用同一套 `bridge-ack` 逻辑，并把回执文件归档到 `processed` 或 `failed` 子目录。
+- 同一份受信回执因网络丢包而重复提交时，后端会用任务、attempt、账号、会话、客户、outbox 文件和 `ackToken` 哈希做幂等校验；完全一致的重放返回既有结果，任何字段冲突都失败关闭。
 - `bridge/status` 和 `bridge/inbox/scan` 只返回回执摘要，例如任务、attempt、状态、文件名和 `hasAckToken`，不会返回 `ackToken` 本体或原始回执 `data`。
-- 详细协议见 `docs/WECHAT_BRIDGE_PROTOCOL.md`。真实桥接程序必须按该协议接入，不能只凭 `taskId` 生成成功回执。
+- 详细协议见 `docs/WECHAT_BRIDGE_PROTOCOL.md`，异常恢复步骤见 `docs/WECHAT_RESTART_RECOVERY.md`。真实桥接程序必须按该协议接入，不能只凭 `taskId` 生成成功回执。
 
 ## Windows 桥接 worker 骨架
 
@@ -457,6 +458,8 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 
 个人微信 Windows 操作端已接在同一 dispatch/ACK 协议后：`tools/personal-wechat-bridge.js` 只操作配置明确绑定的进程、窗口和 Windows 会话，并在发送前后用 UI Automation 校验账号、聊天对象、最近消息及发送结果。详细配置和操作步骤见 `docs/PERSONAL_WECHAT_BRIDGE.md`。
 
+个人微信粘贴桥接同样失败关闭：没有受信窗口验证器，或验证器返回的账号、会话、客户任一项不一致时，不会触碰微信窗口。旧的 `PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW` 绕过开关已被忽略。
+
 后续如果要接真实微信 PC 操作，应该只替换或扩展适配器层，继续复用现有的账号校验、聊天对象校验、最近消息校验、单账号串行锁和发送审计。
 
 ## 发送失败后的人工处理
@@ -469,10 +472,11 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 适用场景：
 
 1. 当前微信窗口错聊导致任务被 `blocked`，客服切回正确窗口后可以重新排队。
-2. Windows 桥接发送失败后，客服可以修复问题再重新排队。
+2. 只有桥接明确证明“发送前失败”并返回受信 `failed` 回执后，客服才可以修复问题再重新排队。
 3. 客户临时撤回需求或客服确认不再发送时，可以取消任务。
 4. 如果取消的是等待桥接回执的任务，系统会把那条 `started` 的桥接发送尝试关闭为 `failed`，避免审计记录一直挂起。
 5. 如果任务关联报价，取消或桥接失败会把报价转回 `manual_review`；重新排队会把报价恢复到 `send_queued`。
+6. ACK 丢失、发送中断、outbox 缺失或 dispatch 过期都不能证明消息未发出；任务保持 `sending`，并记录 `guardSnapshot.deliveryState = unknown` 和 `automaticRetryBlocked = true`，禁止直接重排。
 
 ## 发送异常扫描
 
@@ -483,7 +487,7 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 
 扫描会处理这些情况：
 
-1. `windows_bridge` 任务长时间停在 `sending`，并且发送尝试仍是 `started`，说明桥接程序没有回执。系统会把任务转为 `failed`，关闭 pending attempt，并生成提醒。
+1. `windows_bridge` 任务长时间停在 `sending`，并且发送尝试仍是 `started`，只说明桥接程序没有回执，不能证明消息未发送。系统会把投递标记为 `unknown`，任务和 attempt 分别保持 `sending`、`started`，禁止自动或直接重排，并生成一次提醒。
 2. 任务长时间停在 `queued`，系统会生成“排队过久”提醒。
 3. 任务处于 `blocked` 或 `failed`，系统会生成一次站内提醒，避免客服漏看。
 4. 同一个状态不会重复刷提醒；任务重新排队或状态变化后，下一次异常会重新提醒。
