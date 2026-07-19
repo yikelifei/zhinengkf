@@ -101,6 +101,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "素材 Prisma 身份与路径测试",
     file: "desktop/tests/asset-prisma-identity.test.js",
   },
+  {
+    id: "prisma.wechat_send_parity_tests",
+    title: "企业微信与 Windows bridge Prisma 发送安全一致性测试",
+    file: "desktop/tests/wechat-prisma-send-parity.test.js",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -150,6 +155,34 @@ const CONTRACTS = Object.freeze([
     title: "微信与企业微信 Prisma 持久化",
     file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
     patterns: [/if \(this\.isLocal\)/, /wechatWorkBinding/, /wechatWorkAuditLog/, /wechatSendTask/],
+  },
+  {
+    id: "contract.wechat_prisma_send_atomicity",
+    title: "Prisma 发送任务、attempt 与订单报价原子迁移",
+    file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+    patterns: [
+      /completeAttemptAndTask/,
+      /linkedTransition/,
+      /tx\.wechatSendTask\.updateMany/,
+      /tx\.wechatSendAttempt\.update/,
+      /linked\.count !== 1/,
+      /updateSendTaskWithLinkedTransition/,
+    ],
+  },
+  {
+    id: "contract.wechat_prisma_send_fail_closed",
+    title: "Prisma 企业微信与 bridge 发送闭环",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /await this\.executeQueuedSend\(freshTask\.id/,
+      /pendingAttempt\.adapter !== "windows_bridge"/,
+      /await this\.resolveBridgeAckAttempt\(task, payload\)/,
+      /validatePrismaLinkedSendState/,
+      /deliveryState: "unknown"/,
+      /acceptedMessageIds: apiMsgIds/,
+      /bridgeAckTokenHash: hashBridgeAckToken\(payload\)/,
+      /Files remain in place until the task \+ attempt transition is durably committed/,
+    ],
   },
   {
     id: "contract.wechat_work_cursor_terminality",

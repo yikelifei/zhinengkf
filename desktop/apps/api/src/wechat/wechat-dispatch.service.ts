@@ -2907,12 +2907,10 @@ export class WechatDispatchService {
     const alerted: any[] = [];
     for (const task of tasks) {
       if (task.status === "sending") {
-        const pendingAttempt = await this.persistence.getLatestSendAttempt(task.id, {
-          adapter: "windows_bridge",
-          status: "started",
-        });
-        const outboxState = this.inspectPendingBridgeOutbox(task);
-        const dispatchState = pendingAttempt ? this.findPendingBridgeDispatchForTask(task, pendingAttempt) : null;
+        const pendingAttempt = await this.persistence.getLatestSendAttempt(task.id, { status: "started" });
+        if (!pendingAttempt || pendingAttempt.adapter !== "windows_bridge") continue;
+        const outboxState = this.inspectPendingBridgeOutbox(task, pendingAttempt);
+        const dispatchState = this.findPendingBridgeDispatchForTask(task, pendingAttempt);
         let recovery: "bridge_outbox_unavailable" | "bridge_dispatch_expired" | "bridge_ack_timeout" | null = null;
         let reason = "";
         if (!outboxState.ok) {
@@ -2921,7 +2919,7 @@ export class WechatDispatchService {
         } else if (dispatchState?.expired) {
           recovery = "bridge_dispatch_expired";
           reason = `Windows bridge dispatch expired: ${dispatchState.expiresAt || dispatchState.fileName || "unknown"}`;
-        } else if (this.isBridgeAckTimedOut(task, now)) {
+        } else if (this.isBridgeAckTimedOut(task, now, pendingAttempt)) {
           recovery = "bridge_ack_timeout";
           reason = `Windows bridge ack exceeded ${appConfig.sendBridgeAckTimeoutMinutes} minutes`;
         }
@@ -2994,8 +2992,9 @@ export class WechatDispatchService {
         skipped.push({ sendTaskId: task.id, reason: "task_no_longer_queued" });
         continue;
       }
-      if (freshTask.conversation?.manualLocked || isHighValueLowValueAutomationTask(freshTask)) {
-        const reason = freshTask.conversation?.manualLocked
+      const manualLockBlocksTask = freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask);
+      if (manualLockBlocksTask || isHighValueLowValueAutomationTask(freshTask)) {
+        const reason = manualLockBlocksTask
           ? "会话已人工接管，自动发送暂停。"
           : "自动发送任务已达到高价值线，已转人工确认。";
         const updated = await this.persistence.updateSendTask(freshTask.id, {
@@ -3005,11 +3004,16 @@ export class WechatDispatchService {
             ...(isPlainObject(freshTask.guardSnapshot) ? freshTask.guardSnapshot : {}),
             status: "blocked",
             reason,
-            failedKeys: [freshTask.conversation?.manualLocked ? "conversationManualLocked" : "manualReviewRequired"],
+            failedKeys: [manualLockBlocksTask ? "conversationManualLocked" : "manualReviewRequired"],
             blockedAt: new Date().toISOString(),
           },
         });
         blocked.push({ task: updated, reason });
+        continue;
+      }
+      const nextRetryAt = String(freshTask.guardSnapshot?.wechatWorkNextRetryAt || "");
+      if (nextRetryAt && Date.parse(nextRetryAt) > Date.now()) {
+        skipped.push({ sendTaskId: freshTask.id, reason: "wechat_work_retry_not_due", nextRetryAt });
         continue;
       }
       if (seenAccounts.has(freshTask.wechatAccountId)) {
@@ -3023,7 +3027,7 @@ export class WechatDispatchService {
         continue;
       }
       try {
-        const result = await this.executePrismaSend(freshTask.id, { adapter: params.adapter });
+        const result = await this.executeQueuedSend(freshTask.id, { adapter: params.adapter });
         if (result.task.status === "blocked") blocked.push(result);
         else processed.push(result);
       } catch (error) {
@@ -3726,6 +3730,7 @@ export class WechatDispatchService {
     const attempts = await this.persistence.listSendAttempts({ sendTaskId: task.id, limit: 300 });
     const attemptNumber = attempts.filter((attempt: any) => attempt.adapter === "wechat_work_kf").length;
     const wechatWorkMsgId = `kf_${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    let acceptedApiMsgIds: string[] = [];
     try {
       if (!binding) throw new Error("wechat work mapping disappeared after send guard");
       const response = await this.sendAdapter.deliverWechatWorkKf(task, binding, wechatWorkMsgId);
@@ -3733,6 +3738,31 @@ export class WechatDispatchService {
       const apiMsgIds = Array.isArray(response.apiMsgIds) && response.apiMsgIds.length
         ? response.apiMsgIds
         : [response.msgid || wechatWorkMsgId];
+      acceptedApiMsgIds = apiMsgIds;
+      const preCommitState = await this.validatePrismaLinkedSendState(task.id);
+      if (!preCommitState.ok) {
+        await this.persistence.recordWechatWorkAudit({
+          action: "send_completion_state_changed",
+          status: "unknown",
+          sendTaskId: task.id,
+          sendAttemptId: result.attempt.id,
+          openKfid: binding.openKfid,
+          externalUserId: binding.externalUserId,
+          msgid: apiMsgIds[0],
+          errorMessage: `send API accepted but production state changed: ${preCommitState.message}`,
+        }).catch(() => null);
+        throw new WechatWorkKfDeliveryError(
+          `send API accepted but durable completion was rejected: ${preCommitState.message}`,
+          {
+            retrySafe: false,
+            deliveryState: "unknown",
+            stage: "durable_completion_guard",
+            acceptedMessageIds: apiMsgIds,
+            uploadedMediaIds: [],
+          },
+        );
+      }
+      const linkedTransition = await this.buildPrismaLinkedTransition(task, "sent");
       const completed = await this.persistence.completeAttemptAndTask({
         taskId: task.id,
         attemptId: result.attempt.id,
@@ -3767,6 +3797,7 @@ export class WechatDispatchService {
             apiAcceptedAt: completedAt,
           },
         },
+        linkedTransition,
       });
       if (!completed) {
         const currentTask = await this.persistence.getSendTask(task.id);
@@ -3785,7 +3816,6 @@ export class WechatDispatchService {
         }).catch(() => null);
         return { ...result, task: currentTask, attempt: currentAttempt, deliveryState: "unknown", stateChanged: true };
       }
-      this.markLinkedQuoteSent(completed.task);
       let auditPersisted = true;
       try {
         await this.persistence.recordWechatWorkAudit({
@@ -3805,10 +3835,21 @@ export class WechatDispatchService {
     } catch (error) {
       const completedAt = new Date().toISOString();
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const deliveryFailure = describeWechatWorkDeliveryFailure(error);
+      const deliveryFailure = acceptedApiMsgIds.length && !(error instanceof WechatWorkKfDeliveryError)
+        ? {
+            retrySafe: false,
+            deliveryState: "unknown" as const,
+            stage: "durable_completion",
+            acceptedMessageIds: acceptedApiMsgIds,
+            uploadedMediaIds: [] as string[],
+          }
+        : describeWechatWorkDeliveryFailure(error);
       const retryScheduled = deliveryFailure.retrySafe && attemptNumber < appConfig.wechatWorkSendMaxAttempts;
       const nextRetryAt = retryScheduled
         ? new Date(Date.now() + appConfig.wechatWorkSendRetryDelaySeconds * 1000).toISOString()
+        : null;
+      const linkedTransition = !retryScheduled && deliveryFailure.deliveryState === "failed"
+        ? await this.buildPrismaLinkedTransition(task, "failed", errorMessage)
         : null;
       const completed = await this.persistence.completeAttemptAndTask({
         taskId: task.id,
@@ -3847,6 +3888,7 @@ export class WechatDispatchService {
             automaticRetryBlocked: !deliveryFailure.retrySafe,
           },
         },
+        linkedTransition,
       });
       if (!completed) {
         const currentTask = await this.persistence.getSendTask(task.id);
@@ -3909,6 +3951,10 @@ export class WechatDispatchService {
     if (taskBeforeValidation.status !== "queued") {
       throw new BadRequestException(`send task is not queued: ${taskBeforeValidation.status || "unknown"}`);
     }
+    const initialLinkedState = await this.validatePrismaLinkedSendState(taskBeforeValidation);
+    if (!initialLinkedState.ok) {
+      throw new BadRequestException(`send task production state invalid: ${initialLinkedState.message}`);
+    }
     const binding = validateSendTaskBinding({
       task: taskBeforeValidation,
       conversation: taskBeforeValidation.conversation,
@@ -3964,6 +4010,11 @@ export class WechatDispatchService {
       return { task: validated, attempt, adapter };
     }
 
+    const preClaimState = await this.validatePrismaLinkedSendState(id);
+    if (!preClaimState.ok) {
+      throw new BadRequestException(`send task changed before claim: ${preClaimState.message}`);
+    }
+
     const claimed = await this.persistence.claimQueuedTaskAndCreateAttempt({
       taskId: id,
       taskPatch: { status: "sending", errorMessage: "" },
@@ -3979,6 +4030,34 @@ export class WechatDispatchService {
       },
     });
     if (!claimed) throw new BadRequestException("send task was claimed by another worker");
+
+    const preDispatchState = await this.validatePrismaLinkedSendState(id);
+    if (!preDispatchState.ok) {
+      const blockedAt = new Date().toISOString();
+      const blocked = await this.persistence.completeAttemptAndTask({
+        taskId: id,
+        attemptId: claimed.attempt.id,
+        expectedTaskStatus: "sending",
+        attemptPatch: {
+          status: "blocked",
+          guardStatus: preDispatchState.reason,
+          errorMessage: preDispatchState.message,
+          completedAt: blockedAt,
+        },
+        taskPatch: {
+          status: "blocked",
+          errorMessage: preDispatchState.message,
+          guardSnapshot: {
+            ...(isPlainObject(claimed.task?.guardSnapshot) ? claimed.task.guardSnapshot : {}),
+            status: "blocked",
+            failedKeys: [preDispatchState.reason],
+            blockedAt,
+          },
+        },
+      });
+      if (!blocked) throw new BadRequestException("send task changed while production state was being blocked");
+      return { task: blocked.task, attempt: blocked.attempt, adapter };
+    }
 
     let adapterResult: any;
     try {
@@ -4003,6 +4082,17 @@ export class WechatDispatchService {
           ? "dry_run"
           : "sent";
     const completedAt = adapterResult.status === "started" ? null : new Date().toISOString();
+    if (taskStatus === "sent") {
+      const preCommitState = await this.validatePrismaLinkedSendState(id);
+      if (!preCommitState.ok) {
+        throw new BadRequestException(`send task changed before durable completion: ${preCommitState.message}`);
+      }
+    }
+    const linkedTransition = taskStatus === "sent"
+      ? await this.buildPrismaLinkedTransition(await this.persistence.getSendTask(id), "sent")
+      : taskStatus === "failed"
+        ? await this.buildPrismaLinkedTransition(await this.persistence.getSendTask(id), "failed", adapterResult.errorMessage || "发送失败")
+        : null;
     const completed = await this.persistence.completeAttemptAndTask({
       taskId: id,
       attemptId: claimed.attempt.id,
@@ -4021,9 +4111,14 @@ export class WechatDispatchService {
         sentAt: taskStatus === "sent" ? new Date().toISOString() : null,
         errorMessage: adapterResult.errorMessage || (taskStatus === "sending" ? "等待 Windows 桥接回执" : ""),
       },
+      linkedTransition,
     });
     if (!completed) throw new BadRequestException("send task state changed before adapter completion");
-    return { task: completed.task, attempt: completed.attempt, adapter };
+    const result = { task: completed.task, attempt: completed.attempt, adapter };
+    if (adapter.name === "wechat_work_kf" && completed.task?.status === "sending") {
+      return this.completePrismaWechatWorkKfSend(result);
+    }
+    return result;
   }
 
   private validateExistingSendTaskBinding(task: any) {
@@ -4146,6 +4241,141 @@ export class WechatDispatchService {
     };
   }
 
+  private async validatePrismaLinkedSendState(
+    taskOrId: any,
+    options: { requireQuoteQueued?: boolean } = { requireQuoteQueued: true },
+  ) {
+    const task = typeof taskOrId === "string" ? await this.persistence.getSendTask(taskOrId) : taskOrId;
+    if (!task) return { ok: false as const, reason: "sendTaskMissing", message: "send task no longer exists" };
+
+    const routingState = this.validateQueuedRoutingPolicySendState(task);
+    if (!routingState.ok) return routingState;
+    if (task.conversation?.manualLocked && !isManualReplySendTask(task)) {
+      return {
+        ok: false as const,
+        reason: "conversationManualLocked",
+        message: "conversation is manually locked and only an explicit manual reply may be sent",
+      };
+    }
+    if (isHighValueLowValueAutomationTask(task)) {
+      return {
+        ok: false as const,
+        reason: "manualReviewRequired",
+        message: "high-value automation requires manual review before send",
+      };
+    }
+
+    const prisma = this.prisma as any;
+    const automation = isPlainObject(task.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const orderDraftId = String(automation.orderDraftId || task.payload?.orderDraftId || "").trim();
+    if (orderDraftId) {
+      const order = await prisma.orderDraft.findUnique({ where: { id: orderDraftId }, include: { quoteDraft: true } });
+      if (!order) return { ok: false as const, reason: "orderDraftMissing", message: `order draft not found: ${orderDraftId}` };
+      if (String(order.wechatAccountId || "") !== String(task.wechatAccountId || "")) {
+        return { ok: false as const, reason: "orderWechatAccountMismatch", message: "order no longer belongs to the send account" };
+      }
+      if (String(order.conversationId || "") !== String(task.conversationId || "")) {
+        return { ok: false as const, reason: "orderConversationMismatch", message: "order no longer belongs to the send conversation" };
+      }
+      if (String(order.status || "") === "cancelled") {
+        return { ok: false as const, reason: "orderCancelledBeforeSend", message: "order was cancelled before durable send completion" };
+      }
+      const paymentStatus = String(order.paymentStatus || order.quoteDraft?.paymentStatus || "");
+      if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+        return { ok: false as const, reason: "orderPaymentNotReadyBeforeSend", message: "order payment is no longer verified" };
+      }
+    } else {
+      const quoteDraftId = String(task.quoteDraftId || task.payload?.quoteDraftId || "").trim();
+      if (quoteDraftId) {
+        const quote = await prisma.quoteDraft.findUnique({ where: { id: quoteDraftId } });
+        if (!quote) return { ok: false as const, reason: "quoteDraftMissing", message: `quote draft not found: ${quoteDraftId}` };
+        if (String(quote.sendTaskId || "") !== String(task.id || "")) {
+          return { ok: false as const, reason: "quoteSendTaskChangedBeforeSend", message: "quote is no longer owned by this send task" };
+        }
+        if (options.requireQuoteQueued !== false && String(quote.status || "") !== "send_queued") {
+          return { ok: false as const, reason: "quoteStatusChangedBeforeSend", message: "quote is no longer waiting to be sent" };
+        }
+      }
+    }
+    return { ok: true as const, task };
+  }
+
+  private async buildPrismaLinkedTransition(
+    task: any,
+    outcome: "sent" | "failed" | "requeued",
+    reason = "",
+  ) {
+    const prisma = this.prisma as any;
+    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
+    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    if (orderDraftId) {
+      const order = await prisma.orderDraft.findUnique({ where: { id: orderDraftId } });
+      if (!order) throw new BadRequestException(`linked order draft not found: ${orderDraftId}`);
+      if (outcome === "sent") {
+        return {
+          model: "orderDraft" as const,
+          where: {
+            id: orderDraftId,
+            wechatAccountId: task.wechatAccountId,
+            conversationId: task.conversationId,
+            status: { not: "cancelled" },
+            paymentStatus: { in: ["deposit_paid", "paid"] },
+          },
+          data: { customerNotes: order.customerNotes },
+          required: true,
+        };
+      }
+      const source = String(automation.source || task?.payload?.source || "");
+      const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
+      const marker = outcome === "requeued" ? `[发送任务:${task.id}:requeue]` : `[发送任务:${task.id}]`;
+      if (String(order.customerNotes || "").includes(marker)) return null;
+      const note = outcome === "requeued"
+        ? `${marker}${stage}已人工重新排队：${reason}`
+        : `${marker}${stage}失败，需要人工处理：${reason}`;
+      return {
+        model: "orderDraft" as const,
+        where: {
+          id: orderDraftId,
+          wechatAccountId: task.wechatAccountId,
+          conversationId: task.conversationId,
+          customerNotes: order.customerNotes,
+          ...(outcome === "requeued"
+            ? { status: { not: "cancelled" }, paymentStatus: { in: ["deposit_paid", "paid"] } }
+            : {}),
+        },
+        data: {
+          ...(outcome === "failed"
+            ? { owner: order.owner && order.owner !== "low_value_automation" ? order.owner : "人工客服" }
+            : {}),
+          customerNotes: appendCustomerNote(order.customerNotes, note),
+        },
+        required: true,
+      };
+    }
+
+    const quoteDraftId = String(task?.quoteDraftId || task?.payload?.quoteDraftId || "").trim();
+    if (!quoteDraftId) return null;
+    const quote = await prisma.quoteDraft.findUnique({ where: { id: quoteDraftId } });
+    if (!quote) throw new BadRequestException(`linked quote draft not found: ${quoteDraftId}`);
+    if (["sent", "accepted", "cancelled"].includes(String(quote.status || "")) && outcome !== "sent") return null;
+    return {
+      model: "quoteDraft" as const,
+      where: {
+        id: quoteDraftId,
+        sendTaskId: task.id,
+        ...(outcome === "sent"
+          ? { status: "send_queued" }
+          : { status: { notIn: ["sent", "accepted", "cancelled"] } }),
+      },
+      data: outcome === "sent"
+        ? { status: "sent", customerNotes: "报价已通过微信发送安全流程。" }
+        : outcome === "requeued"
+          ? { status: "send_queued", customerNotes: reason }
+          : { status: "manual_review", customerNotes: `报价发送失败，需要人工处理：${reason}` },
+      required: true,
+    };
+  }
+
   acknowledgeBridgeSend(id: string, payload: {
     status: "sent" | "failed";
     version?: string;
@@ -4168,11 +4398,11 @@ export class WechatDispatchService {
     if (!task) throw new Error(`send task not found: ${id}`);
     const status = payload.status === "sent" ? "sent" : "failed";
     if (task.status !== "sending") {
-      const replay = this.resolveIdempotentBridgeAckReplay(task, payload, status);
+      const replay = this.resolveLocalIdempotentBridgeAckReplay(task, payload, status);
       if (replay) return replay;
       throw new BadRequestException(`bridge ack rejected: send task is no longer waiting for bridge ack (${task.status || "unknown"})`);
     }
-    const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
+    const pendingAttempt = this.resolveLocalBridgeAckAttempt(task, payload);
     if (!pendingAttempt || pendingAttempt.status !== "started") {
       throw new BadRequestException("bridge ack rejected: no active bridge send attempt is waiting for ack");
     }
@@ -4242,8 +4472,8 @@ export class WechatDispatchService {
       sentAt,
       errorMessage: status === "failed" ? payload.errorMessage || "Windows 桥接发送失败" : "",
     });
-    if (status === "sent") this.markLinkedQuoteSent(updatedTask);
-    else this.markLinkedQuoteFailed(updatedTask, payload.errorMessage || "Windows 桥接发送失败");
+    if (status === "sent") void this.markLinkedQuoteSent(updatedTask);
+    else void this.markLinkedQuoteFailed(updatedTask, payload.errorMessage || "Windows 桥接发送失败");
 
     const completedAttempt = this.localStore.updateSendAttempt(preparedAttempt.id, {
       status,
@@ -4287,11 +4517,13 @@ export class WechatDispatchService {
   }, options: { internal?: boolean } = {}) {
     const task = await this.persistence.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
+    const status = payload.status === "sent" ? "sent" : "failed";
     if (task.status !== "sending") {
+      const replay = await this.resolveIdempotentBridgeAckReplay(task, payload, status);
+      if (replay) return replay;
       throw new BadRequestException(`bridge ack rejected: send task is no longer waiting for bridge ack (${task.status || "unknown"})`);
     }
-    const status = payload.status === "sent" ? "sent" : "failed";
-    const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
+    const pendingAttempt = await this.resolveBridgeAckAttempt(task, payload);
     if (!pendingAttempt || pendingAttempt.status !== "started") {
       throw new BadRequestException("bridge ack rejected: no active bridge send attempt is waiting for ack");
     }
@@ -4315,16 +4547,23 @@ export class WechatDispatchService {
     if (!currentBinding.ok) {
       throw new BadRequestException(`bridge ack send task binding invalid: ${currentBinding.reason}`);
     }
+    if (status === "sent") {
+      const linkedState = await this.validatePrismaLinkedSendState(id);
+      if (!linkedState.ok) {
+        throw new BadRequestException(`bridge ack production state invalid: ${linkedState.message}`);
+      }
+    }
 
     const now = new Date().toISOString();
     const outboxFileName = this.resolveBridgeAckOutboxFileName(payload, pendingAttempt);
     const outboxValidation = status === "sent" || !options.internal
       ? this.validateBridgeAckOutboxPayload(task, pendingAttempt, payload, outboxFileName)
       : null;
-    const archivedOutboxPath = outboxFileName
-      ? this.archiveBridgeOutboxFile(outboxFileName, status === "sent" ? "processed" : "failed")
-      : null;
-    const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingAttempt, status === "sent" ? "processed" : "failed");
+    const linkedTransition = await this.buildPrismaLinkedTransition(
+      task,
+      status === "sent" ? "sent" : "failed",
+      payload.errorMessage || "Windows 桥接发送失败",
+    );
     const completed = await this.persistence.completeAttemptAndTask({
       taskId: id,
       attemptId: pendingAttempt.id,
@@ -4342,11 +4581,10 @@ export class WechatDispatchService {
           },
           bridgeAckAt: now,
           bridgeAckOutboxFileName: outboxFileName,
+          bridgeAckTokenHash: hashBridgeAckToken(payload),
           bridgeOutboxPayloadValidation: outboxValidation
             ? { ok: outboxValidation.ok, fileName: outboxFileName, checkedAt: now }
             : undefined,
-          archivedOutboxPath,
-          archivedDispatchPath,
         },
         completedAt: now,
       },
@@ -4355,15 +4593,19 @@ export class WechatDispatchService {
         sentAt: status === "sent" ? payload.sentAt || now : null,
         errorMessage: status === "failed" ? payload.errorMessage || "Windows 桥接发送失败" : "",
       },
+      linkedTransition,
     });
     if (!completed) throw new BadRequestException("send task state changed before bridge acknowledgement completion");
-    if (status === "sent" && task.quoteDraftId) {
-      await (this.prisma as any).quoteDraft.updateMany({
-        where: { id: task.quoteDraftId, sendTaskId: task.id },
-        data: { status: "sent" },
-      });
-    }
-    return { task: completed.task, attempt: completed.attempt, binding, currentBinding };
+
+    // Files remain in place until the task + attempt transition is durably committed.
+    const archivedOutboxPath = outboxFileName
+      ? this.archiveBridgeOutboxFile(outboxFileName, status === "sent" ? "processed" : "failed")
+      : null;
+    const archivedDispatchPath = this.archiveBridgeDispatchFile(task, pendingAttempt, status === "sent" ? "processed" : "failed");
+    const attempt = await this.persistence.updateSendAttempt(completed.attempt.id, {
+      metadata: { archivedOutboxPath, archivedDispatchPath, bridgeAckArchivedAt: new Date().toISOString() },
+    });
+    return { task: completed.task, attempt, binding, currentBinding };
   }
 
   async requeueSendTask(id: string, payload: { reason?: string } & ExpectedIdentityPayload = {}) {
@@ -4383,10 +4625,16 @@ export class WechatDispatchService {
       quoteDraftId: task.quoteDraftId,
       manualReply: Boolean(task.payload?.manualReply || task.guardSnapshot?.manualReply),
     });
-    if (appConfig.useLocalStore) this.assertOrderSendTaskStillQueueable(task);
+    if (appConfig.useLocalStore) {
+      this.assertOrderSendTaskStillQueueable(task);
+    } else {
+      const productionState = await this.validatePrismaLinkedSendState(task, { requireQuoteQueued: false });
+      if (!productionState.ok) throw new BadRequestException(`send task requeue rejected: ${productionState.message}`);
+    }
     const now = new Date().toISOString();
+    const requeueReason = payload.reason || "发送任务已重新排队";
     const previousGuardSnapshot = isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {};
-    const updated = await this.persistence.updateSendTask(id, {
+    const taskPatch = {
       status: "queued",
       queuedAt: now,
       sentAt: null,
@@ -4412,11 +4660,19 @@ export class WechatDispatchService {
           },
         ],
       },
-    });
-    const requeueReason = payload.reason || "发送任务已重新排队";
+    };
+    const updated = appConfig.useLocalStore
+      ? await this.persistence.updateSendTask(id, taskPatch)
+      : await this.persistence.updateSendTaskWithLinkedTransition({
+          taskId: id,
+          expectedTaskStatus: task.status,
+          taskPatch,
+          linkedTransition: await this.buildPrismaLinkedTransition(task, "requeued", requeueReason),
+        });
+    if (!updated) throw new BadRequestException("send task changed before requeue completion");
     if (appConfig.useLocalStore) {
-      this.markLinkedQuoteRequeued(updated, requeueReason);
-      this.markLinkedOrderSendRequeued(updated, requeueReason);
+      await this.markLinkedQuoteRequeued(updated, requeueReason);
+      await this.markLinkedOrderSendRequeued(updated, requeueReason);
     }
     return updated;
   }
@@ -5456,7 +5712,7 @@ export class WechatDispatchService {
     };
   }
 
-  private markLinkedQuoteSent(task: any) {
+  private async markLinkedQuoteSent(task: any) {
     if (this.hasOrderDraftBinding(task)) return;
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (!quoteDraftId) return;
@@ -5469,8 +5725,8 @@ export class WechatDispatchService {
       });
       return;
     }
-    void (this.prisma as any).quoteDraft.update({
-      where: { id: quoteDraftId },
+    await (this.prisma as any).quoteDraft.updateMany({
+      where: { id: quoteDraftId, sendTaskId: task.id, status: "send_queued" },
       data: {
         status: "sent",
         customerNotes: "报价已通过微信发送安全流程。",
@@ -5478,9 +5734,9 @@ export class WechatDispatchService {
     });
   }
 
-  private markLinkedQuoteFailed(task: any, reason: string) {
+  private async markLinkedQuoteFailed(task: any, reason: string) {
     if (this.hasOrderDraftBinding(task)) {
-      this.markLinkedOrderSendFailed(task, reason);
+      await this.markLinkedOrderSendFailed(task, reason);
       return;
     }
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
@@ -5492,47 +5748,85 @@ export class WechatDispatchService {
         status: "manual_review",
         customerNotes: `报价发送失败，需要人工处理：${reason}`,
       });
+      return;
+    }
+    if (quoteDraftId) {
+      await (this.prisma as any).quoteDraft.updateMany({
+        where: {
+          id: quoteDraftId,
+          sendTaskId: task.id,
+          status: { notIn: ["sent", "accepted", "cancelled"] },
+        },
+        data: {
+          status: "manual_review",
+          customerNotes: `报价发送失败，需要人工处理：${reason}`,
+        },
+      });
     }
   }
 
-  private markLinkedOrderSendFailed(task: any, reason: string) {
-    if (!appConfig.useLocalStore) return;
+  private async markLinkedOrderSendFailed(task: any, reason: string) {
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     const source = String(automation.source || task?.payload?.source || "");
     const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (!orderDraftId) return;
-    const order = this.localStore.getOrderDraft(orderDraftId);
+    const order = appConfig.useLocalStore
+      ? this.localStore.getOrderDraft(orderDraftId)
+      : await (this.prisma as any).orderDraft.findUnique({ where: { id: orderDraftId } });
     if (!order) return;
     const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
     const marker = `[发送任务:${task.id}]`;
     const currentNotes = String(order.customerNotes || "");
     if (currentNotes.includes(marker)) return;
     const note = `${marker}${stage}失败，需要人工处理：${reason}`;
-    this.localStore.updateOrderDraft(orderDraftId, {
+    const patch = {
       owner: order.owner && order.owner !== "low_value_automation" ? order.owner : "人工客服",
       customerNotes: appendCustomerNote(order.customerNotes, note),
-    });
+    };
+    if (appConfig.useLocalStore) this.localStore.updateOrderDraft(orderDraftId, patch);
+    else {
+      await (this.prisma as any).orderDraft.updateMany({
+        where: {
+          id: orderDraftId,
+          wechatAccountId: task.wechatAccountId,
+          conversationId: task.conversationId,
+          customerNotes: order.customerNotes,
+        },
+        data: patch,
+      });
+    }
   }
 
-  private markLinkedOrderSendRequeued(task: any, reason: string) {
-    if (!appConfig.useLocalStore) return;
+  private async markLinkedOrderSendRequeued(task: any, reason: string) {
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     const source = String(automation.source || task?.payload?.source || "");
     const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (!orderDraftId) return;
-    const order = this.localStore.getOrderDraft(orderDraftId);
+    const order = appConfig.useLocalStore
+      ? this.localStore.getOrderDraft(orderDraftId)
+      : await (this.prisma as any).orderDraft.findUnique({ where: { id: orderDraftId } });
     if (!order) return;
     const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
     const marker = `[发送任务:${task.id}:requeue]`;
     const currentNotes = String(order.customerNotes || "");
     if (currentNotes.includes(marker)) return;
     const note = `${marker}${stage}已人工重新排队：${reason}`;
-    this.localStore.updateOrderDraft(orderDraftId, {
-      customerNotes: appendCustomerNote(order.customerNotes, note),
-    });
+    const customerNotes = appendCustomerNote(order.customerNotes, note);
+    if (appConfig.useLocalStore) this.localStore.updateOrderDraft(orderDraftId, { customerNotes });
+    else {
+      await (this.prisma as any).orderDraft.updateMany({
+        where: {
+          id: orderDraftId,
+          wechatAccountId: task.wechatAccountId,
+          conversationId: task.conversationId,
+          customerNotes: order.customerNotes,
+        },
+        data: { customerNotes },
+      });
+    }
   }
 
-  private markLinkedQuoteRequeued(task: any, reason: string) {
+  private async markLinkedQuoteRequeued(task: any, reason: string) {
     if (this.hasOrderDraftBinding(task)) return;
     const quoteDraftId = task?.quoteDraftId || task?.payload?.quoteDraftId;
     if (!quoteDraftId) return;
@@ -5541,7 +5835,16 @@ export class WechatDispatchService {
         status: "send_queued",
         customerNotes: reason,
       });
+      return;
     }
+    await (this.prisma as any).quoteDraft.updateMany({
+      where: {
+        id: quoteDraftId,
+        sendTaskId: task.id,
+        status: { notIn: ["sent", "accepted", "cancelled"] },
+      },
+      data: { status: "send_queued", customerNotes: reason },
+    });
   }
 
   private guardHistory(task: any) {
@@ -5549,8 +5852,8 @@ export class WechatDispatchService {
     return Array.isArray(history) ? history.slice(-20) : [];
   }
 
-  private isBridgeAckTimedOut(task: any, now: Date) {
-    const latestAttempt = task.latestAttempt || task.attempts?.[0];
+  private isBridgeAckTimedOut(task: any, now: Date, suppliedAttempt?: any) {
+    const latestAttempt = suppliedAttempt || task.latestAttempt || task.attempts?.[0];
     return latestAttempt?.adapter === "windows_bridge" &&
       latestAttempt.status === "started" &&
       isOlderThan(latestAttempt.startedAt || latestAttempt.createdAt, now, appConfig.sendBridgeAckTimeoutMinutes);
@@ -5597,8 +5900,8 @@ export class WechatDispatchService {
     return Boolean(String(automation.orderDraftId || ""));
   }
 
-  private inspectPendingBridgeOutbox(task: any) {
-    const attempt = this.localStore.getLatestSendAttempt(task.id, {
+  private inspectPendingBridgeOutbox(task: any, suppliedAttempt?: any) {
+    const attempt = suppliedAttempt || this.localStore.getLatestSendAttempt(task.id, {
       adapter: "windows_bridge",
       status: "started",
     });
@@ -5655,7 +5958,7 @@ export class WechatDispatchService {
     const task = this.localStore.getSendTask(taskId);
     if (!task || task.status !== "sending") return null;
     if (payload?.status !== "sent") return null;
-    const pendingAttempt = this.resolveBridgeAckAttempt(task, payload);
+    const pendingAttempt = this.resolveLocalBridgeAckAttempt(task, payload);
     if (!pendingAttempt || pendingAttempt.status !== "started") return null;
     const binding = validateBridgeAckBinding({ task, attempt: pendingAttempt, payload });
     if (!binding.ok) return null;
@@ -5894,12 +6197,12 @@ export class WechatDispatchService {
     return { ok: true, fileName: safeName, filePath: resolved };
   }
 
-  private resolveIdempotentBridgeAckReplay(task: any, payload: any, status: "sent" | "failed") {
+  private resolveLocalIdempotentBridgeAckReplay(task: any, payload: any, status: "sent" | "failed") {
     if (String(task?.status || "") !== status) return null;
     const attemptId = String(payload?.attemptId || "");
     if (!attemptId) return null;
     let attempt = this.localStore
-      .listSendAttempts({ sendTaskId: task.id })
+      .listSendAttempts({ sendTaskId: task.id, limit: 300 })
       .find((item: any) => item.id === attemptId && item.adapter === "windows_bridge" && ["started", status].includes(item.status));
     if (!attempt) return null;
     const metadata = isPlainObject(attempt.metadata) ? attempt.metadata : {};
@@ -5920,8 +6223,8 @@ export class WechatDispatchService {
     ];
     if (checks.some((passed) => !passed)) return null;
     if (attempt.status === "started") {
-      if (status === "sent") this.markLinkedQuoteSent(task);
-      else this.markLinkedQuoteFailed(task, payload.errorMessage || "Windows 桥接发送失败");
+      if (status === "sent") void this.markLinkedQuoteSent(task);
+      else void this.markLinkedQuoteFailed(task, payload.errorMessage || "Windows 桥接发送失败");
       const completedAt = new Date().toISOString();
       const completedAttempt = this.localStore.updateSendAttempt(attempt.id, {
         status,
@@ -5954,7 +6257,80 @@ export class WechatDispatchService {
     };
   }
 
-  private resolveBridgeAckAttempt(task: any, payload: { attemptId?: string }) {
+  private async resolveIdempotentBridgeAckReplay(task: any, payload: any, status: "sent" | "failed") {
+    if (String(task?.status || "") !== status) return null;
+    const attemptId = String(payload?.attemptId || "");
+    if (!attemptId) return null;
+    let attempt = (await this.persistence.listSendAttempts({ sendTaskId: task.id, limit: 300 }))
+      .find((item: any) => item.id === attemptId && item.adapter === "windows_bridge" && ["started", status].includes(item.status));
+    if (!attempt) return null;
+    if (!appConfig.useLocalStore && attempt.status === "started") return null;
+    const metadata = isPlainObject(attempt.metadata) ? attempt.metadata : {};
+    const identity = isPlainObject(metadata.bridgeAckIdentity) ? metadata.bridgeAckIdentity : {};
+    const taskCustomerId = String(task?.conversation?.customerId || task?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "");
+    const expectedOutboxFileName = bridgeFileName(metadata.bridgeAckOutboxFileName);
+    const checks = [
+      payload?.version === BRIDGE_ACK_VERSION || payload?.protocolVersion === BRIDGE_ACK_VERSION,
+      String(payload?.taskId || "") === String(task.id || ""),
+      String(payload?.wechatAccountId || "") === String(task.wechatAccountId || ""),
+      String(payload?.conversationId || "") === String(task.conversationId || ""),
+      Boolean(taskCustomerId) && String(payload?.customerId || "") === taskCustomerId,
+      String(identity.wechatAccountId || "") === String(task.wechatAccountId || ""),
+      String(identity.conversationId || "") === String(task.conversationId || ""),
+      String(identity.customerId || "") === taskCustomerId,
+      Boolean(expectedOutboxFileName) && bridgeFileName(payload?.outboxFileName || payload?.outboxFile) === expectedOutboxFileName,
+      Boolean(metadata.bridgeAckTokenHash) && hashBridgeAckToken(payload) === metadata.bridgeAckTokenHash,
+    ];
+    if (checks.some((passed) => !passed)) return null;
+    if (attempt.status === "started" && appConfig.useLocalStore) {
+      if (status === "sent") await this.markLinkedQuoteSent(task);
+      else await this.markLinkedQuoteFailed(task, payload.errorMessage || "Windows 桥接发送失败");
+      const completedAt = new Date().toISOString();
+      const completedAttempt = this.localStore.updateSendAttempt(attempt.id, {
+        status,
+        errorMessage: payload.errorMessage || "",
+        completedAt,
+      });
+      const archivedOutboxPath = expectedOutboxFileName
+        ? this.archiveBridgeOutboxFile(expectedOutboxFileName, status === "sent" ? "processed" : "failed")
+        : null;
+      const archivedDispatchPath = this.archiveBridgeDispatchFile(
+        task,
+        completedAttempt,
+        status === "sent" ? "processed" : "failed",
+      );
+      attempt = this.localStore.updateSendAttempt(completedAttempt.id, {
+        metadata: {
+          ...(isPlainObject(completedAttempt.metadata) ? completedAttempt.metadata : {}),
+          bridgeAckCommitRecoveredAt: completedAt,
+          archivedOutboxPath,
+          archivedDispatchPath,
+        },
+      });
+    }
+    return {
+      task,
+      attempt,
+      idempotent: true,
+      binding: { ok: true, status: "passed", reason: "duplicate bridge ack matches completed attempt" },
+      currentBinding: appConfig.useLocalStore
+        ? this.validateExistingSendTaskBinding(task)
+        : validateSendTaskBinding({ task, conversation: task.conversation, designJob: task.designJob, quoteDraft: task.quoteDraft }),
+    };
+  }
+
+  private async resolveBridgeAckAttempt(task: any, payload: { attemptId?: string }) {
+    if (payload.attemptId) {
+      return (await this.persistence.listSendAttempts({ sendTaskId: task.id, limit: 300 }))
+        .find((attempt: any) => attempt.id === payload.attemptId) || null;
+    }
+    return this.persistence.getLatestSendAttempt(task.id, {
+      adapter: "windows_bridge",
+      status: "started",
+    });
+  }
+
+  private resolveLocalBridgeAckAttempt(task: any, payload: { attemptId?: string }) {
     if (payload.attemptId) {
       return this.localStore
         .listSendAttempts({ sendTaskId: task.id, limit: 300 })

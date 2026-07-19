@@ -1214,7 +1214,7 @@ test("quote and order APIs filter records by next-step actionability", () => {
   assert.match(wechatDispatchService, /this\.assertOrderConversationUnlocked\(order, context\)[\s\S]*this\.assertOrderPaymentReadyForSend\(order, context\)/);
   assert.match(wechatDispatchService, /this\.assertOrderProfitReadyForSend\(order, context\)/);
   assert.match(wechatDispatchService, /order send task requeue binding invalid/);
-  assert.match(wechatDispatchService, /private markLinkedOrderSendFailed\(task: any, reason: string\)/);
+  assert.match(wechatDispatchService, /private async markLinkedOrderSendFailed\(task: any, reason: string\)/);
   assert.match(wechatDispatchService, /const orderDraftId = String\(automation\.orderDraftId \|\| task\?\.payload\?\.orderDraftId \|\| ""\)\.trim\(\)/);
   assert.match(wechatDispatchService, /source === "order_followup" \|\| automation\.followupType/);
   assert.match(wechatDispatchService, /private hasOrderDraftBinding\(task: any\)/);
@@ -1544,7 +1544,7 @@ test("bridge inbox scan fails trusted rejected sent acknowledgements without byp
   assert.match(scanSection, /acknowledgeBridgeSend\(taskId, ackPayload\)/);
   assert.match(scanSection, /failTaskForRejectedTrustedBridgeAck\(taskId, ackPayload, entry, errorMessage\)/);
   assert.match(recoverySection, /payload\?\.status !== "sent"/);
-  assert.match(recoverySection, /resolveBridgeAckAttempt\(task, payload\)/);
+  assert.match(recoverySection, /resolveLocalBridgeAckAttempt\(task, payload\)/);
   assert.match(recoverySection, /validateBridgeAckBinding\(\{ task, attempt: pendingAttempt, payload \}\)/);
   assert.match(recoverySection, /validateExistingSendTaskBinding\(task\)/);
   assert.match(recoverySection, /validateBridgeAckOutboxPayload\(task, pendingAttempt, payload, outboxFileName\)/);
@@ -1553,7 +1553,7 @@ test("bridge inbox scan fails trusted rejected sent acknowledgements without byp
   assert.match(recoverySection, /status: "failed"/);
   assert.match(recoverySection, /reason: "bridge_ack_rejected_after_trusted_validation"/);
   assert.match(recoverySection, /markLinkedQuoteFailed\(updatedTask, failureReason\)/);
-  assert.match(service, /private markLinkedOrderSendFailed\(task: any, reason: string\)/);
+  assert.match(service, /private async markLinkedOrderSendFailed\(task: any, reason: string\)/);
   assert.match(service, /\[发送任务:\$\{task\.id\}\]/);
   assert.ok(
     recoverySection.indexOf("validateBridgeAckOutboxPayload") < recoverySection.indexOf("updateSendTask"),

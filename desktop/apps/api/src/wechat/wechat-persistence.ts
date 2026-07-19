@@ -437,6 +437,12 @@ export class WechatPersistence {
     taskPatch: any;
     attemptPatch: any;
     expectedTaskStatus?: string;
+    linkedTransition?: {
+      model: "quoteDraft" | "orderDraft";
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+      required?: boolean;
+    } | null;
   }) {
     if (this.isLocal) {
       const attempt = this.localStore.updateSendAttempt(params.attemptId, params.attemptPatch);
@@ -466,6 +472,16 @@ export class WechatPersistence {
             : {}),
         },
       });
+      if (params.linkedTransition) {
+        const delegate = tx[params.linkedTransition.model];
+        const linked = await delegate.updateMany({
+          where: params.linkedTransition.where,
+          data: params.linkedTransition.data,
+        });
+        if (params.linkedTransition.required !== false && linked.count !== 1) {
+          throw new BadRequestException("linked send state changed before durable completion");
+        }
+      }
       return true;
     });
     if (!completed) return null;
@@ -476,6 +492,41 @@ export class WechatPersistence {
         include: attemptInclude,
       }),
     };
+  }
+
+  async updateSendTaskWithLinkedTransition(params: {
+    taskId: string;
+    expectedTaskStatus: string;
+    taskPatch: any;
+    linkedTransition?: {
+      model: "quoteDraft" | "orderDraft";
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+      required?: boolean;
+    } | null;
+  }) {
+    if (this.isLocal) return this.localStore.updateSendTask(params.taskId, params.taskPatch);
+    const prisma = this.prisma as any;
+    const completed = await prisma.$transaction(async (tx: any) => {
+      const task = await tx.wechatSendTask.updateMany({
+        where: { id: params.taskId, status: params.expectedTaskStatus },
+        data: this.sendTaskPatch(params.taskPatch),
+      });
+      if (task.count !== 1) return false;
+      if (params.linkedTransition) {
+        const delegate = tx[params.linkedTransition.model];
+        const linked = await delegate.updateMany({
+          where: params.linkedTransition.where,
+          data: params.linkedTransition.data,
+        });
+        if (params.linkedTransition.required !== false && linked.count !== 1) {
+          throw new BadRequestException("linked send state changed before task transition");
+        }
+      }
+      return true;
+    });
+    if (!completed) return null;
+    return this.getSendTask(params.taskId);
   }
 
   async claimQueuedTaskAndCreateAttempt(params: {
