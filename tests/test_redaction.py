@@ -25,6 +25,22 @@ def test_redact_internal_paths_preserves_ordinary_project_name_text():
     assert redact_internal_paths(text, project_root=r"D:\zhinengkefu") == text
 
 
+def test_redact_internal_paths_uses_main_repository_name_for_linked_worktree(tmp_path):
+    worktree = tmp_path / "finish-python-quality"
+    worktree.mkdir()
+    (worktree / ".git").write_text(
+        "gitdir: D:/zhinengkefu/.git/worktrees/finish-python-quality\n",
+        encoding="utf-8",
+    )
+
+    result = redact_internal_paths(
+        r"report: C:\Users\27808\Desktop\zhinengkefu\reports\quality.md",
+        project_root=worktree,
+    )
+
+    assert result == r"report: [project]\reports\quality.md"
+
+
 def test_redact_internal_paths_removes_user_home_without_project_root():
     result = redact_internal_paths(r"backup: C:\Users\27808\Desktop\secret.zip")
 
