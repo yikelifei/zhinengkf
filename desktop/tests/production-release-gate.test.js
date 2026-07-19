@@ -122,3 +122,16 @@ test("markdown report renders PASS BLOCKED FAIL semantics", () => {
   assert.match(markdown, /`FAIL`/);
   assert.match(markdown, /fixture\.js:1/);
 });
+
+test("Python task runner prefers project virtual environments in linked worktrees", () => {
+  const runner = fs.readFileSync(path.resolve(__dirname, "..", "..", "tools", "_run_python_task.bat"), "utf8");
+  const localVenv = runner.indexOf('if exist ".venv\\Scripts\\python.exe"');
+  const bundledRuntime = runner.indexOf("codex-primary-runtime");
+
+  assert.notEqual(localVenv, -1);
+  assert.notEqual(bundledRuntime, -1);
+  assert.ok(localVenv < bundledRuntime);
+  assert.match(runner, /git rev-parse --git-common-dir/);
+  assert.match(runner, /LINKED_REPO_PYTHON=.*\\.venv\\Scripts\\python\.exe/);
+  assert.match(runner, /SMART_KEFU_TASK_TEMP=.*\\desktop\\.runtime\\python-temp/);
+});
