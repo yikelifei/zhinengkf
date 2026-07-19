@@ -118,7 +118,7 @@ test("encrypted callback acknowledges immediately and forwards Token + OpenKfId 
   const query = { timestamp: "1710000000", nonce: "nonce-test" };
   query.msg_signature = sha1Sorted([appConfig.wechatWorkToken, query.timestamp, query.nonce, encrypted]);
 
-  const response = service.handleCallback(query, `<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`);
+  const response = await service.handleCallback(query, `<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`);
   assert.equal(response, "success");
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(api.syncCalls.length, 1);
@@ -142,13 +142,13 @@ test("one malformed sync_msg item is audited without blocking later customer mes
   assert.equal(result.processedCount, 1);
   assert.equal(localStore.getWechatWorkBinding("wk-batch", "wm-bad"), null);
   assert.ok(localStore.getWechatWorkBinding("wk-batch", "wm-good"));
-  assert.ok(service.listAuditLogs().records.some((item) => item.action === "inbound_failed" && item.msgid === "bad-1"));
+  assert.ok((await service.listAuditLogs()).records.some((item) => item.action === "inbound_failed" && item.msgid === "bad-1"));
 });
 
 test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt audit", async () => {
   const { api, localStore, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-send", externalUserId: "wm-send" });
-  const queued = service.queueCustomerServiceText({ openKfid: "wk-send", externalUserId: "wm-send", text: "您好，方案已确认" });
+  const queued = await service.queueCustomerServiceText({ openKfid: "wk-send", externalUserId: "wm-send", text: "您好，方案已确认" });
 
   const result = await service.dispatchCustomerServiceText(queued.task.id);
   assert.equal(result.task.status, "sent");
@@ -164,9 +164,9 @@ test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt 
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_accepted"));
 });
 
-test("callback validation failures are audited without recording secrets or response bodies", () => {
+test("callback validation failures are audited without recording secrets or response bodies", async () => {
   const { localStore, service } = setup();
-  assert.throws(() => service.verifyCallback({}), /echostr is required/);
+  await assert.rejects(() => service.verifyCallback({}), /echostr is required/);
   const failure = localStore
     .listWechatWorkAuditLogs()
     .find((item) => item.action === "callback_verification_rejected");
@@ -181,7 +181,7 @@ test("callback validation failures are audited without recording secrets or resp
 test("kf/send_msg transport failures are bounded and create a new attempt on retry", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-retry", externalUserId: "wm-retry" });
-  const queued = service.queueCustomerServiceText({ openKfid: "wk-retry", externalUserId: "wm-retry", text: "重试测试" });
+  const queued = await service.queueCustomerServiceText({ openKfid: "wk-retry", externalUserId: "wm-retry", text: "重试测试" });
   api.sendFailures.push(new Error("temporary network failure"));
 
   const first = await dispatch.processSafeSendQueue({ adapter: "wechat_work_kf", conversationId: binding.conversationId });
@@ -197,7 +197,7 @@ test("kf/send_msg transport failures are bounded and create a new attempt on ret
 test("sync_msg msg_send_fail event reverses API-accepted send to failed", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-fail-event", externalUserId: "wm-fail-event" });
-  const queued = service.queueCustomerServiceText({ openKfid: "wk-fail-event", externalUserId: "wm-fail-event", text: "异步失败测试" });
+  const queued = await service.queueCustomerServiceText({ openKfid: "wk-fail-event", externalUserId: "wm-fail-event", text: "异步失败测试" });
   await dispatch.executeQueuedSend(queued.task.id, { adapter: "wechat_work_kf" });
   const acceptedAttempt = localStore.getLatestSendAttempt(queued.task.id, { adapter: "wechat_work_kf" });
   api.syncResponse = {
@@ -226,10 +226,10 @@ test("sync_msg msg_send_fail event reverses API-accepted send to failed", async 
   assert.equal(binding.conversationId, localStore.getWechatWorkBinding("wk-fail-event", "wm-fail-event").conversationId);
 });
 
-test("status reports missing callback/public/send configuration without exposing secrets", () => {
+test("status reports missing callback/public/send configuration without exposing secrets", async () => {
   const { service } = setup();
   appConfig.customerServicePublicBaseUrl = "http://127.0.0.1:3200";
-  const status = service.getStatus();
+  const status = await service.getStatus();
   assert.equal(status.ready, false);
   assert.equal(status.checks.find((item) => item.key === "publicHttpsUrl").ok, false);
   assert.equal(JSON.stringify(status).includes("secret-test"), false);

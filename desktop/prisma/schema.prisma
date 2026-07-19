@@ -91,6 +91,9 @@ model WechatAccount {
   sendTasks       WechatSendTask[]
   orderDrafts     OrderDraft[]
   windowSnapshots WechatWindowSnapshot[]
+  wechatWorkBindings WechatWorkBinding[]
+
+  @@index([isActive, displayName])
 }
 
 model Customer {
@@ -107,6 +110,9 @@ model Customer {
   designJobs    DesignJob[]
   quoteDrafts   QuoteDraft[]
   orderDrafts   OrderDraft[]
+  wechatWorkBindings WechatWorkBinding[]
+
+  @@index([wechatId])
 }
 
 model Conversation {
@@ -126,9 +132,57 @@ model Conversation {
   designJobs      DesignJob[]
   sendTasks       WechatSendTask[]
   orderDrafts     OrderDraft[]
+  activeWindowSnapshots WechatWindowSnapshot[] @relation("ActiveConversationWindowSnapshots")
+  wechatWorkBindings WechatWorkBinding[]
 
   @@index([customerId])
   @@index([wechatAccountId])
+  @@index([channel, lastMessageAt])
+  @@unique([wechatAccountId, externalChatId])
+}
+
+model WechatWorkBinding {
+  id              String        @id @default(cuid())
+  openKfid        String
+  externalUserId  String
+  wechatAccountId String
+  customerId      String
+  conversationId  String
+  lastInboundAt   DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  wechatAccount   WechatAccount @relation(fields: [wechatAccountId], references: [id])
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  conversation    Conversation  @relation(fields: [conversationId], references: [id])
+
+  @@unique([openKfid, externalUserId])
+  @@unique([conversationId])
+  @@index([wechatAccountId, customerId])
+}
+
+model WechatWorkAuditLog {
+  id              String   @id @default(cuid())
+  action          String
+  status          String
+  msgid           String?
+  callbackId      String?
+  event           String?
+  openKfid        String?
+  externalUserId  String?
+  wechatAccountId String?
+  customerId      String?
+  conversationId  String?
+  messageId       String?
+  sendTaskId      String?
+  sendAttemptId   String?
+  errorMessage    String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  @@index([msgid])
+  @@index([action, createdAt])
+  @@index([sendTaskId, createdAt])
+  @@index([openKfid, externalUserId, createdAt])
 }
 
 model Message {
@@ -137,12 +191,15 @@ model Message {
   direction      MessageDirection
   text           String?
   attachments    Json?
+  metadata       Json?
   externalId     String?
   readAt          DateTime?
   createdAt      DateTime         @default(now())
   conversation   Conversation     @relation(fields: [conversationId], references: [id])
 
   @@index([conversationId, createdAt])
+  @@index([externalId])
+  @@unique([conversationId, externalId])
 }
 
 model Sku {
@@ -356,7 +413,8 @@ model WechatSendTask {
   attempts         WechatSendAttempt[]
 
   @@index([wechatAccountId, status])
-  @@index([conversationId])
+  @@index([conversationId, status])
+  @@index([status, queuedAt])
   @@index([quoteDraftId])
 }
 
@@ -374,9 +432,11 @@ model WechatSendAttempt {
   completedAt      DateTime?
   createdAt        DateTime          @default(now())
   sendTask         WechatSendTask    @relation(fields: [sendTaskId], references: [id])
+  windowSnapshot   WechatWindowSnapshot? @relation(fields: [windowSnapshotId], references: [id], onDelete: SetNull)
 
   @@index([sendTaskId, startedAt])
   @@index([status, startedAt])
+  @@index([windowSnapshotId])
 }
 
 model WechatWindowSnapshot {
@@ -384,6 +444,7 @@ model WechatWindowSnapshot {
   source             String
   isOnline           Boolean        @default(true)
   wechatAccountId    String?
+  activeConversationId String?
   accountDisplayName String?
   windowHandle       String?
   processId          Int?
@@ -398,8 +459,12 @@ model WechatWindowSnapshot {
   capturedAt         DateTime       @default(now())
   createdAt          DateTime       @default(now())
   wechatAccount      WechatAccount? @relation(fields: [wechatAccountId], references: [id])
+  activeConversation Conversation?  @relation("ActiveConversationWindowSnapshots", fields: [activeConversationId], references: [id], onDelete: SetNull)
+  sendAttempts       WechatSendAttempt[]
 
   @@index([wechatAccountId, capturedAt])
+  @@index([activeConversationId, capturedAt])
+  @@index([recentCustomerId, capturedAt])
   @@index([isOnline, capturedAt])
 }
 

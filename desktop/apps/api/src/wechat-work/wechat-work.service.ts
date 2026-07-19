@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import crypto from "node:crypto";
 import { LocalStoreService } from "../local-store/local-store.service";
+import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
+import { WechatPersistence } from "../wechat/wechat-persistence";
 import { WechatWorkApiClient, WechatWorkApiError, WechatWorkKfMessage } from "./wechat-work-api.client";
 import { buildWechatWorkProductionReadiness } from "./wechat-work-readiness";
 
@@ -29,14 +31,18 @@ type NormalizedInbound = {
 export class WechatWorkService {
   private readonly inflightInbound = new Set<string>();
   private readonly scheduledSyncs = new Map<string, Promise<unknown>>();
+  private readonly persistence: WechatPersistence;
 
   constructor(
     private readonly wechat: WechatDispatchService,
     private readonly localStore: LocalStoreService,
     private readonly api: WechatWorkApiClient,
-  ) {}
+    prisma: PrismaService,
+  ) {
+    this.persistence = new WechatPersistence(prisma, localStore);
+  }
 
-  getStatus() {
+  async getStatus() {
     const checks = [
       configCheck("corpId", "WECHAT_WORK_CORP_ID", appConfig.wechatWorkCorpId),
       configCheck("secret", "WECHAT_WORK_SECRET", appConfig.wechatWorkSecret),
@@ -49,12 +55,7 @@ export class WechatWorkService {
       },
       configCheck("publicHttpsUrl", "CUSTOMER_SERVICE_PUBLIC_BASE_URL", appConfig.customerServicePublicBaseUrl, /^https:\/\//i),
       configCheck("apiHttpsUrl", "WECHAT_WORK_API_BASE_URL", appConfig.wechatWorkApiBaseUrl, /^https:\/\//i),
-      {
-        key: "localStore",
-        env: "USE_LOCAL_STORE",
-        ok: appConfig.useLocalStore,
-        detail: appConfig.useLocalStore ? "enabled" : "Prisma mode is not implemented for this integration",
-      },
+      { key: "persistence", env: "USE_LOCAL_STORE", ok: true, detail: appConfig.useLocalStore ? "local_store" : "prisma" },
       {
         key: "sendAdapter",
         env: "WECHAT_SEND_ADAPTER",
@@ -62,8 +63,8 @@ export class WechatWorkService {
         detail: appConfig.wechatSendAdapter,
       },
     ];
-    const bindings = this.localStore.listWechatAccounts().filter((item: any) => item.platform === "wechat_work_kf").length;
-    const audit = this.localStore.listWechatWorkAuditLogs(500);
+    const bindings = await this.persistence.countWechatWorkBindings();
+    const audit = await this.persistence.listWechatWorkAuditLogs(500);
     const readiness = buildWechatWorkProductionReadiness({ mappedAccounts: bindings, auditRecords: audit.length });
     return {
       ready: checks.every((item) => item.ok),
@@ -74,7 +75,7 @@ export class WechatWorkService {
       apiBaseUrl: appConfig.wechatWorkApiBaseUrl,
       configuredOpenKfid: appConfig.wechatWorkOpenKfid || null,
       persistence: {
-        mode: appConfig.useLocalStore ? "local_store" : "unsupported",
+        mode: appConfig.useLocalStore ? "local_store" : "prisma",
         mappedAccounts: bindings,
         auditRecords: audit.length,
       },
@@ -87,42 +88,40 @@ export class WechatWorkService {
     };
   }
 
-  getProductionPreflight() {
-    const mappedAccounts = this.localStore
-      .listWechatAccounts()
-      .filter((item: any) => item.platform === "wechat_work_kf").length;
-    const auditRecords = this.localStore.listWechatWorkAuditLogs(500).length;
+  async getProductionPreflight() {
+    const mappedAccounts = await this.persistence.countWechatWorkBindings();
+    const auditRecords = (await this.persistence.listWechatWorkAuditLogs(500)).length;
     return buildWechatWorkProductionReadiness({ mappedAccounts, auditRecords });
   }
 
-  verifyCallback(query: CallbackQuery) {
+  async verifyCallback(query: CallbackQuery) {
     try {
       const encrypted = requiredText(query.echostr, "echostr");
       this.verifySignature(query, encrypted);
       const decrypted = this.decryptMessage(encrypted);
       this.assertReceiveId(decrypted.receiveId);
-      this.localStore.recordWechatWorkAudit({
+      await this.persistence.recordWechatWorkAudit({
         action: "callback_verification_accepted",
         status: "accepted",
       });
       return decrypted.message;
     } catch (error) {
-      this.recordOperationFailure("callback_verification_rejected", error, {
+      await this.recordOperationFailure("callback_verification_rejected", error, {
         signaturePresent: Boolean(query.msg_signature || query.signature),
       });
       throw error;
     }
   }
 
-  handleCallback(query: CallbackQuery, body: unknown) {
+  async handleCallback(query: CallbackQuery, body: unknown) {
     try {
       const encrypted = this.extractEncryptedBody(body);
       this.verifySignature(query, encrypted);
       const decrypted = this.decryptMessage(encrypted);
       this.assertReceiveId(decrypted.receiveId);
       const callbackId = `callback_${crypto.createHash("sha256").update(decrypted.message).digest("hex")}`;
-      if (this.localStore.hasWechatWorkAuditMsgId(callbackId)) {
-        this.localStore.recordWechatWorkAudit({
+      if (await this.persistence.hasWechatWorkAuditMsgId(callbackId)) {
+        await this.persistence.recordWechatWorkAudit({
           action: "callback_duplicate",
           status: "duplicate",
           callbackId,
@@ -132,7 +131,7 @@ export class WechatWorkService {
       const xml = parseXml(decrypted.message);
       const event = xml.Event || "";
       if (event !== "kf_msg_or_event") {
-        this.localStore.recordWechatWorkAudit({
+        await this.persistence.recordWechatWorkAudit({
           action: "callback_ignored",
           status: "ignored",
           msgid: callbackId,
@@ -144,7 +143,7 @@ export class WechatWorkService {
 
       const token = requiredText(xml.Token, "Token");
       const openKfid = String(xml.OpenKfId || appConfig.wechatWorkOpenKfid || "").trim();
-      this.localStore.recordWechatWorkAudit({
+      await this.persistence.recordWechatWorkAudit({
         action: "callback_accepted",
         status: "accepted",
         msgid: callbackId,
@@ -155,7 +154,7 @@ export class WechatWorkService {
       this.scheduleCustomerServiceSync({ token, openKfid });
       return "success";
     } catch (error) {
-      this.recordOperationFailure("callback_rejected", error, {
+      await this.recordOperationFailure("callback_rejected", error, {
         signaturePresent: Boolean(query.msg_signature || query.signature),
       });
       throw error;
@@ -196,7 +195,7 @@ export class WechatWorkService {
             errorMessage: error instanceof Error ? error.message : String(error),
           };
           failed.push(failure);
-          this.localStore.recordWechatWorkAudit({
+          await this.persistence.recordWechatWorkAudit({
             action: "inbound_failed",
             ...failure,
             openKfid: message.open_kfid || fallbackOpenKfid || null,
@@ -233,19 +232,19 @@ export class WechatWorkService {
     };
   }
 
-  listAuditLogs(limit?: number) {
+  async listAuditLogs(limit?: number) {
     return {
-      records: this.localStore.listWechatWorkAuditLogs(limit),
+      records: await this.persistence.listWechatWorkAuditLogs(limit),
     };
   }
 
-  queueCustomerServiceText(payload: { externalUserId?: string; openKfid?: string; text?: string }) {
+  async queueCustomerServiceText(payload: { externalUserId?: string; openKfid?: string; text?: string }) {
     const openKfid = requiredText(payload.openKfid || appConfig.wechatWorkOpenKfid, "openKfid");
     const externalUserId = requiredText(payload.externalUserId, "externalUserId");
     const text = requiredText(payload.text, "text");
-    const binding = this.localStore.getWechatWorkBinding(openKfid, externalUserId);
+    const binding = await this.persistence.getWechatWorkBinding(openKfid, externalUserId);
     if (!binding) throw new BadRequestException("wechat work customer is not mapped yet; sync an inbound message first");
-    const task = this.localStore.createSendTask({
+    const task = await this.persistence.createSendTask({
       wechatAccountId: binding.wechatAccountId,
       conversationId: binding.conversationId,
       customerId: binding.customerId,
@@ -256,7 +255,7 @@ export class WechatWorkService {
         policy: "safe-send-queue",
       },
     });
-    this.localStore.recordWechatWorkAudit({
+    await this.persistence.recordWechatWorkAudit({
       action: "send_queued",
       status: "queued",
       sendTaskId: task.id,
@@ -271,10 +270,10 @@ export class WechatWorkService {
 
   async dispatchCustomerServiceText(id: string) {
     const sendTaskId = requiredText(id, "sendTaskId");
-    const task = this.localStore.getSendTask(sendTaskId);
+    const task = await this.persistence.getSendTask(sendTaskId);
     if (!task) throw new BadRequestException(`wechat work send task not found: ${sendTaskId}`);
 
-    const binding = this.localStore.findWechatWorkBindingByIdentity({
+    const binding = await this.persistence.findWechatWorkBindingByIdentity({
       wechatAccountId: task.wechatAccountId,
       conversationId: task.conversationId,
       customerId: task.customerId || task.conversation?.customerId,
@@ -283,7 +282,7 @@ export class WechatWorkService {
       throw new BadRequestException("send task is not bound to a WeChat Work customer");
     }
 
-    this.localStore.recordWechatWorkAudit({
+    await this.persistence.recordWechatWorkAudit({
       action: "send_dispatch_requested",
       status: "dispatching",
       sendTaskId,
@@ -302,7 +301,7 @@ export class WechatWorkService {
         expectedCustomerId: task.customerId || task.conversation?.customerId,
       });
     } catch (error) {
-      this.recordOperationFailure("send_dispatch_rejected", error, {
+      await this.recordOperationFailure("send_dispatch_rejected", error, {
         sendTaskId,
         openKfid: binding.openKfid,
         externalUserId: binding.externalUserId,
@@ -316,7 +315,7 @@ export class WechatWorkService {
     if (this.scheduledSyncs.has(key)) return;
     const pending = this.syncCustomerServiceMessages(payload)
       .catch((error) => {
-        this.localStore.recordWechatWorkAudit({
+        return this.persistence.recordWechatWorkAudit({
           action: "callback_sync_failed",
           status: "failed",
           openKfid: payload.openKfid || null,
@@ -329,7 +328,7 @@ export class WechatWorkService {
 
   private async processSyncedItem(message: WechatWorkKfMessage, fallbackOpenKfid: string) {
     const msgid = requiredText(message.msgid, "sync_msg msgid");
-    if (this.localStore.hasWechatWorkAuditMsgId(msgid) || this.inflightInbound.has(msgid)) {
+    if (await this.persistence.hasWechatWorkAuditMsgId(msgid) || this.inflightInbound.has(msgid)) {
       return { status: "duplicate", msgid };
     }
     this.inflightInbound.add(msgid);
@@ -344,14 +343,14 @@ export class WechatWorkService {
         return this.auditIgnoredMessage(message, msgid, openKfid, externalUserId, "servicer_origin");
       }
       const normalized = normalizeInbound(message, msgid, openKfid, externalUserId);
-      const binding = this.localStore.upsertWechatWorkBinding({
+      const binding = await this.persistence.upsertWechatWorkBinding({
         openKfid: normalized.openKfid,
         externalUserId: normalized.externalUserId,
         sendTime: message.send_time,
       });
-      const duplicate = this.localStore.findMessageByExternalId(binding.conversationId, msgid);
+      const duplicate = await this.persistence.findMessageByExternalId(binding.conversationId, msgid);
       if (duplicate) {
-        this.localStore.recordWechatWorkAudit({
+        await this.persistence.recordWechatWorkAudit({
           action: "inbound_duplicate",
           status: "duplicate",
           msgid,
@@ -370,7 +369,19 @@ export class WechatWorkService {
         createdAt: normalized.createdAt,
         attachments: normalized.attachments,
       });
-      this.localStore.recordWechatWorkAudit({
+      if (result.deduplicated) {
+        await this.persistence.recordWechatWorkAudit({
+          action: "inbound_duplicate",
+          status: "duplicate",
+          msgid,
+          openKfid,
+          externalUserId,
+          messageId: result.message?.id || null,
+          deduplicatedBy: "message_unique_constraint",
+        });
+        return { status: "duplicate", msgid, messageId: result.message?.id || null };
+      }
+      await this.persistence.recordWechatWorkAudit({
         action: "inbound_processed",
         status: "processed",
         msgid,
@@ -388,7 +399,7 @@ export class WechatWorkService {
     }
   }
 
-  private processSyncedEvent(
+  private async processSyncedEvent(
     message: WechatWorkKfMessage,
     event: Record<string, unknown>,
     msgid: string,
@@ -397,14 +408,14 @@ export class WechatWorkService {
   ) {
     const eventType = String(event.event_type || "unknown");
     if (openKfid && externalUserId) {
-      this.localStore.upsertWechatWorkBinding({ openKfid, externalUserId, sendTime: message.send_time });
+      await this.persistence.upsertWechatWorkBinding({ openKfid, externalUserId, sendTime: message.send_time });
     }
     if (eventType === "msg_send_fail") {
       const failMsgid = requiredText(event.fail_msgid, "event.fail_msgid");
-      const attempt = this.localStore.findWechatWorkSendAttemptByMsgId(failMsgid);
+      const attempt = await this.persistence.findWechatWorkSendAttemptByMsgId(failMsgid);
       if (attempt) {
         const errorMessage = `wechat work reported send failure type ${String(event.fail_type ?? "unknown")}`;
-        this.localStore.updateSendAttempt(attempt.id, {
+        await this.persistence.updateSendAttempt(attempt.id, {
           status: "failed",
           errorMessage,
           completedAt: new Date().toISOString(),
@@ -415,7 +426,7 @@ export class WechatWorkService {
             failType: event.fail_type ?? null,
           },
         });
-        this.localStore.updateSendTask(attempt.sendTaskId, {
+        await this.persistence.updateSendTask(attempt.sendTaskId, {
           status: "failed",
           errorMessage,
           guardSnapshot: {
@@ -426,7 +437,7 @@ export class WechatWorkService {
           },
         });
       }
-      this.localStore.recordWechatWorkAudit({
+      await this.persistence.recordWechatWorkAudit({
         action: "send_async_failed",
         status: "failed",
         msgid,
@@ -439,7 +450,7 @@ export class WechatWorkService {
       });
       return { status: "processed", msgid, eventType, sendAttemptId: attempt?.id || null };
     }
-    this.localStore.recordWechatWorkAudit({
+    await this.persistence.recordWechatWorkAudit({
       action: "event_processed",
       status: "processed",
       msgid,
@@ -451,14 +462,14 @@ export class WechatWorkService {
     return { status: "processed", msgid, eventType };
   }
 
-  private auditIgnoredMessage(
+  private async auditIgnoredMessage(
     message: WechatWorkKfMessage,
     msgid: string,
     openKfid: string,
     externalUserId: string,
     reason: string,
   ) {
-    this.localStore.recordWechatWorkAudit({
+    await this.persistence.recordWechatWorkAudit({
       action: "inbound_ignored",
       status: "ignored",
       reason,
@@ -517,7 +528,7 @@ export class WechatWorkService {
 
   private recordOperationFailure(action: string, error: unknown, details: Record<string, unknown> = {}) {
     const apiError = error instanceof WechatWorkApiError ? error : null;
-    return this.localStore.recordWechatWorkAudit({
+    return this.persistence.recordWechatWorkAudit({
       action,
       status: "failed",
       ...details,

@@ -6,11 +6,13 @@
 
 1. 企业微信向 `GET/POST {CUSTOMER_SERVICE_PUBLIC_BASE_URL}/api/wechat-work/callback` 发起验证或事件回调。
 2. 回调验签、解密并校验 CorpID 后立即返回纯文本 `success`；`kf_msg_or_event` 中的 `Token` 和 `OpenKfId` 用于后台调用 `kf/sync_msg`。
-3. `sync_msg` 的每条客户消息按 `msgid` 幂等处理，并将 `open_kfid + external_userid` 持久映射到独立的本地微信账号、客户和会话。
+3. `sync_msg` 的每条客户消息按 `msgid` 幂等处理，并将 `open_kfid + external_userid` 持久映射到独立的微信账号、客户和会话。
 4. 归一化消息继续复用现有 `WechatDispatchService.processInboundMessage`，进入路由、人工接管和安全发送队列。
 5. 企业微信会话的文本发送任务通过既有安全校验后，由 `wechat_work_kf` 适配器调用 `kf/send_msg`。调用、失败、重试和异步失败均记录在 `WechatSendAttempt` 与企业微信审计日志中。
 
 不会再使用默认客户或默认会话。没有入站映射的 `external_userid` 不能直接发送，必须先成功同步至少一条该客户的消息或事件。
+
+持久化模式由 `USE_LOCAL_STORE` 控制：`true` 继续使用本地 JSON 演示数据；`false` 使用 PostgreSQL，并持久化企微身份映射、消息、发送任务、发送尝试及脱敏审计。切换到 PostgreSQL 前必须先部署 Prisma 迁移；迁移和导入方法见 `prisma/README.md`。两种模式复用同一身份校验和安全发送逻辑。
 
 ## 必需配置
 
