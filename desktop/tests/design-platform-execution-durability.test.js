@@ -765,11 +765,13 @@ test("refund failed never starts a second POST and persisted notification uses o
     expectedCustomerId: job.customerId,
   }, "operator_refund_audit");
   assert.equal(resolved.refundStatus, "refunded");
-  assert.equal(resolved.refundSummary.reason, "rpc_failed");
-  assert.equal(resolved.refundSummary.requestedCredits, 2);
-  assert.equal(resolved.refundSummary.alreadyRefunded, false);
-  assert.equal(resolved.refundSummary.resolution, "confirmed_refunded");
-  assert.equal(resolved.refundSummary.reviewer, "operator_refund_audit");
+  assert.equal("refundSummary" in resolved, false, "write response must use the public execution allowlist");
+  const storedResolution = localStore.getDesignPlatformExecution(execution.id).refundSummary;
+  assert.equal(storedResolution.reason, "rpc_failed");
+  assert.equal(storedResolution.requestedCredits, 2);
+  assert.equal(storedResolution.alreadyRefunded, false);
+  assert.equal(storedResolution.resolution, "confirmed_refunded");
+  assert.equal(storedResolution.reviewer, "operator_refund_audit");
   await executions.assertRetryAllowed(job.id);
   assert.equal(postCount, 1);
   const serialized = fs.readFileSync(path.join(root, "local-store.json"), "utf8");
@@ -823,7 +825,11 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
   assert.equal(resolved.refundStatus, "refunded");
   assert.equal(resolved.acceptanceStatus, "pending");
   assert.equal(resolved.resolvedAt, null);
-  assert.equal(resolved.refundSummary.reason, "partial_refund_rpc_failed");
+  assert.equal("refundSummary" in resolved, false, "write response must not expose internal refund evidence");
+  assert.equal(
+    localStore.getDesignPlatformExecution(execution.id).refundSummary.reason,
+    "partial_refund_rpc_failed",
+  );
 
   let acceptedCount = 0;
   service.acceptDurableArtImageExecution = async (executionId) => {

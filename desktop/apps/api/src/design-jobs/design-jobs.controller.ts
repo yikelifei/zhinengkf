@@ -31,6 +31,20 @@ export class DesignJobsController {
     return this.designJobs.list({ wechatAccountId, conversationId, customerId });
   }
 
+  @Get(":id/executions")
+  listExecutions(
+    @Param("id") id: string,
+    @Query("expectedWechatAccountId") expectedWechatAccountId?: string,
+    @Query("expectedConversationId") expectedConversationId?: string,
+    @Query("expectedCustomerId") expectedCustomerId?: string,
+  ) {
+    return this.designJobs.listExecutions(id, {
+      expectedWechatAccountId,
+      expectedConversationId,
+      expectedCustomerId,
+    });
+  }
+
   @Post()
   @RequireOperatorCapability("manage_design_executions")
   create(@Body() payload: CreateDesignJobPayload) {

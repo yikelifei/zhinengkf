@@ -35,3 +35,24 @@ export type ResolveUnknownDesignExecutionPayload = {
 export type ResolveDesignExecutionRefundPayload = {
   resolution: "confirmed_refunded";
 };
+
+export type DesignExecutionAvailableResolution =
+  | "confirmed_not_generated_refunded"
+  | "confirmed_refunded"
+  | null;
+
+export type DesignPlatformExecutionView = {
+  id: string;
+  attemptNo: number;
+  status: string;
+  acceptanceStatus: string;
+  refundStatus: string;
+  imageCount: number;
+  errorCategory: string | null;
+  responseHttpStatus: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+  resolvedAt: string | null;
+  availableResolution: DesignExecutionAvailableResolution;
+};
