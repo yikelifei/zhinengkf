@@ -1,13 +1,27 @@
-import { BadRequestException, Body, Controller, Get, Headers, Post, UnauthorizedException } from "@nestjs/common";
+import { timingSafeEqual } from "node:crypto";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  NotFoundException,
+  Post,
+  ServiceUnavailableException,
+  UnauthorizedException,
+  UseGuards,
+} from "@nestjs/common";
 import { DesignJobsService } from "../../design-jobs/design-jobs.service";
 import {
   appConfig,
   getDesignPlatformRuntimeConfigSummary,
+  hasIndependentDesignPlatformCallbackApiKey,
   updateDesignPlatformRuntimeConfig,
 } from "../../shared/app-config";
 import { rules } from "../../shared/rules";
 import { DesignPlatformClient } from "./design-platform.client";
 import { DesignPlatformCallbackPayload } from "./design-platform.types";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../../operator-access/operator-access.guard";
 
 const { evaluateArtImageLocalHealthReadiness, evaluateDesignPlatformActivationStatus } = rules;
 
@@ -28,7 +42,7 @@ export class DesignPlatformController {
         latencyMs: Date.now() - startedAt,
         adapter: appConfig.designPlatformAdapter,
         baseUrl: appConfig.designPlatformBaseUrl,
-        data,
+        ...sanitizePublicDesignPlatformHealth(data),
       };
     } catch (error) {
       return {
@@ -36,12 +50,14 @@ export class DesignPlatformController {
         latencyMs: Date.now() - startedAt,
         adapter: appConfig.designPlatformAdapter,
         baseUrl: appConfig.designPlatformBaseUrl,
-        errorMessage: error instanceof Error ? error.message : "unknown design platform health error",
+        errorMessage: "design platform health check failed",
       };
     }
   }
 
   @Get("readiness")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   async readiness() {
     const startedAt = Date.now();
     const checks: Array<{
@@ -126,6 +142,15 @@ export class DesignPlatformController {
         severity: "info",
         detail: "当前是 mock / standard_v1 模式，不要求设计平台登录和设备激活。",
       });
+      checks.push({
+        key: "design_platform_callback_auth",
+        label: "设计平台回调独立密钥",
+        ok: hasIndependentDesignPlatformCallbackApiKey(),
+        severity: "error",
+        detail: hasIndependentDesignPlatformCallbackApiKey()
+          ? "standard_v1 回调已配置独立密钥。"
+          : "standard_v1 必须配置独立的 DESIGN_PLATFORM_CALLBACK_API_KEY，且不得复用内部/API/登录凭据。",
+      });
     }
 
     const failed = checks.filter((check) => !check.ok && check.severity === "error");
@@ -143,7 +168,7 @@ export class DesignPlatformController {
         hasAccessToken: Boolean(appConfig.designPlatformAccessToken),
         hasCookie: Boolean(appConfig.designPlatformCookie),
         hasDeviceId: Boolean(appConfig.designPlatformDeviceId),
-        hasCallbackApiKey: Boolean(appConfig.callbackApiKey),
+        hasCallbackApiKey: hasIndependentDesignPlatformCallbackApiKey(),
         callbackUrl:
           appConfig.designPlatformCallbackUrl ||
           `${appConfig.customerServicePublicBaseUrl}/api/integrations/design-platform/callback`,
@@ -153,6 +178,8 @@ export class DesignPlatformController {
   }
 
   @Get("config")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   config() {
     return {
       ok: true,
@@ -161,6 +188,8 @@ export class DesignPlatformController {
   }
 
   @Post("config")
+  @RequireOperatorCapability("manage_design_executions")
+  @UseGuards(OperatorAccessGuard)
   async updateConfig(@Body() payload: Record<string, unknown>) {
     try {
       const config = updateDesignPlatformRuntimeConfig({
@@ -181,10 +210,12 @@ export class DesignPlatformController {
   }
 
   @Post("login")
+  @RequireOperatorCapability("manage_design_executions")
+  @UseGuards(OperatorAccessGuard)
   async login(@Body() payload: Record<string, unknown>) {
     const email = requiredString(payload.email, "email");
     const password = requiredString(payload.password, "password");
-    const deviceId = requiredString(payload.deviceId || appConfig.designPlatformDeviceId, "deviceId");
+    const deviceId = boundOrExplicitDesignPlatformDeviceId(payload.deviceId);
 
     try {
       const login = await this.designPlatform.loginArtImageLocal({
@@ -210,9 +241,11 @@ export class DesignPlatformController {
   }
 
   @Post("activation/redeem")
+  @RequireOperatorCapability("manage_design_executions")
+  @UseGuards(OperatorAccessGuard)
   async redeemActivation(@Body() payload: Record<string, unknown>) {
     const code = requiredString(payload.code, "activationCode");
-    const deviceId = requiredString(payload.deviceId || appConfig.designPlatformDeviceId, "deviceId");
+    const deviceId = boundOrExplicitDesignPlatformDeviceId(payload.deviceId);
     const deviceLabel = stringOrUndefined(payload.deviceLabel) || "智能客服工作台";
 
     try {
@@ -237,6 +270,8 @@ export class DesignPlatformController {
   }
 
   @Post("smoke-test")
+  @RequireOperatorCapability("manage_design_executions")
+  @UseGuards(OperatorAccessGuard)
   async smokeTest() {
     return this.designJobs.runDesignPlatformSmokeTest();
   }
@@ -246,14 +281,30 @@ export class DesignPlatformController {
     @Headers("authorization") authorization: string | undefined,
     @Body() payload: DesignPlatformCallbackPayload,
   ) {
-    if (appConfig.callbackApiKey) {
-      const expected = `Bearer ${appConfig.callbackApiKey}`;
-      if (authorization !== expected) {
-        throw new UnauthorizedException("invalid callback api key");
-      }
+    if (appConfig.designPlatformAdapter === "art_image_local") {
+      throw new NotFoundException("design platform callback is disabled for art_image_local");
+    }
+    const callbackApiKey = String(appConfig.callbackApiKey || "").trim();
+    if (!hasIndependentDesignPlatformCallbackApiKey()) {
+      throw new ServiceUnavailableException("independent design platform callback api key is not configured");
+    }
+    if (!callbackAuthorizationMatches(authorization, callbackApiKey)) {
+      throw new UnauthorizedException("invalid callback api key");
     }
     return this.designJobs.handleDesignPlatformCallback(payload);
   }
+}
+
+export function callbackAuthorizationMatches(authorization: string | undefined, callbackApiKey: string) {
+  const key = String(callbackApiKey || "").trim();
+  if (!key) return false;
+  const actual = Buffer.from(String(authorization || ""), "utf8");
+  const expected = Buffer.from(`Bearer ${key}`, "utf8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+export function sanitizePublicDesignPlatformHealth(value: unknown) {
+  return { upstreamOk: isRecord(value) && typeof value.ok === "boolean" ? value.ok : true };
 }
 
 function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
@@ -280,6 +331,18 @@ function requiredString(value: unknown, name: string) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text) throw new BadRequestException(`${name} is required`);
   return text;
+}
+
+export function boundOrExplicitDesignPlatformDeviceId(value: unknown) {
+  const explicit = typeof value === "string" ? value.trim() : "";
+  if (explicit) return explicit;
+  const configured = String(appConfig.designPlatformDeviceId || "").trim();
+  let baseOrigin = "";
+  try {
+    baseOrigin = new URL(appConfig.designPlatformBaseUrl).origin;
+  } catch {}
+  if (configured && appConfig.designPlatformDeviceIdOrigin === baseOrigin) return configured;
+  throw new BadRequestException("deviceId is required for the current design platform origin");
 }
 
 function sanitizeLoginUser(user: unknown) {

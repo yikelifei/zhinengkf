@@ -12,6 +12,8 @@ require("ts-node").register({
 });
 
 const { appConfig } = require("../apps/api/src/shared/app-config");
+const { DesignJobsController } = require("../apps/api/src/design-jobs/design-jobs.controller");
+const { DesignPlatformController } = require("../apps/api/src/integrations/design-platform/design-platform.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
 const {
   INTERNAL_API_TOKEN_HEADER,
@@ -41,6 +43,7 @@ test("policy defines the complete conservative role and capability matrix", () =
     "manage_assignments",
     "reply_conversations",
     "approve_send",
+    "manage_design_executions",
     "manage_training",
     "manage_roles",
   ]);
@@ -51,6 +54,7 @@ test("policy defines the complete conservative role and capability matrix", () =
     "manage_assignments",
     "reply_conversations",
     "approve_send",
+    "manage_design_executions",
     "manage_training",
   ]);
   assert.deepEqual([...OPERATOR_CAPABILITY_MATRIX.agent], ["view_console", "reply_conversations"]);
@@ -161,6 +165,128 @@ test("guard rejects spoofed headers and attaches only the server principal", () 
   );
 });
 
+test("design execution charge and recovery routes require a trusted operator and ignore body reviewer", async () => {
+  const protectedMethods = [
+    "create",
+    "scanTimeouts",
+    "pollActiveResults",
+    "autoSubmitDrafts",
+    "autoProcessLowValue",
+    "scanHighValueHandoffs",
+    "createTimeoutDemo",
+    "createFailureDemo",
+    "submit",
+    "pollResult",
+    "retry",
+    "attachAssets",
+    "repairLocalImageFile",
+    "requestRevision",
+    "cancel",
+    "selectImage",
+    "createQuote",
+    "markManualReview",
+    "resolveUnknownExecution",
+    "resolveExecutionRefund",
+  ];
+  for (const methodName of protectedMethods) {
+    const handler = DesignJobsController.prototype[methodName];
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, handler),
+      "manage_design_executions",
+      `${methodName} capability`,
+    );
+  }
+  assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignJobsController), "view_console");
+  assert.equal(
+    Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignJobsController.prototype.preflight),
+    "view_console",
+  );
+  assert.equal(
+    Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignJobsController.prototype.quickConfirmSend),
+    "approve_send",
+  );
+  assert.equal(
+    Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignPlatformController.prototype.health),
+    undefined,
+  );
+  for (const methodName of ["readiness", "config"]) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignPlatformController.prototype[methodName]),
+      "view_console",
+      `design platform ${methodName} capability`,
+    );
+  }
+  for (const methodName of ["updateConfig", "login", "redeemActivation", "smokeTest"]) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignPlatformController.prototype[methodName]),
+      "manage_design_executions",
+      `design platform ${methodName} capability`,
+    );
+  }
+  assert.equal(
+    Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, DesignPlatformController.prototype.smokeTest),
+    "manage_design_executions",
+  );
+
+  const guard = new OperatorAccessGuard(new Reflector(), new OperatorAccessService());
+  for (const [controllerClass, methodName] of [
+    [DesignJobsController, "retry"],
+    [DesignJobsController, "resolveUnknownExecution"],
+    [DesignJobsController, "resolveExecutionRefund"],
+    [DesignPlatformController, "smokeTest"],
+  ]) {
+    const handler = controllerClass.prototype[methodName];
+    assert.throws(
+      () => guard.canActivate(executionContext(handler, controllerClass, { headers: {}, body: {} })),
+      (error) => error?.getStatus?.() === 403,
+    );
+    assert.throws(
+      () => guard.canActivate(executionContext(handler, controllerClass, {
+        headers: { [INTERNAL_API_TOKEN_HEADER]: "b".repeat(64) },
+        body: { reviewer: "attacker" },
+      })),
+      (error) => error?.getStatus?.() === 403,
+    );
+    const request = {
+      headers: { [INTERNAL_API_TOKEN_HEADER]: VALID_TOKEN },
+      body: { reviewer: "attacker" },
+    };
+    assert.equal(guard.canActivate(executionContext(handler, controllerClass, request)), true);
+    assert.equal(request.trustedOperator.id, "local_admin");
+  }
+
+  const calls = [];
+  const controller = new DesignJobsController({
+    resolveUnknownExecution: async (...args) => { calls.push(args); return {}; },
+    resolveExecutionRefund: async (...args) => { calls.push(args); return {}; },
+  });
+  await controller.resolveUnknownExecution(
+    "job-1",
+    "execution-1",
+    { resolution: "confirmed_not_generated_refunded", reviewer: "attacker" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  await controller.resolveExecutionRefund(
+    "job-1",
+    "execution-2",
+    { resolution: "confirmed_refunded", reviewer: "attacker" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  assert.equal(calls.length, 2);
+  for (const args of calls) {
+    assert.equal(args[2].reviewer, undefined);
+    assert.equal(args[3], "local_admin");
+  }
+
+  const quickCalls = [];
+  const quickController = new DesignJobsController({
+    quickConfirmAndQueueSend: async (...args) => { quickCalls.push(args); return {}; },
+  });
+  await quickController.quickConfirmSend("job-quick", {}, LOCAL_ADMIN_PRINCIPAL);
+  assert.match(quickCalls[0][1].reviewer, /local_admin/);
+  assert.doesNotMatch(quickCalls[0][1].reviewer, /^人工客服$/);
+});
+
 test("controller status accepts only the internal proof and protected controllers overwrite audit actors", () => {
   const service = new OperatorAccessService();
   const controller = new OperatorAccessController(service);
@@ -171,12 +297,15 @@ test("controller status accepts only the internal proof and protected controller
   const conversation = read("apps/api/src/conversation-ops/conversation-operations.controller.ts");
   const personalWechat = read("apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller.ts");
   const wechat = read("apps/api/src/wechat/wechat.controller.ts");
+  const designJobs = read("apps/api/src/design-jobs/design-jobs.controller.ts");
   assert.match(conversation, /@RequireOperatorCapability\("manage_assignments"\)[\s\S]*?operator: principal\.id/);
   assert.match(personalWechat, /@Post\("instances"\)[\s\S]*?@RequireOperatorCapability\("manage_channels"\)/);
   assert.match(personalWechat, /@Post\("instances\/:wechatAccountId\/disable"\)[\s\S]*?@RequireOperatorCapability\("manage_channels"\)/);
   assert.match(wechat, /@Post\("conversations\/:id\/manual-replies"\)[\s\S]*?operator: principal\.id/);
   assert.match(wechat, /@Post\("conversations\/:id\/manual-lock"\)[\s\S]*?reviewer: principal\.id/);
   assert.match(wechat, /@Post\("send-tasks\/:id\/execute"\)[\s\S]*?@RequireOperatorCapability\("approve_send"\)/);
+  assert.match(designJobs, /@Post\(":id\/submit"\)[\s\S]*?@RequireOperatorCapability\("manage_design_executions"\)/);
+  assert.match(designJobs, /@Post\(":id\/executions\/:executionId\/resolve-refund"\)[\s\S]*?principal\.id/);
 });
 
 function executionContext(handler, controllerClass, request) {

@@ -47,6 +47,7 @@ async function main() {
   fs.rmSync(smokeRoot, { recursive: true, force: true });
   fs.mkdirSync(smokeRoot, { recursive: true });
   const token = crypto.randomBytes(32).toString("hex");
+  const desktopWebSessionProof = crypto.randomBytes(32).toString("hex");
   const commonEnv = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: "1",
@@ -76,11 +77,18 @@ async function main() {
     processes.push(api);
     const apiHealth = await waitForUrl(api, apiHealthUrl, 45_000);
 
-    const web = spawnService("web", webEntry, path.dirname(webEntry), { ...commonEnv, PORT: String(webPort) });
+    const web = spawnService("web", webEntry, path.dirname(webEntry), {
+      ...commonEnv,
+      PORT: String(webPort),
+      DESKTOP_WEB_SESSION_PROOF: desktopWebSessionProof,
+    });
     processes.push(web);
     const overview = await waitForUrl(web, overviewUrl, 45_000);
     const proxyHealth = await requestUrl(proxyHealthUrl);
-    if (proxyHealth.statusCode >= 500) throw new Error(`packaged Web API proxy returned ${proxyHealth.statusCode}`);
+    const proxyHealthBody = parseJsonBuffer(proxyHealth.body);
+    if (proxyHealth.statusCode !== 403 || proxyHealthBody?.code !== "desktop_session_proof_missing") {
+      throw new Error(`packaged Web API proxy did not fail closed without Electron proof (${proxyHealth.statusCode})`);
+    }
 
     const assetPath = firstStaticAssetPath(overview.body);
     if (!assetPath) throw new Error("packaged overview did not reference a Next static asset");
@@ -94,7 +102,7 @@ async function main() {
       status: "PASS",
       apiHealth: { statusCode: apiHealth.statusCode },
       overview: { statusCode: overview.statusCode },
-      proxyHealth: { statusCode: proxyHealth.statusCode },
+      proxyHealth: { statusCode: proxyHealth.statusCode, mode: "external_no_cookie_fail_closed" },
       staticAsset: { statusCode: staticAsset.statusCode, bytes: staticAsset.body.length },
       ports: { api: apiPort, web: webPort },
       cwd: "resources/services/runtime-root",
@@ -109,6 +117,14 @@ async function main() {
   } finally {
     await Promise.all(processes.reverse().map(stopChild));
     fs.rmSync(smokeRoot, { recursive: true, force: true });
+  }
+}
+
+function parseJsonBuffer(value) {
+  try {
+    return JSON.parse(Buffer.from(value || "").toString("utf8"));
+  } catch {
+    return null;
   }
 }
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { config as loadDotEnv } from "dotenv";
 
 loadDotEnv({
@@ -55,20 +56,65 @@ function stringConfig(envName: string, runtimeKey: string, fallback: string, con
 
 let runtimeConfig = readRuntimeConfig();
 
-function resolveDesignPlatformRuntime(config = runtimeConfig) {
+type DesignPlatformCredentialOrigins = {
+  accessTokenOrigin?: string;
+  cookieOrigin?: string;
+  apiKeyOrigin?: string;
+  deviceIdOrigin?: string;
+};
+
+function resolveDesignPlatformRuntime(
+  config = runtimeConfig,
+  previousCredentialOrigins: DesignPlatformCredentialOrigins = {},
+) {
   const adapter = stringConfig("DESIGN_PLATFORM_ADAPTER", "designPlatformAdapter", defaultDesignPlatformAdapter, config);
-  const baseUrl = stringConfig(
-    "DESIGN_PLATFORM_BASE_URL",
-    "designPlatformBaseUrl",
-    adapter === "art_image_local" ? "http://127.0.0.1:3000" : defaultDesignPlatformBaseUrl,
-    config,
+  const baseUrl = validateDesignPlatformBaseUrl(
+    stringConfig(
+      "DESIGN_PLATFORM_BASE_URL",
+      "designPlatformBaseUrl",
+      adapter === "art_image_local" ? "http://127.0.0.1:3000" : defaultDesignPlatformBaseUrl,
+      config,
+    ),
+    adapter,
   );
+  const baseOrigin = new URL(baseUrl).origin;
+  const envBaseOrigin = process.env.DESIGN_PLATFORM_BASE_URL
+    ? normalizeHttpOrigin(process.env.DESIGN_PLATFORM_BASE_URL)
+    : "";
+  const accessToken = stringConfig("DESIGN_PLATFORM_ACCESS_TOKEN", "designPlatformAccessToken", "", config);
+  const cookie = stringConfig("DESIGN_PLATFORM_COOKIE", "designPlatformCookie", "", config);
+  const deviceId = stringConfig("DESIGN_PLATFORM_DEVICE_ID", "designPlatformDeviceId", "", config);
+  const accessTokenFromEnvironment = Boolean(String(process.env.DESIGN_PLATFORM_ACCESS_TOKEN || "").trim());
+  const cookieFromEnvironment = Boolean(String(process.env.DESIGN_PLATFORM_COOKIE || "").trim());
+  const deviceIdFromEnvironment = Boolean(String(process.env.DESIGN_PLATFORM_DEVICE_ID || "").trim());
   return {
     adapter,
     baseUrl,
-    accessToken: stringConfig("DESIGN_PLATFORM_ACCESS_TOKEN", "designPlatformAccessToken", "", config),
-    cookie: stringConfig("DESIGN_PLATFORM_COOKIE", "designPlatformCookie", "", config),
-    deviceId: stringConfig("DESIGN_PLATFORM_DEVICE_ID", "designPlatformDeviceId", "", config),
+    accessToken,
+    cookie,
+    deviceId,
+    accessTokenOrigin: accessToken
+      ? accessTokenFromEnvironment
+        ? envBaseOrigin
+        : normalizeHttpOrigin(config.designPlatformAccessTokenOrigin) ||
+          normalizeHttpOrigin(previousCredentialOrigins.accessTokenOrigin) ||
+          baseOrigin
+      : "",
+    cookieOrigin: cookie
+      ? cookieFromEnvironment
+        ? envBaseOrigin
+        : normalizeHttpOrigin(config.designPlatformCookieOrigin) ||
+          normalizeHttpOrigin(previousCredentialOrigins.cookieOrigin) ||
+          baseOrigin
+      : "",
+    apiKeyOrigin: String(process.env.DESIGN_PLATFORM_API_KEY || "").trim() ? envBaseOrigin : "",
+    deviceIdOrigin: deviceId
+      ? deviceIdFromEnvironment
+        ? envBaseOrigin
+        : normalizeHttpOrigin(config.designPlatformDeviceIdOrigin) ||
+          normalizeHttpOrigin(previousCredentialOrigins.deviceIdOrigin) ||
+          baseOrigin
+      : "",
   };
 }
 
@@ -97,12 +143,17 @@ export const appConfig = {
   designPlatformAccessToken: designPlatformRuntime.accessToken,
   designPlatformCookie: designPlatformRuntime.cookie,
   designPlatformDeviceId: designPlatformRuntime.deviceId,
+  designPlatformAccessTokenOrigin: designPlatformRuntime.accessTokenOrigin,
+  designPlatformCookieOrigin: designPlatformRuntime.cookieOrigin,
+  designPlatformApiKeyOrigin: designPlatformRuntime.apiKeyOrigin,
+  designPlatformDeviceIdOrigin: designPlatformRuntime.deviceIdOrigin,
   designPlatformTimeoutMs: numberEnv("DESIGN_PLATFORM_TIMEOUT_MS", 30 * 60 * 1000),
   designPlatformImageSize: process.env.DESIGN_PLATFORM_IMAGE_SIZE || "1024x1024",
   designPlatformImageRatio: process.env.DESIGN_PLATFORM_IMAGE_RATIO || "1:1",
   designPlatformCardType: process.env.DESIGN_PLATFORM_CARD_TYPE || "礼盒真实产品摆拍",
   designResultPollIntervalMs: numberEnv("DESIGN_RESULT_POLL_INTERVAL_MS", 5000),
   designResultPollMaxMs: numberEnv("DESIGN_RESULT_POLL_MAX_MS", 20 * 60 * 1000),
+  designExecutionRecoveryIntervalMs: numberEnv("DESIGN_EXECUTION_RECOVERY_INTERVAL_MS", 15000),
   customerServicePublicBaseUrl: trimTrailingSlash(
     process.env.CUSTOMER_SERVICE_PUBLIC_BASE_URL || `http://127.0.0.1:${apiPort}`,
   ),
@@ -163,10 +214,49 @@ export function updateDesignPlatformRuntimeConfig(patch: DesignPlatformRuntimeCo
     }
     next.designPlatformAdapter = adapter;
   }
-  if (patch.baseUrl !== undefined) setRuntimeString(next, "designPlatformBaseUrl", patch.baseUrl);
-  if (patch.accessToken !== undefined) setRuntimeString(next, "designPlatformAccessToken", patch.accessToken);
-  if (patch.cookie !== undefined) setRuntimeString(next, "designPlatformCookie", patch.cookie);
-  if (patch.deviceId !== undefined) setRuntimeString(next, "designPlatformDeviceId", patch.deviceId);
+  if (patch.baseUrl !== undefined) {
+    const adapter = String(next.designPlatformAdapter || appConfig.designPlatformAdapter || defaultDesignPlatformAdapter);
+    const fallback = adapter === "art_image_local" ? "http://127.0.0.1:3000" : defaultDesignPlatformBaseUrl;
+    const requested = String(patch.baseUrl || "").trim() || fallback;
+    next.designPlatformBaseUrl = validateDesignPlatformBaseUrl(requested, adapter);
+  }
+
+  const previousCredentialOrigins = {
+    accessTokenOrigin: appConfig.designPlatformAccessTokenOrigin,
+    cookieOrigin: appConfig.designPlatformCookieOrigin,
+    apiKeyOrigin: appConfig.designPlatformApiKeyOrigin,
+    deviceIdOrigin: appConfig.designPlatformDeviceIdOrigin,
+  };
+  const candidate = resolveDesignPlatformRuntime(next, previousCredentialOrigins);
+  const previousOrigin = normalizeHttpOrigin(appConfig.designPlatformBaseUrl);
+  const candidateOrigin = new URL(candidate.baseUrl).origin;
+  if (previousOrigin && previousOrigin !== candidateOrigin) {
+    delete next.designPlatformAccessToken;
+    delete next.designPlatformCookie;
+    delete next.designPlatformAccessTokenOrigin;
+    delete next.designPlatformCookieOrigin;
+  }
+  if (patch.accessToken !== undefined) {
+    setRuntimeString(next, "designPlatformAccessToken", patch.accessToken);
+    setRuntimeCredentialOrigin(next, "designPlatformAccessTokenOrigin", patch.accessToken, candidateOrigin);
+  }
+  if (patch.cookie !== undefined) {
+    setRuntimeString(next, "designPlatformCookie", patch.cookie);
+    setRuntimeCredentialOrigin(next, "designPlatformCookieOrigin", patch.cookie, candidateOrigin);
+  }
+  if (patch.deviceId !== undefined) {
+    setRuntimeString(next, "designPlatformDeviceId", patch.deviceId);
+    setRuntimeCredentialOrigin(next, "designPlatformDeviceIdOrigin", patch.deviceId, candidateOrigin);
+  }
+  if (next.designPlatformAccessToken && !next.designPlatformAccessTokenOrigin) {
+    next.designPlatformAccessTokenOrigin = candidateOrigin;
+  }
+  if (next.designPlatformCookie && !next.designPlatformCookieOrigin) {
+    next.designPlatformCookieOrigin = candidateOrigin;
+  }
+  if (next.designPlatformDeviceId && !next.designPlatformDeviceIdOrigin) {
+    next.designPlatformDeviceIdOrigin = previousOrigin || candidateOrigin;
+  }
 
   fs.mkdirSync(path.dirname(designPlatformRuntimeConfigPath), { recursive: true });
   fs.writeFileSync(designPlatformRuntimeConfigPath, JSON.stringify(next, null, 2), "utf8");
@@ -177,12 +267,21 @@ export function updateDesignPlatformRuntimeConfig(patch: DesignPlatformRuntimeCo
 
 export function refreshDesignPlatformAppConfig() {
   runtimeConfig = readRuntimeConfig();
-  const resolved = resolveDesignPlatformRuntime(runtimeConfig);
+  const resolved = resolveDesignPlatformRuntime(runtimeConfig, {
+    accessTokenOrigin: appConfig.designPlatformAccessTokenOrigin,
+    cookieOrigin: appConfig.designPlatformCookieOrigin,
+    apiKeyOrigin: appConfig.designPlatformApiKeyOrigin,
+    deviceIdOrigin: appConfig.designPlatformDeviceIdOrigin,
+  });
   appConfig.designPlatformAdapter = resolved.adapter;
   appConfig.designPlatformBaseUrl = resolved.baseUrl;
   appConfig.designPlatformAccessToken = resolved.accessToken;
   appConfig.designPlatformCookie = resolved.cookie;
   appConfig.designPlatformDeviceId = resolved.deviceId;
+  appConfig.designPlatformAccessTokenOrigin = resolved.accessTokenOrigin;
+  appConfig.designPlatformCookieOrigin = resolved.cookieOrigin;
+  appConfig.designPlatformApiKeyOrigin = resolved.apiKeyOrigin;
+  appConfig.designPlatformDeviceIdOrigin = resolved.deviceIdOrigin;
   return getDesignPlatformRuntimeConfigSummary();
 }
 
@@ -194,7 +293,8 @@ export function getDesignPlatformRuntimeConfigSummary() {
     hasAccessToken: Boolean(appConfig.designPlatformAccessToken),
     hasCookie: Boolean(appConfig.designPlatformCookie),
     hasDeviceId: Boolean(appConfig.designPlatformDeviceId),
-    hasCallbackApiKey: Boolean(appConfig.callbackApiKey),
+    credentialsBoundToBase: designPlatformCredentialsBoundToBase(),
+    hasCallbackApiKey: hasIndependentDesignPlatformCallbackApiKey(),
     customerServicePublicBaseUrl: appConfig.customerServicePublicBaseUrl,
     callbackUrl:
       appConfig.designPlatformCallbackUrl ||
@@ -212,4 +312,132 @@ function setRuntimeString(target: Record<string, unknown>, key: string, value: s
 
 function trimTrailingSlash(value: string) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+function setRuntimeCredentialOrigin(
+  target: Record<string, unknown>,
+  key: string,
+  credential: string,
+  origin: string,
+) {
+  if (String(credential || "").trim()) target[key] = origin;
+  else delete target[key];
+}
+
+export function validateDesignPlatformBaseUrl(value: string, adapter: string) {
+  const text = String(value || "").trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(text);
+  } catch {
+    throw new Error("design platform base URL must be an absolute HTTP(S) URL");
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error("design platform base URL must use HTTP or HTTPS");
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("design platform base URL cannot contain credentials, query, or fragment");
+  }
+  if (parsed.pathname !== "/") {
+    throw new Error("design platform base URL must not contain a path");
+  }
+  const loopback = isLiteralLoopbackHost(parsed.hostname);
+  if (adapter === "art_image_local" && !loopback) {
+    throw new Error("art_image_local design platform must use an explicit loopback address");
+  }
+  if (parsed.protocol === "http:" && !loopback) {
+    throw new Error("remote design platform base URL must use HTTPS");
+  }
+  if (!loopback && !configuredDesignPlatformAllowedOrigins().has(parsed.origin)) {
+    throw new Error(
+      "remote design platform base URL origin is not allowlisted; configure DESIGN_PLATFORM_ALLOWED_ORIGINS",
+    );
+  }
+  return parsed.origin;
+}
+
+export function configuredDesignPlatformAllowedOrigins() {
+  const allowed = new Set<string>();
+  const configuredBase = strictHttpOrigin(process.env.DESIGN_PLATFORM_BASE_URL);
+  if (configuredBase) allowed.add(configuredBase);
+  for (const entry of String(process.env.DESIGN_PLATFORM_ALLOWED_ORIGINS || "").split(",")) {
+    const origin = strictHttpOrigin(entry);
+    if (origin) allowed.add(origin);
+  }
+  return allowed;
+}
+
+export function hasIndependentDesignPlatformCallbackApiKey() {
+  const callbackKey = String(appConfig.callbackApiKey || "").trim();
+  if (!callbackKey) return false;
+  const reservedSecrets = [
+    appConfig.internalApiToken,
+    appConfig.designPlatformApiKey,
+    appConfig.designPlatformAccessToken,
+    appConfig.designPlatformCookie,
+    ...cookieSecretValues(appConfig.designPlatformCookie),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return reservedSecrets.every((secret) => !constantTimeSecretEqual(callbackKey, secret));
+}
+
+export function constantTimeSecretEqual(left: unknown, right: unknown) {
+  const leftBuffer = Buffer.from(String(left || ""), "utf8");
+  const rightBuffer = Buffer.from(String(right || ""), "utf8");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeHttpOrigin(value: unknown) {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function strictHttpOrigin(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return "";
+    if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== "/") return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function isLiteralLoopbackHost(hostname: string) {
+  const normalized = String(hostname || "").toLowerCase();
+  if (normalized === "[::1]" || normalized === "::1") return true;
+  if (!/^127(?:\.\d{1,3}){3}$/.test(normalized)) return false;
+  return normalized
+    .split(".")
+    .slice(1)
+    .every((part) => Number(part) >= 0 && Number(part) <= 255);
+}
+
+function designPlatformCredentialsBoundToBase() {
+  const baseOrigin = normalizeHttpOrigin(appConfig.designPlatformBaseUrl);
+  return (
+    (!appConfig.designPlatformAccessToken || appConfig.designPlatformAccessTokenOrigin === baseOrigin) &&
+    (!appConfig.designPlatformCookie || appConfig.designPlatformCookieOrigin === baseOrigin) &&
+    (!appConfig.designPlatformApiKey || appConfig.designPlatformApiKeyOrigin === baseOrigin) &&
+    (!appConfig.designPlatformDeviceId || appConfig.designPlatformDeviceIdOrigin === baseOrigin)
+  );
+}
+
+function cookieSecretValues(cookie: unknown) {
+  return String(cookie || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separator = part.indexOf("=");
+      return separator >= 0 ? part.slice(separator + 1).trim() : part;
+    })
+    .filter(Boolean);
 }

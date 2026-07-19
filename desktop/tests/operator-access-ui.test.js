@@ -28,6 +28,7 @@ const capabilities = [
   "manage_assignments",
   "reply_conversations",
   "approve_send",
+  "manage_design_executions",
   "manage_training",
   "manage_roles",
 ];
@@ -72,12 +73,12 @@ function renderPanel(overrides = {}) {
   );
 }
 
-test("panel renders four roles and seven capabilities as a semantic matrix", () => {
+test("panel renders four roles and eight capabilities as a semantic matrix", () => {
   const html = renderPanel();
   assert.match(html, /<table>/);
-  assert.match(html, /<caption[^>]*>管理员、主管、客服和只读角色的七项能力矩阵<\/caption>/);
+  assert.match(html, /<caption[^>]*>管理员、主管、客服和只读角色的八项能力矩阵<\/caption>/);
   for (const label of ["管理员", "主管", "客服", "只读"]) assert.match(html, new RegExp(label));
-  for (const label of ["查看工作台", "管理渠道", "管理会话分配", "回复客户会话", "审批发送", "管理训练", "管理角色"]) {
+  for (const label of ["查看工作台", "管理渠道", "管理会话分配", "回复客户会话", "审批发送", "管理设计执行", "管理训练", "管理角色"]) {
     assert.match(html, new RegExp(label));
   }
   assert.match(html, /aria-label="管理员：管理角色允许"/);

@@ -12,18 +12,16 @@ require("ts-node").register({
 const { DesignPlatformClient } = require("../apps/api/src/integrations/design-platform/design-platform.client");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
-test("art image local missing in-memory job returns retryable failure result", async () => {
+test("art image local status cannot use process memory and requires durable execution", async () => {
   const previousAdapter = appConfig.designPlatformAdapter;
   appConfig.designPlatformAdapter = "art_image_local";
 
   try {
     const client = new DesignPlatformClient();
-    const result = await client.getDesignJobResults("art_lost_after_restart_1");
-
-    assert.equal(result.status, "failed");
-    assert.equal(result.externalJobId, "art_lost_after_restart_1");
-    assert.deepEqual(result.images, []);
-    assert.match(result.errorMessage, /job state was lost/);
+    await assert.rejects(
+      () => client.getDesignJobResults("art_lost_after_restart_1"),
+      /must be read from durable execution/,
+    );
   } finally {
     appConfig.designPlatformAdapter = previousAdapter;
   }

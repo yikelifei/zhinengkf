@@ -166,6 +166,30 @@ test("design platform smoke test reports result contract failures clearly", asyn
   }
 });
 
+test("art image local smoke fails closed before health, upload or generation because it requires a durable DesignJob", async () => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  try {
+    const calls = { health: 0, upload: 0, create: 0 };
+    const platform = {
+      isArtImageLocalAdapter: () => true,
+      health: async () => { calls.health += 1; },
+      uploadAsset: async () => { calls.upload += 1; },
+      createDesignJob: async () => { calls.create += 1; },
+    };
+    const service = new DesignJobsService(
+      {}, platform, {}, { create: async () => ({}) }, {}, {}, {}, {}, {},
+    );
+    const result = await service.runDesignPlatformSmokeTest();
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "blocked");
+    assert.match(result.errorMessage, /persisted DesignJob and durable execution/);
+    assert.deepEqual(calls, { health: 0, upload: 0, create: 0 });
+  } finally {
+    appConfig.designPlatformAdapter = previousAdapter;
+  }
+});
+
 function emptyStoreData(overrides = {}) {
   return {
     wechatAccounts: [],

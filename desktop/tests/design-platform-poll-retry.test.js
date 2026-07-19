@@ -12,7 +12,7 @@ require("ts-node").register({
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
-test("polling a lost local design-platform job triggers retry instead of failed summary", async () => {
+test("polling a legacy local job without durable execution requires manual review and never retries", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
 
@@ -45,8 +45,10 @@ test("polling a lost local design-platform job triggers retry instead of failed 
       designJob = { ...designJob, ...patch };
       return designJob;
     },
+    createReviewLog: () => ({}),
   };
   const designPlatform = {
+    isArtImageLocalAdapter: () => true,
     getDesignJobResults: async () => ({
       externalJobId: "art_lost_after_restart_1",
       status: "failed",
@@ -58,6 +60,15 @@ test("polling a lost local design-platform job triggers retry instead of failed 
       return { externalJobId: "art_retry_after_restart_1" };
     },
   };
+  const executions = {
+    recoverStaleExecutions: async () => [],
+    takeoverPreparedExecutions: async () => [],
+    listCompletedPending: async () => [],
+    get: async () => null,
+  };
+  const wechatDispatch = {
+    setConversationManualLock: async () => ({ blockedSendTasks: [], inFlightSendTasks: [] }),
+  };
   const notifications = {
     create: async (...args) => {
       notices.push(args);
@@ -66,25 +77,25 @@ test("polling a lost local design-platform job triggers retry instead of failed 
   };
 
   try {
-    const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, {}, {}, {});
+    const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, wechatDispatch, {}, {}, executions);
     service.assertDesignPlatformPreflight = async () => ({ ok: true });
     service.scheduleResultPoll = () => {};
 
     const result = await service.pollActiveResults(10);
 
-    assert.equal(createDesignJobCalled, true);
+    assert.equal(createDesignJobCalled, false);
     assert.equal(result.failed.length, 0);
-    assert.equal(result.retried.length, 1);
-    assert.equal(result.retried[0].externalJobId, "art_retry_after_restart_1");
-    assert.equal(result.retried[0].status, "submitted");
-    assert.equal(result.retried[0].retryCount, 1);
-    assert.equal(notices.some((notice) => String(notice[2]).includes("local design platform job state was lost")), true);
+    assert.equal(result.retried.length, 0);
+    assert.equal(result.outcomeUnknown.length, 1);
+    assert.equal(result.outcomeUnknown[0].status, "manual_review");
+    assert.equal(result.outcomeUnknown[0].retryCount, 0);
+    assert.equal(notices.some((notice) => String(notice[2]).includes("禁止自动重试")), true);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }
 });
 
-test("single polling a lost local design-platform job marks automatic retry", async () => {
+test("single polling a legacy local job marks outcome_unknown without automatic retry", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
 
@@ -114,8 +125,10 @@ test("single polling a lost local design-platform job marks automatic retry", as
       designJob = { ...designJob, ...patch };
       return designJob;
     },
+    createReviewLog: () => ({}),
   };
   const designPlatform = {
+    isArtImageLocalAdapter: () => true,
     getDesignJobResults: async () => ({
       externalJobId: "art_single_lost_after_restart_1",
       status: "failed",
@@ -124,22 +137,26 @@ test("single polling a lost local design-platform job marks automatic retry", as
     }),
     createDesignJob: async () => ({ externalJobId: "art_single_retry_after_restart_1" }),
   };
+  const executions = { get: async () => null };
+  const wechatDispatch = {
+    setConversationManualLock: async () => ({ blockedSendTasks: [], inFlightSendTasks: [] }),
+  };
   const notifications = {
     create: async () => ({ id: "notice-1" }),
   };
 
   try {
-    const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, {}, {}, {});
+    const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, wechatDispatch, {}, {}, executions);
     service.assertDesignPlatformPreflight = async () => ({ ok: true });
     service.scheduleResultPoll = () => {};
 
     const result = await service.pollResult(designJob.id);
 
-    assert.equal(result.remoteStatus, "failed");
-    assert.equal(result.autoRetried, true);
-    assert.equal(result.job.status, "submitted");
-    assert.equal(result.job.retryCount, 1);
-    assert.equal(result.job.externalJobId, "art_single_retry_after_restart_1");
+    assert.equal(result.remoteStatus, "outcome_unknown");
+    assert.equal(result.autoRetried, false);
+    assert.equal(result.job.status, "manual_review");
+    assert.equal(result.job.retryCount, 0);
+    assert.equal(result.job.externalJobId, "art_single_lost_after_restart_1");
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }

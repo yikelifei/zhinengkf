@@ -696,7 +696,10 @@ test("design job manual actions carry and enforce expected conversation identity
     assert.match(controller, /autoSubmitDrafts\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
     assert.match(controller, /scanHighValueHandoffs\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
     assert.match(controller, /submit\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
-  assert.match(controller, /quickConfirmSend\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(controller, /@Post\(":id\/quick-confirm-send"\)[\s\S]*?@RequireOperatorCapability\("approve_send"\)/);
+  assert.match(controller, /quickConfirmSend\([\s\S]*?@TrustedOperator\(\) principal: TrustedOperatorPrincipal/);
+  assert.match(controller, /reviewer: `\$\{principal\.displayName\} \[\$\{principal\.id\}\]`/);
+  assert.match(controller, /\.\.\.\(body \|\| \{\}\)/);
   assert.match(controller, /requestRevision\(@Param\("id"\) id: string, @Body\(\) payload: CreateDesignRevisionPayload & ExpectedIdentityPayload\)/);
     assert.match(service, /ExpectedIdentityPayload, assertExpectedIdentity/);
     assert.match(service, /type IdentityFilter = \{/);

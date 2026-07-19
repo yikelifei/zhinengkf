@@ -27,3 +27,11 @@ export type SelectDesignImagePayload = {
   screenshotFingerprint?: string;
   attachmentFingerprint?: string;
 };
+
+export type ResolveUnknownDesignExecutionPayload = {
+  resolution: "confirmed_not_generated_refunded";
+};
+
+export type ResolveDesignExecutionRefundPayload = {
+  resolution: "confirmed_refunded";
+};

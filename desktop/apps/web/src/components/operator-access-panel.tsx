@@ -61,6 +61,7 @@ const capabilityDefinitions = [
   { id: "manage_assignments", label: "管理会话分配" },
   { id: "reply_conversations", label: "回复客户会话" },
   { id: "approve_send", label: "审批发送" },
+  { id: "manage_design_executions", label: "管理设计执行" },
   { id: "manage_training", label: "管理训练" },
   { id: "manage_roles", label: "管理角色" },
 ] as const;
@@ -152,7 +153,7 @@ export function OperatorAccessPanel({ status, policy, readiness }: OperatorAcces
 
         <div className={styles.tableWrap}>
           <table>
-            <caption className={styles.srOnly}>管理员、主管、客服和只读角色的七项能力矩阵</caption>
+            <caption className={styles.srOnly}>管理员、主管、客服和只读角色的八项能力矩阵</caption>
             <thead>
               <tr>
                 <th scope="col">角色</th>

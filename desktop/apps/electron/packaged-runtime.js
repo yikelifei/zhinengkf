@@ -26,11 +26,14 @@ function resolvePackagedPaths({ resourcesPath, appPath, userDataPath }) {
 
 function buildServiceEnvironment({ resourcesPath, appPath, userDataPath, baseEnv = process.env, token }) {
   const paths = resolvePackagedPaths({ resourcesPath, appPath, userDataPath });
+  const sanitizedBaseEnv = Object.fromEntries(
+    Object.entries(baseEnv).filter(([key]) => key.toUpperCase() !== "DESKTOP_WEB_SESSION_PROOF"),
+  );
   const nodePath = [paths.serviceNodeModulesPath, paths.nodeModulesPath, paths.unpackedNodeModulesPath, baseEnv.NODE_PATH]
     .filter(Boolean)
     .join(path.delimiter);
   return {
-    ...baseEnv,
+    ...sanitizedBaseEnv,
     NODE_ENV: "production",
     ELECTRON_RUN_AS_NODE: "1",
     HOSTNAME: "127.0.0.1",
@@ -80,6 +83,7 @@ class PackagedServiceManager {
     this.children = [];
     this.paths = resolvePackagedPaths(options);
     this.token = crypto.randomBytes(32).toString("hex");
+    this.webSessionProof = crypto.randomBytes(32).toString("hex");
   }
 
   async start() {
@@ -100,7 +104,12 @@ class PackagedServiceManager {
     try {
       const api = this.spawnService("api", this.paths.apiEntry, commonEnv, this.paths.readOnlyRoot);
       await waitForHttp(API_URL, api);
-      const web = this.spawnService("web", this.paths.webEntry, { ...commonEnv, PORT: "3100" }, this.paths.runtimeDir);
+      const web = this.spawnService(
+        "web",
+        this.paths.webEntry,
+        { ...commonEnv, PORT: "3100", DESKTOP_WEB_SESSION_PROOF: this.webSessionProof },
+        this.paths.runtimeDir,
+      );
       await waitForHttp(WEB_URL, web);
     } catch (error) {
       this.stop();

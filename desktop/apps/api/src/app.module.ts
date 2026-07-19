@@ -15,6 +15,7 @@ import { ConversationOperationsController } from "./conversation-ops/conversatio
 import { ConversationOperationsService } from "./conversation-ops/conversation-operations.service";
 import { DesignJobsController } from "./design-jobs/design-jobs.controller";
 import { DesignJobsService } from "./design-jobs/design-jobs.service";
+import { DesignPlatformExecutionService } from "./design-jobs/design-platform-execution.service";
 import { DesignPlatformController } from "./integrations/design-platform/design-platform.controller";
 import { DesignPlatformClient } from "./integrations/design-platform/design-platform.client";
 import { LocalStoreService } from "./local-store/local-store.service";
@@ -76,6 +77,7 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
     CatalogService,
     ConversationOperationsService,
     DesignJobsService,
+    DesignPlatformExecutionService,
     DesignPlatformClient,
     LocalStoreService,
     NotificationsService,

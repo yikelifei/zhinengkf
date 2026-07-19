@@ -21,6 +21,15 @@ const {
   isValidInternalApiToken,
   withoutInternalApiToken,
 } = require("../tools/internal-api-session");
+const {
+  DESKTOP_SESSION_COOKIE,
+  buildDesktopApiUpstreamHeaders,
+  canonicalDesktopProxyPath,
+  evaluateDesktopSessionProof,
+  isForbiddenWebProxyIngress,
+  requiresDesktopSessionProof,
+} = require("../apps/web/src/lib/desktop-session-proof");
+const { PackagedServiceManager, buildServiceEnvironment } = require("../apps/electron/packaged-runtime");
 
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -76,7 +85,7 @@ test("malicious browser Origin receives a structured JSON 403", async () => {
   assert.equal(noOriginReply.payload, null);
 });
 
-test("launcher helper creates high-entropy session proof and only Web/API children receive it", () => {
+test("launcher helper creates a high-entropy internal API token and only Web/API children receive it", () => {
   const first = ensureInternalApiToken("");
   const second = ensureInternalApiToken("invalid");
   assert.equal(isValidInternalApiToken(first), true);
@@ -99,7 +108,10 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
   const apiClient = read("apps/web/src/lib/api.ts");
   assert.match(route, /import "server-only"/);
   assert.match(route, /process\.env\.INTERNAL_API_TOKEN/);
-  assert.match(route, /headers\.delete\(INTERNAL_API_TOKEN_HEADER\);\s*headers\.set\(INTERNAL_API_TOKEN_HEADER, token\);/);
+  assert.match(route, /buildDesktopApiUpstreamHeaders\(request\.headers, token, INTERNAL_API_TOKEN_HEADER\)/);
+  const proofHelper = read("apps/web/src/lib/desktop-session-proof.ts");
+  assert.match(proofHelper, /headers\.delete\("cookie"\)/);
+  assert.match(proofHelper, /headers\.delete\(internalApiTokenHeader\);\s*headers\.set\(internalApiTokenHeader, internalApiToken\);/);
   assert.match(route, /http:\/\/127\.0\.0\.1:\$\{apiPort\}/);
   assert.match(route, /export const POST = proxyDesktopApi/);
   assert.doesNotMatch(route, /NEXT_PUBLIC|console\.(?:log|error)|token\s*:/);
@@ -108,13 +120,91 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
   assert.doesNotMatch(apiClient, /NEXT_PUBLIC_API_BASE/);
 
   const clientFiles = listFiles(path.join(root, "apps", "web", "src"), [".ts", ".tsx"])
-    .filter((filePath) => !filePath.endsWith(path.join("api", "[...path]", "route.ts")));
+    .filter((filePath) => !filePath.endsWith(path.join("api", "[...path]", "route.ts")))
+    .filter((filePath) => !filePath.endsWith(path.join("lib", "desktop-session-proof.ts")));
   for (const filePath of clientFiles) {
     assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /INTERNAL_API_TOKEN|x-internal-api-token/i, filePath);
+    assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /desktop-session-proof/, filePath);
   }
 });
 
-test("stable and port-stack launchers share proof without writing it into wrapper files", () => {
+test("desktop proxy requires a verified Electron proof for every method and strips ambient authority upstream", () => {
+  const proof = "c".repeat(64);
+  for (const method of ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]) {
+    assert.equal(requiresDesktopSessionProof(method), true, method);
+  }
+  assert.equal(evaluateDesktopSessionProof(null, proof).allowed, false);
+  assert.equal(evaluateDesktopSessionProof(`${DESKTOP_SESSION_COOKIE}=${"d".repeat(64)}`, proof).allowed, false);
+  assert.deepEqual(evaluateDesktopSessionProof(`${DESKTOP_SESSION_COOKIE}=${proof}`, proof), {
+    allowed: true,
+    reason: "verified_electron_session",
+  });
+  assert.equal(
+    evaluateDesktopSessionProof(`${DESKTOP_SESSION_COOKIE}=${proof}; ${DESKTOP_SESSION_COOKIE}=${proof}`, proof).allowed,
+    false,
+  );
+
+  const upstream = buildDesktopApiUpstreamHeaders(
+    new Headers({
+      cookie: `${DESKTOP_SESSION_COOKIE}=${proof}; ordinary=also-removed`,
+      "x-internal-api-token": "attacker",
+      "x-request-id": "request-1",
+    }),
+    "a".repeat(64),
+  );
+  assert.equal(upstream.get("cookie"), null);
+  assert.equal(upstream.get("x-internal-api-token"), "a".repeat(64));
+  assert.equal(upstream.get("x-request-id"), "request-1");
+});
+
+test("callback proxy ingress and path-normalization variants are rejected before upstream construction", () => {
+  for (const segments of [
+    ["integrations", "design-platform", "callback"],
+    ["INTEGRATIONS", "DESIGN-PLATFORM", "CALLBACK"],
+  ]) {
+    const result = canonicalDesktopProxyPath(segments);
+    assert.equal(result.allowed, true);
+    assert.equal(isForbiddenWebProxyIngress(result.path), true);
+  }
+  for (const segments of [
+    ["integrations", "design-platform", "callback", ""],
+    ["integrations", "design-platform", "x", "..", "callback"],
+    ["integrations", "design-platform", "x", "%2e%2e", "callback"],
+    ["integrations", "design-platform%2fcallback"],
+    ["integrations", "design-platform%252fcallback"],
+  ]) {
+    assert.equal(canonicalDesktopProxyPath(segments).allowed, false, segments.join("/"));
+  }
+  assert.equal(isForbiddenWebProxyIngress("/integrations/design-platform/callback/"), true);
+});
+
+test("packaged runtime keeps desktop proof independent and out of the API environment", () => {
+  const token = "a".repeat(64);
+  const env = buildServiceEnvironment({
+    resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
+    appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
+    userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
+    baseEnv: { PATH: "safe", DESKTOP_WEB_SESSION_PROOF: "parent-secret", desktop_web_session_proof: "lower-secret" },
+    token,
+  });
+  assert.equal(Object.keys(env).some((key) => key.toUpperCase() === "DESKTOP_WEB_SESSION_PROOF"), false);
+  const manager = new PackagedServiceManager({
+    resourcesPath: "resources",
+    appPath: "app.asar",
+    userDataPath: "user-data",
+    executablePath: "electron.exe",
+  });
+  assert.match(manager.webSessionProof, /^[a-f0-9]{64}$/);
+  assert.notEqual(manager.webSessionProof, manager.token);
+  const main = read("apps/electron/main.js");
+  assert.match(main, /partition: DESKTOP_SESSION_PARTITION/);
+  assert.match(main, /path: "\/api"/);
+  assert.match(main, /httpOnly: true/);
+  assert.match(main, /sameSite: "strict"/);
+  assert.match(main, /await installDesktopSessionCookie\(webSessionProof\);\s*createMainWindow\(\);/);
+});
+
+test("stable and port-stack launchers share the internal API token without writing it into wrapper files", () => {
   const stable = read("tools/stable-runtime-launcher.js");
   const starter = read("tools/ports-stack-starter.js");
   const supervisor = read("tools/desktop-service-supervisor.js");
