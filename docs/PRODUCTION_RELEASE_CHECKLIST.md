@@ -4,6 +4,15 @@
 
 ## 一键入口
 
+先运行不执行构建、不连接外部系统的完成度真值审计：
+
+```powershell
+cd desktop
+npm.cmd run project:completion:audit
+```
+
+它只对仓库和外部系统做只读盘点，唯一写入是已忽略的 `desktop/.runtime/project-completion-audit/latest.{json,md}`。仓库内脚本、迁移、Prisma/BullMQ 路由或生产持久化缺口为 `FAIL`；真实签名、密钥、账号、预发布、恢复目标和现场硬件证据为 `BLOCKED`。审计为 `FAIL` 时不得用本门禁的测试/构建通过来宣称项目完成。
+
 在仓库根目录运行：
 
 ```bat
@@ -109,6 +118,8 @@ npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
 
 ### Windows 桌面与渠道
 
+- [ ] 已生成 `package:win:test` 未签名测试安装包并通过包内容/敏感文件/打包运行时验证；未签名状态保持 `BLOCKED`，未冒充正式发布包。
+- [ ] 已在受控签名机运行 `package:win:signed`，安装器与主程序 Authenticode 均为 Valid；证书和密码未进入仓库、报告或安装包资源。
 - [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
 - [ ] 预发布证据报告中的企业微信、个人微信桥和设计平台只读检查均为 `PASS`。
 - [ ] 微信客户端版本、登录账号、窗口识别和人工接管流程已由授权操作员验收。

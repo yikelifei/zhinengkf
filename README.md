@@ -73,6 +73,15 @@ production-release-gate.cmd
 
 门禁会统一检查运行时版本、依赖锁、Prisma、测试、安全扫描、端口、API/Web 构建和桌面入口，并在 `desktop/.runtime/production-release-gate/latest.md` 生成 `PASS` / `BLOCKED` / `FAIL` 报告。真实数据库、密钥与渠道联调会明确保留为 `BLOCKED`，详见 [生产发布清单](docs/PRODUCTION_RELEASE_CHECKLIST.md)。
 
+需要先核对“仓库内已经完成什么、仍有哪些代码占位或固定 LocalStore 路径”时，运行：
+
+```bat
+cd desktop
+npm.cmd run project:completion:audit
+```
+
+审计器对仓库与外部系统只读、无网络、无外部命令，不读取密钥文件；唯一写入是已忽略的 `desktop/.runtime/project-completion-audit/` 脱敏 JSON/中文 Markdown。内部缺口为 `FAIL`，真实签名、账号、密钥、预发布和硬件证据为 `BLOCKED`；详见 [项目完成度真值审计](desktop/docs/PROJECT_COMPLETION_AUDIT.md)。
+
 7. 启动客服主程序：
 
 ```bat

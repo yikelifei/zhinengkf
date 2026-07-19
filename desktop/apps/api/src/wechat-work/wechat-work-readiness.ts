@@ -49,8 +49,10 @@ export function buildWechatWorkProductionReadiness(metrics: { mappedAccounts: nu
     },
     {
       key: "persistence",
-      status: appConfig.useLocalStore ? "ready" : "missing",
-      detail: appConfig.useLocalStore ? "local_store enabled" : "wechat-work Prisma persistence is not implemented",
+      status: appConfig.useLocalStore ? "missing" : "ready",
+      detail: appConfig.useLocalStore
+        ? "local_store is limited to local/demo mode; production requires USE_LOCAL_STORE=false"
+        : "Prisma persistence enabled for WeChat bindings, messages, send tasks, attempts and audit logs",
       external: false,
     },
   ];
