@@ -423,6 +423,19 @@ function evaluateSendTaskRequeue({ task } = {}) {
       failedKeys: ["taskExists"],
     };
   }
+  if (
+    task.guardSnapshot?.automaticRetryBlocked === true ||
+    task.guardSnapshot?.deliveryState === "unknown" ||
+    task.guardSnapshot?.wechatWorkDeliveryState === "unknown"
+  ) {
+    return {
+      ok: false,
+      action: "reject_requeue",
+      reason: "delivery_unknown_manual_review",
+      failedKeys: ["deliveryKnown", "automaticRetryAllowed"],
+      message: "Delivery result is unknown while waiting for Windows bridge ack; requeue is blocked until an operator completes review.",
+    };
+  }
   if (task.status === "sent") {
     return {
       ok: false,

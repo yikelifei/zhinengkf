@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -296,4 +297,248 @@ test("official API acceptance plus atomic DB rejection becomes non-retryable unk
   assert.deepEqual(recovery.attemptPatch.metadata.acceptedMessageIds, ["accepted-1"]);
   assert.equal(recovery.attemptPatch.metadata.automaticRetryBlocked, true);
   assert.equal(result.retryScheduled, false);
+});
+
+test("stale official started attempt becomes delivery-unknown while a fresh attempt stays active and its queue is released", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
+  const freshTime = new Date().toISOString();
+  const stale = {
+    id: "task-stale-official",
+    status: "sending",
+    wechatAccountId: "account-a",
+    conversationId: "conversation-a",
+    payload: {},
+    guardSnapshot: {},
+    conversation: { id: "conversation-a", customerId: "customer-a", wechatAccountId: "account-a", manualLocked: false },
+    createdAt: oldTime,
+  };
+  const queued = {
+    id: "task-after-stale",
+    status: "queued",
+    wechatAccountId: "account-a",
+    conversationId: "conversation-a",
+    payload: {},
+    guardSnapshot: {},
+    conversation: stale.conversation,
+    createdAt: freshTime,
+  };
+  const fresh = {
+    ...stale,
+    id: "task-fresh-official",
+    wechatAccountId: "account-b",
+    conversationId: "conversation-b",
+    conversation: { id: "conversation-b", customerId: "customer-b", wechatAccountId: "account-b", manualLocked: false },
+    createdAt: freshTime,
+  };
+  const attempts = {
+    [stale.id]: { id: "attempt-stale", sendTaskId: stale.id, adapter: "wechat_work_kf", status: "started", startedAt: oldTime, metadata: {} },
+    [fresh.id]: { id: "attempt-fresh", sendTaskId: fresh.id, adapter: "wechat_work_kf", status: "started", startedAt: freshTime, metadata: {} },
+  };
+  const audits = [];
+  const notifications = [];
+  let queuedExecutions = 0;
+  const service = new WechatDispatchService({}, throwingLocalStore(), {}, {
+    async create(...args) { notifications.push(args); },
+  }, {});
+  service.persistence = {
+    async listSendTasks() { return [stale, queued, fresh]; },
+    async getLatestSendAttempt(taskId) { return attempts[taskId] || null; },
+    async completeAttemptAndTask(params) {
+      assert.equal(params.taskId, stale.id);
+      assert.equal(params.linkedTransition, null);
+      Object.assign(stale, params.taskPatch);
+      Object.assign(attempts[stale.id], params.attemptPatch);
+      return { task: stale, attempt: attempts[stale.id] };
+    },
+    async recordWechatWorkAudit(entry) { audits.push(entry); },
+    async getSendTask(taskId) { return [stale, queued, fresh].find((item) => item.id === taskId) || null; },
+    async listAccountQueueTaskIds(accountId) {
+      return [stale, queued, fresh]
+        .filter((item) => item.wechatAccountId === accountId && ["queued", "sending"].includes(item.status))
+        .map((item) => item.id);
+    },
+  };
+  service.executeQueuedSend = async (taskId) => {
+    assert.equal(taskId, queued.id);
+    queuedExecutions += 1;
+    queued.status = "sent";
+    return { task: queued, attempt: { adapter: "wechat_work_kf", status: "sent" } };
+  };
+
+  const scan = await service.scanPrismaSendOperations({});
+  assert.equal(scan.wechatWorkDeliveryUnknown, 1);
+  assert.equal(stale.status, "failed");
+  assert.equal(stale.guardSnapshot.wechatWorkDeliveryState, "unknown");
+  assert.equal(stale.guardSnapshot.automaticRetryBlocked, true);
+  assert.equal(attempts[stale.id].metadata.deliveryState, "unknown");
+  assert.equal(attempts[stale.id].metadata.automaticRetryBlocked, true);
+  assert.equal(fresh.status, "sending");
+  assert.equal(attempts[fresh.id].status, "started");
+  assert.equal(audits.length, 1);
+  assert.equal(notifications.length, 1);
+  await assert.rejects(
+    () => service.requeueSendTask(stale.id, { reason: "operator retry without resolving unknown delivery" }),
+    /Delivery result is unknown/,
+  );
+
+  const queueResult = await service.processPrismaSafeSendQueue({});
+  assert.equal(queuedExecutions, 1);
+  assert.equal(queueResult.processed[0].task.id, queued.id);
+  assert.equal(attempts[stale.id].status, "failed");
+});
+
+test("Prisma operations protect every uncertain Windows bridge recovery without marking failed", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const fixtures = [
+    { recovery: "bridge_outbox_unavailable", counter: "bridgeOutboxBroken", outbox: { ok: false, reason: "outbox_file_missing" }, dispatch: null, timedOut: false },
+    { recovery: "bridge_dispatch_expired", counter: "bridgeDispatchExpired", outbox: { ok: true }, dispatch: { expired: true, expiresAt: "2026-01-01T00:00:00.000Z" }, timedOut: false },
+    { recovery: "bridge_ack_timeout", counter: "bridgeTimedOut", outbox: { ok: true }, dispatch: { expired: false }, timedOut: true },
+  ];
+
+  for (const fixture of fixtures) {
+    const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
+    const task = {
+      id: `task-${fixture.recovery}`,
+      status: "sending",
+      wechatAccountId: "account-bridge",
+      conversationId: "conversation-bridge",
+      payload: {},
+      guardSnapshot: {},
+      conversation: { id: "conversation-bridge", customerId: "customer-bridge", wechatAccountId: "account-bridge", manualLocked: false },
+      createdAt: oldTime,
+    };
+    const attempt = {
+      id: `attempt-${fixture.recovery}`,
+      sendTaskId: task.id,
+      adapter: "windows_bridge",
+      status: "started",
+      startedAt: oldTime,
+      metadata: {},
+    };
+    const notifications = [];
+    const transitions = [];
+    const dispatchService = new WechatDispatchService({}, throwingLocalStore(), {}, {
+      async create(...args) { notifications.push(args); },
+    }, {});
+    dispatchService.persistence = {
+      async listSendTasks() { return [task]; },
+      async getLatestSendAttempt() { return attempt; },
+      async completeAttemptAndTask(params) {
+        transitions.push(params);
+        Object.assign(task, params.taskPatch);
+        Object.assign(attempt, params.attemptPatch);
+        return { task, attempt };
+      },
+      async getSendTask() { return task; },
+    };
+    dispatchService.inspectPendingBridgeOutbox = () => fixture.outbox;
+    dispatchService.findPendingBridgeDispatchForTask = () => fixture.dispatch;
+    dispatchService.isBridgeAckTimedOut = () => fixture.timedOut;
+
+    const scan = await dispatchService.scanPrismaSendOperations({});
+    assert.equal(scan[fixture.counter], 1, fixture.recovery);
+    assert.equal(transitions.length, 1, fixture.recovery);
+    assert.equal(transitions[0].expectedTaskStatus, "sending", fixture.recovery);
+    assert.equal(transitions[0].taskPatch.status, "sending", fixture.recovery);
+    assert.equal(transitions[0].attemptPatch.status, "started", fixture.recovery);
+    assert.equal(task.status, "sending", fixture.recovery);
+    assert.equal(task.guardSnapshot.deliveryState, "unknown", fixture.recovery);
+    assert.equal(task.guardSnapshot.deliveryUnknownReason, fixture.recovery);
+    assert.equal(task.guardSnapshot.automaticRetryBlocked, true, fixture.recovery);
+    assert.equal(task.guardSnapshot.manualReviewRequired, true, fixture.recovery);
+    assert.equal(attempt.status, "started", fixture.recovery);
+    assert.equal(attempt.metadata.deliveryState, "unknown", fixture.recovery);
+    assert.equal(attempt.metadata.automaticRetryBlocked, true, fixture.recovery);
+    assert.equal(notifications.length, 1, fixture.recovery);
+    await assert.rejects(
+      () => dispatchService.requeueSendTask(task.id, { reason: "unsafe retry" }),
+      /Delivery result is unknown/,
+      fixture.recovery,
+    );
+  }
+});
+
+test("exact Prisma ack replay compensates missing file archives once after durable completion", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const ackToken = "ack-token-for-archive-recovery";
+  const outboxFileName = "bridge-task-archive.json";
+  const task = {
+    id: "task-archive-recovery",
+    status: "sent",
+    wechatAccountId: "account-archive",
+    conversationId: "conversation-archive",
+    customerId: "customer-archive",
+    payload: {},
+    guardSnapshot: {},
+    conversation: { id: "conversation-archive", customerId: "customer-archive", wechatAccountId: "account-archive", manualLocked: false },
+  };
+  const attempt = {
+    id: "attempt-archive-recovery",
+    sendTaskId: task.id,
+    adapter: "windows_bridge",
+    status: "sent",
+    metadata: {
+      bridgeAckIdentity: {
+        wechatAccountId: task.wechatAccountId,
+        conversationId: task.conversationId,
+        customerId: task.customerId,
+      },
+      bridgeAckOutboxFileName: outboxFileName,
+      bridgeAckTokenHash: createHash("sha256").update(ackToken).digest("hex"),
+      dispatchFileName: "bridge-task-archive.dispatch.json",
+    },
+  };
+  const archiveCalls = [];
+  let metadataUpdates = 0;
+  const sendAdapter = {
+    moveBridgeOutboxFile(filePath, outcome) {
+      archiveCalls.push(["outbox", path.basename(filePath), outcome]);
+      return "archive/processed/bridge-task-archive.json";
+    },
+    moveBridgeDispatchFile(filePath, outcome) {
+      archiveCalls.push(["dispatch", path.basename(filePath), outcome]);
+      return "archive/processed/bridge-task-archive.dispatch.json";
+    },
+  };
+  const dispatchService = new WechatDispatchService({}, throwingLocalStore(), sendAdapter, {}, {});
+  dispatchService.persistence = {
+    async getSendTask() { return task; },
+    async listSendAttempts() { return [attempt]; },
+    async updateSendAttempt(_id, patch) {
+      metadataUpdates += 1;
+      attempt.metadata = { ...attempt.metadata, ...patch.metadata };
+      return attempt;
+    },
+  };
+  const payload = {
+    status: "sent",
+    version: "wechat_bridge_ack_v1",
+    ackToken,
+    taskId: task.id,
+    attemptId: attempt.id,
+    wechatAccountId: task.wechatAccountId,
+    conversationId: task.conversationId,
+    customerId: task.customerId,
+    outboxFileName,
+  };
+
+  const recovered = await dispatchService.acknowledgePrismaBridgeSend(task.id, payload);
+  assert.equal(recovered.idempotent, true);
+  assert.deepEqual(archiveCalls, [
+    ["outbox", outboxFileName, "processed"],
+    ["dispatch", "bridge-task-archive.dispatch.json", "processed"],
+  ]);
+  assert.equal(metadataUpdates, 1);
+  assert.equal(attempt.metadata.archivedOutboxPath, "archive/processed/bridge-task-archive.json");
+  assert.equal(attempt.metadata.archivedDispatchPath, "archive/processed/bridge-task-archive.dispatch.json");
+  assert.match(attempt.metadata.bridgeAckArchiveRecoveredAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const replayedAgain = await dispatchService.acknowledgePrismaBridgeSend(task.id, payload);
+  assert.equal(replayedAgain.idempotent, true);
+  assert.equal(archiveCalls.length, 2);
+  assert.equal(metadataUpdates, 1);
 });

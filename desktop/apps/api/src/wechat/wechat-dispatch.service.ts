@@ -2903,12 +2903,75 @@ export class WechatDispatchService {
     const bridgeTimedOut: any[] = [];
     const bridgeOutboxBroken: any[] = [];
     const bridgeDispatchExpired: any[] = [];
+    const wechatWorkDeliveryUnknown: any[] = [];
     const staleQueued: any[] = [];
     const alerted: any[] = [];
     for (const task of tasks) {
       if (task.status === "sending") {
         const pendingAttempt = await this.persistence.getLatestSendAttempt(task.id, { status: "started" });
-        if (!pendingAttempt || pendingAttempt.adapter !== "windows_bridge") continue;
+        if (!pendingAttempt) continue;
+        if (pendingAttempt.adapter === "wechat_work_kf") {
+          if (!isOlderThan(
+            pendingAttempt.startedAt || pendingAttempt.createdAt,
+            now,
+            appConfig.sendBridgeAckTimeoutMinutes,
+          )) continue;
+          const reason = `Enterprise WeChat send attempt exceeded ${appConfig.sendBridgeAckTimeoutMinutes} minutes; delivery is unknown and automatic retry is disabled`;
+          const recoveredAt = now.toISOString();
+          const linkedTransition = await this.buildPrismaLinkedTransition(task, "failed", reason);
+          const completed = await this.persistence.completeAttemptAndTask({
+            taskId: task.id,
+            attemptId: pendingAttempt.id,
+            expectedTaskStatus: "sending",
+            attemptPatch: {
+              status: "failed",
+              errorMessage: reason,
+              completedAt: recoveredAt,
+              metadata: {
+                ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
+                bridgeState: "delivery_unknown",
+                deliveryState: "unknown",
+                failureStage: "stale_started_recovery",
+                automaticRetryBlocked: true,
+                recoveredAt,
+              },
+            },
+            taskPatch: {
+              status: "failed",
+              sentAt: null,
+              errorMessage: reason,
+              guardSnapshot: {
+                ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
+                status: "failed",
+                wechatWorkDeliveryState: "unknown",
+                automaticRetryBlocked: true,
+                manualReviewRequired: true,
+                staleStartedRecoveredAt: recoveredAt,
+              },
+            },
+            linkedTransition,
+          });
+          if (!completed) continue;
+          await this.persistence.recordWechatWorkAudit({
+            action: "send_delivery_unknown",
+            status: "unknown",
+            sendTaskId: task.id,
+            sendAttemptId: pendingAttempt.id,
+            errorMessage: reason,
+            deliveryState: "unknown",
+            failureStage: "stale_started_recovery",
+            automaticRetryBlocked: true,
+          }).catch(() => null);
+          await this.notifications.create("warning", "企业微信发送结果未知", reason, {
+            sendTaskId: task.id,
+            wechatAccountId: task.wechatAccountId,
+            conversationId: task.conversationId,
+          });
+          wechatWorkDeliveryUnknown.push(completed.task);
+          alerted.push(completed.task);
+          continue;
+        }
+        if (pendingAttempt.adapter !== "windows_bridge") continue;
         const outboxState = this.inspectPendingBridgeOutbox(task, pendingAttempt);
         const dispatchState = this.findPendingBridgeDispatchForTask(task, pendingAttempt);
         let recovery: "bridge_outbox_unavailable" | "bridge_dispatch_expired" | "bridge_ack_timeout" | null = null;
@@ -2924,20 +2987,19 @@ export class WechatDispatchService {
           reason = `Windows bridge ack exceeded ${appConfig.sendBridgeAckTimeoutMinutes} minutes`;
         }
         if (recovery) {
-          const ack = await this.acknowledgePrismaBridgeSend(task.id, {
-            status: "failed",
-            errorMessage: reason,
-            metadata: { source: "send_ops_scan", recovery },
-          }, { internal: true });
-          if (recovery === "bridge_outbox_unavailable") bridgeOutboxBroken.push(ack.task);
-          if (recovery === "bridge_dispatch_expired") bridgeDispatchExpired.push(ack.task);
-          if (recovery === "bridge_ack_timeout") bridgeTimedOut.push(ack.task);
-          await this.notifications.create("warning", "微信发送任务恢复处理", reason, {
+          const protectedResult = await this.markPrismaBridgeDeliveryUnknown(task, pendingAttempt, recovery, reason, {
+            source: "send_ops_scan",
+          });
+          if (!protectedResult) continue;
+          if (recovery === "bridge_outbox_unavailable") bridgeOutboxBroken.push(protectedResult.task);
+          if (recovery === "bridge_dispatch_expired") bridgeDispatchExpired.push(protectedResult.task);
+          if (recovery === "bridge_ack_timeout") bridgeTimedOut.push(protectedResult.task);
+          if (protectedResult.changed) await this.notifications.create("warning", "微信发送结果未知", reason, {
             sendTaskId: task.id,
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
           });
-          alerted.push(ack.task);
+          if (protectedResult.changed) alerted.push(protectedResult.task);
           continue;
         }
       }
@@ -2965,10 +3027,11 @@ export class WechatDispatchService {
       bridgeTimedOut: bridgeTimedOut.length,
       bridgeOutboxBroken: bridgeOutboxBroken.length,
       bridgeDispatchExpired: bridgeDispatchExpired.length,
+      wechatWorkDeliveryUnknown: wechatWorkDeliveryUnknown.length,
       autoRetriedLowValue: 0,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
-      tasks: { bridgeTimedOut, bridgeOutboxBroken, bridgeDispatchExpired, autoRetriedLowValue: [], staleQueued, alerted },
+      tasks: { bridgeTimedOut, bridgeOutboxBroken, bridgeDispatchExpired, wechatWorkDeliveryUnknown, autoRetriedLowValue: [], staleQueued, alerted },
     };
   }
 
@@ -5895,6 +5958,64 @@ export class WechatDispatchService {
     });
   }
 
+  private async markPrismaBridgeDeliveryUnknown(
+    task: any,
+    pendingAttempt: any,
+    reasonCode: string,
+    message: string,
+    details: Record<string, unknown> = {},
+  ) {
+    const guardSnapshot = isPlainObject(task?.guardSnapshot) ? task.guardSnapshot : {};
+    const attemptMetadata = isPlainObject(pendingAttempt?.metadata) ? pendingAttempt.metadata : {};
+    const alreadyProtected = guardSnapshot.deliveryState === "unknown" &&
+      guardSnapshot.deliveryUnknownReason === reasonCode &&
+      guardSnapshot.automaticRetryBlocked === true &&
+      attemptMetadata.deliveryState === "unknown" &&
+      attemptMetadata.deliveryUnknownReason === reasonCode &&
+      attemptMetadata.automaticRetryBlocked === true;
+    if (alreadyProtected) return { task, attempt: pendingAttempt, changed: false };
+
+    const protectedAt = new Date().toISOString();
+    const deliveryUnknownDetails = {
+      ...(isPlainObject(guardSnapshot.deliveryUnknownDetails) ? guardSnapshot.deliveryUnknownDetails : {}),
+      ...details,
+    };
+    const completed = await this.persistence.completeAttemptAndTask({
+      taskId: task.id,
+      attemptId: pendingAttempt.id,
+      expectedTaskStatus: "sending",
+      attemptPatch: {
+        status: "started",
+        errorMessage: message,
+        metadata: {
+          ...attemptMetadata,
+          bridgeState: "delivery_unknown",
+          deliveryState: "unknown",
+          deliveryUnknownReason: reasonCode,
+          deliveryUnknownAt: attemptMetadata.deliveryUnknownAt || protectedAt,
+          automaticRetryBlocked: true,
+          manualReviewRequired: true,
+          deliveryUnknownDetails,
+        },
+      },
+      taskPatch: {
+        status: "sending",
+        sentAt: null,
+        errorMessage: `${message}; delivery is unknown and automatic retry is blocked pending manual review`,
+        guardSnapshot: {
+          ...guardSnapshot,
+          deliveryState: "unknown",
+          deliveryUnknownReason: reasonCode,
+          deliveryUnknownAt: guardSnapshot.deliveryUnknownAt || protectedAt,
+          automaticRetryBlocked: true,
+          manualReviewRequired: true,
+          deliveryUnknownDetails,
+        },
+      },
+    });
+    return completed ? { ...completed, changed: true } : null;
+  }
+
   private hasOrderDraftBinding(task: any) {
     const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
     return Boolean(String(automation.orderDraftId || ""));
@@ -6282,6 +6403,32 @@ export class WechatDispatchService {
       Boolean(metadata.bridgeAckTokenHash) && hashBridgeAckToken(payload) === metadata.bridgeAckTokenHash,
     ];
     if (checks.some((passed) => !passed)) return null;
+    if (!appConfig.useLocalStore && attempt.status === status) {
+      const archivePatch: Record<string, unknown> = {};
+      if (!metadata.archivedOutboxPath && expectedOutboxFileName) {
+        const archivedOutboxPath = this.archiveBridgeOutboxFile(
+          expectedOutboxFileName,
+          status === "sent" ? "processed" : "failed",
+        );
+        if (archivedOutboxPath) archivePatch.archivedOutboxPath = archivedOutboxPath;
+      }
+      if (!metadata.archivedDispatchPath) {
+        const archivedDispatchPath = this.archiveBridgeDispatchFile(
+          task,
+          attempt,
+          status === "sent" ? "processed" : "failed",
+        );
+        if (archivedDispatchPath) archivePatch.archivedDispatchPath = archivedDispatchPath;
+      }
+      if (Object.keys(archivePatch).length > 0) {
+        attempt = await this.persistence.updateSendAttempt(attempt.id, {
+          metadata: {
+            ...archivePatch,
+            bridgeAckArchiveRecoveredAt: new Date().toISOString(),
+          },
+        });
+      }
+    }
     if (attempt.status === "started" && appConfig.useLocalStore) {
       if (status === "sent") await this.markLinkedQuoteSent(task);
       else await this.markLinkedQuoteFailed(task, payload.errorMessage || "Windows 桥接发送失败");
