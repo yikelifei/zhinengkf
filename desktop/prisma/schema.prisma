@@ -15,6 +15,7 @@ enum SkuType {
 
 enum ConversationChannel {
   wechat
+  personal_wechat
   xiaohongshu
   douyin
 }
@@ -80,6 +81,8 @@ model WechatAccount {
   id              String          @id @default(cuid())
   displayName     String
   alias           String?
+  personalWechatOwnerWxId String? @unique
+  personalWechatAccountNickname String?
   windowHandle    String?
   processId       Int?
   isActive        Boolean         @default(true)
@@ -92,6 +95,7 @@ model WechatAccount {
   orderDrafts     OrderDraft[]
   windowSnapshots WechatWindowSnapshot[]
   wechatWorkBindings WechatWorkBinding[]
+  personalWechatRpaBindings PersonalWechatRpaBinding[]
 
   @@index([isActive, displayName])
 }
@@ -100,6 +104,7 @@ model Customer {
   id            String         @id @default(cuid())
   name          String
   wechatId      String?
+  personalWechatRpaBindingKey String? @unique
   phone         String?
   tags          Json?
   notes         String?
@@ -111,6 +116,7 @@ model Customer {
   quoteDrafts   QuoteDraft[]
   orderDrafts   OrderDraft[]
   wechatWorkBindings WechatWorkBinding[]
+  personalWechatRpaBindings PersonalWechatRpaBinding[]
 
   @@index([wechatId])
 }
@@ -139,6 +145,7 @@ model Conversation {
   orderDrafts     OrderDraft[]
   activeWindowSnapshots WechatWindowSnapshot[] @relation("ActiveConversationWindowSnapshots")
   wechatWorkBindings WechatWorkBinding[]
+  personalWechatRpaBindings PersonalWechatRpaBinding[]
 
   @@index([customerId])
   @@index([wechatAccountId])
@@ -192,6 +199,50 @@ model WechatWorkAuditLog {
   @@index([action, createdAt])
   @@index([sendTaskId, createdAt])
   @@index([openKfid, externalUserId, createdAt])
+}
+
+model PersonalWechatRpaBinding {
+  id               String        @id @default(cuid())
+  bindingKey       String        @unique
+  ownerWxId        String
+  accountNickname  String
+  chatTitle        String
+  conversationType String
+  senderName       String?
+  wechatAccountId  String
+  customerId       String
+  conversationId   String        @unique
+  lastInboundAt    DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  wechatAccount    WechatAccount @relation(fields: [wechatAccountId], references: [id])
+  customer         Customer      @relation(fields: [customerId], references: [id])
+  conversation     Conversation  @relation(fields: [conversationId], references: [id])
+
+  @@index([wechatAccountId, lastInboundAt])
+  @@index([ownerWxId])
+}
+
+model PersonalWechatRpaAuditLog {
+  id              String   @id @default(cuid())
+  direction       String
+  status          String
+  reason          String?
+  accountNickname String?
+  ownerWxId       String?
+  chatTitle       String?
+  externalId      String?
+  wechatAccountId String?
+  customerId      String?
+  conversationId  String?
+  messageId       String?
+  sendTaskId      String?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+
+  @@index([wechatAccountId, createdAt])
+  @@index([conversationId, externalId, createdAt])
+  @@index([direction, status, createdAt])
 }
 
 model Message {

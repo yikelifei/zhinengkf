@@ -23,6 +23,7 @@ export function PersonalWechatInstanceForm({ instance, busy = false, onValidate,
   const editing = Boolean(instance);
   const [wechatAccountId, setWechatAccountId] = useState(instance?.wechatAccountId || "");
   const [accountNickname, setAccountNickname] = useState(instance?.accountNickname || "");
+  const [ownerWxId, setOwnerWxId] = useState(instance?.ownerWxId || "");
   const [endpoint, setEndpoint] = useState(instance?.endpoint || "http://127.0.0.1:3211");
   const [token, setToken] = useState("");
   const [enabled, setEnabled] = useState(instance?.enabled ?? true);
@@ -35,6 +36,7 @@ export function PersonalWechatInstanceForm({ instance, busy = false, onValidate,
     return {
       wechatAccountId: wechatAccountId.trim(),
       accountNickname: accountNickname.trim(),
+      ownerWxId: ownerWxId.trim(),
       endpoint: endpoint.trim(),
       token: token.trim() || undefined,
       enabled,
@@ -108,6 +110,17 @@ export function PersonalWechatInstanceForm({ instance, busy = false, onValidate,
             value={accountNickname}
             onChange={(event) => changeField(setAccountNickname, event.target.value)}
             disabled={operationBusy}
+            autoComplete="off"
+            required
+          />
+        </label>
+        <label className={styles.field} htmlFor="personal-wechat-owner-wxid">
+          <span>微信 Owner WxId</span>
+          <input
+            id="personal-wechat-owner-wxid"
+            value={ownerWxId}
+            onChange={(event) => changeField(setOwnerWxId, event.target.value)}
+            disabled={operationBusy || editing}
             autoComplete="off"
             required
           />

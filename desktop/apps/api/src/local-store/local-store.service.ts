@@ -643,6 +643,7 @@ export class LocalStoreService {
   }
 
   upsertPersonalWechatRpaBinding(payload: {
+    wechatAccountId: string;
     accountNickname: string;
     ownerWxId: string;
     chatTitle: string;
@@ -650,12 +651,13 @@ export class LocalStoreService {
     senderName?: string;
     receivedAt?: string;
   }) {
+    const wechatAccountId = String(payload.wechatAccountId || "").trim();
     const accountNickname = String(payload.accountNickname || "").trim();
     const ownerWxId = String(payload.ownerWxId || "").trim();
     const chatTitle = String(payload.chatTitle || "").trim();
     const conversationType = String(payload.conversationType || "direct").trim().toLowerCase();
-    if (!accountNickname || !ownerWxId || !chatTitle) {
-      throw new Error("personal WeChat RPA binding requires accountNickname, ownerWxId and chatTitle");
+    if (!wechatAccountId || !accountNickname || !ownerWxId || !chatTitle) {
+      throw new Error("personal WeChat RPA binding requires wechatAccountId, accountNickname, ownerWxId and chatTitle");
     }
 
     const data = this.read();
@@ -665,15 +667,17 @@ export class LocalStoreService {
     const bindingIndex = data.personalWechatRpaBindings.findIndex((item) => item.bindingKey === bindingKey);
     const current = bindingIndex >= 0 ? data.personalWechatRpaBindings[bindingIndex] : null;
 
-    let account = current?.wechatAccountId
-      ? data.wechatAccounts.find((item) => item.id === current.wechatAccountId) || null
-      : null;
-    account ||= data.wechatAccounts.find(
+    const accountById = data.wechatAccounts.find((item) => item.id === wechatAccountId) || null;
+    const accountByOwner = data.wechatAccounts.find(
       (item) => item.platform === "personal_wechat_rpa" && item.personalWechatRpa?.ownerWxId === ownerWxId,
     ) || null;
+    if (accountByOwner && accountByOwner.id !== wechatAccountId) {
+      throw new Error("personal WeChat RPA ownerWxId is already bound to another WeChat account");
+    }
+    let account = accountById || accountByOwner;
     if (!account) {
       account = {
-        id: id("personal_wechat_rpa"),
+        id: wechatAccountId,
         displayName: accountNickname,
         alias: ownerWxId,
         platform: "personal_wechat_rpa",
@@ -684,14 +688,37 @@ export class LocalStoreService {
       };
       data.wechatAccounts.push(account);
     } else {
+      const boundOwnerWxId = String(account.personalWechatRpa?.ownerWxId || "").trim();
       const boundNickname = String(account.personalWechatRpa?.accountNickname || account.displayName || "").trim();
-      if (boundNickname && boundNickname !== accountNickname) {
-        throw new Error("personal WeChat RPA owner nickname changed; manual rebind is required");
+      if (
+        account.id !== wechatAccountId ||
+        account.platform !== "personal_wechat_rpa" ||
+        boundOwnerWxId !== ownerWxId ||
+        boundNickname !== accountNickname
+      ) {
+        throw new Error("personal WeChat RPA registry account identity conflicts with the persisted WeChat account");
       }
       account.displayName = accountNickname;
       account.platform = "personal_wechat_rpa";
       account.personalWechatRpa = { ...(account.personalWechatRpa || {}), ownerWxId, accountNickname };
       account.updatedAt = now;
+    }
+
+    const sameTitleCollision = data.personalWechatRpaBindings.find(
+      (item) =>
+        item.wechatAccountId === wechatAccountId &&
+        item.chatTitle === chatTitle &&
+        item.bindingKey !== bindingKey,
+    );
+    if (sameTitleCollision) throw new Error("duplicate personal WeChat chat title requires manual rebind");
+    if (
+      current &&
+      conversationType === "direct" &&
+      current.senderName &&
+      payload.senderName &&
+      String(current.senderName).trim() !== String(payload.senderName).trim()
+    ) {
+      throw new Error("direct chat sender changed; duplicate chat title requires manual rebind");
     }
 
     let customer = current?.customerId
@@ -790,11 +817,18 @@ export class LocalStoreService {
     return binding ? this.hydratePersonalWechatRpaBinding(data, binding) : null;
   }
 
-  listPersonalWechatRpaBindings() {
+  listPersonalWechatRpaBindings(options: { wechatAccountId?: string; take?: number; cursor?: string } = {}) {
     const data = this.read();
-    return data.personalWechatRpaBindings
+    const take = Math.max(1, Math.min(Number(options.take || 500), 500));
+    const sorted = data.personalWechatRpaBindings
+      .filter((binding) => !options.wechatAccountId || binding.wechatAccountId === options.wechatAccountId)
       .map((binding) => this.hydratePersonalWechatRpaBinding(data, binding))
       .sort((a, b) => String(b.lastInboundAt || b.updatedAt).localeCompare(String(a.lastInboundAt || a.updatedAt)));
+    const cursorIndex = options.cursor ? sorted.findIndex((item) => item.id === options.cursor) : -1;
+    if (options.cursor && cursorIndex < 0) {
+      throw new Error("pagination cursor does not belong to the authenticated WeChat account");
+    }
+    return sorted.slice(cursorIndex >= 0 ? cursorIndex + 1 : 0, (cursorIndex >= 0 ? cursorIndex + 1 : 0) + take);
   }
 
   recordPersonalWechatRpaAudit(payload: Record<string, unknown>) {
@@ -814,11 +848,17 @@ export class LocalStoreService {
     return record;
   }
 
-  listPersonalWechatRpaAuditLogs(limit = 100) {
-    const safeLimit = Math.max(1, Math.min(Number(limit || 100), 500));
-    return this.read().personalWechatRpaAuditLogs
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-      .slice(0, safeLimit);
+  listPersonalWechatRpaAuditLogs(input: number | { wechatAccountId?: string; take?: number; cursor?: string } = 100) {
+    const options = typeof input === "number" ? { take: input } : input;
+    const safeLimit = Math.max(1, Math.min(Number(options.take || 100), 500));
+    const sorted = this.read().personalWechatRpaAuditLogs
+      .filter((item) => !options.wechatAccountId || item.wechatAccountId === options.wechatAccountId)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const cursorIndex = options.cursor ? sorted.findIndex((item) => item.id === options.cursor) : -1;
+    if (options.cursor && cursorIndex < 0) {
+      throw new Error("pagination cursor does not belong to the authenticated WeChat account");
+    }
+    return sorted.slice(cursorIndex >= 0 ? cursorIndex + 1 : 0, (cursorIndex >= 0 ? cursorIndex + 1 : 0) + safeLimit);
   }
 
   listConversations(wechatAccountId?: string) {

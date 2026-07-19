@@ -899,6 +899,7 @@ POST /api/wechat/send-tasks/process-safe-queue
 - 工作台按钮已接入：创建演示任务、提交出图、客户选图、快速确认发送、生成报价、转人工。
 - 一键启动端口：3100、3200、3700。
 - 企业微信生产持久化：`WechatPersistence` 在 `USE_LOCAL_STORE=false` 时使用 Prisma 保存绑定、消息、发送任务、attempt 和审计日志；真实回调/权限/发送仍需预发布账号验收。
+- 个人微信 RPA 生产持久化：认证后的主机注册表账号 ID 是 Prisma `WechatAccount.id`；账号、客户、会话、消息、业务绑定和审计使用事务写入，唯一冲突失败关闭且不回退 LocalStore。主机 endpoint/token、进程、窗口、Windows 会话和配置路径仍只留在本机注册表，不进入业务表、审计明细或绑定接口响应。
 - Windows 安装包流水线：已有固定版本 electron-builder/NSIS、显式白名单、未签名测试包和包内容验证；企业代码签名、目标机安装/卸载和渠道发布仍为 `BLOCKED`。
 - Windows CI：已有最小权限的 GitHub Actions 工作流和本地 release-quality 编排；不注入真实密钥、不执行真实发送。
 - 数据库恢复演练：已有默认零命令的计划模式和显式确认的隔离 rehearsal/sandbox 执行模式；真实数据库演练证据仍为 `BLOCKED`。

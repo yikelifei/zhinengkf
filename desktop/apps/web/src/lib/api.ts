@@ -596,6 +596,7 @@ export type PersonalWechatRpaInstance = {
   endpoint: string;
   port: number | null;
   accountNickname: string;
+  ownerWxId: string;
   enabled: boolean;
   tokenConfigured: boolean;
   createdAt: string | null;
@@ -617,6 +618,7 @@ export type PersonalWechatRpaRegistry = {
     endpoint: string;
     port: number | null;
     accountNickname: string | null;
+    ownerWxId: string | null;
     tokenConfigured: boolean;
   };
   checks: Array<{ key: string; ok: boolean; detail: string }>;
@@ -628,6 +630,7 @@ export type PersonalWechatRpaInstanceInput = {
   endpoint?: string;
   token?: string;
   accountNickname?: string;
+  ownerWxId?: string;
   enabled?: boolean;
 };
 
