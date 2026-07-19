@@ -29,7 +29,7 @@ npm.cmd run project:completion:audit
 审计器维护显式清单，不只搜索 `not implemented`：
 
 - 会话运营字段与审计固定走 LocalStore 时为 `FAIL`。
-- 个人微信 RPA 的账号绑定与业务审计固定走 LocalStore 时为 `FAIL`。
+- 个人微信 RPA 的账号绑定与业务审计当前通过持久化适配器在生产模式写入 Prisma；若重新固定走 LocalStore，或迁移、模型、事务适配器发生漂移，则为 `FAIL`。
 - RPA endpoint/token 注册表与 Windows 登录会话、主机进程绑定，允许作为主机本地配置；该白名单不覆盖业务绑定或审计。
 - 自动化 interval/本地兼容模式可以保留 LocalStore `recentRuns`，但生产 durable readiness、队列状态和故障证据必须来自 BullMQ/Redis runtime；缺少该生产契约时仍为 `FAIL`。
 
@@ -37,4 +37,4 @@ npm.cmd run project:completion:audit
 
 ## 图片指纹口径
 
-当前候选图的 `fingerprint` 是基于任务/图片元数据生成的稳定 SHA-256 身份哈希，可做相同身份值的精确匹配。它不是图片字节哈希，也不是 pHash/dHash 等感知哈希，不能据此宣称已完成裁剪、压缩或截图相似匹配。
+当前候选图与企业微信入站 JPG/PNG 会基于解码后的真实像素生成 `dhash64:v1`：处理 EXIF 旋转、白底、灰度 `9x8`，再以 XOR/popcount 汉明距离和最优/次优差距做失败关闭匹配。历史元数据 SHA-256 仅作为 `legacyIdentityHash` 保留，不参与自动相似匹配。该契约只覆盖已验证的轻微重编码和像素变化，不承诺任意裁剪、大幅编辑或复杂截图。
