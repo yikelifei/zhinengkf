@@ -256,7 +256,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
   const env = options.env || process.env;
   const execute = options.execute === true;
   const runId = options.runId || new Date().toISOString().replace(/[:.]/g, "-");
-  const reportRoot = options.reportRoot || defaultReportRoot;
+  const reportRoot = options.reportRoot || path.join(root, ".runtime", "database-recovery-rehearsal");
   const runDirectory = options.runDirectory || path.join(reportRoot, runId);
   const backupFile = path.join(runDirectory, "rehearsal.dump");
   const runCommand = options.runCommand || safeSpawn;
