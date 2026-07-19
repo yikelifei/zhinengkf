@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
+import { PrismaOperationsService } from "../prisma/prisma-operations.service";
+import { appConfig } from "../shared/app-config";
 import {
   CONVERSATION_PRIORITIES,
   CONVERSATION_SLA_STATES,
@@ -16,9 +18,13 @@ const hasOwn = (value: object, key: string) => Object.prototype.hasOwnProperty.c
 
 @Injectable()
 export class ConversationOperationsService {
-  constructor(private readonly localStore: LocalStoreService) {}
+  constructor(
+    private readonly localStore: LocalStoreService,
+    private readonly prismaOperations?: PrismaOperationsService,
+  ) {}
 
   listQueue(query: ConversationOperationsQuery = {}) {
+    if (!appConfig.useLocalStore) return this.listQueuePrisma(query);
     const normalized = this.normalizeQuery(query);
     const records = this.filteredRecords(normalized);
     const limit = positiveInteger(normalized.limit, 100, 500);
@@ -33,16 +39,19 @@ export class ConversationOperationsService {
   }
 
   getQueueSummary(query: ConversationOperationsQuery = {}) {
+    if (!appConfig.useLocalStore) return this.getQueueSummaryPrisma(query);
     const normalized = this.normalizeQuery(query);
     return summarize(this.filteredRecords(normalized));
   }
 
   getConversation(identity: ConversationOperationsIdentity) {
+    if (!appConfig.useLocalStore) return this.getConversationPrisma(identity);
     const record = this.requireConversationIdentity(identity, "conversation operations query");
     return this.hydrate(record);
   }
 
   listAudit(identity: ConversationOperationsIdentity, limit = 100) {
+    if (!appConfig.useLocalStore) return this.listAuditPrisma(identity, limit);
     const record = this.requireConversationIdentity(identity, "conversation operations audit query");
     return this.localStore
       .listReviewLogs({
@@ -60,6 +69,7 @@ export class ConversationOperationsService {
   }
 
   updateConversation(id: string, payload: ConversationOperationsUpdatePayload = {}) {
+    if (!appConfig.useLocalStore) return this.updateConversationPrisma(id, payload);
     const identity = this.expectedIdentity(id, payload);
     const currentRecord = this.requireConversationIdentity(identity, "conversation operations update");
     const before = this.hydrate(currentRecord);
@@ -283,6 +293,7 @@ export class ConversationOperationsService {
   }
 
   private firstResponseAt(record: any) {
+    if (!appConfig.useLocalStore) return storedIsoDate(record?.firstResponseAt, "", []);
     if (!record?.id || !record?.wechatAccountId || !record?.customerId) return null;
     const timeline = this.localStore.listConversationTimeline({
       wechatAccountId: record.wechatAccountId,
@@ -295,6 +306,126 @@ export class ConversationOperationsService {
       .sort((left: any, right: any) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")))[0];
     return first?.createdAt ? storedIsoDate(first.createdAt, "", []) : null;
   }
+
+  private async listQueuePrisma(query: ConversationOperationsQuery = {}) {
+    const normalized = this.normalizeQuery(query);
+    const scoped = await this.filteredPrismaRecords(normalized);
+    const records = scoped.records;
+    const limit = positiveInteger(normalized.limit, 100, 500);
+    const offset = nonNegativeInteger(normalized.offset, 0);
+    return {
+      records: records.slice(offset, offset + limit),
+      total: records.length,
+      limit,
+      offset,
+      truncated: scoped.truncated,
+      scopeLimit: scoped.scopeLimit,
+      totalIsCapped: scoped.truncated,
+      summary: { ...summarize(records), partial: scoped.truncated, scopeLimit: scoped.scopeLimit },
+    };
+  }
+
+  private async getQueueSummaryPrisma(query: ConversationOperationsQuery = {}) {
+    const normalized = this.normalizeQuery(query);
+    const scoped = await this.filteredPrismaRecords(normalized);
+    return { ...summarize(scoped.records), partial: scoped.truncated, scopeLimit: scoped.scopeLimit };
+  }
+
+  private async getConversationPrisma(identity: ConversationOperationsIdentity) {
+    const normalized = completeIdentity(identity, "conversation operations query");
+    const record = await this.requirePrisma().getConversation(normalized);
+    return this.hydrate(record);
+  }
+
+  private async listAuditPrisma(identity: ConversationOperationsIdentity, limit = 100) {
+    const normalized = completeIdentity(identity, "conversation operations audit query");
+    return this.requirePrisma().listConversationAudit(normalized, positiveInteger(limit, 100, 300));
+  }
+
+  private async updateConversationPrisma(id: string, payload: ConversationOperationsUpdatePayload = {}) {
+    const identity = this.expectedIdentity(id, payload);
+    const normalized = completeIdentity(identity, "conversation operations update");
+    const currentRecord = await this.requirePrisma().getConversation(normalized);
+    const before = this.hydrate(currentRecord);
+    const operator = requiredText(payload.operator, "conversation operations update requires operator");
+    const patch: Record<string, unknown> = {};
+    if (hasOwn(payload, "assignee")) patch.assignee = nullableText(payload.assignee);
+    if (hasOwn(payload, "priority")) patch.priority = parsePriority(payload.priority);
+    if (hasOwn(payload, "status")) patch.status = parseStatus(payload.status);
+    if (hasOwn(payload, "slaDueAt")) patch.slaDueAt = nullableIsoDate(payload.slaDueAt, "slaDueAt");
+    if (hasOwn(payload, "firstResponseDueAt")) patch.firstResponseDueAt = nullableIsoDate(payload.firstResponseDueAt, "firstResponseDueAt");
+    if (!Object.keys(patch).length) throw new BadRequestException("conversation operations update requires at least one of assignee, priority, status, slaDueAt, firstResponseDueAt");
+    const comparableBefore = operationFields(before);
+    const comparableAfter = { ...comparableBefore, ...patch };
+    const changedFields = Object.keys(patch).filter((key) => comparableBefore[key] !== comparableAfter[key]);
+    if (!changedFields.length) return { conversation: before, audit: null, changedFields: [] };
+    const result = await this.requirePrisma().updateConversationOperations(
+      id,
+      normalized,
+      Object.fromEntries(changedFields.map((key) => [key, patch[key]])),
+      {
+        reviewer: operator,
+        note: String(payload.reason || "").trim(),
+        decision: "conversation_operations_update",
+        beforeStatus: String(before.status),
+        afterStatus: String(comparableAfter.status),
+        metadata: { auditType: "conversation_operations", changedFields, before: comparableBefore, after: comparableAfter },
+      },
+    );
+    return { conversation: this.hydrate(result.conversation), audit: result.audit, changedFields };
+  }
+
+  private async filteredPrismaRecords(query: ConversationOperationsQuery) {
+    await this.validatePrismaListIdentity(query);
+    const scoped = await this.requirePrisma().listConversations(query.wechatAccountId);
+    let records = scoped.records.map((record: any) => this.hydrate(record));
+    if (query.conversationId) records = records.filter((record: any) => record.id === query.conversationId);
+    if (query.customerId) records = records.filter((record: any) => record.customerId === query.customerId);
+    if (query.assignee) { const requested = query.assignee === "unassigned" ? null : query.assignee; records = records.filter((record: any) => record.assignee === requested); }
+    if (query.priority) records = records.filter((record: any) => record.priority === query.priority);
+    if (query.status) records = records.filter((record: any) => record.status === query.status);
+    if (query.slaState) records = records.filter((record: any) => record.slaState === query.slaState);
+    if (query.overdue !== undefined) { const requested = parseBoolean(query.overdue, "overdue"); records = records.filter((record: any) => record.isOverdue === requested); }
+    if (query.slaDueAt) records = records.filter((record: any) => record.slaDueAt === query.slaDueAt);
+    if (query.firstResponseDueAt) records = records.filter((record: any) => record.firstResponseDueAt === query.firstResponseDueAt);
+    if (query.slaDueBefore) records = records.filter((record: any) => Boolean(record.slaDueAt && record.slaDueAt <= query.slaDueBefore!));
+    if (query.firstResponseDueBefore) records = records.filter((record: any) => Boolean(record.firstResponseDueAt && record.firstResponseDueAt <= query.firstResponseDueBefore!));
+    return {
+      records: records.sort((left: any, right: any) => String(right.lastMessageAt || right.updatedAt || "").localeCompare(String(left.lastMessageAt || left.updatedAt || ""))),
+      truncated: scoped.truncated,
+      scopeLimit: scoped.scopeLimit,
+    };
+  }
+
+  private async validatePrismaListIdentity(query: ConversationOperationsQuery) {
+    if (query.conversationId || query.customerId) {
+      await this.requirePrisma().getConversation(completeIdentity({
+        wechatAccountId: String(query.wechatAccountId || ""),
+        conversationId: String(query.conversationId || ""),
+        customerId: String(query.customerId || ""),
+      }, "conversation operations queue query"));
+      return;
+    }
+    if (query.wechatAccountId && !(await this.requirePrisma().wechatAccountExists(query.wechatAccountId))) {
+      throw new NotFoundException(`wechat account not found: ${query.wechatAccountId}`);
+    }
+  }
+
+  private requirePrisma() {
+    if (!this.prismaOperations) throw new Error("PrismaOperationsService is required when USE_LOCAL_STORE=false");
+    return this.prismaOperations;
+  }
+}
+
+function completeIdentity(identity: ConversationOperationsIdentity, label: string) {
+  const normalized = {
+    wechatAccountId: String(identity.wechatAccountId || "").trim(),
+    conversationId: String(identity.conversationId || "").trim(),
+    customerId: String(identity.customerId || "").trim(),
+  };
+  const missing = Object.entries(normalized).filter(([, value]) => !value).map(([key]) => key);
+  if (missing.length) throw new BadRequestException(`${label} requires complete identity: ${missing.join(", ")}`);
+  return normalized;
 }
 
 function operationFields(record: any): Record<string, unknown> {

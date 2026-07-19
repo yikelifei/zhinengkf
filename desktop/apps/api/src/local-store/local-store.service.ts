@@ -3416,7 +3416,7 @@ function applyMultiAccountSeed(data: StoreData, now: string) {
   }
 }
 
-function seedAgentConfig(now: string) {
+export function seedAgentConfig(now: string) {
   const agents = [
     {
       id: "agent_pre_sales",

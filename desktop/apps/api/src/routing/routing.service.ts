@@ -4,6 +4,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
+import { PrismaOperationsService } from "../prisma/prisma-operations.service";
 
 const { buildAgentReplyDraft, classifyTrainingSampleUsage, evaluateAgentRoute, findPendingSceneClarificationContext } = rules;
 
@@ -27,15 +28,16 @@ export class RoutingService {
   constructor(
     private readonly localStore: LocalStoreService,
     private readonly notifications: NotificationsService,
+    private readonly prismaOperations?: PrismaOperationsService,
   ) {}
 
   list(filter: IdentityFilter = {}) {
-    if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
-    return this.localStore.listRouteEvaluations(filter);
+    if (appConfig.useLocalStore) return this.localStore.listRouteEvaluations(filter);
+    return this.requirePrisma().listRouteEvaluations(filter);
   }
 
   evaluate(payload: RouteEvaluatePayload) {
-    if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.evaluatePrisma(payload);
     const clarificationContext = payload.clarificationContext || this.findLatestSceneClarification(payload.conversationId);
     const identityFilter = {
       wechatAccountId: payload.wechatAccountId,
@@ -79,11 +81,55 @@ export class RoutingService {
   }
 
   async correctEvaluation(id: string, payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string } & ExpectedIdentityPayload) {
-    if (!appConfig.useLocalStore) throw new Error("routing correction prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) {
+      const result = await this.requirePrisma().correctRouteEvaluation(id, payload || {});
+      await this.notifyCorrection(id, result);
+      return result;
+    }
     const route = this.localStore.listRouteEvaluations().find((item: any) => item.id === id);
     if (!route) throw new Error(`route evaluation not found: ${id}`);
     assertExpectedIdentity(route, payload, "route evaluation");
     const result = this.localStore.correctRouteEvaluation(id, payload || {});
+    await this.notifyCorrection(id, result);
+    return result;
+  }
+
+  private async evaluatePrisma(payload: RouteEvaluatePayload) {
+    const operations = this.requirePrisma();
+    const identityFilter = {
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+    };
+    const previousRoutes = await operations.listRouteEvaluations(payload.conversationId ? { conversationId: payload.conversationId } : {});
+    const clarificationContext = payload.clarificationContext || findPendingSceneClarificationContext(previousRoutes, payload.conversationId);
+    const sceneMemory = (await operations.listTrainingSamples(identityFilter))
+      .filter((sample: any) => isSceneMemorySample(sample))
+      .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+      .slice(0, 200);
+    const result = evaluateAgentRoute({ ...payload, clarificationContext }, {
+      highValueAmountCny: appConfig.highValueAmountCny,
+      sceneMemory,
+    });
+    const agent = await operations.getAgentByKey(result.agentKey);
+    const skills = agent?.id ? await operations.listAgentSkills(agent.id, identityFilter) : [];
+    const knowledgeEntries = agent?.id ? await operations.listKnowledgeEntries({ agentId: agent.id, ...identityFilter }) : [];
+    const draft = buildAgentReplyDraft(result, {
+      agentId: agent?.id,
+      ...identityFilter,
+      skills,
+      knowledgeEntries,
+    });
+    return operations.createRouteEvaluation(payload, {
+      ...result,
+      suggestedReply: draft.suggestedReply,
+      appliedSkills: draft.appliedSkills,
+      knowledgeMatches: draft.knowledgeMatches,
+      replyDraft: draft.replyDraft,
+    });
+  }
+
+  private async notifyCorrection(id: string, result: any) {
     await this.notifications.create(
       "info",
       "场景纠正已记录",
@@ -94,7 +140,11 @@ export class RoutingService {
         trainingSampleId: result.trainingSample.id,
       },
     );
-    return result;
+  }
+
+  private requirePrisma() {
+    if (!this.prismaOperations) throw new Error("PrismaOperationsService is required when USE_LOCAL_STORE=false");
+    return this.prismaOperations;
   }
 
   private findLatestSceneClarification(conversationId?: string) {

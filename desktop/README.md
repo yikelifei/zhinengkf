@@ -108,6 +108,8 @@ npm.cmd run data:reset
 
 Prisma schema 固定 PostgreSQL。微信/企业微信绑定、消息、发送任务、attempt、审计日志、SKU、设计任务等已有 Prisma 路径；但不能据此推断所有模块均已完成生产持久化。`project:completion:audit` 会单独核对会话运营、个人微信 RPA 业务记录和源码占位：仍固定走 LocalStore、缺少强制 Prisma 路由或存在明确占位时才列为 `FAIL`，通过审计前不得宣称数据库模式全量完成。
 
+数据库模式部署必须先执行 migration，再显式初始化默认 Agent/Skill；读取接口不会偷偷写入种子数据。完整步骤、事务边界、身份隔离和会话队列 500 条审计上限见 [`docs/PRISMA_OPERATIONS.md`](docs/PRISMA_OPERATIONS.md)。
+
 ## 本地演示流程
 
 打开 `http://127.0.0.1:3100/` 后按这个顺序点：

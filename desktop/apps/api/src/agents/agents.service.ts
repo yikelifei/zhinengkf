@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { appConfig } from "../shared/app-config";
+import { PrismaOperationsService } from "../prisma/prisma-operations.service";
 
 type IdentityFilter = {
   wechatAccountId?: string;
@@ -10,15 +11,25 @@ type IdentityFilter = {
 
 @Injectable()
 export class AgentsService {
-  constructor(private readonly localStore: LocalStoreService) {}
+  constructor(
+    private readonly localStore: LocalStoreService,
+    private readonly prismaOperations?: PrismaOperationsService,
+  ) {}
 
   listAgents(filter: IdentityFilter = {}) {
-    if (!appConfig.useLocalStore) throw new Error("agents prisma mode is not implemented yet");
-    return this.localStore.listAgents(filter);
+    return appConfig.useLocalStore
+      ? this.localStore.listAgents(filter)
+      : this.requirePrisma().listAgents(filter);
   }
 
   listSkills(agentId?: string, filter: IdentityFilter = {}) {
-    if (!appConfig.useLocalStore) throw new Error("agent skills prisma mode is not implemented yet");
-    return this.localStore.listAgentSkills(agentId, filter);
+    return appConfig.useLocalStore
+      ? this.localStore.listAgentSkills(agentId, filter)
+      : this.requirePrisma().listAgentSkills(agentId, filter);
+  }
+
+  private requirePrisma() {
+    if (!this.prismaOperations) throw new Error("PrismaOperationsService is required when USE_LOCAL_STORE=false");
+    return this.prismaOperations;
   }
 }

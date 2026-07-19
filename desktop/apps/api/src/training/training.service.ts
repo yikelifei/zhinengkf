@@ -4,6 +4,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
+import { PrismaOperationsService } from "../prisma/prisma-operations.service";
 
 const {
   canonicalSkillName,
@@ -108,15 +109,16 @@ export class TrainingService {
   constructor(
     private readonly localStore: LocalStoreService,
     private readonly notifications: NotificationsService,
+    private readonly prismaOperations?: PrismaOperationsService,
   ) {}
 
   listChatImports(filter: IdentityFilter = {}) {
-    if (!appConfig.useLocalStore) throw new Error("training prisma mode is not implemented yet");
-    return this.localStore.listChatImports(filter);
+    if (appConfig.useLocalStore) return this.localStore.listChatImports(filter);
+    return this.requirePrisma().listChatImports(filter);
   }
 
   listSamples(options: string | ListTrainingSamplesOptions = {}) {
-    if (!appConfig.useLocalStore) throw new Error("training samples prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.listSamplesPrisma(options);
     const filters = typeof options === "string" ? { agentId: options } : options;
     const quality = normalizeTrainingSampleQualityFilter(filters.quality);
     const status = String(filters.status || "").trim();
@@ -138,7 +140,7 @@ export class TrainingService {
   }
 
   getOverview(options: { agentId?: string; minScore?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
-    if (!appConfig.useLocalStore) throw new Error("training overview prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.getOverviewPrisma(options);
     const samples = this.localStore.listTrainingSamples(options);
     const agents = this.localStore.listAgents();
     const suggestions = this.listSkillSuggestions(options);
@@ -146,13 +148,14 @@ export class TrainingService {
   }
 
   importChat(payload: ChatImportPayload) {
-    if (!appConfig.useLocalStore) throw new Error("chat import prisma mode is not implemented yet");
     const parsed = parseChatTranscript(payload.text || "");
-    return this.localStore.createChatImport(payload, parsed);
+    return appConfig.useLocalStore
+      ? this.localStore.createChatImport(payload, parsed)
+      : this.requirePrisma().createChatImport(payload, parsed);
   }
 
   reviewSample(id: string, payload: TrainingSampleReviewPayload) {
-    if (!appConfig.useLocalStore) throw new Error("training sample review prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.reviewSamplePrisma(id, payload);
     const sample = this.localStore.listTrainingSamples().find((item: any) => item.id === id);
     if (!sample) throw new Error(`training sample not found: ${id}`);
     assertExpectedIdentity(sample, payload, "training sample");
@@ -168,18 +171,20 @@ export class TrainingService {
   }
 
   batchReviewSamples(payload: TrainingSampleBatchReviewPayload = {}) {
-    if (!appConfig.useLocalStore) throw new Error("training sample batch review prisma mode is not implemented yet");
     const sampleIds = normalizeTrainingSampleIds(payload.sampleIds);
     const status = normalizeTrainingSampleBatchStatus(payload.status);
     if (!sampleIds.length) throw new BadRequestException("sampleIds must include at least one training sample id");
     if (sampleIds.length > MAX_BATCH_REVIEW_SAMPLES) {
       throw new BadRequestException(`sampleIds cannot exceed ${MAX_BATCH_REVIEW_SAMPLES} per batch`);
     }
-    const reviewPayload = {
+    const reviewPayload: { status: "ready" | "review" | "rejected"; reviewer: string; note: string } = {
       status,
       reviewer: payload.reviewer || "人工客服",
       note: payload.note || trainingSampleBatchReviewNote(status, sampleIds.length),
     };
+    if (!appConfig.useLocalStore) {
+      return this.batchReviewSamplesPrisma(sampleIds, reviewPayload, payload.expectedBySampleId || {});
+    }
     const samplesById = new Map(this.localStore.listTrainingSamples().map((sample: any) => [sample.id, sample]));
     for (const sampleId of sampleIds) {
       const sample = samplesById.get(sampleId);
@@ -208,7 +213,7 @@ export class TrainingService {
   }
 
   listSkillSuggestions(options: { agentId?: string; minScore?: number } & IdentityFilter = {}) {
-    if (!appConfig.useLocalStore) throw new Error("skill suggestion prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.listSkillSuggestionsPrisma(options);
     const samples = this.localStore.listTrainingSamples({
       agentId: options.agentId,
       wechatAccountId: options.wechatAccountId,
@@ -228,7 +233,7 @@ export class TrainingService {
   }
 
   applySkillSuggestions(options: ApplySkillSuggestionsPayload = {}) {
-    if (!appConfig.useLocalStore) throw new Error("skill apply prisma mode is not implemented yet");
+    if (!appConfig.useLocalStore) return this.applySkillSuggestionsPrisma(options);
     const allSuggestions = this.listSkillSuggestions(options);
     const selectedKeys = normalizeSuggestionKeySet(options.suggestionKeys);
     const selectedSuggestions = selectedKeys.size
@@ -271,6 +276,119 @@ export class TrainingService {
     }
     return result;
   }
+
+  private async listSamplesPrisma(options: string | ListTrainingSamplesOptions = {}) {
+    const filters = typeof options === "string" ? { agentId: options } : options;
+    const quality = normalizeTrainingSampleQualityFilter(filters.quality);
+    const status = String(filters.status || "").trim();
+    const sourceType = String(filters.sourceType || "").trim();
+    const importId = String(filters.importId || "").trim();
+    const limit = clampTrainingSampleLimit(filters.limit);
+    let samples = await this.requirePrisma().listTrainingSamples({
+      agentId: filters.agentId,
+      wechatAccountId: filters.wechatAccountId,
+      conversationId: filters.conversationId,
+      customerId: filters.customerId,
+    });
+    if (quality) samples = samples.filter((sample: any) => matchesTrainingSampleQuality(sample, quality));
+    if (status) samples = samples.filter((sample: any) => String(sample.status || "ready") === status);
+    if (sourceType) samples = samples.filter((sample: any) => trainingSampleSourceType(sample) === sourceType);
+    if (importId) samples = samples.filter((sample: any) => String(sample.importId || "") === importId);
+    return limit ? samples.slice(0, limit) : samples;
+  }
+
+  private async getOverviewPrisma(options: { agentId?: string; minScore?: number } & IdentityFilter = {}) {
+    const [samples, agents, suggestions] = await Promise.all([
+      this.requirePrisma().listTrainingSamples(options),
+      this.requirePrisma().listAgents(options),
+      this.listSkillSuggestionsPrisma(options),
+    ]);
+    return summarizeTrainingSamples(samples, agents, suggestions);
+  }
+
+  private async reviewSamplePrisma(id: string, payload: TrainingSampleReviewPayload) {
+    const result = await this.requirePrisma().reviewTrainingSample(id, payload || {});
+    const statusLabel = result.sample.status === "ready" ? "已确认训练" : result.sample.status === "rejected" ? "已禁用" : "待复核";
+    await this.notifications.create(
+      result.sample.status === "rejected" ? "warning" : "info",
+      "训练样本状态已更新",
+      `样本「${String(result.sample.customerText || "").slice(0, 24)}」${statusLabel}。`,
+      { source: "training_sample_review", trainingSampleId: result.sample.id, status: result.sample.status, ...sampleIdentity(result.sample) },
+    );
+    return result;
+  }
+
+  private async batchReviewSamplesPrisma(
+    sampleIds: string[],
+    reviewPayload: { status: "ready" | "review" | "rejected"; reviewer: string; note: string },
+    expectedBySampleId: Record<string, ExpectedIdentityPayload>,
+  ) {
+    const results = await this.requirePrisma().reviewTrainingSamplesBatch(sampleIds, reviewPayload, expectedBySampleId);
+    await this.notifications.create(
+      reviewPayload.status === "rejected" ? "warning" : "info",
+      "训练样本批量状态已更新",
+      `已${trainingSampleBatchReviewVerb(reviewPayload.status)} ${results.length} 条训练样本。`,
+      { source: "training_sample_batch_review", status: reviewPayload.status, count: results.length, sampleIds },
+    );
+    return {
+      updated: results.length,
+      status: reviewPayload.status,
+      sampleIds,
+      samples: results.map((result: any) => result.sample),
+      reviewLogs: results.map((result: any) => result.reviewLog),
+    };
+  }
+
+  private async listSkillSuggestionsPrisma(options: { agentId?: string; minScore?: number } & IdentityFilter = {}) {
+    const [samples, existingSkills] = await Promise.all([
+      this.requirePrisma().listTrainingSamples(options),
+      this.requirePrisma().listAgentSkills(options.agentId, options),
+    ]);
+    return compileAgentSkillSuggestions(samples, {
+      agentId: options.agentId,
+      minScore: options.minScore,
+      existingSkills,
+    });
+  }
+
+  private async applySkillSuggestionsPrisma(options: ApplySkillSuggestionsPayload = {}) {
+    const allSuggestions = await this.listSkillSuggestionsPrisma(options);
+    const selectedKeys = normalizeSuggestionKeySet(options.suggestionKeys);
+    const selectedSuggestions = selectedKeys.size
+      ? allSuggestions.filter((suggestion: any) => selectedKeys.has(skillSuggestionKey(suggestion)))
+      : allSuggestions;
+    const blocked: SkillSuggestionApplyBlocked[] = [];
+    const suggestions: any[] = [];
+    for (const suggestion of selectedSuggestions) {
+      const quality = classifySkillSuggestionQuality(suggestion);
+      if (quality.blocked) blocked.push({ ...suggestion, reason: "identity_scope_blocked", quality });
+      else if (options.includeNeedsReview || isSkillSuggestionSafeToApply(suggestion)) suggestions.push(suggestion);
+      else blocked.push({ ...suggestion, reason: "needs_review", quality });
+    }
+    const result: any = await this.requirePrisma().applyAgentSkillSuggestions(suggestions);
+    result.selected = selectedSuggestions.length;
+    result.applied = suggestions.length;
+    result.filtered = allSuggestions.length - selectedSuggestions.length;
+    result.blocked = blocked;
+    result.requiresReview = blocked.length;
+    if (result.created.length + result.updated.length > 0) {
+      await this.notifications.create("info", "Agent Skill 已更新", `已根据训练样本新增 ${result.created.length} 个 Skill，更新 ${result.updated.length} 个 Skill。`, { source: "training", created: result.created.length, updated: result.updated.length });
+    }
+    return result;
+  }
+
+  private requirePrisma() {
+    if (!this.prismaOperations) throw new Error("PrismaOperationsService is required when USE_LOCAL_STORE=false");
+    return this.prismaOperations;
+  }
+}
+
+function sampleIdentity(sample: any) {
+  return {
+    wechatAccountId: sample?.wechatAccountId || undefined,
+    conversationId: sample?.conversationId || undefined,
+    customerId: sample?.customerId || undefined,
+  };
 }
 
 function normalizeTrainingSampleIds(value?: string[]) {

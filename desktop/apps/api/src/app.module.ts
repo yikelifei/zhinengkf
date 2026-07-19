@@ -28,6 +28,7 @@ import { OrdersService } from "./orders/orders.service";
 import { PersonalWechatRpaController } from "./personal-wechat-rpa/personal-wechat-rpa.controller";
 import { PersonalWechatRpaService } from "./personal-wechat-rpa/personal-wechat-rpa.service";
 import { PrismaService } from "./prisma/prisma.service";
+import { PrismaOperationsService } from "./prisma/prisma-operations.service";
 import { QuotesController } from "./quotes/quotes.controller";
 import { QuotesService } from "./quotes/quotes.service";
 import { ReviewsController } from "./reviews/reviews.controller";
@@ -83,6 +84,7 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
     OrdersService,
     PersonalWechatRpaService,
     PrismaService,
+    PrismaOperationsService,
     {
       provide: QuotesService,
       useFactory: (

@@ -124,6 +124,11 @@ model Conversation {
   wechatAccountId String?
   lastMessageAt   DateTime?
   manualLocked    Boolean             @default(false)
+  assignee        String?
+  priority        String              @default("normal")
+  status          String              @default("open")
+  slaDueAt        DateTime?
+  firstResponseDueAt DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   customer        Customer            @relation(fields: [customerId], references: [id])
@@ -138,6 +143,10 @@ model Conversation {
   @@index([customerId])
   @@index([wechatAccountId])
   @@index([channel, lastMessageAt])
+  @@index([wechatAccountId, status, priority, lastMessageAt])
+  @@index([assignee, status, lastMessageAt])
+  @@index([slaDueAt])
+  @@index([firstResponseDueAt])
   @@unique([wechatAccountId, externalChatId])
 }
 
@@ -524,11 +533,16 @@ model AgentSkill {
   sampleCount Int                  @default(0)
   confidence  Int                  @default(0)
   lastCompiledAt DateTime?
+  wechatAccountId String?
+  conversationId String?
+  customerId     String?
+  identityBinding Json?
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
   agent       CustomerServiceAgent @relation(fields: [agentId], references: [id])
 
   @@index([agentId])
+  @@index([agentId, wechatAccountId, conversationId, customerId])
 }
 
 model ChatImport {
@@ -541,6 +555,11 @@ model ChatImport {
   messageCount Int                   @default(0)
   pairCount    Int                   @default(0)
   warnings     Json?
+  customerId   String?
+  conversationId String?
+  wechatAccountId String?
+  identityBinding Json?
+  sceneSummary Json?
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
   agent        CustomerServiceAgent? @relation(fields: [agentId], references: [id])
@@ -548,6 +567,7 @@ model ChatImport {
 
   @@index([agentId])
   @@index([createdAt])
+  @@index([wechatAccountId, conversationId, customerId, createdAt])
 }
 
 model TrainingSample {
@@ -563,6 +583,20 @@ model TrainingSample {
   skillHints      Json?
   sourceLineStart Int?
   sourceLineEnd   Int?
+  customerId      String?
+  conversationId  String?
+  wechatAccountId String?
+  identityBinding Json?
+  sceneScore      Int                   @default(0)
+  sceneScores     Json?
+  matchedKeywords Json?
+  sceneCheck      Json?
+  sourceType      String?
+  sourceRouteId   String?
+  reviewer        String?
+  reviewNote      String?
+  reviewedAt      DateTime?
+  reviewHistory   Json?
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   import          ChatImport?           @relation(fields: [importId], references: [id])
@@ -572,6 +606,8 @@ model TrainingSample {
   @@index([agentId, status])
   @@index([scene])
   @@index([createdAt])
+  @@index([wechatAccountId, conversationId, customerId, createdAt])
+  @@index([sourceType, sourceRouteId])
 }
 
 model KnowledgeEntry {
@@ -584,6 +620,10 @@ model KnowledgeEntry {
   content        String                @db.Text
   tags           Json?
   qualityScore   Int?
+  customerId     String?
+  conversationId String?
+  wechatAccountId String?
+  identityBinding Json?
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
   agent          CustomerServiceAgent? @relation(fields: [agentId], references: [id])
@@ -591,6 +631,7 @@ model KnowledgeEntry {
 
   @@index([agentId])
   @@index([sourceType, sourceId])
+  @@index([agentId, wechatAccountId, conversationId, customerId, qualityScore])
 }
 
 model RouteEvaluation {
@@ -599,6 +640,7 @@ model RouteEvaluation {
   text           String                @db.Text
   customerId     String?
   conversationId String?
+  wechatAccountId String?
   agentId        String?
   agentKey       String
   scene          String
@@ -608,6 +650,17 @@ model RouteEvaluation {
   budget         Json?
   missingFields  Json?
   riskFlags      Json?
+  identityBinding Json?
+  sceneScore     Int                   @default(0)
+  sceneScores    Json?
+  matchedKeywords Json?
+  sceneDecision  Json?
+  sceneClarification Json?
+  clarificationResolution Json?
+  sceneMemory    Json?
+  sceneAudit     Json?
+  routingPolicy  Json?
+  correction     Json?
   suggestedReply String?               @db.Text
   appliedSkills  Json?
   knowledgeMatches Json?
@@ -619,4 +672,5 @@ model RouteEvaluation {
   @@index([agentId, createdAt])
   @@index([action, createdAt])
   @@index([scene])
+  @@index([wechatAccountId, conversationId, customerId, createdAt])
 }
