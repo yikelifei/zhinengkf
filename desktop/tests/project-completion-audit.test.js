@@ -131,6 +131,23 @@ test("missing desktop session security artifact prevents a completion PASS", () 
   assert.equal(report.results.find((item) => item.id === "security.desktop_session_proof").status, STATUS.FAIL);
 });
 
+test("design execution secret boundary is scoped to the execution model", () => {
+  const root = createPassingFixture();
+  const schemaPath = path.join(root, "desktop", "prisma", "schema.prisma");
+  fs.appendFileSync(schemaPath, "\nmodel LegacyDesignRequest { customerText String? }\n", "utf8");
+
+  let report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.design_platform_execution_models").status, STATUS.PASS);
+
+  const schema = fs.readFileSync(schemaPath, "utf8").replace(
+    "scopeKey String processRunId String",
+    "scopeKey String customerText String processRunId String",
+  );
+  fs.writeFileSync(schemaPath, schema, "utf8");
+  report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.design_platform_execution_models").status, STATUS.FAIL);
+});
+
 test("planned channel placeholders are allowed only with planned status, fail-closed adapter and roadmap reason", () => {
   const root = createPassingFixture();
   let report = buildAudit(root, { includeExternal: false });

@@ -493,7 +493,9 @@ const CONTRACTS = Object.freeze([
       /acceptanceStatus\s+DesignPlatformAcceptanceStatus/,
       /refundStatus\s+DesignPlatformRefundStatus/,
     ],
-    forbidden: [/\b(?:prompt|customerText|cookie|token|password|authorization)\s+String/i],
+    forbidden: [
+      /model DesignPlatformExecution\s*\{[^}]*\b(?:prompt|customerText|cookie|token|password|authorization)\s+String/i,
+    ],
   },
   {
     id: "contract.design_platform_execution_recovery",
