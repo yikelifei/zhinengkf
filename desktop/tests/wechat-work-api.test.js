@@ -16,6 +16,7 @@ const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
+const { WechatWorkApiClient, WechatWorkApiError } = require("../apps/api/src/wechat-work/wechat-work-api.client");
 const { WechatWorkService } = require("../apps/api/src/wechat-work/wechat-work.service");
 
 function setup() {
@@ -36,19 +37,41 @@ function setup() {
   appConfig.wechatBridgeDispatchDir = path.join(tempDir, "dispatch");
   appConfig.wechatBridgeLockDir = path.join(tempDir, "locks");
   appConfig.wechatBridgeWorkerStatusFile = path.join(tempDir, "worker.json");
+  appConfig.localStorageRoot = path.join(tempDir, "storage");
+  fs.mkdirSync(appConfig.localStorageRoot, { recursive: true });
 
   const api = {
     syncCalls: [],
     sendCalls: [],
+    uploadCalls: [],
+    imageSendCalls: [],
+    operationCalls: [],
     syncResponse: { errcode: 0, errmsg: "ok", has_more: 0, msg_list: [] },
     sendFailures: [],
+    uploadFailures: [],
+    imageSendFailures: [],
     async syncMessages(payload) {
       this.syncCalls.push(payload);
       return this.syncResponse;
     },
     async sendText(payload) {
       this.sendCalls.push(payload);
+      this.operationCalls.push({ type: "text", msgid: payload.msgid });
       const failure = this.sendFailures.shift();
+      if (failure) throw failure;
+      return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
+    },
+    async uploadImage(payload) {
+      this.uploadCalls.push(payload);
+      this.operationCalls.push({ type: "upload", filePath: payload.filePath });
+      const failure = this.uploadFailures.shift();
+      if (failure) throw failure;
+      return { errcode: 0, errmsg: "ok", media_id: `media-${this.uploadCalls.length}`, type: "image" };
+    },
+    async sendImage(payload) {
+      this.imageSendCalls.push(payload);
+      this.operationCalls.push({ type: "image", mediaId: payload.mediaId, msgid: payload.msgid });
+      const failure = this.imageSendFailures.shift();
       if (failure) throw failure;
       return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
     },
@@ -60,7 +83,31 @@ function setup() {
   const adapter = new WechatSendAdapterService(api);
   const dispatch = new WechatDispatchService({}, localStore, adapter, notifications, orders);
   const service = new WechatWorkService(dispatch, localStore, api);
-  return { api, localStore, dispatch, service };
+  return { api, localStore, dispatch, service, tempDir };
+}
+
+function writePng(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(32, 1),
+  ]));
+  return filePath;
+}
+
+function createBoundDesignJob(localStore, binding, imagePaths) {
+  const job = localStore.createDesignJob({
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    wechatAccountId: binding.wechatAccountId,
+    status: "completed",
+  });
+  localStore.upsertDesignImages(job.id, imagePaths.map((localPath, index) => ({
+    imageId: `candidate-${index + 1}`,
+    position: index + 1,
+    localPath,
+  })));
+  return job;
 }
 
 test("sync_msg persists isolated open_kfid + external_userid mappings and deduplicates msgid", async () => {
@@ -164,6 +211,122 @@ test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt 
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_accepted"));
 });
 
+test("WeChat Work image send uploads and dispatches text plus multiple images in order", async () => {
+  const { api, localStore, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-images", externalUserId: "wm-images" });
+  const first = writePng(path.join(appConfig.localStorageRoot, "designs", "first.png"));
+  const second = writePng(path.join(appConfig.localStorageRoot, "designs", "second.png"));
+  const designJob = createBoundDesignJob(localStore, binding, [first, second]);
+  const queued = await service.queueCustomerServiceImages({
+    openKfid: "wk-images",
+    externalUserId: "wm-images",
+    text: "方案如下",
+    imagePaths: [first, second],
+    designJobId: designJob.id,
+  });
+
+  const result = await service.dispatchCustomerServiceText(queued.task.id);
+  assert.equal(result.task.status, "sent");
+  assert.deepEqual(api.operationCalls.map((item) => item.type), ["text", "upload", "image", "upload", "image"]);
+  assert.deepEqual(api.imageSendCalls.map((item) => item.mediaId), ["media-1", "media-2"]);
+  assert.deepEqual(api.imageSendCalls.map((item) => item.msgid), [`kf_${queued.task.id}_2`, `kf_${queued.task.id}_3`]);
+  const attempt = localStore.getLatestSendAttempt(queued.task.id, { adapter: "wechat_work_kf" });
+  assert.equal(attempt.status, "sent");
+  assert.equal(attempt.metadata.apiMsgIds.length, 3);
+  assert.equal(localStore.findWechatWorkSendAttemptByMsgId(attempt.metadata.apiMsgIds[2]).id, attempt.id);
+  assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_images_queued" && item.imageCount === 2));
+});
+
+test("WeChat Work image upload failure stays unsent and uses bounded retry", async () => {
+  const { api, localStore, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-upload-fail", externalUserId: "wm-upload-fail" });
+  const image = writePng(path.join(appConfig.localStorageRoot, "upload-fail.png"));
+  const designJob = createBoundDesignJob(localStore, binding, [image]);
+  api.uploadFailures.push(new WechatWorkApiError("media_upload", "explicit upload failure", { errcode: 40007 }));
+  const queued = await service.queueCustomerServiceImages({
+    openKfid: "wk-upload-fail",
+    externalUserId: "wm-upload-fail",
+    imagePaths: [image],
+    designJobId: designJob.id,
+  });
+
+  const result = await service.dispatchCustomerServiceText(queued.task.id);
+  assert.equal(result.task.status, "queued");
+  assert.equal(result.retryScheduled, true);
+  assert.equal(api.imageSendCalls.length, 0);
+  assert.equal(localStore.getLatestSendAttempt(queued.task.id).metadata.failureStage, "upload_image");
+});
+
+test("uncertain WeChat Work image send fails closed without automatic retry", async () => {
+  const { api, localStore, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-send-unknown", externalUserId: "wm-send-unknown" });
+  const image = writePng(path.join(appConfig.localStorageRoot, "send-unknown.png"));
+  const designJob = createBoundDesignJob(localStore, binding, [image]);
+  api.imageSendFailures.push(new Error("socket closed after request write"));
+  const queued = await service.queueCustomerServiceImages({
+    openKfid: "wk-send-unknown",
+    externalUserId: "wm-send-unknown",
+    imagePaths: [image],
+    designJobId: designJob.id,
+  });
+
+  const result = await service.dispatchCustomerServiceText(queued.task.id);
+  assert.equal(result.task.status, "failed");
+  assert.equal(result.retryScheduled, false);
+  assert.equal(result.attempt.metadata.deliveryState, "unknown");
+  assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
+  assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_delivery_unknown"));
+});
+
+test("partial multi-image send never retries already accepted images", async () => {
+  const { api, localStore, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-partial", externalUserId: "wm-partial" });
+  const first = writePng(path.join(appConfig.localStorageRoot, "partial-first.png"));
+  const second = writePng(path.join(appConfig.localStorageRoot, "partial-second.png"));
+  const designJob = createBoundDesignJob(localStore, binding, [first, second]);
+  api.imageSendFailures.push(null, new WechatWorkApiError("send_msg", "explicit send rejection", { errcode: 95004 }));
+  const queued = await service.queueCustomerServiceImages({
+    openKfid: "wk-partial",
+    externalUserId: "wm-partial",
+    imagePaths: [first, second],
+    designJobId: designJob.id,
+  });
+
+  const result = await service.dispatchCustomerServiceText(queued.task.id);
+  assert.equal(result.task.status, "failed");
+  assert.equal(result.retryScheduled, false);
+  assert.equal(result.attempt.metadata.deliveryState, "partial");
+  assert.equal(result.attempt.metadata.acceptedMessageIds.length, 1);
+  assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
+});
+
+test("WeChat Work image queue rejects paths outside LOCAL_STORAGE_ROOT", async () => {
+  const { service, tempDir } = setup();
+  const outside = writePng(path.join(tempDir, "outside.png"));
+  await assert.rejects(
+    () => service.queueCustomerServiceImages({ openKfid: "wk-outside", externalUserId: "wm-outside", imagePaths: [outside] }),
+    /inside LOCAL_STORAGE_ROOT/,
+  );
+});
+
+test("WeChat Work image queue rejects a design job bound to another customer", async () => {
+  const { localStore, service } = setup();
+  const owner = localStore.upsertWechatWorkBinding({ openKfid: "wk-design-owner", externalUserId: "wm-owner" });
+  localStore.upsertWechatWorkBinding({ openKfid: "wk-design-owner", externalUserId: "wm-other" });
+  const image = writePng(path.join(appConfig.localStorageRoot, "wrong-customer.png"));
+  const designJob = createBoundDesignJob(localStore, owner, [image]);
+
+  await assert.rejects(
+    () => service.queueCustomerServiceImages({
+      openKfid: "wk-design-owner",
+      externalUserId: "wm-other",
+      designJobId: designJob.id,
+      imagePaths: [image],
+    }),
+    /not bound to the selected WeChat Work customer/,
+  );
+});
+
 test("callback validation failures are audited without recording secrets or response bodies", async () => {
   const { localStore, service } = setup();
   await assert.rejects(() => service.verifyCallback({}), /echostr is required/);
@@ -178,11 +341,11 @@ test("callback validation failures are audited without recording secrets or resp
   assert.equal(Object.hasOwn(failure, "response"), false);
 });
 
-test("kf/send_msg transport failures are bounded and create a new attempt on retry", async () => {
+test("kf/send_msg explicit API failures are bounded and create a new attempt on retry", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-retry", externalUserId: "wm-retry" });
   const queued = await service.queueCustomerServiceText({ openKfid: "wk-retry", externalUserId: "wm-retry", text: "重试测试" });
-  api.sendFailures.push(new Error("temporary network failure"));
+  api.sendFailures.push(new WechatWorkApiError("send_msg", "temporary explicit API failure", { errcode: 45009 }));
 
   const first = await dispatch.processSafeSendQueue({ adapter: "wechat_work_kf", conversationId: binding.conversationId });
   assert.equal(first.failed.length, 1);
@@ -267,6 +430,58 @@ test("app config loads Enterprise WeChat values from the desktop env file", () =
     adapter: "wechat_work_kf",
     publicBaseUrl: "https://kefu.example.com",
   });
+});
+
+test("official API client uploads image multipart then sends image media_id", async (t) => {
+  const { tempDir } = setup();
+  const image = writePng(path.join(appConfig.localStorageRoot, "client-upload.png"));
+  const originalFetch = global.fetch;
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+  const requests = [];
+  global.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    if (String(url).includes("/cgi-bin/gettoken?")) {
+      return new Response(JSON.stringify({ errcode: 0, access_token: "access-token", expires_in: 7200 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (String(url).includes("/cgi-bin/media/upload?")) {
+      assert.equal(init.method, "POST");
+      assert.match(String(url), /access_token=access-token&type=image$/);
+      assert.ok(init.body instanceof FormData);
+      const media = init.body.get("media");
+      assert.equal(media.name, "client-upload.png");
+      assert.equal(media.type, "image/png");
+      assert.equal(media.size, fs.statSync(image).size);
+      return new Response(JSON.stringify({ errcode: 0, errmsg: "ok", type: "image", media_id: "media-client" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const body = JSON.parse(init.body);
+    assert.equal(body.msgtype, "image");
+    assert.deepEqual(body.image, { media_id: "media-client" });
+    assert.equal(body.msgid, "message-client");
+    return new Response(JSON.stringify({ errcode: 0, errmsg: "ok", msgid: "api-message-client" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const client = new WechatWorkApiClient();
+  const upload = await client.uploadImage({ filePath: image });
+  const sent = await client.sendImage({
+    externalUserId: "wm-client",
+    openKfid: "wk-client",
+    mediaId: upload.media_id,
+    msgid: "message-client",
+  });
+  assert.equal(sent.msgid, "api-message-client");
+  assert.equal(requests.length, 3);
+  assert.equal(path.dirname(image).startsWith(path.resolve(tempDir)), true);
 });
 
 function encryptCallback(message, encodingAesKey, receiveId) {

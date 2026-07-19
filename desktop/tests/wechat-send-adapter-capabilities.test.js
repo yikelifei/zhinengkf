@@ -32,6 +32,16 @@ test("dry run keeps image support for safe local verification", () => {
   assert.equal(dryRun.realSend, false);
 });
 
+test("WeChat Work official adapter declares guarded image support", () => {
+  const service = new WechatSendAdapterService();
+  const official = service.describe("wechat_work_kf");
+
+  assert.equal(official.capabilities.images, true);
+  assert.equal(official.capabilities.requiresWindowGuard, false);
+  assert.equal(official.capabilities.writesOutbox, false);
+  assert.equal(official.realSend, true);
+});
+
 test("windows bridge lists dispatch instruction files separately", () => {
   const dispatchDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-dispatch-list-"));
   process.env.WECHAT_BRIDGE_DISPATCH_DIR = dispatchDir;

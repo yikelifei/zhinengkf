@@ -3,7 +3,8 @@ import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Injectable, Optional } from "@nestjs/common";
 import { appConfig } from "../shared/app-config";
-import { WechatWorkApiClient } from "../wechat-work/wechat-work-api.client";
+import { WechatWorkApiClient, WechatWorkApiError } from "../wechat-work/wechat-work-api.client";
+import { resolveWechatWorkImageFile } from "../wechat-work/wechat-work-media";
 
 type AdapterStatus = "started" | "dry_run" | "sent" | "failed";
 
@@ -19,6 +20,33 @@ type AdapterResult = {
   errorMessage?: string;
   metadata?: Record<string, unknown>;
 };
+
+export class WechatWorkKfDeliveryError extends Error {
+  readonly retrySafe: boolean;
+  readonly deliveryState: "failed" | "unknown" | "partial";
+  readonly stage: string;
+  readonly acceptedMessageIds: string[];
+  readonly uploadedMediaIds: string[];
+
+  constructor(
+    message: string,
+    details: {
+      retrySafe: boolean;
+      deliveryState: "failed" | "unknown" | "partial";
+      stage: string;
+      acceptedMessageIds: string[];
+      uploadedMediaIds: string[];
+    },
+  ) {
+    super(message);
+    this.name = "WechatWorkKfDeliveryError";
+    this.retrySafe = details.retrySafe;
+    this.deliveryState = details.deliveryState;
+    this.stage = details.stage;
+    this.acceptedMessageIds = [...details.acceptedMessageIds];
+    this.uploadedMediaIds = [...details.uploadedMediaIds];
+  }
+}
 
 type BridgeFileEntry = {
   fileName: string;
@@ -65,7 +93,7 @@ const adapters = {
     name: "wechat_work_kf",
     label: "企业微信官方客服 API",
     realSend: true,
-    description: "通过企业微信微信客服 kf/send_msg 发送文本，并以 SendAttempt 和异步失败事件记录最终结果。",
+    description: "通过企业微信微信客服素材上传与 kf/send_msg 顺序发送文本和图片，并以 SendAttempt 和异步失败事件记录最终结果。",
   },
 };
 
@@ -75,7 +103,7 @@ export class WechatSendAdapterService {
 
   describe(adapterName?: string) {
     const adapter = this.resolve(adapterName);
-    const supportsImageActions = adapter.name === "dry_run" || adapter.name === "windows_bridge";
+    const supportsImageActions = adapter.name === "dry_run" || adapter.name === "windows_bridge" || adapter.name === "wechat_work_kf";
     return {
       ...adapter,
       configuredName: appConfig.wechatSendAdapter,
@@ -103,16 +131,71 @@ export class WechatSendAdapterService {
   ) {
     if (!this.wechatWorkApi) throw new Error("wechat work api client is unavailable");
     const text = String(task?.payload?.textBeforeImages || task?.payload?.text || "").trim();
-    if (!text) throw new Error("wechat work customer-service send requires a text payload");
-    if (Buffer.byteLength(text, "utf8") > 2048) {
+    const rawImagePaths = Array.isArray(task?.payload?.imagePaths) ? task.payload.imagePaths : [];
+    const images = rawImagePaths.map((filePath: unknown) => resolveWechatWorkImageFile(filePath));
+    const actionCount = (text ? 1 : 0) + images.length;
+    if (!actionCount) throw new Error("wechat work customer-service send requires text or at least one image");
+    if (actionCount > 5) throw new Error("wechat work customer-service send exceeds the 5-message limit");
+    if (text && Buffer.byteLength(text, "utf8") > 2048) {
       throw new Error("wechat work customer-service text exceeds 2048 bytes");
     }
-    return this.wechatWorkApi.sendText({
-      externalUserId: binding.externalUserId,
-      openKfid: binding.openKfid,
-      text,
-      msgid,
-    });
+
+    const acceptedMessageIds: string[] = [];
+    const uploadedMediaIds: string[] = [];
+    const messages: Array<Record<string, unknown>> = [];
+    const actionMsgId = (index: number) => actionCount === 1 ? msgid : `${msgid}_${index + 1}`;
+    let actionIndex = 0;
+
+    if (text) {
+      const outboundMsgId = actionMsgId(actionIndex++);
+      try {
+        const response = await this.wechatWorkApi.sendText({
+          externalUserId: binding.externalUserId,
+          openKfid: binding.openKfid,
+          text,
+          msgid: outboundMsgId,
+        });
+        const apiMsgId = response.msgid || outboundMsgId;
+        acceptedMessageIds.push(apiMsgId);
+        messages.push({ type: "text", msgid: apiMsgId });
+      } catch (error) {
+        throw buildWechatWorkDeliveryError(error, "send_text", acceptedMessageIds, uploadedMediaIds);
+      }
+    }
+
+    for (const image of images) {
+      let mediaId: string;
+      try {
+        const upload = await this.wechatWorkApi.uploadImage({ filePath: image.filePath });
+        mediaId = upload.media_id;
+        uploadedMediaIds.push(mediaId);
+      } catch (error) {
+        throw buildWechatWorkDeliveryError(error, "upload_image", acceptedMessageIds, uploadedMediaIds);
+      }
+      const outboundMsgId = actionMsgId(actionIndex++);
+      try {
+        const response = await this.wechatWorkApi.sendImage({
+          externalUserId: binding.externalUserId,
+          openKfid: binding.openKfid,
+          mediaId,
+          msgid: outboundMsgId,
+        });
+        const apiMsgId = response.msgid || outboundMsgId;
+        acceptedMessageIds.push(apiMsgId);
+        messages.push({ type: "image", msgid: apiMsgId, mediaId, fileName: image.fileName });
+      } catch (error) {
+        throw buildWechatWorkDeliveryError(error, "send_image", acceptedMessageIds, uploadedMediaIds);
+      }
+    }
+
+    return {
+      errcode: 0,
+      errmsg: "ok",
+      msgid: acceptedMessageIds.at(-1) || msgid,
+      messages,
+      apiMsgIds: acceptedMessageIds,
+      uploadedMediaIds,
+    };
   }
 
   listBridgeOutbox(): BridgeFileEntry[] {
@@ -389,6 +472,28 @@ export class WechatSendAdapterService {
     if (name === "wechat_work_kf") return adapters.wechat_work_kf;
     return adapters.dry_run;
   }
+}
+
+function buildWechatWorkDeliveryError(
+  error: unknown,
+  stage: string,
+  acceptedMessageIds: string[],
+  uploadedMediaIds: string[],
+) {
+  const explicitApiFailure = error instanceof WechatWorkApiError && typeof error.errcode === "number";
+  const hasAcceptedMessages = acceptedMessageIds.length > 0;
+  const deliveryState = hasAcceptedMessages ? "partial" : explicitApiFailure || stage === "upload_image" ? "failed" : "unknown";
+  const retrySafe = !hasAcceptedMessages && (stage === "upload_image" || explicitApiFailure);
+  return new WechatWorkKfDeliveryError(
+    error instanceof Error ? error.message : `wechat work ${stage} failed`,
+    {
+      retrySafe,
+      deliveryState,
+      stage,
+      acceptedMessageIds,
+      uploadedMediaIds,
+    },
+  );
 }
 
 function resolveBridgeChildFile(filePath: string, rootDir: string, label: string) {

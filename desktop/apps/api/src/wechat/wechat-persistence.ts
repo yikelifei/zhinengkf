@@ -315,6 +315,14 @@ export class WechatPersistence {
     return (await this.attachQuotes([task]))[0];
   }
 
+  async getDesignJob(id: string) {
+    if (this.isLocal) return this.localStore.getDesignJob(id);
+    return (this.prisma as any).designJob.findUnique({
+      where: { id },
+      include: { images: { orderBy: [{ position: "asc" }, { id: "asc" }] } },
+    });
+  }
+
   async createSendTask(payload: any) {
     if (this.isLocal) return this.localStore.createSendTask(payload);
     const task = await (this.prisma as any).wechatSendTask.create({
@@ -731,7 +739,14 @@ export class WechatPersistence {
   async findWechatWorkSendAttemptByMsgId(msgid: string) {
     if (this.isLocal) return this.localStore.findWechatWorkSendAttemptByMsgId(msgid);
     const attempt = await (this.prisma as any).wechatSendAttempt.findFirst({
-      where: { metadata: { path: ["apiMsgId"], equals: msgid } },
+      where: {
+        OR: [
+          { metadata: { path: ["apiMsgId"], equals: msgid } },
+          { metadata: { path: ["wechatWorkMsgId"], equals: msgid } },
+          { metadata: { path: ["apiMsgIds"], array_contains: [msgid] } },
+          { metadata: { path: ["wechatWorkMsgIds"], array_contains: [msgid] } },
+        ],
+      },
       include: attemptInclude,
       orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
     });

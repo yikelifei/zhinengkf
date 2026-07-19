@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import fs from "node:fs";
 import { appConfig } from "../shared/app-config";
+import { resolveWechatWorkImageFile } from "./wechat-work-media";
 
 export type WechatWorkKfMessage = {
   msgid?: string;
@@ -80,6 +82,58 @@ export class WechatWorkApiClient {
           msgid: requiredText(payload.msgid, "msgid"),
           msgtype: "text",
           text: { content: requiredText(payload.text, "text") },
+        },
+        "send_msg",
+      ),
+    );
+  }
+
+  async uploadImage(payload: { filePath: string }) {
+    const image = resolveWechatWorkImageFile(payload.filePath);
+    return this.withAccessToken("media_upload", async (accessToken) => {
+      const form = new FormData();
+      const bytes = fs.readFileSync(image.filePath);
+      form.append("media", new Blob([new Uint8Array(bytes)], { type: image.contentType }), image.fileName);
+      let response: Response;
+      try {
+        response = await fetch(
+          `${appConfig.wechatWorkApiBaseUrl}/cgi-bin/media/upload?access_token=${encodeURIComponent(accessToken)}&type=image`,
+          { method: "POST", body: form },
+        );
+      } catch (error) {
+        throw new WechatWorkApiError(
+          "media_upload",
+          error instanceof Error ? error.message : "wechat work media_upload network error",
+        );
+      }
+      const data = await readJson(response, "media_upload");
+      if (!response.ok || Number(data.errcode || 0) !== 0 || !data.media_id) {
+        throw new WechatWorkApiError("media_upload", `wechat work media_upload failed: ${data.errmsg || response.status}`, {
+          errcode: finiteNumber(data.errcode),
+          httpStatus: response.status,
+          response: data,
+        });
+      }
+      return {
+        errcode: Number(data.errcode || 0),
+        errmsg: String(data.errmsg || ""),
+        type: String(data.type || "image"),
+        media_id: String(data.media_id),
+        created_at: data.created_at == null ? undefined : String(data.created_at),
+      };
+    });
+  }
+
+  async sendImage(payload: { externalUserId: string; openKfid: string; mediaId: string; msgid: string }) {
+    return this.withAccessToken("send_msg", (accessToken) =>
+      this.postJson<{ errcode?: number; errmsg?: string; msgid?: string }>(
+        `/cgi-bin/kf/send_msg?access_token=${encodeURIComponent(accessToken)}`,
+        {
+          touser: requiredText(payload.externalUserId, "externalUserId"),
+          open_kfid: requiredText(payload.openKfid, "openKfid"),
+          msgid: requiredText(payload.msgid, "msgid"),
+          msgtype: "image",
+          image: { media_id: requiredText(payload.mediaId, "mediaId") },
         },
         "send_msg",
       ),
