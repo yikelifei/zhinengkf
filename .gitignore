@@ -49,6 +49,8 @@ desktop/node_modules/
 desktop/.next/
 desktop/out/
 desktop/dist/
+desktop/release/
+desktop/.package-cache/
 desktop/apps/**/.next/
 desktop/apps/**/dist/
 desktop/storage/

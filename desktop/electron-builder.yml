@@ -1,0 +1,76 @@
+appId: com.zhenxi.smartkefu
+productName: Smart Kefu
+asar: true
+npmRebuild: false
+
+directories:
+  output: release/windows
+
+files:
+  - apps/electron/main.js
+  - apps/electron/preload.js
+  - apps/electron/packaged-runtime.js
+  - package.json
+  - '!.env'
+  - '!.env.*'
+  - '!.runtime/**'
+  - '!storage/**'
+  - '!logs/**'
+  - '!*.log'
+  - '!**/*.map'
+
+asarUnpack:
+  - node_modules/@prisma/client/**/*
+
+extraResources:
+  - from: dist/apps/api
+    to: services/api
+    filter:
+      - '**/*.js'
+  - from: apps/web/.next/standalone
+    to: services/web
+    filter:
+      - '**/*'
+      - '!**/.next/cache/**'
+      - '!**/*.map'
+      - '!.env*'
+      - '!.runtime/**'
+      - '!storage/**'
+      - '!logs/**'
+      - '!*.log'
+  - from: packages/rules
+    to: services/runtime-root/packages/rules
+    filter:
+      - '**/*.js'
+      - package.json
+  - from: tools/wechat-window-observer.js
+    to: services/runtime-root/tools/wechat-window-observer.js
+  - from: ../config/settings.yaml
+    to: services/runtime-root/config/settings.yaml
+  - from: node_modules/@prisma/client
+    to: services/runtime-root/node_modules/@prisma/client
+    filter:
+      - '**/*'
+      - '!**/*.map'
+  - from: node_modules/.prisma/client
+    to: services/runtime-root/node_modules/.prisma/client
+    filter:
+      - '**/*'
+      - '!**/*.map'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: SmartKefu-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
