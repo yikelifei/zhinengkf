@@ -81,7 +81,7 @@ test("design image local preview reads only the image bound to the expected desi
   }
 });
 
-test("design image local preview rejects a local file outside the bound design job folder", async () => {
+test("design image local preview returns a diagnostic stale-record state outside the bound design job folder", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   const previousStorageRoot = appConfig.localStorageRoot;
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-image-preview-boundary-"));
@@ -119,8 +119,137 @@ test("design image local preview rejects a local file outside the bound design j
           expectedConversationId: "conversation_1",
           expectedCustomerId: "customer_1",
         }),
-      /not bound to this design job/,
+      (error) => {
+        assert.equal(error.getStatus(), 409);
+        assert.deepEqual(error.getResponse(), {
+          code: "DESIGN_IMAGE_LOCAL_FILE_STALE_RECORD",
+          state: "stale_record",
+          message: "图片记录指向其他设计任务目录，可重新下载并修复绑定。",
+          canRepair: false,
+        });
+        return true;
+      },
     );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+    appConfig.localStorageRoot = previousStorageRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("design job list diagnoses ready, missing, stale and unsaved historical image records", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const previousStorageRoot = appConfig.localStorageRoot;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-image-preview-diagnostics-"));
+  const jobId = "design_diagnostics_1";
+  const readyPath = path.join(tempRoot, "design-jobs", jobId, "ready.png");
+  const missingPath = path.join(tempRoot, "design-jobs", jobId, "missing.png");
+  const stalePath = path.join(os.tmpdir(), "old-runtime", "design-jobs", jobId, "stale.png");
+  fs.mkdirSync(path.dirname(readyPath), { recursive: true });
+  fs.writeFileSync(readyPath, Buffer.from("ready"));
+  const job = {
+    id: jobId,
+    requestId: "request_diagnostics_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    images: [
+      { id: "image_ready", imageId: "ready", localPath: readyPath, downloadUrl: "http://example.test/ready.png" },
+      { id: "image_missing", imageId: "missing", localPath: missingPath, downloadUrl: "http://example.test/missing.png" },
+      { id: "image_stale", imageId: "stale", localPath: stalePath, downloadUrl: "http://example.test/stale.png" },
+      { id: "image_unsaved", imageId: "unsaved", downloadUrl: "" },
+    ],
+  };
+
+  try {
+    appConfig.useLocalStore = true;
+    appConfig.localStorageRoot = tempRoot;
+    const service = new DesignJobsService(
+      {},
+      {},
+      { listDesignJobs: () => [job] },
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    const [decorated] = await service.list();
+    assert.deepEqual(
+      decorated.images.map((image) => [image.imageId, image.localFile.state, image.localFile.canRepair]),
+      [
+        ["ready", "ready", false],
+        ["missing", "missing_file", true],
+        ["stale", "stale_record", true],
+        ["unsaved", "not_saved", false],
+      ],
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+    appConfig.localStorageRoot = previousStorageRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale historical image can be redownloaded into the current job folder", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const previousStorageRoot = appConfig.localStorageRoot;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-image-preview-repair-"));
+  const job = {
+    id: "design_repair_1",
+    requestId: "request_repair_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    images: [
+      {
+        id: "image_repair_1",
+        imageId: "candidate_1",
+        position: 1,
+        localPath: path.join(os.tmpdir(), "old-runtime", "design-jobs", "design_repair_1", "candidate_1.png"),
+        downloadUrl: "http://example.test/candidate_1.png",
+      },
+    ],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    upsertDesignImages: (_jobId, images) => {
+      job.images = job.images.map((image) =>
+        image.imageId === images[0].imageId ? { ...image, ...images[0] } : image,
+      );
+      return job.images;
+    },
+  };
+
+  try {
+    appConfig.useLocalStore = true;
+    appConfig.localStorageRoot = tempRoot;
+    const service = new DesignJobsService(
+      {},
+      {},
+      localStore,
+      {},
+      {
+        saveDesignImage: async (jobId, imageId) => {
+          const savedPath = path.join(tempRoot, "design-jobs", jobId, `${imageId}.png`);
+          fs.mkdirSync(path.dirname(savedPath), { recursive: true });
+          fs.writeFileSync(savedPath, Buffer.from("repaired"));
+          return savedPath;
+        },
+      },
+      {},
+      {},
+      {},
+    );
+
+    const result = await service.repairLocalDesignImage(job.id, "candidate_1", {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+    });
+    assert.equal(result.repaired, true);
+    assert.equal(result.image.localFile.state, "ready");
+    assert.equal(result.image.localPath, path.join(tempRoot, "design-jobs", job.id, "candidate_1.png"));
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
     appConfig.localStorageRoot = previousStorageRoot;
@@ -140,4 +269,8 @@ test("web image tiles prefer the scoped design-image local preview endpoint", ()
   assert.match(pageSource, /<img src=\{src\}/);
   assert.match(modelSource, /function designImagePreviewSrc[\s\S]*localDesignImageUrl\(job\.id, image, identityExpectation\(job\)\) \|\| image\.downloadUrl/);
   assert.match(controllerSource, /@Get\(":id\/images\/:imageId\/local-file"\)/);
+  assert.match(controllerSource, /@Get\(":id\/images\/:imageId\/local-file-status"\)/);
+  assert.match(controllerSource, /@Post\(":id\/images\/:imageId\/repair-local-file"\)/);
+  assert.match(pageSource, /image\.localFile && image\.localFile\.state !== "ready"/);
+  assert.match(pageSource, /历史图片已重新下载到当前存储目录/);
 });
