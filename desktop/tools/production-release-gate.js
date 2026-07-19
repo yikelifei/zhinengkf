@@ -28,6 +28,11 @@ const externalBlockers = Object.freeze([
     summary: "本地只做 schema、客户端生成和离线 SQL 检查；现有数据库基线及 prisma migrate deploy 必须在隔离的预发布数据库实跑。",
   },
   {
+    id: "external.automation_queue",
+    title: "生产 BullMQ 持久调度证据",
+    summary: "需在隔离预发布环境确认 durable 模式、Redis 权限/持久化、唯一 scheduler、全局并发 1、Worker 在线和故障恢复；报告不得回显 Redis URL 或密码。",
+  },
+  {
     id: "external.integrations",
     title: "真实渠道与设计平台联调",
     summary: "真实微信/企业微信授权、公开 HTTPS 回调、AI 供应商和设计平台可用性需要在受控预发布环境验收。",
@@ -169,6 +174,8 @@ function checkDesktopAndDocs(options = {}) {
     path.join(root, "docs", "PRODUCTION_RELEASE_CHECKLIST.md"),
     path.join(root, "README.md"),
     path.join(root, "tools", "README.md"),
+    path.join(desktop, "apps", "api", "src", "automation", "automation-queue.runtime.ts"),
+    path.join(desktop, "docs", "AUTOMATION_DURABLE_SCHEDULER.md"),
   ];
   const missing = expectedFiles.filter((file) => !fs.existsSync(file)).map((file) => path.relative(root, file));
   if (missing.length) {
@@ -177,7 +184,14 @@ function checkDesktopAndDocs(options = {}) {
     });
   }
   const checklist = fs.readFileSync(path.join(root, "docs", "PRODUCTION_RELEASE_CHECKLIST.md"), "utf8");
-  const requiredText = ["production-release-gate.cmd", "PASS", "BLOCKED", "FAIL", "prisma migrate deploy"];
+  const requiredText = [
+    "production-release-gate.cmd",
+    "PASS",
+    "BLOCKED",
+    "FAIL",
+    "prisma migrate deploy",
+    "LOW_VALUE_AUTOMATION_MODE=durable",
+  ];
   const absentText = requiredText.filter((text) => !checklist.includes(text));
   if (absentText.length) {
     return result(

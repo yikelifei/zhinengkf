@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { CatalogService } from "../catalog/catalog.service";
 import { DesignJobsService } from "../design-jobs/design-jobs.service";
 import { DesignPlatformClient } from "../integrations/design-platform/design-platform.client";
@@ -434,7 +434,7 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
 }
 
 @Injectable()
-export class AutomationService implements OnModuleInit, OnModuleDestroy {
+export class AutomationService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private startedAt: string | null = null;
@@ -455,20 +455,6 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     this.recentRuns = this.store?.listAutomationRuns(10) || [];
     this.lastRun = this.recentRuns[0] || null;
     this.runCount = this.recentRuns.filter((run) => !run.skipped).length;
-  }
-
-  onModuleInit() {
-    if (!appConfig.lowValueAutomationEnabled) return;
-    this.start();
-    if (appConfig.lowValueAutomationRunOnStart) {
-      setTimeout(() => {
-        void this.runOnce("startup");
-      }, 1500);
-    }
-  }
-
-  onModuleDestroy() {
-    this.stop();
   }
 
   start() {

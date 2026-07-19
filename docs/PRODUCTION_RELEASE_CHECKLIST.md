@@ -77,6 +77,7 @@ CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真�
 6. 分别执行 API 与 Web 生产构建；端口被占用时不破坏运行中的桌面服务，Web 构建记为 `BLOCKED`。
 7. 扫描 Git 候选文件中的私钥、禁止提交的密钥文件、高置信度供应商令牌和硬编码敏感赋值；报告只记录文件、行号和规则，不记录密钥值。
 8. 校验 `package.json` 的 Electron main、preload、`run_desktop.bat`、Windows 门禁入口和本发布清单。
+9. 校验 BullMQ durable 调度实现与文档存在；真实 Redis 连通性仍保留为 `BLOCKED`。
 
 门禁不会运行 `electron-builder`、PyInstaller、Inno Setup、NSIS、`git push` 或任何真实发送命令。
 
@@ -88,7 +89,9 @@ CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真�
 - [ ] `staging:readiness -- --execute` 的 `prisma migrate status` 为 `PASS`，报告已附到变更单。
 - [ ] 已在隔离的预发布数据库执行并留存 `prisma migrate deploy --schema prisma/schema.prisma` 输出。
 - [ ] 已运行安全备份/恢复演练，脱敏报告为 `PASS`，SHA-256、命令版本、源/恢复库迁移状态以及最小结构一致性证据已附到变更单。
-- [ ] 若启用 BullMQ/Redis，已验证目标 Redis 的连接、权限、持久化和故障提示。
+- [ ] 已配置 `LOW_VALUE_AUTOMATION_MODE=durable`，且 `LOW_VALUE_AUTOMATION_REDIS_URL` 仅由密钥管理服务注入。
+- [ ] 已验证目标 Redis 的连接、ACL、持久化和故障提示；`/api/automation/status` 不包含 URL 或密码。
+- [ ] BullMQ 只有一个固定 scheduler，全局并发为 1，Worker 在线；任务固定 `attempts=1`、`maxStalledCount=0`，未知投递不会自动重放。
 
 不要在本地门禁中传入生产 `DATABASE_URL`。数据库迁移必须在受控预发布环境执行：
 

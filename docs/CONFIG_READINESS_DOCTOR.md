@@ -29,13 +29,14 @@ npm.cmd run config:doctor -- --json --output ..\reports\config-readiness.json
 
 ## 报告范围
 
-固定检查七个组件：
+固定检查八个组件：
 
 | 组件 | `ready` 条件 | 常见 `blocked` 原因 |
 | --- | --- | --- |
 | Nest API | `API_PORT` 可用；默认 `3200` | 端口格式或范围错误 |
 | Next.js Web | `WEB_PORT` 可用且不和 API 重复；默认 `3100` | Web 端口无效、和 API 冲突、显式 `WEB_URL` 无效 |
 | 数据库 | 默认 `USE_LOCAL_STORE=true` 的本地 JSON 模式直接可用；Prisma 模式要求 PostgreSQL `DATABASE_URL` | 关闭本地存储后没有 PostgreSQL 连接串 |
+| 自动化调度 | 本地可用 `interval`；生产必须为 `durable` 并配置合法的 `redis://` / `rediss://` URL | 生产仍使用进程定时器、Redis URL 缺失或格式错误 |
 | 个人微信桥 | 沿用 `windows_bridge`、托管启动、真实发送、未验证窗口授权和自动回车开关 | 仍处于 `dry_run`，或任一显式安全开关未打开 |
 | 企微客服 | 沿用 `/api/wechat-work/status` 的 corpId、agentId、secret、token、AES key、openKfid、默认会话语义 | 任一必需项缺失，或 AES key 不能解码为 32 字节 |
 | 设计平台 | `standard_v1` 只要求合法 Base URL；`art_image_local` 还要求登录凭据和设备 ID | 适配器/Base URL 无效，或真实平台凭据/设备缺失 |
@@ -56,6 +57,7 @@ npm.cmd run config:doctor -- --json --output ..\reports\config-readiness.json
 
 - 根目录 `.env` 继续承载 `settings.yaml` 中 AI provider 占位符对应的值。
 - `desktop/.env` 或启动进程环境继续承载 Nest、数据库、微信/企微和设计平台配置。
+- `LOW_VALUE_AUTOMATION_REDIS_URL` 只由目标环境密钥管理服务注入；报告只输出配置布尔值，不回显 URL、用户名或密码。
 - `desktop/.runtime/design-platform-config.json` 继续由现有设计平台登录/配置流程管理；doctor 只读取并输出存在性布尔值。
 - `.env.example` 只保留占位值和安全开关示例，不能填写真实密钥。
 - 即使 `settings.yaml` 或运行时 JSON 中存在直接写入的凭据，JSON 报告也不会回显这些值。

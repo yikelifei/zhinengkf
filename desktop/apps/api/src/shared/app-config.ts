@@ -73,6 +73,17 @@ function resolveDesignPlatformRuntime(config = runtimeConfig) {
 }
 
 const designPlatformRuntime = resolveDesignPlatformRuntime();
+const lowValueAutomationModeRaw = String(
+  process.env.LOW_VALUE_AUTOMATION_MODE || (process.env.NODE_ENV === "production" ? "durable" : "interval"),
+).trim().toLowerCase();
+const lowValueAutomationModeCandidate: "interval" | "durable" | "invalid" =
+  lowValueAutomationModeRaw === "interval" || lowValueAutomationModeRaw === "durable"
+    ? lowValueAutomationModeRaw
+    : "invalid";
+const lowValueAutomationMode: "interval" | "durable" | "invalid" =
+  process.env.NODE_ENV === "production" && lowValueAutomationModeCandidate === "interval"
+    ? "invalid"
+    : lowValueAutomationModeCandidate;
 
 export const appConfig = {
   apiPort,
@@ -124,6 +135,8 @@ export const appConfig = {
   designTimeoutMinutes: numberEnv("DESIGN_TIMEOUT_MINUTES", 20),
   defaultOutputCount: numberEnv("DESIGN_DEFAULT_OUTPUT_COUNT", 6),
   lowValueAutomationEnabled: booleanEnv("LOW_VALUE_AUTOMATION_ENABLED", true),
+  lowValueAutomationMode,
+  lowValueAutomationRedisUrl: process.env.LOW_VALUE_AUTOMATION_REDIS_URL || "",
   lowValueAutomationRunOnStart: booleanEnv("LOW_VALUE_AUTOMATION_RUN_ON_START", true),
   lowValueAutomationIntervalMs: numberEnv("LOW_VALUE_AUTOMATION_INTERVAL_MS", 15000),
   lowValueAutomationPollLimit: numberEnv("LOW_VALUE_AUTOMATION_POLL_LIMIT", 50),

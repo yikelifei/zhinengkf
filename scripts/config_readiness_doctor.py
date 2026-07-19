@@ -29,6 +29,7 @@ COMPONENT_ORDER = (
     "api",
     "web",
     "database",
+    "automation_scheduler",
     "personal_wechat_bridge",
     "wechat_work_customer_service",
     "design_platform",
@@ -42,6 +43,7 @@ SECRET_ENV_NAMES = {
     "WECHAT_WORK_SECRET",
     "WECHAT_WORK_TOKEN",
     "WECHAT_WORK_ENCODING_AES_KEY",
+    "LOW_VALUE_AUTOMATION_REDIS_URL",
 }
 
 
@@ -215,6 +217,41 @@ def _check_database(env: dict[str, str]) -> dict:
         "Database / local store",
         missing,
         {"mode": "prisma-postgresql", "databaseUrlConfigured": not _looks_placeholder(database_url)},
+    )
+
+
+def _check_automation_scheduler(env: dict[str, str]) -> dict:
+    enabled = _flag(env.get("LOW_VALUE_AUTOMATION_ENABLED"), True)
+    node_env = _text(env.get("NODE_ENV")).lower()
+    default_mode = "durable" if node_env == "production" else "interval"
+    mode = (_text(env.get("LOW_VALUE_AUTOMATION_MODE")) or default_mode).lower()
+    redis_url = _text(env.get("LOW_VALUE_AUTOMATION_REDIS_URL"))
+    missing: list[str] = []
+    if mode not in {"interval", "durable"}:
+        missing.append("LOW_VALUE_AUTOMATION_MODE must be interval or durable")
+    if enabled and node_env == "production" and mode != "durable":
+        missing.append("production LOW_VALUE_AUTOMATION_MODE=durable")
+    if enabled and mode == "durable":
+        if _looks_placeholder(redis_url):
+            missing.append("LOW_VALUE_AUTOMATION_REDIS_URL")
+        else:
+            try:
+                parsed = urlsplit(redis_url)
+            except ValueError:
+                parsed = None
+            if not parsed or parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+                missing.append("LOW_VALUE_AUTOMATION_REDIS_URL must be a redis or rediss URL")
+    return _component(
+        "automation_scheduler",
+        "Automation scheduler",
+        missing,
+        {
+            "enabled": enabled,
+            "mode": mode,
+            "durable": mode == "durable",
+            "redisUrlConfigured": bool(redis_url) and not _looks_placeholder(redis_url),
+            "liveConnectionChecked": False,
+        },
     )
 
 
@@ -482,6 +519,7 @@ def build_report(root: Path = ROOT, environment: dict[str, str] | None = None) -
             api,
             _check_web(env, api_port),
             _check_database(env),
+            _check_automation_scheduler(env),
             _check_personal_wechat(env),
             _check_wechat_work(env),
             design,

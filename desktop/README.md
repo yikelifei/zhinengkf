@@ -860,6 +860,7 @@ POST /api/wechat/send-tasks/process-safe-queue
 - 设计草稿自动提交：低风险且资料齐全的设计草稿可以批量提交到设计平台，缺资料或高价值任务自动跳过。
 - 高价值转人工：入站消息、直接建设计任务、客户选图、手动转人工和历史任务扫描都会把高价值任务保留给人工处理，并锁定会话、记录 ReviewLog。
 - 低价值自动处理：低价值设计草稿自动提交，已出图的低价值任务自动进入微信安全发送队列。
+- 低价值持久调度：生产可使用 BullMQ Job Scheduler + Worker 复用同一个 `AutomationService.runOnce`，跨进程全局并发为 1，任务不自动重试，状态接口从 Redis 队列读取持久证据。
 - 知识沉淀模型：本地 JSON 和 Prisma schema 都预留训练样本、知识条目和导入批次。
 - 多微信账号演示数据：微信客服1号和微信客服2号各自绑定独立客户会话。
 - 发送队列安全闸门：账号、聊天对象、最近消息/客户 ID、单账号串行队列校验。
@@ -889,6 +890,6 @@ POST /api/wechat/send-tasks/process-safe-queue
 
 - 真实设计平台接口。
 - 微信 PC 真实运行仍依赖现场版本能稳定暴露 UI Automation 元素，并需要为每个账号配置进程、窗口、Windows 会话和会话绑定；不满足时桥接会阻断。
-- PostgreSQL/Redis 自动安装和 BullMQ worker。
+- PostgreSQL/Redis 自动安装不属于应用仓库职责；BullMQ Worker 已实现，生产仍需由基础设施提供受控 Redis 并完成预发布证据验收。
 - Excel 文件解析导入。
 - 引用图片和截图的图片指纹匹配。
