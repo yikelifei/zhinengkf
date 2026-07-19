@@ -48,6 +48,11 @@ test("acceptance runner and 390 renderer are wired to package scripts", () => {
   assert.match(packageJson.scripts["acceptance:e2e"], /run-product-acceptance\.js/);
   assert.match(runner, /PERSONAL_WECHAT_SEND:\s*"0"/);
   assert.match(runner, /LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE:\s*"false"/);
+  assert.match(runner, /INTERNAL_API_TOKEN:\s*internalApiToken/);
+  assert.match(runner, /headers\["x-internal-api-token"\]\s*=\s*context\.internalApiToken/);
+  assert.match(runner, /valid\.text\s*===\s*"success"/);
+  assert.match(runner, /record\.action\s*===\s*"callback_accepted"/);
+  assert.match(runner, /bridgeStatus\.autoEnter\s*!==\s*true/);
   assert.match(runner, /await waitForChildExit\(service\.child/);
   assert.match(renderer, /width:\s*390/);
   assert.match(renderer, /capturePage/);

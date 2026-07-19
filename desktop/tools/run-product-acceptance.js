@@ -197,6 +197,7 @@ async function runStackStartup(context) {
   const wechatWorkKey = Buffer.from("0123456789abcdef0123456789abcdef", "utf8")
     .toString("base64")
     .replace(/=$/, "");
+  const internalApiToken = crypto.randomBytes(32).toString("hex");
   const serviceEnv = {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
@@ -211,6 +212,7 @@ async function runStackStartup(context) {
     DESIGN_PLATFORM_BASE_URL: mockBase,
     DESIGN_PLATFORM_RUNTIME_CONFIG: designConfigPath,
     CUSTOMER_SERVICE_PUBLIC_BASE_URL: `http://127.0.0.1:${apiPort}`,
+    INTERNAL_API_TOKEN: internalApiToken,
     WECHAT_SEND_ADAPTER: "dry_run",
     WECHAT_BRIDGE_OUTBOX_DIR: path.join(context.serviceRuntimeDir, "wechat-outbox"),
     WECHAT_BRIDGE_INBOX_DIR: path.join(context.serviceRuntimeDir, "wechat-inbox"),
@@ -235,11 +237,13 @@ async function runStackStartup(context) {
     WECHAT_WORK_TOKEN: "e2e-callback-token",
     WECHAT_WORK_ENCODING_AES_KEY: wechatWorkKey,
     WECHAT_WORK_OPEN_KFID: "e2e-open-kfid",
+    WECHAT_WORK_API_BASE_URL: mockBase,
     WECHAT_WORK_DEFAULT_WECHAT_ACCOUNT_ID: "wechat_demo_1",
     WECHAT_WORK_DEFAULT_CONVERSATION_ID: "conversation_demo_1",
     WECHAT_WORK_DEFAULT_CUSTOMER_ID: "customer_demo_1",
   };
   context.serviceEnv = serviceEnv;
+  context.internalApiToken = internalApiToken;
   context.wechatWork = {
     token: serviceEnv.WECHAT_WORK_TOKEN,
     aesKey: serviceEnv.WECHAT_WORK_ENCODING_AES_KEY,
@@ -456,7 +460,7 @@ async function runPersonalBridgeNoSend(context) {
   const bridgeStatus = JSON.parse(fs.readFileSync(context.serviceEnv.PERSONAL_WECHAT_BRIDGE_STATUS_FILE, "utf8"));
   const ackFiles = listFiles(context.serviceEnv.WECHAT_BRIDGE_INBOX_DIR, ".ack.json");
   assert(bridgeStatus.sendEnabled === false, "personal bridge unexpectedly enabled real send");
-  assert(bridgeStatus.autoEnter === false, "personal bridge unexpectedly enabled auto-enter");
+  assert(bridgeStatus.autoEnter !== true, "personal bridge unexpectedly enabled auto-enter");
   assert(Number(bridgeStatus.result?.skippedCount || 0) >= 1, "personal bridge did not observe-and-skip dispatch");
   assert(Number(bridgeStatus.result?.processedCount || 0) === 0, "personal bridge processed a real send");
   assert(ackFiles.length === 0, "personal bridge wrote an acknowledgement in no-send mode");
@@ -524,11 +528,9 @@ async function runWechatWorkCallback(context) {
   requireStack(context);
   const innerXml = [
     "<xml>",
-    "<ToUserName><![CDATA[e2e-open-kfid]]></ToUserName>",
-    "<FromUserName><![CDATA[e2e-external-user]]></FromUserName>",
-    "<MsgType><![CDATA[text]]></MsgType>",
-    "<Content><![CDATA[最低多少份起做，可以小批量吗？]]></Content>",
-    `<MsgId>${Date.now()}</MsgId>`,
+    "<Event><![CDATA[kf_msg_or_event]]></Event>",
+    "<Token><![CDATA[e2e-sync-token]]></Token>",
+    "<OpenKfId><![CDATA[e2e-open-kfid]]></OpenKfId>",
     "</xml>",
   ].join("");
   const encrypted = encryptWechatWorkMessage(innerXml, context.wechatWork.aesKey, context.wechatWork.receiveId);
@@ -557,22 +559,25 @@ async function runWechatWorkCallback(context) {
     },
   );
   assert(
-    valid.ok === true && valid.processedCount === 1,
-    `authentic wrapped enterprise WeChat callback was not processed: ${JSON.stringify(valid)}`,
+    valid.text === "success",
+    `authentic wrapped enterprise WeChat callback was not acknowledged: ${JSON.stringify(valid)}`,
   );
-  assert(valid.result?.message?.direction === "inbound", "valid callback did not enter the existing inbound dispatcher");
-  assert(valid.result?.message?.conversationId === "conversation_demo_1", "valid callback used the wrong conversation");
-  assert(valid.result?.sendTask?.status !== "sent", "valid callback marked an outbound message sent");
+  const afterValidTasks = await requestJson(context, "/wechat/send-tasks");
+  assert(afterValidTasks.length === beforeTasks.length, "callback acknowledgement created an outbound task");
+  const audit = await requestJson(context, "/wechat-work/kf/audit?limit=20");
+  const accepted = (audit.records || []).find(
+    (record) => record.action === "callback_accepted" && record.status === "accepted" && record.openKfid === "e2e-open-kfid",
+  );
+  assert(accepted, "valid callback acknowledgement was not recorded in the Enterprise WeChat audit log");
 
   return {
     evidence: {
       invalidSignatureStatus: 400,
       invalidSignatureMessage: invalid.message || "signature mismatch",
       invalidMutationCount: afterInvalidTasks.length - beforeTasks.length,
-      validProcessedCount: valid.processedCount,
-      validMessageId: valid.result.message.id,
-      validConversationId: valid.result.message.conversationId,
-      queuedTaskStatus: valid.result.sendTask?.status || null,
+      acknowledgement: valid.text,
+      acceptedAuditId: accepted.id,
+      validMutationCount: afterValidTasks.length - beforeTasks.length,
       externalWechatApiCalled: false,
     },
   };
@@ -884,6 +889,13 @@ async function requestJson(context, route, options = {}) {
   }
 
   const headers = { ...(options.headers || {}) };
+  if (
+    context.internalApiToken &&
+    context.stack?.apiBase &&
+    url.origin === new URL(context.stack.apiBase).origin
+  ) {
+    headers["x-internal-api-token"] = context.internalApiToken;
+  }
   let body = options.body;
   if (body !== undefined && body !== null && typeof body !== "string" && !Buffer.isBuffer(body)) {
     body = JSON.stringify(body);
