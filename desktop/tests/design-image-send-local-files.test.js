@@ -1,6 +1,9 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 
 require("reflect-metadata");
@@ -11,6 +14,18 @@ require("ts-node").register({
 
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
+
+const VALID_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+
+function writeImageFixture(root, jobId, imageId) {
+  const file = path.join(root, "design-jobs", jobId, `${imageId}.png`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, VALID_PNG);
+  return file;
+}
 
 function createService({ job, notifications = [] }) {
   const localStore = {
@@ -463,9 +478,11 @@ test("initial design callback hands to manual review when insufficient images re
   }
 });
 
-test("initial design callback retries when local image files are below minimum", async () => {
+test("initial design callback retries when local image files are below minimum", async (t) => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-image-save-retry-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
   const saveAttempts = [];
   let upsertCalled = false;
@@ -518,7 +535,7 @@ test("initial design callback retries when local image files are below minimum",
     {
       saveDesignImage: async (jobId, imageId) => {
         saveAttempts.push({ jobId, imageId });
-        if (imageId === "candidate_1") return `C:\\storage\\design-jobs\\${jobId}\\${imageId}.png`;
+        if (imageId === "candidate_1") return writeImageFixture(tempRoot, jobId, imageId);
         throw new Error("download failed");
       },
     },
@@ -842,7 +859,9 @@ test("initial design callback hands to manual review when invalid image metadata
   }
 });
 
-test("revision callback saves local files with versioned image ids", async () => {
+test("revision callback saves local files with versioned image ids", async (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-revision-images-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
   const saved = [];
   let upsertedImages = [];
   const job = {
@@ -879,7 +898,7 @@ test("revision callback saves local files with versioned image ids", async () =>
     {
       saveDesignImage: async (jobId, imageId, downloadUrl) => {
         saved.push({ jobId, imageId, downloadUrl });
-        return `C:\\storage\\design-jobs\\${jobId}\\${imageId}.png`;
+        return writeImageFixture(tempRoot, jobId, imageId);
       },
     },
     {},
@@ -907,7 +926,9 @@ test("revision callback saves local files with versioned image ids", async () =>
   assert.equal(updated.images[0].imageId, "r1-candidate_1");
 });
 
-test("revision callback does not double-prefix already versioned image ids", async () => {
+test("revision callback does not double-prefix already versioned image ids", async (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-revision-versioned-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
   const saved = [];
   let upsertedImages = [];
   const job = {
@@ -944,7 +965,7 @@ test("revision callback does not double-prefix already versioned image ids", asy
     {
       saveDesignImage: async (jobId, imageId, downloadUrl) => {
         saved.push({ jobId, imageId, downloadUrl });
-        return `C:\\storage\\design-jobs\\${jobId}\\${imageId}.png`;
+        return writeImageFixture(tempRoot, jobId, imageId);
       },
     },
     {},

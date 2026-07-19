@@ -8,7 +8,8 @@
 - 设计平台客户端/回调契约、SKU 商品库、礼盒推荐、预算与高价值转人工、设计任务、选图、报价/订单和安全发送队列。
 - 企业微信加密回调、`sync_msg`、文本/图片媒体发送、身份绑定、幂等/审计；`WechatPersistence` 在 `USE_LOCAL_STORE=false` 时使用 Prisma 保存绑定、消息、任务、attempt 与审计日志。
 - SKU 上传文件解析支持 `.xlsx`、`.csv`、`.tsv`、`.txt`，包括标准 XLSX 模板生成和模板回读测试。旧文档中的“Excel 文件解析未实现”已过期。
-- 候选图保存稳定 SHA-256 身份哈希并支持精确身份值匹配。该值基于任务/图片元数据，不是图片字节哈希，也不是感知哈希。
+- 候选图与企业微信客户入站图片对真实 JPG/PNG 字节生成 `dhash64:v1`：EXIF 旋转、白底、灰度 `9x8`，使用 XOR/popcount 汉明距离强阈值匹配；旧元数据 SHA-256 仅保留为 `legacyIdentityHash`，不参与自动匹配。
+- 企业微信入站图片使用官方临时素材下载接口，流式限制 2 MB，并在 `LOCAL_STORAGE_ROOT` 下使用确定性路径和原子 no-clobber 发布；明确永久失败才落人工复核，网络/5xx/限流失败会中止当前同步页。
 - Windows electron-builder/NSIS 构建、显式文件白名单、未签名测试包和包内容验证工具。
 - Windows GitHub Actions 最小权限质量工作流与本地 release-quality 编排。
 - PostgreSQL 恢复演练工具：默认计划模式零命令；执行模式要求独立 rehearsal/sandbox 目标和绑定库名的确认短语。
@@ -20,7 +21,7 @@
 - 会话运营分配、优先级、SLA 与运营审计若仍固定走 LocalStore 会记为 `FAIL`；生产实现必须同时提供 list/update/audit 的 Prisma 路由。
 - 个人微信 RPA 账号绑定与业务审计固定走 LocalStore，属于生产持久化缺口。RPA endpoint/token 注册表与 Windows 主机/登录会话绑定，属于有明确理由的本机配置白名单，不覆盖前述业务记录。
 - 自动化本地/interval 兼容模式可以保留 LocalStore `recentRuns`，但生产 durable 能力只有在 BullMQ/Redis scheduler/runtime、readiness、队列状态和故障证据契约全部存在时才会通过审计。
-- 图片裁剪、压缩或截图相似匹配所需的 pHash/dHash 等感知哈希尚未实现；稳定 SHA-256 身份哈希不能替代该能力。
+- dHash 只覆盖已验证的轻微重编码/像素变化近似匹配，不承诺任意裁剪、大幅编辑或复杂截图；同分、第二名差距不足、缺失/混合/旧算法全部转人工。
 - 小红书、拼多多、淘宝、抖音和快手是路线图中的 `planned` 渠道。它们只有在状态继续为 planned、代码 fail-closed 且路线图明确“不能假装已接通”时才属于允许的规划占位。
 
 ## 只能由真实环境清零的 BLOCKED

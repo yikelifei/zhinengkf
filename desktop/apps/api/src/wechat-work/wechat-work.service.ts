@@ -6,6 +6,7 @@ import { appConfig } from "../shared/app-config";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { WechatPersistence } from "../wechat/wechat-persistence";
 import { WechatWorkApiClient, WechatWorkApiError, WechatWorkKfMessage } from "./wechat-work-api.client";
+import { storeWechatWorkInboundImage } from "./wechat-work-inbound-media";
 import { resolveWechatWorkImageFile } from "./wechat-work-media";
 import { buildWechatWorkProductionReadiness } from "./wechat-work-readiness";
 
@@ -26,6 +27,7 @@ type NormalizedInbound = {
   createdAt?: string;
   attachments: Array<Record<string, unknown>>;
   raw: WechatWorkKfMessage;
+  mediaReview?: { status: "manual_review"; mediaId: string; reason: string; apiErrcode?: number };
 };
 
 @Injectable()
@@ -189,6 +191,7 @@ export class WechatWorkService {
           else if (result.status === "duplicate") duplicates.push(result);
           else ignored.push(result);
         } catch (error) {
+          if (isTransientInboundMediaFailure(error)) throw error;
           const failure = {
             status: "failed",
             msgid: String(message.msgid || ""),
@@ -421,7 +424,7 @@ export class WechatWorkService {
       if (message.servicer_userid) {
         return this.auditIgnoredMessage(message, msgid, openKfid, externalUserId, "servicer_origin");
       }
-      const normalized = normalizeInbound(message, msgid, openKfid, externalUserId);
+      const normalized = await normalizeInbound(message, msgid, openKfid, externalUserId, this.api);
       const binding = await this.persistence.upsertWechatWorkBinding({
         openKfid: normalized.openKfid,
         externalUserId: normalized.externalUserId,
@@ -472,6 +475,20 @@ export class WechatWorkService {
         conversationId: binding.conversationId,
         messageId: result.message?.id || null,
       });
+      if (normalized.mediaReview) {
+        await this.persistence.recordWechatWorkAudit({
+          action: "inbound_media_manual_review",
+          status: "manual_review",
+          msgid,
+          msgtype: normalized.msgtype,
+          openKfid,
+          externalUserId,
+          messageId: result.message?.id || null,
+          mediaId: normalized.mediaReview.mediaId,
+          reason: normalized.mediaReview.reason,
+          apiErrcode: normalized.mediaReview.apiErrcode ?? null,
+        });
+      }
       return { status: "processed", msgid, binding, result };
     } finally {
       this.inflightInbound.delete(msgid);
@@ -620,18 +637,83 @@ export class WechatWorkService {
   }
 }
 
-function normalizeInbound(
+async function normalizeInbound(
   message: WechatWorkKfMessage,
   msgid: string,
   openKfid: string,
   externalUserId: string,
-): NormalizedInbound {
+  api: WechatWorkApiClient,
+): Promise<NormalizedInbound> {
   const msgtype = String(message.msgtype || "").trim();
   if (!openKfid || !externalUserId) {
     throw new BadRequestException("sync_msg customer message requires open_kfid and external_userid");
   }
   const body = isPlainObject(message[msgtype]) ? message[msgtype] as Record<string, unknown> : {};
   const text = inboundText(msgtype, body);
+  if (msgtype === "image") {
+    const mediaId = requiredText(body.media_id, "image.media_id");
+    try {
+      const media = await api.downloadMedia({ mediaId });
+      const stored = await storeWechatWorkInboundImage({ msgid, mediaId, media });
+      return {
+        msgid,
+        openKfid,
+        externalUserId,
+        msgtype,
+        text,
+        createdAt: message.send_time ? new Date(Number(message.send_time) * 1000).toISOString() : undefined,
+        attachments: [{
+          source: "wechat_work_kf",
+          msgid,
+          msgtype,
+          openKfid,
+          externalUserId,
+          mediaId: stored.mediaId,
+          localPath: stored.localPath,
+          size: stored.size,
+          type: stored.type,
+          width: stored.width,
+          height: stored.height,
+          fingerprint: stored.fingerprint,
+          fingerprintAlgorithm: "dhash64:v1",
+          status: stored.status,
+          reviewRequired: false,
+        }],
+        raw: message,
+      };
+    } catch (error) {
+      const apiError = error instanceof WechatWorkApiError ? error : null;
+      if (apiError && apiError.disposition !== "permanent") throw apiError;
+      const reason = apiError?.disposition || "download_or_decode_failed";
+      return {
+        msgid,
+        openKfid,
+        externalUserId,
+        msgtype,
+        text,
+        createdAt: message.send_time ? new Date(Number(message.send_time) * 1000).toISOString() : undefined,
+        attachments: [{
+          source: "wechat_work_kf",
+          msgid,
+          msgtype,
+          openKfid,
+          externalUserId,
+          mediaId,
+          status: "manual_review",
+          reviewRequired: true,
+          reason,
+          ...(apiError?.errcode == null ? {} : { apiErrcode: apiError.errcode }),
+        }],
+        raw: message,
+        mediaReview: {
+          status: "manual_review",
+          mediaId,
+          reason,
+          ...(apiError?.errcode == null ? {} : { apiErrcode: apiError.errcode }),
+        },
+      };
+    }
+  }
   return {
     msgid,
     openKfid,
@@ -652,6 +734,10 @@ function normalizeInbound(
     ],
     raw: message,
   };
+}
+
+function isTransientInboundMediaFailure(error: unknown) {
+  return error instanceof WechatWorkApiError && error.operation === "media_get" && error.disposition !== "permanent";
 }
 
 function inboundText(msgtype: string, body: Record<string, unknown>) {

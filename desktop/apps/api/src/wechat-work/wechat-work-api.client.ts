@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import fs from "node:fs";
 import { appConfig } from "../shared/app-config";
+import { MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES } from "./wechat-work-inbound-media";
 import { resolveWechatWorkImageFile } from "./wechat-work-media";
 
 export type WechatWorkKfMessage = {
@@ -37,11 +38,19 @@ export class WechatWorkApiError extends Error {
   readonly errcode?: number;
   readonly httpStatus?: number;
   readonly response?: Record<string, unknown>;
+  readonly disposition?: "permanent" | "retry_exhausted" | "manual_review" | "delayed_blocked";
+  readonly retryAfterSeconds?: number;
 
   constructor(
     operation: string,
     message: string,
-    details: { errcode?: number; httpStatus?: number; response?: Record<string, unknown> } = {},
+    details: {
+      errcode?: number;
+      httpStatus?: number;
+      response?: Record<string, unknown>;
+      disposition?: "permanent" | "retry_exhausted" | "manual_review" | "delayed_blocked";
+      retryAfterSeconds?: number;
+    } = {},
   ) {
     super(message);
     this.name = "WechatWorkApiError";
@@ -49,6 +58,8 @@ export class WechatWorkApiError extends Error {
     this.errcode = details.errcode;
     this.httpStatus = details.httpStatus;
     this.response = details.response;
+    this.disposition = details.disposition;
+    this.retryAfterSeconds = details.retryAfterSeconds;
   }
 }
 
@@ -70,6 +81,73 @@ export class WechatWorkApiClient {
         "sync_msg",
       ),
     );
+  }
+
+  async downloadMedia(payload: { mediaId: string }) {
+    const mediaId = requiredText(payload.mediaId, "mediaId");
+    let tokenRefreshed = false;
+    let transientAttempt = 0;
+
+    while (true) {
+      const accessToken = await this.getAccessToken();
+      let response: Response;
+      try {
+        response = await fetch(
+          `${appConfig.wechatWorkApiBaseUrl}/cgi-bin/media/get?access_token=${encodeURIComponent(accessToken)}&media_id=${encodeURIComponent(mediaId)}`,
+          { method: "GET" },
+        );
+      } catch {
+        transientAttempt += 1;
+        if (transientAttempt < 3) continue;
+        throw new WechatWorkApiError("media_get", "wechat work media download network retries exhausted", {
+          disposition: "retry_exhausted",
+        });
+      }
+
+      if (response.status >= 500) {
+        await discardResponse(response);
+        transientAttempt += 1;
+        if (transientAttempt < 3) continue;
+        throw new WechatWorkApiError("media_get", "wechat work media download server retries exhausted", {
+          httpStatus: response.status,
+          disposition: "retry_exhausted",
+        });
+      }
+
+      let bytes: Buffer;
+      try {
+        bytes = await readLimitedBytes(response, MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES);
+      } catch (error) {
+        if (error instanceof WechatWorkApiError && error.disposition === "permanent") throw error;
+        transientAttempt += 1;
+        if (transientAttempt < 3) continue;
+        throw new WechatWorkApiError("media_get", "wechat work media download stream retries exhausted", {
+          httpStatus: response.status,
+          disposition: "retry_exhausted",
+        });
+      }
+
+      const contentType = String(response.headers.get("content-type") || "application/octet-stream")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase();
+      if (contentType === "application/json" || contentType.endsWith("+json") || looksLikeJson(bytes) || !response.ok) {
+        const data = parseDownloadError(bytes);
+        const errcode = finiteNumber(data.errcode);
+        if ((errcode === 40014 || errcode === 42001) && !tokenRefreshed) {
+          tokenRefreshed = true;
+          this.clearAccessToken();
+          continue;
+        }
+        throw downloadApiError(errcode, response.status);
+      }
+
+      return {
+        bytes,
+        contentType,
+        size: bytes.length,
+      };
+    }
   }
 
   async sendText(payload: { externalUserId: string; openKfid: string; text: string; msgid: string }) {
@@ -162,8 +240,8 @@ export class WechatWorkApiClient {
     let response: Response;
     try {
       response = await fetch(url);
-    } catch (error) {
-      throw new WechatWorkApiError("gettoken", error instanceof Error ? error.message : "wechat work gettoken network error");
+    } catch {
+      throw new WechatWorkApiError("gettoken", "wechat work gettoken network error");
     }
     const data = await readJson(response, "gettoken");
     if (!response.ok || Number(data.errcode || 0) !== 0 || !data.access_token) {
@@ -232,4 +310,90 @@ function clampLimit(value: unknown) {
 function finiteNumber(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+async function readLimitedBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await discardResponse(response);
+    throw new WechatWorkApiError("media_get", "wechat work image exceeds the 2 MB inbound limit", {
+      httpStatus: response.status,
+      disposition: "permanent",
+    });
+  }
+  if (!response.body) throw new Error("response body is missing");
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+      const chunk = Buffer.from(item.value);
+      size += chunk.length;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new WechatWorkApiError("media_get", "wechat work image exceeds the 2 MB inbound limit", {
+          httpStatus: response.status,
+          disposition: "permanent",
+        });
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!size) throw new Error("response body is empty");
+  return Buffer.concat(chunks, size);
+}
+
+async function discardResponse(response: Response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best effort only. No response bytes are logged.
+  }
+}
+
+function parseDownloadError(bytes: Buffer): Record<string, unknown> {
+  try {
+    const data = JSON.parse(bytes.toString("utf8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function looksLikeJson(bytes: Buffer) {
+  const first = bytes.subarray(0, Math.min(bytes.length, 32)).toString("utf8").trimStart()[0];
+  return first === "{" || first === "[";
+}
+
+function downloadApiError(errcode: number | undefined, httpStatus: number) {
+  const response = {
+    ...(errcode == null ? {} : { errcode }),
+  };
+  if (errcode === 40007 || errcode === 41006) {
+    return new WechatWorkApiError("media_get", `wechat work media download permanently rejected (${errcode})`, {
+      errcode,
+      httpStatus,
+      response,
+      disposition: "permanent",
+    });
+  }
+  if (errcode === 45009) {
+    return new WechatWorkApiError("media_get", "wechat work media download is rate limited and requires delayed review", {
+      errcode,
+      httpStatus,
+      response,
+      disposition: "delayed_blocked",
+      retryAfterSeconds: 60,
+    });
+  }
+  return new WechatWorkApiError("media_get", "wechat work media download requires manual review", {
+    errcode,
+    httpStatus,
+    response,
+    disposition: "manual_review",
+  });
 }

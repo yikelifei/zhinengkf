@@ -57,6 +57,27 @@ extraResources:
     filter:
       - '**/*'
       - '!**/*.map'
+  - from: node_modules/sharp
+    to: services/runtime-root/node_modules/sharp
+    filter:
+      - '**/*'
+      - '!**/*.map'
+  - from: node_modules/@img/colour
+    to: services/runtime-root/node_modules/@img/colour
+    filter:
+      - '**/*'
+  - from: node_modules/@img/sharp-win32-x64
+    to: services/runtime-root/node_modules/@img/sharp-win32-x64
+    filter:
+      - '**/*'
+  - from: node_modules/detect-libc
+    to: services/runtime-root/node_modules/detect-libc
+    filter:
+      - '**/*'
+  - from: node_modules/semver
+    to: services/runtime-root/node_modules/semver
+    filter:
+      - '**/*'
 
 win:
   target:

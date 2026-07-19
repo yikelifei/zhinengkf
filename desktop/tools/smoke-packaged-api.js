@@ -36,6 +36,9 @@ async function main() {
     path.join(readOnlyRoot, "packages", "rules", "index.js"),
     path.join(readOnlyRoot, "config", "settings.yaml"),
     path.join(readOnlyRoot, "node_modules", ".prisma", "client", "default.js"),
+    path.join(readOnlyRoot, "node_modules", "sharp", "lib", "index.js"),
+    path.join(readOnlyRoot, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"),
+    path.join(resourcesDir, "services", "api", "shared", "image-fingerprint.js"),
   ];
   for (const required of requiredFiles) {
     if (!fs.existsSync(required)) throw new Error(`packaged full-stack smoke input missing: ${required}`);
@@ -65,6 +68,10 @@ async function main() {
 
   const processes = [];
   try {
+    const sharpFingerprint = await verifyPackagedSharp({
+      ...commonEnv,
+      PACKAGED_FINGERPRINT_MODULE: path.join(resourcesDir, "services", "api", "shared", "image-fingerprint.js"),
+    });
     const api = spawnService("api", apiEntry, readOnlyRoot, commonEnv);
     processes.push(api);
     const apiHealth = await waitForUrl(api, apiHealthUrl, 45_000);
@@ -93,6 +100,7 @@ async function main() {
       cwd: "resources/services/runtime-root",
       writableRoot: "temporary user-data-equivalent directory",
       sharedToken: "generated 64-hex token (not persisted)",
+      sharpFingerprint,
     });
     console.log(`[PASS] packaged full-stack smoke: API=${apiPort}, Web=${webPort}, overview/proxy/static ready`);
   } catch (error) {
@@ -102,6 +110,38 @@ async function main() {
     await Promise.all(processes.reverse().map(stopChild));
     fs.rmSync(smokeRoot, { recursive: true, force: true });
   }
+}
+
+async function verifyPackagedSharp(env) {
+  const script = path.join(smokeRoot, "verify-sharp.js");
+  fs.writeFileSync(script, [
+    '"use strict";',
+    'const sharp = require("sharp");',
+    'const { fingerprintImageBytes } = require(process.env.PACKAGED_FINGERPRINT_MODULE);',
+    'const pixels = Buffer.from([0,16,32,48,64,80,96,112,128].flatMap((row) => Array(8).fill(row)));',
+    'sharp(pixels, { raw: { width: 9, height: 8, channels: 1 } }).png().toBuffer()',
+    '  .then((png) => fingerprintImageBytes(png))',
+    '  .then((result) => process.stdout.write(result.fingerprint))',
+    '  .catch((error) => { console.error(error.message); process.exitCode = 1; });',
+  ].join("\n"), "utf8");
+  const result = await spawnCapture(executable, [script], { ...env, ELECTRON_RUN_AS_NODE: "1" }, smokeRoot);
+  const fingerprint = String(result.stdout || "").trim();
+  if (result.code !== 0 || fingerprint !== "dhash64:v1:0000000000000000") {
+    throw new Error(`packaged Sharp fixture fingerprint failed: code=${result.code} output=${redact(fingerprint)} error=${redact(result.stderr)}`);
+  }
+  return fingerprint;
+}
+
+function spawnCapture(command, args, env, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+  });
 }
 
 function stopChild(child) {

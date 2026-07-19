@@ -28,7 +28,7 @@ function createPassingFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-fixture-"));
   for (const artifact of REQUIRED_ARTIFACTS) write(root, artifact.file);
   write(root, ".gitignore", "desktop/.runtime/\n");
-  write(root, "desktop/package.json", JSON.stringify({ scripts: {
+  write(root, "desktop/package.json", JSON.stringify({ dependencies: { sharp: "0.34.5" }, scripts: {
     "release:gate": "x", "staging:readiness": "x", "database:recovery:plan": "x",
     "database:recovery:execute": "x", "package:win:test": "x", "package:win:signed": "x",
     "ci:release-quality": "x", "project:completion:audit": "x",
@@ -39,7 +39,7 @@ function createPassingFixture() {
   write(root, "desktop/packages/rules/skuImport.js", "function parseSkuImportFile() {}\nfunction buildSkuImportTemplateXlsx() {}\nmodule.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };\n");
   write(root, "desktop/packages/rules/index.js", "module.exports={...require('./skuImport')};\n");
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", "if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n");
-  write(root, "desktop/README.md", "npm run project:completion:audit\n稳定 SHA-256 身份哈希\n");
+  write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n");
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
   write(root, "desktop/apps/api/src/automation/automation-scheduler.service.ts", 'lowValueAutomationMode === "durable"; bullmq_redis; readiness();\n');
@@ -53,7 +53,11 @@ function createPassingFixture() {
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service.ts", "REGISTRY_VERSION; readRegistryState(); writeRegistryDocument(); PersonalWechatRpaPersistence; this.persistence.listBindings(); this.persistence.listAudit(); this.persistence.upsertBinding(); this.persistence.recordAudit(); assertProductionIdentity();\n");
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence.ts", "prisma.$transaction(); hydrateBinding(); sanitizeError();\n");
   write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
-  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'createHash("sha256"); perceptualHash();\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash;\n');
+  write(root, "desktop/apps/api/src/shared/image-fingerprint.ts", 'import sharp from "sharp";\nconst IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";\nsharp().rotate().flatten({}).greyscale().resize(9, 8);\n');
+  write(root, "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts", 'fetch(`/cgi-bin/media/get?media_id=${encodeURIComponent(mediaId)}`); errcode === 40007; errcode === 41006; errcode === 45009; retry_exhausted;\n');
+  write(root, "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts", 'MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES; LOCAL_STORAGE_ROOT; fs.link(temporaryPath, finalPath); inspectExistingImage();\n');
+  write(root, "desktop/packages/rules/selectionMatcher.js", 'hammingDistance(); nearest.distance > 1; gap < 2; "候选图存在缺失或旧版指纹";\n');
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
   return root;
@@ -158,6 +162,8 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   assert.match(status, /electron-builder\/NSIS/);
   assert.match(status, /GitHub Actions/);
   assert.match(status, /恢复演练工具/);
-  assert.match(status, /不是图片字节哈希，也不是感知哈希/);
+  assert.match(status, /dhash64:v1/);
+  assert.match(status, /legacyIdentityHash/);
+  assert.match(status, /不承诺任意裁剪/);
   assert.doesNotMatch(readme, /Excel 文件解析导入。\s*$/m);
 });

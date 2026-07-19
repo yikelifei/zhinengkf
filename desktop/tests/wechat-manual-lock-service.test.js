@@ -4450,14 +4450,14 @@ test("inbound screenshot fingerprint selection queues low-value quote safely", a
     {
       imageId: "candidate_1",
       position: 1,
-      fingerprint: "aaaaaaaaaaaaaaaa",
+      fingerprint: "dhash64:v1:0000000000000000",
       localPath: "C:\\storage\\design-jobs\\selection_screenshot_fingerprint_request_1\\candidate_1.png",
       downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
     },
     {
       imageId: "candidate_2",
       position: 2,
-      fingerprint: "bbbbbbbbbbbbbbbb",
+      fingerprint: "dhash64:v1:ffffffffffffffff",
       localPath: "C:\\storage\\design-jobs\\selection_screenshot_fingerprint_request_1\\candidate_2.png",
       downloadUrl: "http://127.0.0.1:3700/files/candidate_2.png",
     },
@@ -4467,7 +4467,7 @@ test("inbound screenshot fingerprint selection queues low-value quote safely", a
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "就这个图，麻烦按这个报价",
-    attachments: [{ type: "image", fileName: "客户回传截图.png", screenshotFingerprint: "bbbbbbbbbbbbbbbb" }],
+    attachments: [{ type: "image", fileName: "客户回传截图.png", screenshotFingerprint: "dhash64:v1:ffffffffffffffff" }],
   });
 
   const updatedJob = localStore.getDesignJob(job.id);
@@ -4509,13 +4509,13 @@ test("uncertain inbound screenshot selection goes to manual review without quoti
     {
       imageId: "candidate_1",
       position: 1,
-      fingerprint: "aaaaaaaaaaaaaaaa",
+      fingerprint: "dhash64:v1:0000000000000000",
       localPath: "C:\\storage\\design-jobs\\selection_uncertain_screenshot_request_1\\candidate_1.png",
     },
     {
       imageId: "candidate_2",
       position: 2,
-      fingerprint: "bbbbbbbbbbbbbbbb",
+      fingerprint: "dhash64:v1:ffffffffffffffff",
       localPath: "C:\\storage\\design-jobs\\selection_uncertain_screenshot_request_1\\candidate_2.png",
     },
   ]);
@@ -4524,7 +4524,7 @@ test("uncertain inbound screenshot selection goes to manual review without quoti
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "就按这个截图里的来",
-    attachments: [{ type: "image", fileName: "客户回传截图.png", imageFingerprint: "bbbbcccccccccccc" }],
+    attachments: [{ type: "image", fileName: "客户回传截图.png", imageFingerprint: "dhash64:v1:fffffffffffffffc" }],
   });
 
   const updatedJob = localStore.getDesignJob(job.id);
@@ -4540,7 +4540,7 @@ test("uncertain inbound screenshot selection goes to manual review without quoti
   assert.equal(localStore.listQuoteDrafts().some((quote) => quote.designJobId === job.id), false);
   assert.equal(conversation.manualLocked, true);
   assert.equal(result.notification.target.designJobId, job.id);
-  assert.equal(result.notification.target.reason, "截图相似度不足，需要人工确认");
+  assert.equal(result.notification.target.reason, "截图感知距离过大，需要人工确认");
   assert.equal(images.length, 2);
 });
 

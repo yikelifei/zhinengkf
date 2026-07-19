@@ -4,6 +4,7 @@ import path from "node:path";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import axios from "axios";
 import { appConfig } from "../shared/app-config";
+import { MAX_IMAGE_FINGERPRINT_BYTES } from "../shared/image-fingerprint";
 
 @Injectable()
 export class StorageService {
@@ -121,6 +122,8 @@ function designImageDownloadOptions(sourceUrl: string) {
   return {
     responseType: "arraybuffer" as const,
     timeout: appConfig.designPlatformTimeoutMs,
+    maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
+    maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
     ...(Object.keys(headers).length ? { headers } : {}),
   };
 }

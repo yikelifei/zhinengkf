@@ -427,28 +427,61 @@ test("recognizes lettered customer image choices without treating bare letters a
 
 test("matches screenshot fingerprint and flags uncertain screenshots", () => {
   const candidates = [
-    { id: "candidate-1", imageId: "img-1", fingerprint: "aaaaaaaaaaaaaaaa" },
-    { id: "candidate-2", imageId: "img-2", fingerprint: "bbbbbbbbbbbbbbbb" },
+    { id: "candidate-1", imageId: "img-1", fingerprint: "dhash64:v1:0000000000000000" },
+    { id: "candidate-2", imageId: "img-2", fingerprint: "dhash64:v1:ffffffffffffffff" },
   ];
-  const matched = matchImageFingerprint("bbbbbbbbbbbbbbbb", candidates);
+  const matched = matchImageFingerprint("dhash64:v1:ffffffffffffffff", candidates);
   assert.equal(matched.matched, true);
   assert.equal(matched.imageId, "img-2");
+  assert.equal(matched.distance, 0);
 
   const uncertain = matchCustomerSelection({
-    screenshotFingerprint: "bbbbcccccccccccc",
+    screenshotFingerprint: "dhash64:v1:fffffffffffffffc",
     candidates,
   });
   assert.equal(uncertain.matched, false);
   assert.equal(uncertain.source, "fingerprint");
-  assert.equal(uncertain.reason, "截图相似度不足，需要人工确认");
+  assert.equal(uncertain.reason, "截图感知距离过大，需要人工确认");
 
   const nearMatchPlan = planCustomerImageSelection({
-    screenshotFingerprint: "bbbbbbbbbbbbbbb0",
+    screenshotFingerprint: "dhash64:v1:fffffffffffffffe",
     candidates,
   });
-  assert.equal(nearMatchPlan.ok, false);
-  assert.equal(nearMatchPlan.action, "manual_selection_review");
-  assert.equal(nearMatchPlan.reviewRequired, true);
+  assert.equal(nearMatchPlan.ok, true);
+  assert.equal(nearMatchPlan.action, "select_design_image");
+  assert.equal(nearMatchPlan.reviewRequired, false);
+});
+
+test("perceptual matching fails closed for ties, narrow gaps, mixed algorithms, missing hashes, and legacy hashes", () => {
+  const ambiguous = matchImageFingerprint("dhash64:v1:0000000000000000", [
+    { imageId: "exact", fingerprint: "dhash64:v1:0000000000000000" },
+    { imageId: "one-bit", fingerprint: "dhash64:v1:0000000000000001" },
+  ]);
+  assert.equal(ambiguous.matched, false);
+  assert.equal(ambiguous.reason, "候选图指纹同分或过于接近，需要人工确认");
+
+  for (const candidates of [
+    [
+      { imageId: "new", fingerprint: "dhash64:v1:0000000000000000" },
+      { imageId: "legacy", fingerprint: "aaaaaaaaaaaaaaaa" },
+    ],
+    [
+      { imageId: "new", fingerprint: "dhash64:v1:0000000000000000" },
+      { imageId: "missing" },
+    ],
+  ]) {
+    const result = matchImageFingerprint("dhash64:v1:0000000000000000", candidates);
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, "候选图存在缺失或旧版指纹，需要人工确认");
+  }
+
+  const legacy = planCustomerImageSelection({
+    screenshotFingerprint: "aaaaaaaaaaaaaaaa",
+    candidates: [{ imageId: "legacy", fingerprint: "aaaaaaaaaaaaaaaa" }],
+  });
+  assert.equal(legacy.ok, false);
+  assert.equal(legacy.action, "manual_selection_review");
+  assert.equal(legacy.result.reason, "图片指纹算法不受支持，需要人工确认");
 });
 
 test("builds warm waiting message", () => {

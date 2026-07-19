@@ -24,6 +24,7 @@ import { QuotesService } from "../quotes/quotes.service";
 import { OrdersService } from "../orders/orders.service";
 import { rules } from "../shared/rules";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import { fingerprintImageFile } from "../shared/image-fingerprint";
 
 const SMOKE_TEST_PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -77,6 +78,7 @@ type DesignImageCandidateLike = {
   localPath?: string | null;
   downloadUrl?: string | null;
   fingerprint?: string | null;
+  legacyIdentityHash?: string | null;
   selected?: boolean;
 };
 
@@ -1292,13 +1294,16 @@ export class DesignJobsService {
     }
 
     let localPath = "";
+    let fingerprint = "";
     try {
       localPath = await this.storage.saveDesignImage(
         inspection.designJobId,
         String(inspection.image.imageId || inspection.image.id),
         downloadUrl,
       );
+      fingerprint = (await fingerprintImageFile(localPath)).fingerprint;
     } catch (error) {
+      if (localPath) await this.removeUnusableDownloadedDesignImage(inspection.designJobId, localPath);
       throw new ConflictException({
         code: "DESIGN_IMAGE_REPAIR_DOWNLOAD_FAILED",
         state: inspection.localFile.state,
@@ -1307,7 +1312,12 @@ export class DesignJobsService {
     }
 
     if (appConfig.useLocalStore) {
-      this.localStore.upsertDesignImages(inspection.designJobId, [{ ...inspection.image, localPath }]);
+      this.localStore.upsertDesignImages(inspection.designJobId, [{
+        ...inspection.image,
+        localPath,
+        fingerprint,
+        legacyIdentityHash: this.resolveLegacyIdentityHash(inspection.image),
+      }]);
     } else {
       await this.prisma.designImageCandidate.upsert({
         where: {
@@ -1316,14 +1326,19 @@ export class DesignJobsService {
             imageId: String(inspection.image.imageId || inspection.image.id),
           },
         },
-        update: { localPath } as any,
+        update: {
+          localPath,
+          fingerprint,
+          legacyIdentityHash: this.resolveLegacyIdentityHash(inspection.image),
+        } as any,
         create: {
           designJobId: inspection.designJobId,
           imageId: String(inspection.image.imageId || inspection.image.id),
           downloadUrl,
           localPath,
           position: Number(inspection.image.position || 0),
-          fingerprint: inspection.image.fingerprint,
+          fingerprint,
+          legacyIdentityHash: this.resolveLegacyIdentityHash(inspection.image),
         } as any,
       });
     }
@@ -1692,21 +1707,26 @@ export class DesignJobsService {
       image: any;
       imageId: string;
       position: number;
-      fingerprint: string;
+      fingerprint?: string;
+      legacyIdentityHash: string;
       localPath?: string;
     }> = [];
     for (let index = 0; index < images.length; index += 1) {
       const image = images[index];
       const imageId = this.versionedImageId(job, image.imageId);
       const position = this.versionedImagePosition(job, index + 1);
-      const fingerprint = this.buildImageFingerprint(job, image, imageId, position);
+      const legacyIdentityHash = this.buildLegacyImageIdentityHash(job, image, imageId, position);
       let localPath: string | undefined;
+      let fingerprint: string | undefined;
       try {
         localPath = await this.storage.saveDesignImage(job.id, imageId, image.downloadUrl);
+        fingerprint = (await fingerprintImageFile(localPath)).fingerprint;
       } catch (error) {
+        if (localPath) await this.removeUnusableDownloadedDesignImage(job.id, localPath);
         localPath = undefined;
+        fingerprint = undefined;
       }
-      savedImages.push({ image, imageId, position, fingerprint, localPath });
+      savedImages.push({ image, imageId, position, fingerprint, legacyIdentityHash, localPath });
     }
 
     const downloadFailureCount = savedImages.filter((item) => !item.localPath).length;
@@ -1754,18 +1774,19 @@ export class DesignJobsService {
     if (appConfig.useLocalStore) {
       this.localStore.upsertDesignImages(
         job.id,
-        savedImages.map(({ image, imageId, position, fingerprint, localPath }) => ({
+        savedImages.map(({ image, imageId, position, fingerprint, legacyIdentityHash, localPath }) => ({
           imageId,
           downloadUrl: image.downloadUrl,
           width: image.width,
           height: image.height,
           localPath,
           fingerprint,
+          legacyIdentityHash,
           position,
         })),
       );
     } else {
-      for (const { image, imageId, position, fingerprint, localPath } of savedImages) {
+      for (const { image, imageId, position, fingerprint, legacyIdentityHash, localPath } of savedImages) {
         await this.prisma.designImageCandidate.upsert({
           where: {
             designJobId_imageId: {
@@ -1779,6 +1800,7 @@ export class DesignJobsService {
             width: image.width,
             height: image.height,
             fingerprint,
+            legacyIdentityHash,
             position,
           } as any,
           create: {
@@ -1789,6 +1811,7 @@ export class DesignJobsService {
             width: image.width,
             height: image.height,
             fingerprint,
+            legacyIdentityHash,
             position,
           } as any,
         });
@@ -2531,11 +2554,26 @@ export class DesignJobsService {
     return revisionCount > 0 ? revisionCount * 100 + position : position;
   }
 
-  private buildImageFingerprint(job: any, image: any, imageId: string, position: number) {
+  private buildLegacyImageIdentityHash(job: any, image: any, imageId: string, position: number) {
     return createHash("sha256")
       .update([job.id, job.requestId, imageId, position, image.downloadUrl || ""].join("|"))
       .digest("hex")
       .slice(0, 32);
+  }
+
+  private resolveLegacyIdentityHash(image: any) {
+    const explicit = String(image?.legacyIdentityHash || "").trim();
+    if (explicit) return explicit;
+    const oldFingerprint = String(image?.fingerprint || "").trim();
+    return /^dhash64:v1:[a-f0-9]{16}$/i.test(oldFingerprint) ? undefined : oldFingerprint || undefined;
+  }
+
+  private async removeUnusableDownloadedDesignImage(designJobId: string, localPath: string) {
+    const expectedDirectory = path.resolve(appConfig.localStorageRoot, "design-jobs", String(designJobId));
+    const resolved = path.resolve(String(localPath || ""));
+    const relative = path.relative(expectedDirectory, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return;
+    await fs.unlink(resolved).catch(() => undefined);
   }
 
   private selectionFeedback(input: SelectDesignImagePayload, result: any) {

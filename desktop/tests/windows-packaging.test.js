@@ -60,6 +60,8 @@ test("electron-builder uses explicit application and service whitelists", () => 
   assert.match(config, /to: services\/runtime-root\/config\/settings\.yaml/);
   assert.match(config, /from: node_modules\/@prisma\/client/);
   assert.match(config, /from: node_modules\/\.prisma\/client/);
+  assert.match(config, /from: node_modules\/sharp/);
+  assert.match(config, /from: node_modules\/@img\/sharp-win32-x64/);
   for (const exclusion of ["!.env", "!.runtime/**", "!storage/**", "!logs/**", "!*.log"]) {
     assert.ok(config.includes(exclusion), `missing exclusion ${exclusion}`);
   }
@@ -80,6 +82,7 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /build:web/);
   assert.match(buildScript, /process\.env\.npm_execpath/);
   assert.match(buildScript, /smoke-packaged-api\.js/);
+  assert.match(buildScript, /sharp-win32-x64\.node/);
   assert.match(buildScript, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
   assert.match(buildScript, /ELECTRON_BUILDER_CACHE/);
   assert.match(buildScript, /CSC_LINK or WIN_CSC_SUBJECT_NAME/);
@@ -89,6 +92,8 @@ test("packaged smoke waits for child shutdown before another build can replace r
   const smoke = fs.readFileSync(path.join(root, "tools", "smoke-packaged-api.js"), "utf8");
   assert.match(smoke, /await Promise\.all\(processes\.reverse\(\)\.map\(stopChild\)\)/);
   assert.match(smoke, /child\.once\("exit"/);
+  assert.match(smoke, /require\(\"sharp\"\)/);
+  assert.match(smoke, /dhash64:v1:0000000000000000/);
 });
 
 test("packaged service startup preserves the Electron window activation lifecycle", () => {

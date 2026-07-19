@@ -3226,6 +3226,14 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     }
   }
 
+  for (const image of normalized.designImages) {
+    const fingerprint = String(image?.fingerprint || "").trim();
+    if (!fingerprint || /^dhash64:v1:[a-f0-9]{16}$/i.test(fingerprint)) continue;
+    if (!String(image?.legacyIdentityHash || "").trim()) image.legacyIdentityHash = fingerprint;
+    delete image.fingerprint;
+    changed = true;
+  }
+
   const now = new Date().toISOString();
   const seeded = seedAgentConfig(now);
   if (!normalized.agents.length) {

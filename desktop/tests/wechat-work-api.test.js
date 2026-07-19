@@ -19,6 +19,11 @@ const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send
 const { WechatWorkApiClient, WechatWorkApiError } = require("../apps/api/src/wechat-work/wechat-work-api.client");
 const { WechatWorkService } = require("../apps/api/src/wechat-work/wechat-work.service");
 
+const VALID_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+
 function setup() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-work-api-"));
   appConfig.useLocalStore = true;
@@ -46,10 +51,12 @@ function setup() {
     uploadCalls: [],
     imageSendCalls: [],
     operationCalls: [],
+    downloadCalls: [],
     syncResponse: { errcode: 0, errmsg: "ok", has_more: 0, msg_list: [] },
     sendFailures: [],
     uploadFailures: [],
     imageSendFailures: [],
+    downloadFailures: [],
     async syncMessages(payload) {
       this.syncCalls.push(payload);
       return this.syncResponse;
@@ -60,6 +67,12 @@ function setup() {
       const failure = this.sendFailures.shift();
       if (failure) throw failure;
       return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
+    },
+    async downloadMedia(payload) {
+      this.downloadCalls.push(payload);
+      const failure = this.downloadFailures.shift();
+      if (failure) throw failure;
+      return { bytes: VALID_PNG, contentType: "image/png", size: VALID_PNG.length };
     },
     async uploadImage(payload) {
       this.uploadCalls.push(payload);
@@ -155,7 +168,82 @@ test("sync_msg persists isolated open_kfid + external_userid mappings and dedupl
   assert.notEqual(bindingA.customerId, bindingB.customerId);
   assert.notEqual(bindingA.conversationId, bindingB.conversationId);
   assert.equal(localStore.findMessageByExternalId(bindingA.conversationId, "incoming-1").text, "我要做礼盒");
-  assert.equal(localStore.findMessageByExternalId(bindingB.conversationId, "incoming-2").text, "[图片]");
+  const imageMessage = localStore.findMessageByExternalId(bindingB.conversationId, "incoming-2");
+  assert.equal(imageMessage.text, "[图片]");
+  assert.equal(api.downloadCalls.length, 1);
+  assert.equal(api.downloadCalls[0].mediaId, "media-1");
+  assert.equal(imageMessage.attachments[0].mediaId, "media-1");
+  assert.equal(imageMessage.attachments[0].status, "ready");
+  assert.match(imageMessage.attachments[0].fingerprint, /^dhash64:v1:[a-f0-9]{16}$/);
+  assert.equal(fs.existsSync(imageMessage.attachments[0].localPath), true);
+});
+
+test("permanent inbound media failure persists a controlled manual-review attachment without a fake hash", async () => {
+  const { api, localStore, service } = setup();
+  api.downloadFailures.push(new WechatWorkApiError("media_get", "permanent media error", {
+    errcode: 40007,
+    disposition: "permanent",
+  }));
+  api.syncResponse = {
+    errcode: 0,
+    has_more: 0,
+    msg_list: [{
+      msgid: "incoming-permanent-image",
+      open_kfid: "wk-media",
+      external_userid: "wm-media",
+      msgtype: "image",
+      image: { media_id: "invalid-media" },
+    }],
+  };
+
+  const result = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-media" });
+  assert.equal(result.processedCount, 1);
+  const binding = localStore.getWechatWorkBinding("wk-media", "wm-media");
+  const message = localStore.findMessageByExternalId(binding.conversationId, "incoming-permanent-image");
+  assert.deepEqual(message.attachments[0], {
+    source: "wechat_work_kf",
+    msgid: "incoming-permanent-image",
+    msgtype: "image",
+    openKfid: "wk-media",
+    externalUserId: "wm-media",
+    mediaId: "invalid-media",
+    status: "manual_review",
+    reviewRequired: true,
+    reason: "permanent",
+    apiErrcode: 40007,
+  });
+  assert.equal("fingerprint" in message.attachments[0], false);
+  assert.equal("localPath" in message.attachments[0], false);
+  assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "inbound_media_manual_review"));
+});
+
+test("transient or delayed inbound media failure aborts the sync page without advancing durable state", async () => {
+  for (const disposition of ["retry_exhausted", "delayed_blocked"]) {
+    const { api, localStore, service } = setup();
+    api.downloadFailures.push(new WechatWorkApiError("media_get", "retry later", {
+      errcode: disposition === "delayed_blocked" ? 45009 : undefined,
+      disposition,
+    }));
+    api.syncResponse = {
+      errcode: 0,
+      has_more: 1,
+      next_cursor: "must-not-advance",
+      msg_list: [{
+        msgid: `incoming-${disposition}`,
+        open_kfid: "wk-transient",
+        external_userid: "wm-transient",
+        msgtype: "image",
+        image: { media_id: "retry-media" },
+      }],
+    };
+
+    await assert.rejects(
+      () => service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-transient" }),
+      (error) => error instanceof WechatWorkApiError && error.disposition === disposition,
+    );
+    assert.equal(localStore.getWechatWorkBinding("wk-transient", "wm-transient"), null);
+    assert.equal(localStore.listWechatWorkAuditLogs().some((item) => item.msgid === `incoming-${disposition}`), false);
+  }
 });
 
 test("encrypted callback acknowledges immediately and forwards Token + OpenKfId to sync_msg", async () => {

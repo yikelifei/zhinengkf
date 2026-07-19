@@ -9,6 +9,7 @@
 3. `sync_msg` 的每条客户消息按 `msgid` 幂等处理，并将 `open_kfid + external_userid` 持久映射到独立的微信账号、客户和会话。
 4. 归一化消息继续复用现有 `WechatDispatchService.processInboundMessage`，进入路由、人工接管和安全发送队列。
 5. 企业微信会话的文本或设计图片发送任务通过既有身份、设计任务绑定和本地文件安全校验后，由 `wechat_work_kf` 适配器调用素材上传和 `kf/send_msg`。调用、失败、重试和异步失败均记录在 `WechatSendAttempt` 与企业微信审计日志中。
+6. 客户图片消息通过官方 `GET /cgi-bin/media/get` 下载临时素材，`media_id` URL 编码；成功二进制流限制 2 MB，真实解码后以确定性 no-clobber 路径保存到 `LOCAL_STORAGE_ROOT/wechat-work/inbound` 并生成 `dhash64:v1`。
 
 不会再使用默认客户或默认会话。没有入站映射的 `external_userid` 不能直接发送，必须先成功同步至少一条该客户的消息或事件。
 
@@ -106,6 +107,8 @@ GET /api/wechat-work/kf/audit?limit=100
 ## 幂等、失败与重试
 
 - `msgid` 是入站和事件的持久幂等键；重复回调、重复拉取或并发拉取不会重复创建本地消息。
+- 图片素材 `40007/41006`、超过 2 MB、解码不支持或本地身份冲突会记录受控人工复核附件，不伪造哈希；`40014/42001` 只允许下载流程刷新 Token 一次。
+- 下载网络错误、5xx、读取中断只做有限重试；重试耗尽或 `45009` 限流会中止当前同步页，不推进游标。该规则不改变发送接口的失败关闭策略，也不会把发送变成自动重放。
 - 客服人员在企业微信端发送、且带 `servicer_userid` 的同步记录不会再次作为客户入站触发自动回复。
 - `kf/send_msg` 调用失败时，该次 `WechatSendAttempt` 记录为 `failed`；未达到上限时任务回到 `queued`，并记录下次重试时间。
 - 素材上传明确失败、或 `kf/send_msg` 明确返回非零 `errcode` 且此前没有任何消息被受理时，沿用上述有界重试。

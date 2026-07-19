@@ -71,6 +71,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "个人微信 Prisma 安全契约测试",
     file: "desktop/tests/personal-wechat-rpa-prisma.test.js",
   },
+  {
+    id: "prisma.perceptual_hash_migration",
+    title: "候选图感知指纹迁移",
+    file: "desktop/prisma/migrations/20260719210000_design_image_perceptual_hash/migration.sql",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -125,7 +130,37 @@ const CONTRACTS = Object.freeze([
     id: "contract.documentation",
     title: "完成度审计文档入口",
     file: "desktop/README.md",
-    patterns: [/project:completion:audit/, /稳定 SHA-256/],
+    patterns: [/project:completion:audit/, /dhash64:v1/, /legacyIdentityHash/],
+  },
+  {
+    id: "contract.perceptual_hash",
+    title: "真实图片字节 dHash64 v1",
+    file: "desktop/apps/api/src/shared/image-fingerprint.ts",
+    patterns: [/IMAGE_FINGERPRINT_ALGORITHM\s*=\s*["']dhash64:v1["']/, /from ["']sharp["']/, /\.rotate\(\)/, /\.flatten\(/, /\.greyscale\(\)/, /\.resize\(9, 8/],
+  },
+  {
+    id: "contract.wechat_media_download",
+    title: "企业微信入站图片下载与失败分类",
+    file: "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts",
+    patterns: [/\/cgi-bin\/media\/get/, /encodeURIComponent\(mediaId\)/, /errcode === 40007/, /errcode === 41006/, /errcode === 45009/, /retry_exhausted/],
+  },
+  {
+    id: "contract.wechat_media_storage",
+    title: "企业微信入站图片安全落盘",
+    file: "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts",
+    patterns: [/MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES/, /LOCAL_STORAGE_ROOT/, /fs\.link\(temporaryPath, finalPath\)/, /inspectExistingImage/],
+  },
+  {
+    id: "contract.perceptual_matcher",
+    title: "图片感知距离失败关闭匹配",
+    file: "desktop/packages/rules/selectionMatcher.js",
+    patterns: [/hammingDistance/, /nearest\.distance > 1/, /gap < 2/, /候选图存在缺失或旧版指纹/],
+  },
+  {
+    id: "contract.sharp_runtime",
+    title: "Sharp 生产依赖与 Windows 运行时",
+    file: "desktop/package.json",
+    patterns: [/["']sharp["']\s*:\s*["']0\.34\.5["']/],
   },
   {
     id: "contract.report_ignored",
@@ -523,23 +558,25 @@ function placeholderResult(root) {
 }
 
 function capabilityTruthResults(root) {
-  const fingerprintSource = readText(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts") || "";
-  const exactHash = /createHash\(["']sha256["']\)/.test(fingerprintSource);
-  const perceptualHash = /(?:perceptualHash|pHash|dHash|aHash)/.test(fingerprintSource);
+  const designSource = readText(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts") || "";
+  const fingerprintSource = readText(root, "desktop/apps/api/src/shared/image-fingerprint.ts") || "";
+  const matcherSource = readText(root, "desktop/packages/rules/selectionMatcher.js") || "";
+  const exactHash = /buildLegacyImageIdentityHash/.test(designSource) && /legacyIdentityHash/.test(designSource);
+  const perceptualHash = /dhash64:v1/.test(fingerprintSource) && /\.resize\(9, 8/.test(fingerprintSource);
+  const safeMatcher = /hammingDistance/.test(matcherSource) && /nearest\.distance > 1/.test(matcherSource) && /gap < 2/.test(matcherSource);
   return [
     result(
       "capability.image_fingerprint",
       "图片指纹能力口径",
-      exactHash && perceptualHash ? STATUS.PASS : exactHash ? STATUS.FAIL : STATUS.FAIL,
-      exactHash && !perceptualHash
-        ? "当前仅有稳定 SHA-256 身份哈希，不是感知哈希，截图相似匹配尚未完成。"
-        : exactHash
-          ? "稳定哈希与感知哈希实现均可定位。"
-          : "未定位到稳定图片身份哈希实现。",
+      exactHash && perceptualHash && safeMatcher ? STATUS.PASS : STATUS.FAIL,
+      exactHash && perceptualHash && safeMatcher
+        ? "真实图片字节 dHash64 v1、旧身份哈希隔离和汉明距离强阈值均可定位。"
+        : "真实图片字节指纹、旧身份哈希隔离或失败关闭匹配契约存在缺口。",
       {
-        path: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
-        stableSha256IdentityHash: exactHash,
+        paths: ["desktop/apps/api/src/shared/image-fingerprint.ts", "desktop/packages/rules/selectionMatcher.js", "desktop/apps/api/src/design-jobs/design-jobs.service.ts"],
+        legacySha256IdentityHash: exactHash,
         perceptualImageHash: perceptualHash,
+        failClosedMatcher: safeMatcher,
       },
     ),
   ];

@@ -64,6 +64,8 @@ function assertBuildInputs() {
     path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js"),
     path.join(root, "node_modules", ".prisma", "client", "default.js"),
     path.join(root, "packages", "rules", "index.js"),
+    path.join(root, "node_modules", "sharp", "lib", "index.js"),
+    path.join(root, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"),
     path.resolve(root, "..", "config", "settings.yaml"),
     path.join(root, "tools", "wechat-window-observer.js"),
   ];

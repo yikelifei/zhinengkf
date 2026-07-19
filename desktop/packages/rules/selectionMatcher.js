@@ -77,8 +77,8 @@ function matchCustomerSelection(input = {}) {
     };
   }
 
-  const fingerprint = normalizeFingerprint(input.screenshotFingerprint || input.attachmentFingerprint);
-  if (fingerprint) {
+  const fingerprint = input.screenshotFingerprint || input.attachmentFingerprint;
+  if (String(fingerprint || "").trim()) {
     const result = matchImageFingerprint(fingerprint, candidates);
     if (result.matched) return result;
     return {
@@ -115,7 +115,7 @@ function hasSelectionIntent(input = {}) {
   const value = typeof input === "string" ? { text: input } : input || {};
   const text = String(value.text || "").replace(/\s+/g, "");
   if (value.referencedImageId || value.quotedImageId || value.attachmentImageId) return true;
-  if (normalizeFingerprint(value.screenshotFingerprint || value.attachmentFingerprint)) return true;
+  if (String(value.screenshotFingerprint || value.attachmentFingerprint || "").trim()) return true;
   if (letterSelectionIndex(text)) return true;
   if (/(?:^|[^\d])(?:no\.?|#)\d{1,2}(?:$|[^\d])/i.test(text)) return true;
   if (/^(?:第)?\d{1,2}(?:号|號|张|張|个|個|款|版|套)$/.test(text)) return true;
@@ -164,57 +164,80 @@ function planCustomerImageSelection(input = {}) {
   };
 }
 
-function matchImageFingerprint(fingerprint, candidates = [], minimumScore = 0.92) {
+function matchImageFingerprint(fingerprint, candidates = []) {
   const target = normalizeFingerprint(fingerprint);
-  if (!target) return { matched: false, confidence: "low", source: "fingerprint", reason: "缺少图片指纹" };
-
-  let nearest = null;
-  for (const candidate of candidates) {
-    const candidateFingerprint = normalizeFingerprint(candidate.fingerprint || candidate.imageFingerprint);
-    if (!candidateFingerprint) continue;
-    const score = fingerprintSimilarity(target, candidateFingerprint);
-    const record = {
-      score,
-      imageId: candidate.imageId || candidate.id,
-      candidate,
-    };
-    if (!nearest || score > nearest.score) nearest = record;
-  }
-
-  if (!nearest) return { matched: false, confidence: "low", source: "fingerprint", reason: "候选图没有可匹配指纹" };
-  if (nearest.score < minimumScore) {
+  if (!target) {
     return {
       matched: false,
-      confidence: nearest.score >= 0.75 ? "medium" : "low",
+      confidence: "low",
       source: "fingerprint",
-      reason: "截图相似度不足，需要人工确认",
+      reason: String(fingerprint || "").trim() ? "图片指纹算法不受支持，需要人工确认" : "缺少图片指纹",
+    };
+  }
+
+  const records = [];
+  const unsupported = [];
+  for (const candidate of candidates) {
+    const candidateFingerprint = normalizeFingerprint(candidate.fingerprint || candidate.imageFingerprint);
+    if (!candidateFingerprint) {
+      unsupported.push(candidate.imageId || candidate.id || "unknown");
+      continue;
+    }
+    records.push({
+      distance: hammingDistance(target, candidateFingerprint),
+      imageId: candidate.imageId || candidate.id,
+      candidate,
+    });
+  }
+
+  if (unsupported.length || !records.length) {
+    return {
+      matched: false,
+      confidence: "low",
+      source: "fingerprint",
+      reason: unsupported.length ? "候选图存在缺失或旧版指纹，需要人工确认" : "候选图没有可匹配指纹",
+      unsupportedImageIds: unsupported,
+    };
+  }
+
+  records.sort((left, right) => left.distance - right.distance || String(left.imageId).localeCompare(String(right.imageId)));
+  const nearest = records[0];
+  const runnerUp = records[1] || null;
+  const gap = runnerUp ? runnerUp.distance - nearest.distance : 64;
+  if (nearest.distance > 1 || gap < 2) {
+    return {
+      matched: false,
+      confidence: nearest.distance <= 3 ? "medium" : "low",
+      source: "fingerprint",
+      reason: gap < 2 ? "候选图指纹同分或过于接近，需要人工确认" : "截图感知距离过大，需要人工确认",
       nearest,
+      runnerUp,
     };
   }
   return {
     matched: true,
-    confidence: nearest.score >= 0.98 ? "high" : "medium",
+    confidence: "high",
     source: "fingerprint",
     imageId: nearest.imageId,
     candidate: nearest.candidate,
-    score: nearest.score,
+    distance: nearest.distance,
+    runnerUpDistance: runnerUp?.distance ?? null,
   };
 }
 
 function normalizeFingerprint(value) {
-  return String(value || "").toLowerCase().replace(/[^a-f0-9]/g, "");
+  const match = /^dhash64:v1:([a-f0-9]{16})$/i.exec(String(value || "").trim());
+  return match ? match[1].toLowerCase() : "";
 }
 
-function fingerprintSimilarity(left, right) {
-  if (!left || !right) return 0;
-  const length = Math.max(left.length, right.length);
-  if (!length) return 0;
-  let same = 0;
-  const min = Math.min(left.length, right.length);
-  for (let index = 0; index < min; index += 1) {
-    if (left[index] === right[index]) same += 1;
+function hammingDistance(left, right) {
+  let bits = BigInt(`0x${left}`) ^ BigInt(`0x${right}`);
+  let count = 0;
+  while (bits) {
+    bits &= bits - 1n;
+    count += 1;
   }
-  return same / length;
+  return count;
 }
 
 function needsManualSelectionReview(result) {

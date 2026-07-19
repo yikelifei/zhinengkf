@@ -359,6 +359,7 @@ model DesignImageCandidate {
   width           Int?
   height          Int?
   fingerprint     String?
+  legacyIdentityHash String?
   selected        Boolean    @default(false)
   customerFeedback String?
   createdAt       DateTime   @default(now())

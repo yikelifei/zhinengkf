@@ -16,6 +16,11 @@ require("ts-node").register({
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
+const VALID_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+
 test("design image local preview reads only the image bound to the expected design job", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   const previousStorageRoot = appConfig.localStorageRoot;
@@ -233,7 +238,7 @@ test("stale historical image can be redownloaded into the current job folder", a
         saveDesignImage: async (jobId, imageId) => {
           const savedPath = path.join(tempRoot, "design-jobs", jobId, `${imageId}.png`);
           fs.mkdirSync(path.dirname(savedPath), { recursive: true });
-          fs.writeFileSync(savedPath, Buffer.from("repaired"));
+          fs.writeFileSync(savedPath, VALID_PNG);
           return savedPath;
         },
       },

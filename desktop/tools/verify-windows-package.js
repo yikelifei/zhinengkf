@@ -45,6 +45,8 @@ function verifyWindowsPackage(options) {
   checkExists(checks, "packaged placeholder-only AI settings", path.join(resourcesDir, "services", "runtime-root", "config", "settings.yaml"));
   checkExists(checks, "packaged Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@prisma", "client", "default.js"));
   checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"));
+  checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "lib", "index.js"));
+  checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"));
   if (!options.directoryOnly) checkExists(checks, "NSIS installer", installer);
 
   const smokeReport = readJson(path.join(options.outputDir, "verification", "packaged-api-smoke.json"));
