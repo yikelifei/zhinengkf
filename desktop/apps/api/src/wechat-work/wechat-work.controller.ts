@@ -39,6 +39,13 @@ export class WechatWorkController {
     return this.wechatWork.queueCustomerServiceText(payload || {});
   }
 
+  @Post("kf/send-images")
+  sendCustomerServiceImages(
+    @Body() payload: { externalUserId?: string; openKfid?: string; text?: string; imagePaths?: string[]; designJobId?: string },
+  ) {
+    return this.wechatWork.queueCustomerServiceImages(payload || {});
+  }
+
   @Post("kf/send-tasks/:id/dispatch")
   dispatchCustomerServiceText(@Param("id") id: string) {
     return this.wechatWork.dispatchCustomerServiceText(id);

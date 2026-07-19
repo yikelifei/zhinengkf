@@ -8,7 +8,7 @@
 2. 回调验签、解密并校验 CorpID 后立即返回纯文本 `success`；`kf_msg_or_event` 中的 `Token` 和 `OpenKfId` 用于后台调用 `kf/sync_msg`。
 3. `sync_msg` 的每条客户消息按 `msgid` 幂等处理，并将 `open_kfid + external_userid` 持久映射到独立的微信账号、客户和会话。
 4. 归一化消息继续复用现有 `WechatDispatchService.processInboundMessage`，进入路由、人工接管和安全发送队列。
-5. 企业微信会话的文本发送任务通过既有安全校验后，由 `wechat_work_kf` 适配器调用 `kf/send_msg`。调用、失败、重试和异步失败均记录在 `WechatSendAttempt` 与企业微信审计日志中。
+5. 企业微信会话的文本或设计图片发送任务通过既有身份、设计任务绑定和本地文件安全校验后，由 `wechat_work_kf` 适配器调用素材上传和 `kf/send_msg`。调用、失败、重试和异步失败均记录在 `WechatSendAttempt` 与企业微信审计日志中。
 
 不会再使用默认客户或默认会话。没有入站映射的 `external_userid` 不能直接发送，必须先成功同步至少一条该客户的消息或事件。
 
@@ -66,6 +66,28 @@ Content-Type: application/json
 {"openKfid":"wk...","externalUserId":"wm...","text":"您好"}
 ```
 
+安全入队设计图片（不会绕过队列直接发送）：
+
+```http
+POST /api/wechat-work/kf/send-images
+Content-Type: application/json
+
+{
+  "openKfid":"wk...",
+  "externalUserId":"wm...",
+  "designJobId":"design_...",
+  "text":"方案如下",
+  "imagePaths":[
+    "storage/design-jobs/design_.../candidate-1.png",
+    "storage/design-jobs/design_.../candidate-2.png"
+  ]
+}
+```
+
+`designJobId` 必须属于同一客服账号、客户和会话，且 `imagePaths` 必须是该设计任务已有的本地图片。每个路径还会在入队和实际上传前分别验证：只允许 `LOCAL_STORAGE_ROOT` 内的真实常规文件，拒绝 URL、目录、符号链接越界和不存在路径；图片内容及扩展名必须同时为 JPG/JPEG 或 PNG，大小必须大于 5 字节且不超过 2 MB。不会从任意外部 URL 临时下载后发送。
+
+当请求同时包含文本和多张图片时，适配器严格按“文本、图片 1、图片 2……”顺序处理。每张图片先调用 `/cgi-bin/media/upload?type=image` 获取临时 `media_id`，再调用 `/cgi-bin/kf/send_msg` 发送 `msgtype=image`；整个任务最多包含 5 条有序消息，以符合微信客服单次会话的下发上限。
+
 处理安全发送队列：
 
 ```http
@@ -86,12 +108,13 @@ GET /api/wechat-work/kf/audit?limit=100
 - `msgid` 是入站和事件的持久幂等键；重复回调、重复拉取或并发拉取不会重复创建本地消息。
 - 客服人员在企业微信端发送、且带 `servicer_userid` 的同步记录不会再次作为客户入站触发自动回复。
 - `kf/send_msg` 调用失败时，该次 `WechatSendAttempt` 记录为 `failed`；未达到上限时任务回到 `queued`，并记录下次重试时间。
+- 素材上传明确失败、或 `kf/send_msg` 明确返回非零 `errcode` 且此前没有任何消息被受理时，沿用上述有界重试。
+- 发送请求的网络结果不确定，或多图任务已有任一消息被受理后才发生上传/发送失败时，任务会以 `unknown`/`partial` 交付状态失败关闭，记录已受理 `msgid`、素材阶段和审计，禁止自动重试，避免重复发送；绝不会伪造 `sent`。
 - `kf/send_msg` 返回 `errcode=0` 只代表接口受理。后续 `sync_msg` 若出现 `msg_send_fail`，系统会按 `fail_msgid` 找回原发送尝试并把任务改为 `failed`。
 - 官方限制仍然适用：客户主动发消息后的 48 小时内最多可下发 5 条；超过时限、会话关闭、用户拒收等会通过失败事件返回。
-
-当前官方适配器只发送文本。包含图片路径的任务会在安全校验阶段被阻止，不能降级成伪成功；图片发送需要后续补充企业微信素材上传流程。
 
 ## 官方接口
 
 - 读取消息：<https://open.work.weixin.qq.com/api/doc/90000/90135/94670>
 - 发送消息：<https://open.work.weixin.qq.com/api/doc/90000/90135/94677>
+- 上传临时素材：<https://open.work.weixin.qq.com/api/doc/90000/90135/90253>

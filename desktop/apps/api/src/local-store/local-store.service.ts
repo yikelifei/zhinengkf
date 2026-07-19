@@ -2164,7 +2164,12 @@ export class LocalStoreService {
     const data = this.read();
     const attempt = data.sendAttempts
       .filter((item) => item.adapter === "wechat_work_kf")
-      .find((item) => item.metadata?.wechatWorkMsgId === msgid || item.metadata?.apiMsgId === msgid);
+      .find((item) =>
+        item.metadata?.wechatWorkMsgId === msgid
+        || item.metadata?.apiMsgId === msgid
+        || (Array.isArray(item.metadata?.wechatWorkMsgIds) && item.metadata.wechatWorkMsgIds.includes(msgid))
+        || (Array.isArray(item.metadata?.apiMsgIds) && item.metadata.apiMsgIds.includes(msgid))
+      );
     return attempt ? this.hydrateSendAttempt(data, attempt) : null;
   }
 

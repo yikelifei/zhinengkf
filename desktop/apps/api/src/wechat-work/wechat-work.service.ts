@@ -6,6 +6,7 @@ import { appConfig } from "../shared/app-config";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { WechatPersistence } from "../wechat/wechat-persistence";
 import { WechatWorkApiClient, WechatWorkApiError, WechatWorkKfMessage } from "./wechat-work-api.client";
+import { resolveWechatWorkImageFile } from "./wechat-work-media";
 import { buildWechatWorkProductionReadiness } from "./wechat-work-readiness";
 
 type CallbackQuery = {
@@ -264,6 +265,84 @@ export class WechatWorkService {
       conversationId: binding.conversationId,
       customerId: binding.customerId,
       wechatAccountId: binding.wechatAccountId,
+    });
+    return { ok: true, queued: true, task };
+  }
+
+  async queueCustomerServiceImages(payload: {
+    externalUserId?: string;
+    openKfid?: string;
+    text?: string;
+    imagePaths?: string[];
+    designJobId?: string;
+  }) {
+    const openKfid = requiredText(payload.openKfid || appConfig.wechatWorkOpenKfid, "openKfid");
+    const externalUserId = requiredText(payload.externalUserId, "externalUserId");
+    const text = String(payload.text || "").trim();
+    const imagePaths = Array.isArray(payload.imagePaths)
+      ? payload.imagePaths.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    if (!imagePaths.length) throw new BadRequestException("imagePaths must include at least one image");
+    if ((text ? 1 : 0) + imagePaths.length > 5) {
+      throw new BadRequestException("wechat work customer-service send exceeds the 5-message limit");
+    }
+    let validatedImages;
+    try {
+      validatedImages = imagePaths.map((filePath) => resolveWechatWorkImageFile(filePath));
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "wechat work image validation failed");
+    }
+    const designJobId = requiredText(payload.designJobId, "designJobId");
+    const binding = await this.persistence.getWechatWorkBinding(openKfid, externalUserId);
+    if (!binding) throw new BadRequestException("wechat work customer is not mapped yet; sync an inbound message first");
+    const designJob = await this.persistence.getDesignJob(designJobId);
+    if (
+      !designJob
+      || designJob.wechatAccountId !== binding.wechatAccountId
+      || designJob.conversationId !== binding.conversationId
+      || designJob.customerId !== binding.customerId
+    ) {
+      throw new BadRequestException("design job is not bound to the selected WeChat Work customer and conversation");
+    }
+    const allowedImagePaths = new Set<string>();
+    for (const image of Array.isArray(designJob.images) ? designJob.images : []) {
+      try {
+        allowedImagePaths.add(resolveWechatWorkImageFile(image.localPath).filePath.toLowerCase());
+      } catch {
+        // A stale design candidate is not eligible for sending.
+      }
+    }
+    if (validatedImages.some((image) => !allowedImagePaths.has(image.filePath.toLowerCase()))) {
+      throw new BadRequestException("image paths do not belong to the selected design job");
+    }
+    const task = await this.persistence.createSendTask({
+      wechatAccountId: binding.wechatAccountId,
+      conversationId: binding.conversationId,
+      customerId: binding.customerId,
+      designJobId,
+      payload: {
+        kind: "design_images",
+        ...(text ? { textBeforeImages: text } : {}),
+        imagePaths: validatedImages.map((image) => image.filePath),
+      },
+      guardSnapshot: {
+        source: "wechat_work_kf",
+        requiredChecks: ["identityBinding", "wechatWorkBinding", "officialApiConfig", "localStorageImages"],
+        policy: "safe-send-queue",
+      },
+    });
+    await this.persistence.recordWechatWorkAudit({
+      action: "send_images_queued",
+      status: "queued",
+      sendTaskId: task.id,
+      openKfid,
+      externalUserId,
+      conversationId: binding.conversationId,
+      customerId: binding.customerId,
+      wechatAccountId: binding.wechatAccountId,
+      imageCount: validatedImages.length,
+      designJobId,
+      textIncluded: Boolean(text),
     });
     return { ok: true, queued: true, task };
   }

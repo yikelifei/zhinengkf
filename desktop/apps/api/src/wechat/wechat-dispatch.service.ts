@@ -12,7 +12,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
-import { WechatSendAdapterService } from "./wechat-send-adapter.service";
+import { resolveWechatWorkImageFile } from "../wechat-work/wechat-work-media";
+import { WechatSendAdapterService, WechatWorkKfDeliveryError } from "./wechat-send-adapter.service";
 import { WechatPersistence } from "./wechat-persistence";
 
 const {
@@ -3167,13 +3168,16 @@ export class WechatDispatchService {
     });
     const text = String(task.payload?.textBeforeImages || task.payload?.text || "").trim();
     const imagePaths = Array.isArray(task.payload?.imagePaths) ? task.payload.imagePaths.filter(Boolean) : [];
+    const imageValidation = validateWechatWorkImagePaths(imagePaths);
+    const messageCount = (text ? 1 : 0) + imagePaths.length;
     const checks = [
       { key: "wechatWorkBinding", passed: Boolean(binding), detail: binding ? "mapping found" : "mapping missing" },
       { key: "wechatWorkCorpId", passed: Boolean(appConfig.wechatWorkCorpId), detail: "WECHAT_WORK_CORP_ID" },
       { key: "wechatWorkSecret", passed: Boolean(appConfig.wechatWorkSecret), detail: "WECHAT_WORK_SECRET" },
-      { key: "textPayload", passed: Boolean(text), detail: "text or textBeforeImages" },
-      { key: "textLength", passed: Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
-      { key: "textOnly", passed: imagePaths.length === 0, detail: "wechat_work_kf adapter currently supports text only" },
+      { key: "messagePayload", passed: messageCount > 0, detail: "text and/or imagePaths" },
+      { key: "textLength", passed: !text || Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
+      { key: "imageFiles", passed: imageValidation.ok, detail: imageValidation.detail },
+      { key: "messageCount", passed: messageCount <= 5, detail: "maximum 5 ordered messages" },
     ];
     const failedKeys = checks.filter((item) => !item.passed).map((item) => item.key);
     if (failedKeys.length) {
@@ -3211,13 +3215,16 @@ export class WechatDispatchService {
     });
     const text = String(task.payload?.textBeforeImages || task.payload?.text || "").trim();
     const imagePaths = Array.isArray(task.payload?.imagePaths) ? task.payload.imagePaths.filter(Boolean) : [];
+    const imageValidation = validateWechatWorkImagePaths(imagePaths);
+    const messageCount = (text ? 1 : 0) + imagePaths.length;
     const checks = [
       { key: "wechatWorkBinding", passed: Boolean(binding), detail: binding ? "mapping found" : "mapping missing" },
       { key: "wechatWorkCorpId", passed: Boolean(appConfig.wechatWorkCorpId), detail: "WECHAT_WORK_CORP_ID" },
       { key: "wechatWorkSecret", passed: Boolean(appConfig.wechatWorkSecret), detail: "WECHAT_WORK_SECRET" },
-      { key: "textPayload", passed: Boolean(text), detail: "text or textBeforeImages" },
-      { key: "textLength", passed: Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
-      { key: "textOnly", passed: imagePaths.length === 0, detail: "wechat_work_kf adapter currently supports text only" },
+      { key: "messagePayload", passed: messageCount > 0, detail: "text and/or imagePaths" },
+      { key: "textLength", passed: !text || Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
+      { key: "imageFiles", passed: imageValidation.ok, detail: imageValidation.detail },
+      { key: "messageCount", passed: messageCount <= 5, detail: "maximum 5 ordered messages" },
     ];
     const failedKeys = checks.filter((item) => !item.passed).map((item) => item.key);
     return this.persistence.updateSendTask(id, {
@@ -3301,6 +3308,9 @@ export class WechatDispatchService {
       if (!binding) throw new Error("wechat work mapping disappeared after send guard");
       const response = await this.sendAdapter.deliverWechatWorkKf(task, binding, wechatWorkMsgId);
       const completedAt = new Date().toISOString();
+      const apiMsgIds = Array.isArray(response.apiMsgIds) && response.apiMsgIds.length
+        ? response.apiMsgIds
+        : [response.msgid || wechatWorkMsgId];
       const attempt = this.localStore.updateSendAttempt(result.attempt.id, {
         status: "sent",
         errorMessage: "",
@@ -3312,7 +3322,8 @@ export class WechatDispatchService {
           openKfid: binding.openKfid,
           externalUserId: binding.externalUserId,
           wechatWorkMsgId,
-          apiMsgId: response.msgid || wechatWorkMsgId,
+          apiMsgId: apiMsgIds[0],
+          apiMsgIds,
           apiResponse: response,
           finalDeliveryPendingFailureEvent: true,
         },
@@ -3325,7 +3336,8 @@ export class WechatDispatchService {
           ...(task.guardSnapshot || {}),
           wechatWorkRetryCount: Math.max(0, attemptNumber - 1),
           wechatWorkNextRetryAt: null,
-          wechatWorkMsgId: response.msgid || wechatWorkMsgId,
+          wechatWorkMsgId: apiMsgIds[0],
+          wechatWorkMsgIds: apiMsgIds,
           apiAcceptedAt: completedAt,
         },
       });
@@ -3337,14 +3349,16 @@ export class WechatDispatchService {
         sendAttemptId: attempt.id,
         openKfid: binding.openKfid,
         externalUserId: binding.externalUserId,
-        msgid: response.msgid || wechatWorkMsgId,
+        msgid: apiMsgIds[0],
+        msgids: apiMsgIds,
         attemptNumber,
       });
       return { ...result, task: updatedTask, attempt, retryScheduled: false };
     } catch (error) {
       const completedAt = new Date().toISOString();
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const retryScheduled = attemptNumber < appConfig.wechatWorkSendMaxAttempts;
+      const deliveryFailure = describeWechatWorkDeliveryFailure(error);
+      const retryScheduled = deliveryFailure.retrySafe && attemptNumber < appConfig.wechatWorkSendMaxAttempts;
       const nextRetryAt = retryScheduled
         ? new Date(Date.now() + appConfig.wechatWorkSendRetryDelaySeconds * 1000).toISOString()
         : null;
@@ -3353,7 +3367,7 @@ export class WechatDispatchService {
         errorMessage,
         completedAt,
         metadata: {
-          bridgeState: retryScheduled ? "retry_scheduled" : "api_failed",
+          bridgeState: retryScheduled ? "retry_scheduled" : deliveryFailure.deliveryState === "failed" ? "api_failed" : "delivery_unknown",
           attemptNumber,
           maxAttempts: appConfig.wechatWorkSendMaxAttempts,
           retryScheduled,
@@ -3362,6 +3376,11 @@ export class WechatDispatchService {
           openKfid: binding?.openKfid || null,
           externalUserId: binding?.externalUserId || null,
           wechatWorkMsgId,
+          deliveryState: deliveryFailure.deliveryState,
+          failureStage: deliveryFailure.stage,
+          acceptedMessageIds: deliveryFailure.acceptedMessageIds,
+          uploadedMediaIds: deliveryFailure.uploadedMediaIds,
+          automaticRetryBlocked: !deliveryFailure.retrySafe,
         },
       });
       const updatedTask = this.localStore.updateSendTask(task.id, {
@@ -3372,11 +3391,15 @@ export class WechatDispatchService {
           wechatWorkRetryCount: attemptNumber,
           wechatWorkNextRetryAt: nextRetryAt,
           wechatWorkLastErrorAt: completedAt,
+          wechatWorkDeliveryState: deliveryFailure.deliveryState,
+          automaticRetryBlocked: !deliveryFailure.retrySafe,
         },
       });
       this.localStore.recordWechatWorkAudit({
-        action: retryScheduled ? "send_retry_scheduled" : "send_api_failed",
-        status: retryScheduled ? "retrying" : "failed",
+        action: retryScheduled
+          ? "send_retry_scheduled"
+          : deliveryFailure.deliveryState === "failed" ? "send_api_failed" : "send_delivery_unknown",
+        status: retryScheduled ? "retrying" : deliveryFailure.deliveryState === "failed" ? "failed" : "unknown",
         sendTaskId: task.id,
         sendAttemptId: attempt.id,
         openKfid: binding?.openKfid || null,
@@ -3385,6 +3408,9 @@ export class WechatDispatchService {
         attemptNumber,
         nextRetryAt,
         errorMessage,
+        deliveryState: deliveryFailure.deliveryState,
+        failureStage: deliveryFailure.stage,
+        acceptedMessageIds: deliveryFailure.acceptedMessageIds,
       });
       return { ...result, task: updatedTask, attempt, retryScheduled, nextRetryAt };
     }
@@ -3405,6 +3431,9 @@ export class WechatDispatchService {
       if (!binding) throw new Error("wechat work mapping disappeared after send guard");
       const response = await this.sendAdapter.deliverWechatWorkKf(task, binding, wechatWorkMsgId);
       const completedAt = new Date().toISOString();
+      const apiMsgIds = Array.isArray(response.apiMsgIds) && response.apiMsgIds.length
+        ? response.apiMsgIds
+        : [response.msgid || wechatWorkMsgId];
       const completed = await this.persistence.completeAttemptAndTask({
         taskId: task.id,
         attemptId: result.attempt.id,
@@ -3420,7 +3449,8 @@ export class WechatDispatchService {
             openKfid: binding.openKfid,
             externalUserId: binding.externalUserId,
             wechatWorkMsgId,
-            apiMsgId: response.msgid || wechatWorkMsgId,
+            apiMsgId: apiMsgIds[0],
+            apiMsgIds,
             apiResponse: response,
             finalDeliveryPendingFailureEvent: true,
           },
@@ -3433,7 +3463,8 @@ export class WechatDispatchService {
             ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
             wechatWorkRetryCount: Math.max(0, attemptNumber - 1),
             wechatWorkNextRetryAt: null,
-            wechatWorkMsgId: response.msgid || wechatWorkMsgId,
+            wechatWorkMsgId: apiMsgIds[0],
+            wechatWorkMsgIds: apiMsgIds,
             apiAcceptedAt: completedAt,
           },
         },
@@ -3448,7 +3479,8 @@ export class WechatDispatchService {
           sendAttemptId: currentAttempt?.id || result.attempt.id,
           openKfid: binding.openKfid,
           externalUserId: binding.externalUserId,
-          msgid: response.msgid || wechatWorkMsgId,
+          msgid: apiMsgIds[0],
+          msgids: apiMsgIds,
           taskStatus: currentTask?.status || "missing",
           errorMessage: "send API accepted but task left sending state before durable completion",
         }).catch(() => null);
@@ -3474,7 +3506,8 @@ export class WechatDispatchService {
     } catch (error) {
       const completedAt = new Date().toISOString();
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const retryScheduled = attemptNumber < appConfig.wechatWorkSendMaxAttempts;
+      const deliveryFailure = describeWechatWorkDeliveryFailure(error);
+      const retryScheduled = deliveryFailure.retrySafe && attemptNumber < appConfig.wechatWorkSendMaxAttempts;
       const nextRetryAt = retryScheduled
         ? new Date(Date.now() + appConfig.wechatWorkSendRetryDelaySeconds * 1000).toISOString()
         : null;
@@ -3487,7 +3520,7 @@ export class WechatDispatchService {
           errorMessage,
           completedAt,
           metadata: {
-            bridgeState: retryScheduled ? "retry_scheduled" : "api_failed",
+            bridgeState: retryScheduled ? "retry_scheduled" : deliveryFailure.deliveryState === "failed" ? "api_failed" : "delivery_unknown",
             attemptNumber,
             maxAttempts: appConfig.wechatWorkSendMaxAttempts,
             retryScheduled,
@@ -3496,6 +3529,11 @@ export class WechatDispatchService {
             openKfid: binding?.openKfid || null,
             externalUserId: binding?.externalUserId || null,
             wechatWorkMsgId,
+            deliveryState: deliveryFailure.deliveryState,
+            failureStage: deliveryFailure.stage,
+            acceptedMessageIds: deliveryFailure.acceptedMessageIds,
+            uploadedMediaIds: deliveryFailure.uploadedMediaIds,
+            automaticRetryBlocked: !deliveryFailure.retrySafe,
           },
         },
         taskPatch: {
@@ -3506,6 +3544,8 @@ export class WechatDispatchService {
             wechatWorkRetryCount: attemptNumber,
             wechatWorkNextRetryAt: nextRetryAt,
             wechatWorkLastErrorAt: completedAt,
+            wechatWorkDeliveryState: deliveryFailure.deliveryState,
+            automaticRetryBlocked: !deliveryFailure.retrySafe,
           },
         },
       });
@@ -3515,8 +3555,10 @@ export class WechatDispatchService {
         return { ...result, task: currentTask, attempt: currentAttempt, retryScheduled: false, stateChanged: true };
       }
       await this.persistence.recordWechatWorkAudit({
-        action: retryScheduled ? "send_retry_scheduled" : "send_api_failed",
-        status: retryScheduled ? "retrying" : "failed",
+        action: retryScheduled
+          ? "send_retry_scheduled"
+          : deliveryFailure.deliveryState === "failed" ? "send_api_failed" : "send_delivery_unknown",
+        status: retryScheduled ? "retrying" : deliveryFailure.deliveryState === "failed" ? "failed" : "unknown",
         sendTaskId: task.id,
         sendAttemptId: completed.attempt.id,
         openKfid: binding?.openKfid || null,
@@ -3525,6 +3567,9 @@ export class WechatDispatchService {
         attemptNumber,
         nextRetryAt,
         errorMessage,
+        deliveryState: deliveryFailure.deliveryState,
+        failureStage: deliveryFailure.stage,
+        acceptedMessageIds: deliveryFailure.acceptedMessageIds,
       });
       return { ...result, task: completed.task, attempt: completed.attempt, retryScheduled, nextRetryAt };
     }
@@ -5951,6 +5996,40 @@ function validateBridgeSendPlanActions(actions: unknown[]) {
     return { ok: false, reason: `unsupported send action type: ${type || "empty"}` };
   }
   return { ok: true, reason: "send plan actions are valid" };
+}
+
+function validateWechatWorkImagePaths(imagePaths: unknown[]) {
+  try {
+    for (const imagePath of imagePaths) resolveWechatWorkImageFile(imagePath);
+    return {
+      ok: true,
+      detail: imagePaths.length ? `${imagePaths.length} image file(s) passed local storage validation` : "no images",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : "wechat work image validation failed",
+    };
+  }
+}
+
+function describeWechatWorkDeliveryFailure(error: unknown) {
+  if (error instanceof WechatWorkKfDeliveryError) {
+    return {
+      retrySafe: error.retrySafe,
+      deliveryState: error.deliveryState,
+      stage: error.stage,
+      acceptedMessageIds: error.acceptedMessageIds,
+      uploadedMediaIds: error.uploadedMediaIds,
+    };
+  }
+  return {
+    retrySafe: false,
+    deliveryState: "unknown" as const,
+    stage: "adapter",
+    acceptedMessageIds: [] as string[],
+    uploadedMediaIds: [] as string[],
+  };
 }
 
 function appendCustomerNote(current: unknown, next: string) {
