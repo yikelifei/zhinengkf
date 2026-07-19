@@ -22,6 +22,7 @@
     "config:doctor": "..\\config-readiness-doctor.cmd",
     "release:gate": "node tools/production-release-gate.js",
     "staging:readiness": "node tools/staging-readiness-evidence.js",
+    "qa:responsive": "node tools/run-responsive-layout-qa.js",
     "acceptance:e2e": "node tools/run-product-acceptance.js",
     "acceptance:e2e:mock": "node tools/run-product-acceptance.js --mode mock",
     "acceptance:e2e:external": "node tools/run-product-acceptance.js --mode real-external --allow-external-readiness",

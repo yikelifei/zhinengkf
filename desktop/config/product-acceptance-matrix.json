@@ -150,10 +150,10 @@
       "capability": "mobile_390_layout",
       "mode": "mock",
       "handler": "layout_390",
-      "titleZh": "390px 关键工作台布局与导航",
+      "titleZh": "1536px 与 390px 关键工作台布局与导航",
       "sideEffectClass": "local-render-only",
       "mutatesExternal": false,
-      "acceptance": "390x844 渲染非空、无框架错误层、无页面级横向溢出；发送中心导航可交互并截图留证。"
+      "acceptance": "1536x960 与 390x844 均渲染非空、无框架错误层、无页面级横向溢出；桌面侧栏和移动底栏/抽屉可交互，主面板可到达并分别截图留证。"
     },
     {
       "id": "EXT-DESIGN-001",

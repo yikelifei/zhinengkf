@@ -716,44 +716,45 @@ async function runContractRegression(context) {
 
 async function runLayout390(context) {
   requireStack(context);
-  if (context.options.skipLayout) throw new BlockedError("390px renderer was skipped by --skip-layout", ["layout renderer disabled"]);
-  let electronExecutable;
-  try {
-    electronExecutable = require("electron");
-  } catch {
-    throw new BlockedError("Electron runtime is unavailable; run npm.cmd ci", ["desktop/node_modules/electron"]);
-  }
-  const outputPath = path.join(context.outputDir, "layout-390.json");
-  const screenshotPath = path.join(context.outputDir, "layout-390.png");
-  const result = await runCommand(electronExecutable, [path.join(desktopRoot, "tools", "product-acceptance-layout-probe.js")], {
+  if (context.options.skipLayout) throw new BlockedError("responsive renderer was skipped by --skip-layout", ["layout renderer disabled"]);
+  const outputDir = path.join(context.outputDir, "responsive-layout");
+  const outputPath = path.join(outputDir, "responsive-layout-report.json");
+  const result = await runCommand(process.execPath, [
+    path.join(desktopRoot, "tools", "run-responsive-layout-qa.js"),
+    "--url",
+    context.stack.webUrl,
+    "--output-dir",
+    outputDir,
+  ], {
     cwd: desktopRoot,
-    env: {
-      ...context.serviceEnv,
-      ACCEPTANCE_WEB_URL: context.stack.webUrl,
-      ACCEPTANCE_LAYOUT_OUTPUT: outputPath,
-      ACCEPTANCE_LAYOUT_SCREENSHOT: screenshotPath,
-      ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
-    },
-    timeoutMs: 150_000,
+    env: context.serviceEnv,
+    timeoutMs: 180_000,
   });
-  assertCommandPassed(result, "390px Electron layout probe");
-  assert(fs.existsSync(outputPath), "390px layout JSON was not written");
+  if (!fs.existsSync(outputPath)) assertCommandPassed(result, "responsive layout QA runner");
+  assert(fs.existsSync(outputPath), "responsive layout JSON was not written");
   const layout = JSON.parse(fs.readFileSync(outputPath, "utf8"));
-  assert(layout.passed === true, `390px layout failed: ${(layout.failures || []).join("; ")}`);
-  assert(fs.existsSync(screenshotPath), "390px screenshot was not written");
+  if (layout.status === "blocked") {
+    throw new BlockedError("responsive Electron layout QA is blocked", layout.blockers || ["renderer unavailable"], {
+      reportPath: outputPath,
+      process: layout.process || null,
+    });
+  }
+  assert(layout.status === "passed", `responsive layout failed: ${(layout.failures || []).join("; ")}`);
+  assert(Array.isArray(layout.viewports) && layout.viewports.length === 2, "responsive layout must include 1536px and 390px evidence");
   return {
     evidence: {
-      browserPlugin: "absent",
       renderer: "existing Electron Chromium runtime",
-      playwright: "not installed; no dependency was added",
       url: layout.url,
-      title: layout.title,
-      viewport: layout.viewport,
-      checks: layout.checks,
-      interaction: layout.interaction,
-      consoleErrors: layout.consoleErrors,
+      viewports: layout.viewports.map((item) => ({
+        name: item.name,
+        viewport: item.viewport,
+        checks: item.checks,
+        interaction: item.interaction,
+        screenshotPath: item.screenshotPath,
+      })),
+      consoleErrors: layout.consoleErrors || [],
       reportPath: outputPath,
-      screenshotPath,
+      markdownPath: layout.artifacts?.markdownReport || "",
     },
   };
 }

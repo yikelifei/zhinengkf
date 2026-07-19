@@ -40,12 +40,14 @@ test("real external scenarios are read-only and declare dependencies", () => {
   }
 });
 
-test("acceptance runner and 390 renderer are wired to package scripts", () => {
+test("acceptance runner and responsive renderer are wired to package scripts", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const runner = fs.readFileSync(path.join(root, "tools", "run-product-acceptance.js"), "utf8");
   const renderer = fs.readFileSync(path.join(root, "tools", "product-acceptance-layout-probe.js"), "utf8");
+  const responsiveRunner = fs.readFileSync(path.join(root, "tools", "run-responsive-layout-qa.js"), "utf8");
 
   assert.match(packageJson.scripts["acceptance:e2e"], /run-product-acceptance\.js/);
+  assert.match(packageJson.scripts["qa:responsive"], /run-responsive-layout-qa\.js/);
   assert.match(runner, /PERSONAL_WECHAT_SEND:\s*"0"/);
   assert.match(runner, /LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE:\s*"false"/);
   assert.match(runner, /INTERNAL_API_TOKEN:\s*internalApiToken/);
@@ -54,11 +56,15 @@ test("acceptance runner and 390 renderer are wired to package scripts", () => {
   assert.match(runner, /record\.action\s*===\s*"callback_accepted"/);
   assert.match(runner, /bridgeStatus\.autoEnter\s*!==\s*true/);
   assert.match(runner, /await waitForChildExit\(service\.child/);
-  assert.match(renderer, /width:\s*390/);
+  assert.match(runner, /responsive-layout-report\.json/);
+  assert.match(renderer, /name:\s*"desktop-1536",\s*width:\s*1536/);
+  assert.match(renderer, /name:\s*"mobile-390",\s*width:\s*390/);
   assert.match(renderer, /capturePage/);
   assert.match(renderer, /app\.setPath\("userData"/);
   assert.match(renderer, /app\.disableHardwareAcceleration\(\)/);
   assert.match(renderer, /data-section-id=\"send-center\"/);
+  assert.match(responsiveRunner, /status:\s*"blocked"/);
+  assert.match(responsiveRunner, /responsive-layout-report\.zh-CN\.md/);
 });
 
 test("bridge worker restores customer identity from the sanitized API preview", () => {
