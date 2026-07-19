@@ -1,11 +1,14 @@
 "use strict";
 
-const { app, BrowserWindow, Notification, ipcMain, nativeTheme } = require("electron");
+const { app, BrowserWindow, Notification, ipcMain, nativeTheme, session } = require("electron");
 const path = require("node:path");
 const { PackagedServiceManager } = require("./packaged-runtime");
 
 const WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
 const APP_TITLE = "智能体客服工作台";
+const DESKTOP_SESSION_COOKIE = "smart_kefu_desktop_session";
+const DESKTOP_SESSION_PROOF_PATTERN = /^[a-f0-9]{64}$/i;
+const DESKTOP_SESSION_PARTITION = "persist:smart-kefu-desktop";
 
 let mainWindow = null;
 let packagedServices = null;
@@ -60,6 +63,7 @@ function createMainWindow() {
       : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      partition: DESKTOP_SESSION_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -79,6 +83,7 @@ function createMainWindow() {
 }
 
 async function startApplication() {
+  let webSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim();
   if (app.isPackaged) {
     packagedServices = new PackagedServiceManager({
       executablePath: process.execPath,
@@ -87,8 +92,31 @@ async function startApplication() {
       userDataPath: app.getPath("userData"),
     });
     await packagedServices.start();
+    webSessionProof = packagedServices.webSessionProof;
   }
+  await installDesktopSessionCookie(webSessionProof);
   createMainWindow();
+}
+
+async function installDesktopSessionCookie(proof) {
+  const value = String(proof || "").trim();
+  if (!DESKTOP_SESSION_PROOF_PATTERN.test(value)) return false;
+  const target = new URL(WEB_URL);
+  const hostname = target.hostname.toLowerCase();
+  if (target.protocol !== "http:" && target.protocol !== "https:") return false;
+  if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "[::1]" && hostname !== "::1") {
+    return false;
+  }
+  await session.fromPartition(DESKTOP_SESSION_PARTITION).cookies.set({
+    url: target.origin,
+    name: DESKTOP_SESSION_COOKIE,
+    value,
+    path: "/api",
+    httpOnly: true,
+    sameSite: "strict",
+    secure: target.protocol === "https:",
+  });
+  return true;
 }
 
 const ownsSingleInstance = app.requestSingleInstanceLock();

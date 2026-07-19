@@ -1,22 +1,21 @@
 import "server-only";
 
+import {
+  buildDesktopApiUpstreamHeaders,
+  canonicalDesktopProxyPath,
+  evaluateDesktopSessionProof,
+  isForbiddenWebProxyIngress,
+  requiresDesktopSessionProof,
+} from "../../../lib/desktop-session-proof";
+
 const INTERNAL_API_TOKEN_HEADER = "x-internal-api-token";
 const INTERNAL_API_TOKEN_PATTERN = /^[a-f0-9]{64}$/i;
-const REQUEST_HEADERS_TO_REMOVE = [
+const RESPONSE_HEADERS_TO_REMOVE = [
   "connection",
   "content-length",
-  "host",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-];
-const RESPONSE_HEADERS_TO_REMOVE = [
-  ...REQUEST_HEADERS_TO_REMOVE,
   "content-encoding",
+  "keep-alive",
+  "transfer-encoding",
   "set-cookie",
   INTERNAL_API_TOKEN_HEADER,
 ];
@@ -29,22 +28,34 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
+  const params = await context.params;
+  const canonicalPath = canonicalDesktopProxyPath(params.path);
+  if (!canonicalPath.allowed) {
+    return jsonError(400, canonicalPath.reason, "The desktop API proxy path is invalid.");
+  }
+  if (isForbiddenWebProxyIngress(canonicalPath.path)) {
+    return jsonError(404, "callback_proxy_disabled", "Design platform callbacks must use the dedicated API ingress.");
+  }
+  if (requiresDesktopSessionProof(request.method)) {
+    const desktopSession = evaluateDesktopSessionProof(
+      request.headers.get("cookie"),
+      process.env.DESKTOP_WEB_SESSION_PROOF,
+    );
+    if (!desktopSession.allowed) {
+      return jsonError(403, desktopSession.reason, "A verified Electron desktop session is required.");
+    }
+  }
   const token = String(process.env.INTERNAL_API_TOKEN || "").trim();
   if (!INTERNAL_API_TOKEN_PATTERN.test(token)) {
     return jsonError(503, "trusted_local_session_unavailable", "The trusted local desktop session is unavailable.");
   }
-
-  const params = await context.params;
-  const path = Array.isArray(params.path) ? params.path.map((segment) => encodeURIComponent(segment)).join("/") : "";
+  const path = canonicalPath.path.split("/").filter(Boolean).map((segment) => encodeURIComponent(segment)).join("/");
   const requestUrl = new URL(request.url);
   const apiPort = validPort(process.env.API_PORT, 3200);
   const upstreamUrl = new URL(`/api/${path}`, `http://127.0.0.1:${apiPort}`);
   upstreamUrl.search = requestUrl.search;
 
-  const headers = new Headers(request.headers);
-  for (const header of REQUEST_HEADERS_TO_REMOVE) headers.delete(header);
-  headers.delete(INTERNAL_API_TOKEN_HEADER);
-  headers.set(INTERNAL_API_TOKEN_HEADER, token);
+  const headers = buildDesktopApiUpstreamHeaders(request.headers, token, INTERNAL_API_TOKEN_HEADER);
 
   try {
     const method = request.method.toUpperCase();
@@ -75,7 +86,8 @@ function validPort(value: string | undefined, fallback: number) {
 }
 
 function jsonError(status: number, code: string, message: string) {
-  return Response.json({ statusCode: status, error: status === 503 ? "Service Unavailable" : "Bad Gateway", code, message }, { status });
+  const error = status === 503 ? "Service Unavailable" : status === 403 ? "Forbidden" : status === 404 ? "Not Found" : status === 400 ? "Bad Request" : "Bad Gateway";
+  return Response.json({ statusCode: status, error, code, message }, { status });
 }
 
 export const GET = proxyDesktopApi;

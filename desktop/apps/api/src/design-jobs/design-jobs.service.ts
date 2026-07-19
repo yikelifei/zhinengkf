@@ -5,6 +5,8 @@ import {
   GoneException,
   Injectable,
   NotFoundException,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -17,7 +19,7 @@ import {
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { appConfig } from "../shared/app-config";
+import { appConfig, hasIndependentDesignPlatformCallbackApiKey } from "../shared/app-config";
 import { StorageService } from "../storage/storage.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { QuotesService } from "../quotes/quotes.service";
@@ -69,7 +71,14 @@ const {
   validateDesignJobIdentity,
   validateDesignRequest,
 } = rules;
-import { CreateDesignJobPayload, CreateDesignRevisionPayload, SelectDesignImagePayload } from "./design-jobs.types";
+import {
+  CreateDesignJobPayload,
+  CreateDesignRevisionPayload,
+  ResolveDesignExecutionRefundPayload,
+  ResolveUnknownDesignExecutionPayload,
+  SelectDesignImagePayload,
+} from "./design-jobs.types";
+import { DesignPlatformExecutionService } from "./design-platform-execution.service";
 
 type DesignImageCandidateLike = {
   id: string;
@@ -156,8 +165,12 @@ type DesignPlatformSmokeTestResult = {
 };
 
 @Injectable()
-export class DesignJobsService {
+export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly activeResultPolls = new Set<string>();
+  private readonly activeExecutionPromises = new Map<string, Promise<void>>();
+  private activeRecoveryReconciliation: Promise<void> | null = null;
+  private recoveryStartupTimer: ReturnType<typeof setTimeout> | null = null;
+  private recoveryInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -168,7 +181,42 @@ export class DesignJobsService {
     private readonly wechatDispatch: WechatDispatchService,
     private readonly quotes: QuotesService,
     private readonly orders: OrdersService,
+    private readonly platformExecutions: DesignPlatformExecutionService,
   ) {}
+
+  onApplicationBootstrap() {
+    if (!this.usesDurableArtImageExecutions()) return;
+    const intervalMs = Math.max(1000, Number(appConfig.designExecutionRecoveryIntervalMs || 15000));
+    this.recoveryInterval = setInterval(() => {
+      void this.reconcileDurableArtImageExecutions().catch(() => this.reportRecoveryReconciliationFailure("interval"));
+    }, intervalMs);
+    this.recoveryInterval.unref?.();
+    this.recoveryStartupTimer = setTimeout(() => {
+      this.recoveryStartupTimer = null;
+      void this.reconcileDurableArtImageExecutions().catch(() => this.reportRecoveryReconciliationFailure("startup"));
+    }, 0);
+    this.recoveryStartupTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.recoveryStartupTimer) clearTimeout(this.recoveryStartupTimer);
+    if (this.recoveryInterval) clearInterval(this.recoveryInterval);
+    this.recoveryStartupTimer = null;
+    this.recoveryInterval = null;
+  }
+
+  private async reportRecoveryReconciliationFailure(source: "startup" | "interval") {
+    try {
+      await this.notifications.create(
+        "error",
+        "设计平台恢复协调失败",
+        "持久化设计执行本轮恢复未完成；系统不会自动创建新的尝试，请保留 execution 状态并继续下一轮协调。",
+        { source },
+      );
+    } catch {
+      // The durable execution rows remain the source of truth even if notification storage is unavailable.
+    }
+  }
 
   async list(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     const jobs = appConfig.useLocalStore
@@ -194,6 +242,29 @@ export class DesignJobsService {
     let candidateCount = 0;
     const savedImagePaths: string[] = [];
     const savedImagePreviews: Array<{ imageId: string; dataUrl: string }> = [];
+
+    if (this.usesDurableArtImageExecutions()) {
+      const errorMessage =
+        "art_image_local smoke generation is disabled because every real generation must start from a persisted DesignJob and durable execution";
+      steps.push({ key: "durable_execution_required", label: "持久化执行要求", ok: false, detail: errorMessage });
+      return {
+        ok: false,
+        adapter: appConfig.designPlatformAdapter,
+        baseUrl: appConfig.designPlatformBaseUrl,
+        latencyMs: Date.now() - startedAt,
+        requestId,
+        status: "blocked",
+        expectedCandidateCount,
+        assetUploadCount,
+        candidateCount,
+        savedImageCount: 0,
+        savedImagePaths,
+        savedImagePreviews,
+        contractChecks,
+        steps,
+        errorMessage,
+      };
+    }
 
     try {
       await this.designPlatform.health();
@@ -551,6 +622,7 @@ export class DesignJobsService {
   }
 
   async pollActiveResults(limit = appConfig.lowValueAutomationPollLimit, filter: IdentityFilter = {}) {
+    if (this.usesDurableArtImageExecutions()) await this.reconcileDurableArtImageExecutions();
     const max = Math.max(1, Math.min(Number(limit || 50), 200));
     const jobs = appConfig.useLocalStore
       ? this.localStore
@@ -574,6 +646,7 @@ export class DesignJobsService {
       retried: [] as any[],
       generating: [] as any[],
       cancelled: [] as any[],
+      outcomeUnknown: [] as any[],
       errors: [] as any[],
     };
 
@@ -585,6 +658,7 @@ export class DesignJobsService {
         else if (remoteStatus === "completed") result.completed.push(polled.job);
         else if (remoteStatus === "failed") result.failed.push(polled.job);
         else if (remoteStatus === "cancelled") result.cancelled.push(polled.job);
+        else if (remoteStatus === "outcome_unknown") result.outcomeUnknown.push(polled.job);
         else result.generating.push(polled.job);
       } catch (error) {
         result.errors.push({
@@ -615,6 +689,7 @@ export class DesignJobsService {
     const updatedJobs = [];
     const recoveredJobs = [];
     const pollErrors = [];
+    const protectedByDurableExecution = [];
 
     for (const job of candidates as any[]) {
       if (job.externalJobId) {
@@ -636,6 +711,19 @@ export class DesignJobsService {
             externalJobId: job.externalJobId,
             errorMessage: error instanceof Error ? error.message : "unknown poll error",
           });
+        }
+      }
+
+      if (this.usesDurableArtImageExecutions()) {
+        const blocker = await this.platformExecutions!.findRetryBlocker(job.id);
+        if (blocker) {
+          protectedByDurableExecution.push({
+            designJobId: job.id,
+            executionId: blocker.id,
+            executionStatus: blocker.status,
+            acceptanceStatus: blocker.acceptanceStatus,
+          });
+          continue;
         }
       }
 
@@ -674,7 +762,9 @@ export class DesignJobsService {
       candidates: candidates.length,
       recovered: recoveredJobs.length,
       timedOut: updatedJobs.length,
+      protectedByDurableExecution: protectedByDurableExecution.length,
       pollErrors,
+      protectedExecutions: protectedByDurableExecution,
       recoveredJobs,
       jobs: updatedJobs,
     };
@@ -885,6 +975,14 @@ export class DesignJobsService {
     try {
       await this.assertDesignPlatformPreflight(id);
       const payload = await this.buildDesignPlatformPayload(job);
+      if (this.usesDurableArtImageExecutions()) {
+        const updated = await this.beginDurableArtImageExecution(job, payload, null, "initial");
+        const waitMessage = buildWaitingMessage({ scene: job.scene || "", outputCount: job.outputCount });
+        if (job.wechatAccountId) {
+          await this.queueDesignTextMessage(job, waitMessage, "design-waiting-message");
+        }
+        return updated;
+      }
       remote = await this.designPlatform.createDesignJob(payload);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "unknown design submit error";
@@ -1032,6 +1130,19 @@ export class DesignJobsService {
       }，${callbackSummary.fallbackPolling ? "已启用轮询兜底" : "未启用轮询兜底"}`,
     });
 
+    if (appConfig.designPlatformAdapter === "standard_v1") {
+      const callbackAuthReady = hasIndependentDesignPlatformCallbackApiKey();
+      checks.push({
+        key: "design_platform_callback_auth",
+        label: "设计平台回调独立密钥",
+        ok: callbackAuthReady,
+        severity: "error",
+        detail: callbackAuthReady
+          ? "standard_v1 回调已配置独立密钥。"
+          : "standard_v1 必须配置独立的 DESIGN_PLATFORM_CALLBACK_API_KEY，且不得复用内部/API/登录凭据。",
+      });
+    }
+
     if (appConfig.designPlatformAdapter === "art_image_local") {
       checks.push({
         key: "art_image_adapter",
@@ -1152,6 +1263,8 @@ export class DesignJobsService {
       };
     }
 
+    if (this.usesDurableArtImageExecutions()) return this.pollDurableArtImageResult(job);
+
     const result = await this.designPlatform.getDesignJobResults(job.externalJobId);
     if (result.status === "completed") {
       const updated = await this.handleDesignPlatformCallback({
@@ -1194,8 +1307,94 @@ export class DesignJobsService {
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
     this.assertDesignJobCanManualRetry(job);
+    if (this.usesDurableArtImageExecutions()) await this.platformExecutions!.assertRetryAllowed(job.id);
     const revision = await this.findLatestRevisionForRetry(job.id);
     return this.retryDesignJob(id, "manual", undefined, expected, revision);
+  }
+
+  async resolveUnknownExecution(
+    id: string,
+    executionId: string,
+    payload: ResolveUnknownDesignExecutionPayload & ExpectedIdentityPayload,
+    trustedReviewer: string,
+  ) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, payload || {}, "design job");
+    if (payload?.resolution !== "confirmed_not_generated_refunded") {
+      throw new BadRequestException("resolution must be confirmed_not_generated_refunded");
+    }
+    const reviewer = String(trustedReviewer || "").trim();
+    if (!reviewer || !/^[\p{L}\p{N}_.@-]{1,80}$/u.test(reviewer)) {
+      throw new BadRequestException("reviewer must be a non-empty operator identifier");
+    }
+    const execution = await this.platformExecutions.get(executionId);
+    if (!execution || execution.designJobId !== job.id) {
+      throw new BadRequestException("design platform execution does not belong to this design job");
+    }
+    const resolved = await this.platformExecutions.resolveUnknown(execution.id, payload.resolution, reviewer);
+    await this.createReviewLog({
+      targetType: "design_platform_execution",
+      targetId: execution.id,
+      decision: payload.resolution,
+      reviewer,
+      note: "人工已确认未生成且退款完成，允许后续显式重试。",
+      beforeStatus: "outcome_unknown",
+      afterStatus: "explicit_failed",
+      metadata: { designJobId: job.id, externalJobId: execution.externalJobId },
+    });
+
+    await this.notifications.create(
+      "warning",
+      "设计平台未知结果已人工核销",
+      "已确认该次尝试没有生成且退款完成；系统仅解除重试阻塞，不会自动重新生成。",
+      { designJobId: job.id, externalJobId: execution.externalJobId },
+    );
+    return resolved;
+  }
+
+  async resolveExecutionRefund(
+    id: string,
+    executionId: string,
+    payload: ResolveDesignExecutionRefundPayload & ExpectedIdentityPayload,
+    trustedReviewer: string,
+  ) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, payload || {}, "design job");
+    if (payload?.resolution !== "confirmed_refunded") {
+      throw new BadRequestException("resolution must be confirmed_refunded");
+    }
+    const reviewer = String(trustedReviewer || "").trim();
+    if (!reviewer || !/^[\p{L}\p{N}_.@-]{1,80}$/u.test(reviewer)) {
+      throw new BadRequestException("reviewer must be a non-empty operator identifier");
+    }
+    const execution = await this.platformExecutions.get(executionId);
+    if (!execution || execution.designJobId !== job.id) {
+      throw new BadRequestException("design platform execution does not belong to this design job");
+    }
+    const resolved = await this.platformExecutions.resolveUnsafeRefund(execution.id, payload.resolution, reviewer);
+    await this.createReviewLog({
+      targetType: "design_platform_execution_refund",
+      targetId: execution.id,
+      decision: payload.resolution,
+      reviewer,
+      note: "人工已核对退款到账，允许后续显式重试。",
+      beforeStatus: `${execution.status}:${execution.refundStatus}`,
+      afterStatus: `${execution.status}:refunded`,
+      metadata: { designJobId: job.id, externalJobId: execution.externalJobId },
+    });
+    await this.notifications.create(
+      "warning",
+      "设计平台退款结果已人工核销",
+      "已确认该次失败尝试退款完成；系统仅解除重试阻塞，不会自动重新生成。",
+      { designJobId: job.id, externalJobId: execution.externalJobId },
+    );
+    return resolved;
   }
 
   async attachAssets(id: string, assetIds: string[], expected: ExpectedIdentityPayload = {}) {
@@ -1382,6 +1581,7 @@ export class DesignJobsService {
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, payload, "design job");
     this.assertDesignJobCanRequestRevision(job);
+    if (this.usesDurableArtImageExecutions()) await this.platformExecutions!.assertRetryAllowed(job.id);
 
     const existingRevisions = appConfig.useLocalStore
       ? this.localStore.listDesignRevisions(job.id)
@@ -1505,6 +1705,30 @@ export class DesignJobsService {
     let remote: any;
     try {
       const payloadForPlatform = await this.buildDesignPlatformPayload(job, revision);
+      if (this.usesDurableArtImageExecutions()) {
+        let updated = await this.beginDurableArtImageExecution(job, payloadForPlatform, revision, "initial");
+        const externalJobId = updated.externalJobId;
+        revision = appConfig.useLocalStore
+          ? this.localStore.listDesignRevisions(job.id).find((item: any) => item.id === revision.id)
+          : await prisma.designRevision.findUnique({ where: { id: revision.id } });
+        updated = appConfig.useLocalStore
+          ? this.localStore.updateDesignJob(job.id, { revisionPolicy: decision })
+          : await prisma.designJob.update({
+              where: { id: job.id },
+              data: { revisionPolicy: decision as any },
+              include: { images: true, assets: true, revisions: true },
+            });
+        await this.notifications.create("info", "改图已提交设计平台", decision.reason, {
+          designJobId: job.id,
+          revisionId: revision.id,
+          externalJobId,
+        });
+        if (job.wechatAccountId) {
+          const text = `收到，我按您说的“${String(payload.instruction || "").trim()}”重新处理一版，出来后再发您确认。`;
+          await this.queueDesignTextMessage(job, text, "design-revision-waiting-message");
+        }
+        return { decision, revision, job: updated };
+      }
       remote = await this.designPlatform.createDesignJob(payloadForPlatform);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "unknown design revision submit error";
@@ -1573,9 +1797,15 @@ export class DesignJobsService {
     let remoteResult: Record<string, unknown> | null = null;
     if (job.externalJobId) {
       try {
-        remoteResult = await this.designPlatform.cancelDesignJob(job.externalJobId);
+        let durableCancellation: any = null;
+        if (this.usesDurableArtImageExecutions()) {
+          durableCancellation = await this.platformExecutions!.requestCancellation(job.externalJobId);
+        }
+        if (!this.usesDurableArtImageExecutions() || durableCancellation?.status === "cancel_requested") {
+          remoteResult = await this.designPlatform.cancelDesignJob(job.externalJobId);
+        }
       } catch (error) {
-        await this.notifications.create("warning", "设计平台取消失败", error instanceof Error ? error.message : "未知错误", {
+        await this.notifications.create("warning", "设计平台取消失败", "设计任务已在本地取消，但远端取消请求未确认；迟到结果仍会被拒收并保留对账证据。", {
           designJobId: job.id,
           externalJobId: job.externalJobId,
         });
@@ -1603,6 +1833,7 @@ export class DesignJobsService {
     if (!callbackBinding.ok) {
       throw new BadRequestException(`design callback binding invalid: ${callbackBinding.reason}`);
     }
+    const automaticRetryAllowed = await this.designCallbackAllowsAutomaticRetry(payload);
     const terminalStatusLabel = this.designJobTerminalStatusLabel(job.status);
     if (terminalStatusLabel) {
       const notificationTitle = String(job.status || "") === "cancelled" ? "已忽略取消任务回调" : "已忽略终态任务回调";
@@ -1621,7 +1852,7 @@ export class DesignJobsService {
       await this.notifications.create(retryCount < 1 ? "warning" : "error", "设计平台出图失败", payload.errorMessage || "未返回失败原因", {
         designJobId: job.id,
       });
-      if (retryCount < 1) {
+      if (automaticRetryAllowed && retryCount < 1) {
         return this.retryDesignJob(job.id, "automatic", payload.errorMessage || "设计平台返回失败", {}, failedRevision);
       }
       await this.notifications.create("error", "设计任务已转人工", "自动重试后仍失败，需要客服人工处理。", {
@@ -1643,7 +1874,7 @@ export class DesignJobsService {
         designJobId: job.id,
         externalJobId: payload.externalJobId || job.externalJobId,
       });
-      if (retryCount < 1) {
+      if (automaticRetryAllowed && retryCount < 1) {
         return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
@@ -1668,7 +1899,7 @@ export class DesignJobsService {
           invalidImageReasons: imageMetadataCheck.reasons,
         },
       );
-      if (retryableFailure && retryCount < 1) {
+      if (automaticRetryAllowed && retryableFailure && retryCount < 1) {
         return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
@@ -1693,7 +1924,7 @@ export class DesignJobsService {
           requiredImageCount: minimumInitialImageCount,
         },
       );
-      if (retryCount < 1) {
+      if (automaticRetryAllowed && retryCount < 1) {
         return this.retryDesignJob(job.id, "automatic", errorMessage);
       }
       return this.failDesignJobForManualReview(job, {
@@ -1749,7 +1980,7 @@ export class DesignJobsService {
           downloadFailureCount,
         },
       );
-      if (retryableFailure && retryCount < 1) {
+      if (automaticRetryAllowed && retryableFailure && retryCount < 1) {
         return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
       }
       return this.failDesignJobForManualReview(job, {
@@ -1771,12 +2002,43 @@ export class DesignJobsService {
       );
     }
 
+    const nextStatus = nextStatusAfterDesignCompleted({
+      isHighValue: job.isHighValue,
+      budget: job.budget,
+      highValueAmountCny: appConfig.highValueAmountCny,
+      manualQcRequired: job.manualQcRequired,
+    });
+    if (this.usesDurableArtImageExecutions() && payload.externalJobId) {
+      const execution = await this.platformExecutions.get(payload.externalJobId);
+      if (execution?.status === "completed" && execution.acceptanceStatus === "accepting") {
+        const accepted = await this.platformExecutions.commitAcceptedResult({
+          executionId: execution.id,
+          images: savedImages.map(({ image, imageId, position, fingerprint, legacyIdentityHash, localPath }) => ({
+            imageId,
+            downloadUrl: sanitizePersistedImageUrl(image.downloadUrl),
+            width: image.width,
+            height: image.height,
+            localPath,
+            fingerprint,
+            legacyIdentityHash,
+            position,
+          })),
+          resultImageIds: images.map((image) => this.versionedImageId(job, image.imageId)),
+          nextStatus,
+        });
+        await this.notifications.create("info", "设计图已生成", `已生成 ${images.length} 张候选图`, {
+          designJobId: job.id,
+        });
+        return { ...accepted, durableAcceptanceCommitted: true };
+      }
+    }
+
     if (appConfig.useLocalStore) {
       this.localStore.upsertDesignImages(
         job.id,
         savedImages.map(({ image, imageId, position, fingerprint, legacyIdentityHash, localPath }) => ({
           imageId,
-          downloadUrl: image.downloadUrl,
+          downloadUrl: sanitizePersistedImageUrl(image.downloadUrl),
           width: image.width,
           height: image.height,
           localPath,
@@ -1795,7 +2057,7 @@ export class DesignJobsService {
             },
           },
           update: {
-            downloadUrl: image.downloadUrl,
+            downloadUrl: sanitizePersistedImageUrl(image.downloadUrl),
             localPath,
             width: image.width,
             height: image.height,
@@ -1824,12 +2086,6 @@ export class DesignJobsService {
       images.map((image) => this.versionedImageId(job, image.imageId)),
     );
 
-    const nextStatus = nextStatusAfterDesignCompleted({
-      isHighValue: job.isHighValue,
-      budget: job.budget,
-      highValueAmountCny: appConfig.highValueAmountCny,
-      manualQcRequired: job.manualQcRequired,
-    });
     await this.notifications.create("info", "设计图已生成", `已生成 ${images.length} 张候选图`, {
       designJobId: job.id,
     });
@@ -2367,15 +2623,32 @@ export class DesignJobsService {
     try {
       await this.assertDesignPlatformPreflight(job.id);
       const payload = await this.buildDesignPlatformPayload(job, revision);
+      const retryCount = Number(job.retryCount || 0) + 1;
+      const revisionRetryCount = revision?.id ? Number(revision.retryCount || 0) + 1 : undefined;
+      if (this.usesDurableArtImageExecutions()) {
+        const updated = await this.beginDurableArtImageExecution(
+          job,
+          payload,
+          revision || null,
+          mode,
+          retryCount,
+          revisionRetryCount,
+        );
+        await this.notifications.create(
+          mode === "automatic" ? "warning" : "info",
+          mode === "automatic" ? "设计任务已自动重试" : "设计任务已重新提交",
+          reason || "已重新提交到设计平台，等待新的出图结果。",
+          { designJobId: job.id, externalJobId: updated.externalJobId },
+        );
+        return updated;
+      }
       const remote = await this.designPlatform.createDesignJob(payload);
       const externalJobId = remote.externalJobId || remote.jobId || remote.id;
-      const retryCount = Number(job.retryCount || 0) + 1;
       if (revision?.id) {
-        const revisionRetryCount = Number(revision.retryCount || 0) + 1;
         await this.updateRevision(revision.id, {
           externalJobId,
           status: "submitted",
-          retryCount: revisionRetryCount,
+          retryCount: revisionRetryCount!,
           errorMessage: "",
         });
       }
@@ -2464,7 +2737,7 @@ export class DesignJobsService {
       "",
     );
     const url = configuredUrl || `${baseUrl}/api/integrations/design-platform/callback`;
-    const headers = appConfig.callbackApiKey
+    const headers = hasIndependentDesignPlatformCallbackApiKey()
       ? {
           Authorization: `Bearer ${appConfig.callbackApiKey}`,
         }
@@ -2871,6 +3144,252 @@ export class DesignJobsService {
     if (binding === "wrong_job") throw new BadRequestException("design image file is not bound to this design job");
   }
 
+  private usesDurableArtImageExecutions() {
+    return Boolean(this.designPlatform.isArtImageLocalAdapter?.());
+  }
+
+  private async beginDurableArtImageExecution(
+    job: any,
+    payload: DesignPlatformJobPayload,
+    revision: DesignRevisionLike | null,
+    mode: "initial" | "automatic" | "manual",
+    retryCount?: number,
+    revisionRetryCount?: number,
+  ) {
+    const attemptNo = retryCount === undefined ? 1 : retryCount + 1;
+    const begun = await this.platformExecutions!.begin({
+      designJobId: job.id,
+      designRevisionId: revision?.id || null,
+      attemptNo,
+      ...(retryCount !== undefined ? { retryCount } : {}),
+      ...(revisionRetryCount !== undefined ? { revisionRetryCount } : {}),
+      ...(revision?.revisionNumber !== undefined ? { revisionNumber: Number(revision.revisionNumber) } : {}),
+    });
+    const execution = begun.execution;
+    if (begun.created) {
+      const promise = this.runDurableArtImageExecution(execution, payload, mode).finally(() => {
+        this.activeExecutionPromises.delete(execution.id);
+      });
+      this.activeExecutionPromises.set(execution.id, promise);
+      void promise.catch(async (error) => {
+        await this.notifications.create(
+          "error",
+          "设计平台执行持久化处理失败",
+          "设计平台执行处理未完成，已保留持久化状态，请按 execution 状态恢复或人工核对。",
+          { designJobId: job.id, externalJobId: execution.externalJobId },
+        );
+      });
+    }
+    const updated = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(job.id)
+      : await this.prisma.designJob.findUnique({ where: { id: job.id } });
+    return updated;
+  }
+
+  private async runDurableArtImageExecution(execution: any, payload: DesignPlatformJobPayload, mode: string) {
+    const claimed = await this.platformExecutions!.claimDispatch(execution.id);
+    if (!claimed) return;
+    const generating = await this.platformExecutions!.markGenerating(execution.id);
+    if (!generating) return;
+    let outcome: any;
+    try {
+      outcome = await this.designPlatform.executeArtImageLocalGeneration(payload, execution.externalJobId);
+    } catch (error) {
+      outcome = {
+        status: "outcome_unknown",
+        images: [],
+        refundStatus: "unknown",
+        errorCode: "UNCLASSIFIED_EXECUTION_ERROR",
+        errorMessage: error instanceof Error ? error.message : "unknown design platform execution error",
+      };
+    }
+    const stored = await this.platformExecutions!.recordOutcome(execution.id, outcome);
+    if (!stored) return;
+
+    if (outcome.status === "outcome_unknown") {
+      const job = await this.findDesignJobForExecution(execution.designJobId);
+      if (job && job.status !== "cancelled") {
+        await this.handoffDesignJobToManual(job, {
+          reason: "design_platform_outcome_unknown",
+          source: `durable_${mode}_execution`,
+          beforeStatus: job.status,
+          note: "网络中断或服务重启后无法确认设计平台是否已生成和扣费；必须人工核对，普通重试已禁用。",
+          title: "设计平台执行结果未知",
+        });
+      }
+      return;
+    }
+
+    if (outcome.status === "failed") {
+      await this.handleDesignPlatformCallback({
+        requestId: payload.requestId,
+        externalJobId: execution.externalJobId,
+        status: "failed",
+        errorMessage: stored.errorMessage || "design platform reported an explicit terminal failure",
+      });
+      return;
+    }
+
+    if (["failed", "unknown"].includes(outcome.refundStatus)) {
+      const job = await this.findDesignJobForExecution(execution.designJobId);
+      if (job && job.status !== "cancelled") {
+        await this.handoffDesignJobToManual(job, {
+          reason: "design_platform_refund_unresolved",
+          source: `durable_${mode}_execution`,
+          beforeStatus: job.status,
+          note: "设计平台已返回图片，但失败项的退款状态未安全闭环；必须人工核对后再验收。",
+        });
+      }
+      const claimedAcceptance = await this.platformExecutions!.claimAcceptance(execution.id);
+      if (claimedAcceptance) {
+        await this.platformExecutions!.finishAcceptance(
+          execution.id,
+          "manual_review",
+          "design platform refund requires manual review",
+        );
+      }
+      return;
+    }
+
+    await this.acceptDurableArtImageExecution(execution.id, outcome.images);
+  }
+
+  private async acceptDurableArtImageExecution(executionId: string, transientImages?: any[]) {
+    const execution = await this.platformExecutions!.claimAcceptance(executionId);
+    if (!execution) return null;
+    try {
+      const job = await this.findDesignJobForExecution(execution.designJobId);
+      if (!job?.requestId) throw new Error("design execution job binding is missing during acceptance");
+      const updated = await this.handleDesignPlatformCallback({
+        requestId: job.requestId,
+        externalJobId: execution.externalJobId,
+        status: "completed",
+        images: Array.isArray(transientImages) ? transientImages : Array.isArray(execution.images) ? execution.images : [],
+      });
+      if (updated?.durableAcceptanceCommitted) return updated;
+      const accepted = !["failed", "manual_review", "cancelled"].includes(String(updated?.status || ""));
+      await this.platformExecutions!.finishAcceptance(
+        execution.id,
+        accepted ? "accepted" : "manual_review",
+        accepted ? undefined : String(updated?.errorMessage || "design result requires manual acceptance"),
+      );
+      return updated;
+    } catch (error) {
+      await this.platformExecutions!.finishAcceptance(
+        execution.id,
+        "pending",
+        error instanceof Error ? error.message : "design result acceptance failed",
+      );
+      await this.notifications.create(
+        "warning",
+        "设计结果待继续验收",
+        "设计平台已完成出图，但本地验收尚未完成；重启后只会继续验收，不会重新生成。",
+        { designJobId: execution.designJobId, externalJobId: execution.externalJobId },
+      );
+      return null;
+    }
+  }
+
+  async reconcileDurableArtImageExecutions() {
+    if (!this.usesDurableArtImageExecutions()) return;
+    if (this.activeRecoveryReconciliation) return this.activeRecoveryReconciliation;
+    const reconciliation = this.recoverDurableArtImageExecutions();
+    this.activeRecoveryReconciliation = reconciliation;
+    try {
+      await reconciliation;
+    } finally {
+      if (this.activeRecoveryReconciliation === reconciliation) this.activeRecoveryReconciliation = null;
+    }
+  }
+
+  private async recoverDurableArtImageExecutions() {
+    const recovered = await this.platformExecutions!.recoverStaleExecutions();
+    for (const execution of recovered) {
+      await this.notifications.create(
+        "warning",
+        "设计平台重启恢复需人工核对",
+        "进程重启时任务可能已被真实设计平台接受；系统已标记 outcome_unknown 并禁止自动重试。",
+        { designJobId: execution.designJobId, externalJobId: execution.externalJobId },
+      );
+    }
+    const prepared = await this.platformExecutions!.takeoverPreparedExecutions(50);
+    for (const execution of prepared) {
+      try {
+        const job = await this.findDesignJobForExecution(execution.designJobId);
+        if (!job) throw new Error(`design job not found: ${execution.designJobId}`);
+        const revision = execution.designRevisionId
+          ? appConfig.useLocalStore
+            ? this.localStore.listDesignRevisions(job.id).find((item: any) => item.id === execution.designRevisionId) || null
+            : await (this.prisma as any).designRevision.findUnique({ where: { id: execution.designRevisionId } })
+          : null;
+        const payload = await this.buildDesignPlatformPayload(job, revision);
+        const promise = this.runDurableArtImageExecution(execution, payload, "restart_prepared").finally(() => {
+          this.activeExecutionPromises.delete(execution.id);
+        });
+        this.activeExecutionPromises.set(execution.id, promise);
+        void promise.catch(() => undefined);
+      } catch (error) {
+        await this.platformExecutions!.failPrepared(execution.id, error);
+        await this.notifications.create(
+          "error",
+          "设计平台待提交任务恢复失败",
+          "待提交任务无法重建设计请求，未调用生成接口，已转人工处理。",
+          { designJobId: execution.designJobId, externalJobId: execution.externalJobId },
+        );
+      }
+    }
+    const pending = await this.platformExecutions!.listCompletedPending(50);
+    for (const execution of pending) await this.acceptDurableArtImageExecution(execution.id);
+  }
+
+  private async pollDurableArtImageResult(job: any) {
+    const execution = await this.platformExecutions!.get(job.externalJobId);
+    if (!execution) {
+      const updated = await this.handoffDesignJobToManual(job, {
+        reason: "design_platform_execution_missing",
+        source: "poll_durable_design_result",
+        beforeStatus: job.status,
+        note: "旧任务没有可核验的持久化执行记录，不能判断是否生成或扣费，禁止自动重试。",
+      });
+      return { remoteStatus: "outcome_unknown", autoRetried: false, job: updated, result: { status: "outcome_unknown" } };
+    }
+    if (execution.status === "completed" && execution.acceptanceStatus === "pending") {
+      await this.acceptDurableArtImageExecution(execution.id);
+    }
+    const updated = await this.findDesignJobForExecution(job.id);
+    const remoteStatus = ["dispatching", "prepared", "generating"].includes(execution.status)
+      ? "generating"
+      : execution.status;
+    return {
+      remoteStatus,
+      autoRetried: false,
+      job: updated,
+      result: {
+        status: remoteStatus,
+        images: execution.status === "completed" ? execution.images || [] : [],
+        errorMessage: execution.errorMessage || undefined,
+        refundStatus: execution.refundStatus,
+      },
+    };
+  }
+
+  private async designCallbackAllowsAutomaticRetry(payload: DesignPlatformCallbackPayload) {
+    if (!this.usesDurableArtImageExecutions()) return true;
+    if (payload.status !== "failed" || !payload.externalJobId) return false;
+    const execution = await this.platformExecutions!.get(payload.externalJobId);
+    return Boolean(
+      execution &&
+      execution.status === "explicit_failed" &&
+      ["refunded", "not_required", "credit_bypass"].includes(execution.refundStatus),
+    );
+  }
+
+  private async findDesignJobForExecution(designJobId: string) {
+    return appConfig.useLocalStore
+      ? this.localStore.getDesignJob(designJobId)
+      : this.prisma.designJob.findUnique({ where: { id: designJobId }, include: { images: true } });
+  }
+
   private scheduleResultPoll(requestId: string, externalJobId: string) {
     const pollKey = `${requestId}:${externalJobId}`;
     if (this.activeResultPolls.has(pollKey)) return;
@@ -2985,6 +3504,16 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizePersistedImageUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value || ""));
+    if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) return "";
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "";
+  }
 }
 
 function mimeTypeFromImagePath(filePath: string) {

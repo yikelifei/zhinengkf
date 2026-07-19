@@ -6,6 +6,7 @@
 
 - Electron 桌面壳、Next.js 工作台、NestJS API 与 PostgreSQL Prisma schema。
 - 设计平台客户端/回调契约、SKU 商品库、礼盒推荐、预算与高价值转人工、设计任务、选图、报价/订单和安全发送队列。
+- `art_image_local` 每次生成使用独立 `DesignPlatformExecution` 做 durable begin/CAS/outcome/acceptance/recovery；timeout、5xx、连接重置或进程重启期间的在途请求均 fail-closed 为 `outcome_unknown`，禁止自动重生成和重复扣费。
 - 企业微信加密回调、`sync_msg`、文本/图片媒体发送、身份绑定、幂等/审计；`WechatPersistence` 在 `USE_LOCAL_STORE=false` 时使用 Prisma 保存绑定、消息、任务、attempt 与审计日志。
 - SKU 上传文件解析支持 `.xlsx`、`.csv`、`.tsv`、`.txt`，包括标准 XLSX 模板生成和模板回读测试。旧文档中的“Excel 文件解析未实现”已过期。
 - 候选图与企业微信客户入站图片对真实 JPG/PNG 字节生成 `dhash64:v1`：EXIF 旋转、白底、灰度 `9x8`，使用 XOR/popcount 汉明距离强阈值匹配；旧元数据 SHA-256 仅保留为 `legacyIdentityHash`，不参与自动匹配。
@@ -16,8 +17,12 @@
 - Windows GitHub Actions 最小权限质量工作流与本地 release-quality 编排。
 - PostgreSQL 恢复演练工具：默认计划模式零命令；执行模式要求独立 rehearsal/sandbox 目标和绑定库名的确认短语。
 - 生产发布门禁、预发布只读证据工具和本完成度真值审计。
+- 生产安装包由 Electron 主进程在内存中生成独立 `DESKTOP_WEB_SESSION_PROOF`，只传给 Web 子进程，并在专属 Electron partition 写入 `HttpOnly`、`SameSite=Strict`、`Path=/api` Cookie；Next `/api/*` catch-all 的所有方法都必须恒定时间验证该证明，证明 Cookie 和来访内部令牌不会转发给 API，设计平台 callback 永不经 Web 代理。
+- `standard_v1` 远端地址只允许 `DESIGN_PLATFORM_BASE_URL` 明确配置的 origin 或 `DESIGN_PLATFORM_ALLOWED_ORIGINS` 中的精确 HTTPS origin；access token、cookie、API key 和 device id 分别绑定 origin，切换 origin 不会自动重绑旧凭据。standard_v1 回调必须使用与内部令牌、平台 API key、登录 token/cookie 独立的回调密钥，并在 readiness/preflight 前失败关闭。
 
 ## 仓库内未完成或必须继续审计
+
+- 松散浏览器、独立 stable/dev Web 服务不是生产产品的可信桌面会话路径；若 Web 与 Electron 不是由同一父环境显式提供同一个 `DESKTOP_WEB_SESSION_PROOF`，所有 Web `/api/*` 请求会返回 403。仓库没有隐藏的 dev 绕过，也不会把证明写进普通 runtime 文件。生产受支持路径是 packaged Electron 内存证明链路。
 
 - Agent、路由、训练和会话运营只有在 Prisma 迁移、初始化工具、`PrismaOperationsService` 以及各服务的 list/update/audit 路由契约全部存在时才会通过审计；仅删除 `not implemented` 报错字符串不算完成。
 - 会话运营分配、优先级、SLA 与运营审计若仍固定走 LocalStore 会记为 `FAIL`；生产实现必须同时提供 list/update/audit 的 Prisma 路由。

@@ -178,3 +178,105 @@ test("design job submit stops before calling platform when output count is below
     Object.assign(appConfig, previous);
   }
 });
+
+test("standard submit with a missing callback key stops before asset upload or remote create", async () => {
+  const previous = { ...appConfig };
+  const job = {
+    id: "design-callback-preflight-1",
+    requestId: "request-callback-preflight-1",
+    wechatAccountId: "wechat-1",
+    customerId: "customer-1",
+    conversationId: "conversation-1",
+    status: "draft",
+    scene: "员工福利",
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 20, totalAmount: 4000 },
+    bundle: {
+      automation: { ready: true, blockers: [] },
+      items: [{ skuCode: "BOX-A", name: "礼盒", imageUrl: "https://example.test/box.png" }],
+    },
+    assets: [{ id: "asset-logo", url: "https://example.test/logo.png" }],
+    requirements: { useRealSkuImages: true },
+    outputCount: 6,
+  };
+  let uploadCalls = 0;
+  let createCalls = 0;
+  let currentJob = { ...job };
+  try {
+    Object.assign(appConfig, {
+      useLocalStore: true,
+      designPlatformAdapter: "standard_v1",
+      callbackApiKey: "",
+      internalApiToken: "",
+      designPlatformApiKey: "",
+      designPlatformAccessToken: "",
+      designPlatformCookie: "",
+    });
+    const service = new DesignJobsService(
+      {},
+      {
+        health: async () => ({ ok: true }),
+        uploadAsset: async () => { uploadCalls += 1; return {}; },
+        createDesignJob: async () => { createCalls += 1; return {}; },
+      },
+      {
+        getDesignJob: () => currentJob,
+        updateDesignJob: (_id, patch) => (currentJob = { ...currentJob, ...patch }),
+        createReviewLog: () => ({}),
+      },
+      { create: async () => ({}) },
+      {},
+      { setConversationManualLock: async () => ({ blockedSendTasks: [], inFlightSendTasks: [] }) },
+      {},
+      {},
+      {},
+    );
+    const preflight = await service.preflight(job.id);
+    const callbackCheck = preflight.checks.find((check) => check.key === "design_platform_callback_auth");
+    assert.equal(callbackCheck.ok, false);
+    assert.equal(callbackCheck.severity, "error");
+    await assert.rejects(() => service.submit(job.id), /design job preflight failed/);
+    assert.equal(uploadCalls, 0);
+    assert.equal(createCalls, 0);
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("art local preflight does not require the standard callback key", async () => {
+  const previous = { ...appConfig };
+  const job = {
+    id: "design-art-callback-preflight-1",
+    requestId: "request-art-callback-preflight-1",
+    customerId: "customer-1",
+    conversationId: "conversation-1",
+    status: "draft",
+    scene: "员工福利",
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 20, totalAmount: 4000 },
+    bundle: { automation: { ready: true, blockers: [] }, items: [] },
+    assets: [],
+    requirements: { useRealSkuImages: false },
+    outputCount: 6,
+  };
+  try {
+    Object.assign(appConfig, { useLocalStore: true, designPlatformAdapter: "art_image_local", callbackApiKey: "" });
+    const service = new DesignJobsService(
+      {},
+      {
+        health: async () => ({ ok: true }),
+        getArtImageLocalAuthSession: async () => ({ authenticated: true }),
+        getArtImageLocalActivationStatus: async () => ({ required: true, active: true }),
+      },
+      { getDesignJob: () => job },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    const result = await service.preflight(job.id);
+    assert.equal(result.checks.some((check) => check.key === "design_platform_callback_auth"), false);
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});

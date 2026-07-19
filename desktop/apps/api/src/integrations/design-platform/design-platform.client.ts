@@ -16,16 +16,31 @@ type DesignImageResult = {
   height?: number;
 };
 
-type ArtImageLocalJob = {
-  externalJobId: string;
-  requestId: string;
-  status: "submitted" | "generating" | "completed" | "failed" | "cancelled";
-  images: DesignImageResult[];
-  errorMessage?: string;
-  raw?: unknown;
-  startedAt: string;
-  updatedAt: string;
-};
+export type ArtImageLocalGenerationOutcome =
+  | {
+      status: "completed";
+      images: DesignImageResult[];
+      refundStatus: "not_required" | "credit_bypass" | "refunded" | "failed" | "unknown";
+      refundSummary?: Record<string, unknown>;
+      httpStatus: number;
+    }
+  | {
+      status: "failed";
+      images: [];
+      refundStatus: "refunded" | "not_required" | "credit_bypass" | "failed" | "unknown";
+      refundSummary?: Record<string, unknown>;
+      errorCode: string;
+      errorMessage: string;
+      httpStatus: number;
+    }
+  | {
+      status: "outcome_unknown";
+      images: [];
+      refundStatus: "unknown";
+      errorCode: string;
+      errorMessage: string;
+      httpStatus?: number;
+    };
 
 type ArtImageLocalResult = {
   url?: string | null;
@@ -83,7 +98,6 @@ const imageMimeByExtension: Record<string, string> = {
 @Injectable()
 export class DesignPlatformClient {
   private readonly http: AxiosInstance;
-  private readonly artImageJobs = new Map<string, ArtImageLocalJob>();
 
   constructor() {
     this.http = axios.create({
@@ -94,12 +108,16 @@ export class DesignPlatformClient {
       config.baseURL = appConfig.designPlatformBaseUrl;
       config.timeout = appConfig.designPlatformTimeoutMs;
       const headers = config.headers as Record<string, string>;
-      const authToken = appConfig.designPlatformAccessToken || appConfig.designPlatformApiKey;
-      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const explicitDeviceId =
+        typeof (config.headers as any)?.get === "function"
+          ? String((config.headers as any).get("x-art-device-id") || "")
+          : String(headers["x-art-device-id"] || headers["X-Art-Device-Id"] || "");
+      const credentials = designPlatformCredentialsForTarget(config.baseURL, config.url, explicitDeviceId);
+      if (credentials.authorization) headers.Authorization = credentials.authorization;
       else delete headers.Authorization;
-      if (appConfig.designPlatformCookie) headers.Cookie = appConfig.designPlatformCookie;
+      if (credentials.cookie) headers.Cookie = credentials.cookie;
       else delete headers.Cookie;
-      if (appConfig.designPlatformDeviceId) headers["x-art-device-id"] = appConfig.designPlatformDeviceId;
+      if (credentials.deviceId) headers["x-art-device-id"] = credentials.deviceId;
       else delete headers["x-art-device-id"];
       return config;
     });
@@ -228,7 +246,7 @@ export class DesignPlatformClient {
 
   async createDesignJob(payload: DesignPlatformJobPayload) {
     if (this.useArtImageLocalAdapter()) {
-      return this.createArtImageLocalJob(payload);
+      throw new Error("art_image_local generation must be dispatched through DesignPlatformExecutionService");
     }
 
     const response = await this.http.post("/v1/design-jobs", payload);
@@ -246,15 +264,7 @@ export class DesignPlatformClient {
 
   async getDesignJob(externalJobId: string) {
     if (this.useArtImageLocalAdapter()) {
-      const job = this.artImageJobs.get(externalJobId);
-      if (!job) return this.missingArtImageLocalJob(externalJobId);
-      return {
-        externalJobId,
-        jobId: externalJobId,
-        status: job.status,
-        requestId: job.requestId,
-        errorMessage: job.errorMessage,
-      };
+      throw new Error(`art_image_local status must be read from durable execution: ${externalJobId}`);
     }
 
     const response = await this.http.get(`/v1/design-jobs/${encodeURIComponent(externalJobId)}`);
@@ -263,16 +273,7 @@ export class DesignPlatformClient {
 
   async getDesignJobResults(externalJobId: string) {
     if (this.useArtImageLocalAdapter()) {
-      const job = this.artImageJobs.get(externalJobId);
-      if (!job) return this.missingArtImageLocalJob(externalJobId);
-      return {
-        externalJobId,
-        jobId: externalJobId,
-        status: job.status,
-        images: job.images,
-        errorMessage: job.errorMessage,
-        raw: job.raw,
-      };
+      throw new Error(`art_image_local results must be read from durable execution: ${externalJobId}`);
     }
 
     const response = await this.http.get(`/v1/design-jobs/${encodeURIComponent(externalJobId)}/results`);
@@ -281,17 +282,19 @@ export class DesignPlatformClient {
 
   async cancelDesignJob(externalJobId: string) {
     if (this.useArtImageLocalAdapter()) {
-      const job = this.getArtImageLocalJob(externalJobId);
-      job.status = "cancelled";
-      job.updatedAt = new Date().toISOString();
       return {
         externalJobId,
         status: "cancelled",
+        cancellationMode: "reject_late_result",
       };
     }
 
     const response = await this.http.post(`/v1/design-jobs/${encodeURIComponent(externalJobId)}/cancel`);
     return response.data;
+  }
+
+  isArtImageLocalAdapter() {
+    return this.useArtImageLocalAdapter();
   }
 
   private useArtImageLocalAdapter() {
@@ -332,66 +335,89 @@ export class DesignPlatformClient {
     };
   }
 
-  private createArtImageLocalJob(payload: DesignPlatformJobPayload) {
-    const externalJobId = `art_${safeIdPart(payload.requestId)}_${Date.now()}`;
-    const now = new Date().toISOString();
-    this.artImageJobs.set(externalJobId, {
-      externalJobId,
-      requestId: payload.requestId,
-      status: "submitted",
-      images: [],
-      startedAt: now,
-      updatedAt: now,
-    });
-
-    void this.runArtImageLocalGeneration(externalJobId, payload);
-
-    return {
-      id: externalJobId,
-      jobId: externalJobId,
-      externalJobId,
-      status: "submitted",
-    };
-  }
-
-  private async runArtImageLocalGeneration(externalJobId: string, payload: DesignPlatformJobPayload) {
-    const job = this.getArtImageLocalJob(externalJobId);
-    if (job.status === "cancelled") return;
-
-    job.status = "generating";
-    job.updatedAt = new Date().toISOString();
-
+  async executeArtImageLocalGeneration(
+    payload: DesignPlatformJobPayload,
+    externalJobId: string,
+  ): Promise<ArtImageLocalGenerationOutcome> {
     try {
-      const requestBody = await this.buildArtImageLocalRequest(payload);
+      const requestBody = await this.buildArtImageLocalRequest({ ...payload, requestId: externalJobId });
       const response = await this.http.post("/api/local-generate", requestBody, {
         timeout: appConfig.designPlatformTimeoutMs,
       });
-      const data = this.unwrapApiData(response.data) as { results?: ArtImageLocalResult[]; credits?: unknown };
-      const results = Array.isArray(data.results) ? data.results : [];
+      const data = this.unwrapApiData(response.data) as { results?: ArtImageLocalResult[]; credits?: unknown; refund?: unknown };
+      if (!isRecord(data) || !Array.isArray(data.results)) {
+        return {
+          status: "outcome_unknown",
+          images: [],
+          refundStatus: "unknown",
+          errorCode: "MALFORMED_SUCCESS_RESPONSE",
+          errorMessage: "design platform returned malformed 2xx response; acceptance and refund are unknown",
+          httpStatus: Number(response.status || 200),
+        };
+      }
+      // Run the existing recursive sanitizer as a defense-in-depth assertion; durable storage uses a stricter field whitelist.
+      void sanitizeArtImageLocalRaw(data);
+      const results = data.results;
       const successful = results.filter((item) => item.status === "success" && item.url);
+      const refund = artImageRefundOutcome(data);
 
       if (!successful.length) {
         const firstError = results.find((item) => item.error)?.error || "design platform returned no generated images";
-        job.status = "failed";
-        job.errorMessage = firstError;
-        job.raw = sanitizeArtImageLocalRaw(data);
-        job.updatedAt = new Date().toISOString();
-        return;
+        return {
+          status: "failed",
+          images: [],
+          refundStatus: refund.status,
+          refundSummary: refund.summary,
+          errorCode: "MACHINE_TERMINAL_ALL_FAILED",
+          errorMessage: firstError,
+          httpStatus: Number(response.status || 200),
+        };
       }
 
-      job.status = "completed";
-      job.images = successful.map((item, index) => ({
-        imageId: `candidate_${index + 1}`,
-        downloadUrl: this.absoluteDesignPlatformUrl(String(item.url)),
-        width: parseImageSize(appConfig.designPlatformImageSize).width,
-        height: parseImageSize(appConfig.designPlatformImageSize).height,
-      }));
-      job.raw = sanitizeArtImageLocalRaw(data);
-      job.updatedAt = new Date().toISOString();
+      return {
+        status: "completed",
+        images: successful.map((item, index) => ({
+          imageId: `candidate_${index + 1}`,
+          downloadUrl: this.absoluteDesignPlatformUrl(String(item.url)),
+          width: parseImageSize(appConfig.designPlatformImageSize).width,
+          height: parseImageSize(appConfig.designPlatformImageSize).height,
+        })),
+        refundStatus:
+          successful.length === results.length && refund.status === "unknown"
+            ? "not_required"
+            : refund.status,
+        refundSummary: refund.summary,
+        httpStatus: Number(response.status || 200),
+      };
     } catch (error) {
-      job.status = "failed";
-      job.errorMessage = this.publicErrorMessage(error);
-      job.updatedAt = new Date().toISOString();
+      if (!axios.isAxiosError(error)) {
+        return {
+          status: "failed",
+          images: [],
+          refundStatus: "not_required",
+          errorCode: "LOCAL_REQUEST_BUILD_FAILED",
+          errorMessage: this.publicErrorMessage(error),
+          httpStatus: 0,
+        };
+      }
+      if (isUncertainArtImageError(error)) {
+        return {
+          status: "outcome_unknown",
+          images: [],
+          refundStatus: "unknown",
+          errorCode: artImageErrorCode(error),
+          errorMessage: this.publicErrorMessage(error),
+          ...(axios.isAxiosError(error) && error.response?.status ? { httpStatus: error.response.status } : {}),
+        };
+      }
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: "unknown",
+        errorCode: artImageErrorCode(error),
+        errorMessage: this.publicErrorMessage(error),
+        httpStatus: axios.isAxiosError(error) ? Number(error.response?.status || 0) : 0,
+      };
     }
   }
 
@@ -475,22 +501,6 @@ export class DesignPlatformClient {
     if (/^https?:\/\//i.test(url)) return url;
     const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
     return `${base}${url.startsWith("/") ? "" : "/"}${url}`;
-  }
-
-  private getArtImageLocalJob(externalJobId: string) {
-    const job = this.artImageJobs.get(externalJobId);
-    if (!job) throw new Error(`design platform job not found: ${externalJobId}`);
-    return job;
-  }
-
-  private missingArtImageLocalJob(externalJobId: string) {
-    return {
-      externalJobId,
-      jobId: externalJobId,
-      status: "failed" as const,
-      images: [],
-      errorMessage: "local design platform job state was lost; the customer-service platform should retry this design job",
-    };
   }
 
   private unwrapApiData(data: unknown) {
@@ -691,6 +701,91 @@ function clampInteger(value: number, min: number, max: number) {
   const normalized = Math.floor(Number(value));
   if (!Number.isFinite(normalized)) return min;
   return Math.min(Math.max(normalized, min), max);
+}
+
+function artImageRefundOutcome(data: Record<string, unknown>): {
+  status: "refunded" | "not_required" | "credit_bypass" | "failed" | "unknown";
+  summary?: Record<string, unknown>;
+} {
+  const refund = isRecord(data.refund)
+    ? data.refund
+    : isRecord(data.credits) && isRecord(data.credits.refund)
+      ? data.credits.refund
+      : {};
+  const rawStatus = String(refund.status || "").trim().toLowerCase();
+  const reason = String(refund.reason || "").trim().toLowerCase();
+  const status = rawStatus === "succeeded" || rawStatus === "refunded"
+    ? "refunded"
+    : rawStatus === "not_required" && reason === "credit_bypass"
+      ? "credit_bypass"
+      : rawStatus === "not_required"
+        ? "not_required"
+        : rawStatus === "failed"
+          ? "failed"
+          : "unknown";
+  const summary: Record<string, unknown> = {};
+  if (reason) summary.reason = reason.slice(0, 120);
+  for (const source of ["requestedCredits", "refundedCredits", "chargedCredits"] as const) {
+    const value = Number(refund[source]);
+    if (Number.isFinite(value)) summary[source] = value;
+  }
+  if (typeof refund.alreadyRefunded === "boolean") summary.alreadyRefunded = refund.alreadyRefunded;
+  if (isRecord(data.credits)) {
+    for (const source of ["requestedCredits", "refundedCredits", "chargedCredits"] as const) {
+      const value = Number(data.credits[source]);
+      if (Number.isFinite(value) && summary[source] === undefined) summary[source] = value;
+    }
+  }
+  return { status, ...(Object.keys(summary).length ? { summary } : {}) };
+}
+
+function isUncertainArtImageError(error: unknown) {
+  if (!axios.isAxiosError(error)) return false;
+  const code = String(error.code || "").toUpperCase();
+  if (["ECONNABORTED", "ETIMEDOUT", "ECONNRESET"].includes(code)) return true;
+  return Number(error.response?.status || 0) >= 500;
+}
+
+function artImageErrorCode(error: unknown) {
+  if (!axios.isAxiosError(error)) return "LOCAL_REQUEST_BUILD_FAILED";
+  const code = String(error.code || "").trim();
+  if (code) return code.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
+  if (error.response?.status) return `HTTP_${error.response.status}`;
+  return "DESIGN_PLATFORM_REQUEST_FAILED";
+}
+
+export function designPlatformCredentialsForTarget(
+  baseUrl: string | undefined,
+  requestUrl: string | undefined,
+  explicitDeviceId = "",
+) {
+  try {
+    const targetOrigin = new URL(String(requestUrl || ""), String(baseUrl || appConfig.designPlatformBaseUrl)).origin;
+    const configuredBaseOrigin = new URL(appConfig.designPlatformBaseUrl).origin;
+    const accessToken =
+      appConfig.designPlatformAccessToken && targetOrigin === appConfig.designPlatformAccessTokenOrigin
+        ? appConfig.designPlatformAccessToken
+        : "";
+    const apiKey =
+      appConfig.designPlatformApiKey && targetOrigin === appConfig.designPlatformApiKeyOrigin
+        ? appConfig.designPlatformApiKey
+        : "";
+    return {
+      authorization: accessToken || apiKey ? `Bearer ${accessToken || apiKey}` : "",
+      cookie:
+        appConfig.designPlatformCookie && targetOrigin === appConfig.designPlatformCookieOrigin
+          ? appConfig.designPlatformCookie
+          : "",
+      deviceId:
+        targetOrigin === configuredBaseOrigin && String(explicitDeviceId || "").trim()
+          ? String(explicitDeviceId).trim()
+          : appConfig.designPlatformDeviceId && targetOrigin === appConfig.designPlatformDeviceIdOrigin
+            ? appConfig.designPlatformDeviceId
+            : "",
+    };
+  } catch {
+    return { authorization: "", cookie: "", deviceId: "" };
+  }
 }
 
 function safeIdPart(value: string) {

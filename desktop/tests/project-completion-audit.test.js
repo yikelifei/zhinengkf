@@ -64,6 +64,16 @@ function createPassingFixture() {
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts", 'MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES; LOCAL_STORAGE_ROOT; fs.link(temporaryPath, finalPath); inspectExistingImage();\n');
   write(root, "desktop/packages/rules/selectionMatcher.js", 'hammingDistance(); nearest.distance > 1; gap < 2; "候选图存在缺失或旧版指纹";\n');
   write(root, "desktop/tests/wechat-prisma-send-parity.test.js", "Prisma send safety parity tests\n");
+  write(root, "desktop/prisma/migrations/20260719233000_design_platform_execution_durability/migration.sql", "CREATE TABLE \"DesignPlatformExecution\" ();\n");
+  write(root, "desktop/tests/design-platform-execution-durability.test.js", "durable design execution behavior tests\n");
+  write(root, "desktop/apps/api/src/design-jobs/design-platform-execution.service.ts", 'async begin() {} async claimDispatch() {} async markGenerating() {} recoverStaleExecutions(); commitAcceptedResult(); designImageCandidate.upsert(); "design platform acceptance CAS failed"; status: "outcome_unknown"; "explicit confirmed_not_generated_refunded resolution and reviewer are required"; "design platform execution outcome requires explicit manual resolution before retry";\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.controller.ts", '@Post(":id/executions/:executionId/resolve-unknown")\nresolveUnknownExecution();\n');
+  write(root, "desktop/apps/api/src/integrations/design-platform/design-platform.client.ts", 'requestId: externalJobId; MALFORMED_SUCCESS_RESPONSE; ECONNABORTED; ECONNRESET; Number(error.response?.status || 0) >= 500; art_image_local results must be read from durable execution;\n');
+  write(root, "desktop/apps/web/src/lib/desktop-session-proof.ts", 'DESKTOP_SESSION_COOKIE; timingSafeEqual(); requiresDesktopSessionProof(); return true; headers.delete("cookie"); headers.set(internalApiTokenHeader, internalApiToken);\n');
+  write(root, "desktop/apps/api/src/shared/app-config.ts", 'DESIGN_PLATFORM_ALLOWED_ORIGINS; designPlatformAccessTokenOrigin; designPlatformCookieOrigin; designPlatformApiKeyOrigin; designPlatformDeviceIdOrigin; hasIndependentDesignPlatformCallbackApiKey(); timingSafeEqual();\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; design_platform_callback_auth; hasIndependentDesignPlatformCallbackApiKey(); severity: "error"; assertDesignPlatformPreflight();\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.controller.ts", '@RequireOperatorCapability("view_console")\n@RequireOperatorCapability("manage_design_executions")\n@RequireOperatorCapability("approve_send")\n@TrustedOperator() principal\n@Post(":id/executions/:executionId/resolve-unknown")\nresolveUnknownExecution();\n');
+  write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\nmodel DesignPlatformExecution { operationKey String @unique requestId String @unique scopeKey String processRunId String acceptanceStatus DesignPlatformAcceptanceStatus refundStatus DesignPlatformRefundStatus }\nenum DesignPlatformExecutionStatus { outcome_unknown explicit_failed cancel_requested }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
   return root;
@@ -111,6 +121,14 @@ test("missing repository artifact and production placeholder aggregate to FAIL w
     line: 1,
     marker: "prisma mode is not implemented yet",
   }]);
+});
+
+test("missing desktop session security artifact prevents a completion PASS", () => {
+  const root = createPassingFixture();
+  fs.rmSync(path.join(root, "desktop", "tests", "internal-api-security.test.js"));
+  const report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.status, STATUS.FAIL);
+  assert.equal(report.results.find((item) => item.id === "security.desktop_session_proof").status, STATUS.FAIL);
 });
 
 test("planned channel placeholders are allowed only with planned status, fail-closed adapter and roadmap reason", () => {

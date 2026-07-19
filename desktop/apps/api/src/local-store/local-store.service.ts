@@ -33,6 +33,7 @@ type StoreData = {
   designJobs: any[];
   designImages: any[];
   designRevisions: any[];
+  designPlatformExecutions: any[];
   notifications: any[];
   sendTasks: any[];
   sendAttempts: any[];
@@ -1359,6 +1360,384 @@ export class LocalStoreService {
     data.designJobs[index] = next;
     this.write(data);
     return this.hydrateDesignJob(data, data.designJobs[index]);
+  }
+
+  listDesignPlatformExecutions(filter: { designJobId?: string; status?: string; acceptanceStatus?: string } = {}) {
+    return this.read()
+      .designPlatformExecutions
+      .filter((item) => !filter.designJobId || item.designJobId === filter.designJobId)
+      .filter((item) => !filter.status || item.status === filter.status)
+      .filter((item) => !filter.acceptanceStatus || item.acceptanceStatus === filter.acceptanceStatus)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  getDesignPlatformExecution(idOrKey: string) {
+    return this.read().designPlatformExecutions.find(
+      (item) => item.id === idOrKey || item.operationKey === idOrKey || item.externalJobId === idOrKey,
+    ) || null;
+  }
+
+  beginDesignPlatformExecution(payload: any) {
+    const data = this.read();
+    const existing = data.designPlatformExecutions.find((item) => item.operationKey === payload.operationKey);
+    if (existing) return { execution: existing, created: false };
+
+    const job = data.designJobs.find((item) => item.id === payload.designJobId);
+    if (!job) throw new Error(`local design job not found: ${payload.designJobId}`);
+    if (job.status === "cancelled") throw new Error("cancelled design job cannot start a platform execution");
+    const retryBlocker = data.designPlatformExecutions.find(
+      (item) =>
+        item.designJobId === job.id &&
+        (["prepared", "dispatching", "generating", "cancel_requested", "outcome_unknown"].includes(item.status) ||
+          (item.status === "completed" && !["accepted", "rejected"].includes(item.acceptanceStatus)) ||
+          (item.status === "explicit_failed" &&
+            !["refunded", "not_required", "credit_bypass"].includes(item.refundStatus))),
+    );
+    if (retryBlocker) {
+      if (["prepared", "dispatching", "generating", "cancel_requested"].includes(retryBlocker.status)) {
+        throw new Error("active design platform execution is still in progress; retry would risk duplicate generation and charging");
+      }
+      if (retryBlocker.status === "explicit_failed") {
+        throw new Error("design platform refund outcome requires explicit manual verification before retry");
+      }
+      throw new Error("design platform execution outcome requires explicit manual resolution before retry");
+    }
+
+    const revision = payload.designRevisionId
+      ? data.designRevisions.find((item) => item.id === payload.designRevisionId) || null
+      : null;
+    if (payload.designRevisionId && (!revision || revision.designJobId !== job.id)) {
+      throw new Error("design platform execution revision binding invalid");
+    }
+    if (
+      revision &&
+      Number(revision.revisionNumber || 0) !== Number(job.revisionCount || 0) &&
+      Number(revision.revisionNumber || 0) !== Number(job.revisionCount || 0) + 1
+    ) {
+      throw new Error("stale design revision cannot start a platform execution");
+    }
+
+    const now = new Date().toISOString();
+    const execution = {
+      id: id("design_execution"),
+      operationKey: String(payload.operationKey),
+      externalJobId: String(payload.externalJobId),
+      requestId: String(payload.requestId),
+      scopeKey: String(payload.scopeKey),
+      adapter: "art_image_local",
+      designJobId: job.id,
+      designRevisionId: revision?.id || null,
+      attemptNo: Number(payload.attemptNo),
+      processRunId: String(payload.processRunId),
+      status: "prepared",
+      acceptanceStatus: "pending",
+      refundStatus: "pending",
+      imageCount: 0,
+      images: null,
+      refundSummary: null,
+      errorCode: null,
+      errorCategory: null,
+      errorMessage: null,
+      responseHttpStatus: null,
+      dispatchedAt: null,
+      acceptedAt: null,
+      completedAt: null,
+      resolvedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    data.designPlatformExecutions.push(execution);
+    Object.assign(job, {
+      externalJobId: execution.externalJobId,
+      status: "submitted",
+      submittedAt: now,
+      errorMessage: "",
+      ...(payload.retryCount !== undefined ? { retryCount: Number(payload.retryCount) } : {}),
+      ...(payload.revisionNumber !== undefined ? { revisionCount: Number(payload.revisionNumber) } : {}),
+      updatedAt: now,
+    });
+    if (revision) {
+      Object.assign(revision, {
+        externalJobId: execution.externalJobId,
+        status: "submitted",
+        ...(payload.revisionRetryCount !== undefined ? { retryCount: Number(payload.revisionRetryCount) } : {}),
+        updatedAt: now,
+      });
+    }
+    this.write(data);
+    return { execution, created: true };
+  }
+
+  claimDesignPlatformExecution(executionId: string, processRunId: string) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.id === executionId);
+    if (!execution || execution.status !== "prepared" || execution.processRunId !== processRunId) return null;
+    const job = data.designJobs.find(
+      (item) => item.id === execution.designJobId && item.externalJobId === execution.externalJobId,
+    );
+    if (!job || job.status === "cancelled") return null;
+    const now = new Date().toISOString();
+    job.updatedAt = now;
+    Object.assign(execution, { status: "dispatching", dispatchedAt: now, updatedAt: now });
+    this.write(data);
+    return execution;
+  }
+
+  takeoverPreparedDesignPlatformExecutions(processRunId: string, limit = 50) {
+    const data = this.read();
+    const now = new Date().toISOString();
+    const claimed: any[] = [];
+    for (const execution of data.designPlatformExecutions) {
+      if (claimed.length >= limit) break;
+      if (
+        execution.status !== "prepared" ||
+        execution.processRunId === processRunId
+      ) continue;
+      execution.processRunId = processRunId;
+      execution.updatedAt = now;
+      claimed.push(execution);
+    }
+    if (claimed.length) this.write(data);
+    return claimed;
+  }
+
+  transitionDesignPlatformExecution(
+    executionId: string,
+    expected: { status?: string; acceptanceStatus?: string },
+    patch: Record<string, unknown>,
+    jobPatch?: Record<string, unknown>,
+  ) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.id === executionId);
+    if (!execution) return null;
+    if (expected.status && execution.status !== expected.status) return null;
+    if (expected.acceptanceStatus && execution.acceptanceStatus !== expected.acceptanceStatus) return null;
+    const job = data.designJobs.find((item) => item.id === execution.designJobId);
+    if (!job) throw new Error(`local design job not found: ${execution.designJobId}`);
+    if (jobPatch && (job.externalJobId !== execution.externalJobId || job.status === "cancelled")) return null;
+    const now = new Date().toISOString();
+    if (jobPatch) Object.assign(job, jobPatch, { updatedAt: now });
+    Object.assign(execution, patch, { updatedAt: now });
+    this.write(data);
+    return execution;
+  }
+
+  commitAcceptedDesignPlatformExecution(payload: any) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.id === payload.executionId);
+    if (!execution || execution.status !== "completed" || execution.acceptanceStatus !== "accepting") {
+      throw new Error("design platform execution is not accepting");
+    }
+    const job = data.designJobs.find((item) => item.id === execution.designJobId);
+    if (!job || job.status === "cancelled" || job.externalJobId !== execution.externalJobId) {
+      throw new Error("design platform acceptance job binding changed");
+    }
+    const revision = execution.designRevisionId
+      ? data.designRevisions.find((item) => item.id === execution.designRevisionId) || null
+      : null;
+    if (
+      execution.designRevisionId &&
+      (!revision || revision.designJobId !== job.id || Number(revision.revisionNumber || 0) !== Number(job.revisionCount || 0))
+    ) {
+      throw new Error("design platform acceptance revision binding changed");
+    }
+    if (!execution.designRevisionId && Number(job.revisionCount || 0) !== 0) {
+      throw new Error("initial design platform result became stale");
+    }
+    for (const image of payload.images || []) {
+      const index = data.designImages.findIndex(
+        (item) => item.designJobId === job.id && item.imageId === image.imageId,
+      );
+      const current = index >= 0 ? data.designImages[index] : null;
+      const record = {
+        ...(current || {}),
+        id: current?.id || id("image"),
+        createdAt: current?.createdAt || new Date().toISOString(),
+        ...image,
+        designJobId: job.id,
+        selected: Boolean(current?.selected),
+      };
+      if (index >= 0) data.designImages[index] = record;
+      else data.designImages.push(record);
+    }
+    const now = new Date().toISOString();
+    if (revision) {
+      Object.assign(revision, {
+        status: "completed",
+        resultImageIds: payload.resultImageIds || [],
+        errorMessage: "",
+        updatedAt: now,
+      });
+    }
+    Object.assign(job, {
+      status: payload.nextStatus,
+      completedAt: now,
+      errorMessage: "",
+      updatedAt: now,
+    });
+    Object.assign(execution, {
+      acceptanceStatus: "accepted",
+      acceptedAt: now,
+      resolvedAt: now,
+      updatedAt: now,
+    });
+    this.write(data);
+    return this.hydrateDesignJob(data, job);
+  }
+
+  recoverStaleDesignPlatformExecutions(processRunId: string, leaseCutoff: string) {
+    const data = this.read();
+    const now = new Date().toISOString();
+    const recovered: any[] = [];
+    for (const execution of data.designPlatformExecutions) {
+      if (
+        !["dispatching", "generating", "cancel_requested"].includes(execution.status) ||
+        execution.processRunId === processRunId ||
+        String(execution.updatedAt) >= leaseCutoff
+      ) continue;
+      const wasCancelled = execution.status === "cancel_requested";
+      const job = data.designJobs.find((item) => item.id === execution.designJobId);
+      if (
+        !wasCancelled &&
+        (!job || job.externalJobId !== execution.externalJobId || job.status === "cancelled")
+      ) continue;
+      const executionPatch = {
+        status: "outcome_unknown",
+        acceptanceStatus: wasCancelled ? "rejected" : "manual_review",
+        refundStatus: "unknown",
+        errorCode: wasCancelled ? "CANCELLED_EXECUTION_OUTCOME_UNKNOWN" : "PROCESS_RESTARTED_DURING_DISPATCH",
+        errorCategory: wasCancelled ? "cancelled_late_outcome_unknown" : "process_restart_unknown",
+        errorMessage: wasCancelled
+          ? "cancelled design platform execution has no late outcome evidence after recovery lease"
+          : "design platform generation may have been accepted before process restart",
+        completedAt: now,
+        ...(wasCancelled ? { resolvedAt: now } : {}),
+        updatedAt: now,
+      };
+      if (!wasCancelled && job && job.externalJobId === execution.externalJobId && job.status !== "cancelled") {
+        Object.assign(job, {
+          status: "manual_review",
+          manualQcRequired: true,
+          errorMessage: "设计平台生成结果未知，必须人工核对扣费和出图结果，禁止普通重试。",
+          updatedAt: now,
+        });
+      }
+      Object.assign(execution, executionPatch);
+      recovered.push(execution);
+    }
+    let resetAcceptance = false;
+    for (const execution of data.designPlatformExecutions) {
+      if (
+        execution.status === "completed" &&
+        execution.acceptanceStatus === "accepting" &&
+        execution.processRunId !== processRunId &&
+        String(execution.updatedAt) < leaseCutoff
+      ) {
+        execution.acceptanceStatus = "pending";
+        execution.processRunId = processRunId;
+        execution.updatedAt = now;
+        resetAcceptance = true;
+      }
+    }
+    if (recovered.length || resetAcceptance) this.write(data);
+    return recovered;
+  }
+
+  requestDesignPlatformExecutionCancellation(externalJobId: string) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.externalJobId === externalJobId);
+    const now = new Date().toISOString();
+    const job = execution
+      ? data.designJobs.find((item) => item.id === execution.designJobId && item.externalJobId === execution.externalJobId)
+      : data.designJobs.find((item) => item.externalJobId === externalJobId);
+    if (job) Object.assign(job, { status: "cancelled", updatedAt: now });
+    if (!execution) {
+      if (job) this.write(data);
+      return null;
+    }
+    if (execution.status === "prepared") {
+      Object.assign(execution, {
+        status: "cancelled",
+        acceptanceStatus: "rejected",
+        refundStatus: "not_required",
+        imageCount: 0,
+        images: [],
+        errorCategory: "cancelled_before_dispatch",
+        errorCode: "LOCAL_CANCELLED_BEFORE_DISPATCH",
+        completedAt: now,
+        resolvedAt: now,
+        updatedAt: now,
+      });
+    } else if (["dispatching", "generating"].includes(execution.status)) {
+      Object.assign(execution, {
+        status: "cancel_requested",
+        acceptanceStatus: "rejected",
+        errorCategory: "cancel_requested",
+        errorCode: "LOCAL_CANCEL_REQUESTED",
+        updatedAt: now,
+      });
+    } else if (
+      execution.status === "completed" &&
+      ["pending", "accepting", "manual_review"].includes(execution.acceptanceStatus)
+    ) {
+      Object.assign(execution, {
+        acceptanceStatus: "rejected",
+        errorCategory: "cancelled_before_acceptance",
+        errorCode: "LOCAL_CANCELLED_BEFORE_ACCEPTANCE",
+        resolvedAt: now,
+        updatedAt: now,
+      });
+    }
+    this.write(data);
+    return execution;
+  }
+
+  resolveUnknownDesignPlatformExecution(executionId: string, resolution: string, reviewer: string) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.id === executionId);
+    if (!execution || execution.status !== "outcome_unknown" || execution.resolvedAt) {
+      throw new Error("only unresolved outcome_unknown execution can be resolved");
+    }
+    if (resolution !== "confirmed_not_generated_refunded" || !String(reviewer || "").trim()) {
+      throw new Error("explicit confirmed_not_generated_refunded resolution and reviewer are required");
+    }
+    const now = new Date().toISOString();
+    Object.assign(execution, {
+      status: "explicit_failed",
+      acceptanceStatus: "manual_review",
+      refundStatus: "refunded",
+      refundSummary: mergeLocalRefundResolution(execution.refundSummary, resolution, reviewer),
+      resolvedAt: now,
+      updatedAt: now,
+    });
+    this.write(data);
+    return execution;
+  }
+
+  resolveUnsafeDesignPlatformRefund(executionId: string, resolution: string, reviewer: string) {
+    const data = this.read();
+    const execution = data.designPlatformExecutions.find((item) => item.id === executionId);
+    const resumableCompleted = execution?.status === "completed" && execution?.acceptanceStatus === "manual_review";
+    if (
+      !execution ||
+      (execution.status !== "explicit_failed" && !resumableCompleted) ||
+      !["failed", "unknown"].includes(execution.refundStatus)
+    ) {
+      throw new Error("only an unsafe explicit failure refund can be resolved");
+    }
+    if (resolution !== "confirmed_refunded" || !String(reviewer || "").trim()) {
+      throw new Error("explicit confirmed_refunded resolution and reviewer are required");
+    }
+    const now = new Date().toISOString();
+    Object.assign(execution, {
+      refundStatus: "refunded",
+      ...(resumableCompleted ? { acceptanceStatus: "pending" } : {}),
+      refundSummary: mergeLocalRefundResolution(execution.refundSummary, resolution, reviewer),
+      resolvedAt: resumableCompleted ? null : now,
+      updatedAt: now,
+    });
+    this.write(data);
+    return execution;
   }
 
   private validateDesignJobIdentity(data: StoreData, payload: any) {
@@ -3271,6 +3650,7 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "designJobs",
     "designImages",
     "designRevisions",
+    "designPlatformExecutions",
     "notifications",
     "sendTasks",
     "sendAttempts",
@@ -3445,6 +3825,7 @@ function seedData(): StoreData {
     designJobs: [],
     designImages: [],
     designRevisions: [],
+    designPlatformExecutions: [],
     notifications: [],
     sendTasks: [],
     sendAttempts: [],
@@ -3534,6 +3915,24 @@ function applyMultiAccountSeed(data: StoreData, now: string) {
       createdAt: now,
     });
   }
+}
+
+function mergeLocalRefundResolution(value: unknown, resolution: string, reviewer: string) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const summary: Record<string, unknown> = {};
+  for (const key of ["reason", "requestedCredits", "refundedCredits", "chargedCredits", "mode", "alreadyRefunded"]) {
+    const item = source[key];
+    if (typeof item === "number" && Number.isFinite(item)) summary[key] = item;
+    else if (typeof item === "boolean") summary[key] = item;
+    else if (typeof item === "string") summary[key] = item.slice(0, 120);
+  }
+  return {
+    ...summary,
+    resolution,
+    reviewer: String(reviewer || "").trim().replace(/[^\p{L}\p{N}_.@-]/gu, "_").slice(0, 80),
+  };
 }
 
 export function seedAgentConfig(now: string) {

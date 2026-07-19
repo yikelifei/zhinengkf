@@ -42,6 +42,34 @@ enum DesignJobStatus {
   cancelled
 }
 
+enum DesignPlatformExecutionStatus {
+  prepared
+  dispatching
+  generating
+  completed
+  explicit_failed
+  outcome_unknown
+  cancel_requested
+  cancelled
+}
+
+enum DesignPlatformAcceptanceStatus {
+  pending
+  accepting
+  accepted
+  rejected
+  manual_review
+}
+
+enum DesignPlatformRefundStatus {
+  pending
+  refunded
+  not_required
+  credit_bypass
+  failed
+  unknown
+}
+
 enum QuoteStatus {
   draft
   auto_sent
@@ -378,6 +406,7 @@ model DesignJob {
   quoteDrafts        QuoteDraft[]
   orderDrafts        OrderDraft[]
   sendTasks          WechatSendTask[]
+  platformExecutions DesignPlatformExecution[]
 
   @@index([status, createdAt])
   @@index([customerId])
@@ -425,9 +454,47 @@ model DesignRevision {
   updatedAt            DateTime              @updatedAt
   designJob            DesignJob             @relation(fields: [designJobId], references: [id])
   selectedImage        DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
+  platformExecutions   DesignPlatformExecution[]
 
   @@index([designJobId, createdAt])
   @@index([status, createdAt])
+}
+
+model DesignPlatformExecution {
+  id               String                         @id @default(cuid())
+  operationKey     String                         @unique
+  externalJobId    String                         @unique
+  requestId        String                         @unique
+  scopeKey         String
+  adapter          String                         @default("art_image_local")
+  designJobId      String
+  designRevisionId String?
+  attemptNo        Int
+  processRunId     String
+  status           DesignPlatformExecutionStatus @default(prepared)
+  acceptanceStatus DesignPlatformAcceptanceStatus @default(pending)
+  refundStatus     DesignPlatformRefundStatus     @default(pending)
+  imageCount       Int                            @default(0)
+  images           Json?
+  refundSummary    Json?
+  errorCode        String?
+  errorCategory    String?
+  errorMessage     String?
+  responseHttpStatus Int?
+  dispatchedAt     DateTime?
+  acceptedAt       DateTime?
+  completedAt      DateTime?
+  resolvedAt       DateTime?
+  createdAt        DateTime                       @default(now())
+  updatedAt        DateTime                       @updatedAt
+  designJob        DesignJob                      @relation(fields: [designJobId], references: [id], onDelete: Restrict)
+  designRevision   DesignRevision?                @relation(fields: [designRevisionId], references: [id], onDelete: Restrict)
+
+  @@unique([designJobId, designRevisionId, attemptNo])
+  @@index([status, processRunId, updatedAt])
+  @@index([scopeKey, attemptNo])
+  @@index([designJobId, createdAt])
+  @@index([acceptanceStatus, completedAt])
 }
 
 model QuoteDraft {
