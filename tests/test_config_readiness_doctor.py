@@ -60,11 +60,12 @@ ai_engine:
     payload = json.dumps(report, ensure_ascii=False)
 
     assert report["overall"] == "ready"
-    assert report["summary"] == {"ready": 7, "blocked": 0, "total": 7}
+    assert report["summary"] == {"ready": 8, "blocked": 0, "total": 8}
     assert [item["id"] for item in report["components"]] == [
         "api",
         "web",
         "database",
+        "automation_scheduler",
         "personal_wechat_bridge",
         "wechat_work_customer_service",
         "design_platform",
@@ -90,13 +91,15 @@ ai_engine:
         "WEB_PORT": "3200",
         "USE_LOCAL_STORE": "false",
         "DESIGN_PLATFORM_ADAPTER": "art_image_local",
+        "NODE_ENV": "production",
     }
 
     report = build_report(tmp_path, environment)
 
     assert report["overall"] == "blocked"
-    assert report["summary"] == {"ready": 0, "blocked": 7, "total": 7}
+    assert report["summary"] == {"ready": 0, "blocked": 8, "total": 8}
     assert "DATABASE_URL" in _component(report, "database")["missing"]
+    assert "LOW_VALUE_AUTOMATION_REDIS_URL" in _component(report, "automation_scheduler")["missing"]
     assert "WECHAT_SEND_ADAPTER=windows_bridge" in _component(report, "personal_wechat_bridge")["missing"]
     assert "WECHAT_WORK_CORP_ID" in _component(report, "wechat_work_customer_service")["missing"]
     assert "DESIGN_PLATFORM_DEVICE_ID" in _component(report, "design_platform")["missing"]
@@ -137,3 +140,46 @@ ai_engine:
     assert design["details"]["credentialConfigured"] is True
     assert runtime_secret not in payload
     assert runtime_cookie not in payload
+
+
+def test_doctor_requires_durable_redis_in_production_and_never_echoes_url(tmp_path):
+    _write_project(tmp_path, "ai_engine:\n  enabled: false\n  providers: {}\n")
+    redis_url = "rediss://automation-user:redis-password-sentinel@redis.internal:6380/2"
+    report = build_report(
+        tmp_path,
+        {
+            "NODE_ENV": "production",
+            "LOW_VALUE_AUTOMATION_ENABLED": "1",
+            "LOW_VALUE_AUTOMATION_MODE": "durable",
+            "LOW_VALUE_AUTOMATION_REDIS_URL": redis_url,
+        },
+    )
+    scheduler = _component(report, "automation_scheduler")
+    payload = json.dumps(report, ensure_ascii=False)
+
+    assert scheduler["status"] == "ready"
+    assert scheduler["details"] == {
+        "enabled": True,
+        "mode": "durable",
+        "durable": True,
+        "redisUrlConfigured": True,
+        "liveConnectionChecked": False,
+    }
+    assert redis_url not in payload
+    assert "redis-password-sentinel" not in payload
+
+
+def test_doctor_blocks_interval_scheduler_in_production(tmp_path):
+    _write_project(tmp_path, "ai_engine:\n  enabled: false\n  providers: {}\n")
+    report = build_report(
+        tmp_path,
+        {
+            "NODE_ENV": "production",
+            "LOW_VALUE_AUTOMATION_ENABLED": "1",
+            "LOW_VALUE_AUTOMATION_MODE": "interval",
+        },
+    )
+    scheduler = _component(report, "automation_scheduler")
+
+    assert scheduler["status"] == "blocked"
+    assert "production LOW_VALUE_AUTOMATION_MODE=durable" in scheduler["missing"]

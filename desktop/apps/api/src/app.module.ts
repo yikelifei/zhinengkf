@@ -4,6 +4,7 @@ import { AiProviderService } from "./ai/ai-provider.service";
 import { AgentsController } from "./agents/agents.controller";
 import { AgentsService } from "./agents/agents.service";
 import { AutomationController } from "./automation/automation.controller";
+import { AutomationSchedulerService } from "./automation/automation-scheduler.service";
 import { AutomationService } from "./automation/automation.service";
 import { AssetsController } from "./assets/assets.controller";
 import { AssetsService } from "./assets/assets.service";
@@ -69,6 +70,7 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
     AiProviderService,
     AgentsService,
     AutomationService,
+    AutomationSchedulerService,
     AssetsService,
     CatalogService,
     ConversationOperationsService,
