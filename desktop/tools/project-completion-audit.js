@@ -6,7 +6,7 @@ const path = require("node:path");
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
 const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
-const SCHEMA_VERSION = "smart_kefu_project_completion_audit_v1";
+const SCHEMA_VERSION = "smart_kefu_project_completion_audit_v2";
 
 const REQUIRED_ARTIFACTS = Object.freeze([
   { id: "release.gate", title: "生产发布门禁", file: "desktop/tools/production-release-gate.js" },
@@ -135,6 +135,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     id: "security.design_platform_callback",
     title: "设计平台回调与控制器安全测试",
     file: "desktop/tests/design-platform-controller-security.test.js",
+  },
+  {
+    id: "ui.design_execution_reconciliation",
+    title: "设计执行人工核销工作台",
+    file: "desktop/apps/web/src/components/design-execution-reconciliation-panel.tsx",
   },
 ]);
 
@@ -643,6 +648,21 @@ const SOURCE_ROOTS = Object.freeze([
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs", ".py"]);
 const PLACEHOLDER_PATTERN = /(?:prisma mode is not implemented yet|not implemented|尚未实现|TODO\b|FIXME\b)/gi;
+const DESIGN_EXECUTION_PUBLIC_VIEW_FIELDS = Object.freeze([
+  "id",
+  "attemptNo",
+  "status",
+  "acceptanceStatus",
+  "refundStatus",
+  "imageCount",
+  "errorCategory",
+  "responseHttpStatus",
+  "createdAt",
+  "updatedAt",
+  "completedAt",
+  "resolvedAt",
+  "availableResolution",
+]);
 const PLANNED_CHANNEL_SCOPE = Object.freeze({
   id: "planned_scope.optional_channels",
   title: "规划渠道 fail-closed 边界",
@@ -732,6 +752,288 @@ function contractResults(root) {
       { path: normalizeRelative(contract.file), missing, forbidden },
     );
   });
+}
+
+function extractBalancedBlock(text, startPattern) {
+  const match = startPattern.exec(text);
+  if (!match) return null;
+  const open = text.indexOf("{", match.index + match[0].length);
+  if (open < 0) return null;
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = open; index < text.length; index += 1) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (lineComment) {
+      if (character === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (character === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(match.index, index + 1);
+    }
+  }
+  return null;
+}
+
+function extractRouteSection(text, routePattern) {
+  const match = routePattern.exec(text);
+  if (!match) return null;
+  const rest = text.slice(match.index + match[0].length);
+  const next = /\n\s+@(?:Get|Post|Put|Patch|Delete)\(/.exec(rest);
+  return text.slice(match.index, next ? match.index + match[0].length + next.index : text.length);
+}
+
+function patternFailures(text, required = [], forbidden = []) {
+  if (text === null) return { missing: ["section-missing"], forbidden: [] };
+  return {
+    missing: required.map((pattern, index) => (pattern.test(text) ? null : `required-pattern-${index + 1}`)).filter(Boolean),
+    forbidden: forbidden.map((pattern, index) => (pattern.test(text) ? `forbidden-pattern-${index + 1}` : null)).filter(Boolean),
+  };
+}
+
+function designReconciliationResults(root) {
+  const uiPath = "desktop/apps/web/src/components/design-execution-reconciliation-panel.tsx";
+  const webApiPath = "desktop/apps/web/src/lib/api.ts";
+  const controllerPath = "desktop/apps/api/src/design-jobs/design-jobs.controller.ts";
+  const designServicePath = "desktop/apps/api/src/design-jobs/design-jobs.service.ts";
+  const executionServicePath = "desktop/apps/api/src/design-jobs/design-platform-execution.service.ts";
+  const typesPath = "desktop/apps/api/src/design-jobs/design-jobs.types.ts";
+  const ui = readText(root, uiPath);
+  const webApi = readText(root, webApiPath) || "";
+  const controller = readText(root, controllerPath) || "";
+  const designService = readText(root, designServicePath) || "";
+  const executionService = readText(root, executionServicePath) || "";
+  const types = readText(root, typesPath) || "";
+
+  const uiChecks = patternFailures(ui, [
+    /export const DESIGN_EXECUTION_RESOLUTIONS\s*=\s*\{[\s\S]*unknown:\s*["']confirmed_not_generated_refunded["'][\s\S]*refund:\s*["']confirmed_refunded["'][\s\S]*\}\s*as const/,
+    /resolutionAction\(execution\.availableResolution\)/,
+    /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.unknown/,
+    /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.refund/,
+    /return null/,
+    /if \(!pending[^\n{]*submittingId[^\n{]*!canManageExecutions\) return/,
+    /submitLock\.current/,
+    /role=["']alertdialog["']/,
+    /await onRefresh\(\)/,
+  ], [
+    /\breviewer\s*:/,
+    /\bsetInterval\s*\(/,
+  ]);
+  const uiOk = uiChecks.missing.length === 0 && uiChecks.forbidden.length === 0;
+
+  const viewMatch = /export type DesignPlatformExecutionView\s*=\s*\{([\s\S]*?)\n\};/.exec(types);
+  const viewBody = viewMatch?.[1] || null;
+  const actualViewFields = viewBody
+    ? [...viewBody.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\??\s*:/gm)].map((match) => match[1])
+    : [];
+  const missingViewFields = DESIGN_EXECUTION_PUBLIC_VIEW_FIELDS.filter((field) => !actualViewFields.includes(field));
+  const unexpectedViewFields = actualViewFields.filter((field) => !DESIGN_EXECUTION_PUBLIC_VIEW_FIELDS.includes(field));
+  const publicList = extractBalancedBlock(executionService, /async listPublicForDesignJob\s*\([^)]*\)\s*[^\{]*/);
+  const projection = extractBalancedBlock(executionService, /function toPublicExecutionView\s*\([^)]*\)\s*[^\{]*/);
+  const publicListChecks = patternFailures(publicList, [/\.map\(toPublicExecutionView\)/]);
+  const projectionChecks = patternFailures(projection, [
+    /availableResolution/,
+    /confirmed_not_generated_refunded/,
+    /confirmed_refunded/,
+  ], [
+    /\.\.\.\s*execution/,
+    /\boperationKey\b/,
+    /\brequestId\b/,
+    /\bexternalJobId\b/,
+    /\bimages\b/,
+    /\brefundSummary\b/,
+    /\berrorMessage\b/,
+  ]);
+  const publicViewOk = Boolean(viewBody)
+    && missingViewFields.length === 0
+    && unexpectedViewFields.length === 0
+    && /type DesignExecutionAvailableResolution\s*=\s*\|?\s*["']confirmed_not_generated_refunded["']\s*\|\s*["']confirmed_refunded["']\s*\|\s*null/.test(types)
+    && /availableResolution\??\s*:\s*DesignExecutionAvailableResolution/.test(viewBody)
+    && publicListChecks.missing.length === 0
+    && projectionChecks.missing.length === 0
+    && projectionChecks.forbidden.length === 0;
+
+  const getRoute = extractRouteSection(controller, /@Get\(["']:id\/executions["']\)/);
+  const listMethod = extractBalancedBlock(designService, /async listExecutions\s*\([^)]*\)\s*[^\{]*/);
+  const getIdentityQuery = extractBalancedBlock(webApi, /function designExecutionExpectedIdentityQuery\s*\([^)]*\)\s*[^\{]*/);
+  const getClient = extractBalancedBlock(webApi, /export async function getDesignJobExecutions\s*\([^)]*\)\s*[^\{]*/);
+  const getRouteChecks = patternFailures(getRoute, [
+    /@Query\(["']expectedWechatAccountId["']\)/,
+    /@Query\(["']expectedConversationId["']\)/,
+    /@Query\(["']expectedCustomerId["']\)/,
+  ]);
+  const listIdentityChecks = patternFailures(listMethod, [
+    /!expected\.expectedWechatAccountId/,
+    /!expected\.expectedConversationId/,
+    /!expected\.expectedCustomerId/,
+    /assertExpectedIdentity/,
+    /listPublicForDesignJob/,
+  ]);
+  const getClientChecks = patternFailures(getClient, [
+    /\/design-jobs\/\$\{encodeURIComponent\(id\)\}\/executions/,
+    /designExecutionExpectedIdentityQuery\(expected\)/,
+  ]);
+  const getIdentityQueryChecks = patternFailures(getIdentityQuery, [
+    /params\.set\(["']expectedWechatAccountId["'],\s*expected\.expectedWechatAccountId\)/,
+    /params\.set\(["']expectedConversationId["'],\s*expected\.expectedConversationId\)/,
+    /params\.set\(["']expectedCustomerId["'],\s*expected\.expectedCustomerId\)/,
+    /expectedWechatAccountId/,
+    /expectedConversationId/,
+    /expectedCustomerId/,
+  ]);
+  const identityMissing = [
+    ...getRouteChecks.missing.map((item) => `controller-${item}`),
+    ...listIdentityChecks.missing.map((item) => `service-${item}`),
+    ...getClientChecks.missing.map((item) => `client-${item}`),
+    ...getIdentityQueryChecks.missing.map((item) => `client-query-${item}`),
+  ];
+  const identityOk = identityMissing.length === 0;
+
+  const unknownRoute = extractRouteSection(controller, /@Post\(["']:id\/executions\/:executionId\/resolve-unknown["']\)/);
+  const refundRoute = extractRouteSection(controller, /@Post\(["']:id\/executions\/:executionId\/resolve-refund["']\)/);
+  const approveRoute = extractRouteSection(controller, /@Post\(["']:id\/quick-confirm-send["']\)/);
+  const unknownClient = extractBalancedBlock(webApi, /export async function resolveUnknownDesignExecution\s*\([^)]*\)\s*[^\{]*/);
+  const refundClient = extractBalancedBlock(webApi, /export async function resolveDesignExecutionRefund\s*\([^)]*\)\s*[^\{]*/);
+  const unknownPublic = extractBalancedBlock(executionService, /async resolveUnknownPublic\s*\([^)]*\)\s*[^\{]*/);
+  const refundPublic = extractBalancedBlock(executionService, /async resolveUnsafeRefundPublic\s*\([^)]*\)\s*[^\{]*/);
+  const resolveUnknownService = extractBalancedBlock(designService, /async resolveUnknownExecution\s*\([^)]*\)\s*[^\{]*/);
+  const resolveRefundService = extractBalancedBlock(designService, /async resolveExecutionRefund\s*\([^)]*\)\s*[^\{]*/);
+  const classBoundaryChecks = patternFailures(controller.slice(0, Math.max(0, controller.indexOf("export class DesignJobsController"))), [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+  ]);
+  const unknownBoundaryChecks = patternFailures(unknownRoute, [
+    /@RequireOperatorCapability\(["']manage_design_executions["']\)/,
+    /@TrustedOperator\(\) principal/,
+    /reviewer:\s*_untrustedReviewer/,
+    /principal\.id/,
+  ]);
+  const refundBoundaryChecks = patternFailures(refundRoute, [
+    /@RequireOperatorCapability\(["']manage_design_executions["']\)/,
+    /@TrustedOperator\(\) principal/,
+    /reviewer:\s*_untrustedReviewer/,
+    /principal\.id/,
+  ]);
+  const approveBoundaryChecks = patternFailures(approveRoute, [
+    /@RequireOperatorCapability\(["']approve_send["']\)/,
+  ]);
+  const typeBoundaryChecks = patternFailures(types, [
+    /ResolveUnknownDesignExecutionPayload\s*=\s*\{\s*resolution:\s*["']confirmed_not_generated_refunded["'];?\s*\}/,
+    /ResolveDesignExecutionRefundPayload\s*=\s*\{\s*resolution:\s*["']confirmed_refunded["'];?\s*\}/,
+  ]);
+  const unknownClientChecks = patternFailures(unknownClient, [
+    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-unknown/,
+    /resolution:\s*["']confirmed_not_generated_refunded["']/,
+  ], [/\breviewer\s*:/]);
+  const refundClientChecks = patternFailures(refundClient, [
+    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-refund/,
+    /resolution:\s*["']confirmed_refunded["']/,
+  ], [/\breviewer\s*:/]);
+  const unknownPublicChecks = patternFailures(unknownPublic, [
+    /toPublicExecutionView\(await this\.resolveUnknown/,
+  ]);
+  const refundPublicChecks = patternFailures(refundPublic, [
+    /toPublicExecutionView\(await this\.resolveUnsafeRefund/,
+  ]);
+  const unknownServiceResponseChecks = patternFailures(resolveUnknownService, [
+    /\.resolveUnknownPublic\(/,
+  ]);
+  const refundServiceResponseChecks = patternFailures(resolveRefundService, [
+    /\.resolveUnsafeRefundPublic\(/,
+  ]);
+  const boundaryMissing = [
+    ...classBoundaryChecks.missing.map((item) => `class-${item}`),
+    ...unknownBoundaryChecks.missing.map((item) => `unknown-route-${item}`),
+    ...refundBoundaryChecks.missing.map((item) => `refund-route-${item}`),
+    ...approveBoundaryChecks.missing.map((item) => `approve-route-${item}`),
+    ...typeBoundaryChecks.missing.map((item) => `types-${item}`),
+    ...unknownClientChecks.missing.map((item) => `unknown-client-${item}`),
+    ...refundClientChecks.missing.map((item) => `refund-client-${item}`),
+    ...unknownPublicChecks.missing.map((item) => `unknown-public-mapper-${item}`),
+    ...refundPublicChecks.missing.map((item) => `refund-public-mapper-${item}`),
+    ...unknownServiceResponseChecks.missing.map((item) => `unknown-service-response-${item}`),
+    ...refundServiceResponseChecks.missing.map((item) => `refund-service-response-${item}`),
+  ];
+  const boundaryForbidden = [
+    ...unknownClientChecks.forbidden.map((item) => `unknown-client-${item}`),
+    ...refundClientChecks.forbidden.map((item) => `refund-client-${item}`),
+  ];
+  const boundariesOk = boundaryMissing.length === 0
+    && boundaryForbidden.length === 0;
+
+  return [
+    result(
+      "contract.design_execution_reconciliation_ui",
+      "设计执行人工核销 UI 失败关闭契约",
+      uiOk ? STATUS.PASS : STATUS.FAIL,
+      uiOk ? "UI 只使用服务端白名单动作和固定 resolution，且不提交 reviewer。" : "UI 文件缺失，或核销动作、固定 resolution、失败关闭/无 reviewer 契约发生漂移。",
+      { paths: [uiPath, webApiPath], ...uiChecks },
+    ),
+    result(
+      "contract.design_execution_public_view",
+      "设计执行人工核销安全读模型",
+      publicViewOk ? STATUS.PASS : STATUS.FAIL,
+      publicViewOk ? "执行视图采用精确字段白名单，服务端导出可核销动作且不展开原始执行记录。" : "执行视图字段白名单、服务端可操作性或显式 projection 契约不完整。",
+      {
+        paths: [typesPath, executionServicePath],
+        expectedFields: DESIGN_EXECUTION_PUBLIC_VIEW_FIELDS,
+        actualFields: actualViewFields,
+        missingFields: missingViewFields,
+        unexpectedFields: unexpectedViewFields,
+        missingContracts: [...publicListChecks.missing, ...projectionChecks.missing],
+        forbidden: projectionChecks.forbidden,
+      },
+    ),
+    result(
+      "contract.design_execution_list_identity",
+      "设计执行列表期望身份边界",
+      identityOk ? STATUS.PASS : STATUS.FAIL,
+      identityOk ? "GET 客户端和服务端都使用账号、会话、客户 expected* 身份，并在读取前校验设计任务身份。" : "GET 客户端 query、控制器或服务层缺少一致的 expected* 身份字段/校验，存在跳过校验风险。",
+      { paths: [controllerPath, designServicePath, webApiPath], missing: identityMissing, forbidden: [] },
+    ),
+    result(
+      "contract.design_execution_resolution_boundaries",
+      "设计执行核销与发送能力边界",
+      boundariesOk ? STATUS.PASS : STATUS.FAIL,
+      boundariesOk ? "核销使用 manage_design_executions、可信 reviewer、严格 payload 与脱敏响应；发送仍独立要求 approve_send。" : "核销/发送能力、可信 reviewer、严格 resolution、客户端 body 或脱敏响应发生漂移。",
+      {
+        paths: [controllerPath, designServicePath, executionServicePath, typesPath, webApiPath],
+        missing: boundaryMissing,
+        forbidden: boundaryForbidden,
+      },
+    ),
+  ];
 }
 
 function localStoreInventoryResults(root) {
@@ -884,6 +1186,7 @@ function buildAudit(root, options = {}) {
   const results = [
     ...artifactResults(resolvedRoot),
     ...contractResults(resolvedRoot),
+    ...designReconciliationResults(resolvedRoot),
     plannedScopeResult(resolvedRoot),
     placeholderResult(resolvedRoot),
     ...localStoreInventoryResults(resolvedRoot),
