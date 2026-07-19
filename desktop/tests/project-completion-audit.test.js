@@ -32,6 +32,7 @@ function createPassingFixture() {
     "release:gate": "x", "staging:readiness": "x", "database:recovery:plan": "x",
     "database:recovery:execute": "x", "package:win:test": "x", "package:win:signed": "x",
     "ci:release-quality": "x", "project:completion:audit": "x",
+    "prisma:agents:init": "node tools/initialize-prisma-agents.js",
   }}));
   write(root, "desktop/electron-builder.yml", "asar: true\nextraResources:\n  - from: x\nwin:\n  target: nsis\n");
   write(root, ".github/workflows/windows-quality.yml", "permissions:\n  contents: read\nsteps:\n  persist-credentials: false\n  uses: actions/upload-artifact@v4\n");
@@ -43,6 +44,7 @@ function createPassingFixture() {
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
   write(root, "desktop/apps/api/src/automation/automation-scheduler.service.ts", 'lowValueAutomationMode === "durable"; bullmq_redis; readiness();\n');
   write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", "listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations();\n");
+  write(root, "desktop/tools/initialize-prisma-agents.js", 'const execute=process.argv.includes("--execute");\nconst requiredConfirmation="INITIALIZE_PRISMA_AGENTS";\nif (!execute) { console.log({status:"PLAN", writesExecuted:false}); process.exit(0); }\nif (confirmation !== requiredConfirmation) throw new Error("refusing");\ninitializePrismaAgentData().catch(() => { process.stderr.write("failed; inspect protected deployment logs"); });\n');
   write(root, "desktop/apps/api/src/agents/agents.service.ts", "PrismaOperationsService; appConfig.useLocalStore; this.requirePrisma().listAgents(); this.requirePrisma().listAgentSkills();\n");
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation();\n");
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
@@ -109,6 +111,19 @@ test("planned channel placeholders are allowed only with planned status, fail-cl
   report = buildAudit(root, { includeExternal: false });
   assert.equal(report.results.find((item) => item.id === "planned_scope.optional_channels").status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "source.production_placeholders").status, STATUS.FAIL);
+});
+
+test("Prisma Agent initializer must keep zero-write plan, explicit confirmation and redacted catch", () => {
+  const root = createPassingFixture();
+  let report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.prisma_agent_initializer_safety").status, STATUS.PASS);
+
+  write(root, "desktop/tools/initialize-prisma-agents.js", 'const execute=process.argv.includes("--execute");\ninitializePrismaAgentData().catch((error) => process.stderr.write(error.message));\n');
+  report = buildAudit(root, { includeExternal: false });
+  const initializer = report.results.find((item) => item.id === "contract.prisma_agent_initializer_safety");
+  assert.equal(initializer.status, STATUS.FAIL);
+  assert.ok(initializer.evidence.missing.length > 0);
+  assert.ok(initializer.evidence.forbidden.length > 0);
 });
 
 test("report output is confined to the ignored runtime path and remains sanitized Chinese Markdown plus JSON", () => {

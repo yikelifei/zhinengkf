@@ -44,7 +44,12 @@ const REQUIRED_ARTIFACTS = Object.freeze([
   {
     id: "prisma.agent_initializer",
     title: "Prisma Agent 初始化工具",
-    file: "desktop/tools/initialize-prisma-agents.ts",
+    file: "desktop/tools/initialize-prisma-agents.js",
+  },
+  {
+    id: "prisma.agent_initializer_data",
+    title: "Prisma Agent 初始化事务实现",
+    file: "desktop/tools/initialize-prisma-agent-data.ts",
   },
   {
     id: "prisma.operations_tests",
@@ -67,6 +72,7 @@ const CONTRACTS = Object.freeze([
       /"package:win:signed"\s*:/,
       /"ci:release-quality"\s*:/,
       /"project:completion:audit"\s*:/,
+      /"prisma:agents:init"\s*:\s*"node tools\/initialize-prisma-agents\.js"/,
     ],
   },
   {
@@ -145,6 +151,27 @@ const CONTRACTS = Object.freeze([
       /listConversations\(/,
       /listConversationAudit\(/,
       /updateConversationOperations\(/,
+    ],
+  },
+  {
+    id: "contract.prisma_agent_initializer_safety",
+    title: "Prisma Agent 初始化安全包装",
+    file: "desktop/tools/initialize-prisma-agents.js",
+    patterns: [
+      /process\.argv\.includes\(["']--execute["']\)/,
+      /if \(!execute\)/,
+      /status:\s*["']PLAN["']/,
+      /writesExecuted:\s*false/,
+      /process\.exit\(0\)/,
+      /requiredConfirmation\s*=\s*["']INITIALIZE_PRISMA_AGENTS["']/,
+      /confirmation !== requiredConfirmation/,
+      /initializePrismaAgentData/,
+      /\.catch\(\(\) =>/,
+      /inspect protected deployment logs/,
+    ],
+    forbidden: [
+      /\.catch\(\(error\) =>/,
+      /process\.stderr\.write\([^\n]*(?:error\.message|String\(error\))/,
     ],
   },
   {
