@@ -30,10 +30,13 @@ type NormalizedInbound = {
   mediaReview?: { status: "manual_review"; mediaId: string; reason: string; apiErrcode?: number };
 };
 
+const WECHAT_WORK_INBOUND_MAX_ATTEMPTS = 3;
+
 @Injectable()
 export class WechatWorkService {
   private readonly inflightInbound = new Set<string>();
   private readonly scheduledSyncs = new Map<string, Promise<unknown>>();
+  private readonly activeCursorSyncs = new Map<string, Promise<unknown>>();
   private readonly persistence: WechatPersistence;
 
   constructor(
@@ -123,7 +126,7 @@ export class WechatWorkService {
       const decrypted = this.decryptMessage(encrypted);
       this.assertReceiveId(decrypted.receiveId);
       const callbackId = `callback_${crypto.createHash("sha256").update(decrypted.message).digest("hex")}`;
-      if (await this.persistence.hasWechatWorkAuditMsgId(callbackId)) {
+      if (await this.persistence.hasWechatWorkCallbackId(callbackId)) {
         await this.persistence.recordWechatWorkAudit({
           action: "callback_duplicate",
           status: "duplicate",
@@ -148,7 +151,7 @@ export class WechatWorkService {
       const openKfid = String(xml.OpenKfId || appConfig.wechatWorkOpenKfid || "").trim();
       await this.persistence.recordWechatWorkAudit({
         action: "callback_accepted",
-        status: "accepted",
+        status: "processed",
         msgid: callbackId,
         callbackId,
         event,
@@ -167,10 +170,32 @@ export class WechatWorkService {
   async syncCustomerServiceMessages(
     payload: { token?: string; cursor?: string; limit?: number; openKfid?: string } = {},
   ) {
+    const openKfid = requiredText(payload.openKfid || appConfig.wechatWorkOpenKfid, "openKfid");
+    if (this.activeCursorSyncs.has(openKfid)) {
+      throw new BadRequestException("wechat work sync already active for this openKfid");
+    }
+    const pending = this.runCustomerServiceSync({ ...payload, openKfid });
+    this.activeCursorSyncs.set(openKfid, pending);
+    try {
+      return await pending;
+    } finally {
+      this.activeCursorSyncs.delete(openKfid);
+    }
+  }
+
+  private async runCustomerServiceSync(
+    payload: { token?: string; cursor?: string; limit?: number; openKfid: string },
+  ) {
     const token = requiredText(payload.token, "token");
     const limit = clampLimit(payload.limit);
-    const fallbackOpenKfid = String(payload.openKfid || appConfig.wechatWorkOpenKfid || "").trim();
-    let cursor = String(payload.cursor || "");
+    const fallbackOpenKfid = payload.openKfid;
+    const persistCursor = payload.cursor === undefined;
+    const storedCursor = persistCursor
+      ? await this.persistence.getWechatWorkSyncCursor(fallbackOpenKfid)
+      : null;
+    let cursor = persistCursor
+      ? String(storedCursor?.nextCursor || "")
+      : String(payload.cursor || "");
     let pageCount = 0;
     let receivedCount = 0;
     const processed: any[] = [];
@@ -178,12 +203,15 @@ export class WechatWorkService {
     const ignored: any[] = [];
     const failed: any[] = [];
     let hasMore = false;
+    let cursorCommitted = false;
+    let retryRequired = false;
 
     while (pageCount < 50) {
-      const response = await this.api.syncMessages({ token, cursor, limit, openKfid: fallbackOpenKfid || undefined });
+      const response = await this.api.syncMessages({ token, cursor, limit, openKfid: fallbackOpenKfid });
       pageCount += 1;
       const messages = Array.isArray(response.msg_list) ? response.msg_list : [];
       receivedCount += messages.length;
+      let pageTerminal = true;
       for (const message of messages) {
         try {
           const result = await this.processSyncedItem(message, fallbackOpenKfid);
@@ -191,37 +219,74 @@ export class WechatWorkService {
           else if (result.status === "duplicate") duplicates.push(result);
           else ignored.push(result);
         } catch (error) {
-          if (isTransientInboundMediaFailure(error)) throw error;
+          const msgid = stableSyncedItemId(message);
+          const previousFailures = await this.persistence.countWechatWorkInboundFailures(msgid);
+          const observedOpenKfid = syncedItemOpenKfid(message);
+          const scopeMismatch = Boolean(observedOpenKfid && observedOpenKfid !== fallbackOpenKfid);
+          const transientMediaFailure = isTransientInboundMediaFailure(error);
+          const permanent = !scopeMismatch && (
+            previousFailures + 1 >= WECHAT_WORK_INBOUND_MAX_ATTEMPTS ||
+            (!transientMediaFailure && error instanceof BadRequestException)
+          );
           const failure = {
-            status: "failed",
-            msgid: String(message.msgid || ""),
+            status: scopeMismatch ? "scope_mismatch" : permanent ? "permanent_manual_review" : "transient_failed",
+            msgid,
             msgtype: String(message.msgtype || "unknown"),
             errorMessage: error instanceof Error ? error.message : String(error),
+            attempt: previousFailures + 1,
+            retryable: scopeMismatch ? false : !permanent,
+            manualInterventionRequired: scopeMismatch || permanent,
           };
           failed.push(failure);
+          if (!permanent) pageTerminal = false;
           await this.persistence.recordWechatWorkAudit({
             action: "inbound_failed",
             ...failure,
-            openKfid: message.open_kfid || fallbackOpenKfid || null,
-            externalUserId: message.external_userid || null,
+            openKfid: fallbackOpenKfid,
+            externalUserId: scopeMismatch ? null : message.external_userid || null,
+            cursorScopeMismatch: scopeMismatch,
           });
         }
       }
       const nextCursor = String(response.next_cursor || "");
       hasMore = Boolean(response.has_more);
-      if (!hasMore) {
-        cursor = nextCursor;
+      if (!pageTerminal) {
+        retryRequired = true;
         break;
       }
-      if (!nextCursor || nextCursor === cursor) {
+      if (hasMore && (!nextCursor || nextCursor === cursor)) {
         throw new BadRequestException("wechat work sync_msg returned has_more without a new next_cursor");
       }
+      if (!nextCursor) {
+        retryRequired = true;
+        await this.persistence.recordWechatWorkAudit({
+          action: "sync_cursor_not_advanced",
+          status: "blocked",
+          openKfid: fallbackOpenKfid,
+          reason: "terminal sync_msg page did not return a non-empty next_cursor",
+          terminalMessageCount: messages.length,
+        });
+        break;
+      }
+      if (persistCursor) {
+        await this.persistence.commitWechatWorkSyncCursor({
+          openKfid: fallbackOpenKfid,
+          expectedCursor: cursor,
+          nextCursor,
+          terminalMessageCount: messages.length,
+          batchFingerprint: syncBatchFingerprint(messages),
+        });
+        cursorCommitted = true;
+      }
       cursor = nextCursor;
+      if (!hasMore) {
+        break;
+      }
     }
     if (pageCount >= 50 && hasMore) throw new BadRequestException("wechat work sync_msg exceeded 50 pages in one run");
 
     return {
-      ok: true,
+      ok: !retryRequired,
       pageCount,
       receivedCount,
       processedCount: processed.length,
@@ -229,6 +294,8 @@ export class WechatWorkService {
       ignoredCount: ignored.length,
       failedCount: failed.length,
       nextCursor: cursor,
+      cursorCommitted,
+      retryRequired,
       processed,
       duplicates,
       ignored,
@@ -393,7 +460,7 @@ export class WechatWorkService {
   }
 
   private scheduleCustomerServiceSync(payload: { token: string; openKfid?: string }) {
-    const key = `${payload.openKfid || "all"}:${payload.token}`;
+    const key = payload.openKfid || appConfig.wechatWorkOpenKfid || "missing_open_kfid";
     if (this.scheduledSyncs.has(key)) return;
     const pending = this.syncCustomerServiceMessages(payload)
       .catch((error) => {
@@ -418,6 +485,9 @@ export class WechatWorkService {
       const event = isPlainObject(message.event) ? message.event : {};
       const openKfid = String(message.open_kfid || event.open_kfid || fallbackOpenKfid || "").trim();
       const externalUserId = String(message.external_userid || event.external_userid || "").trim();
+      if (openKfid !== fallbackOpenKfid) {
+        throw new BadRequestException("sync_msg item open_kfid does not match the durable cursor scope");
+      }
       if (message.msgtype === "event") {
         return this.processSyncedEvent(message, event, msgid, openKfid, externalUserId);
       }
@@ -535,7 +605,8 @@ export class WechatWorkService {
       }
       await this.persistence.recordWechatWorkAudit({
         action: "send_async_failed",
-        status: "failed",
+        status: "processed",
+        deliveryStatus: "failed",
         msgid,
         failMsgid,
         failType: event.fail_type ?? null,
@@ -772,6 +843,24 @@ function validEncodingAesKey(value: string) {
 
 function sha1Sorted(values: string[]) {
   return crypto.createHash("sha1").update([...values].sort().join("")).digest("hex");
+}
+
+function stableSyncedItemId(message: WechatWorkKfMessage) {
+  const msgid = String(message?.msgid || "").trim();
+  if (msgid) return msgid;
+  return `sync_item_${crypto.createHash("sha256").update(JSON.stringify(message || {})).digest("hex")}`;
+}
+
+function syncedItemOpenKfid(message: WechatWorkKfMessage) {
+  const event = isPlainObject(message?.event) ? message.event : {};
+  return String(message?.open_kfid || event.open_kfid || "").trim();
+}
+
+function syncBatchFingerprint(messages: WechatWorkKfMessage[]) {
+  return crypto
+    .createHash("sha256")
+    .update(messages.map((message) => stableSyncedItemId(message)).join("\n"))
+    .digest("hex");
 }
 
 function safeEqual(left: string, right: string) {

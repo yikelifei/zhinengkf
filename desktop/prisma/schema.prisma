@@ -16,6 +16,7 @@ enum SkuType {
 enum ConversationChannel {
   wechat
   personal_wechat
+  work_wechat
   xiaohongshu
   douyin
 }
@@ -243,6 +244,19 @@ model PersonalWechatRpaAuditLog {
   @@index([wechatAccountId, createdAt])
   @@index([conversationId, externalId, createdAt])
   @@index([direction, status, createdAt])
+}
+
+model WechatWorkSyncCursor {
+  id                   String   @id @default(cuid())
+  openKfid             String   @unique
+  nextCursor           String   @default("")
+  terminalMessageCount Int      @default(0)
+  batchFingerprint     String?
+  committedAt          DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([committedAt])
 }
 
 model Message {

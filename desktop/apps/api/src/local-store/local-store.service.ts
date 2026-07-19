@@ -48,6 +48,7 @@ type StoreData = {
   automationRuns: any[];
   wechatWorkBindings: any[];
   wechatWorkAuditLogs: any[];
+  wechatWorkSyncCursors: any[];
   personalWechatRpaBindings: any[];
   personalWechatRpaAuditLogs: any[];
 };
@@ -639,7 +640,62 @@ export class LocalStoreService {
   }
 
   hasWechatWorkAuditMsgId(msgid: string) {
-    return this.read().wechatWorkAuditLogs.some((item) => item.msgid === msgid);
+    return this.read().wechatWorkAuditLogs.some(
+      (item) => item.msgid === msgid && isTerminalWechatWorkAudit(item),
+    );
+  }
+
+  hasWechatWorkCallbackId(callbackId: string) {
+    return this.read().wechatWorkAuditLogs.some(
+      (item) =>
+        item.callbackId === callbackId &&
+        ["callback_accepted", "callback_ignored", "callback_duplicate"].includes(String(item.action || "")),
+    );
+  }
+
+  countWechatWorkInboundFailures(msgid: string) {
+    return this.read().wechatWorkAuditLogs.filter(
+      (item) => item.msgid === msgid && item.action === "inbound_failed" && !isTerminalWechatWorkAudit(item),
+    ).length;
+  }
+
+  getWechatWorkSyncCursor(openKfid: string) {
+    const key = String(openKfid || "").trim();
+    if (!key) return null;
+    return this.read().wechatWorkSyncCursors.find((item) => item.openKfid === key) || null;
+  }
+
+  commitWechatWorkSyncCursor(payload: {
+    openKfid: string;
+    expectedCursor: string;
+    nextCursor: string;
+    terminalMessageCount?: number;
+    batchFingerprint?: string;
+  }) {
+    const openKfid = String(payload.openKfid || "").trim();
+    if (!openKfid) throw new Error("wechat work sync cursor requires openKfid");
+    const data = this.read();
+    const now = new Date().toISOString();
+    const index = data.wechatWorkSyncCursors.findIndex((item) => item.openKfid === openKfid);
+    const current = index >= 0 ? data.wechatWorkSyncCursors[index] : null;
+    const actualCursor = String(current?.nextCursor || "");
+    if (actualCursor !== String(payload.expectedCursor || "")) {
+      throw new Error("wechat work sync cursor changed concurrently; refusing stale cursor commit");
+    }
+    const record = {
+      id: current?.id || id("wechat_work_cursor"),
+      openKfid,
+      nextCursor: String(payload.nextCursor || ""),
+      terminalMessageCount: Number(payload.terminalMessageCount || 0),
+      batchFingerprint: String(payload.batchFingerprint || "") || null,
+      committedAt: now,
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    };
+    if (index >= 0) data.wechatWorkSyncCursors[index] = record;
+    else data.wechatWorkSyncCursors.push(record);
+    this.write(data);
+    return record;
   }
 
   upsertPersonalWechatRpaBinding(payload: {
@@ -2882,6 +2938,19 @@ function id(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 }
 
+function isTerminalWechatWorkAudit(record: any) {
+  const action = String(record?.action || "").trim();
+  const status = String(record?.status || "").trim();
+  return (
+    (action === "inbound_processed" && status === "processed") ||
+    (action === "inbound_ignored" && status === "ignored") ||
+    (action === "inbound_duplicate" && status === "duplicate") ||
+    (action === "event_processed" && status === "processed") ||
+    (action === "send_async_failed" && status === "processed") ||
+    (action === "inbound_failed" && status === "permanent_manual_review")
+  );
+}
+
 function normalizeTimelineAttachments(value: unknown, fallbackStatus: string) {
   if (!Array.isArray(value)) return [];
   return value.filter((attachment) => {
@@ -3216,6 +3285,7 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "automationRuns",
     "wechatWorkBindings",
     "wechatWorkAuditLogs",
+    "wechatWorkSyncCursors",
     "personalWechatRpaBindings",
     "personalWechatRpaAuditLogs",
   ];
@@ -3389,6 +3459,7 @@ function seedData(): StoreData {
     automationRuns: [],
     wechatWorkBindings: [],
     wechatWorkAuditLogs: [],
+    wechatWorkSyncCursors: [],
     personalWechatRpaBindings: [],
     personalWechatRpaAuditLogs: [],
   };

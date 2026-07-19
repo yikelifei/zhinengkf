@@ -712,7 +712,7 @@ export class WechatPersistence {
         action: String(payload.action || "unknown"),
         status: String(payload.status || "unknown"),
         ...this.auditScalarFields(payload),
-        metadata: Object.keys(metadata).length ? metadata : undefined,
+        metadata: Object.keys(metadata).length ? this.jsonOrNull(metadata) : undefined,
         ...(payload.createdAt ? { createdAt: new Date(String(payload.createdAt)) } : {}),
       },
     });
@@ -733,7 +733,89 @@ export class WechatPersistence {
 
   async hasWechatWorkAuditMsgId(msgid: string) {
     if (this.isLocal) return this.localStore.hasWechatWorkAuditMsgId(msgid);
-    return Boolean(await (this.prisma as any).wechatWorkAuditLog.findFirst({ where: { msgid }, select: { id: true } }));
+    return Boolean(await (this.prisma as any).wechatWorkAuditLog.findFirst({
+      where: {
+        msgid,
+        OR: [
+          { action: "inbound_processed", status: "processed" },
+          { action: "inbound_ignored", status: "ignored" },
+          { action: "inbound_duplicate", status: "duplicate" },
+          { action: "event_processed", status: "processed" },
+          { action: "send_async_failed", status: "processed" },
+          { action: "inbound_failed", status: "permanent_manual_review" },
+        ],
+      },
+      select: { id: true },
+    }));
+  }
+
+  async hasWechatWorkCallbackId(callbackId: string) {
+    if (this.isLocal) return this.localStore.hasWechatWorkCallbackId(callbackId);
+    return Boolean(await (this.prisma as any).wechatWorkAuditLog.findFirst({
+      where: {
+        callbackId,
+        action: { in: ["callback_accepted", "callback_ignored", "callback_duplicate"] },
+      },
+      select: { id: true },
+    }));
+  }
+
+  async countWechatWorkInboundFailures(msgid: string) {
+    if (this.isLocal) return this.localStore.countWechatWorkInboundFailures(msgid);
+    return (this.prisma as any).wechatWorkAuditLog.count({
+      where: {
+        msgid,
+        action: "inbound_failed",
+        status: { notIn: ["processed", "ignored", "duplicate", "permanent_manual_review"] },
+      },
+    });
+  }
+
+  async getWechatWorkSyncCursor(openKfid: string) {
+    if (this.isLocal) return this.localStore.getWechatWorkSyncCursor(openKfid);
+    return (this.prisma as any).wechatWorkSyncCursor.findUnique({ where: { openKfid } });
+  }
+
+  async commitWechatWorkSyncCursor(payload: {
+    openKfid: string;
+    expectedCursor: string;
+    nextCursor: string;
+    terminalMessageCount?: number;
+    batchFingerprint?: string;
+  }) {
+    if (this.isLocal) return this.localStore.commitWechatWorkSyncCursor(payload);
+    const prisma = this.prisma as any;
+    return prisma.$transaction(async (tx: any) => {
+      const current = await tx.wechatWorkSyncCursor.findUnique({ where: { openKfid: payload.openKfid } });
+      const actualCursor = String(current?.nextCursor || "");
+      if (actualCursor !== String(payload.expectedCursor || "")) {
+        throw new BadRequestException("wechat work sync cursor changed concurrently; refusing stale cursor commit");
+      }
+      const data = {
+        nextCursor: payload.nextCursor,
+        terminalMessageCount: Number(payload.terminalMessageCount || 0),
+        batchFingerprint: payload.batchFingerprint || null,
+        committedAt: new Date(),
+      };
+      if (!current) {
+        try {
+          return await tx.wechatWorkSyncCursor.create({ data: { openKfid: payload.openKfid, ...data } });
+        } catch (error: any) {
+          if (error?.code === "P2002") {
+            throw new BadRequestException("wechat work sync cursor changed concurrently; refusing stale cursor commit");
+          }
+          throw error;
+        }
+      }
+      const updated = await tx.wechatWorkSyncCursor.updateMany({
+        where: { openKfid: payload.openKfid, nextCursor: payload.expectedCursor },
+        data,
+      });
+      if (updated.count !== 1) {
+        throw new BadRequestException("wechat work sync cursor changed concurrently; refusing stale cursor commit");
+      }
+      return tx.wechatWorkSyncCursor.findUnique({ where: { openKfid: payload.openKfid } });
+    });
   }
 
   async findWechatWorkSendAttemptByMsgId(msgid: string) {

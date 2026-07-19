@@ -217,7 +217,7 @@ test("permanent inbound media failure persists a controlled manual-review attach
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "inbound_media_manual_review"));
 });
 
-test("transient or delayed inbound media failure aborts the sync page without advancing durable state", async () => {
+test("transient or delayed inbound media failure is audited without advancing durable state", async () => {
   for (const disposition of ["retry_exhausted", "delayed_blocked"]) {
     const { api, localStore, service } = setup();
     api.downloadFailures.push(new WechatWorkApiError("media_get", "retry later", {
@@ -237,12 +237,16 @@ test("transient or delayed inbound media failure aborts the sync page without ad
       }],
     };
 
-    await assert.rejects(
-      () => service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-transient" }),
-      (error) => error instanceof WechatWorkApiError && error.disposition === disposition,
-    );
+    const result = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-transient" });
+    assert.equal(result.retryRequired, true);
+    assert.equal(result.cursorCommitted, false);
+    assert.equal(localStore.getWechatWorkSyncCursor("wk-transient"), null);
     assert.equal(localStore.getWechatWorkBinding("wk-transient", "wm-transient"), null);
-    assert.equal(localStore.listWechatWorkAuditLogs().some((item) => item.msgid === `incoming-${disposition}`), false);
+    const msgid = `incoming-${disposition}`;
+    const audit = localStore.listWechatWorkAuditLogs().find((item) => item.msgid === msgid);
+    assert.equal(audit.action, "inbound_failed");
+    assert.equal(audit.status, "transient_failed");
+    assert.equal(localStore.hasWechatWorkAuditMsgId(msgid), false);
   }
 });
 
@@ -278,6 +282,131 @@ test("one malformed sync_msg item is audited without blocking later customer mes
   assert.equal(localStore.getWechatWorkBinding("wk-batch", "wm-bad"), null);
   assert.ok(localStore.getWechatWorkBinding("wk-batch", "wm-good"));
   assert.ok((await service.listAuditLogs()).records.some((item) => item.action === "inbound_failed" && item.msgid === "bad-1"));
+});
+
+test("sync_msg resumes from a durable per-open_kfid cursor after service restart", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  api.syncResponse = { errcode: 0, errmsg: "ok", has_more: 0, next_cursor: "cursor-a-1", msg_list: [] };
+  const first = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-cursor-a" });
+  assert.equal(first.cursorCommitted, true);
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-cursor-a").nextCursor, "cursor-a-1");
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-cursor-b"), null);
+
+  const restarted = new WechatWorkService(dispatch, localStore, api);
+  api.syncResponse = { errcode: 0, errmsg: "ok", has_more: 0, next_cursor: "cursor-a-2", msg_list: [] };
+  await restarted.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-cursor-a" });
+  assert.equal(api.syncCalls.at(-1).cursor, "cursor-a-1");
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-cursor-a").nextCursor, "cursor-a-2");
+});
+
+test("transient inbound failure replays the same cursor and only terminal completion commits it", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  api.syncResponse = {
+    errcode: 0,
+    errmsg: "ok",
+    has_more: 0,
+    next_cursor: "cursor-transient-next",
+    msg_list: [{ msgid: "transient-1", open_kfid: "wk-transient", external_userid: "wm-transient", msgtype: "text", text: { content: "重试" } }],
+  };
+  const original = dispatch.processInboundMessage.bind(dispatch);
+  let calls = 0;
+  dispatch.processInboundMessage = async (payload) => {
+    calls += 1;
+    if (calls === 1) throw new Error("temporary storage outage");
+    return original(payload);
+  };
+
+  const first = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-transient" });
+  assert.equal(first.retryRequired, true);
+  assert.equal(first.cursorCommitted, false);
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-transient"), null);
+  assert.equal(localStore.hasWechatWorkAuditMsgId("transient-1"), false);
+
+  const second = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-transient" });
+  assert.equal(second.processedCount, 1);
+  assert.equal(second.cursorCommitted, true);
+  assert.equal(api.syncCalls.at(-1).cursor, "");
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-transient").nextCursor, "cursor-transient-next");
+});
+
+test("bounded inbound failures become permanent manual review and then skip duplicate replay", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  api.syncResponse = {
+    errcode: 0,
+    errmsg: "ok",
+    has_more: 0,
+    next_cursor: "cursor-permanent",
+    msg_list: [{ msgid: "permanent-1", open_kfid: "wk-permanent", external_userid: "wm-permanent", msgtype: "text", text: { content: "持久失败" } }],
+  };
+  let calls = 0;
+  dispatch.processInboundMessage = async () => {
+    calls += 1;
+    throw new Error("repeatable transient failure");
+  };
+  const first = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-permanent" });
+  const second = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-permanent" });
+  const third = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-permanent" });
+  assert.equal(first.cursorCommitted, false);
+  assert.equal(second.cursorCommitted, false);
+  assert.equal(third.cursorCommitted, true);
+  assert.equal(third.failed[0].status, "permanent_manual_review");
+  assert.equal(localStore.hasWechatWorkAuditMsgId("permanent-1"), true);
+  const replay = await service.syncCustomerServiceMessages({ token: "sync-token", cursor: "", openKfid: "wk-permanent" });
+  assert.equal(replay.duplicateCount, 1);
+  assert.equal(replay.cursorCommitted, false);
+  assert.equal(calls, 3);
+});
+
+test("sync inbound idempotency ignores callback and outbound audit rows with colliding ids", () => {
+  const { localStore } = setup();
+  localStore.recordWechatWorkAudit({ action: "callback_accepted", status: "processed", msgid: "shared-id", callbackId: "callback-id" });
+  localStore.recordWechatWorkAudit({ action: "send_api_accepted", status: "processed", msgid: "shared-id" });
+  assert.equal(localStore.hasWechatWorkAuditMsgId("shared-id"), false);
+  assert.equal(localStore.hasWechatWorkCallbackId("callback-id"), true);
+  localStore.recordWechatWorkAudit({ action: "inbound_processed", status: "processed", msgid: "shared-id" });
+  assert.equal(localStore.hasWechatWorkAuditMsgId("shared-id"), true);
+});
+
+test("cursor CAS rejects stale and cross-scope commits", () => {
+  const { localStore } = setup();
+  localStore.commitWechatWorkSyncCursor({ openKfid: "wk-cas-a", expectedCursor: "", nextCursor: "a-1" });
+  assert.throws(
+    () => localStore.commitWechatWorkSyncCursor({ openKfid: "wk-cas-a", expectedCursor: "", nextCursor: "a-stale" }),
+    /stale cursor commit/,
+  );
+  localStore.commitWechatWorkSyncCursor({ openKfid: "wk-cas-b", expectedCursor: "", nextCursor: "b-1" });
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-cas-a").nextCursor, "a-1");
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-cas-b").nextCursor, "b-1");
+});
+
+test("empty final next_cursor never resets a previously durable cursor", async () => {
+  const { api, localStore, service } = setup();
+  localStore.commitWechatWorkSyncCursor({ openKfid: "wk-empty-next", expectedCursor: "", nextCursor: "cursor-safe" });
+  api.syncResponse = { errcode: 0, errmsg: "ok", has_more: 0, next_cursor: "", msg_list: [] };
+  const result = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-empty-next" });
+  assert.equal(result.cursorCommitted, false);
+  assert.equal(result.retryRequired, true);
+  assert.equal(result.nextCursor, "cursor-safe");
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-empty-next").nextCursor, "cursor-safe");
+});
+
+test("cross-open_kfid item fails closed without advancing or leaking the foreign customer", async () => {
+  const { api, localStore, service } = setup();
+  api.syncResponse = {
+    errcode: 0,
+    errmsg: "ok",
+    has_more: 0,
+    next_cursor: "must-not-commit",
+    msg_list: [{ msgid: "cross-scope-1", open_kfid: "wk-foreign", external_userid: "wm-secret", msgtype: "text", text: { content: "错误范围" } }],
+  };
+  const result = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-owned" });
+  assert.equal(result.cursorCommitted, false);
+  assert.equal(result.retryRequired, true);
+  assert.equal(localStore.getWechatWorkSyncCursor("wk-owned"), null);
+  const audit = localStore.listWechatWorkAuditLogs().find((item) => item.msgid === "cross-scope-1");
+  assert.equal(audit.openKfid, "wk-owned");
+  assert.equal(audit.externalUserId, null);
+  assert.equal(audit.cursorScopeMismatch, true);
 });
 
 test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt audit", async () => {

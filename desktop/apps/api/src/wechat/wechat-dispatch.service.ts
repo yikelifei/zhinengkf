@@ -34,6 +34,8 @@ const {
   evaluateLowValueOrderFollowupSend,
   findPendingSceneClarificationContext,
   isHighValueBudget,
+  inspectBundleAutomationReadiness,
+  latestCandidateRound,
   normalizeWechatWindowSnapshot,
   planInboundAutomation,
   planInboundQuoteAcceptance,
@@ -1289,6 +1291,13 @@ export class WechatDispatchService {
         replyDraft: draft.replyDraft || Prisma.JsonNull,
       },
     });
+    const selectionResult = await this.handlePrismaInboundImageSelection({
+      conversation,
+      message,
+      route,
+      payload,
+    });
+    if (selectionResult) return selectionResult;
     const plan = planInboundAutomation({
       route: conversation.manualLocked ? { ...route, conversationManualLocked: true } : route,
       conversationManualLocked: Boolean(conversation.manualLocked),
@@ -1337,6 +1346,296 @@ export class WechatDispatchService {
       designJob: null,
       notification: null,
       bundleRecommendation: null,
+    };
+  }
+
+  private async handlePrismaInboundImageSelection(params: {
+    conversation: any;
+    message: any;
+    route: any;
+    payload: { text?: string; attachments?: Array<Record<string, unknown>> };
+  }) {
+    if (this.hasInboundPaymentProof(params.payload)) return null;
+    const identity = {
+      wechatAccountId: String(params.conversation?.wechatAccountId || "").trim(),
+      conversationId: String(params.conversation?.id || "").trim(),
+      customerId: String(params.conversation?.customerId || "").trim(),
+    };
+    const hasSelectionIntent = planCustomerImageSelection({
+      ...this.buildInboundSelectionInput(params.payload),
+      candidates: [],
+    }).action !== "skip";
+    if (!hasSelectionIntent) return null;
+    if (!identity.wechatAccountId || !identity.conversationId || !identity.customerId) {
+      return this.createPrismaInboundSelectionReview(params, null, "selection_identity_incomplete");
+    }
+
+    const prisma = this.prisma as any;
+    const job = await prisma.designJob.findFirst({
+      where: {
+        wechatAccountId: identity.wechatAccountId,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+        status: { in: ["sent", "customer_selected", "quote_created"] },
+      },
+      include: { images: true, revisions: true, customer: true, conversation: true },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
+    const candidates = latestCandidateRound(
+      Array.isArray(job?.images)
+        ? [...job.images].sort((left: any, right: any) => Number(left.position || 0) - Number(right.position || 0))
+        : [],
+    );
+    const selectionPlan = planCustomerImageSelection({
+      ...this.buildInboundSelectionInput(params.payload),
+      candidates,
+    });
+    if (this.shouldLetQuoteAcceptanceHandleSelectionText(params.payload, selectionPlan)) return null;
+    if (!job || !selectionPlan.ok || selectionPlan.reviewRequired || !selectionPlan.result?.candidate) {
+      return this.createPrismaInboundSelectionReview(
+        params,
+        job,
+        job ? selectionPlan.reason || "selection_uncertain" : "selection_without_active_design_job",
+        selectionPlan,
+      );
+    }
+
+    const selectedImageId = String(selectionPlan.result.candidate.id || "").trim();
+    if (!selectedImageId || !candidates.some((candidate: any) => String(candidate.id) === selectedImageId)) {
+      return this.createPrismaInboundSelectionReview(params, job, "selection_candidate_outside_latest_revision", selectionPlan);
+    }
+    const existingQuote = await prisma.quoteDraft.findFirst({
+      where: { designJobId: job.id },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
+    if (existingQuote?.sendTaskId || existingQuote?.status === "sent") {
+      return this.createPrismaInboundSelectionReview(params, job, "quote_already_queued_or_sent", selectionPlan);
+    }
+    const feedback = this.inboundSelectionFeedback(params.payload, selectionPlan.result);
+    const highValueReview = this.shouldManualReviewSelectedJob(job);
+    let updatedJob: any;
+    let quote: any = null;
+    try {
+      const initialRevisionSignature = designSelectionRevisionSignature(job);
+      const committed = await prisma.$transaction(async (tx: any) => {
+        const current = await tx.designJob.findFirst({
+          where: {
+            id: job.id,
+            wechatAccountId: identity.wechatAccountId,
+            conversationId: identity.conversationId,
+            customerId: identity.customerId,
+            status: { in: ["sent", "customer_selected", "quote_created"] },
+          },
+          include: { images: true, revisions: true },
+        });
+        if (!current) throw new BadRequestException("design selection identity changed before commit");
+        if (designSelectionRevisionSignature(current) !== initialRevisionSignature) {
+          throw new BadRequestException("design selection revision changed before commit");
+        }
+        const currentCandidates = latestCandidateRound(current.images || []);
+        if (!currentCandidates.some((candidate: any) => String(candidate.id) === selectedImageId)) {
+          throw new BadRequestException("design selection candidate is not in the latest revision");
+        }
+        await tx.designImageCandidate.updateMany({ where: { designJobId: current.id }, data: { selected: false } });
+        await tx.designImageCandidate.update({
+          where: { id: selectedImageId },
+          data: { selected: true, customerFeedback: feedback },
+        });
+        const nextJob = await tx.designJob.update({
+          where: { id: current.id },
+          data: highValueReview
+            ? { status: "manual_review", manualQcRequired: true }
+            : { status: "quote_created" },
+          include: { images: true, revisions: true, customer: true, conversation: true },
+        });
+        if (highValueReview) return { job: nextJob, quote: null };
+        const pricing = prismaQuotePricing(job);
+        const quoteStatus = pricing.highValue || !inspectBundleAutomationReadiness(job.bundle || {}).ok
+          ? "manual_review"
+          : "auto_sent";
+        const quoteData = {
+          selectedImageId,
+          quantity: pricing.quantity,
+          unitPrice: pricing.unitPrice,
+          totalPrice: pricing.totalPrice,
+          totalCost: pricing.totalCost,
+          profit: pricing.profit,
+          status: quoteStatus,
+          paymentStatus: existingQuote?.paymentStatus || "unpaid",
+          customerNotes: "客户在会话中选择了这张效果图，系统已绑定为报价图片。",
+        };
+        const nextQuote = existingQuote
+          ? await tx.quoteDraft.update({
+              where: { id: existingQuote.id },
+              data: quoteData,
+              include: { customer: true, selectedImage: true, designJob: true },
+            })
+          : await tx.quoteDraft.create({
+              data: {
+                designJobId: current.id,
+                customerId: identity.customerId,
+                ...quoteData,
+              },
+              include: { customer: true, selectedImage: true, designJob: true },
+            });
+        return { job: nextJob, quote: nextQuote };
+      });
+      updatedJob = committed.job;
+      quote = committed.quote;
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        return this.createPrismaInboundSelectionReview(params, job, "selection_revision_changed_before_commit", selectionPlan);
+      }
+      throw error;
+    }
+    if (highValueReview) {
+      const manualLock = await this.lockConversationForManualReview(params.conversation, {
+        reviewer: "system",
+        reason: "high_value_customer_selected_image",
+      });
+      await this.createReviewLog({
+        targetType: "design_job",
+        targetId: job.id,
+        decision: "high_value_customer_selected_image",
+        reviewer: "system",
+        note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
+        beforeStatus: job.status || "",
+        afterStatus: "manual_review",
+        metadata: {
+          source: "inbound_image_selection",
+          selectedImageId,
+          routeId: params.route.id,
+          ...identity,
+        },
+      });
+      const notification = await this.notifications.create(
+        "warning",
+        "高价值客户已选图，转人工报价",
+        "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
+        { designJobId: job.id, selectedImageId, routeId: params.route.id, ...identity },
+      );
+      return {
+        message: params.message,
+        route: params.route,
+        plan: {
+          type: "select_design_image",
+          reason: "high_value_customer_selected_image",
+          shouldNotifyHuman: true,
+          shouldCreateDesignJob: false,
+          shouldQueueReply: false,
+        },
+        sendTask: null,
+        designJob: updatedJob,
+        notification,
+        bundleRecommendation: null,
+        selection: selectionPlan,
+        quote: null,
+        manualLock,
+      };
+    }
+    const quoteSend = await this.tryQueuePrismaLowValueQuoteAfterSelection(quote, updatedJob);
+    quote = quoteSend.quote;
+    const notification = await this.notifications.create(
+      "info",
+      "低价值客户已选图，已生成报价草稿",
+      "客户选图置信度高，系统已绑定候选图并生成报价草稿，后台低价值自动化会继续处理报价发送队列。",
+      { designJobId: job.id, quoteDraftId: quote?.id, selectedImageId, ...identity },
+    );
+    return {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: "select_design_image_and_create_quote",
+        reason: quoteSend.sendTask ? "low_value_customer_selected_image_quote_queued" : "low_value_customer_selected_image",
+        shouldNotifyHuman: false,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: Boolean(quoteSend.sendTask),
+      },
+      sendTask: null,
+      designJob: updatedJob,
+      notification,
+      bundleRecommendation: null,
+      selection: selectionPlan,
+      quote,
+    };
+  }
+
+  private async tryQueuePrismaLowValueQuoteAfterSelection(quote: any, designJob: any) {
+    const decision = evaluateLowValueQuoteSend(quote, { highValueAmountCny: appConfig.highValueAmountCny });
+    if (!decision.ok) return { decision, quote, sendTask: null };
+    const text = buildQuoteCustomerMessage({
+      customerName: quote.customer?.name,
+      scene: designJob?.scene,
+      quantity: quote.quantity,
+      unitPrice: quote.unitPrice,
+      totalPrice: quote.totalPrice,
+      hasSelectedImage: Boolean(quote.selectedImageId),
+      selectedImagePosition: quote.selectedImage?.position,
+      items: Array.isArray(designJob?.bundle?.items) ? designJob.bundle.items : [],
+    });
+    const sendTask = await this.enqueueQuoteMessage({
+      wechatAccountId: designJob.wechatAccountId,
+      conversationId: designJob.conversationId,
+      designJobId: designJob.id,
+      quoteDraftId: quote.id,
+      text,
+      automation: {
+        source: "inbound_image_selection_quote_send",
+        valueLevel: "low",
+        reason: decision.reason,
+        queuedBy: "low_value_automation",
+      },
+    });
+    const updatedQuote = await (this.prisma as any).quoteDraft.update({
+      where: { id: quote.id },
+      data: {
+        status: "send_queued",
+        sendTaskId: sendTask.id,
+        owner: quote.owner || "low_value_automation",
+        customerNotes: "客户选图后，低价值报价已自动进入微信安全发送队列。",
+      },
+      include: { customer: true, selectedImage: true, designJob: true },
+    });
+    return { decision, quote: updatedQuote, sendTask };
+  }
+
+  private async createPrismaInboundSelectionReview(
+    params: { conversation: any; message: any; route: any },
+    job: any,
+    reason: string,
+    selection: any = null,
+  ) {
+    const manualLock = await this.lockConversationForManualReview(params.conversation, { reviewer: "system", reason });
+    const notification = await this.notifications.create(
+      "warning",
+      "客户选图需要人工确认",
+      "客户消息包含选图意图，但当前生产持久化数据无法在同一身份和最新修订范围内唯一判定候选图。",
+      {
+        reason,
+        designJobId: job?.id || null,
+        wechatAccountId: params.conversation.wechatAccountId,
+        conversationId: params.conversation.id,
+        customerId: params.conversation.customerId,
+        routeId: params.route.id,
+      },
+    );
+    return {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: "manual_selection_review",
+        reason,
+        shouldNotifyHuman: true,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: false,
+      },
+      sendTask: null,
+      designJob: job,
+      notification,
+      bundleRecommendation: null,
+      selection,
+      quote: null,
+      manualLock,
     };
   }
 
@@ -5740,6 +6039,43 @@ function isOlderThan(value: unknown, now: Date, minutes: number) {
   const time = new Date(String(value || ""));
   if (Number.isNaN(time.getTime())) return false;
   return now.getTime() - time.getTime() > minutes * 60 * 1000;
+}
+
+function designSelectionRevisionSignature(job: any) {
+  const revisions = (Array.isArray(job?.revisions) ? job.revisions : [])
+    .map((revision: any) => ({
+      id: String(revision.id || ""),
+      revisionNumber: Number(revision.revisionNumber || 0),
+      status: String(revision.status || ""),
+      resultImageIds: Array.isArray(revision.resultImageIds) ? revision.resultImageIds.map(String).sort() : [],
+    }))
+    .sort((left: any, right: any) => left.revisionNumber - right.revisionNumber || left.id.localeCompare(right.id));
+  const candidates = latestCandidateRound(Array.isArray(job?.images) ? job.images : [])
+    .map((candidate: any) => ({
+      id: String(candidate.id || ""),
+      imageId: String(candidate.imageId || ""),
+      position: Number(candidate.position || 0),
+    }))
+    .sort((left: any, right: any) => left.id.localeCompare(right.id));
+  return JSON.stringify({ revisionCount: Number(job?.revisionCount || 0), revisions, candidates });
+}
+
+function prismaQuotePricing(job: any) {
+  const items = Array.isArray(job?.bundle?.items) ? job.bundle.items : [];
+  const unitPrice = items.reduce((sum: number, item: any) => sum + Number(item.salePrice || item.price || 0), 0);
+  const unitCost = items.reduce((sum: number, item: any) => sum + Number(item.costPrice || item.cost || 0), 0);
+  const quantity = Math.max(1, Number(job?.budget?.quantity || 1));
+  const totalPrice = unitPrice * quantity;
+  const totalCost = unitCost * quantity;
+  const threshold = Number(appConfig.highValueAmountCny || 10000);
+  return {
+    quantity,
+    unitPrice,
+    totalPrice,
+    totalCost,
+    profit: totalPrice - totalCost,
+    highValue: totalPrice >= threshold || unitPrice >= threshold,
+  };
 }
 
 function channelCheck(key: string, label: string, passed: boolean, detail?: string) {

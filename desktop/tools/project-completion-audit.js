@@ -76,6 +76,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "候选图感知指纹迁移",
     file: "desktop/prisma/migrations/20260719210000_design_image_perceptual_hash/migration.sql",
   },
+  {
+    id: "prisma.wechat_work_inbound_durability",
+    title: "企业微信入站游标与渠道枚举迁移",
+    file: "desktop/prisma/migrations/20260719210000_wechat_work_inbound_durability/migration.sql",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -125,6 +130,42 @@ const CONTRACTS = Object.freeze([
     title: "微信与企业微信 Prisma 持久化",
     file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
     patterns: [/if \(this\.isLocal\)/, /wechatWorkBinding/, /wechatWorkAuditLog/, /wechatSendTask/],
+  },
+  {
+    id: "contract.wechat_work_cursor_terminality",
+    title: "企业微信入站终态游标与 CAS",
+    file: "desktop/apps/api/src/wechat-work/wechat-work.service.ts",
+    patterns: [
+      /activeCursorSyncs/,
+      /getWechatWorkSyncCursor/,
+      /expectedCursor:\s*cursor/,
+      /permanent_manual_review/,
+      /cursorScopeMismatch/,
+    ],
+  },
+  {
+    id: "contract.wechat_work_terminal_idempotency",
+    title: "企业微信入站终态幂等白名单",
+    file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+    patterns: [
+      /action:\s*"inbound_processed",\s*status:\s*"processed"/,
+      /action:\s*"inbound_failed",\s*status:\s*"permanent_manual_review"/,
+      /wechatWorkSyncCursor\.updateMany/,
+    ],
+  },
+  {
+    id: "contract.wechat_work_prisma_selection_parity",
+    title: "企业微信 Prisma 选图身份与修订一致性",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /handlePrismaInboundImageSelection/,
+      /wechatAccountId:\s*identity\.wechatAccountId/,
+      /customerId:\s*identity\.customerId/,
+      /latestCandidateRound/,
+      /shouldLetQuoteAcceptanceHandleSelectionText/,
+      /high_value_customer_selected_image/,
+      /designSelectionRevisionSignature/,
+    ],
   },
   {
     id: "contract.documentation",

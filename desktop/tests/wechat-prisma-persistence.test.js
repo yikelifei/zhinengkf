@@ -91,6 +91,63 @@ test("Prisma WeChat persistence keeps idempotency, indexes, transactions and swi
   assert.match(pkg.scripts["prisma:migrate:deploy"], /prisma migrate deploy/);
 });
 
+test("Prisma sync idempotency only accepts explicit inbound terminal action-status pairs", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const queries = [];
+  const prisma = {
+    wechatWorkAuditLog: {
+      async findFirst(query) {
+        queries.push(query);
+        return null;
+      },
+    },
+  };
+  const persistence = new WechatPersistence(prisma, new LocalStoreService());
+  assert.equal(await persistence.hasWechatWorkAuditMsgId("shared-id"), false);
+  assert.equal(await persistence.hasWechatWorkCallbackId("callback-id"), false);
+  const inbound = queries[0].where;
+  assert.equal(inbound.msgid, "shared-id");
+  assert.ok(inbound.OR.some((item) => item.action === "inbound_processed" && item.status === "processed"));
+  assert.ok(inbound.OR.some((item) => item.action === "inbound_failed" && item.status === "permanent_manual_review"));
+  assert.equal(inbound.OR.some((item) => String(item.action || "").startsWith("callback_")), false);
+  assert.deepEqual(queries[1].where.action.in, ["callback_accepted", "callback_ignored", "callback_duplicate"]);
+});
+
+test("Prisma sync cursor uses compare-and-swap and rejects stale expected cursors", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  let row = { id: "cursor-row", openKfid: "wk-db-cursor", nextCursor: "cursor-1" };
+  const cursorModel = {
+    async findUnique() { return row; },
+    async updateMany({ where, data }) {
+      if (!row || row.openKfid !== where.openKfid || row.nextCursor !== where.nextCursor) return { count: 0 };
+      row = { ...row, ...data };
+      return { count: 1 };
+    },
+    async create({ data }) { row = { id: "created", ...data }; return row; },
+  };
+  const prisma = {
+    wechatWorkSyncCursor: cursorModel,
+    async $transaction(callback) { return callback({ wechatWorkSyncCursor: cursorModel }); },
+  };
+  const persistence = new WechatPersistence(prisma, new LocalStoreService());
+  const committed = await persistence.commitWechatWorkSyncCursor({
+    openKfid: "wk-db-cursor",
+    expectedCursor: "cursor-1",
+    nextCursor: "cursor-2",
+  });
+  assert.equal(committed.nextCursor, "cursor-2");
+  await assert.rejects(
+    () => persistence.commitWechatWorkSyncCursor({
+      openKfid: "wk-db-cursor",
+      expectedCursor: "cursor-1",
+      nextCursor: "stale",
+    }),
+    /stale cursor commit/,
+  );
+});
+
 test("Prisma mode creates isolated Enterprise WeChat identity bindings without touching local JSON", async (t) => {
   t.after(() => { appConfig.useLocalStore = true; });
   appConfig.useLocalStore = false;

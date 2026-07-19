@@ -13,7 +13,7 @@
 
 不会再使用默认客户或默认会话。没有入站映射的 `external_userid` 不能直接发送，必须先成功同步至少一条该客户的消息或事件。
 
-持久化模式由 `USE_LOCAL_STORE` 控制：`true` 继续使用本地 JSON 演示数据；`false` 使用 PostgreSQL，并持久化企微身份映射、消息、发送任务、发送尝试及脱敏审计。切换到 PostgreSQL 前必须先部署 Prisma 迁移；迁移和导入方法见 `prisma/README.md`。两种模式复用同一身份校验和安全发送逻辑。
+持久化模式由 `USE_LOCAL_STORE` 控制：`true` 继续使用本地 JSON 演示数据；`false` 使用 PostgreSQL，并持久化企微身份映射、每个 `open_kfid` 的同步游标、消息、发送任务、发送尝试及脱敏审计。切换到 PostgreSQL 前必须先部署 Prisma 迁移；迁移和导入方法见 `prisma/README.md`。两种模式复用同一身份校验和安全发送逻辑。
 
 ## 必需配置
 
@@ -109,6 +109,10 @@ GET /api/wechat-work/kf/audit?limit=100
 - `msgid` 是入站和事件的持久幂等键；重复回调、重复拉取或并发拉取不会重复创建本地消息。
 - 图片素材 `40007/41006`、超过 2 MB、解码不支持或本地身份冲突会记录受控人工复核附件，不伪造哈希；`40014/42001` 只允许下载流程刷新 Token 一次。
 - 下载网络错误、5xx、读取中断只做有限重试；重试耗尽或 `45009` 限流会中止当前同步页，不推进游标。该规则不改变发送接口的失败关闭策略，也不会把发送变成自动重放。
+- 同步游标按 `open_kfid` 隔离。只有一页中的每条记录都达到 `processed`、`ignored`、`duplicate` 或 `permanent_manual_review` 终态，才以 compare-and-swap 方式提交非空 `next_cursor`；瞬时失败、跨客服帐号记录、并发旧游标或空 `next_cursor` 均不推进。
+- `inbound_failed` 的瞬时失败不会占用 `msgid` 幂等键，后续同步会重放；同一记录连续失败达到 3 次后进入永久人工复核终态。回调审计和出站审计即使与入站 `msgid` 文本碰撞，也不参与入站去重。
+- 手工接口显式传入 `cursor` 时视为只读回放起点，不覆盖持久游标，避免旧游标回退生产进度。
+- Prisma 入站选图严格限定同一 `wechatAccountId + conversationId + customerId`、最新设计任务与最新修订候选轮次；事务提交前再次校验修订签名。身份漂移、并发修订、歧义选择、报价已发送或高价值客户都会失败关闭或转人工，不会自动推进报价发送。
 - 客服人员在企业微信端发送、且带 `servicer_userid` 的同步记录不会再次作为客户入站触发自动回复。
 - `kf/send_msg` 调用失败时，该次 `WechatSendAttempt` 记录为 `failed`；未达到上限时任务回到 `queued`，并记录下次重试时间。
 - 素材上传明确失败、或 `kf/send_msg` 明确返回非零 `errcode` 且此前没有任何消息被受理时，沿用上述有界重试。
