@@ -214,6 +214,22 @@ test("rejects requeue while bridge ack is pending", () => {
   assert.equal(result.failedKeys.includes("bridgeAckPending"), true);
 });
 
+test("rejects unknown delivery requeue with channel-neutral Chinese guidance", () => {
+  const result = evaluateSendTaskRequeue({
+    task: {
+      ...task,
+      status: "failed",
+      guardSnapshot: { deliveryState: "unknown", automaticRetryBlocked: true },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "delivery_unknown_manual_review");
+  assert.match(result.message, /发送结果未知/);
+  assert.match(result.message, /人工核查.*不能直接重新排队/);
+  assert.doesNotMatch(result.message, /Windows|微信|桥接/i);
+});
+
 test("rejects requeue after audited manual cancellation", () => {
   const result = evaluateSendTaskRequeue({
     task: {

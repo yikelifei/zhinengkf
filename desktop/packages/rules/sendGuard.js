@@ -433,7 +433,7 @@ function evaluateSendTaskRequeue({ task } = {}) {
       action: "reject_requeue",
       reason: "delivery_unknown_manual_review",
       failedKeys: ["deliveryKnown", "automaticRetryAllowed"],
-      message: "Delivery result is unknown while waiting for Windows bridge ack; requeue is blocked until an operator completes review.",
+      message: "发送结果未知，完成人工核查前不能直接重新排队。",
     };
   }
   if (task.status === "sent") {

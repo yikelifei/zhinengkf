@@ -5965,6 +5965,7 @@ export class WechatDispatchService {
     message: string,
     details: Record<string, unknown> = {},
   ) {
+    if (!task?.updatedAt) return null;
     const guardSnapshot = isPlainObject(task?.guardSnapshot) ? task.guardSnapshot : {};
     const attemptMetadata = isPlainObject(pendingAttempt?.metadata) ? pendingAttempt.metadata : {};
     const alreadyProtected = guardSnapshot.deliveryState === "unknown" &&
@@ -5984,6 +5985,8 @@ export class WechatDispatchService {
       taskId: task.id,
       attemptId: pendingAttempt.id,
       expectedTaskStatus: "sending",
+      expectedTaskUpdatedAt: task.updatedAt,
+      expectedAttemptStatus: "started",
       attemptPatch: {
         status: "started",
         errorMessage: message,

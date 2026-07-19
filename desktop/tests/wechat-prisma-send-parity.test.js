@@ -83,6 +83,8 @@ test("task, attempt and linked quote/order state transition atomically with owne
   assert.match(complete, /prisma\.\$transaction/);
   assert.match(complete, /tx\.wechatSendTask\.updateMany/);
   assert.match(complete, /tx\.wechatSendAttempt\.update/);
+  assert.match(complete, /expectedTaskUpdatedAt[\s\S]*updatedAt: new Date\(params\.expectedTaskUpdatedAt\)/);
+  assert.match(complete, /expectedAttemptStatus[\s\S]*tx\.wechatSendAttempt\.updateMany/);
   assert.match(complete, /params\.linkedTransition/);
   assert.match(complete, /linked\.count !== 1/);
 
@@ -131,6 +133,7 @@ test("completeAttemptAndTask commits task, attempt and linked row together or ro
       quoteDraftId: "quote-a",
       payload: {},
       guardSnapshot: {},
+      updatedAt: "2026-07-19T01:00:00.000Z",
       attempts: [],
       conversation: { id: "conversation-a", customerId: "customer-a", wechatAccountId: "account-a" },
     };
@@ -140,7 +143,10 @@ test("completeAttemptAndTask commits task, attempt and linked row together or ro
         const staged = [];
         const tx = {
           wechatSendTask: { async updateMany(query) { staged.push(["task", query]); return { count: 1 }; } },
-          wechatSendAttempt: { async update(query) { staged.push(["attempt", query]); return attempt; } },
+          wechatSendAttempt: {
+            async update(query) { staged.push(["attempt", query]); return attempt; },
+            async updateMany(query) { staged.push(["attempt", query]); return { count: 1 }; },
+          },
           quoteDraft: { async updateMany(query) { staged.push(["quote", query]); return { count: linkedCount }; } },
         };
         const result = await callback(tx);
@@ -179,6 +185,20 @@ test("completeAttemptAndTask commits task, attempt and linked row together or ro
   });
   assert.equal(result.task.id, "task-atomic");
   assert.deepEqual(accepted.committed.map(([model]) => model), ["task", "attempt", "quote"]);
+
+  const guarded = setup(1);
+  await guarded.persistence.completeAttemptAndTask({
+    taskId: "task-atomic",
+    attemptId: "attempt-atomic",
+    expectedTaskStatus: "sending",
+    expectedTaskUpdatedAt: "2026-07-19T01:00:00.000Z",
+    expectedAttemptStatus: "started",
+    taskPatch: { status: "sending", guardSnapshot: { deliveryState: "unknown" } },
+    attemptPatch: { status: "started", metadata: { deliveryState: "unknown" } },
+  });
+  assert.equal(guarded.committed[0][1].where.status, "sending");
+  assert.equal(guarded.committed[0][1].where.updatedAt.toISOString(), "2026-07-19T01:00:00.000Z");
+  assert.equal(guarded.committed[1][1].where.status, "started");
 });
 
 test("Prisma bridge ack DB failure never archives files and never reads LocalStore", async (t) => {
@@ -380,7 +400,7 @@ test("stale official started attempt becomes delivery-unknown while a fresh atte
   assert.equal(notifications.length, 1);
   await assert.rejects(
     () => service.requeueSendTask(stale.id, { reason: "operator retry without resolving unknown delivery" }),
-    /Delivery result is unknown/,
+    /发送结果未知.*不能直接重新排队/,
   );
 
   const queueResult = await service.processPrismaSafeSendQueue({});
@@ -400,6 +420,7 @@ test("Prisma operations protect every uncertain Windows bridge recovery without 
 
   for (const fixture of fixtures) {
     const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
+    const updatedAt = new Date(Date.now() - 60_000).toISOString();
     const task = {
       id: `task-${fixture.recovery}`,
       status: "sending",
@@ -409,6 +430,7 @@ test("Prisma operations protect every uncertain Windows bridge recovery without 
       guardSnapshot: {},
       conversation: { id: "conversation-bridge", customerId: "customer-bridge", wechatAccountId: "account-bridge", manualLocked: false },
       createdAt: oldTime,
+      updatedAt,
     };
     const attempt = {
       id: `attempt-${fixture.recovery}`,
@@ -442,6 +464,8 @@ test("Prisma operations protect every uncertain Windows bridge recovery without 
     assert.equal(scan[fixture.counter], 1, fixture.recovery);
     assert.equal(transitions.length, 1, fixture.recovery);
     assert.equal(transitions[0].expectedTaskStatus, "sending", fixture.recovery);
+    assert.equal(transitions[0].expectedTaskUpdatedAt, updatedAt, fixture.recovery);
+    assert.equal(transitions[0].expectedAttemptStatus, "started", fixture.recovery);
     assert.equal(transitions[0].taskPatch.status, "sending", fixture.recovery);
     assert.equal(transitions[0].attemptPatch.status, "started", fixture.recovery);
     assert.equal(task.status, "sending", fixture.recovery);
@@ -455,10 +479,87 @@ test("Prisma operations protect every uncertain Windows bridge recovery without 
     assert.equal(notifications.length, 1, fixture.recovery);
     await assert.rejects(
       () => dispatchService.requeueSendTask(task.id, { reason: "unsafe retry" }),
-      /Delivery result is unknown/,
+      /发送结果未知.*不能直接重新排队/,
       fixture.recovery,
     );
   }
+});
+
+test("concurrent Prisma operations scans CAS delivery-unknown and notify only once", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const initialUpdatedAt = new Date(Date.now() - 60_000).toISOString();
+  const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
+  let currentTask = {
+    id: "task-concurrent-unknown",
+    status: "sending",
+    wechatAccountId: "account-concurrent",
+    conversationId: "conversation-concurrent",
+    payload: {},
+    guardSnapshot: {},
+    conversation: { id: "conversation-concurrent", customerId: "customer-concurrent", wechatAccountId: "account-concurrent", manualLocked: false },
+    createdAt: oldTime,
+    updatedAt: initialUpdatedAt,
+  };
+  let currentAttempt = {
+    id: "attempt-concurrent-unknown",
+    sendTaskId: currentTask.id,
+    adapter: "windows_bridge",
+    status: "started",
+    startedAt: oldTime,
+    metadata: {},
+  };
+  let entrants = 0;
+  let releaseBoth;
+  const bothEntered = new Promise((resolve) => { releaseBoth = resolve; });
+  let successfulTransitions = 0;
+  const notifications = [];
+  const dispatchService = new WechatDispatchService({}, throwingLocalStore(), {}, {
+    async create(...args) { notifications.push(args); },
+  }, {});
+  dispatchService.persistence = {
+    async listSendTasks() {
+      return [{ ...currentTask, guardSnapshot: { ...currentTask.guardSnapshot } }];
+    },
+    async getLatestSendAttempt() {
+      return { ...currentAttempt, metadata: { ...currentAttempt.metadata } };
+    },
+    async completeAttemptAndTask(params) {
+      entrants += 1;
+      if (entrants === 2) releaseBoth();
+      await bothEntered;
+      assert.equal(params.expectedTaskStatus, "sending");
+      assert.equal(params.expectedAttemptStatus, "started");
+      if (new Date(params.expectedTaskUpdatedAt).getTime() !== new Date(currentTask.updatedAt).getTime() ||
+        currentAttempt.status !== params.expectedAttemptStatus) return null;
+      successfulTransitions += 1;
+      currentTask = {
+        ...currentTask,
+        ...params.taskPatch,
+        updatedAt: new Date(Date.now() + 1_000).toISOString(),
+      };
+      currentAttempt = { ...currentAttempt, ...params.attemptPatch };
+      return { task: currentTask, attempt: currentAttempt };
+    },
+  };
+  dispatchService.inspectPendingBridgeOutbox = () => ({ ok: false, reason: "outbox_file_missing" });
+  dispatchService.findPendingBridgeDispatchForTask = () => null;
+  dispatchService.isBridgeAckTimedOut = () => false;
+
+  const scans = await Promise.all([
+    dispatchService.scanPrismaSendOperations({}),
+    dispatchService.scanPrismaSendOperations({}),
+  ]);
+  assert.equal(entrants, 2);
+  assert.equal(successfulTransitions, 1);
+  assert.equal(scans.reduce((sum, scan) => sum + scan.bridgeOutboxBroken, 0), 1);
+  assert.equal(scans.reduce((sum, scan) => sum + scan.alerted, 0), 1);
+  assert.equal(notifications.length, 1);
+  assert.equal(currentTask.status, "sending");
+  assert.equal(currentTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(currentTask.guardSnapshot.automaticRetryBlocked, true);
+  assert.equal(currentAttempt.status, "started");
+  assert.equal(currentAttempt.metadata.deliveryState, "unknown");
 });
 
 test("exact Prisma ack replay compensates missing file archives once after durable completion", async (t) => {

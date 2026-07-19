@@ -437,6 +437,8 @@ export class WechatPersistence {
     taskPatch: any;
     attemptPatch: any;
     expectedTaskStatus?: string;
+    expectedTaskUpdatedAt?: string | Date;
+    expectedAttemptStatus?: string;
     linkedTransition?: {
       model: "quoteDraft" | "orderDraft";
       where: Record<string, unknown>;
@@ -445,15 +447,30 @@ export class WechatPersistence {
     } | null;
   }) {
     if (this.isLocal) {
+      const currentTask = this.localStore.getSendTask(params.taskId);
+      if (!currentTask) return null;
+      if (params.expectedTaskStatus && currentTask.status !== params.expectedTaskStatus) return null;
+      if (params.expectedTaskUpdatedAt &&
+        new Date(currentTask.updatedAt || 0).getTime() !== new Date(params.expectedTaskUpdatedAt).getTime()) return null;
+      if (params.expectedAttemptStatus) {
+        const currentAttempt = this.localStore
+          .listSendAttempts({ sendTaskId: params.taskId, limit: 300 })
+          .find((attempt: any) => attempt.id === params.attemptId);
+        if (!currentAttempt || currentAttempt.status !== params.expectedAttemptStatus) return null;
+      }
       const attempt = this.localStore.updateSendAttempt(params.attemptId, params.attemptPatch);
       const task = this.localStore.updateSendTask(params.taskId, params.taskPatch);
       return { task, attempt };
     }
     const prisma = this.prisma as any;
     const completed = await prisma.$transaction(async (tx: any) => {
-      if (params.expectedTaskStatus) {
+      if (params.expectedTaskStatus || params.expectedTaskUpdatedAt) {
         const claimed = await tx.wechatSendTask.updateMany({
-          where: { id: params.taskId, status: params.expectedTaskStatus },
+          where: {
+            id: params.taskId,
+            ...(params.expectedTaskStatus ? { status: params.expectedTaskStatus } : {}),
+            ...(params.expectedTaskUpdatedAt ? { updatedAt: new Date(params.expectedTaskUpdatedAt) } : {}),
+          },
           data: this.sendTaskPatch(params.taskPatch),
         });
         if (claimed.count !== 1) return false;
@@ -463,15 +480,26 @@ export class WechatPersistence {
           data: this.sendTaskPatch(params.taskPatch),
         });
       }
-      await tx.wechatSendAttempt.update({
-        where: { id: params.attemptId },
-        data: {
-          ...params.attemptPatch,
-          ...(params.attemptPatch.completedAt
-            ? { completedAt: new Date(params.attemptPatch.completedAt) }
-            : {}),
-        },
-      });
+      const attemptData = {
+        ...params.attemptPatch,
+        ...(params.attemptPatch.completedAt
+          ? { completedAt: new Date(params.attemptPatch.completedAt) }
+          : {}),
+      };
+      if (params.expectedAttemptStatus) {
+        const claimedAttempt = await tx.wechatSendAttempt.updateMany({
+          where: { id: params.attemptId, status: params.expectedAttemptStatus },
+          data: attemptData,
+        });
+        if (claimedAttempt.count !== 1) {
+          throw new BadRequestException("send attempt state changed before durable completion");
+        }
+      } else {
+        await tx.wechatSendAttempt.update({
+          where: { id: params.attemptId },
+          data: attemptData,
+        });
+      }
       if (params.linkedTransition) {
         const delegate = tx[params.linkedTransition.model];
         const linked = await delegate.updateMany({
