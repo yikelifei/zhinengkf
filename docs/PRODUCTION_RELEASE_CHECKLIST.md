@@ -42,6 +42,19 @@ npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-d
 
 Windows 入口退出码为：`PASS=0`、`FAIL=1`、`BLOCKED=2`。默认不接入真实密钥，因此即使所有本地检查通过，真实生产依赖仍会保留为 `BLOCKED`。在预发布环境用 `staging:readiness -- --execute` 收集可重复的只读证据，再由发布负责人完成下面无法自动化的人工证据清单。
 
+## Windows CI 口径
+
+`.github/workflows/windows-quality.yml` 在固定的 Windows Server 2022、Node.js 20.19.4 和 Python 3.12.10 环境中复用本门禁。流水线执行锁文件安装、Prisma 生成/校验/离线迁移 SQL、安全扫描与关键安全测试、Python/Node 全量测试以及 API/Web 构建。
+
+CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真实数据库、企业微信、个人微信和设计平台证据可以继续为 `BLOCKED`。但端口预检、Prisma、测试、安全与构建等仓库内项目必须全部为 `PASS`；任一项目为 `FAIL`，或本应在干净 CI 主机执行的本地项目被跳过/阻塞，job 都会失败。
+
+无论 job 成功或失败，CI 都上传以下脱敏报告，保留 14 天：
+
+- `desktop/.runtime/production-release-gate/latest.json` 与 `latest.md`
+- `desktop/.runtime/staging-readiness-evidence/latest.json` 与 `latest.md`
+
+工作流权限仅为 `contents: read`，checkout 不保留凭据，不使用 `pull_request_target`，不部署、不发布、不真实发送，也不执行外部写入。
+
 ## 自动门禁范围
 
 门禁必须完成以下检查：
