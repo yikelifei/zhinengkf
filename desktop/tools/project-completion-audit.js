@@ -81,6 +81,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     title: "企业微信入站游标与渠道枚举迁移",
     file: "desktop/prisma/migrations/20260719210000_wechat_work_inbound_durability/migration.sql",
   },
+  {
+    id: "prisma.order_send_invalidation_tests",
+    title: "Prisma 订单发送失效事务测试",
+    file: "desktop/tests/order-prisma-send-invalidation.test.js",
+  },
 ]);
 
 const CONTRACTS = Object.freeze([
@@ -165,6 +170,21 @@ const CONTRACTS = Object.freeze([
       /shouldLetQuoteAcceptanceHandleSelectionText/,
       /high_value_customer_selected_image/,
       /designSelectionRevisionSignature/,
+    ],
+  },
+  {
+    id: "contract.prisma_order_send_invalidation",
+    title: "Prisma 订单与待发送任务原子失效",
+    file: "desktop/apps/api/src/orders/orders.service.ts",
+    patterns: [
+      /updatePrismaOrderAndQuoteWithSendInvalidation/,
+      /return prisma\.\$transaction\(async \(tx: any\) =>/,
+      /tx\.quoteDraft\.update/,
+      /status:\s*\{\s*in:\s*\["queued", "blocked", "failed"\]\s*\}/,
+      /tx\.wechatSendTask\.updateMany/,
+      /invalidationStateChanged \|\| cancelledSendTasks\.length > 0/,
+      /decision:\s*"invalidate_pending_order_send_tasks"/,
+      /reviewer:\s*"system_order_invalidation"/,
     ],
   },
   {
