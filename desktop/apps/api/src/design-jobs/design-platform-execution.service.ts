@@ -4,6 +4,10 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import type { ArtImageLocalGenerationOutcome } from "../integrations/design-platform/design-platform.client";
+import type {
+  DesignExecutionAvailableResolution,
+  DesignPlatformExecutionView,
+} from "./design-jobs.types";
 
 export type BeginDesignPlatformExecutionInput = {
   designJobId: string;
@@ -16,6 +20,20 @@ export type BeginDesignPlatformExecutionInput = {
 
 const ACTIVE_EXECUTION_STATUSES = ["prepared", "dispatching", "generating", "cancel_requested"] as const;
 const RETRY_SAFE_REFUND_STATUSES = ["refunded", "not_required", "credit_bypass"] as const;
+const PUBLIC_EXECUTION_STATUSES = new Set([
+  "prepared", "dispatching", "generating", "completed", "explicit_failed", "outcome_unknown", "cancel_requested", "cancelled",
+]);
+const PUBLIC_ACCEPTANCE_STATUSES = new Set(["pending", "accepting", "accepted", "rejected", "manual_review"]);
+const PUBLIC_REFUND_STATUSES = new Set(["pending", "refunded", "not_required", "credit_bypass", "failed", "unknown"]);
+const PUBLIC_ERROR_CATEGORIES = new Set([
+  "explicit_remote_failure",
+  "local_pre_dispatch_failure",
+  "timeout_unknown",
+  "connection_reset_unknown",
+  "remote_acceptance_unknown",
+  "transport_outcome_unknown",
+  "acceptance_failure",
+]);
 
 function retryBlockingWhere(designJobId: string) {
   return {
@@ -240,6 +258,31 @@ export class DesignPlatformExecutionService {
     return prisma.designPlatformExecution.findFirst({
       where: { OR: [{ id: idOrExternalJobId }, { externalJobId: idOrExternalJobId }, { operationKey: idOrExternalJobId }] },
     });
+  }
+
+  async listPublicForDesignJob(designJobId: string): Promise<DesignPlatformExecutionView[]> {
+    const executions = appConfig.useLocalStore
+      ? this.localStore.listDesignPlatformExecutions({ designJobId })
+      : await (this.prisma as any).designPlatformExecution.findMany({
+          where: { designJobId },
+          select: {
+            id: true,
+            attemptNo: true,
+            status: true,
+            acceptanceStatus: true,
+            refundStatus: true,
+            imageCount: true,
+            errorCategory: true,
+            responseHttpStatus: true,
+            createdAt: true,
+            updatedAt: true,
+            completedAt: true,
+            resolvedAt: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        });
+    return executions.slice(0, 100).map(toPublicExecutionView);
   }
 
   async listCompletedPending(limit = 50) {
@@ -708,6 +751,10 @@ export class DesignPlatformExecutionService {
     });
   }
 
+  async resolveUnknownPublic(executionId: string, resolution: string, reviewer: string) {
+    return toPublicExecutionView(await this.resolveUnknown(executionId, resolution, reviewer));
+  }
+
   async resolveUnsafeRefund(executionId: string, resolution: string, reviewer: string) {
     if (appConfig.useLocalStore) {
       return this.localStore.resolveUnsafeDesignPlatformRefund(executionId, resolution, reviewer);
@@ -745,6 +792,10 @@ export class DesignPlatformExecutionService {
       if (changed.count !== 1) throw new Error("only an unsafe explicit failure refund can be resolved");
       return tx.designPlatformExecution.findUnique({ where: { id: executionId } });
     });
+  }
+
+  async resolveUnsafeRefundPublic(executionId: string, resolution: string, reviewer: string) {
+    return toPublicExecutionView(await this.resolveUnsafeRefund(executionId, resolution, reviewer));
   }
 
   private async transition(
@@ -851,6 +902,57 @@ function mergeRefundResolution(value: unknown, resolution: string, reviewer: str
 
 function sanitizeCode(value: unknown) {
   return String(value || "UNKNOWN").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
+}
+
+function toPublicExecutionView(execution: any): DesignPlatformExecutionView {
+  const availableResolution: DesignExecutionAvailableResolution =
+    execution?.status === "outcome_unknown" && !execution?.resolvedAt
+      ? "confirmed_not_generated_refunded"
+      : execution?.status === "explicit_failed" && ["failed", "unknown"].includes(execution?.refundStatus)
+        ? "confirmed_refunded"
+        : null;
+  return {
+    id: sanitizeIdentifier(execution?.id),
+    attemptNo: safeCount(execution?.attemptNo, 100000),
+    status: safePublicCode(execution?.status, PUBLIC_EXECUTION_STATUSES),
+    acceptanceStatus: safePublicCode(execution?.acceptanceStatus, PUBLIC_ACCEPTANCE_STATUSES),
+    refundStatus: safePublicCode(execution?.refundStatus, PUBLIC_REFUND_STATUSES),
+    imageCount: safeCount(execution?.imageCount, 1000),
+    errorCategory: execution?.errorCategory
+      ? safePublicCode(execution.errorCategory, PUBLIC_ERROR_CATEGORIES, "other_error")
+      : null,
+    responseHttpStatus:
+      Number.isInteger(execution?.responseHttpStatus)
+      && execution.responseHttpStatus >= 100
+      && execution.responseHttpStatus <= 599
+        ? execution.responseHttpStatus
+        : null,
+    createdAt: safeTimestamp(execution?.createdAt),
+    updatedAt: safeTimestamp(execution?.updatedAt),
+    completedAt: safeTimestamp(execution?.completedAt),
+    resolvedAt: safeTimestamp(execution?.resolvedAt),
+    availableResolution,
+  };
+}
+
+function sanitizeIdentifier(value: unknown) {
+  return String(value || "").replace(/[^\p{L}\p{N}_.:-]/gu, "_").slice(0, 160);
+}
+
+function safePublicCode(value: unknown, allowed: ReadonlySet<string>, fallback = "unknown") {
+  const code = String(value || "");
+  return allowed.has(code) ? code : fallback;
+}
+
+function safeCount(value: unknown, maximum: number) {
+  const count = Number(value);
+  return Number.isInteger(count) ? Math.min(maximum, Math.max(0, count)) : 0;
+}
+
+function safeTimestamp(value: unknown) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function sanitizeText(value: unknown, max = 500) {

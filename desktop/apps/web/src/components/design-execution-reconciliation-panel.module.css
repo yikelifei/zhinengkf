@@ -1,0 +1,278 @@
+.panel {
+  width: 100%;
+  min-width: 0;
+  margin-top: 16px;
+  border: 1px solid var(--wk-color-border);
+  border-radius: 8px;
+  color: var(--wk-color-text);
+  background: var(--wk-color-surface);
+}
+
+.header,
+.cardHeader,
+.warning,
+.success,
+.confirmation,
+.confirmActions {
+  display: flex;
+  align-items: center;
+}
+
+.header {
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--wk-color-border);
+  padding: 14px 16px;
+}
+
+.header h2,
+.confirmation h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.header p,
+.confirmation p,
+.noAction,
+.empty {
+  margin: 3px 0 0;
+  color: var(--wk-color-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.header button,
+.resolveButton,
+.confirmActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--wk-color-border);
+  border-radius: 6px;
+  padding: 6px 11px;
+  color: var(--wk-color-text);
+  background: #fff;
+  cursor: pointer;
+}
+
+.header button:disabled,
+.resolveButton:disabled,
+.confirmActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.warning,
+.success,
+.error {
+  gap: 8px;
+  margin: 12px 16px 0;
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.warning {
+  border: 1px solid #f1d59a;
+  color: #8f5b00;
+  background: #fff9ed;
+}
+
+.success {
+  border: 1px solid #b8e2c9;
+  color: #0f7b45;
+  background: #f3fbf6;
+}
+
+.error {
+  border: 1px solid #f4c7c3;
+  color: #b42318;
+  background: #fff7f6;
+}
+
+.empty {
+  padding: 18px 16px;
+}
+
+.executionList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px 16px;
+  list-style: none;
+}
+
+.executionCard {
+  min-width: 0;
+  border: 1px solid var(--wk-color-border);
+  border-radius: 7px;
+  padding: 12px;
+  background: #fff;
+}
+
+.cardHeader {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cardHeader > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.cardHeader strong {
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.cardHeader span {
+  color: var(--wk-color-text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.status {
+  flex: 0 0 auto;
+  border: 1px solid #bfd2f5;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--wk-color-brand) !important;
+  background: #edf4ff;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 12px 0;
+  border: 1px solid var(--wk-color-border);
+  background: var(--wk-color-border);
+}
+
+.facts > div {
+  min-width: 0;
+  padding: 8px 9px;
+  background: var(--wk-color-surface);
+}
+
+.facts dt {
+  color: var(--wk-color-text-secondary);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.facts dd {
+  overflow-wrap: anywhere;
+  margin: 2px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.resolveButton {
+  border-color: #d54941;
+  color: #b42318;
+  background: #fff7f6;
+}
+
+.noAction {
+  margin: 0;
+}
+
+.confirmation {
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 16px 16px;
+  border: 2px solid #d54941;
+  border-radius: 8px;
+  padding: 13px;
+  color: #8f1d18;
+  background: #fff7f6;
+}
+
+.confirmation > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.confirmation > div {
+  min-width: 0;
+}
+
+.confirmation p {
+  color: #6f4a47;
+}
+
+.confirmActions {
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.dangerButton {
+  border-color: #b42318 !important;
+  color: #fff !important;
+  background: #b42318 !important;
+}
+
+@media (max-width: 600px) {
+  .header {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .header p {
+    max-width: 210px;
+  }
+
+  .header button {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  .warning,
+  .success,
+  .error,
+  .confirmation {
+    margin-right: 12px;
+    margin-left: 12px;
+  }
+
+  .executionList {
+    padding: 12px;
+  }
+
+  .facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .confirmActions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .confirmActions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 410px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .header button {
+    width: 100%;
+  }
+
+  .facts {
+    grid-template-columns: 1fr;
+  }
+}

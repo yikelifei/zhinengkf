@@ -230,6 +230,18 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     return Promise.all(jobs.map((job: any) => this.decorateDesignJobLocalFileStatuses(job)));
   }
 
+  async listExecutions(id: string, expected: ExpectedIdentityPayload = {}) {
+    if (!expected.expectedWechatAccountId || !expected.expectedConversationId || !expected.expectedCustomerId) {
+      throw new BadRequestException("complete expected design job identity is required");
+    }
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
+    return this.platformExecutions.listPublicForDesignJob(job.id);
+  }
+
   async runDesignPlatformSmokeTest(): Promise<DesignPlatformSmokeTestResult> {
     const startedAt = Date.now();
     const requestId = `smoke_${Date.now()}_${randomUUID().slice(0, 8)}`;
@@ -1334,7 +1346,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!execution || execution.designJobId !== job.id) {
       throw new BadRequestException("design platform execution does not belong to this design job");
     }
-    const resolved = await this.platformExecutions.resolveUnknown(execution.id, payload.resolution, reviewer);
+    const resolved = await this.platformExecutions.resolveUnknownPublic(execution.id, payload.resolution, reviewer);
     await this.createReviewLog({
       targetType: "design_platform_execution",
       targetId: execution.id,
@@ -1377,7 +1389,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!execution || execution.designJobId !== job.id) {
       throw new BadRequestException("design platform execution does not belong to this design job");
     }
-    const resolved = await this.platformExecutions.resolveUnsafeRefund(execution.id, payload.resolution, reviewer);
+    const resolved = await this.platformExecutions.resolveUnsafeRefundPublic(execution.id, payload.resolution, reviewer);
     await this.createReviewLog({
       targetType: "design_platform_execution_refund",
       targetId: execution.id,

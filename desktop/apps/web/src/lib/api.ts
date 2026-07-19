@@ -76,6 +76,27 @@ export type DesignJob = {
   };
 };
 
+export type DesignExecutionAvailableResolution =
+  | "confirmed_not_generated_refunded"
+  | "confirmed_refunded"
+  | null;
+
+export type DesignPlatformExecutionView = {
+  id: string;
+  attemptNo: number;
+  status: string;
+  acceptanceStatus: string;
+  refundStatus: string;
+  imageCount: number;
+  errorCategory: string | null;
+  responseHttpStatus: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+  resolvedAt: string | null;
+  availableResolution: DesignExecutionAvailableResolution;
+};
+
 export type DesignRevision = {
   id: string;
   designJobId: string;
@@ -649,6 +670,7 @@ export type OperatorCapability =
   | "manage_assignments"
   | "reply_conversations"
   | "approve_send"
+  | "manage_design_executions"
   | "manage_training"
   | "manage_roles";
 
@@ -2964,6 +2986,73 @@ export async function pollDesignJob(
   expected: IdentityExpectation = {},
 ): Promise<{ remoteStatus: string; autoRetried?: boolean; job: DesignJob; result: Record<string, unknown> }> {
   return postJson<{ remoteStatus: string; autoRetried?: boolean; job: DesignJob; result: Record<string, unknown> }>(`/design-jobs/${id}/poll`, expected);
+}
+
+function designExecutionExpectedIdentityQuery(expected: IdentityExpectation) {
+  const params = new URLSearchParams();
+  if (expected.expectedWechatAccountId) params.set("expectedWechatAccountId", expected.expectedWechatAccountId);
+  if (expected.expectedConversationId) params.set("expectedConversationId", expected.expectedConversationId);
+  if (expected.expectedCustomerId) params.set("expectedCustomerId", expected.expectedCustomerId);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function getDesignJobExecutions(
+  id: string,
+  expected: IdentityExpectation = {},
+): Promise<DesignPlatformExecutionView[]> {
+  const response = await fetch(
+    `${API_BASE}/design-jobs/${encodeURIComponent(id)}/executions${designExecutionExpectedIdentityQuery(expected)}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(designExecutionRequestError("读取执行记录失败", response.status));
+  }
+  return response.json();
+}
+
+export async function resolveUnknownDesignExecution(
+  designJobId: string,
+  executionId: string,
+  expected: IdentityExpectation = {},
+): Promise<DesignPlatformExecutionView> {
+  return postDesignExecutionResolution(
+    `/design-jobs/${encodeURIComponent(designJobId)}/executions/${encodeURIComponent(executionId)}/resolve-unknown`,
+    { ...expected, resolution: "confirmed_not_generated_refunded" },
+  );
+}
+
+export async function resolveDesignExecutionRefund(
+  designJobId: string,
+  executionId: string,
+  expected: IdentityExpectation = {},
+): Promise<DesignPlatformExecutionView> {
+  return postDesignExecutionResolution(
+    `/design-jobs/${encodeURIComponent(designJobId)}/executions/${encodeURIComponent(executionId)}/resolve-refund`,
+    { ...expected, resolution: "confirmed_refunded" },
+  );
+}
+
+async function postDesignExecutionResolution(
+  path: string,
+  body: IdentityExpectation & { resolution: Exclude<DesignExecutionAvailableResolution, null> },
+): Promise<DesignPlatformExecutionView> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(designExecutionRequestError("人工核销失败", response.status));
+  }
+  return response.json();
+}
+
+function designExecutionRequestError(action: string, status: number) {
+  if (status === 401 || status === 403) return `${action}：当前会话没有所需权限（HTTP ${status}）。`;
+  if (status === 404) return `${action}：任务或执行记录不存在（HTTP 404）。`;
+  if (status === 409) return `${action}：执行状态已经变化，请刷新后重新核对（HTTP 409）。`;
+  return `${action}：服务暂时不可用（HTTP ${status}）。`;
 }
 
 export async function retryDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
