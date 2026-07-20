@@ -16,7 +16,10 @@ export const DESIGN_EXECUTION_RESOLUTIONS = {
 type DesignExecutionReconciliationPanelProps = {
   executions: readonly DesignPlatformExecutionView[];
   loading: boolean;
+  loaded?: boolean;
   error?: string;
+  accessLoaded?: boolean;
+  accessError?: string;
   canManageExecutions: boolean;
   onRefresh: () => Promise<void>;
   onResolveUnknown: (executionId: string) => Promise<void>;
@@ -31,7 +34,10 @@ type PendingResolution = {
 export function DesignExecutionReconciliationPanel({
   executions,
   loading,
+  loaded = true,
   error,
+  accessLoaded = true,
+  accessError,
   canManageExecutions,
   onRefresh,
   onResolveUnknown,
@@ -88,17 +94,23 @@ export function DesignExecutionReconciliationPanel({
         </button>
       </header>
 
-      {!canManageExecutions ? (
+      {!accessLoaded ? (
+        <div className={styles.warning} role="status">
+          <ShieldCheck size={18} aria-hidden="true" />
+          执行管理权限尚未成功读取，核销操作保持禁用。
+        </div>
+      ) : !canManageExecutions ? (
         <div className={styles.warning} role="status">
           <ShieldCheck size={18} aria-hidden="true" />
           当前会话没有 manage_design_executions 能力，仅可查看执行摘要。
         </div>
       ) : null}
       {error || actionError ? <div className={styles.error} role="alert">{actionError || error}</div> : null}
+      {accessError ? <div className={styles.error} role="alert">{accessError}</div> : null}
       {notice ? <div className={styles.success} role="status"><CheckCircle2 size={16} aria-hidden="true" />{notice}</div> : null}
 
       {loading && !executions.length ? <p className={styles.empty}>正在读取执行记录…</p> : null}
-      {!loading && !executions.length ? <p className={styles.empty}>当前任务没有持久化执行记录。</p> : null}
+      {!loading && !executions.length ? <p className={styles.empty}>{loaded && !error ? "读取成功，当前任务没有持久化执行记录。" : "执行记录尚未成功读取，不能据此认定没有执行记录。"}</p> : null}
 
       {executions.length ? (
         <ol className={styles.executionList} aria-label="设计平台执行记录">

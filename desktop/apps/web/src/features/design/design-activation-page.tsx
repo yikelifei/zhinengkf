@@ -1,7 +1,7 @@
 "use client";
 
 import { RefreshCw, Save } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { redeemDesignPlatformActivation } from "./api";
 import styles from "./design-pages.module.css";
 import { DesignConfirmation, DesignNotice, DesignPageHeader, errorText } from "./design-ui";
@@ -15,6 +15,7 @@ export function DesignActivationPage() {
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const submitLockRef = useRef(false);
 
   function generateDeviceId() {
     setDeviceId(createDesignPlatformDeviceId());
@@ -23,26 +24,29 @@ export function DesignActivationPage() {
   }
 
   async function activateDevice() {
+    if (submitLockRef.current || busy) return;
     const code = activationCode.trim();
     const targetDeviceId = deviceId.trim();
+    const targetDeviceLabel = deviceLabel.trim() || "智能客服工作台";
     setPendingConfirmation(false);
     if (!targetDeviceId || !code) {
       setError("设备 ID 和设计平台激活码都不能为空。");
       return;
     }
+    submitLockRef.current = true;
     setBusy(true); setError(""); setNotice("");
     try {
       const result = await redeemDesignPlatformActivation({
         code,
         deviceId: targetDeviceId,
-        deviceLabel: deviceLabel.trim() || "智能客服工作台",
+        deviceLabel: targetDeviceLabel,
       });
       setActivationCode(""); setDeviceId("");
       setNotice(result.readiness?.canSubmitFormalGeneration
         ? "设备已激活，设计平台已可正式出图。"
         : "设备激活已提交；请前往连接设置查看尚未完成的就绪检查。");
     } catch (cause) { setError(errorText(cause, "设计平台设备激活失败")); }
-    finally { setBusy(false); }
+    finally { submitLockRef.current = false; setBusy(false); }
   }
 
   return (
@@ -53,9 +57,9 @@ export function DesignActivationPage() {
       <form className={styles.card} onSubmit={(event) => { event.preventDefault(); setPendingConfirmation(true); }}>
         <div className={styles.cardHeader}><div><h2>绑定这台客服设备</h2><p>激活码必须来自设计平台后台，并与下方设备 ID 一一对应。</p></div></div>
         <div className={styles.formGrid}>
-          <label><span>设备 ID</span><input value={deviceId} onChange={(event) => setDeviceId(event.target.value)} placeholder="smart-kefu-..." /></label>
-          <label><span>设备名称</span><input value={deviceLabel} onChange={(event) => setDeviceLabel(event.target.value)} /></label>
-          <label><span>激活码</span><input type="password" autoComplete="one-time-code" value={activationCode} onChange={(event) => setActivationCode(event.target.value)} placeholder="设计平台后台生成的激活码" /></label>
+          <label><span>设备 ID</span><input disabled={busy} value={deviceId} onChange={(event) => setDeviceId(event.target.value)} placeholder="smart-kefu-..." /></label>
+          <label><span>设备名称</span><input disabled={busy} value={deviceLabel} onChange={(event) => setDeviceLabel(event.target.value)} /></label>
+          <label><span>激活码</span><input disabled={busy} type="password" autoComplete="one-time-code" value={activationCode} onChange={(event) => setActivationCode(event.target.value)} placeholder="设计平台后台生成的激活码" /></label>
         </div>
         <div className={styles.formActions}>
           <button type="button" data-action-id="design-activation-device-id-generate" aria-label="生成设计平台设备 ID" disabled={busy} onClick={generateDeviceId}><RefreshCw size={16} aria-hidden="true" />生成设备 ID</button>
