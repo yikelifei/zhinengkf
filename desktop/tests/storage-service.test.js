@@ -13,11 +13,15 @@ require("ts-node").register({
   compilerOptions: { module: "CommonJS" },
 });
 
-const axiosModule = require("axios");
-const axios = axiosModule.default || axiosModule;
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { MAX_IMAGE_FINGERPRINT_BYTES } = require("../apps/api/src/shared/image-fingerprint");
 const { StorageService } = require("../apps/api/src/storage/storage.service");
+
+const VALID_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+const PUBLIC_LOOKUP = async () => [{ address: "93.184.216.34", family: 4 }];
 
 async function storageFixture(t) {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "smart-kefu-storage-assets-"));
@@ -81,8 +85,8 @@ test("base64 and UTF-8 text assets share the exact byte boundary before writing"
   const base64Saved = await service.saveAssetFromBase64({
     ownerType: "customer",
     ownerId: "c1",
-    fileName: "boundary.bin",
-    base64: `data:application/octet-stream;base64,${boundary.toString("base64")}`,
+    fileName: "boundary.txt",
+    base64: `data:text/plain;base64,${boundary.toString("base64")}`,
   });
   const textSaved = await service.saveAssetFromText({
     ownerType: "customer",
@@ -99,7 +103,7 @@ test("base64 and UTF-8 text assets share the exact byte boundary before writing"
       service.saveAssetFromBase64({
         ownerType: "customer",
         ownerId: "c1",
-        fileName: "too-large.bin",
+        fileName: "too-large.txt",
         base64: Buffer.alloc(MAX_IMAGE_FINGERPRINT_BYTES + 1).toString("base64"),
       }),
     (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
@@ -120,19 +124,15 @@ test("base64 and UTF-8 text assets share the exact byte boundary before writing"
 test("asset URL ingestion rejects non-http schemes before axios or disk", async (t) => {
   const service = new StorageService();
   const tempRoot = await storageFixture(t);
-  const originalGet = axios.get;
   let calls = 0;
-  axios.get = async () => {
+  const request = async () => {
     calls += 1;
     return { data: Buffer.from("unexpected") };
   };
-  t.after(() => {
-    axios.get = originalGet;
-  });
 
   for (const url of ["ftp://example.com/a.png", "file:///C:/temp/a.png", "data:image/png;base64,AAAA", "not-a-url"]) {
     await assert.rejects(
-      () => service.saveAssetFromUrl({ ownerType: "customer", ownerId: "c1", fileName: "bad.bin", url }),
+      () => service.saveAssetFromUrl({ ownerType: "customer", ownerId: "c1", fileName: "bad.bin", url }, { request }),
       (error) => error?.getStatus?.() === 400 && /http\(s\)/.test(error.message),
     );
   }
@@ -143,32 +143,31 @@ test("asset URL ingestion rejects non-http schemes before axios or disk", async 
 test("asset URL download uses bounded timeout options and checks bytes again before disk", async (t) => {
   const service = new StorageService();
   const tempRoot = await storageFixture(t);
-  const originalGet = axios.get;
   const originalTimeout = appConfig.designPlatformTimeoutMs;
   const calls = [];
   appConfig.designPlatformTimeoutMs = 4321;
-  axios.get = async (url, config) => {
+  const request = async (url, config) => {
     calls.push({ url, config });
-    return { data: Buffer.alloc(calls.length === 1 ? MAX_IMAGE_FINGERPRINT_BYTES : MAX_IMAGE_FINGERPRINT_BYTES + 1) };
+    return { data: Buffer.alloc(calls.length === 1 ? MAX_IMAGE_FINGERPRINT_BYTES : MAX_IMAGE_FINGERPRINT_BYTES + 1, 0x61) };
   };
   t.after(() => {
-    axios.get = originalGet;
     appConfig.designPlatformTimeoutMs = originalTimeout;
   });
 
   const saved = await service.saveAssetFromUrl({
     ownerType: "customer",
     ownerId: "c1",
-    fileName: "boundary.bin",
+    fileName: "boundary.txt",
     url: "https://cdn.example.com/boundary.bin",
-  });
+  }, { lookup: PUBLIC_LOOKUP, request });
   assert.equal(saved.sizeBytes, MAX_IMAGE_FINGERPRINT_BYTES);
-  assert.deepEqual(calls[0].config, {
-    responseType: "arraybuffer",
-    timeout: 4321,
-    maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
-    maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
-  });
+  assert.equal(calls[0].config.responseType, "arraybuffer");
+  assert.equal(calls[0].config.timeout, 4321);
+  assert.equal(calls[0].config.maxContentLength, MAX_IMAGE_FINGERPRINT_BYTES);
+  assert.equal(calls[0].config.maxBodyLength, MAX_IMAGE_FINGERPRINT_BYTES);
+  assert.equal(calls[0].config.maxRedirects, 0);
+  assert.equal(calls[0].config.proxy, false);
+  assert.ok(calls[0].config.httpsAgent);
   assert.equal((await listFiles(tempRoot)).length, 1);
 
   await assert.rejects(
@@ -176,9 +175,9 @@ test("asset URL download uses bounded timeout options and checks bytes again bef
       service.saveAssetFromUrl({
         ownerType: "customer",
         ownerId: "c1",
-        fileName: "too-large.bin",
+        fileName: "too-large.txt",
         url: "http://cdn.example.com/too-large.bin",
-      }),
+      }, { lookup: PUBLIC_LOOKUP, request }),
     (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
   );
   assert.equal((await listFiles(tempRoot)).length, 1);
@@ -187,24 +186,20 @@ test("asset URL download uses bounded timeout options and checks bytes again bef
 test("axios download size rejection becomes BadRequest without creating an asset file", async (t) => {
   const service = new StorageService();
   const tempRoot = await storageFixture(t);
-  const originalGet = axios.get;
-  axios.get = async () => {
+  const request = async () => {
     const error = new Error("maxContentLength size of 20971520 exceeded");
     error.code = "ERR_BAD_RESPONSE";
     throw error;
   };
-  t.after(() => {
-    axios.get = originalGet;
-  });
 
   await assert.rejects(
     () =>
       service.saveAssetFromUrl({
         ownerType: "customer",
         ownerId: "c1",
-        fileName: "too-large.bin",
+        fileName: "too-large.txt",
         url: "https://cdn.example.com/too-large.bin",
-      }),
+      }, { lookup: PUBLIC_LOOKUP, request }),
     (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
   );
   assert.deepEqual(await listFiles(tempRoot), []);
@@ -240,30 +235,29 @@ test("design image downloader sends design platform credentials only to design p
     designPlatformDeviceId: appConfig.designPlatformDeviceId,
     designPlatformTimeoutMs: appConfig.designPlatformTimeoutMs,
   };
-  const originalGet = axios.get;
   const calls = [];
 
   appConfig.localStorageRoot = tempRoot;
-  appConfig.designPlatformBaseUrl = "http://127.0.0.1:3700";
+  appConfig.designPlatformBaseUrl = "https://design.example";
   appConfig.designPlatformApiKey = "api-key";
   appConfig.designPlatformAccessToken = "access-token";
   appConfig.designPlatformCookie = "sid=design";
   appConfig.designPlatformDeviceId = "device-1";
   appConfig.designPlatformTimeoutMs = 1234;
-  axios.get = async (url, config) => {
+  const request = async (url, config) => {
     calls.push({ url, config });
-    return { data: Buffer.from(`image:${calls.length}`) };
+    return { data: VALID_PNG };
   };
+  const lookup = async (hostname) => [{ address: hostname === "cdn.example.com" ? "93.184.216.35" : "93.184.216.34", family: 4 }];
 
   t.after(async () => {
-    axios.get = originalGet;
     Object.assign(appConfig, originalConfig);
     await fsp.rm(tempRoot, { recursive: true, force: true });
   });
 
-  const localPath = await service.saveDesignImage("job_1", "candidate_1", "/v1/results/candidate.png");
+  const localPath = await service.saveDesignImage("job_1", "candidate_1", "/v1/results/candidate.png", { lookup, request });
 
-  assert.equal(calls[0].url, "http://127.0.0.1:3700/v1/results/candidate.png");
+  assert.equal(calls[0].url, "https://design.example/v1/results/candidate.png");
   assert.equal(calls[0].config.responseType, "arraybuffer");
   assert.equal(calls[0].config.timeout, 1234);
   assert.deepEqual(calls[0].config.headers, {
@@ -273,7 +267,7 @@ test("design image downloader sends design platform credentials only to design p
   });
   assert.equal(fs.existsSync(localPath), true);
 
-  await service.saveDesignImage("job_1", "candidate_2", "https://cdn.example.com/candidate.png");
+  await service.saveDesignImage("job_1", "candidate_2", "https://cdn.example.com/candidate.png", { lookup, request });
 
   assert.equal(calls[1].url, "https://cdn.example.com/candidate.png");
   assert.equal(calls[1].config.responseType, "arraybuffer");
