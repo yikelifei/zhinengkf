@@ -19,7 +19,7 @@ const {
   designPlatformCredentialsForTarget,
 } = require("../apps/api/src/integrations/design-platform/design-platform.client");
 
-test("Axios interceptor sends each credential only to its bound origin", async () => {
+test("Axios boundary sends each credential only to its explicitly bound origin", async () => {
   const previous = snapshotConfig();
   const seen = [];
   try {
@@ -35,34 +35,25 @@ test("Axios interceptor sends each credential only to its bound origin", async (
       designPlatformDeviceId: "device-secret",
       designPlatformDeviceIdOrigin: "https://design.example",
     });
-    const client = new DesignPlatformClient();
-    client.http.defaults.adapter = captureAdapter(seen, { ok: true });
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
 
     await client.health();
-    await client.http.get("https://untrusted.example/probe", {
-      headers: {
-        Authorization: "Bearer spoofed",
-        Cookie: "spoofed=1",
-        "x-art-device-id": "explicit-device",
-      },
-    });
 
     assert.equal(header(seen[0], "authorization"), "Bearer access-secret");
     assert.equal(header(seen[0], "cookie"), "session=cookie-secret");
     assert.equal(header(seen[0], "x-art-device-id"), "device-secret");
-    assert.equal(header(seen[1], "authorization"), undefined);
-    assert.equal(header(seen[1], "cookie"), undefined);
-    assert.equal(header(seen[1], "x-art-device-id"), undefined);
 
     appConfig.designPlatformAccessToken = "";
     const apiKeyOnly = designPlatformCredentialsForTarget("https://design.example", "/v1/health");
     assert.equal(apiKeyOnly.authorization, "Bearer api-secret");
+    const untrusted = designPlatformCredentialsForTarget("https://design.example", "https://untrusted.example/probe");
+    assert.deepEqual(untrusted, { authorization: "", cookie: "", deviceId: "" });
   } finally {
     Object.assign(appConfig, previous);
   }
 });
 
-test("first login preserves its explicit same-origin device id while a cross-origin absolute request loses it", async () => {
+test("first login preserves its explicit same-origin device id and rejects absolute requests", async () => {
   const previous = snapshotConfig();
   const seen = [];
   try {
@@ -78,23 +69,25 @@ test("first login preserves its explicit same-origin device id while a cross-ori
       designPlatformDeviceId: "",
       designPlatformDeviceIdOrigin: "",
     });
-    const client = new DesignPlatformClient();
-    client.http.defaults.adapter = captureAdapter(seen, {
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, {
       ok: true,
       data: { accessToken: "login-token", user: { id: "user-1" } },
-    });
+    }));
 
     await client.loginArtImageLocal({ email: "test@example.com", password: "secret", deviceId: "first-device" });
-    await client.http.get("https://untrusted.example/probe", { headers: { "x-art-device-id": "first-device" } });
+    await assert.rejects(
+      client.http.get("https://untrusted.example/probe", { headers: { "x-art-device-id": "first-device" } }),
+      (error) => error?.code === "DESIGN_PLATFORM_REQUEST_TARGET_BLOCKED",
+    );
 
     assert.equal(header(seen[0], "x-art-device-id"), "first-device");
-    assert.equal(header(seen[1], "x-art-device-id"), undefined);
+    assert.equal(seen.length, 1);
   } finally {
     Object.assign(appConfig, previous);
   }
 });
 
-test("request security invariants cannot be overridden per request", async () => {
+test("request security invariants and transport cannot be overridden per request", async () => {
   const previous = snapshotConfig();
   const seen = [];
   try {
@@ -111,20 +104,186 @@ test("request security invariants cannot be overridden per request", async () =>
       designPlatformDeviceId: "",
       designPlatformDeviceIdOrigin: "",
     });
-    const client = new DesignPlatformClient();
-    client.http.defaults.adapter = captureAdapter(seen, { ok: true });
+    let transformRequestRan = false;
+    let transformResponseRan = false;
+    let attackerAdapterRan = false;
+    let attackerTransportRan = false;
+    const attackerAdapter = async () => {
+      attackerAdapterRan = true;
+      throw new Error("attacker adapter must not run");
+    };
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
 
-    await client.http.post("/v1/design-jobs", { prompt: "sensitive body" }, {
+    await client.http.post("v1/design-jobs", { prompt: "sensitive body" }, {
       baseURL: "https://untrusted.example",
       timeout: 1,
       maxRedirects: 12,
+      transformRequest: [function (data) {
+        transformRequestRan = true;
+        this.url = "https://untrusted.example/collect";
+        this.maxRedirects = 12;
+        return data;
+      }],
+      transformResponse: [function (data) {
+        transformResponseRan = true;
+        return data;
+      }],
+      adapter: attackerAdapter,
+      transport: {
+        request() {
+          attackerTransportRan = true;
+          throw new Error("attacker transport must not run");
+        },
+      },
+      socketPath: "\\\\.\\pipe\\attacker",
+      proxy: { host: "untrusted.example", port: 8080 },
+      httpAgent: { attacker: true },
+      httpsAgent: { attacker: true },
+      beforeRedirect() {
+        throw new Error("attacker redirect hook must not run");
+      },
+      httpVersion: 2,
+      http2Options: { createConnection: () => { throw new Error("attacker HTTP/2 connection must not run"); } },
+      validateStatus: () => true,
     });
 
     assert.equal(seen.length, 1);
-    assert.equal(seen[0].baseURL, "https://design.example");
+    assert.equal(transformRequestRan, false);
+    assert.equal(transformResponseRan, false);
+    assert.equal(attackerAdapterRan, false);
+    assert.equal(attackerTransportRan, false);
+    assert.equal(seen[0].url, "v1/design-jobs");
+    assert.equal(seen[0].baseURL, "https://design.example/");
     assert.equal(seen[0].timeout, 12000);
     assert.equal(seen[0].maxRedirects, 0);
+    assert.equal(seen[0].proxy, false);
+    assert.equal(seen[0].transport, undefined);
+    assert.equal(seen[0].socketPath, undefined);
+    assert.equal(seen[0].httpAgent, undefined);
+    assert.equal(seen[0].httpsAgent, undefined);
+    assert.equal(seen[0].beforeRedirect, undefined);
+    assert.equal(seen[0].httpVersion, undefined);
+    assert.equal(seen[0].http2Options, undefined);
     assert.equal(header(seen[0], "authorization"), "Bearer access-secret");
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("request boundary rejects absolute, protocol-relative and base-path escape URLs before transport", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "standard_v1",
+      designPlatformBaseUrl: "https://design.example/trusted/base",
+      designPlatformAccessToken: "",
+      designPlatformAccessTokenOrigin: "",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "",
+      designPlatformCookieOrigin: "",
+      designPlatformDeviceId: "",
+      designPlatformDeviceIdOrigin: "",
+    });
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
+    const blocked = [
+      "https://untrusted.example/collect",
+      "//untrusted.example/collect",
+      "/v1/health",
+      "../outside",
+      "%2e%2e/outside",
+      "v1/%2e%2e/%2e%2e/outside",
+      "v1\\..\\outside",
+    ];
+
+    for (const url of blocked) {
+      await assert.rejects(
+        client.http.get(url),
+        (error) => error?.code === "DESIGN_PLATFORM_REQUEST_TARGET_BLOCKED",
+        url,
+      );
+    }
+    assert.equal(seen.length, 0);
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("AxiosHeaders removes mixed-case credential and routing header spoof attempts", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "standard_v1",
+      designPlatformBaseUrl: "https://design.example",
+      designPlatformAccessToken: "",
+      designPlatformAccessTokenOrigin: "",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "",
+      designPlatformCookieOrigin: "",
+      designPlatformDeviceId: "",
+      designPlatformDeviceIdOrigin: "",
+    });
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
+    await client.http.get("v1/health", {
+      headers: {
+        aUtHoRiZaTiOn: "Bearer spoofed",
+        cOoKiE: "spoofed=1",
+        "X-aRt-DeViCe-Id": "spoofed-device",
+        "pRoXy-AuThOrIzAtIoN": "Basic spoofed",
+        hOsT: "untrusted.example",
+      },
+    });
+
+    assert.equal(seen.length, 1);
+    for (const name of ["authorization", "cookie", "x-art-device-id", "proxy-authorization", "host"]) {
+      assert.equal(header(seen[0], name), undefined, name);
+    }
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("normal public methods use fixed relative routes beneath the configured base path", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "standard_v1",
+      designPlatformBaseUrl: "https://design.example/trusted/base",
+      designPlatformAccessToken: "",
+      designPlatformAccessTokenOrigin: "",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "",
+      designPlatformCookieOrigin: "",
+      designPlatformDeviceId: "",
+      designPlatformDeviceIdOrigin: "",
+    });
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
+
+    await client.health();
+    await client.createDesignJob({ requestId: "request-1" });
+    await client.uploadAsset({ assetId: "asset-1" });
+    await client.getDesignJob("job with spaces");
+    await client.getDesignJobResults("job with spaces");
+    await client.cancelDesignJob("job with spaces");
+
+    assert.deepEqual(
+      seen.map((config) => config.url),
+      [
+        "v1/health",
+        "v1/design-jobs",
+        "v1/assets/upload",
+        "v1/design-jobs/job%20with%20spaces",
+        "v1/design-jobs/job%20with%20spaces/results",
+        "v1/design-jobs/job%20with%20spaces/cancel",
+      ],
+    );
+    assert.ok(seen.every((config) => config.baseURL === "https://design.example/trusted/base/"));
+    assert.ok(seen.every((config) => config.maxRedirects === 0));
   } finally {
     Object.assign(appConfig, previous);
   }
@@ -172,8 +331,7 @@ test("login, activation and ordinary API POST reject 307/308 without following s
         designPlatformDeviceId: "device-secret",
         designPlatformDeviceIdOrigin: "https://design.example",
       });
-      const client = new DesignPlatformClient();
-      client.http.defaults.adapter = redirectAdapter(seen, item.status, item.location);
+      const client = DesignPlatformClient.createForTesting(redirectAdapter(seen, item.status, item.location));
 
       await assert.rejects(
         item.invoke(client),
