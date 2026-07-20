@@ -3,11 +3,12 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { resolveRepositoryRevision } = require("./repository-provenance");
 
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
 const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
-const SCHEMA_VERSION = "smart_kefu_staging_readiness_v1";
+const SCHEMA_VERSION = "smart_kefu_staging_readiness_v2";
 const READ_ONLY_ROUTES = Object.freeze([
   "/health",
   "/wechat-work/status",
@@ -674,6 +675,11 @@ function assertSecretFree(report, env) {
 async function collectStagingReadiness(options = {}) {
   const root = options.repositoryRoot || repositoryRoot;
   const desktop = options.desktopRoot || path.join(root, "desktop");
+  const repositoryRevision = resolveRepositoryRevision({
+    repositoryRoot: root,
+    ...(options.repositoryRevision !== undefined ? { repositoryRevision: options.repositoryRevision } : {}),
+    ...(options.runGitCommand ? { runCommand: options.runGitCommand } : {}),
+  });
   const env = options.env || readEffectiveEnvironment(root, options.inheritedEnvironment || process.env);
   const loadedDoctor = options.doctorReport ? { report: options.doctorReport } : loadDoctorReport(options.runCommand || defaultRunCommand, root);
   const doctorReport = loadedDoctor.report || null;
@@ -690,6 +696,7 @@ async function collectStagingReadiness(options = {}) {
   const runId = options.runId || `staging-${generatedAt.replace(/[-:.]/g, "").replace("Z", "Z")}-${process.pid}`;
   const report = {
     schemaVersion: SCHEMA_VERSION,
+    repositoryRevision,
     runId,
     generatedAt,
     status: computeOverallStatus(results),
@@ -729,6 +736,7 @@ function renderMarkdown(report) {
     `- 状态：**${report.status}**`,
     `- 运行编号：${report.runId}`,
     `- 生成时间：${report.generatedAt}`,
+    `- 仓库修订：\`${report.repositoryRevision}\``,
     `- 模式：${report.mode}`,
     `- 安全边界：外部写入 ${report.safety.externalMutationCount} 次；真实发送未执行；报告不含密钥值。`,
     "",

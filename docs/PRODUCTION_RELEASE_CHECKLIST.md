@@ -62,6 +62,15 @@ npm.cmd run database:recovery:execute -- --confirm "RESTORE ISOLATED REHEARSAL D
 
 默认 `plan` 不执行命令或数据库连接；`execute` 仅允许源库之外、名称明确为 rehearsal/sandbox 且不含生产标识的隔离目标。报告不记录 URL、用户名、密码或业务数据，临时备份在演练结束前删除。完整操作和审批边界见 `desktop/docs/DATABASE_RECOVERY_REHEARSAL.md`。
 
+三类外部报告产生后，可执行纯本地只读 provenance 校验：
+
+```powershell
+cd desktop
+npm.cmd run external:evidence:bundle -- --evidence-root C:\release-evidence\candidate --staging-report staging.json --recovery-report recovery.json --windows-report windows.json
+```
+
+三个路径必须显式指定且位于 evidence root 内；工具只接受当前 `HEAD`、当前 schema、有效期内的 `PASS` 报告，不会联网或执行任何外部动作。完整口径见 `docs/EXTERNAL_EVIDENCE_BUNDLE.md`。该校验不会自动清除本门禁或完成度审计的外部 `BLOCKED`，SmartScreen 与目标 Windows 安装验收仍必须人工补证。
+
 ## 状态口径
 
 - `PASS`：本机可重复执行的代码、构建、测试和静态安全检查通过。
@@ -130,6 +139,7 @@ npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
 
 - [ ] 已生成 `package:win:test` 未签名测试安装包并通过包内容/敏感文件/打包运行时验证；未签名状态保持 `BLOCKED`，未冒充正式发布包。
 - [ ] 已在受控签名机运行 `package:win:signed`，安装器与主程序 Authenticode 均为 Valid；证书和密码未进入仓库、报告或安装包资源。
+- [ ] 三份 JSON 报告均绑定当前 `repositoryRevision`，并已通过 `external:evidence:bundle` 的 schema、revision、时效和失败关闭字段校验。
 - [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
 - [ ] 预发布证据报告中的企业微信、个人微信桥和设计平台只读检查均为 `PASS`。
 - [ ] 微信客户端版本、登录账号、窗口识别和人工接管流程已由授权操作员验收。

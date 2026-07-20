@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  SCHEMA_VERSION,
   STATUS,
   collectDatabaseRecoveryRehearsal,
   confirmationPhrase,
@@ -16,6 +17,8 @@ const {
   renderMarkdown,
   writeReports,
 } = require("../tools/database-recovery-rehearsal");
+
+const TEST_REVISION = "a".repeat(40);
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-db-recovery-"));
@@ -152,6 +155,7 @@ test("successful rehearsal records only redacted versions, hash, migration and c
     runDirectory,
     runId: "passing-rehearsal",
     generatedAt: "2026-07-19T00:00:00.000Z",
+    repositoryRevision: TEST_REVISION,
     execute: true,
     confirmation: confirmationPhrase("smart_kefu_rehearsal"),
     env,
@@ -159,6 +163,9 @@ test("successful rehearsal records only redacted versions, hash, migration and c
     runCommand: successfulRunner(calls),
   });
   assert.equal(report.status, STATUS.PASS);
+  assert.equal(SCHEMA_VERSION, "smart_kefu_database_recovery_rehearsal_v2");
+  assert.equal(report.repositoryRevision, TEST_REVISION);
+  assert.match(renderMarkdown(report), new RegExp(TEST_REVISION));
   assert.equal(calls.length, 10);
   assert.deepEqual(calls.map((item) => item.stage), [
     "version.pg_dump", "version.pg_restore", "version.psql", "version.prisma",

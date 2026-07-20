@@ -70,4 +70,6 @@ desktop/.runtime/staging-readiness-evidence/runs/<run-id>/report.zh-CN.md
 
 每次运行保留独立 run 目录，并包含执行模式、固定只读接口、状态、缺失证据和零外部写入声明。退出码与生产门禁一致：`PASS=0`、`FAIL=1`、`BLOCKED=2`。
 
+报告 schema 为 `smart_kefu_staging_readiness_v2`，JSON 和 Markdown 都记录生成报告时的完整 Git `repositoryRevision`。无法取得合法的当前 `HEAD` 时失败关闭，不生成无来源的可用证据。外部证据包校验只接受与当前 `HEAD` 完全一致且 24 小时内生成的 `PASS` 执行报告；默认离线 inventory 仍为 `BLOCKED`。
+
 建议顺序：先运行 `npm.cmd run release:gate` 清除代码与构建问题，再在隔离预发布环境执行本检查；两者都无 `FAIL` 且预发布报告无 `BLOCKED` 后，才进入人工发布评审。数据库备份/恢复演练、企业微信后台登记和授权操作员确认仍需作为变更单附件留存。
