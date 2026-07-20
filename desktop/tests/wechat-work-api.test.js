@@ -176,6 +176,10 @@ test("sync_msg persists isolated open_kfid + external_userid mappings and dedupl
   assert.equal(imageMessage.attachments[0].status, "ready");
   assert.match(imageMessage.attachments[0].fingerprint, /^dhash64:v1:[a-f0-9]{16}$/);
   assert.equal(fs.existsSync(imageMessage.attachments[0].localPath), true);
+  const imageOperation = localStore.getInboundMessageOperation(bindingB.wechatAccountId, "incoming-2");
+  assert.equal(imageOperation.normalizedPayload.attachments[0].mediaId, "media-1");
+  assert.equal(imageOperation.normalizedPayload.attachments[0].type, "image/png");
+  assert.equal("localPath" in imageOperation.normalizedPayload.attachments[0], false);
 });
 
 test("permanent inbound media failure persists a controlled manual-review attachment without a fake hash", async () => {

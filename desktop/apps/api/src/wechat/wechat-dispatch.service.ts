@@ -363,6 +363,7 @@ export class WechatDispatchService {
       expectedCustomerId: payload.expectedCustomerId,
       owner: payload.owner || order.owner || "人工客服",
       customerNotes: payload.note || order.customerNotes || "订单确认已进入微信安全发送队列。",
+      notificationEffectKey: `${operationKey}:order-update-notification`,
     });
     const notification = await this.notifications.create(
       "info",
@@ -957,6 +958,7 @@ export class WechatDispatchService {
         ...(payload.effectKey ? { effectKey: `${payload.effectKey}:review` } : {}),
         ...transition.metadata,
         wechatAccountId: before.wechatAccountId || null,
+        conversationId: id,
         wechatAccountName: before.wechatAccount?.displayName || before.wechatAccount?.alias || null,
         customerId: before.customerId || null,
         customerName: before.customer?.name || null,
@@ -1164,6 +1166,7 @@ export class WechatDispatchService {
         "人工接管会话收到新消息",
         `${conversation.title}：客户有新消息，请人工继续处理。`,
         {
+          wechatAccountId: conversation.wechatAccountId,
           conversationId: conversation.id,
           customerId: conversation.customerId,
           routeId: route.id,
@@ -1189,6 +1192,8 @@ export class WechatDispatchService {
     const quoteAcceptanceResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
       this.handleInboundQuoteAcceptance({
         operationId: inboundOperation.id,
+        claimToken,
+        operationResult: inboundOperation.result,
         conversation,
         message,
         route,
@@ -1225,6 +1230,7 @@ export class WechatDispatchService {
             ? `${conversation.title}：${plan.reason}。已暂停 ${manualLock.blockedSendTasks.length} 个待发送任务。`
             : `${conversation.title}：${plan.reason}`,
           {
+            wechatAccountId: conversation.wechatAccountId,
             conversationId: conversation.id,
             customerId: conversation.customerId,
             routeId: route.id,
@@ -1401,6 +1407,27 @@ export class WechatDispatchService {
     ]);
     if (blockedSendTasks.some((item) => !item) || inFlightSendTasks.some((item) => !item)) {
       throw new BadRequestException("completed inbound operation is missing its durable manual-lock send task");
+    }
+    const canonicalIdentity = completedReplayEntityIdentity("message", message);
+    assertCompletedReplayIdentity("operation", {
+      wechatAccountId: operation.wechatAccountId,
+      conversationId: operation.conversationId,
+      customerId: operation.customerId,
+    }, canonicalIdentity);
+    for (const [label, value] of [
+      ["route evaluation", route],
+      ["send task", sendTask],
+      ["design job", designJob],
+      ["notification", notification],
+      ["quote draft", quote],
+      ["order draft", orderDraft],
+      ["manual-lock conversation", manualConversation],
+      ["manual-lock review log", manualReviewLog],
+    ] as const) {
+      if (value) assertCompletedReplayIdentity(label, value, canonicalIdentity);
+    }
+    for (const task of [...blockedSendTasks, ...inFlightSendTasks]) {
+      assertCompletedReplayIdentity("manual-lock send task", task, canonicalIdentity);
     }
     if (manualLockRef && !manualConversationId) {
       throw new BadRequestException("completed inbound operation has an incomplete durable manual-lock reference");
@@ -1606,6 +1633,7 @@ export class WechatDispatchService {
     const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, claimToken, {
         channel: conversation.channel || "wechat",
         text: payload.text || "",
+        wechatAccountId: conversation.wechatAccountId,
         customerId: conversation.customerId,
         conversationId: conversation.id,
         agentId: agent?.id || null,
@@ -1679,6 +1707,7 @@ export class WechatDispatchService {
           conversation.manualLocked ? "人工接管会话收到新消息" : "客户消息需要人工处理",
           `${conversation.title || conversation.id}：${plan.reason}`,
           {
+            wechatAccountId: conversation.wechatAccountId,
             conversationId: conversation.id,
             customerId: conversation.customerId,
             routeId: route.id,
@@ -1715,6 +1744,7 @@ export class WechatDispatchService {
       if (
         String(existing?.conversationId || "") !== String(data.conversationId || "") ||
         String(existing?.customerId || "") !== String(data.customerId || "") ||
+        String(existing?.wechatAccountId || "") !== String(data.wechatAccountId || "") ||
         String(existing?.text || "") !== String(data.text || "")
       ) {
         throw new BadRequestException("inbound route operation replay changed identity or text");
@@ -6081,21 +6111,37 @@ export class WechatDispatchService {
     if (recovery) {
       const recoveryJob = this.localStore.getDesignJob(recovery.designJobId);
       if (!recoveryJob || !this.jobMatchesConversationIdentity(recoveryJob, params.conversation)) {
-        throw new BadRequestException("high-value inbound selection recovery lost its durable design job binding");
+        throw new BadRequestException("inbound selection recovery lost its durable design job binding");
       }
       const recoveryCandidate = (recoveryJob.images || []).find(
         (image: any) => String(image.id || image.imageId || "") === recovery.selectedImageId,
       );
       if (!recoveryCandidate) {
-        throw new BadRequestException("high-value inbound selection recovery lost its durable image binding");
+        throw new BadRequestException("inbound selection recovery lost its durable image binding");
       }
-      return this.finishLocalHighValueSelection(params, recoveryJob, recovery.selectedImageId, {
+      const recoveredSelection = {
         action: "select_image",
         ok: true,
         reviewRequired: false,
-        reason: "high_value_customer_selected_image",
+        reason: recovery.kind === "high_value_image_selection"
+          ? "high_value_customer_selected_image"
+          : "low_value_customer_selected_image",
         result: { candidate: recoveryCandidate, imageId: recovery.selectedImageId, source: "durable_recovery" },
-      });
+      };
+      if (recovery.kind === "high_value_image_selection") {
+        return this.finishLocalHighValueSelection(params, recoveryJob, recovery.selectedImageId, recoveredSelection);
+      }
+      const recoveredQuote = recovery.quoteDraftId
+        ? this.localStore.getQuoteDraft(recovery.quoteDraftId)
+        : null;
+      if (
+        !recoveredQuote ||
+        recoveredQuote.designJobId !== recoveryJob.id ||
+        recoveredQuote.selectedImageId !== recovery.selectedImageId
+      ) {
+        throw new BadRequestException("low-value inbound selection recovery lost its durable quote binding");
+      }
+      return this.finishLocalLowValueSelection(params, recoveryJob, recoveredQuote, recovery.selectedImageId, recoveredSelection);
     }
     const job = this.findLatestSelectableDesignJob(params.conversation);
     const candidates = job ? [...(job.images || [])].sort((a: any, b: any) => Number(a.position || 0) - Number(b.position || 0)) : [];
@@ -6170,8 +6216,6 @@ export class WechatDispatchService {
       return this.finishLocalHighValueSelection(params, updated, String(selectedImageId), selectionPlan);
     }
 
-    this.localStore.selectDesignImage(job.id, selectedImageId, feedback);
-
     const existingQuote = this.localStore
       .listQuoteDrafts()
       .find((quote: any) => quote.designJobId === job.id);
@@ -6189,45 +6233,77 @@ export class WechatDispatchService {
       return result;
     }
 
-    const inboundSelectionQuoteNote = "客户在会话中选择了这张效果图，系统已绑定为报价图片。";
-    const quote = existingQuote
-      ? this.localStore.updateQuoteDraft(existingQuote.id, {
-          selectedImageId,
-          status: "auto_sent",
-          customerNotes: inboundSelectionQuoteNote,
-        })
-      : this.localStore.updateQuoteDraft(this.localStore.createQuoteFromDesignJob(job.id, selectedImageId).id, {
-          customerNotes: inboundSelectionQuoteNote,
-        });
-    const updatedJob = this.localStore.updateDesignJob(job.id, { status: "quote_created" });
-    result.quote = quote;
-    result.designJob = updatedJob;
-    const quoteSend = await this.tryQueueLowValueQuoteAfterSelection(quote);
-    if (quoteSend.sendTask) {
-      result.quote = quoteSend.quote;
-      result.sendTask = quoteSend.sendTask;
-    }
-    result.plan = {
-      ...result.plan,
-      type: "select_design_image_and_create_quote",
-      reason: quoteSend.sendTask ? "low_value_customer_selected_image_quote_queued" : "low_value_customer_selected_image",
-      shouldNotifyHuman: false,
-      shouldQueueReply: Boolean(quoteSend.sendTask),
+    const recoveryEffect = {
+      kind: "low_value_image_selection",
+      phase: "selection_committed",
+      designJobId: job.id,
+      selectedImageId: String(selectedImageId),
+      routeEvaluationId: params.route.id,
     };
-    result.notification = await this.notifications.create(
+    const committed = this.localStore.commitInboundLowValueSelection({
+      operationId: params.operationId,
+      claimToken: params.claimToken,
+      leaseExpiresAt: this.nextInboundLeaseExpiry(),
+      designJobId: job.id,
+      selectedImageId: String(selectedImageId),
+      feedback,
+      recoveryEffect,
+      highValueAmountCny: appConfig.highValueAmountCny,
+    });
+    return this.finishLocalLowValueSelection(
+      params,
+      committed.designJob,
+      committed.quote,
+      String(selectedImageId),
+      selectionPlan,
+    );
+  }
+
+  private async finishLocalLowValueSelection(
+    params: { operationId: string; conversation: any; message: any; route: any },
+    job: any,
+    quote: any,
+    selectedImageId: string,
+    selectionPlan: any,
+  ) {
+    let quoteSend: any;
+    if (quote.sendTaskId) {
+      const sendTask = this.localStore.getSendTask(quote.sendTaskId);
+      if (!sendTask) throw new BadRequestException("low-value inbound selection recovery lost its durable send task binding");
+      quoteSend = { quote, sendTask };
+    } else {
+      quoteSend = await this.tryQueueLowValueQuoteAfterSelection(quote);
+    }
+    const notification = await this.notifications.create(
       "info",
       "低价值客户已选图，已生成报价草稿",
       "客户选图置信度高，系统已绑定候选图并生成报价草稿，后台低价值自动化会继续处理报价发送队列。",
       {
         effectKey: `${params.operationId}:low-value-selection-notification`,
         designJobId: job.id,
-        quoteDraftId: quote.id,
+        quoteDraftId: quoteSend.quote.id,
         selectedImageId,
         conversationId: params.conversation.id,
         customerId: params.conversation.customerId,
       },
     );
-    return result;
+    return {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: "select_design_image_and_create_quote",
+        reason: quoteSend.sendTask ? "low_value_customer_selected_image_quote_queued" : "low_value_customer_selected_image",
+        shouldNotifyHuman: false,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: Boolean(quoteSend.sendTask),
+      },
+      sendTask: quoteSend.sendTask,
+      designJob: job,
+      notification,
+      bundleRecommendation: null,
+      selection: selectionPlan,
+      quote: quoteSend.quote,
+    };
   }
 
   private async finishLocalHighValueSelection(
@@ -6298,11 +6374,31 @@ export class WechatDispatchService {
 
   private async handleInboundQuoteAcceptance(params: {
     operationId: string;
+    claimToken: string;
+    operationResult?: unknown;
     conversation: any;
     message: any;
     route: any;
     payload: { text?: string; assetIds?: string[]; attachments?: Array<Record<string, unknown>> };
   }) {
+    const recovery = inboundQuoteAcceptanceRecovery(params.operationResult);
+    if (recovery) {
+      const quote = this.localStore.getQuoteDraft(recovery.quoteDraftId);
+      const orderDraft = this.localStore.getOrderDraft(recovery.orderDraftId);
+      if (!quote || !this.jobMatchesConversationIdentity(quote.designJob, params.conversation)) {
+        throw new BadRequestException("inbound quote acceptance recovery lost its durable quote binding");
+      }
+      if (
+        !orderDraft ||
+        orderDraft.quoteDraftId !== quote.id ||
+        String(orderDraft.wechatAccountId || "") !== String(params.conversation.wechatAccountId || "") ||
+        String(orderDraft.conversationId || "") !== String(params.conversation.id || "") ||
+        String(orderDraft.customerId || "") !== String(params.conversation.customerId || "")
+      ) {
+        throw new BadRequestException("inbound quote acceptance recovery lost its durable order binding");
+      }
+      return this.finishLocalQuoteAcceptance(params, quote, orderDraft, recovery.acceptancePlan);
+    }
     const quote = this.findLatestQuoteForConversation(params.conversation);
     const existingOrderDraft = quote
       ? this.localStore.listOrderDrafts().find((order: any) => order.quoteDraftId === quote.id) || null
@@ -6433,71 +6529,128 @@ export class WechatDispatchService {
 
     if (acceptancePlan.action === "update_existing_order_payment") {
       const orderDraftId = acceptancePlan.orderDraftId || existingOrderDraft?.id;
-      result.orderDraft = await this.orders.update(orderDraftId, {
-        ...acceptancePlan.orderPatch,
-        expectedWechatAccountId: params.conversation.wechatAccountId,
-        expectedConversationId: params.conversation.id,
-        expectedCustomerId: params.conversation.customerId,
-      });
-      result.quote = quote?.id ? this.localStore.getQuoteDraft(quote.id) || result.orderDraft?.quoteDraft || quote : quote;
-      result.plan.type = "order_payment_updated";
-      const confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
-        highValueAmountCny: appConfig.highValueAmountCny,
-      });
-      if (confirmationDecision.ok) {
-        const confirmation = await this.queueLowValueOrderConfirmation(result.orderDraft.id, {
-          ...this.expectedIdentityFromOrder(result.orderDraft),
-          owner: "low_value_automation",
-          note: "客户补充付款信息后，订单确认已自动进入微信安全发送队列。",
-          reason: "low_value_order_confirmation",
-        }, {
-          source: "low_value_quote_payment_update",
-          reason: acceptancePlan.reason,
-        });
-        result.orderDraft = confirmation.orderDraft;
-        result.sendTask = confirmation.sendTask;
-        result.plan.shouldQueueReply = true;
-      }
-      result.notification = await this.notifications.create(
-        "info",
-        "客户付款信息已记录",
-        result.sendTask
-          ? "系统已更新订单付款状态，并把订单确认回复放入微信安全发送队列。"
-          : "系统已更新订单付款状态，现有订单确认发送状态保持不变。",
-        {
-          effectKey: `${params.operationId}:payment-update-notification`,
-          quoteDraftId: result.quote?.id || quote?.id,
-          orderDraftId: result.orderDraft?.id,
-          sendTaskId: result.sendTask?.id,
-          designJobId: result.orderDraft?.designJobId || quote?.designJobId,
-          conversationId: params.conversation.id,
-          customerId: params.conversation.customerId,
-          routeId: params.route.id,
-          reason: acceptancePlan.reason,
-          confirmationReason: confirmationDecision.reason,
+      const committed = this.localStore.commitInboundQuoteAcceptance({
+        operationId: params.operationId,
+        claimToken: params.claimToken,
+        leaseExpiresAt: this.nextInboundLeaseExpiry(),
+        quoteDraftId: quote.id,
+        quotePatch: acceptancePlan.quotePatch,
+        action: "update_existing_order_payment",
+        orderDraftId,
+        orderPatch: acceptancePlan.orderPatch,
+        recoveryEffect: {
+          kind: "low_value_quote_acceptance",
+          phase: "quote_and_order_committed",
+          action: acceptancePlan.action,
+          acceptancePlan: durableJsonSnapshot(acceptancePlan),
+          routeEvaluationId: params.route.id,
         },
-      );
-      return result;
+      });
+      return this.finishLocalQuoteAcceptance(params, committed.quote, committed.orderDraft, acceptancePlan);
     }
 
-    const updatedQuote = this.localStore.updateQuoteDraft(quote.id, acceptancePlan.quotePatch);
-    result.quote = updatedQuote;
-    result.orderDraft = await this.orders.createFromQuote(updatedQuote.id, {
-      expectedWechatAccountId: params.conversation.wechatAccountId,
-      expectedConversationId: params.conversation.id,
-      expectedCustomerId: params.conversation.customerId,
+    const committed = this.localStore.commitInboundQuoteAcceptance({
+      operationId: params.operationId,
+      claimToken: params.claimToken,
+      leaseExpiresAt: this.nextInboundLeaseExpiry(),
+      quoteDraftId: quote.id,
+      quotePatch: acceptancePlan.quotePatch,
+      action: "accept_quote_and_create_order",
+      recoveryEffect: {
+        kind: "low_value_quote_acceptance",
+        phase: "quote_and_order_committed",
+        action: acceptancePlan.action,
+        acceptancePlan: durableJsonSnapshot(acceptancePlan),
+        routeEvaluationId: params.route.id,
+      },
     });
-    const confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
+    return this.finishLocalQuoteAcceptance(params, committed.quote, committed.orderDraft, acceptancePlan);
+  }
+
+  private async finishLocalQuoteAcceptance(
+    params: { operationId: string; conversation: any; message: any; route: any },
+    quote: any,
+    orderDraft: any,
+    acceptancePlan: any,
+  ) {
+    const updatingExistingOrder = acceptancePlan.action === "update_existing_order_payment";
+    const result: any = {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: updatingExistingOrder ? "order_payment_updated" : "quote_accepted",
+        reason: acceptancePlan.reason,
+        shouldNotifyHuman: false,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: false,
+      },
+      sendTask: null,
+      designJob: quote?.designJob || orderDraft?.designJob || null,
+      notification: null,
+      bundleRecommendation: null,
+      quote,
+      orderDraft,
+      quoteAcceptance: acceptancePlan,
+    };
+    if (!updatingExistingOrder) {
+      await this.notifications.create(
+        "info",
+        "订单草稿已生成",
+        `客户 ${quote.customer?.name || quote.customerId} 的报价已生成订单草稿，金额 ${orderDraft.totalPrice} 元。`,
+        {
+          effectKey: `${params.operationId}:order-draft-created-notification`,
+          orderDraftId: orderDraft.id,
+          quoteDraftId: quote.id,
+          designJobId: quote.designJobId,
+          wechatAccountId: orderDraft.wechatAccountId,
+          conversationId: orderDraft.conversationId,
+          customerId: orderDraft.customerId,
+        },
+      );
+    }
+
+    let confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
       highValueAmountCny: appConfig.highValueAmountCny,
     });
-    if (confirmationDecision.ok) {
+    const existingConfirmationTask = result.orderDraft.confirmationSendTask || null;
+    if (existingConfirmationTask && confirmationDecision.reason === "already_queued") {
+      const note = updatingExistingOrder
+        ? "客户补充付款信息后，订单确认已自动进入微信安全发送队列。"
+        : "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。";
+      result.orderDraft = await this.orders.update(result.orderDraft.id, {
+        ...this.expectedIdentityFromOrder(result.orderDraft),
+        owner: "low_value_automation",
+        customerNotes: note,
+        notificationEffectKey: `${stableOperationKey("order-confirm", `${result.orderDraft.id}:order-confirmation`)}:order-update-notification`,
+      } as any);
+      result.sendTask = existingConfirmationTask;
+      result.plan.shouldQueueReply = true;
+      confirmationDecision = { ...confirmationDecision, reason: "low_value_order_confirmation_ready" };
+      await this.notifications.create(
+        "info",
+        "订单确认已入队",
+        "系统已根据订单草稿生成客户确认话术，并放入微信安全发送队列。",
+        {
+          effectKey: `${stableOperationKey("order-confirm", `${result.orderDraft.id}:order-confirmation`)}:notification`,
+          orderDraftId: result.orderDraft.id,
+          quoteDraftId: result.orderDraft.quoteDraftId,
+          designJobId: result.orderDraft.designJobId,
+          sendTaskId: existingConfirmationTask.id,
+          wechatAccountId: result.orderDraft.wechatAccountId,
+          conversationId: result.orderDraft.conversationId,
+          customerId: result.orderDraft.customerId,
+        },
+      );
+    } else if (confirmationDecision.ok) {
       const confirmation = await this.queueLowValueOrderConfirmation(result.orderDraft.id, {
         ...this.expectedIdentityFromOrder(result.orderDraft),
         owner: "low_value_automation",
-        note: "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。",
+        note: updatingExistingOrder
+          ? "客户补充付款信息后，订单确认已自动进入微信安全发送队列。"
+          : "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。",
         reason: "low_value_order_confirmation",
       }, {
-        source: "low_value_quote_acceptance",
+        source: updatingExistingOrder ? "low_value_quote_payment_update" : "low_value_quote_acceptance",
         reason: acceptancePlan.reason,
       });
       result.orderDraft = confirmation.orderDraft;
@@ -6506,18 +6659,26 @@ export class WechatDispatchService {
     }
     result.notification = await this.notifications.create(
       "info",
-      acceptancePlan.quotePatch.paymentStatus === "paid" || acceptancePlan.quotePatch.paymentStatus === "deposit_paid"
-        ? "低价值客户已确认付款，订单草稿已生成"
-        : "低价值客户已确认报价，订单草稿已生成",
-      result.sendTask
-        ? "系统已根据客户确认付款消息更新报价、生成订单草稿，并把确认回复放入微信安全发送队列。"
-        : "系统已根据客户确认消息更新报价并生成待付款订单草稿，收到付款凭证并核验后再发送订单确认。",
+      updatingExistingOrder
+        ? "客户付款信息已记录"
+        : acceptancePlan.quotePatch.paymentStatus === "paid" || acceptancePlan.quotePatch.paymentStatus === "deposit_paid"
+          ? "低价值客户已确认付款，订单草稿已生成"
+          : "低价值客户已确认报价，订单草稿已生成",
+      updatingExistingOrder
+        ? result.sendTask
+          ? "系统已更新订单付款状态，并把订单确认回复放入微信安全发送队列。"
+          : "系统已更新订单付款状态，现有订单确认发送状态保持不变。"
+        : result.sendTask
+          ? "系统已根据客户确认付款消息更新报价、生成订单草稿，并把确认回复放入微信安全发送队列。"
+          : "系统已根据客户确认消息更新报价并生成待付款订单草稿，收到付款凭证并核验后再发送订单确认。",
       {
-        effectKey: `${params.operationId}:quote-accepted-notification`,
-        quoteDraftId: updatedQuote.id,
+        effectKey: updatingExistingOrder
+          ? `${params.operationId}:payment-update-notification`
+          : `${params.operationId}:quote-accepted-notification`,
+        quoteDraftId: quote.id,
         orderDraftId: result.orderDraft.id,
         sendTaskId: result.sendTask?.id,
-        designJobId: updatedQuote.designJobId,
+        designJobId: quote.designJobId,
         conversationId: params.conversation.id,
         customerId: params.conversation.customerId,
         routeId: params.route.id,
@@ -7882,6 +8043,51 @@ export class WechatDispatchService {
   }
 }
 
+type CompletedReplayIdentity = {
+  wechatAccountId: string;
+  conversationId: string;
+  customerId: string;
+};
+
+function completedReplayEntityIdentity(label: string, value: any): CompletedReplayIdentity {
+  const source = label === "notification"
+    ? value?.target
+    : label === "manual-lock review log"
+      ? value?.metadata
+      : label === "quote draft"
+        ? {
+            wechatAccountId: value?.designJob?.wechatAccountId,
+            conversationId: value?.designJob?.conversationId,
+            customerId: value?.customerId || value?.designJob?.customerId,
+          }
+        : label === "manual-lock conversation"
+          ? {
+              wechatAccountId: value?.wechatAccountId,
+              conversationId: value?.id,
+              customerId: value?.customerId,
+            }
+          : value;
+  return {
+    wechatAccountId: String(source?.wechatAccountId || "").trim(),
+    conversationId: String(source?.conversationId || "").trim(),
+    customerId: String(source?.customerId || "").trim(),
+  };
+}
+
+function assertCompletedReplayIdentity(label: string, value: any, expected: CompletedReplayIdentity) {
+  const actual = completedReplayEntityIdentity(label, value);
+  if (
+    !expected.wechatAccountId ||
+    !expected.conversationId ||
+    !expected.customerId ||
+    actual.wechatAccountId !== expected.wechatAccountId ||
+    actual.conversationId !== expected.conversationId ||
+    actual.customerId !== expected.customerId
+  ) {
+    throw new BadRequestException(`completed inbound operation has a foreign or incomplete durable ${label} identity`);
+  }
+}
+
 function inboundSelectionRecovery(value: unknown) {
   const result = isPlainObject(value) ? value : {};
   const effect = isPlainObject(result.recoveryEffect) ? result.recoveryEffect : {};
@@ -7891,10 +8097,30 @@ function inboundSelectionRecovery(value: unknown) {
   ) return null;
   const designJobId = String(effect.designJobId || "").trim();
   const selectedImageId = String(effect.selectedImageId || "").trim();
+  const quoteDraftId = String(effect.quoteDraftId || "").trim();
   if (!designJobId || !selectedImageId) {
     throw new BadRequestException("inbound selection recovery marker is incomplete");
   }
-  return { kind: String(effect.kind), designJobId, selectedImageId };
+  if (effect.kind === "low_value_image_selection" && !quoteDraftId) {
+    throw new BadRequestException("low-value inbound selection recovery marker is missing its quote draft");
+  }
+  return { kind: String(effect.kind), designJobId, selectedImageId, quoteDraftId: quoteDraftId || null };
+}
+
+function inboundQuoteAcceptanceRecovery(value: unknown) {
+  const result = isPlainObject(value) ? value : {};
+  const effect = isPlainObject(result.recoveryEffect) ? result.recoveryEffect : {};
+  if (effect.kind !== "low_value_quote_acceptance" || effect.phase !== "quote_and_order_committed") return null;
+  const quoteDraftId = String(effect.quoteDraftId || "").trim();
+  const orderDraftId = String(effect.orderDraftId || "").trim();
+  const acceptancePlan = isPlainObject(effect.acceptancePlan) ? effect.acceptancePlan : null;
+  if (!quoteDraftId || !orderDraftId || !acceptancePlan?.action || !acceptancePlan?.reason) {
+    throw new BadRequestException("inbound quote acceptance recovery marker is incomplete");
+  }
+  if (!["accept_quote_and_create_order", "update_existing_order_payment"].includes(String(acceptancePlan.action))) {
+    throw new BadRequestException("inbound quote acceptance recovery marker has an invalid action");
+  }
+  return { quoteDraftId, orderDraftId, acceptancePlan };
 }
 
 function isOlderThan(value: unknown, now: Date, minutes: number) {

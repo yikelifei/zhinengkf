@@ -18,6 +18,7 @@ import {
 } from "../shared/operation-idempotency";
 
 const {
+  buildOrderDraftFromQuote,
   diagnoseWechatWindowSnapshot,
   evaluateTrainingSampleQuality,
   inspectBundleAutomationReadiness,
@@ -1362,6 +1363,197 @@ export class LocalStoreService {
     };
     this.write(data);
     return this.hydrateDesignJob(data, data.designJobs[jobIndex]);
+  }
+
+  commitInboundLowValueSelection(payload: {
+    operationId: string;
+    claimToken: string;
+    leaseExpiresAt: string;
+    designJobId: string;
+    selectedImageId: string;
+    feedback: string;
+    recoveryEffect: Record<string, unknown>;
+    highValueAmountCny?: number;
+  }) {
+    const data = this.read();
+    const operationIndex = data.inboundMessageOperations.findIndex((item) => item.id === payload.operationId);
+    if (operationIndex < 0) throw new NotFoundException(`inbound operation not found: ${payload.operationId}`);
+    const operation = data.inboundMessageOperations[operationIndex];
+    if (
+      operation.status !== "processing" ||
+      operation.claimToken !== payload.claimToken ||
+      Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now()
+    ) {
+      throw new InboundLeaseLostError("inbound operation lease changed before low-value selection commit");
+    }
+    const jobIndex = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (jobIndex < 0) throw new NotFoundException(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[jobIndex];
+    if (
+      String(job.wechatAccountId || "") !== String(operation.wechatAccountId || "") ||
+      String(job.conversationId || "") !== String(operation.conversationId || "") ||
+      String(job.customerId || "") !== String(operation.customerId || "")
+    ) {
+      throw new BadRequestException("low-value inbound selection design job identity changed before commit");
+    }
+    const selected = data.designImages.find(
+      (image) => image.designJobId === payload.designJobId &&
+        (image.id === payload.selectedImageId || image.imageId === payload.selectedImageId),
+    );
+    if (!selected) throw new NotFoundException(`design image not found in design job: ${payload.selectedImageId}`);
+    const existingQuoteIndex = data.quoteDrafts.findIndex((item) => item.designJobId === payload.designJobId);
+    const existingQuote = existingQuoteIndex >= 0 ? data.quoteDrafts[existingQuoteIndex] : null;
+    if (existingQuote?.sendTaskId || existingQuote?.status === "sent") {
+      throw new BadRequestException("low-value inbound selection quote changed before commit");
+    }
+    for (const image of data.designImages) {
+      if (image.designJobId !== payload.designJobId) continue;
+      image.selected = image.id === selected.id;
+      if (image.selected) image.customerFeedback = payload.feedback;
+    }
+    const now = new Date().toISOString();
+    let quote: any;
+    if (existingQuote) {
+      quote = {
+        ...existingQuote,
+        selectedImageId: selected.id,
+        status: "auto_sent",
+        customerNotes: "客户在会话中选择了这张效果图，系统已绑定为报价图片。",
+        updatedAt: now,
+      };
+      quote.identityBinding = this.validateStoredQuoteDraftIdentity(data, quote);
+      data.quoteDrafts[existingQuoteIndex] = quote;
+    } else {
+      const conversation = data.conversations.find((item) => item.id === job.conversationId) || null;
+      const items = Array.isArray(job.bundle?.items) ? job.bundle.items : [];
+      const totals = calculateTotals(items);
+      const quantity = Number(job.budget?.quantity || 1);
+      const totalPrice = totals.salePrice * quantity;
+      const totalCost = totals.cost * quantity;
+      const highValueAmount = Number(payload.highValueAmountCny || 10000);
+      const highValueQuote =
+        job.isHighValue ||
+        isHighValueBudget(job.budget, highValueAmount) ||
+        (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
+        (Number.isFinite(totals.salePrice) && totals.salePrice >= highValueAmount);
+      quote = {
+        id: id("quote"),
+        designJobId: job.id,
+        customerId: job.customerId,
+        selectedImageId: selected.id,
+        quantity,
+        unitPrice: totals.salePrice,
+        totalPrice,
+        totalCost,
+        profit: totalPrice - totalCost,
+        status: highValueQuote || !inspectBundleAutomationReadiness(job.bundle || {}).ok ? "manual_review" : "auto_sent",
+        paymentStatus: "unpaid",
+        sendTaskId: null,
+        customerNotes: "客户在会话中选择了这张效果图，系统已绑定为报价图片。",
+        createdAt: now,
+        updatedAt: now,
+      };
+      quote.identityBinding = this.validateQuoteDraftIdentity({ quoteDraft: quote, designJob: job, conversation, selectedImage: selected });
+      data.quoteDrafts.push(quote);
+    }
+    data.designJobs[jobIndex] = { ...job, status: "quote_created", updatedAt: now };
+    const recoveryEffect = { ...payload.recoveryEffect, quoteDraftId: quote.id };
+    data.inboundMessageOperations[operationIndex] = {
+      ...operation,
+      result: { ...(operation.result || {}), recoveryEffect },
+      leaseExpiresAt: normalizeInstant(payload.leaseExpiresAt),
+      updatedAt: now,
+    };
+    this.write(data);
+    return {
+      designJob: this.hydrateDesignJob(data, data.designJobs[jobIndex]),
+      quote: this.hydrateQuoteDraft(data, quote),
+    };
+  }
+
+  commitInboundQuoteAcceptance(payload: {
+    operationId: string;
+    claimToken: string;
+    leaseExpiresAt: string;
+    quoteDraftId: string;
+    quotePatch: Record<string, unknown>;
+    action: "accept_quote_and_create_order" | "update_existing_order_payment";
+    orderDraftId?: string;
+    orderPatch?: Record<string, unknown>;
+    recoveryEffect: Record<string, unknown>;
+  }) {
+    const data = this.read();
+    const operationIndex = data.inboundMessageOperations.findIndex((item) => item.id === payload.operationId);
+    if (operationIndex < 0) throw new NotFoundException(`inbound operation not found: ${payload.operationId}`);
+    const operation = data.inboundMessageOperations[operationIndex];
+    if (
+      operation.status !== "processing" ||
+      operation.claimToken !== payload.claimToken ||
+      Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now()
+    ) {
+      throw new InboundLeaseLostError("inbound operation lease changed before quote acceptance commit");
+    }
+    const quoteIndex = data.quoteDrafts.findIndex((item) => item.id === payload.quoteDraftId);
+    if (quoteIndex < 0) throw new NotFoundException(`local quote draft not found: ${payload.quoteDraftId}`);
+    const currentQuote = data.quoteDrafts[quoteIndex];
+    const designJob = data.designJobs.find((item) => item.id === currentQuote.designJobId) || null;
+    if (
+      !designJob ||
+      String(designJob.wechatAccountId || "") !== String(operation.wechatAccountId || "") ||
+      String(designJob.conversationId || "") !== String(operation.conversationId || "") ||
+      String(currentQuote.customerId || "") !== String(operation.customerId || "")
+    ) {
+      throw new BadRequestException("inbound quote acceptance identity changed before commit");
+    }
+    const now = new Date().toISOString();
+    const quote = { ...currentQuote, ...payload.quotePatch, updatedAt: now };
+    quote.identityBinding = this.validateStoredQuoteDraftIdentity(data, quote);
+    data.quoteDrafts[quoteIndex] = quote;
+
+    let order: any;
+    if (payload.action === "update_existing_order_payment") {
+      const orderIndex = data.orderDrafts.findIndex((item) => item.id === payload.orderDraftId);
+      if (orderIndex < 0) throw new NotFoundException(`local order draft not found: ${payload.orderDraftId}`);
+      const currentOrder = data.orderDrafts[orderIndex];
+      if (currentOrder.quoteDraftId !== quote.id) {
+        throw new BadRequestException("inbound quote acceptance order binding changed before commit");
+      }
+      order = { ...currentOrder, ...(payload.orderPatch || {}), updatedAt: now };
+      order.identityBinding = this.validateStoredOrderDraftBinding(data, order);
+      data.orderDrafts[orderIndex] = order;
+    } else {
+      const existingOrder = data.orderDrafts.find((item) => item.quoteDraftId === quote.id);
+      if (existingOrder) throw new BadRequestException("inbound quote acceptance order changed before commit");
+      const decision = buildOrderDraftFromQuote(this.hydrateQuoteDraft(data, quote));
+      if (!decision.ok) {
+        throw new BadRequestException(`quote cannot create order draft: ${decision.reason}`);
+      }
+      order = {
+        id: id("order"),
+        ...decision.orderDraft,
+        quoteDraftId: quote.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      order.identityBinding = this.validateStoredOrderDraftBinding(data, order);
+      data.orderDrafts.push(order);
+    }
+    const recoveryEffect = {
+      ...payload.recoveryEffect,
+      quoteDraftId: quote.id,
+      orderDraftId: order.id,
+    };
+    data.inboundMessageOperations[operationIndex] = {
+      ...operation,
+      result: { ...(operation.result || {}), recoveryEffect },
+      leaseExpiresAt: normalizeInstant(payload.leaseExpiresAt),
+      updatedAt: now,
+    };
+    this.write(data);
+    return {
+      quote: this.hydrateQuoteDraft(data, quote),
+      orderDraft: this.hydrateOrderDraft(data, order),
+    };
   }
 
   listConversationTimeline(filter: IdentityListFilter & { limit?: number }) {

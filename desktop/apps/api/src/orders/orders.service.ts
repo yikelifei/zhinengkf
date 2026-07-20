@@ -154,6 +154,7 @@ export class OrdersService {
       "订单草稿已更新",
       `订单 ${id} 已更新为 ${updated.status} / ${orderDraftPaymentStatus({ ...current, ...updated }, data)}。`,
       {
+        ...(patch.notificationEffectKey ? { effectKey: patch.notificationEffectKey } : {}),
         orderDraftId: id,
         quoteDraftId: current.quoteDraftId,
         designJobId: current.designJobId,
@@ -961,6 +962,7 @@ type OrderDraftUpdatePatch = {
   paymentStatus?: string;
   customerNotes?: string;
   owner?: string;
+  notificationEffectKey?: string;
 };
 
 function assertGenericOrderUpdatePatch(patch: OrderDraftUpdatePatch) {
