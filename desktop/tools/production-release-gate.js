@@ -10,6 +10,7 @@ const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
 const MIN_NODE_VERSION = "20.0.0";
 const MIN_PYTHON_VERSION = "3.10.0";
 const SAFE_DATABASE_URL = "postgresql://release_gate:release_gate@127.0.0.1:1/release_gate?schema=public";
+const DEFAULT_ISOLATED_PORTS = Object.freeze({ web: 31911, api: 32911, mock: 37911 });
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repositoryRoot = path.resolve(desktopRoot, "..");
@@ -69,6 +70,75 @@ function computeOverallStatus(results) {
 
 function stableObject(value) {
   return Object.fromEntries(Object.entries(value || {}).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function parseTcpPort(value, name) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${name} must be a valid TCP port between 1 and 65535`);
+  }
+  return port;
+}
+
+function parseGateOptions(argv = [], env = process.env) {
+  let isolatedWorktree = false;
+  for (const argument of argv) {
+    if (argument === "--isolated-worktree") isolatedWorktree = true;
+    else throw new Error(`unsupported argument: ${argument}`);
+  }
+  if (!isolatedWorktree) return { mode: "default", ports: null, ownerCheckWebPort: null };
+
+  const ports = {
+    web: parseTcpPort(env.RELEASE_GATE_ISOLATED_WEB_PORT || DEFAULT_ISOLATED_PORTS.web, "isolated Web port"),
+    api: parseTcpPort(env.RELEASE_GATE_ISOLATED_API_PORT || DEFAULT_ISOLATED_PORTS.api, "isolated API port"),
+    mock: parseTcpPort(env.RELEASE_GATE_ISOLATED_MOCK_PORT || DEFAULT_ISOLATED_PORTS.mock, "isolated mock port"),
+  };
+  if (new Set(Object.values(ports)).size !== 3) throw new Error("isolated Web, API and mock ports must be distinct");
+  const ownerCheckWebPort = parseTcpPort(env.WEB_PORT || 3100, "current Web owner-check port");
+  return { mode: "isolated-worktree", ports, ownerCheckWebPort };
+}
+
+function normalizeGitPath(value) {
+  return String(value || "").trim().replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
+function isLinkedWorktreeLayout(gitDir, commonDir) {
+  const normalizedGitDir = normalizeGitPath(gitDir);
+  const normalizedCommonDir = normalizeGitPath(commonDir);
+  if (!normalizedGitDir || !normalizedCommonDir || normalizedGitDir === normalizedCommonDir) return false;
+  return normalizedGitDir.startsWith(`${normalizedCommonDir}/worktrees/`);
+}
+
+function checkLinkedWorktree(root = repositoryRoot) {
+  const checked = spawnSync("git", ["rev-parse", "--git-dir", "--git-common-dir"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+  });
+  const [gitDir = "", commonDir = ""] = String(checked.stdout || "").trim().split(/\r?\n/);
+  if (checked.status === 0 && isLinkedWorktreeLayout(gitDir, commonDir)) {
+    return result(
+      "mode.linked-worktree",
+      "隔离门禁 linked worktree 边界",
+      STATUS.PASS,
+      "Git git-dir 位于 common-dir/worktrees 下，允许使用隔离端口收集当前 worktree 的构建证据。",
+    );
+  }
+  const reason = checked.status === 0
+    ? "当前目录不是 linked worktree；隔离门禁拒绝在主工作树运行。"
+    : "无法读取 Git worktree 布局；隔离门禁失败关闭。";
+  return result("mode.linked-worktree", "隔离门禁 linked worktree 边界", STATUS.FAIL, reason);
+}
+
+function isolatedPortEnv(ports) {
+  return {
+    WEB_PORT: String(ports.web),
+    API_PORT: String(ports.api),
+    MOCK_DESIGN_PLATFORM_PORT: String(ports.mock),
+    DESIGN_PLATFORM_ADAPTER: "mock",
+    DESIGN_PLATFORM_BASE_URL: `http://127.0.0.1:${ports.mock}`,
+  };
 }
 
 function checkDependencyLock(options = {}) {
@@ -344,7 +414,16 @@ function batchCommand(batchFile, args = []) {
   return { command: "python", args: [path.join(repositoryRoot, "scripts", "run_tests.py"), ...args] };
 }
 
-function runLoggedCommand({ id, title, command, args = [], cwd = desktopRoot, env = {}, failureStatus = STATUS.FAIL }) {
+function runLoggedCommand({
+  id,
+  title,
+  command,
+  args = [],
+  cwd = desktopRoot,
+  env = {},
+  failureStatus = STATUS.FAIL,
+  failureStatusByExitCode = {},
+}) {
   const startedAt = Date.now();
   process.stdout.write(`[gate] ${title}...\n`);
   const executed = spawnSync(command, args, {
@@ -384,8 +463,9 @@ function runLoggedCommand({ id, title, command, args = [], cwd = desktopRoot, en
     });
   }
 
-  process.stdout.write(`[${failureStatus}] ${title} (${Math.ceil(durationMs / 1000)}s)\n`);
-  return result(id, title, failureStatus, `命令退出码 ${executed.status ?? "未启动"}，详见隔离日志。`, {
+  const resolvedFailureStatus = resolveCommandFailureStatus(executed.status, failureStatus, failureStatusByExitCode);
+  process.stdout.write(`[${resolvedFailureStatus}] ${title} (${Math.ceil(durationMs / 1000)}s)\n`);
+  return result(id, title, resolvedFailureStatus, `命令退出码 ${executed.status ?? "未启动"}，详见隔离日志。`, {
     durationMs,
     log: path.relative(desktopRoot, logFile).replace(/\\/g, "/"),
     output: `${executed.stdout || ""}\n${executed.stderr || ""}`,
@@ -397,12 +477,18 @@ function sanitizeResults(results) {
 }
 
 function renderMarkdownReport(report) {
+  const ports = report.ports
+    ? `Web=${report.ports.web}, API=${report.ports.api}, Mock=${report.ports.mock}`
+    : "默认端口";
   const lines = [
     "# 生产发布门禁报告",
     "",
     `- 总状态：**${report.status}**`,
     `- 生成时间：${report.generatedAt}`,
     `- 工作目录：\`desktop\``,
+    `- 运行模式：\`${report.mode || "default"}\``,
+    `- 端口范围：${ports}`,
+    ...(report.ownerCheckWebPort ? [`- owner 安全检查端口：${report.ownerCheckWebPort}`] : []),
     "- 说明：该门禁不读取真实密钥、不打包、不上传，也不会自动停止占用端口的进程。",
     "",
     "## 检查结果",
@@ -438,14 +524,25 @@ function renderMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-function writeReport(results) {
+function createReport(results, execution = {}) {
   const cleanResults = sanitizeResults(results);
-  const report = {
-    schemaVersion: 1,
+  return {
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
+    mode: execution.mode || "default",
+    ports: execution.ports || null,
+    ownerCheckWebPort: execution.ownerCheckWebPort || null,
     status: computeOverallStatus(cleanResults),
     results: cleanResults,
   };
+}
+
+function resolveCommandFailureStatus(exitCode, fallbackStatus, statusByExitCode = {}) {
+  return statusByExitCode[exitCode] || fallbackStatus;
+}
+
+function writeReport(results, execution = {}) {
+  const report = createReport(results, execution);
   fs.mkdirSync(reportRoot, { recursive: true });
   fs.writeFileSync(path.join(reportRoot, "latest.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   fs.writeFileSync(path.join(reportRoot, "latest.md"), renderMarkdownReport(report), "utf8");
@@ -511,9 +608,21 @@ function runNpmCheck(id, title, args, options = {}) {
   return runLoggedCommand({ id, title, command: npm.command, args: npm.args, cwd: desktopRoot, ...options });
 }
 
-function main() {
+function main(argv = process.argv.slice(2), env = process.env) {
+  const execution = parseGateOptions(argv, env);
+  let linkedWorktreeCheck = null;
+  if (execution.mode === "isolated-worktree") {
+    linkedWorktreeCheck = checkLinkedWorktree();
+    if (linkedWorktreeCheck.status !== STATUS.PASS) {
+      const report = writeReport([linkedWorktreeCheck], execution);
+      process.stdout.write(`\n[gate] overall=${report.status}\n`);
+      process.stdout.write(`[gate] report=${path.join(reportRoot, "latest.md")}\n`);
+      process.exitCode = EXIT_CODE[report.status];
+      return;
+    }
+  }
   fs.mkdirSync(logRoot, { recursive: true });
-  const results = [];
+  const results = linkedWorktreeCheck ? [linkedWorktreeCheck] : [];
   results.push(checkNodeRuntime());
   results.push(checkNpmRuntime());
   results.push(checkPythonRuntime());
@@ -523,6 +632,7 @@ function main() {
   results.push(secretScanResult());
 
   const portCheck = runNpmCheck("ports.preflight", "端口冲突预检", ["run", "ports:preflight:mock:free"], {
+    env: execution.ports ? isolatedPortEnv(execution.ports) : {},
     failureStatus: STATUS.BLOCKED,
   });
   results.push(portCheck);
@@ -566,7 +676,16 @@ function main() {
   results.push(runNpmCheck("build.api", "API 生产构建", ["run", "build:api"]));
 
   if (portCheck.status === STATUS.PASS) {
-    results.push(runNpmCheck("build.web", "Web 生产构建", ["run", "build:web"]));
+    if (execution.mode === "isolated-worktree") {
+      results.push(
+        runNpmCheck("build.web", "Web 生产构建", ["run", "build:web", "--", "--allow-foreign-port-owner"], {
+          env: { WEB_PORT: String(execution.ownerCheckWebPort), ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "0" },
+          failureStatusByExitCode: { 2: STATUS.BLOCKED },
+        }),
+      );
+    } else {
+      results.push(runNpmCheck("build.web", "Web 生产构建", ["run", "build:web"]));
+    }
   } else {
     results.push(
       result("build.web", "Web 生产构建", STATUS.BLOCKED, "端口预检未通过，为避免破坏正在运行的桌面服务，本次未执行 Web 构建。"),
@@ -587,7 +706,7 @@ function main() {
     results.push(result(blocker.id, blocker.title, STATUS.BLOCKED, blocker.summary));
   }
 
-  const report = writeReport(results);
+  const report = writeReport(results, execution);
   process.stdout.write(`\n[gate] overall=${report.status}\n`);
   process.stdout.write(`[gate] report=${path.join(reportRoot, "latest.md")}\n`);
   process.exitCode = EXIT_CODE[report.status];
@@ -605,8 +724,12 @@ module.exports = {
   checkMigrationInventory,
   compareVersions,
   computeOverallStatus,
+  createReport,
+  isLinkedWorktreeLayout,
+  parseGateOptions,
   parseVersion,
   renderMarkdownReport,
+  resolveCommandFailureStatus,
   scanSecretEntries,
   scanTextForSecrets,
 };

@@ -25,6 +25,15 @@ production-release-gate.cmd
 npm.cmd run release:gate
 ```
 
+当默认 `3100/3200/3700` 正由另一个工作树的桌面栈使用时，只能在 Git linked worktree 中显式运行隔离门禁：
+
+```powershell
+cd desktop
+npm.cmd run release:gate:isolated
+```
+
+隔离门禁默认使用 `31911/32911/37911` 做端口预检，可分别通过 `RELEASE_GATE_ISOLATED_WEB_PORT`、`RELEASE_GATE_ISOLATED_API_PORT`、`RELEASE_GATE_ISOLATED_MOCK_PORT` 覆盖；三个值必须是合法且互不相同的 TCP 端口。报告会披露 `isolated-worktree` 模式和实际端口。该模式不会停止任何进程，也不会把“替代端口空闲”当成可安全重建的充分条件：Web 构建仍检查调用环境原有 `WEB_PORT`（未设置时为 `3100`）的 owner，只有所有 owner 命令行均可识别且均不属于当前 worktree 时才继续；同 worktree owner 或未知 owner 一律 `BLOCKED`。主工作树会在任何测试、构建前被拒绝。此结果只证明隔离 worktree 内的仓库构建，不证明生产默认端口可用。
+
 固定报告位置：
 
 - `desktop/.runtime/production-release-gate/latest.md`
@@ -81,9 +90,9 @@ CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真�
 1. Node.js `>=20.0.0`、npm `>=10.0.0`，Python `>=3.10.0`。
 2. `package.json` 与 `package-lock.json` 的依赖、开发依赖和 engines 一致；`requirements-dev.txt` 复用 `requirements.txt`。
 3. Prisma schema 校验、Prisma Client 生成、离线 SQL 生成，以及迁移目录/SQL 文件完整性检查。
-4. 复用 `ports:preflight:mock:free` 检查 3100、3200、3700 端口冲突；发现占用只报告 `BLOCKED`，不杀进程。
+4. 默认门禁复用 `ports:preflight:mock:free` 检查 3100、3200、3700 端口冲突；隔离门禁只在 linked worktree 使用报告披露的隔离端口。发现占用只报告 `BLOCKED`，不杀进程。
 5. 复用 Python 测试入口、Node 全量测试和身份绑定/发送护栏/桌面启动等关键安全测试。
-6. 分别执行 API 与 Web 生产构建；端口被占用时不破坏运行中的桌面服务，Web 构建记为 `BLOCKED`。
+6. 分别执行 API 与 Web 生产构建；默认模式保持端口占用即阻断。隔离模式只允许绕过可识别的 foreign owner，同 worktree 或未知 owner 仍记为 `BLOCKED`。
 7. 扫描 Git 候选文件中的私钥、禁止提交的密钥文件、高置信度供应商令牌和硬编码敏感赋值；报告只记录文件、行号和规则，不记录密钥值。
 8. 校验 `package.json` 的 Electron main、preload、`run_desktop.bat`、Windows 门禁入口和本发布清单。
 9. 校验 BullMQ durable 调度实现与文档存在；真实 Redis 连通性仍保留为 `BLOCKED`。

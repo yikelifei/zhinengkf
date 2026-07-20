@@ -4,6 +4,8 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const args = new Set(process.argv.slice(2));
+const allowForeignPortOwner = args.delete("--allow-foreign-port-owner");
 const webPort = numberEnv("WEB_PORT", 3100);
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -17,9 +19,14 @@ const stableRuntimeLauncherPidFile = path.join(root, ".runtime-stable", "stable-
 const nextDir = path.join(root, "apps", "web", ".next");
 const nextLockFile = path.join(root, "apps", "web", ".next", "lock");
 
-main();
+if (require.main === module) main();
 
 function main() {
+  if (args.size) {
+    console.error(`[build] unsupported argument: ${[...args].join(", ")}`);
+    process.exitCode = 1;
+    return;
+  }
   buildDiagnostic("start");
   const releaseBuildLock = acquireBuildLock();
   process.on("exit", releaseBuildLock);
@@ -31,11 +38,25 @@ function main() {
   }
   const owners = getPortOwnerPids(webPort);
   if (owners.length) {
-    console.log(`[blocked] Web port ${webPort} is currently used by PID ${owners.join(", ")}.`);
-    console.log("          Stop the desktop services before building web assets:");
-    console.log("          npm.cmd run ports:stop");
-    process.exitCode = 1;
-    return;
+    if (!allowForeignPortOwner) {
+      console.log(`[blocked] Web port ${webPort} is currently used by PID ${owners.join(", ")}.`);
+      console.log("          Stop the desktop services before building web assets:");
+      console.log("          npm.cmd run ports:stop");
+      process.exitCode = 1;
+      return;
+    }
+    const ownerCommands = new Map(owners.map((pid) => [String(pid), commandLineForPid(pid)]));
+    const classified = classifyPortOwners(owners, ownerCommands, root);
+    if (classified.status !== "foreign") {
+      const details = [];
+      if (classified.sameRootPids.length) details.push(`same-worktree PID ${classified.sameRootPids.join(", ")}`);
+      if (classified.unknownPids.length) details.push(`unknown-owner PID ${classified.unknownPids.join(", ")}`);
+      console.log(`[blocked] Web port ${webPort} cannot be treated as foreign-owned: ${details.join("; ")}.`);
+      console.log("          Isolated builds fail closed when an owner belongs to this worktree or its command line cannot be identified.");
+      process.exitCode = 2;
+      return;
+    }
+    console.log(`[isolated] Web port ${webPort} is owned only by recognized foreign PID ${classified.foreignPids.join(", ")}; continuing with worktree-local build outputs.`);
   }
   if (stableRuntimeHeartbeatIsFresh() && process.env.ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT !== "1") {
     console.log("[blocked] Stable desktop heartbeat is fresh; refusing to rebuild web assets while the runtime may be restarting.");
@@ -509,6 +530,28 @@ function commandLineForPid(pid) {
   return normalizePathText(result.stdout || "");
 }
 
+function classifyPortOwners(ownerPids, commandLinesByPid, currentRoot) {
+  const ownerIds = [...new Set((ownerPids || []).map((pid) => String(pid)))];
+  const classified = {
+    status: "free",
+    ownerPids: ownerIds,
+    foreignPids: [],
+    sameRootPids: [],
+    unknownPids: [],
+  };
+  const normalizedRoot = normalizePathText(currentRoot);
+  for (const pid of ownerIds) {
+    const commandLine = normalizePathText(commandLinesByPid?.get?.(pid) || "").trim();
+    if (!commandLine) classified.unknownPids.push(pid);
+    else if (normalizedRoot && commandLine.includes(normalizedRoot)) classified.sameRootPids.push(pid);
+    else classified.foreignPids.push(pid);
+  }
+  if (classified.unknownPids.length) classified.status = "unknown";
+  else if (classified.sameRootPids.length) classified.status = "same-root";
+  else if (classified.foreignPids.length) classified.status = "foreign";
+  return classified;
+}
+
 function getPortOwnerPids(port) {
   const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return [];
@@ -618,3 +661,5 @@ function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
 }
+
+module.exports = { classifyPortOwners };

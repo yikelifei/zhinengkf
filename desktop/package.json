@@ -27,6 +27,7 @@
     "ci:release-quality": "node tools/ci-release-quality.js",
     "project:completion:audit": "node tools/project-completion-audit.js",
     "release:gate": "node tools/production-release-gate.js",
+    "release:gate:isolated": "node tools/production-release-gate.js --isolated-worktree",
     "staging:readiness": "node tools/staging-readiness-evidence.js",
     "database:recovery:plan": "node tools/database-recovery-rehearsal.js",
     "database:recovery:execute": "node tools/database-recovery-rehearsal.js --execute",
