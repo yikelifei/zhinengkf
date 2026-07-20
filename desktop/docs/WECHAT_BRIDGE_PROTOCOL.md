@@ -13,6 +13,14 @@ The bridge program may read outbox files and write acknowledgement files. It mus
 - An external `failed` acknowledgement must include the same identity and `ackToken` proof as `sent`.
 - Simplified failed acknowledgements are only allowed for platform-internal timeout handling.
 
+## Local API authentication
+
+Bridge list, status and inbox-scan routes accept either an authenticated Web operator with `view_console`, or the scoped local bridge credential sent as `x-wechat-bridge-token`. The normal launchers create a 256-bit random token in `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`, pass only that file path to the API, bridge worker and personal-WeChat bridge, and those workers reload the file for every request so rotation takes effect without copying the secret into their environment. They never receive `INTERNAL_API_TOKEN`.
+
+The bridge service token cannot authenticate window-observer routes, and the observer proof token cannot authenticate bridge routes. `POST /api/wechat/send-tasks/:id/bridge-ack` remains on its dedicated one-time `ackToken` protocol and is not converted into an operator endpoint.
+
+The token session uses a random credential, same-directory atomic replacement, a regular-file-only path, and rejects symbolic links. POSIX permission mode is requested where supported. On Windows this is not a claim of per-file ACL isolation; deployments must protect the runtime directory with the service account's Windows ACL.
+
 ## Outbox
 
 Source:
@@ -187,6 +195,7 @@ Configuration:
 - `WECHAT_BRIDGE_INBOX_DIR`: default `.runtime/wechat-inbox`
 - `WECHAT_BRIDGE_LOCK_DIR`: default `.runtime/wechat-bridge-locks`
 - `WECHAT_BRIDGE_WORKER_STATUS_FILE`: default `.runtime/wechat-bridge-worker-status.json`
+- `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`: launcher-managed scoped API credential file; do not copy its contents into environment variables, status files, or logs
 - `BRIDGE_LIMIT`: max outbox tasks per run
 
 Do not enable `simulate_sent` in production. A real bridge must keep the current account lock, account identity, conversation identity, window snapshot, and ack-token validation flow intact.

@@ -9,6 +9,8 @@ import { ConversationOperationsService } from "./conversation-operations.service
 import { ConversationOperationsQuery, ConversationOperationsUpdatePayload } from "./conversation-operations.types";
 
 @Controller("conversation-ops")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class ConversationOperationsController {
   constructor(private readonly operations: ConversationOperationsService) {}
 

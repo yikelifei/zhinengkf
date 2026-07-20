@@ -14,6 +14,10 @@ const {
   ensureWechatWindowObserverProofSession,
   wechatWindowObserverServiceEnv,
 } = require("./wechat-window-observer-session");
+const {
+  ensureWechatBridgeServiceSession,
+  wechatBridgeServiceEnv,
+} = require("./wechat-bridge-service-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -50,6 +54,7 @@ const webStandaloneBuildIdPath = path.join(
 );
 const internalApiToken = ensureInternalApiToken();
 const observerProofSession = ensureWechatWindowObserverProofSession(runtimeDir);
+const bridgeServiceSession = ensureWechatBridgeServiceSession(runtimeDir);
 const args = new Set(process.argv.slice(2));
 const includeApi = !args.has("--no-api");
 const statusOnly = args.has("--status");
@@ -1622,7 +1627,8 @@ function serviceEnv(service) {
     ...process.env,
     ...serviceDefaultEnv(service),
   }, service?.name, internalApiToken);
-  return wechatWindowObserverServiceEnv(internalEnv, service?.name, observerProofSession.tokenFile);
+  const observerEnv = wechatWindowObserverServiceEnv(internalEnv, service?.name, observerProofSession.tokenFile);
+  return wechatBridgeServiceEnv(observerEnv, service?.name, bridgeServiceSession.tokenFile);
 }
 
 function windowsSafeEnv(env) {

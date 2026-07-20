@@ -7,22 +7,29 @@ import {
   TrustedOperator,
 } from "../operator-access/operator-access.guard";
 import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
+import { WechatBridgeAccessGuard, WechatWindowObserverAccessGuard } from "./wechat-runtime-access.guard";
 
 @Controller("wechat")
 export class WechatController {
   constructor(private readonly wechat: WechatDispatchService) {}
 
   @Get("accounts")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listAccounts() {
     return this.wechat.listAccounts();
   }
 
   @Get("conversations")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listConversations(@Query("wechatAccountId") wechatAccountId?: string) {
     return this.wechat.listConversations(wechatAccountId);
   }
 
   @Get("conversations/:id/messages")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listConversationTimeline(
     @Param("id") id: string,
     @Query("wechatAccountId") wechatAccountId?: string,
@@ -38,6 +45,8 @@ export class WechatController {
   }
 
   @Post("conversations/:id/read")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   markConversationMessagesRead(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
     if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
       throw new BadRequestException("mark messages read requires matching expectedConversationId");
@@ -107,6 +116,8 @@ export class WechatController {
   }
 
   @Get("send-tasks")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listSendTasks(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -116,6 +127,8 @@ export class WechatController {
   }
 
   @Get("send-attempts")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listSendAttempts(
     @Query("sendTaskId") sendTaskId?: string,
     @Query("wechatAccountId") wechatAccountId?: string,
@@ -126,11 +139,15 @@ export class WechatController {
   }
 
   @Get("send-adapter")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   getSendAdapter(@Query("adapter") adapter?: string) {
     return this.wechat.getSendAdapter(adapter);
   }
 
   @Get("channels/status")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   getChannelStatus(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -158,6 +175,8 @@ export class WechatController {
   }
 
   @Get("bridge/outbox")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatBridgeAccessGuard)
   listBridgeOutbox(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -167,6 +186,8 @@ export class WechatController {
   }
 
   @Get("bridge/dispatch")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatBridgeAccessGuard)
   listBridgeDispatch(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -176,6 +197,8 @@ export class WechatController {
   }
 
   @Get("bridge/status")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatBridgeAccessGuard)
   getBridgeStatus(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -185,11 +208,15 @@ export class WechatController {
   }
 
   @Post("bridge/inbox/scan")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatBridgeAccessGuard)
   scanBridgeInbox() {
     return this.wechat.scanBridgeInbox();
   }
 
   @Get("window-snapshots")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatWindowObserverAccessGuard)
   listWindowSnapshots(
     @Query("wechatAccountId") wechatAccountId?: string,
     @Query("conversationId") conversationId?: string,
@@ -199,6 +226,8 @@ export class WechatController {
   }
 
   @Get("window-observer/status")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatWindowObserverAccessGuard)
   getWindowObserverStatus() {
     return this.wechat.getWindowObserverStatus();
   }
@@ -211,6 +240,8 @@ export class WechatController {
   }
 
   @Post("window-snapshots/inbox/scan")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(WechatWindowObserverAccessGuard)
   scanWindowSnapshotInbox() {
     return this.wechat.scanWindowSnapshotInbox();
   }

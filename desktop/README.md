@@ -416,6 +416,8 @@ GET /api/wechat/bridge/status
 POST /api/wechat/bridge/inbox/scan
 ```
 
+- 上述 bridge 查询/扫描接口不接受匿名本机请求：已登录工作台通过 `view_console` 操作员会话访问；bridge worker 和个人微信桥接通过启动器创建的 `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`，逐次读取并发送 `x-wechat-bridge-token`。两个 worker 不接收 `INTERNAL_API_TOKEN`。
+- 桥接专用 token 与窗口观察器 proof token 互不通用。凭据文件使用随机值、同目录原子替换、普通文件和拒绝符号链接等保护；Windows 上仍需由部署账号 ACL 保护运行时目录，代码不声称 `mode: 0600` 等价于 Windows ACL。
 - `bridge/outbox` 只返回仍处于 `sending`，且最新 `windows_bridge` attempt 仍是 `started` 的任务。
 - `bridge/status` 汇总 worker 最近一次运行状态、outbox 待处理数、inbox 待扫描回执数和账号锁状态。
 - 已完成、失败、取消或旧 outbox 文件会进入 `ignored`，不会被桥接程序误处理。
@@ -467,6 +469,7 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 - `WECHAT_BRIDGE_INBOX_DIR`：默认 `.runtime/wechat-inbox`
 - `WECHAT_BRIDGE_LOCK_DIR`：默认 `.runtime/wechat-bridge-locks`
 - `WECHAT_BRIDGE_WORKER_STATUS_FILE`：默认 `.runtime/wechat-bridge-worker-status.json`
+- `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`：启动器管理的 bridge 专用 API 凭据文件，不要把 token 内容复制到环境变量、状态文件或日志
 - `BRIDGE_LIMIT`：单轮最多处理几个 outbox 任务
 
 个人微信 Windows 操作端已接在同一 dispatch/ACK 协议后：`tools/personal-wechat-bridge.js` 只操作配置明确绑定的进程、窗口和 Windows 会话，并在发送前后用 UI Automation 校验账号、聊天对象、最近消息及发送结果。详细配置和操作步骤见 `docs/PERSONAL_WECHAT_BRIDGE.md`。
@@ -754,6 +757,8 @@ npm.cmd run wechat:observe-window:watch
 ```bash
 node tools/wechat-window-observer.js --once --scan
 ```
+
+观察器对扫描接口发送 `x-wechat-window-observer-token`，其值从现有 `WECHAT_WINDOW_OBSERVER_PROOF_FILE` 逐次读取，轮换后下一次请求立即生效。该 proof token 只能访问观察器的快照/状态/扫描端点，不能访问 bridge 端点；工作台访问这些端点仍使用 `view_console` 操作员会话。
 
 建议先创建配置文件：
 

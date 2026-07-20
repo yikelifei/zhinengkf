@@ -12,6 +12,7 @@ const {
   buildAckPayload,
   buildDispatchPayload,
   buildWorkerStatus,
+  bridgeServiceHeaders,
   loadAndValidateOutboxPayload,
   normalizeAckTransport,
   normalizeMode,
@@ -22,6 +23,23 @@ const {
   writeDispatchFile,
   writeWorkerStatus,
 } = require("../tools/wechat-bridge-worker");
+
+test("bridge HTTP proof is file-backed, rotates, and never enters worker status", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-http-proof-"));
+  try {
+    const tokenFile = path.join(tempDir, "bridge.key");
+    const first = "5".repeat(64);
+    const second = "6".repeat(64);
+    fs.writeFileSync(tokenFile, `${first}\n`, "utf8");
+    const config = { bridgeServiceTokenFile: tokenFile, mode: "noop", ackTransport: "file_scan" };
+    assert.deepEqual(bridgeServiceHeaders(config), { "x-wechat-bridge-token": first });
+    fs.writeFileSync(tokenFile, `${second}\n`, "utf8");
+    assert.deepEqual(bridgeServiceHeaders(config), { "x-wechat-bridge-token": second });
+    assert.equal(JSON.stringify(buildWorkerStatus(null, config, new Date().toISOString())).includes(second), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 function validOutboxEntry(overrides = {}) {
   return {

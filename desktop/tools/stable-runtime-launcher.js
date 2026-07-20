@@ -12,6 +12,10 @@ const {
   createWechatWindowObserverProofSession,
   wechatWindowObserverServiceEnv,
 } = require("./wechat-window-observer-session");
+const {
+  createWechatBridgeServiceSession,
+  wechatBridgeServiceEnv,
+} = require("./wechat-bridge-service-session");
 const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
 
 const root = path.resolve(__dirname, "..");
@@ -30,6 +34,9 @@ const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next
 const internalApiToken = ensureInternalApiToken();
 const observerProofSession = {
   tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
+};
+const bridgeServiceSession = {
+  tokenFile: path.resolve(process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE || path.join(runtimeDir, "wechat-bridge-service.key")),
 };
 
 const ports = {
@@ -76,6 +83,7 @@ if (fs.existsSync(stopRequestFile)) {
 }
 acquireSingleInstanceLock();
 Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
+Object.assign(bridgeServiceSession, createWechatBridgeServiceSession(runtimeDir, { tokenFile: bridgeServiceSession.tokenFile }));
 if (specs[0].args[0] === webRuntimeServerPath) {
   writeWebRuntimeServer();
 } else {
@@ -319,7 +327,8 @@ function serviceEnv(port, serviceName) {
     WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
   }, serviceName, internalApiToken);
-  return wechatWindowObserverServiceEnv(internalEnv, serviceName, observerProofSession.tokenFile);
+  const observerEnv = wechatWindowObserverServiceEnv(internalEnv, serviceName, observerProofSession.tokenFile);
+  return wechatBridgeServiceEnv(observerEnv, serviceName, bridgeServiceSession.tokenFile);
 }
 
 function acquireSingleInstanceLock() {

@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -142,6 +143,37 @@ test("running observer reloads a rotated proof file before every signed snapshot
   const secondEvidence = JSON.parse(fs.readFileSync(second.snapshotFile, "utf8"));
   assert.equal(verifyWechatWindowObserverEvidence(secondEvidence, "3".repeat(64)).ok, true);
   assert.equal(verifyWechatWindowObserverEvidence(secondEvidence, "2".repeat(64)).ok, false);
+});
+
+test("observer scan authenticates its HTTP request with the current scoped proof token", async (t) => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-window-observer-http-auth-"));
+  const token = "4".repeat(64);
+  let observedHeader = "";
+  const server = http.createServer((request, response) => {
+    observedHeader = String(request.headers["x-wechat-window-observer-token"] || "");
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ scanned: 0, processed: [], failed: [], pending: 0, total: 0, limit: 50 }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const result = await runOnce(
+    {
+      apiBase: `http://127.0.0.1:${server.address().port}/api`,
+      inboxDir: path.join(runtimeDir, "inbox"),
+      statusFile: path.join(runtimeDir, "status.json"),
+      proofToken: token,
+      requestTimeoutMs: 1000,
+      scan: true,
+      dryRun: false,
+      accounts: [],
+      conversations: [],
+    },
+    () => ({ title: "WeChat", processName: "WeChat", processId: 11 }),
+  );
+
+  assert.equal(observedHeader, token);
+  assert.equal(result.scanResult.scanned, 0);
 });
 
 test("observer status avoids leaking raw chat title", () => {

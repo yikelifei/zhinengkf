@@ -13,6 +13,7 @@
 - 只支持非空文本和 `LOCAL_STORAGE_ROOT` 内的真实本地图片。远程 URL、缺失文件、目录、符号链接和越界路径会阻断。
 - 每个动作发送后都必须观察到绑定消息列表发生变化；文本动作还必须在该消息列表中观察到发送文本。
 - 只有全部动作都返回真实 UI 成功证据后才写 `sent` ACK。无法验证或结果不确定时只写本地 blocked marker，不写 ACK，也不会自动重试。
+- 读取 bridge 状态/outbox 和扫描 ACK 时，只使用启动器分配的 `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`，逐次读取并发送 `x-wechat-bridge-token`；进程不接收平台级 `INTERNAL_API_TOKEN`，凭据也不得写入状态文件或日志。
 
 ## 1. 准备账号绑定文件
 
@@ -128,6 +129,7 @@ npm.cmd run wechat:safe:personal:start
 - `PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE`：账号绑定文件路径。
 - `PERSONAL_WECHAT_BLOCKED_DIR`：默认 `.runtime/personal-wechat-blocked`。
 - `WECHAT_BRIDGE_LOCK_DIR`：默认 `.runtime/wechat-bridge-locks`，worker 和个人桥接共同使用。
+- `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`：启动器管理的桥接专用 API 凭据文件；正常启动链会自动配置，无需人工复制 token。
 - `LOCAL_STORAGE_ROOT`：允许发送图片的本地存储根目录。
 - `PERSONAL_WECHAT_PASTE_DELAY_MS`：粘贴后等待时间，默认 500 ms。
 - `PERSONAL_WECHAT_CONFIRM_DELAY_MS`：按 Enter 后等待 UI 结果时间，默认 1500 ms。

@@ -5,6 +5,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { acquireAccountLock, acquireNamedLock, writeFileAtomic } = require("./wechat-bridge-durable-fs");
+const { readWechatBridgeServiceToken } = require("./wechat-bridge-service-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -345,7 +346,7 @@ async function verifyPendingDispatch(dispatch, outboxPayload, config) {
     url.searchParams.set("conversationId", String(dispatch.conversationId || ""));
     const customerId = String(outboxPayload?.target?.customerId || "");
     if (customerId) url.searchParams.set("customerId", customerId);
-    const response = await getJson(url.toString());
+    const response = await getJson(url.toString(), { headers: bridgeServiceHeaders(config) });
     const pending = Array.isArray(response?.pending) ? response.pending : [];
     const match = pending.find((entry) =>
       String(entry?.taskId || "") === String(dispatch.taskId || "") &&
@@ -842,7 +843,9 @@ function dispatchExpired(dispatch) {
 
 function scanAckInbox(config) {
   if (typeof config.scanAckExecutor === "function") return Promise.resolve(config.scanAckExecutor());
-  return postJson(`${config.apiBase}/wechat/bridge/inbox/scan`, {});
+  return postJson(`${config.apiBase}/wechat/bridge/inbox/scan`, {}, {
+    headers: bridgeServiceHeaders(config),
+  });
 }
 
 async function safeScanAckInbox(config) {
@@ -931,6 +934,9 @@ function readConfig() {
     lockDir: path.resolve(valueArg("--lock-dir") || process.env.WECHAT_BRIDGE_LOCK_DIR || defaultLockDir),
     blockedDir: path.resolve(valueArg("--blocked-dir") || process.env.PERSONAL_WECHAT_BLOCKED_DIR || defaultBlockedDir),
     statusFile: path.resolve(valueArg("--status-file") || process.env.PERSONAL_WECHAT_BRIDGE_STATUS_FILE || defaultStatusFile),
+    bridgeServiceTokenFile: process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE
+      ? path.resolve(process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE)
+      : "",
     localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || defaultLocalStorageRoot),
     accountsConfigFile,
     accountsConfig,
@@ -949,6 +955,14 @@ function readConfig() {
     scanAckInbox: !envFlag("PERSONAL_WECHAT_DISABLE_ACK_SCAN"),
     watch: hasArg("--watch"),
   };
+}
+
+function bridgeServiceHeaders(config = {}) {
+  const token = config.bridgeServiceToken
+    ? String(config.bridgeServiceToken).trim()
+    : readWechatBridgeServiceToken(config.bridgeServiceTokenFile);
+  if (!/^[a-f0-9]{64}$/i.test(token)) throw new Error("WeChat bridge service token is unavailable");
+  return { "x-wechat-bridge-token": token };
 }
 
 function resolveProbeAccount(accountId, config) {
@@ -1095,6 +1109,7 @@ Required for real sending:
   PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE=.runtime/personal-wechat-accounts.json
   PERSONAL_WECHAT_DRIVER=windows_uia|wechatauto_rpa
   PERSONAL_WECHAT_RPA_CONFIG_FILE=.runtime/personal-wechat-rpa.json
+  WECHAT_BRIDGE_SERVICE_TOKEN_FILE=.runtime/wechat-bridge-service.key
   PERSONAL_WECHAT_RPA_ENDPOINT=http://127.0.0.1:3211
 
 Safety behavior:
@@ -1107,9 +1122,13 @@ Safety behavior:
   Unsafe pre-send validation creates a blocked marker and requires manual review.`);
 }
 
-function getJson(url) {
+function getJson(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.request(url, { method: "GET", timeout: 10000 }, (response) => {
+    const request = http.request(url, {
+      method: "GET",
+      timeout: Number(options.timeoutMs || 10000),
+      headers: options.headers || {},
+    }, (response) => {
       let data = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => { data += chunk; });
@@ -1138,6 +1157,7 @@ module.exports = {
   buildAckPayload,
   buildActionPlan,
   buildStatus,
+  bridgeServiceHeaders,
   buildOperationPayload,
   executeBoundWechatActions,
   groupDispatchFilesByAccount,

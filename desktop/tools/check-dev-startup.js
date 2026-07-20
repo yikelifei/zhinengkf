@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { readWechatWindowObserverProofToken } = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = path.join(desktopRoot, ".runtime");
@@ -49,6 +50,9 @@ const mockDesignService = {
 
 const integrationHealthUrl = `http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`;
 const wechatSnapshotsUrl = `http://127.0.0.1:${apiPort}/api/wechat/window-snapshots`;
+const observerProofFile = path.resolve(
+  process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key"),
+);
 const maxWechatSnapshotLatencyMs = numberEnv("MAX_WECHAT_SNAPSHOT_LATENCY_MS", 2000);
 
 const fallbackServices = [
@@ -274,7 +278,14 @@ function printLogTail(serviceName) {
 function requestUrl(url) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    const request = http.get(url, { timeout: 3000 }, (response) => {
+    let headers;
+    try {
+      headers = requestHeadersForUrl(url);
+    } catch (error) {
+      resolve({ error: error instanceof Error ? error.message : String(error), durationMs: Date.now() - startedAt });
+      return;
+    }
+    const request = http.get(url, { timeout: 3000, headers }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => {
@@ -291,6 +302,13 @@ function requestUrl(url) {
     });
     request.on("error", (error) => resolve({ error: error.message, durationMs: Date.now() - startedAt }));
   });
+}
+
+function requestHeadersForUrl(url) {
+  if (url !== wechatSnapshotsUrl) return {};
+  return {
+    "x-wechat-window-observer-token": readWechatWindowObserverProofToken(observerProofFile),
+  };
 }
 
 async function getIntegrationHealth() {

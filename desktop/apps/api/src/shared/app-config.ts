@@ -48,6 +48,9 @@ const designPlatformRuntimeConfigPath = path.resolve(
 const wechatWindowObserverProofFile = path.resolve(
   process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || runtimePath("wechat-window-observer-proof.key"),
 );
+const wechatBridgeServiceTokenFile = path.resolve(
+  process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE || runtimePath("wechat-bridge-service.key"),
+);
 
 function readRuntimeConfig(): Record<string, unknown> {
   const configPath = designPlatformRuntimeConfigPath;
@@ -177,6 +180,7 @@ export const appConfig = {
   wechatBridgeDispatchDir: path.resolve(process.env.WECHAT_BRIDGE_DISPATCH_DIR || runtimePath("wechat-dispatch")),
   wechatBridgeLockDir: path.resolve(process.env.WECHAT_BRIDGE_LOCK_DIR || runtimePath("wechat-bridge-locks")),
   wechatBridgeWorkerStatusFile: path.resolve(process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || runtimePath("wechat-bridge-worker-status.json")),
+  wechatBridgeServiceTokenFile,
   wechatWindowSnapshotInboxDir: path.resolve(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR || runtimePath("wechat-window-snapshots")),
   wechatWindowObserverStatusFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || runtimePath("wechat-window-observer-status.json")),
   wechatWindowObserverProofFile,

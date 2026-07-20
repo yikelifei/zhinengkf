@@ -61,11 +61,81 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
-  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", '@Post("inbound/messages")\n@RequireOperatorCapability("approve_send")\n@UseGuards(OperatorAccessGuard)\nprocessInboundMessage(@Body() payload, @TrustedOperator() _principal) {}\nvalidateSendTask(\n  @Param("id") id: string,\n  @Body() payload: ExpectedIdentityPayload,\n) {}\n');
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", `
+@Get("accounts")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+listAccounts() {}
+@Get("conversations")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+listConversations() {}
+@Get("conversations/:id/messages")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+listConversationTimeline() {}
+@Post("conversations/:id/read")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+markConversationMessagesRead() {}
+@Get("send-tasks")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+listSendTasks() {}
+@Get("send-attempts")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+listSendAttempts() {}
+@Get("send-adapter")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+getSendAdapter() {}
+@Get("channels/status")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+getChannelStatus() {}
+@Get("bridge/outbox")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatBridgeAccessGuard)
+listBridgeOutbox() {}
+@Get("bridge/dispatch")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatBridgeAccessGuard)
+listBridgeDispatch() {}
+@Get("bridge/status")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatBridgeAccessGuard)
+getBridgeStatus() {}
+@Post("bridge/inbox/scan")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatBridgeAccessGuard)
+scanBridgeInbox() {}
+@Get("window-snapshots")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatWindowObserverAccessGuard)
+listWindowSnapshots() {}
+@Get("window-observer/status")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatWindowObserverAccessGuard)
+getWindowObserverStatus() {}
+@Post("window-snapshots/inbox/scan")
+@RequireOperatorCapability("view_console")
+@UseGuards(WechatWindowObserverAccessGuard)
+scanWindowSnapshotInbox() {}
+@Post("inbound/messages")
+@RequireOperatorCapability("approve_send")
+@UseGuards(OperatorAccessGuard)
+processInboundMessage(@Body() payload, @TrustedOperator() _principal) {}
+@Post("send-tasks/:id/bridge-ack")
+acknowledgeBridgeSend() {}
+validateSendTask(
+  @Param("id") id: string,
+  @Body() payload: ExpectedIdentityPayload,
+) {}
+`);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest() {}\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'buildOrderSendContext();\norderContext: params.orderContext;\nthis.orderSendContext(task);\n', true);
-  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id });\n', true);
-  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'setConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id });\nsetConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n', true);
   write(root, "desktop/packages/rules/wechatWindowEvidence.js", 'WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION; createWechatWindowObserverAttestation(); createHmac("sha256", token); timingSafeEqual(supplied, expected); canonicalObserverAttestation(); canonicalJsonObject();\n');
   write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
@@ -83,6 +153,19 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
+  write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.controller.ts", `
+@Controller("conversation-ops")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class ConversationOperationsController {
+  @Get("queue")
+  listQueue() {}
+
+  @Patch("conversations/:id")
+  @RequireOperatorCapability("manage_assignments")
+  updateConversation() {}
+}
+`);
   write(root, "desktop/apps/api/src/automation/automation.service.ts", "listAutomationRuns(); saveAutomationRun();\n");
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service.ts", "REGISTRY_VERSION; readRegistryState(); writeRegistryDocument(); PersonalWechatRpaPersistence; this.persistence.listBindings(); this.persistence.listAudit(); this.persistence.upsertBinding(); this.persistence.recordAudit(); assertProductionIdentity();\n");
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence.ts", "prisma.$transaction(); hydrateBinding(); sanitizeError();\n");

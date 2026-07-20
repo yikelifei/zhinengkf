@@ -237,6 +237,20 @@ test("API bootstrap keeps dedicated callbacks public while generic inbound requi
   assert.doesNotMatch(personalInbound, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
   const bridgeAck = methodSection(wechat, '@Post("send-tasks/:id/bridge-ack")', "acknowledgeBridgeSend");
   assert.doesNotMatch(bridgeAck, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
+  assert.doesNotMatch(bridgeAck, /WechatBridgeAccessGuard|WechatWindowObserverAccessGuard/);
+  for (const [decorator, method, guard] of [
+    ['@Get("bridge/outbox")', "listBridgeOutbox", "WechatBridgeAccessGuard"],
+    ['@Get("bridge/dispatch")', "listBridgeDispatch", "WechatBridgeAccessGuard"],
+    ['@Get("bridge/status")', "getBridgeStatus", "WechatBridgeAccessGuard"],
+    ['@Post("bridge/inbox/scan")', "scanBridgeInbox", "WechatBridgeAccessGuard"],
+    ['@Get("window-snapshots")', "listWindowSnapshots", "WechatWindowObserverAccessGuard"],
+    ['@Get("window-observer/status")', "getWindowObserverStatus", "WechatWindowObserverAccessGuard"],
+    ['@Post("window-snapshots/inbox/scan")', "scanWindowSnapshotInbox", "WechatWindowObserverAccessGuard"],
+  ]) {
+    const section = methodSection(wechat, decorator, method);
+    assert.match(section, /@RequireOperatorCapability\("view_console"\)/, method);
+    assert.match(section, new RegExp(`@UseGuards\\(${guard}\\)`), method);
+  }
   const inbound = methodSection(wechat, '@Post("inbound/messages")', "processInboundMessage");
   assert.match(inbound, /@RequireOperatorCapability\("approve_send"\)/);
   assert.match(inbound, /@UseGuards\(OperatorAccessGuard\)/);

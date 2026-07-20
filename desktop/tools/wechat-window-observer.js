@@ -267,7 +267,10 @@ function writeObserverStatus(statusFile, status) {
 async function postJson(url, body, config = {}) {
   const response = await fetchWithContext(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-wechat-window-observer-token": currentObserverProofToken(config),
+    },
     body: JSON.stringify(body || {}),
   }, config.requestTimeoutMs);
   if (!response.ok) {

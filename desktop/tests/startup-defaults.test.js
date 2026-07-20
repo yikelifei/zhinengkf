@@ -54,6 +54,10 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(smokeDevStack, /url: `http:\/\/127\.0\.0\.1:\$\{webPort\}\/`/);
   assert.match(smokeDevStack, /"dev", "apps\/web", "-p", String\(webPort\), "--hostname", "127\.0\.0\.1"/);
   assert.match(checkDevStartup, /const wechatSnapshotsUrl = `http:\/\/127\.0\.0\.1:\$\{apiPort\}\/api\/wechat\/window-snapshots`;/);
+  assert.match(checkDevStartup, /readWechatWindowObserverProofToken/);
+  assert.match(checkDevStartup, /if \(url !== wechatSnapshotsUrl\) return \{\};/);
+  assert.match(checkDevStartup, /"x-wechat-window-observer-token": readWechatWindowObserverProofToken\(observerProofFile\)/);
+  assert.doesNotMatch(checkDevStartup, /createWechatWindowObserverProofSession|ensureWechatWindowObserverProofSession/);
   assert.match(checkDevStartup, /MAX_WECHAT_SNAPSHOT_LATENCY_MS/);
   assert.match(checkDevStartup, /function printWechatWorkerProcesses\(\)/);
   assert.match(checkDevStartup, /function findKeepAliveSupervisorProcesses\(\)/);
@@ -644,7 +648,8 @@ test("wechat safe worker launcher is explicit and defaults to no real send", () 
   assert.match(launcher, /was stopped by wechat:safe:stop/);
   assert.match(launcher, /could not mark \$\{service\.label\} stopped/);
   assert.match(bridgeWorker, /if \(!config\.watch\) throw error;/);
-  assert.match(bridgeWorker, /await fetchWithContext\(url, \{ method: "GET" \}\)/);
+  assert.match(bridgeWorker, /headers: bridgeServiceHeaders\(config\)/);
+  assert.match(bridgeWorker, /"x-wechat-bridge-token": token/);
   assert.match(bridgeWorker, /throw new Error\(`\$\{method\} \$\{url\} failed: \$\{causeMessage\}`\)/);
   assert.match(bridgeWorker, /Default mode is noop/);
   assert.match(bridgeWorker, /does not mark anything sent/);
@@ -1476,6 +1481,28 @@ test("wechat window observer proof is runtime-generated and scoped only to API p
   assert.match(safeWorkers, /readWechatWindowObserverProofToken\(observerProofFile\)/);
   assert.match(acceptance, /wechatWindowObserverServiceEnv\(serviceEnv, "api", observerProofSession\.tokenFile\)/);
   assert.match(acceptance, /withoutWechatWindowObserverProof\(process\.env\)/);
+});
+
+test("wechat bridge runtime token is generated separately and scoped away from Web and observer", () => {
+  const session = readText("tools/wechat-bridge-service-session.js");
+  const startDev = readText("tools/start-dev-ports.js");
+  const stackStarter = readText("tools/ports-stack-starter.js");
+  const stableRuntime = readText("tools/stable-runtime-launcher.js");
+  const safeWorkers = readText("tools/start-wechat-safe-workers.js");
+  const bridgeWorker = readText("tools/wechat-bridge-worker.js");
+  const personalBridge = readText("tools/personal-wechat-bridge.js");
+
+  assert.match(session, /randomBytes\(32\)\.toString\("hex"\)/);
+  assert.match(session, /TRUSTED_SERVICE_NAMES = new Set\(\["api", "wechat-bridge-worker", "personal-wechat-bridge"\]\)/);
+  assert.match(session, /withoutWechatBridgeServiceToken/);
+  assert.match(startDev, /ensureWechatBridgeServiceSession\(runtimeDir\)/);
+  assert.match(startDev, /wechatBridgeServiceEnv\(observerEnv, service\?\.name, bridgeServiceSession\.tokenFile\)/);
+  assert.match(stackStarter, /WECHAT_BRIDGE_SERVICE_TOKEN_FILE: bridgeServiceSession\.tokenFile/);
+  assert.match(stableRuntime, /createWechatBridgeServiceSession\(runtimeDir/);
+  assert.match(safeWorkers, /wechatBridgeServiceEnv\(observerEnv, service\.name, bridgeServiceSession\.tokenFile\)/);
+  assert.match(bridgeWorker, /readWechatBridgeServiceToken\(config\.bridgeServiceTokenFile\)/);
+  assert.match(personalBridge, /readWechatBridgeServiceToken\(config\.bridgeServiceTokenFile\)/);
+  assert.doesNotMatch(session, /INTERNAL_API_TOKEN/);
 });
 
 test("web build script refuses to build while dev web port is occupied", () => {

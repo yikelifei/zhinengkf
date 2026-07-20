@@ -15,7 +15,7 @@
 | `wechat-inbox/*.ack.json` | 尚未被后端扫描的持久回执 | 不发送，只重扫 ACK |
 | 任务 `sending` 且 `deliveryState=unknown` | ACK 超时、outbox 异常或 dispatch 过期，投递结果未知 | 绝对禁止 |
 
-目录可由环境变量改写；现场应以 `GET /api/wechat/bridge/status` 返回值和进程实际配置为准，不要假定默认路径。
+目录可由环境变量改写；现场应以已登录工作台显示的 bridge 状态和进程实际配置为准，不要假定默认路径。`GET /api/wechat/bridge/status` 不再接受匿名本机请求：工作台走操作员会话，bridge 进程走专用服务凭据。
 
 ## 2. 通用停机检查
 
@@ -31,10 +31,10 @@ npm.cmd run wechat:safe:stop
 ## 3. ACK 丢失或 ACK 扫描失败
 
 1. 查看 `.runtime/wechat-inbox` 或配置的 inbox 中是否仍有对应 `.ack.json`。
-2. 有 ACK 时只重扫回执，不重新发送：
+2. 有 ACK 时只重扫回执，不重新发送。优先恢复并运行正常 bridge worker，让它用启动器管理的 `WECHAT_BRIDGE_SERVICE_TOKEN_FILE` 自动鉴权。只有受控排障脚本才应读取该文件并发送 `x-wechat-bridge-token`，不要把 token 粘贴进命令历史、报告或日志。
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:3200/api/wechat/bridge/inbox/scan
+npm.cmd run wechat:bridge:once
 ```
 
 3. 网络响应丢失导致同一 ACK 再次提交是安全的；只有任务、attempt、账号、会话、客户、outbox 文件和 token 哈希全部一致才会按幂等重放接受。

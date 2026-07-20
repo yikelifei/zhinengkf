@@ -1276,6 +1276,7 @@ function highRiskOperatorRouteResults(root) {
     aiProviders: "desktop/apps/api/src/ai/ai-provider.controller.ts",
     assets: "desktop/apps/api/src/assets/assets.controller.ts",
     catalog: "desktop/apps/api/src/catalog/catalog.controller.ts",
+    conversationOperations: "desktop/apps/api/src/conversation-ops/conversation-operations.controller.ts",
     notifications: "desktop/apps/api/src/notifications/notifications.controller.ts",
     orders: "desktop/apps/api/src/orders/orders.controller.ts",
     wechat: "desktop/apps/api/src/wechat/wechat.controller.ts",
@@ -1313,6 +1314,7 @@ function highRiskOperatorRouteResults(root) {
     ["orders-class", "orders"],
     ["quotes-class", "quotes"],
     ["routing-class", "routing"],
+    ["conversation-operations-class", "conversationOperations"],
   ]) {
     checkClass(label, sources[sourceKey], [
       /@RequireOperatorCapability\(["']view_console["']\)/,
@@ -1368,6 +1370,46 @@ function highRiskOperatorRouteResults(root) {
     /@RequireOperatorCapability\(["']approve_send["']\)/,
     /@UseGuards\(OperatorAccessGuard\)/,
     /@TrustedOperator\(\) _principal/,
+  ]);
+  for (const [label, routePattern] of [
+    ["wechat-accounts-read", /@Get\(["']accounts["']\)/],
+    ["wechat-conversations-read", /@Get\(["']conversations["']\)/],
+    ["wechat-timeline-read", /@Get\(["']conversations\/:id\/messages["']\)/],
+    ["wechat-mark-read", /@Post\(["']conversations\/:id\/read["']\)/],
+    ["wechat-send-tasks-read", /@Get\(["']send-tasks["']\)/],
+    ["wechat-send-attempts-read", /@Get\(["']send-attempts["']\)/],
+    ["wechat-send-adapter-read", /@Get\(["']send-adapter["']\)/],
+    ["wechat-channel-status-read", /@Get\(["']channels\/status["']\)/],
+  ]) {
+    check(label, sources.wechat, routePattern, [
+      /@RequireOperatorCapability\(["']view_console["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+    ]);
+  }
+  for (const [label, routePattern] of [
+    ["wechat-bridge-outbox", /@Get\(["']bridge\/outbox["']\)/],
+    ["wechat-bridge-dispatch", /@Get\(["']bridge\/dispatch["']\)/],
+    ["wechat-bridge-status", /@Get\(["']bridge\/status["']\)/],
+    ["wechat-bridge-inbox-scan", /@Post\(["']bridge\/inbox\/scan["']\)/],
+  ]) {
+    check(label, sources.wechat, routePattern, [
+      /@RequireOperatorCapability\(["']view_console["']\)/,
+      /@UseGuards\(WechatBridgeAccessGuard\)/,
+    ]);
+  }
+  for (const [label, routePattern] of [
+    ["wechat-window-snapshots", /@Get\(["']window-snapshots["']\)/],
+    ["wechat-window-observer-status", /@Get\(["']window-observer\/status["']\)/],
+    ["wechat-window-inbox-scan", /@Post\(["']window-snapshots\/inbox\/scan["']\)/],
+  ]) {
+    check(label, sources.wechat, routePattern, [
+      /@RequireOperatorCapability\(["']view_console["']\)/,
+      /@UseGuards\(WechatWindowObserverAccessGuard\)/,
+    ]);
+  }
+  check("wechat-bridge-ack-dedicated", sources.wechat, /@Post\(["']send-tasks\/:id\/bridge-ack["']\)/, [], [
+    /@RequireOperatorCapability\(/,
+    /@UseGuards\((?:OperatorAccessGuard|WechatBridgeAccessGuard|WechatWindowObserverAccessGuard)\)/,
   ]);
 
   check("wechat-work-sync", sources.wechatWork, /@Post\(["']kf\/sync["']\)/, [

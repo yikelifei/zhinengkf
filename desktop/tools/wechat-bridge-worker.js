@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { acquireAccountLock, writeFileAtomic } = require("./wechat-bridge-durable-fs");
+const { readWechatBridgeServiceToken } = require("./wechat-bridge-service-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -55,7 +56,7 @@ async function runOnce(config = readConfig()) {
   fs.mkdirSync(config.dispatchDir, { recursive: true });
   fs.mkdirSync(config.lockDir, { recursive: true });
 
-  const outbox = await fetchJson(`${config.apiBase}/wechat/bridge/outbox`);
+  const outbox = await fetchJson(`${config.apiBase}/wechat/bridge/outbox`, config);
   const allPending = Array.isArray(outbox.pending) ? outbox.pending : [];
   const handledAccounts = new Set();
   const processed = [];
@@ -160,7 +161,7 @@ async function processPendingEntry(entry, config) {
 
   const ackFile = writeAckFile(config.inboxDir, ackPayload);
   const result = config.ackTransport === "file_scan"
-    ? await postJson(`${config.apiBase}/wechat/bridge/inbox/scan`, {})
+    ? await postJson(`${config.apiBase}/wechat/bridge/inbox/scan`, {}, bridgeServiceHeaders(config))
     : null;
   if (config.ackTransport === "file_scan") {
     assertScanAcceptedAck(result, ackPayload);
@@ -647,8 +648,11 @@ function writeWorkerStatus(statusFile, status) {
   return statusFile;
 }
 
-async function fetchJson(url) {
-  const response = await fetchWithContext(url, { method: "GET" });
+async function fetchJson(url, config = {}) {
+  const response = await fetchWithContext(url, {
+    method: "GET",
+    headers: bridgeServiceHeaders(config),
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `GET ${url} failed with ${response.status}`);
@@ -656,10 +660,10 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, headers = {}) {
   const response = await fetchWithContext(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body || {}),
   });
   if (!response.ok) {
@@ -688,6 +692,9 @@ function readConfig() {
     dispatchDir: path.resolve(valueArg("--dispatch-dir") || process.env.WECHAT_BRIDGE_DISPATCH_DIR || defaultDispatchDir),
     lockDir: path.resolve(valueArg("--lock-dir") || process.env.WECHAT_BRIDGE_LOCK_DIR || defaultLockDir),
     statusFile: path.resolve(valueArg("--status-file") || process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || defaultStatusFile),
+    bridgeServiceTokenFile: process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE
+      ? path.resolve(process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE)
+      : "",
     mode: normalizeMode(valueArg("--mode") || process.env.BRIDGE_MODE || "noop"),
     ackTransport: normalizeAckTransport(valueArg("--ack") || process.env.BRIDGE_ACK_TRANSPORT || "file_scan"),
     limit: numberValue(valueArg("--limit") || process.env.BRIDGE_LIMIT, 5, 1, 50),
@@ -696,6 +703,14 @@ function readConfig() {
     dispatchTtlMs: numberValue(valueArg("--dispatch-ttl-ms") || process.env.BRIDGE_DISPATCH_TTL_MS, lockStaleMs, 1000, 60 * 60 * 1000),
     watch: hasArg("--watch"),
   };
+}
+
+function bridgeServiceHeaders(config = {}) {
+  const token = config.bridgeServiceToken
+    ? String(config.bridgeServiceToken).trim()
+    : readWechatBridgeServiceToken(config.bridgeServiceTokenFile);
+  if (!/^[a-f0-9]{64}$/i.test(token)) throw new Error("WeChat bridge service token is unavailable");
+  return { "x-wechat-bridge-token": token };
 }
 
 function normalizeMode(value) {
@@ -759,6 +774,7 @@ Environment:
   WECHAT_BRIDGE_DISPATCH_DIR=.runtime/wechat-dispatch
   WECHAT_BRIDGE_LOCK_DIR=.runtime/wechat-bridge-locks
   WECHAT_BRIDGE_WORKER_STATUS_FILE=.runtime/wechat-bridge-worker-status.json
+  WECHAT_BRIDGE_SERVICE_TOKEN_FILE=.runtime/wechat-bridge-service.key
   BRIDGE_DISPATCH_TTL_MS=300000
 
 Default mode is noop: it only reads pending bridge outbox tasks and does not mark anything sent.
@@ -770,6 +786,7 @@ module.exports = {
   buildAckFileName,
   buildDispatchPayload,
   buildWorkerStatus,
+  bridgeServiceHeaders,
   assertScanAcceptedAck,
   loadAndValidateOutboxPayload,
   validateOutboxEntry,

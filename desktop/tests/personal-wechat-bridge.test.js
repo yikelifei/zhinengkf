@@ -12,6 +12,7 @@ const {
   buildAckPayload,
   buildActionPlan,
   buildStatus,
+  bridgeServiceHeaders,
   executeBoundWechatActions,
   readConfig,
   resolveAccountBinding,
@@ -21,6 +22,23 @@ const {
   validateDispatchPayload,
   validateSourceOutbox,
 } = require("../tools/personal-wechat-bridge");
+
+test("personal bridge reads the rotating bridge HTTP proof without exposing it in status", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "personal-bridge-http-proof-"));
+  try {
+    const tokenFile = path.join(tempDir, "bridge.key");
+    const first = "7".repeat(64);
+    const second = "8".repeat(64);
+    fs.writeFileSync(tokenFile, `${first}\n`, "utf8");
+    const config = { bridgeServiceTokenFile: tokenFile, sendEnabled: false, driver: "windows_uia", rpaInstances: [] };
+    assert.deepEqual(bridgeServiceHeaders(config), { "x-wechat-bridge-token": first });
+    fs.writeFileSync(tokenFile, `${second}\n`, "utf8");
+    assert.deepEqual(bridgeServiceHeaders(config), { "x-wechat-bridge-token": second });
+    assert.equal(JSON.stringify(buildStatus(null, config, new Date().toISOString())).includes(second), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 test("validates explicit account to process, window and Windows session bindings", () => {
   const config = buildAccountsConfig();
@@ -425,6 +443,8 @@ test("implementation has no unverified-window escape hatch or first-process acti
   assert.match(helper, /windows_session_mismatch/);
   assert.match(helper, /recent_message_mismatch/);
   assert.match(helper, /send_not_observed/);
+  assert.match(bridge, /getJson\(url\.toString\(\), \{ headers: bridgeServiceHeaders\(config\) \}\)/);
+  assert.match(bridge, /headers: options\.headers \|\| \{\}/);
 });
 
 function createRuntimeFixture() {

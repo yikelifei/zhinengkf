@@ -41,6 +41,7 @@ import { TrainingController } from "./training/training.controller";
 import { TrainingService } from "./training/training.service";
 import { WechatController } from "./wechat/wechat.controller";
 import { WechatDispatchService } from "./wechat/wechat-dispatch.service";
+import { WechatBridgeAccessGuard, WechatWindowObserverAccessGuard } from "./wechat/wechat-runtime-access.guard";
 import { WechatSendAdapterService } from "./wechat/wechat-send-adapter.service";
 import { WechatWorkController } from "./wechat-work/wechat-work.controller";
 import { WechatWorkApiClient } from "./wechat-work/wechat-work-api.client";
@@ -102,6 +103,8 @@ import { WechatWorkService } from "./wechat-work/wechat-work.service";
     StorageService,
     TrainingService,
     WechatDispatchService,
+    WechatBridgeAccessGuard,
+    WechatWindowObserverAccessGuard,
     WechatSendAdapterService,
     WechatWorkApiClient,
     WechatWorkService,

@@ -8,6 +8,11 @@ const {
   readWechatWindowObserverProofToken,
   wechatWindowObserverServiceEnv,
 } = require("./wechat-window-observer-session");
+const {
+  ensureWechatBridgeServiceSession,
+  readWechatBridgeServiceToken,
+  wechatBridgeServiceEnv,
+} = require("./wechat-bridge-service-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -23,6 +28,7 @@ const requestedBridgeMode = resolveBridgeMode();
 const observerProofFile = path.resolve(
   process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key"),
 );
+const bridgeServiceSession = ensureWechatBridgeServiceSession(runtimeDir);
 
 const services = buildServices();
 
@@ -44,6 +50,7 @@ async function main() {
   }
 
   readWechatWindowObserverProofToken(observerProofFile);
+  readWechatBridgeServiceToken(bridgeServiceSession.tokenFile);
 
   if (!args.has("--no-api-check")) {
     await assertApiReadyForSafeWorkers();
@@ -284,7 +291,7 @@ function windowsWorkerEnv(service) {
 }
 
 function workerEnv(service) {
-  return wechatWindowObserverServiceEnv({
+  const observerEnv = wechatWindowObserverServiceEnv({
     ...process.env,
     PATH: process.env.PATH || process.env.Path || "",
     SystemRoot: process.env.SystemRoot || process.env.WINDIR || "C:\\WINDOWS",
@@ -294,6 +301,7 @@ function workerEnv(service) {
     TMP: process.env.TMP || process.env.TEMP || runtimeDir,
     ...service.env,
   }, service.name, observerProofFile);
+  return wechatBridgeServiceEnv(observerEnv, service.name, bridgeServiceSession.tokenFile);
 }
 
 function stopWorkers() {
@@ -397,7 +405,10 @@ function isProcessRunning(pid) {
 
 function getJson(url, timeoutMs) {
   return new Promise((resolve) => {
-    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+    const request = http.get(url, {
+      timeout: timeoutMs,
+      headers: { "x-wechat-bridge-token": readWechatBridgeServiceToken(bridgeServiceSession.tokenFile) },
+    }, (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => {
