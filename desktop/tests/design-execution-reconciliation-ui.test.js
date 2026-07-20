@@ -58,7 +58,7 @@ function localFixture(t) {
 test("execution read model is an exact allowlist and server computes only two narrow resolutions", async (t) => {
   const { localStore, job, storePath } = localFixture(t);
   const service = new DesignPlatformExecutionService({}, localStore);
-  for (let attemptNo = 1; attemptNo <= 5; attemptNo += 1) {
+  for (let attemptNo = 1; attemptNo <= 9; attemptNo += 1) {
     const begun = await service.begin({ designJobId: job.id, attemptNo });
     const interim = JSON.parse(fs.readFileSync(storePath, "utf8"));
     const created = interim.designPlatformExecutions.find((row) => row.id === begun.execution.id);
@@ -71,7 +71,11 @@ test("execution read model is an exact allowlist and server computes only two na
   Object.assign(rows[1], { status: "outcome_unknown", resolvedAt: new Date().toISOString() });
   Object.assign(rows[2], { status: "explicit_failed", refundStatus: "failed" });
   Object.assign(rows[3], { status: "explicit_failed", refundStatus: "refunded" });
-  Object.assign(rows[4], { status: "completed", refundStatus: "unknown" });
+  Object.assign(rows[4], { status: "completed", acceptanceStatus: "manual_review", refundStatus: "unknown" });
+  Object.assign(rows[5], { status: "completed", acceptanceStatus: "accepted", refundStatus: "unknown" });
+  Object.assign(rows[6], { status: "completed", acceptanceStatus: "manual_review", refundStatus: "failed" });
+  Object.assign(rows[7], { status: "completed", acceptanceStatus: "pending", refundStatus: "failed" });
+  Object.assign(rows[8], { status: "completed", acceptanceStatus: "manual_review", refundStatus: "refunded" });
   for (const row of rows) {
     Object.assign(row, {
       operationKey: "secret-operation-key",
@@ -82,7 +86,7 @@ test("execution read model is an exact allowlist and server computes only two na
       errorMessage: "https://secret.invalid Authorization=secret",
     });
   }
-  Object.assign(rows[4], {
+  Object.assign(rows[5], {
     errorCategory: "token=secret-category",
     createdAt: "https://secret.invalid/date",
     responseHttpStatus: 999,
@@ -95,10 +99,14 @@ test("execution read model is an exact allowlist and server computes only two na
   assert.equal(byAttempt.get(2).availableResolution, null);
   assert.equal(byAttempt.get(3).availableResolution, DESIGN_EXECUTION_RESOLUTIONS.refund);
   assert.equal(byAttempt.get(4).availableResolution, null);
-  assert.equal(byAttempt.get(5).availableResolution, null);
-  assert.equal(byAttempt.get(5).errorCategory, "other_error");
-  assert.equal(byAttempt.get(5).createdAt, null);
-  assert.equal(byAttempt.get(5).responseHttpStatus, null);
+  assert.equal(byAttempt.get(5).availableResolution, DESIGN_EXECUTION_RESOLUTIONS.refund);
+  assert.equal(byAttempt.get(6).availableResolution, null);
+  assert.equal(byAttempt.get(7).availableResolution, DESIGN_EXECUTION_RESOLUTIONS.refund);
+  assert.equal(byAttempt.get(8).availableResolution, null);
+  assert.equal(byAttempt.get(9).availableResolution, null);
+  assert.equal(byAttempt.get(6).errorCategory, "other_error");
+  assert.equal(byAttempt.get(6).createdAt, null);
+  assert.equal(byAttempt.get(6).responseHttpStatus, null);
 
   const allowed = [
     "acceptanceStatus", "attemptNo", "availableResolution", "completedAt", "createdAt",
@@ -143,6 +151,7 @@ test("controller, API client and write responses preserve the authorization and 
   const controller = read("apps/api/src/design-jobs/design-jobs.controller.ts");
   const jobsService = read("apps/api/src/design-jobs/design-jobs.service.ts");
   const executionService = read("apps/api/src/design-jobs/design-platform-execution.service.ts");
+  const localStoreService = read("apps/api/src/local-store/local-store.service.ts");
   const client = read("apps/web/src/lib/api.ts");
 
   assert.match(controller, /@RequireOperatorCapability\("view_console"\)[\s\S]*@Get\(":id\/executions"\)[\s\S]*listExecutions/);
@@ -154,6 +163,11 @@ test("controller, API client and write responses preserve the authorization and 
   assert.match(jobsService, /resolveUnsafeRefundPublic\(/);
   assert.match(executionService, /resolveUnknownPublic[\s\S]*toPublicExecutionView/);
   assert.match(executionService, /resolveUnsafeRefundPublic[\s\S]*toPublicExecutionView/);
+  assert.match(executionService, /if \(!isUnsafeRefundResolutionEligible\(execution\)\)/);
+  assert.match(executionService, /isUnsafeRefundResolutionEligible\(execution\)[\s\S]*\? "confirmed_refunded"/);
+  assert.match(executionService, /only an eligible unsafe refund can be resolved/);
+  assert.match(localStoreService, /only an eligible unsafe refund can be resolved/);
+  assert.doesNotMatch(`${executionService}\n${localStoreService}`, /only an unsafe explicit failure refund/);
 
   const clientSection = client.slice(client.indexOf("export async function getDesignJobExecutions"), client.indexOf("export async function retryDesignJob"));
   assert.match(clientSection, /confirmed_not_generated_refunded/);
@@ -196,6 +210,18 @@ test("panel fails closed on status alone and exposes a guarded second confirmati
   }));
   assert.match(actionable, /确认未生成且已退款/);
   assert.doesNotMatch(actionable, /secret|secret\.invalid/i);
+
+  const resumableRefund = renderToStaticMarkup(React.createElement(DesignExecutionReconciliationPanel, {
+    ...props,
+    executions: [{
+      ...baseExecution,
+      status: "completed",
+      acceptanceStatus: "manual_review",
+      refundStatus: "failed",
+      availableResolution: DESIGN_EXECUTION_RESOLUTIONS.refund,
+    }],
+  }));
+  assert.match(resumableRefund, /确认退款已到账/);
 
   const source = read("apps/web/src/components/design-execution-reconciliation-panel.tsx");
   assert.match(source, /if \(!pending \|\| submitLock\.current \|\| submittingId \|\| !canManageExecutions\) return/);

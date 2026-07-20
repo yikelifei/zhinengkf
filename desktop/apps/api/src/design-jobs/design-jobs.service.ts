@@ -1389,21 +1389,35 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!execution || execution.designJobId !== job.id) {
       throw new BadRequestException("design platform execution does not belong to this design job");
     }
+    const resumesLocalAcceptance =
+      execution.status === "completed" && execution.acceptanceStatus === "manual_review";
     const resolved = await this.platformExecutions.resolveUnsafeRefundPublic(execution.id, payload.resolution, reviewer);
     await this.createReviewLog({
       targetType: "design_platform_execution_refund",
       targetId: execution.id,
       decision: payload.resolution,
       reviewer,
-      note: "人工已核对退款到账，允许后续显式重试。",
-      beforeStatus: `${execution.status}:${execution.refundStatus}`,
-      afterStatus: `${execution.status}:refunded`,
-      metadata: { designJobId: job.id, externalJobId: execution.externalJobId },
+      note: resumesLocalAcceptance
+        ? "人工已核对退款到账，执行已恢复本地验收；不会再次生成，也不会再次调用远端 POST。"
+        : "人工已核对退款到账，允许后续显式重试。",
+      beforeStatus: resumesLocalAcceptance
+        ? `${execution.status}:manual_review:${execution.refundStatus}`
+        : `${execution.status}:${execution.refundStatus}`,
+      afterStatus: resumesLocalAcceptance
+        ? `${execution.status}:pending:refunded`
+        : `${execution.status}:refunded`,
+      metadata: {
+        designJobId: job.id,
+        externalJobId: execution.externalJobId,
+        resolutionEffect: resumesLocalAcceptance ? "resume_local_acceptance" : "unblock_explicit_retry",
+      },
     });
     await this.notifications.create(
       "warning",
       "设计平台退款结果已人工核销",
-      "已确认该次失败尝试退款完成；系统仅解除重试阻塞，不会自动重新生成。",
+      resumesLocalAcceptance
+        ? "已确认该次部分成功执行退款完成；系统已恢复本地验收，不会再次生成，也不会再次调用远端 POST。"
+        : "已确认该次失败尝试退款完成；系统仅解除重试阻塞，不会自动重新生成。",
       { designJobId: job.id, externalJobId: execution.externalJobId },
     );
     return resolved;

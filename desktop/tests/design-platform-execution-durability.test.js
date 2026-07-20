@@ -772,6 +772,11 @@ test("refund failed never starts a second POST and persisted notification uses o
   assert.equal(storedResolution.alreadyRefunded, false);
   assert.equal(storedResolution.resolution, "confirmed_refunded");
   assert.equal(storedResolution.reviewer, "operator_refund_audit");
+  const refundAudit = localStore.listReviewLogs().find((item) => item.targetId === execution.id);
+  assert.equal(refundAudit.beforeStatus, "explicit_failed:failed");
+  assert.equal(refundAudit.afterStatus, "explicit_failed:refunded");
+  assert.match(refundAudit.note, /允许后续显式重试/);
+  assert.equal(refundAudit.metadata.resolutionEffect, "unblock_explicit_retry");
   await executions.assertRetryAllowed(job.id);
   assert.equal(postCount, 1);
   const serialized = fs.readFileSync(path.join(root, "local-store.json"), "utf8");
@@ -782,6 +787,7 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
   const { localStore, job } = localFixture(t);
   const executions = new DesignPlatformExecutionService({}, localStore);
   let postCount = 0;
+  const notices = [];
   const service = new DesignJobsService(
     {},
     {
@@ -798,7 +804,7 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
       },
     },
     localStore,
-    { create: async () => ({}) },
+    { create: async (...args) => { notices.push(args); return {}; } },
     {},
     {
       enqueueTextMessage: async () => ({}),
@@ -825,11 +831,21 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
   assert.equal(resolved.refundStatus, "refunded");
   assert.equal(resolved.acceptanceStatus, "pending");
   assert.equal(resolved.resolvedAt, null);
+  assert.equal(resolved.availableResolution, null);
   assert.equal("refundSummary" in resolved, false, "write response must not expose internal refund evidence");
   assert.equal(
     localStore.getDesignPlatformExecution(execution.id).refundSummary.reason,
     "partial_refund_rpc_failed",
   );
+  const refundAudit = localStore.listReviewLogs().find((item) => item.targetId === execution.id);
+  assert.equal(refundAudit.beforeStatus, "completed:manual_review:failed");
+  assert.equal(refundAudit.afterStatus, "completed:pending:refunded");
+  assert.match(refundAudit.note, /恢复本地验收/);
+  assert.match(refundAudit.note, /不会再次调用远端 POST/);
+  assert.doesNotMatch(refundAudit.note, /显式重试/);
+  assert.equal(refundAudit.metadata.resolutionEffect, "resume_local_acceptance");
+  assert.match(notices.at(-1)[2], /恢复本地验收/);
+  assert.match(notices.at(-1)[2], /不会再次调用远端 POST/);
 
   let acceptedCount = 0;
   service.acceptDurableArtImageExecution = async (executionId) => {
