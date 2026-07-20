@@ -50,7 +50,7 @@ export class AssetsService {
       ownerId: payload.ownerId,
       role: payload.role || "reference",
       fileName: payload.fileName,
-      mimeType: payload.mimeType || guessMimeType(payload.fileName),
+      mimeType: saved.mimeType,
       localPath: canonicalSavedPath,
       normalizedLocalPath: this.normalizeLocalAssetPath(canonicalSavedPath),
       sizeBytes: saved.sizeBytes,
@@ -305,6 +305,7 @@ export class AssetsService {
         ownerType: payload.ownerType,
         ownerId: payload.ownerId,
         fileName: payload.fileName,
+        mimeType: payload.mimeType,
         base64: payload.base64,
       });
     }
@@ -313,6 +314,7 @@ export class AssetsService {
         ownerType: payload.ownerType,
         ownerId: payload.ownerId,
         fileName: payload.fileName,
+        mimeType: payload.mimeType,
         text: payload.text,
       });
     }
@@ -320,17 +322,8 @@ export class AssetsService {
       ownerType: payload.ownerType,
       ownerId: payload.ownerId,
       fileName: payload.fileName,
+      mimeType: payload.mimeType,
       url: payload.url || "",
     });
   }
-}
-
-function guessMimeType(fileName: string) {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  if (lower.endsWith(".pdf")) return "application/pdf";
-  return "application/octet-stream";
 }

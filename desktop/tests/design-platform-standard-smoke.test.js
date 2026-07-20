@@ -22,6 +22,11 @@ const { NotificationsService } = require("../apps/api/src/notifications/notifica
 const { StorageService } = require("../apps/api/src/storage/storage.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
+const VALID_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+
 test("standard design platform smoke submits, polls, saves images, and keeps uploaded asset urls", async () => {
   const originalConfig = {
     useLocalStore: appConfig.useLocalStore,
@@ -88,7 +93,7 @@ test("standard design platform smoke submits, polls, saves images, and keeps upl
     const localStore = new LocalStoreService();
     localStore.filePath = localStoreFile;
     const notifications = new NotificationsService({}, localStore);
-    const storage = new StorageService();
+    const storage = mockedPublicStorage();
     const designPlatform = new DesignPlatformClient();
     const uploadResponses = [];
     const createdPayloads = [];
@@ -291,4 +296,19 @@ function writeJson(filePath, value) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mockedPublicStorage() {
+  const storage = new StorageService();
+  const saveDesignImage = storage.saveDesignImage.bind(storage);
+  storage.saveDesignImage = (jobId, imageId) => saveDesignImage(
+    jobId,
+    imageId,
+    `https://mock-public.example/${encodeURIComponent(imageId)}.png`,
+    {
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      request: async () => ({ status: 200, headers: {}, data: VALID_PNG }),
+    },
+  );
+  return storage;
 }

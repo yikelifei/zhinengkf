@@ -1,19 +1,30 @@
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import axios from "axios";
 import { appConfig } from "../shared/app-config";
 import { MAX_IMAGE_FINGERPRINT_BYTES } from "../shared/image-fingerprint";
+import { assertDeclaredAssetMimeType, inspectSafeAssetContent } from "./asset-content-security";
+import { downloadBoundedBytes, SafeDownloadOptions, SafeDownloadRuntime } from "./safe-download";
 
 @Injectable()
 export class StorageService {
-  async saveDesignImage(jobId: string, imageId: string, downloadUrl: string): Promise<string> {
+  async saveDesignImage(
+    jobId: string,
+    imageId: string,
+    downloadUrl: string,
+    runtime: SafeDownloadRuntime = {},
+  ): Promise<string> {
     const sourceUrl = normalizeDownloadUrl(downloadUrl);
-    const ext = extensionFromUrl(sourceUrl) || ".png";
-    const buffer = await downloadBoundedBytes(sourceUrl, designImageDownloadOptions(sourceUrl));
+    const claimedExtension = extensionFromUrl(sourceUrl);
+    const buffer = assertAssetSize(await downloadBoundedBytes(sourceUrl, designImageDownloadOptions(), runtime));
+    const content = await inspectSafeAssetContent(buffer, `image${claimedExtension}`, {
+      allowPdf: false,
+      allowText: false,
+      requireExtension: Boolean(claimedExtension),
+    });
     const dir = path.join(appConfig.localStorageRoot, "design-jobs", jobId);
-    const localPath = path.join(dir, `${safeName(imageId)}${ext}`);
+    const localPath = path.join(dir, `${safeName(imageId)}${content.extension}`);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(localPath, buffer);
     return localPath;
@@ -23,55 +34,78 @@ export class StorageService {
     ownerType: string;
     ownerId: string;
     fileName: string;
+    mimeType?: string;
     base64: string;
-  }): Promise<{ localPath: string; sizeBytes: number }> {
+  }): Promise<{ localPath: string; sizeBytes: number; mimeType: string }> {
     const buffer = assertAssetSize(decodeBase64(params.base64));
+    const content = await inspectSafeAssetContent(buffer, params.fileName);
+    assertDeclaredAssetMimeType(params.mimeType, content.mimeType);
+    assertDeclaredAssetMimeType(dataUrlMimeType(params.base64), content.mimeType);
     const localPath = await this.assetPath(params.ownerType, params.ownerId, params.fileName);
     await fs.writeFile(localPath, buffer);
-    return { localPath, sizeBytes: buffer.length };
+    return { localPath, sizeBytes: buffer.length, mimeType: content.mimeType };
   }
 
   async saveAssetFromText(params: {
     ownerType: string;
     ownerId: string;
     fileName: string;
+    mimeType?: string;
     text: string;
-  }): Promise<{ localPath: string; sizeBytes: number }> {
+  }): Promise<{ localPath: string; sizeBytes: number; mimeType: string }> {
     const byteLength = Buffer.byteLength(params.text, "utf8");
     assertAssetByteLength(byteLength);
     const buffer = Buffer.from(params.text, "utf8");
+    const content = await inspectSafeAssetContent(buffer, params.fileName, { allowPdf: false, allowRaster: false });
+    assertDeclaredAssetMimeType(params.mimeType, content.mimeType);
     const localPath = await this.assetPath(params.ownerType, params.ownerId, params.fileName);
     await fs.writeFile(localPath, buffer);
-    return { localPath, sizeBytes: buffer.length };
+    return { localPath, sizeBytes: buffer.length, mimeType: content.mimeType };
   }
 
   async saveAssetFromUrl(params: {
     ownerType: string;
     ownerId: string;
     fileName?: string;
+    mimeType?: string;
     url: string;
-  }): Promise<{ localPath: string; sizeBytes: number }> {
+  }, runtime: SafeDownloadRuntime = {}): Promise<{ localPath: string; sizeBytes: number; mimeType: string }> {
     const sourceUrl = normalizeAssetUrl(params.url);
-    const buffer = await downloadBoundedBytes(sourceUrl, assetDownloadOptions());
-    const fallbackName = `asset${extensionFromUrl(sourceUrl) || ".bin"}`;
-    const localPath = await this.assetPath(params.ownerType, params.ownerId, params.fileName || fallbackName);
+    const buffer = assertAssetSize(await downloadBoundedBytes(sourceUrl, assetDownloadOptions(), runtime));
+    const claimedName = params.fileName || `asset${extensionFromUrl(sourceUrl)}`;
+    const content = await inspectSafeAssetContent(buffer, claimedName, { requireExtension: Boolean(path.extname(claimedName)) });
+    assertDeclaredAssetMimeType(params.mimeType, content.mimeType);
+    const localPath = await this.assetPath(params.ownerType, params.ownerId, params.fileName || `asset${content.extension}`);
     await fs.writeFile(localPath, buffer);
-    return { localPath, sizeBytes: buffer.length };
+    return { localPath, sizeBytes: buffer.length, mimeType: content.mimeType };
   }
 
-  async readLocalAsset(localPath: string): Promise<{ stream: ReturnType<typeof createReadStream>; mimeType: string; sizeBytes: number }> {
+  async readLocalAsset(localPath: string): Promise<{
+    stream: Readable;
+    mimeType: string;
+    sizeBytes: number;
+    fileName: string;
+    inlineSafe: boolean;
+  }> {
     const resolved = this.resolveStoragePath(localPath);
-    let stat;
+    let canonicalPath: string;
     try {
-      stat = await fs.stat(resolved);
+      canonicalPath = await fs.realpath(resolved);
     } catch {
       throw new NotFoundException("asset file not found");
     }
+    await this.assertCanonicalStoragePath(canonicalPath);
+    const stat = await fs.stat(canonicalPath);
     if (!stat.isFile()) throw new NotFoundException("asset file not found");
+    assertAssetByteLength(stat.size);
+    const buffer = await fs.readFile(canonicalPath);
+    const content = await inspectSafeAssetContent(buffer, path.basename(canonicalPath));
     return {
-      stream: createReadStream(resolved),
-      mimeType: mimeTypeFromFileName(resolved),
-      sizeBytes: stat.size,
+      stream: Readable.from(buffer),
+      mimeType: content.mimeType,
+      sizeBytes: buffer.length,
+      fileName: path.basename(canonicalPath),
+      inlineSafe: content.inlineSafe,
     };
   }
 
@@ -88,6 +122,14 @@ export class StorageService {
       throw new ForbiddenException("asset file is outside local storage");
     }
     return resolved;
+  }
+
+  private async assertCanonicalStoragePath(canonicalPath: string): Promise<void> {
+    const canonicalRoot = await fs.realpath(path.resolve(appConfig.localStorageRoot));
+    const relative = path.relative(canonicalRoot, canonicalPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new ForbiddenException("asset file is outside local storage");
+    }
   }
 
   private async assetPath(ownerType: string, ownerId: string, fileName: string): Promise<string> {
@@ -119,43 +161,23 @@ function normalizeDownloadUrl(url: string): string {
   throw new BadRequestException("downloadUrl must be http(s) or design-platform relative path");
 }
 
-function designImageDownloadOptions(sourceUrl: string) {
-  const headers = designPlatformDownloadHeaders(sourceUrl);
+function designImageDownloadOptions(): SafeDownloadOptions {
   return {
     responseType: "arraybuffer" as const,
     timeout: appConfig.designPlatformTimeoutMs,
     maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
     maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
-    ...(Object.keys(headers).length ? { headers } : {}),
+    headersForUrl: designPlatformDownloadHeaders,
   };
 }
 
-function assetDownloadOptions() {
+function assetDownloadOptions(): SafeDownloadOptions {
   return {
     responseType: "arraybuffer" as const,
     timeout: appConfig.designPlatformTimeoutMs,
     maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
     maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
   };
-}
-
-async function downloadBoundedBytes(sourceUrl: string, options: ReturnType<typeof assetDownloadOptions>): Promise<Buffer> {
-  try {
-    const response = await axios.get<ArrayBuffer>(sourceUrl, options);
-    return assertAssetSize(Buffer.from(response.data));
-  } catch (error) {
-    if (error instanceof BadRequestException) throw error;
-    if (isDownloadSizeError(error)) throw assetSizeException();
-    throw error;
-  }
-}
-
-function isDownloadSizeError(error: unknown): boolean {
-  const candidate = error as { code?: unknown; message?: unknown } | null;
-  const code = String(candidate?.code || "");
-  const message = String(candidate?.message || "");
-  return code === "ERR_FR_MAX_BODY_LENGTH_EXCEEDED"
-    || /max(?:Content|Body)Length|maximum (?:content|body) length|size of \d+ exceeded/i.test(message);
 }
 
 function normalizeAssetUrl(url: string): string {
@@ -196,16 +218,6 @@ function safeName(value: string): string {
   return String(value || "image").replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function mimeTypeFromFileName(fileName: string) {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  return "application/octet-stream";
-}
-
 function decodeBase64(value: string): Buffer {
   const raw = String(value || "");
   if (!raw) throw new BadRequestException("asset base64 is required");
@@ -228,6 +240,11 @@ function decodeBase64(value: string): Buffer {
     throw new BadRequestException("asset base64 must be canonical base64");
   }
   return buffer;
+}
+
+function dataUrlMimeType(value: string): string | undefined {
+  const match = /^data:([^;,\r\n]*)(?:;[^,\r\n]*)*;base64,/i.exec(String(value || ""));
+  return match?.[1] || undefined;
 }
 
 function isCanonicalBase64Text(payload: string): boolean {
@@ -263,3 +280,5 @@ function assertAssetByteLength(byteLength: number): void {
 function assetSizeException(): BadRequestException {
   return new BadRequestException(`asset exceeds maximum size of ${MAX_IMAGE_FINGERPRINT_BYTES} bytes`);
 }
+
+export { downloadBoundedBytes, inspectSafeAssetContent };

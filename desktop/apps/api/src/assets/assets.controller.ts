@@ -4,6 +4,7 @@ import { AssetsService } from "./assets.service";
 import { UploadAssetPayload } from "./assets.types";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
+import { applySafeLocalFileHeaders } from "../storage/local-file-response";
 
 @Controller("assets")
 @RequireOperatorCapability("view_console")
@@ -41,9 +42,7 @@ export class AssetsController {
       expectedConversationId: conversationId,
       expectedCustomerId: customerId,
     });
-    reply.header("Content-Type", file.mimeType);
-    reply.header("Content-Length", String(file.sizeBytes));
-    reply.header("Cache-Control", "private, max-age=3600");
+    applySafeLocalFileHeaders(reply, file);
     return reply.send(file.stream);
   }
 
