@@ -12,8 +12,13 @@ require("ts-node").register({
 });
 
 const { appConfig } = require("../apps/api/src/shared/app-config");
+const { AutomationController } = require("../apps/api/src/automation/automation.controller");
 const { DesignJobsController } = require("../apps/api/src/design-jobs/design-jobs.controller");
 const { DesignPlatformController } = require("../apps/api/src/integrations/design-platform/design-platform.controller");
+const { QuotesController } = require("../apps/api/src/quotes/quotes.controller");
+const { ReviewsController } = require("../apps/api/src/reviews/reviews.controller");
+const { TrainingController } = require("../apps/api/src/training/training.controller");
+const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
 const {
   INTERNAL_API_TOKEN_HEADER,
@@ -306,6 +311,118 @@ test("controller status accepts only the internal proof and protected controller
   assert.match(wechat, /@Post\("send-tasks\/:id\/execute"\)[\s\S]*?@RequireOperatorCapability\("approve_send"\)/);
   assert.match(designJobs, /@Post\(":id\/submit"\)[\s\S]*?@RequireOperatorCapability\("manage_design_executions"\)/);
   assert.match(designJobs, /@Post\(":id\/executions\/:executionId\/resolve-refund"\)[\s\S]*?principal\.id/);
+});
+
+test("high-risk operator routes use the existing capability matrix while public machine ingress stays unguarded", () => {
+  assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, ReviewsController), "view_console");
+  assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, AutomationController), "view_console");
+  assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, TrainingController), "view_console");
+
+  const expectedCapabilities = [
+    [WechatWorkController, "syncCustomerServiceMessages", "manage_channels"],
+    [WechatWorkController, "sendCustomerServiceText", "approve_send"],
+    [WechatWorkController, "sendCustomerServiceImages", "approve_send"],
+    [WechatWorkController, "dispatchCustomerServiceText", "approve_send"],
+    [WechatWorkController, "listAuditLogs", "view_console"],
+    [ReviewsController, "reviewDesignJob", "approve_send"],
+    [ReviewsController, "reviewQuote", "approve_send"],
+    [ReviewsController, "reviewOrder", "approve_send"],
+    [QuotesController, "queueSend", "approve_send"],
+    [QuotesController, "verifyPaymentProof", "approve_send"],
+    [AutomationController, "runOnce", "approve_send"],
+    [AutomationController, "start", "approve_send"],
+    [AutomationController, "stop", "approve_send"],
+    [TrainingController, "importChat", "manage_training"],
+    [TrainingController, "reviewSample", "manage_training"],
+    [TrainingController, "batchReviewSamples", "manage_training"],
+    [TrainingController, "applySkillSuggestions", "manage_training"],
+  ];
+  for (const [controllerClass, methodName, capability] of expectedCapabilities) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, controllerClass.prototype[methodName]),
+      capability,
+      `${controllerClass.name}.${methodName}`,
+    );
+  }
+
+  for (const methodName of ["getStatus", "getProductionPreflight", "verifyCallback", "handleCallback"]) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, WechatWorkController.prototype[methodName]),
+      undefined,
+      `WechatWorkController.${methodName} must remain public`,
+    );
+  }
+
+  const guard = new OperatorAccessGuard(new Reflector(), new OperatorAccessService());
+  for (const [controllerClass, methodName] of [
+    [WechatWorkController, "dispatchCustomerServiceText"],
+    [ReviewsController, "reviewOrder"],
+    [QuotesController, "verifyPaymentProof"],
+    [AutomationController, "runOnce"],
+    [TrainingController, "reviewSample"],
+  ]) {
+    const handler = controllerClass.prototype[methodName];
+    assert.throws(
+      () => guard.canActivate(executionContext(handler, controllerClass, { headers: {}, body: {} })),
+      (error) => error?.getStatus?.() === 403,
+      `${controllerClass.name}.${methodName} missing token`,
+    );
+    assert.throws(
+      () => guard.canActivate(executionContext(handler, controllerClass, {
+        headers: { [INTERNAL_API_TOKEN_HEADER]: "b".repeat(64) },
+        body: { reviewer: "attacker", owner: "attacker" },
+      })),
+      (error) => error?.getStatus?.() === 403,
+      `${controllerClass.name}.${methodName} forged token`,
+    );
+    const request = { headers: { [INTERNAL_API_TOKEN_HEADER]: VALID_TOKEN }, body: {} };
+    assert.equal(guard.canActivate(executionContext(handler, controllerClass, request)), true);
+    assert.equal(request.trustedOperator.id, "local_admin");
+  }
+});
+
+test("high-risk controllers discard browser-owned reviewer and owner fields", async () => {
+  const calls = [];
+  const reviews = new ReviewsController({
+    reviewDesignJob: async (...args) => calls.push(["reviewDesignJob", ...args]),
+    reviewQuote: async (...args) => calls.push(["reviewQuote", ...args]),
+    reviewOrder: async (...args) => calls.push(["reviewOrder", ...args]),
+  });
+  await reviews.reviewDesignJob("design-1", { decision: "approve_send", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
+  await reviews.reviewQuote("quote-1", { decision: "approve_quote", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
+  await reviews.reviewOrder("order-1", { decision: "approve_confirmation", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
+
+  const quotes = new QuotesController({
+    queueSend: async (...args) => calls.push(["queueSend", ...args]),
+    verifyPaymentProofAndQueueConfirmation: async (...args) => calls.push(["verifyPaymentProof", ...args]),
+  });
+  await quotes.queueSend(
+    "quote-2",
+    { owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker", note: "safe" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  await quotes.verifyPaymentProof(
+    "quote-3",
+    { paymentStatus: "paid", owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+
+  const training = new TrainingController({
+    reviewSample: async (...args) => calls.push(["reviewSample", ...args]),
+    batchReviewSamples: async (...args) => calls.push(["batchReviewSamples", ...args]),
+  });
+  await training.reviewSample("sample-1", { status: "ready", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
+  await training.batchReviewSamples({ sampleIds: ["sample-1"], status: "ready", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
+
+  assert.equal(calls.length, 7);
+  for (const [name, _id, payload] of calls) {
+    const actualPayload = name === "batchReviewSamples" ? _id : payload;
+    assert.equal(actualPayload.reviewer === "attacker" || actualPayload.owner === "attacker", false, name);
+    assert.equal(actualPayload.actor, undefined, name);
+    assert.equal(actualPayload.operator, undefined, name);
+    if (name.startsWith("review") || name === "batchReviewSamples") assert.equal(actualPayload.reviewer, "local_admin", name);
+    if (name === "queueSend" || name === "verifyPaymentProof") assert.equal(actualPayload.owner, "local_admin", name);
+  }
 });
 
 function executionContext(handler, controllerClass, request) {

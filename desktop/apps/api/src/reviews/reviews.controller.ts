@@ -1,8 +1,16 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { ReviewsService } from "./reviews.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("reviews")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class ReviewsController {
   constructor(private readonly reviews: ReviewsService) {}
 
@@ -16,22 +24,29 @@ export class ReviewsController {
   }
 
   @Post("design-jobs/:id")
+  @RequireOperatorCapability("approve_send")
   reviewDesignJob(
     @Param("id") id: string,
     @Body() payload: { decision: string; reviewer?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.reviews.reviewDesignJob(id, payload || { decision: "approve_images" });
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || { decision: "approve_images" };
+    return this.reviews.reviewDesignJob(id, { ...trustedPayload, reviewer: principal.id });
   }
 
   @Post("quotes/:id")
+  @RequireOperatorCapability("approve_send")
   reviewQuote(
     @Param("id") id: string,
     @Body() payload: { decision: string; reviewer?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.reviews.reviewQuote(id, payload || { decision: "approve_quote" });
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || { decision: "approve_quote" };
+    return this.reviews.reviewQuote(id, { ...trustedPayload, reviewer: principal.id });
   }
 
   @Post("orders/:id")
+  @RequireOperatorCapability("approve_send")
   reviewOrder(
     @Param("id") id: string,
     @Body()
@@ -41,7 +56,9 @@ export class ReviewsController {
       note?: string;
       followupType?: "production" | "delivery";
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.reviews.reviewOrder(id, payload || { decision: "request_followup" });
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || { decision: "request_followup" as const };
+    return this.reviews.reviewOrder(id, { ...trustedPayload, reviewer: principal.id });
   }
 }

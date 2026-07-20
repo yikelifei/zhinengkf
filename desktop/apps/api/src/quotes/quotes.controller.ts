@@ -1,6 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { QuotesService } from "./quotes.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("quotes")
 export class QuotesController {
@@ -60,18 +66,31 @@ export class QuotesController {
   }
 
   @Post(":id/queue-send")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   queueSend(
     @Param("id") id: string,
     @Body() payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
     return this.quotes.queueSend(id, {
-      ...(payload || {}),
+      ...trustedPayload,
+      owner: principal.id,
       releaseManualLock: true,
       releaseReason: "manual_quote_send",
     });
   }
 
   @Post(":id/verify-payment-proof")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   verifyPaymentProof(
     @Param("id") id: string,
     @Body()
@@ -80,7 +99,15 @@ export class QuotesController {
       owner?: string;
       note?: string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.quotes.verifyPaymentProofAndQueueConfirmation(id, payload || {});
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.quotes.verifyPaymentProofAndQueueConfirmation(id, { ...trustedPayload, owner: principal.id });
   }
 }
