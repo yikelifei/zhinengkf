@@ -24,6 +24,7 @@ export class RoutingController {
   }
 
   @Post("evaluate")
+  @RequireOperatorCapability("manage_training")
   evaluate(@Body() payload: { text: string; channel?: "wechat" | "xiaohongshu" | "douyin"; customerId?: string; conversationId?: string; wechatAccountId?: string }) {
     return this.routing.evaluate(payload);
   }

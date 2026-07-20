@@ -115,11 +115,20 @@ export class QuotesService {
   }
 
   async update(id: string, patch: QuoteUpdatePatch & ExpectedIdentityPayload) {
+    assertGenericQuoteUpdatePatch(patch || {});
+    return this.updateQuoteDraft(id, patch || {}, false);
+  }
+
+  private async updateQuoteDraft(
+    id: string,
+    patch: QuoteUpdatePatch & ExpectedIdentityPayload,
+    allowVerifiedPayment: boolean,
+  ) {
     const current = await this.getQuoteForSend(id);
     if (!current) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(current);
     assertExpectedIdentity(current, patch, "quote draft");
-    const data = cleanQuotePatch(patch, current);
+    const data = cleanQuotePatch(patch, current, allowVerifiedPayment);
     const shouldClearLinkedSendTask =
       this.quoteUpdateInvalidatesPendingSendTask(data) && this.quoteLinkedSendTaskCanBeCleared(current);
     const cancelledSendTask = shouldClearLinkedSendTask
@@ -153,7 +162,6 @@ export class QuotesService {
     if (data.status === "manual_review") {
       await this.lockQuoteConversationForManualReview(current, patch.owner || current.owner);
     }
-    await this.syncOrderPaymentStatusFromQuoteUpdate(current, data, patch);
     return updated;
   }
 
@@ -368,17 +376,16 @@ export class QuotesService {
       owner: reviewer,
       customerNotes: note,
     };
-    const updatedQuote = await this.update(id, { ...payload, ...quotePatch });
+    const updatedQuote = await this.updateQuoteDraft(id, { ...payload, ...quotePatch }, true);
     const orderDraft = await this.orders.createFromQuote(id, {
       expectedWechatAccountId: payload.expectedWechatAccountId,
       expectedConversationId: payload.expectedConversationId,
       expectedCustomerId: payload.expectedCustomerId,
     });
-    const confirmedOrder = await this.orders.update(orderDraft.id, {
+    const confirmedOrder = await this.orders.recordVerifiedPayment(orderDraft.id, {
       expectedWechatAccountId: payload.expectedWechatAccountId,
       expectedConversationId: payload.expectedConversationId,
       expectedCustomerId: payload.expectedCustomerId,
-      status: "confirmed",
       paymentStatus,
       owner: reviewer,
       customerNotes: note,
@@ -643,20 +650,6 @@ export class QuotesService {
     return (this.prisma as any).orderDraft.findUnique({ where: { quoteDraftId } });
   }
 
-  private async syncOrderPaymentStatusFromQuoteUpdate(quote: any, data: any, payload: ExpectedIdentityPayload & { owner?: string }) {
-    if (!Object.prototype.hasOwnProperty.call(data, "paymentStatus")) return null;
-    const order = await this.findOrderDraftForQuote(quote.id);
-    if (!order || order.paymentStatus === data.paymentStatus) return null;
-    return this.orders.update(order.id, {
-      expectedWechatAccountId: payload.expectedWechatAccountId || order.wechatAccountId || quote.designJob?.wechatAccountId,
-      expectedConversationId: payload.expectedConversationId || order.conversationId || quote.designJob?.conversationId,
-      expectedCustomerId: payload.expectedCustomerId || order.customerId || quote.customerId || quote.designJob?.customerId,
-      paymentStatus: data.paymentStatus,
-      owner: payload.owner || order.owner || quote.owner || "人工客服",
-      customerNotes: appendCustomerNote(order.customerNotes, `报价付款状态已同步为 ${data.paymentStatus}。`),
-    });
-  }
-
   private isQuoteSelectionLocked(quote: any) {
     return Boolean(quote?.sendTaskId) || ["send_queued", "sent", "accepted"].includes(String(quote?.status || ""));
   }
@@ -834,12 +827,15 @@ type QuoteUpdatePatch = {
   totalCost?: number | string;
 };
 
-function cleanQuotePatch(patch: QuoteUpdatePatch, current: any) {
+function cleanQuotePatch(patch: QuoteUpdatePatch, current: any, allowVerifiedPayment = false) {
   const data: Record<string, string | number | null> = {};
-  if (isAllowed(patch.status, ["draft", "auto_sent", "send_queued", "manual_review", "sent", "accepted", "rejected", "cancelled"])) {
+  const allowedStatuses = allowVerifiedPayment
+    ? ["accepted"]
+    : ["draft", "manual_review", "rejected", "cancelled"];
+  if (isAllowed(patch.status, allowedStatuses)) {
     data.status = patch.status as string;
   }
-  if (isAllowed(patch.paymentStatus, ["unpaid", "deposit_paid", "paid", "refunded"])) {
+  if (allowVerifiedPayment && isAllowed(patch.paymentStatus, ["deposit_paid", "paid"])) {
     data.paymentStatus = patch.paymentStatus as string;
   }
   if (typeof patch.customerNotes === "string") data.customerNotes = patch.customerNotes;
@@ -860,6 +856,15 @@ function cleanQuotePatch(patch: QuoteUpdatePatch, current: any) {
     data.profit = roundMoney(totalPrice - totalCost);
   }
   return data;
+}
+
+function assertGenericQuoteUpdatePatch(patch: QuoteUpdatePatch) {
+  if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) {
+    throw new BadRequestException("报价付款状态只能通过付款凭证核验入口更新。");
+  }
+  if (patch.status !== undefined && !isAllowed(patch.status, ["draft", "manual_review", "rejected", "cancelled"])) {
+    throw new BadRequestException("通用报价更新不允许推进自动发送、已发送或已接受状态。");
+  }
 }
 
 function isAllowed(value: unknown, allowed: string[]) {

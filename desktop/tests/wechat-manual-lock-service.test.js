@@ -1509,7 +1509,7 @@ test("cancelled order draft cancels pending order send tasks only", async () => 
   assert.ok(notification);
 });
 
-test("refunded order draft cancels pending order send tasks before execution", async () => {
+test("generic order update rejects refunded payment before touching pending sends", async () => {
   const { localStore, orders } = setupService();
   const order = seedStoredOrderDraft(localStore, {
     id: "order_refund_clears_pending_sends_1",
@@ -1546,12 +1546,15 @@ test("refunded order draft cancels pending order send tasks before execution", a
     },
   });
 
-  const updated = await orders.update(order.id, {
-    ...demoExpectedIdentity(),
-    paymentStatus: "refunded",
-    owner: "人工客服",
-    customerNotes: "客户退款，停止自动确认",
-  });
+  await assert.rejects(
+    orders.update(order.id, {
+      ...demoExpectedIdentity(),
+      paymentStatus: "refunded",
+      owner: "人工客服",
+      customerNotes: "客户退款，停止自动确认",
+    }),
+    /付款状态只能通过报价付款凭证核验入口更新/,
+  );
 
   const cancelledConfirmation = localStore.getSendTask(confirmation.id);
   const keptUnrelated = localStore.getSendTask(unrelated.id);
@@ -1559,16 +1562,14 @@ test("refunded order draft cancels pending order send tasks before execution", a
     .listNotifications()
     .find((item) => item.target?.orderDraftId === order.id && item.target?.cancelledSendTaskIds?.includes(confirmation.id));
 
-  assert.equal(updated.paymentStatus, "refunded");
-  assert.equal(cancelledConfirmation.status, "cancelled");
-  assert.equal(cancelledConfirmation.errorMessage, "order_payment_not_ready_before_send");
-  assert.equal(cancelledConfirmation.guardSnapshot.cancelReason, "order_payment_not_ready_before_send");
-  assert.equal(cancelledConfirmation.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
+  assert.equal(localStore.getOrderDraft(order.id).paymentStatus, "deposit_paid");
+  assert.equal(cancelledConfirmation.status, "queued");
+  assert.equal(cancelledConfirmation.errorMessage, undefined);
   assert.equal(keptUnrelated.status, "queued");
-  assert.ok(notification);
+  assert.equal(notification, undefined);
 });
 
-test("refunded quote update syncs linked order and cancels pending order sends", async () => {
+test("generic quote update rejects refunded payment before touching linked order sends", async () => {
   const { localStore, quotes } = setupService();
   const order = seedStoredOrderDraft(localStore, {
     id: "order_quote_refund_clears_pending_sends_1",
@@ -1594,22 +1595,22 @@ test("refunded quote update syncs linked order and cancels pending order sends",
     },
   });
 
-  const updatedQuote = await quotes.update(order.quoteDraftId, {
-    ...demoExpectedIdentity(),
-    paymentStatus: "refunded",
-    owner: "人工客服",
-    customerNotes: "客户退款，报价停止推进",
-  });
+  await assert.rejects(
+    quotes.update(order.quoteDraftId, {
+      ...demoExpectedIdentity(),
+      paymentStatus: "refunded",
+      owner: "人工客服",
+      customerNotes: "客户退款，报价停止推进",
+    }),
+    /付款状态只能通过付款凭证核验入口更新/,
+  );
 
   const syncedOrder = localStore.getOrderDraft(order.id);
   const cancelledTask = localStore.getSendTask(task.id);
 
-  assert.equal(updatedQuote.paymentStatus, "refunded");
-  assert.equal(syncedOrder.paymentStatus, "refunded");
-  assert.match(syncedOrder.customerNotes, /报价付款状态已同步为 refunded/);
-  assert.equal(cancelledTask.status, "cancelled");
-  assert.equal(cancelledTask.guardSnapshot.cancelReason, "order_payment_not_ready_before_send");
-  assert.equal(cancelledTask.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
+  assert.equal(localStore.getQuoteDraft(order.quoteDraftId).paymentStatus, "deposit_paid");
+  assert.equal(syncedOrder.paymentStatus, "deposit_paid");
+  assert.equal(cancelledTask.status, "queued");
 });
 
 test("manual rejected order review reuses order cancellation send cleanup", async () => {
@@ -4019,11 +4020,14 @@ test("route correction training samples inherit route conversation identity", ()
       },
     },
   );
-  const correction = localStore.correctRouteEvaluation(route.id, {
+  const beforeSampleCount = localStore.listTrainingSamples().length;
+  const correctionPayload = {
     agentKey: "gift_design",
     scene: "礼盒设计",
     idealReply: "可以的，我先按您的预算和用途整理礼盒方案。",
-  });
+  };
+  const correction = localStore.correctRouteEvaluation(route.id, correctionPayload);
+  const retried = localStore.correctRouteEvaluation(route.id, correctionPayload);
 
   assert.equal(route.wechatAccountId, "wechat_demo_1");
   assert.equal(route.identityBinding.conversationId, "conversation_demo_1");
@@ -4036,6 +4040,17 @@ test("route correction training samples inherit route conversation identity", ()
   assert.equal(correction.trainingSample.wechatAccountId, "wechat_demo_1");
   assert.equal(correction.knowledgeEntry.conversationId, "conversation_demo_1");
   assert.equal(correction.knowledgeEntry.wechatAccountId, "wechat_demo_1");
+  assert.equal(retried.trainingSample.id, correction.trainingSample.id);
+  assert.equal(retried.knowledgeEntry.id, correction.knowledgeEntry.id);
+  assert.equal(localStore.listTrainingSamples().length, beforeSampleCount + 1);
+  assert.throws(
+    () => localStore.correctRouteEvaluation("missing-route", correctionPayload),
+    (error) => error?.getStatus?.() === 404,
+  );
+  assert.throws(
+    () => localStore.correctRouteEvaluation(route.id, { ...correctionPayload, agentKey: "missing-agent" }),
+    (error) => error?.getStatus?.() === 400,
+  );
 });
 
 test("route evaluation list filters keep account customer and conversation isolated", () => {

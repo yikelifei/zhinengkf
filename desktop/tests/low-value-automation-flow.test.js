@@ -371,11 +371,10 @@ test("low-value customer image selection flows to quote send queue and order dra
       /付款|定金|全款/,
     );
 
-    await orders.update(order.id, {
+    await orders.recordVerifiedPayment(order.id, {
       expectedWechatAccountId: "wechat_1",
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
-      status: "confirmed",
       paymentStatus: "deposit_paid",
       owner: "测试客服",
     });
@@ -430,7 +429,6 @@ test("low-value customer image selection flows to quote send queue and order dra
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
       status: "processing",
-      paymentStatus: "deposit_paid",
       owner: "测试客服",
     });
 
@@ -483,12 +481,18 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(duplicateProductionFollowup.skipped[0].reason, "already_queued");
     assert.deepEqual(duplicateProductionFollowup.skipped[0].missing, ["productionFollowupSendTask"]);
 
+    await orders.recordVerifiedPayment(order.id, {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+      paymentStatus: "paid",
+      owner: "测试客服",
+    });
     await orders.update(order.id, {
       expectedWechatAccountId: "wechat_1",
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
       status: "fulfilled",
-      paymentStatus: "paid",
       owner: "测试客服",
     });
 

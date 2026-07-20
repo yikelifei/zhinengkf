@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
@@ -83,14 +83,14 @@ export class RoutingService {
   async correctEvaluation(id: string, payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string } & ExpectedIdentityPayload) {
     if (!appConfig.useLocalStore) {
       const result = await this.requirePrisma().correctRouteEvaluation(id, payload || {});
-      await this.notifyCorrection(id, result);
+      await this.notifyCorrectionBestEffort(id, result);
       return result;
     }
     const route = this.localStore.listRouteEvaluations().find((item: any) => item.id === id);
-    if (!route) throw new Error(`route evaluation not found: ${id}`);
+    if (!route) throw new NotFoundException(`route evaluation not found: ${id}`);
     assertExpectedIdentity(route, payload, "route evaluation");
     const result = this.localStore.correctRouteEvaluation(id, payload || {});
-    await this.notifyCorrection(id, result);
+    await this.notifyCorrectionBestEffort(id, result);
     return result;
   }
 
@@ -140,6 +140,14 @@ export class RoutingService {
         trainingSampleId: result.trainingSample.id,
       },
     );
+  }
+
+  private async notifyCorrectionBestEffort(id: string, result: any) {
+    try {
+      await this.notifyCorrection(id, result);
+    } catch {
+      // The correction and its training artifacts are already durable; notification delivery is non-authoritative.
+    }
   }
 
   private requirePrisma() {
