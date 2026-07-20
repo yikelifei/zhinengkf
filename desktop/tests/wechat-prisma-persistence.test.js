@@ -152,40 +152,34 @@ test("Prisma mode creates isolated Enterprise WeChat identity bindings without t
   t.after(() => { appConfig.useLocalStore = true; });
   appConfig.useLocalStore = false;
   const calls = [];
-  const account = { id: "wa-db", displayName: "企业微信客服 wk-db" };
-  const customer = { id: "customer-db", name: "企业微信客户 wm-db" };
-  const conversation = {
-    id: "conversation-db",
-    channel: "work_wechat",
-    externalChatId: "wechat_work_kf:wk-db:wm-db",
-    wechatAccountId: account.id,
-    customerId: customer.id,
-  };
-  const binding = {
-    id: "binding-db",
-    openKfid: "wk-db",
-    externalUserId: "wm-db",
-    wechatAccountId: account.id,
-    customerId: customer.id,
-    conversationId: conversation.id,
-    wechatAccount: account,
-    customer,
-    conversation,
-  };
+  let account = null;
+  let customer = null;
+  let conversation = null;
   const tx = {
     wechatWorkBinding: {
       findUnique: async () => null,
-      findFirst: async () => null,
-      upsert: async (args) => { calls.push(["binding", args]); return binding; },
+      findMany: async () => [],
+      create: async (args) => {
+        calls.push(["binding", args]);
+        return {
+          ...args.data,
+          wechatAccount: account,
+          customer,
+          conversation,
+        };
+      },
     },
     wechatAccount: {
-      create: async (args) => { calls.push(["account", args]); return account; },
+      findUnique: async () => null,
+      create: async (args) => { calls.push(["account", args]); account = args.data; return account; },
     },
     customer: {
-      create: async (args) => { calls.push(["customer", args]); return customer; },
+      findUnique: async () => null,
+      create: async (args) => { calls.push(["customer", args]); customer = args.data; return customer; },
     },
     conversation: {
-      upsert: async (args) => { calls.push(["conversation", args]); return conversation; },
+      findUnique: async () => null,
+      create: async (args) => { calls.push(["conversation", args]); conversation = args.data; return conversation; },
     },
   };
   const prisma = { $transaction: async (callback) => callback(tx) };
@@ -201,9 +195,234 @@ test("Prisma mode creates isolated Enterprise WeChat identity bindings without t
 
   assert.equal(result.conversationId, conversation.id);
   assert.deepEqual(calls.map(([name]) => name), ["account", "customer", "conversation", "binding"]);
-  const bindingCreate = calls.find(([name]) => name === "binding")[1].create;
+  const bindingCreate = calls.find(([name]) => name === "binding")[1].data;
   assert.deepEqual(
     [bindingCreate.openKfid, bindingCreate.externalUserId, bindingCreate.wechatAccountId, bindingCreate.customerId, bindingCreate.conversationId],
     ["wk-db", "wm-db", account.id, customer.id, conversation.id],
   );
+  assert.match(account.id, /^wwacct_/);
+  assert.match(customer.id, /^wwcust_/);
+  assert.match(conversation.id, /^wwconv_/);
+  assert.match(result.id, /^wwbind_/);
 });
+
+test("Prisma Enterprise WeChat canonical binding stays stable under concurrent first contact", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createCanonicalBindingPrisma();
+  const persistence = new WechatPersistence(database.prisma, {});
+
+  const sameAccount = await Promise.all([
+    persistence.upsertWechatWorkBinding({ openKfid: "wk-shared", externalUserId: "wm-one" }),
+    persistence.upsertWechatWorkBinding({ openKfid: "wk-shared", externalUserId: "wm-two" }),
+  ]);
+  assert.equal(new Set(sameAccount.map((item) => item.wechatAccountId)).size, 1);
+
+  const sameCustomer = await Promise.all([
+    persistence.upsertWechatWorkBinding({ openKfid: "wk-a", externalUserId: "wm-shared" }),
+    persistence.upsertWechatWorkBinding({ openKfid: "wk-b", externalUserId: "wm-shared" }),
+  ]);
+  assert.equal(new Set(sameCustomer.map((item) => item.customerId)).size, 1);
+
+  const samePair = await Promise.all(Array.from({ length: 6 }, () =>
+    persistence.upsertWechatWorkBinding({ openKfid: "wk-race", externalUserId: "wm-race" }),
+  ));
+  assert.equal(new Set(samePair.map((item) => item.id)).size, 1);
+  assert.equal(new Set(samePair.map((item) => item.conversationId)).size, 1);
+  assert.equal(database.state.bindings.size, 5);
+});
+
+test("Prisma Enterprise WeChat canonical binding retries every P2002 create boundary", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  for (const model of ["wechatAccount", "customer", "conversation", "wechatWorkBinding"]) {
+    const database = createCanonicalBindingPrisma({ failOnceAt: model });
+    const persistence = new WechatPersistence(database.prisma, {});
+    const result = await persistence.upsertWechatWorkBinding({
+      openKfid: `wk-${model}`,
+      externalUserId: `wm-${model}`,
+    });
+    assert.match(result.id, /^wwbind_/);
+    assert.equal(database.state.failures.get(model), 1);
+  }
+});
+
+test("Prisma Enterprise WeChat canonical binding fails closed on inconsistent history", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createCanonicalBindingPrisma();
+  const persistence = new WechatPersistence(database.prisma, {});
+  await persistence.upsertWechatWorkBinding({ openKfid: "wk-conflict", externalUserId: "wm-one" });
+
+  database.seedBinding({
+    id: "legacy-conflict-binding",
+    openKfid: "wk-conflict",
+    externalUserId: "wm-legacy",
+    wechatAccountId: "legacy-conflict-account",
+    customerId: "legacy-conflict-customer",
+    conversationId: "legacy-conflict-conversation",
+  });
+  const writesBefore = database.state.writeCount;
+  await assert.rejects(
+    () => persistence.upsertWechatWorkBinding({ openKfid: "wk-conflict", externalUserId: "wm-new" }),
+    /openKfid maps to multiple WeChat accounts/,
+  );
+  assert.equal(database.state.writeCount, writesBefore);
+});
+
+test("Prisma Enterprise WeChat canonical binding rejects conflicting customer history without writes", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createCanonicalBindingPrisma();
+  const persistence = new WechatPersistence(database.prisma, {});
+  await persistence.upsertWechatWorkBinding({ openKfid: "wk-one", externalUserId: "wm-conflict" });
+
+  database.seedBinding({
+    id: "legacy-customer-conflict-binding",
+    openKfid: "wk-legacy",
+    externalUserId: "wm-conflict",
+    wechatAccountId: "legacy-customer-conflict-account",
+    customerId: "legacy-customer-conflict-customer",
+    conversationId: "legacy-customer-conflict-conversation",
+  });
+  const writesBefore = database.state.writeCount;
+  await assert.rejects(
+    () => persistence.upsertWechatWorkBinding({ openKfid: "wk-new", externalUserId: "wm-conflict" }),
+    /externalUserId maps to multiple customers/,
+  );
+  assert.equal(database.state.writeCount, writesBefore);
+});
+
+function createCanonicalBindingPrisma(options = {}) {
+  const state = {
+    accounts: new Map(),
+    customers: new Map(),
+    conversations: new Map(),
+    bindings: new Map(),
+    failures: new Map(),
+    writeCount: 0,
+  };
+  const failOnceAt = options.failOnceAt || "";
+  function p2002() {
+    const error = new Error("unique conflict");
+    error.code = "P2002";
+    return error;
+  }
+  function maybeFail(model) {
+    if (model !== failOnceAt || state.failures.has(model)) return;
+    state.failures.set(model, 1);
+    throw p2002();
+  }
+  function hydrate(binding) {
+    return {
+      ...binding,
+      wechatAccount: state.accounts.get(binding.wechatAccountId),
+      customer: state.customers.get(binding.customerId),
+      conversation: state.conversations.get(binding.conversationId),
+    };
+  }
+  function bindingByPair(openKfid, externalUserId) {
+    return [...state.bindings.values()].find((item) =>
+      item.openKfid === openKfid && item.externalUserId === externalUserId,
+    ) || null;
+  }
+  function conversationByIdentity(wechatAccountId, externalChatId) {
+    return [...state.conversations.values()].find((item) =>
+      item.wechatAccountId === wechatAccountId && item.externalChatId === externalChatId,
+    ) || null;
+  }
+  const tx = {
+    wechatWorkBinding: {
+      async findUnique({ where }) {
+        await Promise.resolve();
+        if (where.id) return state.bindings.has(where.id) ? hydrate(state.bindings.get(where.id)) : null;
+        const pair = where.openKfid_externalUserId;
+        const binding = pair ? bindingByPair(pair.openKfid, pair.externalUserId) : null;
+        return binding ? hydrate(binding) : null;
+      },
+      async findMany({ where }) {
+        await Promise.resolve();
+        return [...state.bindings.values()]
+          .filter((item) => !where.openKfid || item.openKfid === where.openKfid)
+          .filter((item) => !where.externalUserId || item.externalUserId === where.externalUserId)
+          .map(hydrate);
+      },
+      async create({ data }) {
+        maybeFail("wechatWorkBinding");
+        if (state.bindings.has(data.id) || bindingByPair(data.openKfid, data.externalUserId)) throw p2002();
+        if ([...state.bindings.values()].some((item) => item.conversationId === data.conversationId)) throw p2002();
+        state.bindings.set(data.id, { ...data });
+        state.writeCount += 1;
+        return hydrate(data);
+      },
+      async update({ where, data }) {
+        const current = state.bindings.get(where.id);
+        const updated = { ...current, ...data };
+        state.bindings.set(where.id, updated);
+        state.writeCount += 1;
+        return hydrate(updated);
+      },
+    },
+    wechatAccount: {
+      async findUnique({ where }) { await Promise.resolve(); return state.accounts.get(where.id) || null; },
+      async create({ data }) {
+        maybeFail("wechatAccount");
+        if (state.accounts.has(data.id)) throw p2002();
+        state.accounts.set(data.id, { ...data });
+        state.writeCount += 1;
+        return state.accounts.get(data.id);
+      },
+    },
+    customer: {
+      async findUnique({ where }) { await Promise.resolve(); return state.customers.get(where.id) || null; },
+      async create({ data }) {
+        maybeFail("customer");
+        if (state.customers.has(data.id)) throw p2002();
+        state.customers.set(data.id, { ...data });
+        state.writeCount += 1;
+        return state.customers.get(data.id);
+      },
+    },
+    conversation: {
+      async findUnique({ where }) {
+        await Promise.resolve();
+        if (where.id) return state.conversations.get(where.id) || null;
+        const identity = where.wechatAccountId_externalChatId;
+        return identity ? conversationByIdentity(identity.wechatAccountId, identity.externalChatId) : null;
+      },
+      async create({ data }) {
+        maybeFail("conversation");
+        if (state.conversations.has(data.id) || conversationByIdentity(data.wechatAccountId, data.externalChatId)) throw p2002();
+        state.conversations.set(data.id, { ...data });
+        state.writeCount += 1;
+        return state.conversations.get(data.id);
+      },
+      async update({ where, data }) {
+        const updated = { ...state.conversations.get(where.id), ...data };
+        state.conversations.set(where.id, updated);
+        state.writeCount += 1;
+        return updated;
+      },
+    },
+  };
+  const seedBinding = (binding) => {
+    state.accounts.set(binding.wechatAccountId, {
+      id: binding.wechatAccountId,
+      displayName: binding.wechatAccountId,
+    });
+    state.customers.set(binding.customerId, { id: binding.customerId, name: binding.customerId });
+    state.conversations.set(binding.conversationId, {
+      id: binding.conversationId,
+      channel: "work_wechat",
+      externalChatId: `wechat_work_kf:${binding.openKfid}:${binding.externalUserId}`,
+      wechatAccountId: binding.wechatAccountId,
+      customerId: binding.customerId,
+    });
+    state.bindings.set(binding.id, { ...binding });
+  };
+  return {
+    state,
+    seedBinding,
+    prisma: { async $transaction(callback) { return callback(tx); } },
+  };
+}
