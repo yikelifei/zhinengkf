@@ -7,11 +7,15 @@ export class WechatWorkController {
   constructor(private readonly wechatWork: WechatWorkService) {}
 
   @Get("status")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   getStatus() {
     return this.wechatWork.getStatus();
   }
 
   @Get("preflight")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   getProductionPreflight() {
     return this.wechatWork.getProductionPreflight();
   }

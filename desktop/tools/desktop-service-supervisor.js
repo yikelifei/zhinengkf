@@ -6,6 +6,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { ensureInternalApiToken } = require("./internal-api-session");
 const { ensureWechatWindowObserverProofSession } = require("./wechat-window-observer-session");
+const { readPrivateJsonFile } = require("./private-runtime-file");
 
 process.env.INTERNAL_API_TOKEN = ensureInternalApiToken();
 
@@ -473,12 +474,7 @@ function mockRuntimeStateIsActive() {
 }
 
 function runtimeConfigLooksMockDesignMode() {
-  try {
-    const config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-    return config?.designPlatformAdapter === "standard_v1";
-  } catch {
-    return false;
-  }
+  return readPrivateJsonFile(designPlatformConfigFile, {})?.designPlatformAdapter === "standard_v1";
 }
 
 function preferredDesignModeIsMock() {
@@ -588,12 +584,7 @@ function numberEnv(name, fallback) {
 }
 
 function runtimeConfigLooksRealDesignMode() {
-  try {
-    const config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-    return config?.designPlatformAdapter === "art_image_local";
-  } catch {
-    return false;
-  }
+  return readPrivateJsonFile(designPlatformConfigFile, {})?.designPlatformAdapter === "art_image_local";
 }
 
 function preferredDesignModeIsReal() {

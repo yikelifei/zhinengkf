@@ -16,11 +16,15 @@ export class PersonalWechatRpaController {
   }
 
   @Get("instances")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listInstances() {
     return this.personalWechatRpa.getRegistry();
   }
 
   @Post("instances/validate")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
   validateInstance(@Body() payload: PersonalWechatRpaInstanceInput) {
     return this.personalWechatRpa.validateInstance(payload || {});
   }

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { config as loadDotEnv } from "dotenv";
 
 loadDotEnv({
@@ -33,6 +33,42 @@ function runtimePath(...segments: string[]) {
   return path.join(runtimeDir, ...segments);
 }
 
+function assertPrivateRegularFileOrMissing(filePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Unsafe runtime file target: ${filePath}`);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function readPrivateJsonFile(filePath: string, fallback: Record<string, unknown>) {
+  if (!assertPrivateRegularFileOrMissing(filePath)) return fallback;
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
+function atomicWritePrivateJson(filePath: string, value: unknown) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  assertPrivateRegularFileOrMissing(filePath);
+  const temporaryPath = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    assertPrivateRegularFileOrMissing(filePath);
+    fs.renameSync(temporaryPath, filePath);
+    try { fs.chmodSync(filePath, 0o600); } catch {}
+  } finally {
+    if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {}
+    try { fs.rmSync(temporaryPath, { force: true }); } catch {}
+  }
+}
+
 function readRuntimeSecret(filePath: string): string {
   try {
     const value = String(fs.readFileSync(filePath, "utf8") || "").trim();
@@ -53,12 +89,7 @@ const wechatBridgeServiceTokenFile = path.resolve(
 );
 
 function readRuntimeConfig(): Record<string, unknown> {
-  const configPath = designPlatformRuntimeConfigPath;
-  try {
-    return JSON.parse(fs.readFileSync(configPath, "utf8"));
-  } catch {
-    return {};
-  }
+  return readPrivateJsonFile(designPlatformRuntimeConfigPath, {});
 }
 
 function stringConfig(envName: string, runtimeKey: string, fallback: string, config = runtimeConfig): string {
@@ -276,8 +307,7 @@ export function updateDesignPlatformRuntimeConfig(patch: DesignPlatformRuntimeCo
     next.designPlatformDeviceIdOrigin = previousOrigin || candidateOrigin;
   }
 
-  fs.mkdirSync(path.dirname(designPlatformRuntimeConfigPath), { recursive: true });
-  fs.writeFileSync(designPlatformRuntimeConfigPath, JSON.stringify(next, null, 2), "utf8");
+  atomicWritePrivateJson(designPlatformRuntimeConfigPath, next);
   runtimeConfig = next;
   refreshDesignPlatformAppConfig();
   return getDesignPlatformRuntimeConfigSummary();

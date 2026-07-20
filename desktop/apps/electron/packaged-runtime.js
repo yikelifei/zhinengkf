@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { selectServiceEnvironment } = require("../../packages/runtime/service-environment");
 
 const API_URL = "http://127.0.0.1:3200/api/health";
 const WEB_URL = "http://127.0.0.1:3100/overview";
@@ -24,16 +25,12 @@ function resolvePackagedPaths({ resourcesPath, appPath, userDataPath }) {
   };
 }
 
-function buildServiceEnvironment({ resourcesPath, appPath, userDataPath, baseEnv = process.env, token }) {
+function buildApiServiceEnvironment({ resourcesPath, appPath, userDataPath, baseEnv = process.env, token }) {
   const paths = resolvePackagedPaths({ resourcesPath, appPath, userDataPath });
-  const sanitizedBaseEnv = Object.fromEntries(
-    Object.entries(baseEnv).filter(([key]) => key.toUpperCase() !== "DESKTOP_WEB_SESSION_PROOF"),
-  );
   const nodePath = [paths.serviceNodeModulesPath, paths.nodeModulesPath, paths.unpackedNodeModulesPath, baseEnv.NODE_PATH]
     .filter(Boolean)
     .join(path.delimiter);
-  return {
-    ...sanitizedBaseEnv,
+  return selectServiceEnvironment("api", baseEnv, {
     NODE_ENV: "production",
     ELECTRON_RUN_AS_NODE: "1",
     HOSTNAME: "127.0.0.1",
@@ -44,8 +41,30 @@ function buildServiceEnvironment({ resourcesPath, appPath, userDataPath, baseEnv
     LOCAL_STORAGE_ROOT: paths.storageDir,
     DESKTOP_ENV_FILE: path.join(paths.configDir, "runtime.env"),
     NODE_PATH: nodePath,
-  };
+  });
 }
+
+function buildWebServiceEnvironment({ resourcesPath, appPath, userDataPath, baseEnv = process.env, token, webSessionProof }) {
+  const paths = resolvePackagedPaths({ resourcesPath, appPath, userDataPath });
+  const nodePath = [paths.serviceNodeModulesPath, paths.nodeModulesPath, paths.unpackedNodeModulesPath, baseEnv.NODE_PATH]
+    .filter(Boolean)
+    .join(path.delimiter);
+  return selectServiceEnvironment("web", baseEnv, {
+    NODE_ENV: "production",
+    ELECTRON_RUN_AS_NODE: "1",
+    HOSTNAME: "127.0.0.1",
+    PORT: "3100",
+    API_PORT: "3200",
+    WEB_PORT: "3100",
+    INTERNAL_API_TOKEN: token,
+    DESKTOP_WEB_SESSION_PROOF: webSessionProof,
+    DESKTOP_RUNTIME_DIR: paths.runtimeDir,
+    LOCAL_STORAGE_ROOT: paths.storageDir,
+    NODE_PATH: nodePath,
+  });
+}
+
+const buildServiceEnvironment = buildApiServiceEnvironment;
 
 function waitForHttp(url, child, timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
@@ -94,7 +113,7 @@ class PackagedServiceManager {
       fs.mkdirSync(directory, { recursive: true });
     }
 
-    const commonEnv = buildServiceEnvironment({
+    const apiEnv = buildApiServiceEnvironment({
       appPath: this.options.appPath,
       resourcesPath: this.options.resourcesPath,
       userDataPath: this.options.userDataPath,
@@ -102,12 +121,19 @@ class PackagedServiceManager {
       token: this.token,
     });
     try {
-      const api = this.spawnService("api", this.paths.apiEntry, commonEnv, this.paths.readOnlyRoot);
+      const api = this.spawnService("api", this.paths.apiEntry, apiEnv, this.paths.readOnlyRoot);
       await waitForHttp(API_URL, api);
       const web = this.spawnService(
         "web",
         this.paths.webEntry,
-        { ...commonEnv, PORT: "3100", DESKTOP_WEB_SESSION_PROOF: this.webSessionProof },
+        buildWebServiceEnvironment({
+          appPath: this.options.appPath,
+          resourcesPath: this.options.resourcesPath,
+          userDataPath: this.options.userDataPath,
+          baseEnv: process.env,
+          token: this.token,
+          webSessionProof: this.webSessionProof,
+        }),
         this.paths.runtimeDir,
       );
       await waitForHttp(WEB_URL, web);
@@ -154,7 +180,9 @@ module.exports = {
   API_URL,
   WEB_URL,
   PackagedServiceManager,
+  buildApiServiceEnvironment,
   buildServiceEnvironment,
+  buildWebServiceEnvironment,
   resolvePackagedPaths,
   waitForHttp,
 };

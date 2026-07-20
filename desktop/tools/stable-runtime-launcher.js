@@ -6,7 +6,6 @@ const { spawn, spawnSync } = require("node:child_process");
 const {
   ensureInternalApiToken,
   internalApiServiceEnv,
-  withoutInternalApiToken,
 } = require("./internal-api-session");
 const {
   createWechatWindowObserverProofSession,
@@ -17,6 +16,8 @@ const {
   wechatBridgeServiceEnv,
 } = require("./wechat-bridge-service-session");
 const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
+const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
+const { atomicWritePrivateJson } = require("./private-runtime-file");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
@@ -191,7 +192,7 @@ function startService(spec) {
     append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
     const child = spawn(spec.command, spec.args, {
       cwd: root,
-      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
+      env: serviceEnv(spec.port || ports.api, spec.name, spec.env),
       detached: process.platform === "win32",
       stdio: ["ignore", out, err],
       windowsHide: true,
@@ -218,7 +219,7 @@ function startWindowsWrappedPortService(spec) {
     append(spec.name, `starting wrapper ${wrapperPath}`);
     const child = spawn("cmd.exe", ["/d", "/c", wrapperPath], {
       cwd: root,
-      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
+      env: serviceEnv(spec.port || ports.api, spec.name, spec.env),
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -237,12 +238,11 @@ function startWindowsWrappedPortService(spec) {
 }
 
 function buildWindowsPortServiceWrapper(spec) {
-  const env = withoutInternalApiToken({ ...serviceEnv(spec.port, spec.name), ...(spec.env || {}) });
   return [
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(root)}`,
-    ...Object.entries(env).map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)}`),
+    ...renderWindowsWrapperEnvironment(spec.name, serviceEnv(spec.port, spec.name, spec.env)),
     ":restart",
     `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
     `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${spec.port} -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`,
@@ -301,7 +301,7 @@ function webStandaloneBuildReady() {
   ].every((filePath) => fs.existsSync(filePath));
 }
 
-function serviceEnv(port, serviceName) {
+function serviceEnv(port, serviceName, overrides = {}) {
   const internalEnv = internalApiServiceEnv({
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
@@ -328,7 +328,11 @@ function serviceEnv(port, serviceName) {
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
   }, serviceName, internalApiToken);
   const observerEnv = wechatWindowObserverServiceEnv(internalEnv, serviceName, observerProofSession.tokenFile);
-  return wechatBridgeServiceEnv(observerEnv, serviceName, bridgeServiceSession.tokenFile);
+  return selectServiceEnvironment(
+    serviceName,
+    wechatBridgeServiceEnv(observerEnv, serviceName, bridgeServiceSession.tokenFile),
+    overrides,
+  );
 }
 
 function acquireSingleInstanceLock() {
@@ -548,8 +552,11 @@ function writeHeartbeat() {
 }
 
 function writeDesignConfig() {
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(designConfigFile, `${JSON.stringify({ designPlatformAdapter: "standard_v1", designPlatformBaseUrl: `http://127.0.0.1:${ports.mock}`, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+  atomicWritePrivateJson(designConfigFile, {
+    designPlatformAdapter: "standard_v1",
+    designPlatformBaseUrl: `http://127.0.0.1:${ports.mock}`,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 function writeWebRuntimeServer() {

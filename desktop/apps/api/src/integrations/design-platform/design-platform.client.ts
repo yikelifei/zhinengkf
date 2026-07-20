@@ -132,6 +132,7 @@ function designPlatformRedirectError(response: AxiosResponse) {
 @Injectable()
 export class DesignPlatformClient {
   private readonly http: AxiosInstance;
+  private readonly publicHttp: AxiosInstance;
   private transport: AxiosAdapter;
   private readonly guardedAdapter: AxiosAdapter;
 
@@ -148,6 +149,19 @@ export class DesignPlatformClient {
       timeout: appConfig.designPlatformTimeoutMs,
       maxRedirects: 0,
       adapter: this.guardedAdapter,
+      proxy: false,
+      validateStatus: trustedValidateStatus,
+    });
+    this.publicHttp = axios.create({
+      baseURL: trustedDesignPlatformBaseUrl().toString(),
+      timeout: appConfig.designPlatformTimeoutMs,
+      maxRedirects: 0,
+      adapter: async (config) => {
+        this.applyTrustedRequestBoundary(config);
+        this.removeCredentialHeaders(config);
+        assertTrustedDesignPlatformTarget(config.baseURL, config.url);
+        return this.transport(config);
+      },
       proxy: false,
       validateStatus: trustedValidateStatus,
     });
@@ -185,6 +199,20 @@ export class DesignPlatformClient {
     }
 
     const response = await this.http.get("v1/health");
+    return response.data;
+  }
+
+  async publicHealth() {
+    if (this.useArtImageLocalAdapter()) {
+      const response = await this.publicHttp.get("api/health");
+      const data = this.unwrapApiData(response.data);
+      return {
+        adapter: appConfig.designPlatformAdapter,
+        ...(isRecord(data) ? data : { data }),
+      };
+    }
+
+    const response = await this.publicHttp.get("v1/health");
     return response.data;
   }
 
@@ -389,6 +417,16 @@ export class DesignPlatformClient {
     if (credentials.authorization) headers.set("Authorization", credentials.authorization);
     if (credentials.cookie) headers.set("Cookie", credentials.cookie);
     if (credentials.deviceId) headers.set("x-art-device-id", credentials.deviceId);
+    config.headers = headers;
+  }
+
+  private removeCredentialHeaders(config: InternalAxiosRequestConfig) {
+    const headers = AxiosHeaders.from(config.headers);
+    headers.delete("Authorization");
+    headers.delete("Cookie");
+    headers.delete("x-art-device-id");
+    headers.delete("Proxy-Authorization");
+    headers.delete("Host");
     config.headers = headers;
   }
 

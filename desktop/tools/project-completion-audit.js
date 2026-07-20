@@ -1281,6 +1281,7 @@ function highRiskOperatorRouteResults(root) {
     orders: "desktop/apps/api/src/orders/orders.controller.ts",
     wechat: "desktop/apps/api/src/wechat/wechat.controller.ts",
     wechatWork: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
+    personalWechat: "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller.ts",
     reviews: "desktop/apps/api/src/reviews/reviews.controller.ts",
     quotes: "desktop/apps/api/src/quotes/quotes.controller.ts",
     routing: "desktop/apps/api/src/routing/routing.controller.ts",
@@ -1431,8 +1432,15 @@ function highRiskOperatorRouteResults(root) {
     /@UseGuards\(OperatorAccessGuard\)/,
   ]);
   for (const [label, routePattern] of [
-    ["wechat-work-status-public", /@Get\(["']status["']\)/],
-    ["wechat-work-preflight-public", /@Get\(["']preflight["']\)/],
+    ["wechat-work-status", /@Get\(["']status["']\)/],
+    ["wechat-work-preflight", /@Get\(["']preflight["']\)/],
+  ]) {
+    check(label, sources.wechatWork, routePattern, [
+      /@RequireOperatorCapability\(["']view_console["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+    ]);
+  }
+  for (const [label, routePattern] of [
     ["wechat-work-verify-callback-public", /@Get\(["']callback["']\)/],
     ["wechat-work-callback-public", /@Post\(["']callback["']\)/],
   ]) {
@@ -1440,6 +1448,20 @@ function highRiskOperatorRouteResults(root) {
       /@RequireOperatorCapability\(/,
       /@UseGuards\(OperatorAccessGuard\)/,
       /@TrustedOperator\(\)/,
+    ]);
+  }
+  check("personal-wechat-instances", sources.personalWechat, /@Get\(["']instances["']\)/, [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["personal-wechat-validate", /@Post\(["']instances\/validate["']\)/],
+    ["personal-wechat-upsert", /@Post\(["']instances["']\)/],
+    ["personal-wechat-disable", /@Post\(["']instances\/:wechatAccountId\/disable["']\)/],
+  ]) {
+    check(label, sources.personalWechat, routePattern, [
+      /@RequireOperatorCapability\(["']manage_channels["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
     ]);
   }
 
@@ -1518,7 +1540,7 @@ function highRiskOperatorRouteResults(root) {
     "高风险操作路由与可信审计人边界",
     ok ? STATUS.PASS : STATUS.FAIL,
     ok
-      ? "操作员写入、通用微信入站、渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信主体；企业微信 readiness/callback 保持专用公开入口。"
+      ? "操作员写入、通用微信入站、渠道状态、个人微信实例、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信主体；企业微信 callback 保持签名认证公开入口。"
       : "高风险路由守卫、可信审计人覆盖或企业微信公开入口边界发生漂移。",
     { path: paths.wechatWork, paths: Object.values(paths), missing, forbidden },
   )];

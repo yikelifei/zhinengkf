@@ -382,8 +382,14 @@ pendingImportOperation.current = completeClientOperation(pendingImportOperation.
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.controller.ts", `
 @Controller("wechat-work")
 export class WechatWorkController {
-  @Get("status") status() {}
-  @Get("preflight") preflight() {}
+  @Get("status")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  status() {}
+  @Get("preflight")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  preflight() {}
   @Get("callback") verifyCallback() {}
   @Post("callback") handleCallback() {}
   @Post("kf/sync")
@@ -406,6 +412,27 @@ export class WechatWorkController {
   @RequireOperatorCapability("view_console")
   @UseGuards(OperatorAccessGuard)
   audit() {}
+}
+`);
+  write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller.ts", `
+@Controller("personal-wechat-rpa")
+export class PersonalWechatRpaController {
+  @Get("instances")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  listInstances() {}
+  @Post("instances/validate")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
+  validateInstance() {}
+  @Post("instances")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
+  upsertInstance() {}
+  @Post("instances/:wechatAccountId/disable")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
+  disableInstance() {}
 }
 `);
   write(root, "desktop/apps/api/src/reviews/reviews.controller.ts", `

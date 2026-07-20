@@ -91,7 +91,7 @@ test("public health response reduces hostile upstream data to one boolean", asyn
     config: { apiKey: "secret-api-key" },
   };
   assert.deepEqual(sanitizePublicDesignPlatformHealth(hostile), { upstreamOk: true });
-  const controller = new DesignPlatformController({}, { health: async () => hostile });
+  const controller = new DesignPlatformController({}, { publicHealth: async () => hostile });
   const response = await controller.health();
   const serialized = JSON.stringify(response);
   assert.equal(response.upstreamOk, true);
@@ -99,7 +99,7 @@ test("public health response reduces hostile upstream data to one boolean", asyn
     assert.equal(serialized.includes(secret), false);
   }
   const failed = new DesignPlatformController({}, {
-    health: async () => { throw new Error("secret-token cookie=secret-cookie"); },
+    publicHealth: async () => { throw new Error("secret-token cookie=secret-cookie"); },
   });
   const failure = await failed.health();
   assert.equal(failure.errorMessage, "design platform health check failed");

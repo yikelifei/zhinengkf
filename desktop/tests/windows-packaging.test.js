@@ -8,7 +8,8 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 const {
-  buildServiceEnvironment,
+  buildApiServiceEnvironment,
+  buildWebServiceEnvironment,
   resolvePackagedPaths,
 } = require("../apps/electron/packaged-runtime");
 const {
@@ -63,9 +64,9 @@ test("packaged services resolve from resources while mutable data resolves under
   assert.doesNotMatch(paths.storageDir, /Program Files[\\/]Smart Kefu[\\/]storage$/);
 });
 
-test("packaged API and Web receive one trusted token and no source-workspace runtime paths", () => {
+test("packaged API and Web receive isolated environments and one trusted token", () => {
   const token = "a".repeat(64);
-  const env = buildServiceEnvironment({
+  const env = buildApiServiceEnvironment({
     resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
     appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
     userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
@@ -80,12 +81,25 @@ test("packaged API and Web receive one trusted token and no source-workspace run
   assert.match(env.DESKTOP_ENV_FILE, /AppData[\\/]Roaming[\\/]Smart Kefu[\\/]config[\\/]runtime\.env$/);
   assert.match(env.NODE_PATH, /app\.asar[\\/]node_modules/);
   assert.match(env.NODE_PATH, /runtime-root[\\/]node_modules/);
+  const web = buildWebServiceEnvironment({
+    resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
+    appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
+    userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
+    baseEnv: { PATH: "safe", DATABASE_URL: "database-secret", WECHAT_WORK_SECRET: "wecom-secret" },
+    token,
+    webSessionProof: "proof",
+  });
+  assert.equal(web.INTERNAL_API_TOKEN, token);
+  assert.equal(web.DESKTOP_WEB_SESSION_PROOF, "proof");
+  assert.equal(web.DATABASE_URL, undefined);
+  assert.equal(web.WECHAT_WORK_SECRET, undefined);
 });
 
 test("electron-builder uses explicit application and service whitelists", () => {
   const config = fs.readFileSync(path.join(root, "electron-builder.yml"), "utf8");
   assert.match(config, /asar: true/);
   assert.match(config, /apps\/electron\/packaged-runtime\.js/);
+  assert.match(config, /packages\/runtime\/service-environment\.js/);
   assert.match(config, /from: dist\/apps\/api/);
   assert.match(config, /from: apps\/web\/\.next\/standalone/);
   assert.match(config, /from: packages\/rules/);

@@ -27,6 +27,7 @@ const { RoutingController } = require("../apps/api/src/routing/routing.controlle
 const { TrainingController } = require("../apps/api/src/training/training.controller");
 const { WechatController } = require("../apps/api/src/wechat/wechat.controller");
 const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
+const { PersonalWechatRpaController } = require("../apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
 const {
   INTERNAL_API_TOKEN_HEADER,
@@ -328,6 +329,8 @@ test("high-risk operator routes use the existing capability matrix while dedicat
 
   const expectedCapabilities = [
     [WechatWorkController, "syncCustomerServiceMessages", "manage_channels"],
+    [WechatWorkController, "getStatus", "view_console"],
+    [WechatWorkController, "getProductionPreflight", "view_console"],
     [WechatWorkController, "sendCustomerServiceText", "approve_send"],
     [WechatWorkController, "sendCustomerServiceImages", "approve_send"],
     [WechatWorkController, "dispatchCustomerServiceText", "approve_send"],
@@ -344,6 +347,10 @@ test("high-risk operator routes use the existing capability matrix while dedicat
     [TrainingController, "reviewSample", "manage_training"],
     [TrainingController, "batchReviewSamples", "manage_training"],
     [TrainingController, "applySkillSuggestions", "manage_training"],
+    [PersonalWechatRpaController, "listInstances", "view_console"],
+    [PersonalWechatRpaController, "validateInstance", "manage_channels"],
+    [PersonalWechatRpaController, "upsertInstance", "manage_channels"],
+    [PersonalWechatRpaController, "disableInstance", "manage_channels"],
   ];
   for (const [controllerClass, methodName, capability] of expectedCapabilities) {
     assert.equal(
@@ -353,7 +360,7 @@ test("high-risk operator routes use the existing capability matrix while dedicat
     );
   }
 
-  for (const methodName of ["getStatus", "getProductionPreflight", "verifyCallback", "handleCallback"]) {
+  for (const methodName of ["verifyCallback", "handleCallback"]) {
     assert.equal(
       Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, WechatWorkController.prototype[methodName]),
       undefined,

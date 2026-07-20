@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { atomicWritePrivateJson, readPrivateJsonFile, removePrivateRegularFile } = require("./private-runtime-file");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const staleDesktopRoots = [
@@ -164,13 +165,7 @@ function readJsonFile(filePath) {
 
 function clearRuntimeDesignModeConfig() {
   // Keep designPlatformAccessToken, designPlatformCookie and designPlatformDeviceId across restarts.
-  let config = {};
-  try {
-    config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-  } catch {
-    fs.rmSync(designPlatformConfigFile, { force: true });
-    return;
-  }
+  const config = readPrivateJsonFile(designPlatformConfigFile, {});
 
   for (const key of [
     "designPlatformAdapter",
@@ -183,10 +178,9 @@ function clearRuntimeDesignModeConfig() {
   }
 
   if (Object.keys(config).length) {
-    fs.mkdirSync(path.dirname(designPlatformConfigFile), { recursive: true });
-    fs.writeFileSync(designPlatformConfigFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    atomicWritePrivateJson(designPlatformConfigFile, config);
   } else {
-    fs.rmSync(designPlatformConfigFile, { force: true });
+    removePrivateRegularFile(designPlatformConfigFile);
   }
 }
 

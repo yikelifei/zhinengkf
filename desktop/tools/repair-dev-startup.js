@@ -3,6 +3,7 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { atomicWritePrivateJson, readPrivateJsonFile, removePrivateRegularFile } = require("./private-runtime-file");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -135,19 +136,15 @@ function clearDefaultMockModeLocks() {
   fs.writeFileSync(mockRepairLockFile, `${new Date().toISOString()}\n`, "utf8");
   fs.rmSync(realModeLockFile, { force: true });
   fs.rmSync(preferredDesignModeFile, { force: true });
-  let config = {};
-  try {
-    config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-  } catch {
-    return;
-  }
+  if (!fs.existsSync(designPlatformConfigFile)) return;
+  const config = readPrivateJsonFile(designPlatformConfigFile, {});
   for (const key of ["designPlatformAdapter", "designPlatformBaseUrl", "launcherPid", "launcherArgs", "updatedAt"]) {
     delete config[key];
   }
   if (Object.keys(config).length) {
-    fs.writeFileSync(designPlatformConfigFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    atomicWritePrivateJson(designPlatformConfigFile, config);
   } else {
-    fs.rmSync(designPlatformConfigFile, { force: true });
+    removePrivateRegularFile(designPlatformConfigFile);
   }
 }
 

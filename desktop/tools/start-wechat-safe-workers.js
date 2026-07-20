@@ -13,6 +13,8 @@ const {
   readWechatBridgeServiceToken,
   wechatBridgeServiceEnv,
 } = require("./wechat-bridge-service-session");
+const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
+const { readPrivateJsonFile } = require("./private-runtime-file");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -175,7 +177,7 @@ async function assertApiReadyForSafeWorkers() {
     throw new Error(`WeChat safe workers require windows_bridge adapter, current adapter is ${bridgeAdapterName}.`);
   }
 
-  const runtimeConfig = readJson(designPlatformConfigFile);
+  const runtimeConfig = readPrivateJsonFile(designPlatformConfigFile, {});
   const expectedAdapter = String(runtimeConfig.designPlatformAdapter || "");
   const expectedBaseUrl = normalizeBaseUrl(runtimeConfig.designPlatformBaseUrl || "");
   if (!expectedAdapter && !expectedBaseUrl) return;
@@ -279,7 +281,7 @@ function buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogP
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(desktopRoot)}`,
-    ...Object.entries(windowsWorkerEnv(service)).map(([key, value]) => cmdSetEnv(key, value)),
+    ...renderWindowsWrapperEnvironment(service.name, windowsWorkerEnv(service)),
     `echo [%date% %time%] launching ${service.name} >> ${cmdQuote(launcherLogPath)}`,
     runLine,
   ];
@@ -301,7 +303,10 @@ function workerEnv(service) {
     TMP: process.env.TMP || process.env.TEMP || runtimeDir,
     ...service.env,
   }, service.name, observerProofFile);
-  return wechatBridgeServiceEnv(observerEnv, service.name, bridgeServiceSession.tokenFile);
+  return selectServiceEnvironment(
+    service.name,
+    wechatBridgeServiceEnv(observerEnv, service.name, bridgeServiceSession.tokenFile),
+  );
 }
 
 function stopWorkers() {
