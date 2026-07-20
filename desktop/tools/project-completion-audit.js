@@ -823,6 +823,139 @@ function patternFailures(text, required = [], forbidden = []) {
   };
 }
 
+function highRiskOperatorRouteResults(root) {
+  const paths = {
+    wechatWork: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
+    reviews: "desktop/apps/api/src/reviews/reviews.controller.ts",
+    quotes: "desktop/apps/api/src/quotes/quotes.controller.ts",
+    automation: "desktop/apps/api/src/automation/automation.controller.ts",
+    training: "desktop/apps/api/src/training/training.controller.ts",
+  };
+  const sources = Object.fromEntries(
+    Object.entries(paths).map(([key, file]) => [key, readText(root, file) || ""]),
+  );
+  const missing = [];
+  const forbidden = [];
+
+  const check = (label, text, routePattern, requiredPatterns, forbiddenPatterns = []) => {
+    const failures = patternFailures(extractRouteSection(text, routePattern), requiredPatterns, forbiddenPatterns);
+    missing.push(...failures.missing.map((item) => `${label}-${item}`));
+    forbidden.push(...failures.forbidden.map((item) => `${label}-${item}`));
+  };
+  const checkClass = (label, text, requiredPatterns) => {
+    const classIndex = text.indexOf("export class");
+    const header = classIndex >= 0 ? text.slice(0, classIndex) : null;
+    const failures = patternFailures(header, requiredPatterns);
+    missing.push(...failures.missing.map((item) => `${label}-${item}`));
+  };
+
+  check("wechat-work-sync", sources.wechatWork, /@Post\(["']kf\/sync["']\)/, [
+    /@RequireOperatorCapability\(["']manage_channels["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["wechat-work-send-text", /@Post\(["']kf\/send-text["']\)/],
+    ["wechat-work-send-images", /@Post\(["']kf\/send-images["']\)/],
+    ["wechat-work-dispatch", /@Post\(["']kf\/send-tasks\/:id\/dispatch["']\)/],
+  ]) {
+    check(label, sources.wechatWork, routePattern, [
+      /@RequireOperatorCapability\(["']approve_send["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+    ]);
+  }
+  check("wechat-work-audit", sources.wechatWork, /@Get\(["']kf\/audit["']\)/, [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["wechat-work-status-public", /@Get\(["']status["']\)/],
+    ["wechat-work-preflight-public", /@Get\(["']preflight["']\)/],
+    ["wechat-work-verify-callback-public", /@Get\(["']callback["']\)/],
+    ["wechat-work-callback-public", /@Post\(["']callback["']\)/],
+  ]) {
+    check(label, sources.wechatWork, routePattern, [], [
+      /@RequireOperatorCapability\(/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+      /@TrustedOperator\(\)/,
+    ]);
+  }
+
+  checkClass("reviews-class", sources.reviews, [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["reviews-design", /@Post\(["']design-jobs\/:id["']\)/],
+    ["reviews-quote", /@Post\(["']quotes\/:id["']\)/],
+    ["reviews-order", /@Post\(["']orders\/:id["']\)/],
+  ]) {
+    check(label, sources.reviews, routePattern, [
+      /@RequireOperatorCapability\(["']approve_send["']\)/,
+      /@TrustedOperator\(\) principal/,
+      /reviewer:\s*_untrustedReviewer/,
+      /reviewer:\s*principal\.id/,
+    ]);
+  }
+
+  for (const [label, routePattern] of [
+    ["quotes-queue-send", /@Post\(["']:id\/queue-send["']\)/],
+    ["quotes-payment-proof", /@Post\(["']:id\/verify-payment-proof["']\)/],
+  ]) {
+    check(label, sources.quotes, routePattern, [
+      /@RequireOperatorCapability\(["']approve_send["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+      /@TrustedOperator\(\) principal/,
+      /owner:\s*_untrustedOwner/,
+      /owner:\s*principal\.id/,
+    ]);
+  }
+
+  checkClass("automation-class", sources.automation, [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["automation-run-once", /@Post\(["']run-once["']\)/],
+    ["automation-start", /@Post\(["']start["']\)/],
+    ["automation-stop", /@Post\(["']stop["']\)/],
+  ]) {
+    check(label, sources.automation, routePattern, [/@RequireOperatorCapability\(["']approve_send["']\)/]);
+  }
+
+  checkClass("training-class", sources.training, [
+    /@RequireOperatorCapability\(["']view_console["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+  ]);
+  check("training-import", sources.training, /@Post\(["']chat-imports["']\)/, [
+    /@RequireOperatorCapability\(["']manage_training["']\)/,
+  ]);
+  for (const [label, routePattern] of [
+    ["training-review", /@Post\(["']samples\/:id\/review["']\)/],
+    ["training-batch-review", /@Post\(["']samples\/batch-review["']\)/],
+  ]) {
+    check(label, sources.training, routePattern, [
+      /@RequireOperatorCapability\(["']manage_training["']\)/,
+      /@TrustedOperator\(\) principal/,
+      /reviewer:\s*_untrustedReviewer/,
+      /reviewer:\s*principal\.id/,
+    ]);
+  }
+  check("training-apply", sources.training, /@Post\(["']skill-suggestions\/apply["']\)/, [
+    /@RequireOperatorCapability\(["']manage_training["']\)/,
+  ]);
+
+  const ok = missing.length === 0 && forbidden.length === 0;
+  return [result(
+    "contract.high_risk_operator_routes",
+    "高风险操作路由与可信审计人边界",
+    ok ? STATUS.PASS : STATUS.FAIL,
+    ok
+      ? "渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力；企业微信 readiness/callback 保持专用公开入口。"
+      : "高风险路由守卫、可信审计人覆盖或企业微信公开入口边界发生漂移。",
+    { path: paths.wechatWork, paths: Object.values(paths), missing, forbidden },
+  )];
+}
+
 function designReconciliationResults(root) {
   const uiPath = "desktop/apps/web/src/components/design-execution-reconciliation-panel.tsx";
   const webApiPath = "desktop/apps/web/src/lib/api.ts";
@@ -1208,6 +1341,7 @@ function buildAudit(root, options = {}) {
   const results = [
     ...artifactResults(resolvedRoot),
     ...contractResults(resolvedRoot),
+    ...highRiskOperatorRouteResults(resolvedRoot),
     ...designReconciliationResults(resolvedRoot),
     plannedScopeResult(resolvedRoot),
     placeholderResult(resolvedRoot),
