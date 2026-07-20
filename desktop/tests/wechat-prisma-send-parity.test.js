@@ -10,6 +10,7 @@ require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "C
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
+const { WechatBridgeOutboxError } = require("../apps/api/src/wechat/wechat-send-adapter.service");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const service = fs.readFileSync(
@@ -39,6 +40,98 @@ test("Prisma queue honors retry due time, manual-reply exception and official We
   const execute = section(service, "private async executePrismaSend", "private validateExistingSendTaskBinding");
   assert.match(execute, /adapter\.name === "wechat_work_kf"[\s\S]*completePrismaWechatWorkKfSend/);
   assert.match(execute, /preClaimState[\s\S]*claimQueuedTaskAndCreateAttempt[\s\S]*preDispatchState/);
+});
+
+test("Prisma bridge adapter preserves typed failed versus delivery-unknown outcomes", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+
+  for (const deliveryState of ["failed", "unknown"]) {
+    const task = {
+      id: `task-adapter-${deliveryState}`,
+      status: "queued",
+      wechatAccountId: "account-adapter",
+      conversationId: "conversation-adapter",
+      customerId: "customer-adapter",
+      payload: { kind: "text", text: "safe bridge fixture" },
+      guardSnapshot: {},
+      conversation: {
+        id: "conversation-adapter",
+        wechatAccountId: "account-adapter",
+        customerId: "customer-adapter",
+        manualLocked: false,
+      },
+      designJob: null,
+      quoteDraft: null,
+    };
+    const attempt = {
+      id: `attempt-adapter-${deliveryState}`,
+      sendTaskId: task.id,
+      adapter: "windows_bridge",
+      status: "started",
+      metadata: {},
+    };
+    const transitions = [];
+    let adapterContext = null;
+    const sendAdapter = {
+      describe() {
+        return { name: "windows_bridge", capabilities: { requiresWindowGuard: true } };
+      },
+      execute(_task, context) {
+        adapterContext = context;
+        throw new WechatBridgeOutboxError(`bridge ${deliveryState}`, {
+          deliveryState,
+          retrySafe: deliveryState === "failed",
+          stage: "outbox_publish_rename",
+          outboxFile: `C:\\runtime\\${task.id}.json`,
+        });
+      },
+    };
+    const dispatch = new WechatDispatchService({}, throwingLocalStore(), sendAdapter, {}, {});
+    dispatch.validatePrismaLinkedSendState = async () => ({ ok: true });
+    dispatch.validatePrismaSendTask = async () => ({
+      ...task,
+      guardSnapshot: { status: "passed" },
+    });
+    dispatch.buildPrismaLinkedTransition = async () => ({
+      model: "quoteDraft",
+      where: { id: "quote-adapter" },
+      data: { status: "manual_review" },
+    });
+    dispatch.persistence = {
+      async getSendTask() { return task; },
+      async claimQueuedTaskAndCreateAttempt(params) {
+        return { task: { ...task, ...params.taskPatch }, attempt };
+      },
+      async completeAttemptAndTask(params) {
+        transitions.push(params);
+        return {
+          task: { ...task, ...params.taskPatch },
+          attempt: { ...attempt, ...params.attemptPatch },
+        };
+      },
+    };
+
+    const result = await dispatch.executePrismaSend(task.id, { adapter: "windows_bridge" });
+    assert.equal(adapterContext.attemptId, attempt.id);
+    assert.equal(transitions.length, 1);
+    assert.equal(transitions[0].expectedTaskStatus, "sending");
+    assert.equal(transitions[0].expectedAttemptStatus, "started");
+    if (deliveryState === "unknown") {
+      assert.equal(result.task.status, "sending");
+      assert.equal(result.attempt.status, "started");
+      assert.equal(result.task.guardSnapshot.deliveryState, "unknown");
+      assert.equal(result.task.guardSnapshot.automaticRetryBlocked, true);
+      assert.equal(result.attempt.metadata.manualReviewRequired, true);
+      assert.equal(transitions[0].linkedTransition, null);
+    } else {
+      assert.equal(result.task.status, "failed");
+      assert.equal(result.attempt.status, "failed");
+      assert.equal(result.task.guardSnapshot.deliveryState, "failed");
+      assert.equal(result.attempt.metadata.retrySafe, true);
+      assert.equal(transitions[0].linkedTransition.model, "quoteDraft");
+    }
+  }
 });
 
 test("Prisma operations recovery dispatches by persisted attempt adapter without LocalStore state", () => {

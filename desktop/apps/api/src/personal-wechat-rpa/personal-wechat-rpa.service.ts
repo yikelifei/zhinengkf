@@ -192,6 +192,14 @@ export class PersonalWechatRpaService {
       return { ok: true, ignored: true, reason: normalized.reason, audit };
     }
 
+    const existingMessage = await this.persistence.findInboundMessageByExternalId(
+      identity.wechatAccountId,
+      normalized.externalId,
+    );
+    if (existingMessage) {
+      return this.completeExistingInboundReplay(existingMessage, normalized, sensitiveValues);
+    }
+
     const binding = await this.persistence.upsertBinding({
       wechatAccountId: identity.wechatAccountId,
       accountNickname: normalized.accountNickname,
@@ -352,14 +360,69 @@ export class PersonalWechatRpaService {
   private assertDuplicateMatches(message: any, binding: any, inbound: ReturnType<PersonalWechatRpaService["validateInbound"]>) {
     if (
       !message ||
+      !binding ||
       String(message.conversationId || "") !== String(binding.conversationId || "") ||
       String(message.customerId || "") !== String(binding.customerId || "") ||
       String(message.wechatAccountId || "") !== String(binding.wechatAccountId || "") ||
       String(message.text || "") !== String(inbound.message || "") ||
-      String(message.externalId || "") !== String(inbound.externalId || "")
+      String(message.externalId || "") !== String(inbound.externalId || "") ||
+      String(binding.accountNickname || "") !== String(inbound.accountNickname || "") ||
+      String(binding.ownerWxId || "") !== String(inbound.ownerWxId || "") ||
+      String(binding.chatTitle || "") !== String(inbound.chatTitle || "") ||
+      String(binding.conversationType || "") !== String(inbound.conversationType || "") ||
+      (inbound.conversationType === "direct" && Boolean(binding.senderName) && String(binding.senderName) !== String(inbound.senderName)) ||
+      stableJson(message.attachments || []) !== stableJson(inbound.attachments || [])
     ) {
-      throw new BadRequestException("duplicate inbound externalId conflict: account, conversation, customer or text changed");
+      throw new BadRequestException(
+        "duplicate inbound externalId conflict: account, conversation, customer, content or attachment changed",
+      );
     }
+  }
+
+  private async completeExistingInboundReplay(
+    message: any,
+    inbound: ReturnType<PersonalWechatRpaService["validateInbound"]>,
+    sensitiveValues: unknown[],
+  ) {
+    const identity = {
+      wechatAccountId: String(message.wechatAccountId || message.conversation?.wechatAccountId || ""),
+      conversationId: String(message.conversationId || message.conversation?.id || ""),
+      customerId: String(message.customerId || message.conversation?.customerId || ""),
+    };
+    const binding = identity.wechatAccountId && identity.conversationId && identity.customerId
+      ? await this.persistence.findBindingByIdentity(identity)
+      : null;
+    try {
+      this.assertDuplicateMatches(message, binding, inbound);
+    } catch (error) {
+      await this.persistence.recordAudit({
+        direction: "inbound",
+        status: "failed",
+        accountNickname: inbound.accountNickname,
+        ownerWxId: inbound.ownerWxId,
+        chatTitle: inbound.chatTitle,
+        externalId: inbound.externalId,
+        wechatAccountId: identity.wechatAccountId,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+        messageId: message?.id || null,
+        errorMessage: error instanceof Error ? error.message : "duplicate inbound externalId conflict",
+      }, sensitiveValues);
+      throw error;
+    }
+    const audit = await this.persistence.recordAudit({
+      direction: "inbound",
+      status: "duplicate",
+      accountNickname: inbound.accountNickname,
+      ownerWxId: inbound.ownerWxId,
+      chatTitle: inbound.chatTitle,
+      externalId: inbound.externalId,
+      wechatAccountId: identity.wechatAccountId,
+      conversationId: identity.conversationId,
+      customerId: identity.customerId,
+      messageId: message.id || null,
+    }, sensitiveValues);
+    return { ok: true, duplicate: true, binding, message, audit };
   }
 
   private readRegistryState() {
@@ -773,6 +836,17 @@ function duplicateValues(values: readonly string[]) {
     seen.add(value);
   }
   return [...duplicates];
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {

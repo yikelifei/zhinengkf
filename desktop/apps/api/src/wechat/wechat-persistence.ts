@@ -160,8 +160,14 @@ export class WechatPersistence {
             createdAt: now,
           },
         });
-        await tx.conversation.update({
-          where: { id: conversation.id },
+        await tx.conversation.updateMany({
+          where: {
+            id: conversation.id,
+            OR: [
+              { lastMessageAt: null },
+              { lastMessageAt: { lt: now } },
+            ],
+          },
           data: { lastMessageAt: now },
         });
         return this.hydrateMessage(message, conversation);

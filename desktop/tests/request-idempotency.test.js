@@ -914,7 +914,7 @@ test("Prisma inbound concurrent cross-conversation externalId creates one accoun
   const tx = {
     conversation: {
       findUnique: async ({ where }) => conversations[where.id] || null,
-      update: async () => ({}),
+      updateMany: async () => ({ count: 1 }),
     },
     message: {
       findFirst: async () => {
@@ -942,6 +942,7 @@ test("Prisma inbound concurrent cross-conversation externalId creates one accoun
     direction: "inbound",
     text: "same body",
     externalId: "account-global-external-1",
+    createdAt: "2026-07-20T09:30:00.000Z",
     attachments: [{ type: "image", mediaId: "media-1" }],
     metadata: { assetIds: ["asset-1"] },
   };
@@ -955,6 +956,53 @@ test("Prisma inbound concurrent cross-conversation externalId creates one accoun
     assert.equal(outcomes.filter((item) => item.status === "rejected").length, 1);
     assert.match(String(outcomes.find((item) => item.status === "rejected").reason), /already used with different identity or payload/);
     assert.equal(stored.externalId, base.externalId);
+    assert.equal(stored.createdAt.toISOString(), base.createdAt);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("Prisma inbound preserves source createdAt without regressing conversation activity", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const conversation = {
+    id: "conversation-prisma-time",
+    customerId: "customer-prisma-time",
+    wechatAccountId: "wechat-prisma-time",
+    lastMessageAt: new Date("2026-07-20T12:00:00.000Z"),
+  };
+  let stored = null;
+  const tx = {
+    conversation: {
+      async findUnique() { return conversation; },
+      async updateMany({ where, data }) {
+        const incoming = data.lastMessageAt;
+        const mayAdvance = conversation.lastMessageAt === null || conversation.lastMessageAt < incoming;
+        if (!mayAdvance) return { count: 0 };
+        conversation.lastMessageAt = incoming;
+        return { count: 1 };
+      },
+    },
+    message: {
+      async findFirst() { return null; },
+      async create({ data }) { stored = { ...data }; return stored; },
+    },
+  };
+  const prisma = { $transaction: async (callback) => callback(tx) };
+  const persistence = new WechatPersistence(prisma, {});
+  try {
+    appConfig.useLocalStore = false;
+    const message = await persistence.createMessage({
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      wechatAccountId: conversation.wechatAccountId,
+      direction: "inbound",
+      text: "延迟同步的历史消息",
+      externalId: "prisma-source-time-1",
+      createdAt: "2026-07-20T10:00:00.000Z",
+      attachments: [],
+    });
+    assert.equal(message.createdAt.toISOString(), "2026-07-20T10:00:00.000Z");
+    assert.equal(conversation.lastMessageAt.toISOString(), "2026-07-20T12:00:00.000Z");
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }

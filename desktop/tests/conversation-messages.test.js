@@ -105,6 +105,24 @@ test("external inbound replay is idempotent within the conversation", () => {
   );
 });
 
+test("out-of-order LocalStore inbound messages never move conversation lastMessageAt backwards", () => {
+  const { localStore } = setup();
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "较新消息",
+    externalId: "conversation-newer-event",
+    createdAt: "2026-07-20T12:00:00.000Z",
+  });
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "延迟到达的旧消息",
+    externalId: "conversation-stale-event",
+    createdAt: "2026-07-20T10:00:00.000Z",
+  });
+  const conversation = localStore.listConversations().find((item) => item.id === primaryIdentity.conversationId);
+  assert.equal(conversation.lastMessageAt, "2026-07-20T12:00:00.000Z");
+});
+
 test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {
   const { localStore, service, tempDir } = setup();
   localStore.updateConversation(primaryIdentity.conversationId, { manualLocked: true });

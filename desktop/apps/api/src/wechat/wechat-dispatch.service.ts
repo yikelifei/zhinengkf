@@ -1279,6 +1279,7 @@ export class WechatDispatchService {
     externalId?: string;
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
+    createdAt?: string;
   }) {
     if (!payload.conversationId) throw new BadRequestException("conversationId is required in prisma mode");
     const conversation = await this.persistence.getConversation(payload.conversationId);
@@ -1311,6 +1312,7 @@ export class WechatDispatchService {
       text: payload.text || "",
       externalId: payload.externalId,
       attachments: payload.attachments || [],
+      createdAt: payload.createdAt,
       metadata: { assetIds },
     });
     if (message.deduplicated) {
@@ -4436,16 +4438,66 @@ export class WechatDispatchService {
     try {
       adapterResult = this.sendAdapter.execute(
         validated,
-        { guardStatus, windowSnapshotId, payloadSummary },
+        { guardStatus, windowSnapshotId, payloadSummary, attemptId: claimed.attempt.id },
         params.adapter,
       );
     } catch (error) {
-      adapterResult = {
-        adapter: adapter.name,
-        status: "failed",
-        errorMessage: error instanceof Error ? error.message : "send adapter failed",
-        metadata: {},
-      };
+      const completedAt = new Date().toISOString();
+      const knownNotSent = error instanceof WechatBridgeOutboxError && error.deliveryState === "failed";
+      const failureStage = error instanceof WechatBridgeOutboxError ? error.stage : "adapter_execution";
+      const errorMessage = error instanceof Error ? error.message : "send adapter failed";
+      const deliveryUnknownReason = knownNotSent ? null : "adapter_execution_exception";
+      const taskPatch = knownNotSent
+        ? {
+            status: "failed",
+            sentAt: null,
+            errorMessage,
+            guardSnapshot: this.settledDeliveryGuard(claimed.task, "failed", completedAt, failureStage),
+          }
+        : {
+            status: "sending",
+            sentAt: null,
+            errorMessage: `${errorMessage}; delivery is unknown and automatic retry is blocked pending manual review`,
+            guardSnapshot: {
+              ...(isPlainObject(claimed.task.guardSnapshot) ? claimed.task.guardSnapshot : {}),
+              status: "sending",
+              deliveryState: "unknown",
+              deliveryUnknownReason,
+              deliveryUnknownAt: completedAt,
+              automaticRetryBlocked: true,
+              manualReviewRequired: true,
+            },
+          };
+      const linkedTransition = knownNotSent
+        ? await this.buildPrismaLinkedTransition(claimed.task, "failed", errorMessage)
+        : null;
+      const completed = await this.persistence.completeAttemptAndTask({
+        taskId: id,
+        attemptId: claimed.attempt.id,
+        expectedTaskStatus: "sending",
+        expectedAttemptStatus: "started",
+        attemptPatch: {
+          status: knownNotSent ? "failed" : "started",
+          errorMessage,
+          completedAt: knownNotSent ? completedAt : null,
+          metadata: {
+            ...(isPlainObject(claimed.attempt.metadata) ? claimed.attempt.metadata : {}),
+            bridgeState: knownNotSent ? "adapter_failed_before_delivery" : "delivery_unknown",
+            deliveryState: knownNotSent ? "failed" : "unknown",
+            failureStage,
+            retrySafe: knownNotSent,
+            automaticRetryBlocked: !knownNotSent,
+            manualReviewRequired: !knownNotSent,
+            ...(error instanceof WechatBridgeOutboxError && error.outboxFile
+              ? { outboxFile: error.outboxFile }
+              : {}),
+          },
+        },
+        taskPatch,
+        linkedTransition,
+      });
+      if (!completed) throw new BadRequestException("send task state changed before adapter failure was recorded");
+      return { task: completed.task, attempt: completed.attempt, adapter };
     }
     const taskStatus = adapterResult.status === "failed"
       ? "failed"
