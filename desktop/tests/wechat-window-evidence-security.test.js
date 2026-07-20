@@ -7,7 +7,9 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  createWechatWindowObserverAttestation,
   createWechatWindowObserverEvidence,
+  isTrustedWechatWindowObserverSnapshot,
   verifyWechatWindowObserverEvidence,
 } = require("../packages/rules/wechatWindowEvidence");
 const { validateSendGuard } = require("../packages/rules/sendGuard");
@@ -33,7 +35,7 @@ const snapshot = {
   recentMessageText: "hello",
   confidence: 0.95,
   capturedAt: "2026-07-20T08:00:00.000Z",
-  raw: { processName: "WeChat" },
+  raw: { processName: "WeChat", executablePath: "C:\\Program Files\\Tencent\\WeChat.exe" },
 };
 
 test("observer HMAC authenticates all send-guard fields and canonicalizes source", () => {
@@ -78,7 +80,7 @@ test("observer evidence rejects wrong token, expiry, future timestamps and malfo
   assert.equal(verifyWechatWindowObserverEvidence({ ...envelope, signature: "bad" }, token, { now }).reason, "invalid_signature");
 });
 
-test("send guard blocks demo/manual evidence and accepts only verified observer marker", () => {
+test("send guard rejects browser-forged markers and accepts only token-attested persisted evidence", () => {
   const base = {
     task: { id: "send-1", wechatAccountId: "wechat-1" },
     account: { id: "wechat-1" },
@@ -99,19 +101,48 @@ test("send guard blocks demo/manual evidence and accepts only verified observer 
     assert.equal(result.failedKeys.includes("verifiedObserverEvidence"), true, source);
   }
 
-  const trusted = validateSendGuard({
-    ...base,
-    activeWindow: {
-      ...identity,
-      source: "windows_foreground_observer",
-      diagnostic: {
-        observerEvidence: {
-          verified: true,
-          version: "wechat_window_observer_v1",
-          nonceHash: "a".repeat(64),
-        },
+  const forgedMarker = {
+    ...snapshot,
+    source: "windows_foreground_observer",
+    diagnostic: {
+      observerEvidence: {
+        verified: true,
+        version: "wechat_window_observer_v1",
+        issuedAt: snapshot.capturedAt,
+        nonceHash: "a".repeat(64),
       },
     },
+  };
+  const forged = validateSendGuard({
+    ...base,
+    activeWindow: forgedMarker,
+    observerProofToken: token,
+    now: new Date(now),
+  });
+  assert.equal(forged.ok, false);
+  assert.equal(forged.failedKeys.includes("verifiedObserverEvidence"), true);
+
+  const authenticSnapshot = { ...snapshot, source: "windows_foreground_observer" };
+  authenticSnapshot.diagnostic = {
+    observerEvidence: createWechatWindowObserverAttestation(
+      authenticSnapshot,
+      { version: "wechat_window_observer_v1", issuedAt: snapshot.capturedAt, nonceHash: "a".repeat(64) },
+      token,
+    ),
+  };
+  assert.equal(isTrustedWechatWindowObserverSnapshot(authenticSnapshot, token), true);
+  assert.equal(isTrustedWechatWindowObserverSnapshot(authenticSnapshot, ""), false);
+  assert.equal(isTrustedWechatWindowObserverSnapshot(authenticSnapshot, "8".repeat(64)), false);
+  assert.equal(isTrustedWechatWindowObserverSnapshot({ ...authenticSnapshot, chatTitle: "attacker-chat" }, token), false);
+  assert.equal(isTrustedWechatWindowObserverSnapshot({
+    ...authenticSnapshot,
+    raw: { executablePath: authenticSnapshot.raw.executablePath, processName: authenticSnapshot.raw.processName },
+  }, token), true);
+
+  const trusted = validateSendGuard({
+    ...base,
+    activeWindow: authenticSnapshot,
+    observerProofToken: token,
     now: new Date(now),
   });
   assert.equal(trusted.ok, true);
@@ -153,6 +184,7 @@ test("snapshot routes and launchers keep the observer proof fail-closed and non-
   const controller = read("apps/api/src/wechat/wechat.controller.ts");
   const service = read("apps/api/src/wechat/wechat-dispatch.service.ts");
   const observer = read("tools/wechat-window-observer.js");
+  const webApi = read("apps/web/src/lib/api.ts");
 
   assert.doesNotMatch(controller, /@Post\("window-snapshots"\)/);
   assert.match(controller, /@Post\("window-snapshots\/inbox\/scan"\)/);
@@ -160,8 +192,23 @@ test("snapshot routes and launchers keep the observer proof fail-closed and non-
   assert.match(service, /claimJsonInboxFile/);
   assert.match(service, /observer evidence replay rejected/);
   assert.match(service, /trustedObserverSnapshot/);
+  assert.match(service, /createWechatWindowObserverAttestation/);
+  assert.match(service, /observerProofToken:\s*currentWechatWindowObserverProofToken\(\)/);
+  assert.match(service, /fs\.readFileSync\(appConfig\.wechatWindowObserverProofFile/);
+  assert.doesNotMatch(service, /params\.activeWindow|suppliedWindow|buildWindowState/);
   assert.doesNotMatch(service, /source:\s*"window_snapshot_inbox"/);
   assert.match(observer, /createWechatWindowObserverEvidence/);
+  assert.match(controller, /validateSendTask\([\s\S]{0,180}@Body\(\) payload: ExpectedIdentityPayload/);
+  assert.doesNotMatch(controller, /validateSendTask\([\s\S]{0,180}activeWindow/);
+  assert.match(webApi, /validateSendTask\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.doesNotMatch(webApi, /validateSendTask\(id: string, mode:/);
+
+  const portsStarter = read("tools/ports-stack-starter.js");
+  const stopFailureBoundary = portsStarter.indexOf("if (stopResult.status !== 0)");
+  const proofRotation = portsStarter.indexOf("createWechatWindowObserverProofSession(runtimeDir");
+  assert.ok(stopFailureBoundary >= 0 && proofRotation > stopFailureBoundary);
+  assert.match(observer, /currentObserverProofToken\(config\)/);
+  assert.match(observer, /readWechatWindowObserverProofToken\(config\.proofFile\)/);
 
   for (const relative of [
     "tools/start-dev-ports.js",

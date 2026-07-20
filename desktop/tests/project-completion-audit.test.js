@@ -17,10 +17,11 @@ const {
   writeReport,
 } = require("../tools/project-completion-audit");
 
-function write(root, relative, content = "fixture evidence\n") {
+function write(root, relative, content = "fixture evidence\n", append = false) {
   const target = path.join(root, ...relative.split("/"));
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, content, "utf8");
+  if (append) fs.appendFileSync(target, content, "utf8");
+  else fs.writeFileSync(target, content, "utf8");
   return target;
 }
 
@@ -50,6 +51,9 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\n');
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'validateSendTask(\n  @Param("id") id: string,\n  @Body() payload: ExpectedIdentityPayload,\n) {}\n');
+  write(root, "desktop/packages/rules/wechatWindowEvidence.js", 'WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION; createWechatWindowObserverAttestation(); createHmac("sha256", token); timingSafeEqual(supplied, expected); canonicalObserverAttestation(); canonicalJsonObject();\n');
   write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
@@ -760,6 +764,39 @@ test("missing wechat window observer evidence security artifact prevents a compl
   const report = buildAudit(root, { includeExternal: false });
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "security.wechat_window_observer_evidence").status, STATUS.FAIL);
+});
+
+test("completion audit rejects browser window self-report and observer attestation drift", () => {
+  const mutations = [
+    {
+      id: "contract.wechat_window_validation_source",
+      file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+      from: "return this.validateSendTaskWithCurrentWindow(id, expected)",
+      to: "return this.validateSendTask(id, expected.activeWindow)",
+    },
+    {
+      id: "contract.wechat_window_validation_controller",
+      file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+      from: "@Body() payload: ExpectedIdentityPayload",
+      to: "@Body() payload: ExpectedIdentityPayload & { activeWindow?: object }",
+    },
+    {
+      id: "contract.wechat_window_persisted_attestation",
+      file: "desktop/packages/rules/wechatWindowEvidence.js",
+      from: "timingSafeEqual(supplied, expected)",
+      to: "supplied.length === expected.length",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
 });
 
 test("design reconciliation UI is a required artifact with a fail-closed action contract", () => {

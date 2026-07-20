@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   buildSendQueueSkipAdvice,
   buildDemoWechatWindowSnapshot,
+  createWechatWindowObserverAttestation,
   diagnoseWechatWindowSnapshot,
   evaluateSendTaskRequeue,
   validateBridgeAckBinding,
@@ -17,18 +18,38 @@ const task = { id: "send-1", wechatAccountId: "wechat-1", conversationId: "conv-
 const account = { id: "wechat-1", displayName: "微信客服1号" };
 const conversation = { id: "conv-1", title: "王总-端午礼盒", customerId: "customer-1" };
 const customer = { id: "customer-1", name: "王总" };
+const observerProofToken = "b".repeat(64);
 
 const boundConversation = { ...conversation, wechatAccountId: "wechat-1" };
-const trustedObserverEvidence = {
-  source: "windows_foreground_observer",
-  diagnostic: {
-    observerEvidence: {
-      verified: true,
+function trustedWindow(overrides = {}) {
+  const snapshot = {
+    source: "windows_foreground_observer",
+    isOnline: true,
+    wechatAccountId: "wechat-1",
+    accountDisplayName: "service-1",
+    windowHandle: "123",
+    processId: 456,
+    chatTitle: conversation.title,
+    activeChatTitle: conversation.title,
+    externalChatId: "",
+    recentCustomerId: "customer-1",
+    recentMessageText: "",
+    confidence: 0.95,
+    capturedAt: "2026-06-26T10:00:00.000Z",
+    raw: null,
+    ...overrides,
+  };
+  const observerEvidence = createWechatWindowObserverAttestation(
+    snapshot,
+    {
       version: "wechat_window_observer_v1",
+      issuedAt: snapshot.capturedAt,
       nonceHash: "a".repeat(64),
     },
-  },
-};
+    observerProofToken,
+  );
+  return { ...snapshot, diagnostic: { observerEvidence } };
+}
 const boundDesignJob = {
   id: "design-1",
   conversationId: "conv-1",
@@ -60,11 +81,12 @@ test("passes send guard when account, chat, customer and queue head all match", 
     conversation,
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-1"],
   });
 
@@ -79,11 +101,12 @@ test("blocks send guard when active chat is another customer", () => {
     conversation,
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: "李经理-企业伴手礼",
       recentCustomerId: "customer-1",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-1"],
   });
 
@@ -98,11 +121,12 @@ test("blocks send guard when task is not first in account queue", () => {
     conversation,
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-0", "send-1"],
   });
 
@@ -117,11 +141,12 @@ test("blocks send guard when conversation is manually locked", () => {
     conversation: { ...conversation, manualLocked: true },
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-1"],
   });
 
@@ -138,12 +163,13 @@ test("passes send guard when current window snapshot is fresh", () => {
     conversation,
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: conversation.title,
       recentCustomerId: "customer-1",
       capturedAt: "2026-06-26T10:00:00.000Z",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-1"],
     maxWindowSnapshotAgeSeconds: 30,
     now: new Date("2026-06-26T10:00:20.000Z"),
@@ -160,12 +186,13 @@ test("blocks send guard when current window snapshot is stale", () => {
     conversation,
     customer,
     activeWindow: {
-      ...trustedObserverEvidence,
+      ...trustedWindow(),
       wechatAccountId: "wechat-1",
       chatTitle: conversation.title,
       recentCustomerId: "customer-1",
       capturedAt: "2026-06-26T10:00:00.000Z",
     },
+    observerProofToken,
     accountQueueTaskIds: ["send-1"],
     maxWindowSnapshotAgeSeconds: 30,
     now: new Date("2026-06-26T10:00:45.000Z"),

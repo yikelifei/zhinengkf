@@ -21,7 +21,12 @@ const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
-const { createWechatWindowObserverEvidence } = require("../packages/rules/wechatWindowEvidence");
+const {
+  createWechatWindowObserverAttestation,
+  createWechatWindowObserverEvidence,
+} = require("../packages/rules/wechatWindowEvidence");
+
+const observerProofToken = "e".repeat(64);
 
 function setupService(overrides = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manual-lock-send-"));
@@ -36,6 +41,8 @@ function setupService(overrides = {}) {
   appConfig.wechatBridgeDispatchDir = process.env.WECHAT_BRIDGE_DISPATCH_DIR;
   appConfig.wechatBridgeLockDir = process.env.WECHAT_BRIDGE_LOCK_DIR;
   appConfig.wechatBridgeWorkerStatusFile = process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE;
+  appConfig.wechatWindowObserverProofFile = path.join(tempDir, "wechat-window-observer-proof.key");
+  fs.writeFileSync(appConfig.wechatWindowObserverProofFile, `${observerProofToken}\n`, "utf8");
 
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
@@ -311,7 +318,7 @@ test("manual quote status update unlinks an already cancelled quote send task", 
 });
 
 function createPassingWechatWindowSnapshot(localStore, recentMessageText = "") {
-  return localStore.createWechatWindowSnapshot({
+  return createTrustedTestWindowSnapshot(localStore, {
     source: "windows_foreground_observer",
     isOnline: true,
     wechatAccountId: "wechat_demo_1",
@@ -330,6 +337,24 @@ function createPassingWechatWindowSnapshot(localStore, recentMessageText = "") {
         nonceHash: "b".repeat(64),
       },
     },
+  });
+}
+
+function createTrustedTestWindowSnapshot(localStore, payload) {
+  const snapshot = { ...payload, capturedAt: payload.capturedAt || new Date().toISOString() };
+  const evidence = payload.diagnostic?.observerEvidence || {};
+  const observerEvidence = createWechatWindowObserverAttestation(
+    snapshot,
+    {
+      version: evidence.version || "wechat_window_observer_v1",
+      issuedAt: snapshot.capturedAt,
+      nonceHash: evidence.nonceHash || "b".repeat(64),
+    },
+    observerProofToken,
+  );
+  return localStore.createWechatWindowSnapshot({
+    ...snapshot,
+    diagnostic: { ...(payload.diagnostic || {}), observerEvidence },
   });
 }
 
@@ -1987,7 +2012,6 @@ test("send task validation requires matching account conversation identity", () 
   assert.throws(
     () =>
       service.validateSendTask(task.id, {
-        mode: "correct",
         expectedWechatAccountId: "wechat_demo_2",
         expectedConversationId: "conversation_demo_1",
         expectedCustomerId: "customer_demo_1",
@@ -2005,17 +2029,30 @@ test("send task validation requires matching account conversation identity", () 
   );
 
   const result = service.validateSendTask(task.id, {
-    mode: "correct",
     expectedWechatAccountId: "wechat_demo_1",
     expectedConversationId: "conversation_demo_1",
     expectedCustomerId: "customer_demo_1",
+    activeWindow: {
+      source: "windows_foreground_observer",
+      wechatAccountId: "wechat_demo_1",
+      chatTitle: "forged-browser-window",
+      recentCustomerId: "customer_demo_1",
+      diagnostic: {
+        observerEvidence: {
+          verified: true,
+          version: "wechat_window_observer_v1",
+          nonceHash: "a".repeat(64),
+        },
+      },
+    },
   });
 
   assert.equal(result.id, task.id);
   assert.equal(result.wechatAccountId, "wechat_demo_1");
   assert.equal(result.conversationId, "conversation_demo_1");
   assert.equal(result.guardSnapshot.status, "blocked");
-  assert.equal(result.guardSnapshot.failedKeys.includes("verifiedObserverEvidence"), true);
+  assert.equal(result.guardSnapshot.failedKeys.includes("windowSnapshotMissing"), true);
+  assert.equal(result.guardSnapshot.activeWindow, null);
 });
 
 test("current window validation records missing snapshot diagnostic for operator triage", () => {
@@ -2082,6 +2119,7 @@ test("window snapshot inbox accepts only fresh signed observer evidence and reje
   const inboxDir = path.join(tempDir, "window-snapshots");
   appConfig.wechatWindowSnapshotInboxDir = inboxDir;
   appConfig.wechatWindowObserverProofToken = proofToken;
+  fs.writeFileSync(appConfig.wechatWindowObserverProofFile, `${proofToken}\n`, "utf8");
   appConfig.wechatWindowSnapshotMaxAgeSeconds = 30;
   fs.mkdirSync(inboxDir, { recursive: true });
 
@@ -2133,6 +2171,22 @@ test("window snapshot inbox accepts only fresh signed observer evidence and reje
   assert.equal(replayScan.failed.length, 1);
   assert.match(replayScan.failed[0].errorMessage, /replay rejected/);
   assert.equal(localStore.listWechatWindowSnapshots().length, 1);
+
+  const rotatedToken = "8".repeat(64);
+  fs.writeFileSync(appConfig.wechatWindowObserverProofFile, `${rotatedToken}\n`, "utf8");
+  const rotatedCapturedAt = new Date().toISOString();
+  const rotatedEvidence = createWechatWindowObserverEvidence(
+    { ...evidence.snapshot, capturedAt: rotatedCapturedAt },
+    rotatedToken,
+    { issuedAt: rotatedCapturedAt, nonce: "f".repeat(48) },
+  );
+  fs.writeFileSync(path.join(inboxDir, "rotated.json"), JSON.stringify(rotatedEvidence));
+  const rotatedScan = service.scanWindowSnapshotInbox();
+  assert.equal(rotatedScan.failed.length, 0);
+  assert.equal(rotatedScan.processed.length, 1);
+  const trustedAfterRotation = localStore.getLatestWechatWindowSnapshot("wechat_demo_1");
+  assert.match(trustedAfterRotation.diagnostic.observerEvidence.attestation, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(trustedAfterRotation).includes(rotatedToken), false);
 
   const demo = service.createDemoWindowSnapshot({
     mode: "correct",

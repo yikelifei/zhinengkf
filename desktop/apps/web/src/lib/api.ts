@@ -2441,8 +2441,8 @@ export async function createDemoSendTask(
   return postJson<SendTask>("/wechat/send-tasks/demo", { ...expected, conversationId, wechatAccountId });
 }
 
-export async function validateSendTask(id: string, mode: "correct" | "wrong_chat", expected: IdentityExpectation = {}): Promise<SendTask> {
-  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate`, { ...expected, mode });
+export async function validateSendTask(id: string, expected: IdentityExpectation = {}): Promise<SendTask> {
+  return postJson<SendTask>(`/wechat/send-tasks/${id}/validate`, expected);
 }
 
 export async function validateSendTaskCurrentWindow(id: string, expected: IdentityExpectation = {}): Promise<SendTask> {

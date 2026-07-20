@@ -808,6 +808,39 @@ const CONTRACTS = Object.freeze([
     ],
   },
   {
+    id: "contract.wechat_window_validation_source",
+    title: "个人微信发送校验仅使用持久化 observer 快照",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /validateSendTask\(id: string, expected: ExpectedIdentityPayload = \{\}\) \{\s*return this\.validateSendTaskWithCurrentWindow\(id, expected\)/,
+      /const activeWindow = await this\.persistence\.getLatestWindowSnapshot\(task\.wechatAccountId\)/,
+      /observerProofToken: currentWechatWindowObserverProofToken\(\)/,
+      /createWechatWindowObserverAttestation/,
+    ],
+    forbidden: [/params\.activeWindow/, /suppliedWindow/, /buildWindowState/],
+  },
+  {
+    id: "contract.wechat_window_validation_controller",
+    title: "个人微信浏览器校验 DTO 不接收窗口自报字段",
+    file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+    patterns: [
+      /validateSendTask\(\s*@Param\("id"\) id: string,\s*@Body\(\) payload: ExpectedIdentityPayload,\s*\)/,
+    ],
+  },
+  {
+    id: "contract.wechat_window_persisted_attestation",
+    title: "个人微信持久化窗口证据使用密钥 attestation",
+    file: "desktop/packages/rules/wechatWindowEvidence.js",
+    patterns: [
+      /WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION/,
+      /createWechatWindowObserverAttestation/,
+      /createHmac\("sha256", token\)/,
+      /timingSafeEqual\(supplied, expected\)/,
+      /canonicalObserverAttestation/,
+      /canonicalJsonObject/,
+    ],
+  },
+  {
     id: "contract.design_platform_credential_origins",
     title: "设计平台显式 allowlist 与逐凭据 origin",
     file: "desktop/apps/api/src/shared/app-config.ts",

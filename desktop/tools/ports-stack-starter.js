@@ -120,8 +120,6 @@ async function main() {
       return;
     }
 
-    Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
-
     if (realDesignMode) {
       fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
       writeRealDesignRuntimeConfig();
@@ -171,6 +169,8 @@ async function main() {
     writePreferredDesignMode(realDesignMode ? "real" : "mock");
     disableConflictingLaunchers();
     stopConflictingDesignLaunchers();
+
+    Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
 
     const env = {
       ...process.env,

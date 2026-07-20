@@ -19,6 +19,9 @@ const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
+const { createWechatWindowObserverAttestation } = require("../packages/rules/wechatWindowEvidence");
+
+const observerProofToken = "f".repeat(64);
 
 function emptyStoreData(overrides = {}) {
   return {
@@ -65,6 +68,8 @@ function configureBridgeDirs(tempDir) {
   appConfig.wechatBridgeDispatchDir = path.join(tempDir, "dispatch");
   appConfig.wechatBridgeLockDir = path.join(tempDir, "locks");
   appConfig.wechatBridgeWorkerStatusFile = path.join(tempDir, "worker-status.json");
+  appConfig.wechatWindowObserverProofFile = path.join(tempDir, "wechat-window-observer-proof.key");
+  fs.writeFileSync(appConfig.wechatWindowObserverProofFile, `${observerProofToken}\n`, "utf8");
 }
 
 function createServices(store, notifications) {
@@ -94,7 +99,7 @@ function createServices(store, notifications) {
 }
 
 function createPassingWechatWindowSnapshot(store, recentMessageText = "") {
-  return store.createWechatWindowSnapshot({
+  return createTrustedTestWindowSnapshot(store, {
     source: "windows_foreground_observer",
     isOnline: true,
     wechatAccountId: "wechat_1",
@@ -113,6 +118,24 @@ function createPassingWechatWindowSnapshot(store, recentMessageText = "") {
       },
     },
     capturedAt: new Date().toISOString(),
+  });
+}
+
+function createTrustedTestWindowSnapshot(store, payload) {
+  const snapshot = { ...payload, capturedAt: payload.capturedAt || new Date().toISOString() };
+  const evidence = payload.diagnostic?.observerEvidence || {};
+  const observerEvidence = createWechatWindowObserverAttestation(
+    snapshot,
+    {
+      version: evidence.version || "wechat_window_observer_v1",
+      issuedAt: snapshot.capturedAt,
+      nonceHash: evidence.nonceHash || "c".repeat(64),
+    },
+    observerProofToken,
+  );
+  return store.createWechatWindowSnapshot({
+    ...snapshot,
+    diagnostic: { ...(payload.diagnostic || {}), observerEvidence },
   });
 }
 

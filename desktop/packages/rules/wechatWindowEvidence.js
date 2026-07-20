@@ -4,6 +4,7 @@ const { createHash, createHmac, randomBytes, timingSafeEqual } = require("node:c
 
 const WECHAT_WINDOW_OBSERVER_SOURCE = "windows_foreground_observer";
 const WECHAT_WINDOW_OBSERVER_EVIDENCE_VERSION = "wechat_window_observer_v1";
+const WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION = "wechat_window_observer_attestation_v1";
 const NONCE_PATTERN = /^[a-f0-9]{32,128}$/i;
 const SIGNATURE_PATTERN = /^[a-f0-9]{64}$/i;
 
@@ -65,14 +66,51 @@ function verifyWechatWindowObserverEvidence(envelope, token, options = {}) {
   }
 }
 
-function isTrustedWechatWindowObserverSnapshot(snapshot) {
+function createWechatWindowObserverAttestation(snapshot, evidence, token) {
+  assertObserverToken(token);
+  const payload = canonicalObserverAttestation(snapshot, evidence);
+  return {
+    ...payload.evidence,
+    verified: true,
+    attestationVersion: WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION,
+    attestation: createHmac("sha256", token).update(JSON.stringify(payload)).digest("hex"),
+  };
+}
+
+function isTrustedWechatWindowObserverSnapshot(snapshot, token) {
   const evidence = snapshot?.diagnostic?.observerEvidence;
-  return Boolean(
-    snapshot?.source === WECHAT_WINDOW_OBSERVER_SOURCE &&
-      evidence?.verified === true &&
-      evidence?.version === WECHAT_WINDOW_OBSERVER_EVIDENCE_VERSION &&
-      SIGNATURE_PATTERN.test(String(evidence?.nonceHash || "")),
-  );
+  if (
+    snapshot?.source !== WECHAT_WINDOW_OBSERVER_SOURCE ||
+    evidence?.verified !== true ||
+    evidence?.version !== WECHAT_WINDOW_OBSERVER_EVIDENCE_VERSION ||
+    evidence?.attestationVersion !== WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION ||
+    !SIGNATURE_PATTERN.test(String(evidence?.nonceHash || "")) ||
+    !SIGNATURE_PATTERN.test(String(evidence?.attestation || ""))
+  ) {
+    return false;
+  }
+  try {
+    assertObserverToken(token);
+    const payload = canonicalObserverAttestation(snapshot, evidence);
+    const expected = createHmac("sha256", token).update(JSON.stringify(payload)).digest();
+    const supplied = Buffer.from(String(evidence.attestation), "hex");
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalObserverAttestation(snapshot, evidence = {}) {
+  const version = String(evidence.version || "").trim();
+  const issuedAt = requiredIsoDate(evidence.issuedAt, "observer evidence issuedAt");
+  const nonceHash = String(evidence.nonceHash || "").trim();
+  if (version !== WECHAT_WINDOW_OBSERVER_EVIDENCE_VERSION) throw new Error("observer evidence version is invalid");
+  if (!SIGNATURE_PATTERN.test(nonceHash)) throw new Error("observer evidence nonce hash is invalid");
+  return {
+    attestationVersion: WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION,
+    evidence: { version, issuedAt, nonceHash },
+    snapshot: canonicalObserverSnapshot(snapshot),
+  };
 }
 
 function canonicalObserverSnapshot(input = {}) {
@@ -95,8 +133,25 @@ function canonicalObserverSnapshot(input = {}) {
     recentMessageText: cleanText(input.recentMessageText),
     confidence,
     capturedAt,
-    raw: input.raw && typeof input.raw === "object" && !Array.isArray(input.raw) ? input.raw : null,
+    raw: input.raw && typeof input.raw === "object" && !Array.isArray(input.raw) ? canonicalJsonObject(input.raw) : null,
   };
+}
+
+function canonicalJsonObject(value) {
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    const canonical = canonicalJsonValue(value[key]);
+    if (canonical !== undefined) result[key] = canonical;
+  }
+  return result;
+}
+
+function canonicalJsonValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map((item) => canonicalJsonValue(item) ?? null);
+  if (value && typeof value === "object") return canonicalJsonObject(value);
+  return undefined;
 }
 
 function assertObserverToken(token) {
@@ -128,9 +183,11 @@ function failure(reason) {
 }
 
 module.exports = {
+  WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION,
   WECHAT_WINDOW_OBSERVER_EVIDENCE_VERSION,
   WECHAT_WINDOW_OBSERVER_SOURCE,
   canonicalObserverSnapshot,
+  createWechatWindowObserverAttestation,
   createWechatWindowObserverEvidence,
   isTrustedWechatWindowObserverSnapshot,
   verifyWechatWindowObserverEvidence,

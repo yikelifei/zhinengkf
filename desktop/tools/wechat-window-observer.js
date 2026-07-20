@@ -48,7 +48,7 @@ async function runOnce(config = readConfig(), capture = captureForegroundWindow)
   fs.mkdirSync(config.inboxDir, { recursive: true });
   const windowInfo = await Promise.resolve(capture(config));
   const snapshot = buildSnapshotFromWindow(windowInfo, config);
-  const snapshotFile = config.dryRun ? "" : writeSnapshotFile(config.inboxDir, snapshot, config.proofToken);
+  const snapshotFile = config.dryRun ? "" : writeSnapshotFile(config.inboxDir, snapshot, currentObserverProofToken(config));
   const scanResult = config.scan && !config.dryRun
     ? await postJson(`${config.apiBase}/wechat/window-snapshots/inbox/scan`, {}, config)
     : null;
@@ -315,8 +315,14 @@ function readConfig() {
     scan: hasArg("--scan") || String(process.env.WECHAT_WINDOW_OBSERVER_SCAN || fileConfig.scan || "").toLowerCase() === "true",
     dryRun,
     watch: hasArg("--watch"),
-    proofToken: dryRun ? "" : readWechatWindowObserverProofToken(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE),
+    proofFile: dryRun ? "" : path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || ""),
   };
+}
+
+function currentObserverProofToken(config = {}) {
+  if (config.proofFile) return readWechatWindowObserverProofToken(config.proofFile);
+  if (config.proofToken) return String(config.proofToken);
+  throw new Error("observer proof file is not configured");
 }
 
 function readJsonIfExists(filePath) {
@@ -418,6 +424,7 @@ Config example:
 module.exports = {
   buildObserverStatus,
   buildSnapshotFromWindow,
+  currentObserverProofToken,
   isWechatLikeWindow,
   matchAccount,
   matchConversation,

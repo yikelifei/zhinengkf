@@ -16,6 +16,8 @@ const {
   safeFileSegment,
   writeObserverStatus,
 } = require("../tools/wechat-window-observer");
+const { createWechatWindowObserverProofSession } = require("../tools/wechat-window-observer-session");
+const { verifyWechatWindowObserverEvidence } = require("../packages/rules/wechatWindowEvidence");
 
 test("matches account and conversation rules from foreground window title", () => {
   const snapshot = buildSnapshotFromWindow(
@@ -113,6 +115,33 @@ test("runOnce writes a snapshot file without scanning in default mode", async ()
   assert.match(saved.signature, /^[a-f0-9]{64}$/);
   assert.equal(saved.snapshot.wechatAccountId, "wechat_demo_1");
   assert.equal(saved.snapshot.recentCustomerId, "customer_demo_1");
+});
+
+test("running observer reloads a rotated proof file before every signed snapshot", async () => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-window-observer-rotation-"));
+  const inboxDir = path.join(runtimeDir, "inbox");
+  const firstSession = createWechatWindowObserverProofSession(runtimeDir, { token: "2".repeat(64) });
+  const config = {
+    apiBase: "http://127.0.0.1:3200/api",
+    inboxDir,
+    statusFile: path.join(runtimeDir, "status.json"),
+    proofFile: firstSession.tokenFile,
+    scan: false,
+    dryRun: false,
+    accounts: [{ wechatAccountId: "wechat_demo_1", processNames: ["WeChat"] }],
+    conversations: [],
+  };
+  const capture = () => ({ title: "WeChat", processName: "WeChat", processId: 11 });
+
+  const first = await runOnce(config, capture);
+  const firstEvidence = JSON.parse(fs.readFileSync(first.snapshotFile, "utf8"));
+  assert.equal(verifyWechatWindowObserverEvidence(firstEvidence, "2".repeat(64)).ok, true);
+
+  createWechatWindowObserverProofSession(runtimeDir, { tokenFile: firstSession.tokenFile, token: "3".repeat(64) });
+  const second = await runOnce(config, capture);
+  const secondEvidence = JSON.parse(fs.readFileSync(second.snapshotFile, "utf8"));
+  assert.equal(verifyWechatWindowObserverEvidence(secondEvidence, "3".repeat(64)).ok, true);
+  assert.equal(verifyWechatWindowObserverEvidence(secondEvidence, "2".repeat(64)).ok, false);
 });
 
 test("observer status avoids leaking raw chat title", () => {

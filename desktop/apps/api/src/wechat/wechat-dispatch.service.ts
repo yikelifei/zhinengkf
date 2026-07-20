@@ -31,6 +31,7 @@ const {
   buildOrderConfirmationCustomerMessage,
   buildOrderFollowupCustomerMessage,
   classifyTrainingSampleUsage,
+  createWechatWindowObserverAttestation,
   diagnoseWechatWindowSnapshot,
   evaluateSendTaskRequeue,
   evaluateAgentRoute,
@@ -1742,9 +1743,14 @@ export class WechatDispatchService {
     const snapshot = normalizeWechatWindowSnapshot(snapshotPayload || {});
     const account = this.localStore.listWechatAccounts().find((item) => item.id === snapshot.wechatAccountId) || null;
     const conversations = this.localStore.listConversations(snapshot.wechatAccountId || undefined);
+    const verifiedEvidence = createWechatWindowObserverAttestation(
+      snapshot,
+      observerEvidence,
+      currentWechatWindowObserverProofToken(),
+    );
     const diagnostic = {
       ...diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
-      observerEvidence: { ...observerEvidence, verified: true, verifiedAt: new Date().toISOString() },
+      observerEvidence: { ...verifiedEvidence, verifiedAt: new Date().toISOString() },
     };
     return this.localStore.createWechatWindowSnapshot({ ...snapshot, diagnostic });
   }
@@ -1757,9 +1763,14 @@ export class WechatDispatchService {
     const accounts = await this.persistence.listAccounts();
     const account = accounts.find((item: any) => item.id === snapshot.wechatAccountId) || null;
     const conversations = await this.persistence.listConversations(snapshot.wechatAccountId || undefined);
+    const verifiedEvidence = createWechatWindowObserverAttestation(
+      snapshot,
+      observerEvidence,
+      currentWechatWindowObserverProofToken(),
+    );
     const diagnostic = {
       ...diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
-      observerEvidence: { ...observerEvidence, verified: true, verifiedAt: new Date().toISOString() },
+      observerEvidence: { ...verifiedEvidence, verifiedAt: new Date().toISOString() },
     };
     const activeConversation = conversations.find((conversation: any) => {
       if (snapshot.externalChatId && conversation.externalChatId === snapshot.externalChatId) return true;
@@ -1803,7 +1814,7 @@ export class WechatDispatchService {
         const snapshots = normalizeWindowSnapshotInboxPayload(data);
         if (snapshots.length !== 1) throw new Error("window snapshot inbox file must contain exactly one observer evidence envelope");
         const created = snapshots.map((evidence, index) => {
-          const verified = verifyWechatWindowObserverEvidence(evidence, appConfig.wechatWindowObserverProofToken, {
+          const verified = verifyWechatWindowObserverEvidence(evidence, currentWechatWindowObserverProofToken(), {
             maxAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
           });
           if (!verified.ok) throw new Error(`observer evidence[${index}] rejected: ${verified.reason}`);
@@ -1847,7 +1858,7 @@ export class WechatDispatchService {
 
         const created = [];
         for (const [index, evidence] of snapshots.entries()) {
-          const verified = verifyWechatWindowObserverEvidence(evidence, appConfig.wechatWindowObserverProofToken, {
+          const verified = verifyWechatWindowObserverEvidence(evidence, currentWechatWindowObserverProofToken(), {
             maxAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
           });
           if (!verified.ok) throw new Error(`observer evidence[${index}] rejected: ${verified.reason}`);
@@ -3269,36 +3280,8 @@ export class WechatDispatchService {
     }
   }
 
-  validateSendTask(
-    id: string,
-    params: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> } & ExpectedIdentityPayload = {},
-  ) {
-    if (!appConfig.useLocalStore) return this.validatePrismaSendTask(id, params, params.activeWindow);
-    const task = this.localStore.getSendTask(id);
-    if (!task) throw new Error(`send task not found: ${id}`);
-    assertExpectedIdentity(task, params, "send task");
-
-    const activeWindow = params.activeWindow || this.buildWindowState(task, params.mode || "correct");
-    const result = validateSendGuard({
-      task,
-      account: task.wechatAccount,
-      conversation: task.conversation,
-      customer: task.conversation?.customer,
-      recentMessage: this.localStore.getRecentMessage(task.conversationId),
-      activeWindow,
-      accountQueueTaskIds: this.localStore.listAccountQueueTaskIds(task.wechatAccountId),
-    });
-
-    return this.localStore.updateSendTask(task.id, {
-      status: result.ok ? task.status : "blocked",
-      errorMessage: result.ok ? "" : result.reason,
-      guardSnapshot: {
-        ...(task.guardSnapshot || {}),
-        ...result,
-        activeWindow,
-        validatedAt: new Date().toISOString(),
-      },
-    });
+  validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) {
+    return this.validateSendTaskWithCurrentWindow(id, expected);
   }
 
   validateSendTaskWithCurrentWindow(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -3348,6 +3331,7 @@ export class WechatDispatchService {
       customer: task.conversation?.customer,
       recentMessage: this.localStore.getRecentMessage(task.conversationId),
       activeWindow: latestWindow,
+      observerProofToken: currentWechatWindowObserverProofToken(),
       accountQueueTaskIds: this.localStore.listAccountQueueTaskIds(task.wechatAccountId),
       maxWindowSnapshotAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
     });
@@ -3651,15 +3635,11 @@ export class WechatDispatchService {
     });
   }
 
-  private async validatePrismaSendTask(
-    id: string,
-    expected: ExpectedIdentityPayload = {},
-    suppliedWindow?: Record<string, unknown>,
-  ) {
+  private async validatePrismaSendTask(id: string, expected: ExpectedIdentityPayload = {}) {
     const task = await this.persistence.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
     assertExpectedIdentity(task, expected, "send task");
-    const activeWindow = suppliedWindow || await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);
+    const activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);
     if (!activeWindow) {
       return this.persistence.updateSendTask(id, {
         status: "blocked",
@@ -3685,6 +3665,7 @@ export class WechatDispatchService {
       customer: task.conversation?.customer,
       recentMessage,
       activeWindow,
+      observerProofToken: currentWechatWindowObserverProofToken(),
       accountQueueTaskIds,
       maxWindowSnapshotAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
     });
@@ -6594,25 +6575,6 @@ export class WechatDispatchService {
     return `${accountId}-${taskId}-${attemptId}.dispatch.json`;
   }
 
-  private buildWindowState(task: any, mode: "correct" | "wrong_chat") {
-    if (mode === "wrong_chat") {
-      const otherConversation = this.localStore
-        .listConversations()
-        .find((conversation) => conversation.id !== task.conversationId);
-      return {
-        wechatAccountId: task.wechatAccountId,
-        chatTitle: otherConversation?.title || "错误客户会话",
-        recentCustomerId: otherConversation?.customerId || "wrong_customer",
-      };
-    }
-
-    return {
-      wechatAccountId: task.wechatAccountId,
-      chatTitle: task.conversation?.title || "",
-      recentCustomerId: task.conversation?.customerId || "",
-    };
-  }
-
   private async createReviewLog(payload: {
     targetType: string;
     targetId: string;
@@ -7033,6 +6995,15 @@ function clampWindowSnapshotScanLimit(value: unknown) {
 function readJsonFile(filePath: string) {
   const text = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
   return JSON.parse(text);
+}
+
+function currentWechatWindowObserverProofToken() {
+  try {
+    const token = String(fs.readFileSync(appConfig.wechatWindowObserverProofFile, "utf8") || "").trim();
+    return /^[a-f0-9]{64}$/i.test(token) ? token : "";
+  } catch {
+    return "";
+  }
 }
 
 function normalizeWindowSnapshotInboxPayload(data: unknown): unknown[] {

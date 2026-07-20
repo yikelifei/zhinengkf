@@ -11,6 +11,7 @@ function validateSendGuard({
   customer,
   recentMessage,
   activeWindow,
+  observerProofToken,
   accountQueueTaskIds = [],
   maxWindowSnapshotAgeSeconds,
   now = new Date(),
@@ -27,7 +28,7 @@ function validateSendGuard({
     actual: windowState?.diagnostic?.observerEvidence?.verified === true
       ? String(windowState.source || "unknown")
       : "unverified",
-    passed: isTrustedWechatWindowObserverSnapshot(windowState),
+    passed: isTrustedWechatWindowObserverSnapshot(windowState, observerProofToken),
   });
 
   checks.push(check("wechatAccount", "微信账号正确", task?.wechatAccountId, windowState.wechatAccountId || windowState.accountId));

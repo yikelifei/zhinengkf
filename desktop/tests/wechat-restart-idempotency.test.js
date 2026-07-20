@@ -21,6 +21,9 @@ const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
+const { createWechatWindowObserverAttestation } = require("../packages/rules/wechatWindowEvidence");
+
+const observerProofToken = "9".repeat(64);
 
 test("duplicate inbound msgid is idempotent and conflicting content fails closed", async () => {
   const { localStore, service } = setupService();
@@ -363,6 +366,8 @@ function setupService() {
   appConfig.wechatBridgeDispatchDir = process.env.WECHAT_BRIDGE_DISPATCH_DIR;
   appConfig.wechatBridgeLockDir = process.env.WECHAT_BRIDGE_LOCK_DIR;
   appConfig.wechatBridgeWorkerStatusFile = path.join(tempDir, "worker-status.json");
+  appConfig.wechatWindowObserverProofFile = path.join(tempDir, "wechat-window-observer-proof.key");
+  fs.writeFileSync(appConfig.wechatWindowObserverProofFile, `${observerProofToken}\n`, "utf8");
   appConfig.sendBridgeAckTimeoutMinutes = 5;
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
@@ -380,7 +385,7 @@ function createPendingBridgeSend(localStore, service, text) {
     payload: { kind: "text", text },
     guardSnapshot: { requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"] },
   });
-  localStore.createWechatWindowSnapshot({
+  createTrustedTestWindowSnapshot(localStore, {
     source: "windows_foreground_observer",
     isOnline: true,
     wechatAccountId: "wechat_demo_1",
@@ -400,6 +405,24 @@ function createPendingBridgeSend(localStore, service, text) {
     },
   });
   return service.executeSend(task.id, { adapter: "windows_bridge" });
+}
+
+function createTrustedTestWindowSnapshot(localStore, payload) {
+  const snapshot = { ...payload, capturedAt: payload.capturedAt || new Date().toISOString() };
+  const evidence = payload.diagnostic?.observerEvidence || {};
+  const observerEvidence = createWechatWindowObserverAttestation(
+    snapshot,
+    {
+      version: evidence.version || "wechat_window_observer_v1",
+      issuedAt: snapshot.capturedAt,
+      nonceHash: evidence.nonceHash || "d".repeat(64),
+    },
+    observerProofToken,
+  );
+  return localStore.createWechatWindowSnapshot({
+    ...snapshot,
+    diagnostic: { ...(payload.diagnostic || {}), observerEvidence },
+  });
 }
 
 function createDispatchForPending(service) {

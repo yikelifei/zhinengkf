@@ -280,7 +280,7 @@ export class WechatController {
   @UseGuards(OperatorAccessGuard)
   validateSendTask(
     @Param("id") id: string,
-    @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> } & ExpectedIdentityPayload,
+    @Body() payload: ExpectedIdentityPayload,
   ) {
     return this.wechat.validateSendTask(id, payload || {});
   }

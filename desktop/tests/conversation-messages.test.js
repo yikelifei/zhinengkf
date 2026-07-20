@@ -113,7 +113,8 @@ test("manual reply uses safe queue while automation stays blocked by manual take
     activeWindow: { wechatAccountId: "wechat_demo_2", chatTitle: "王总-端午礼盒", recentCustomerId: primaryIdentity.customerId },
   });
   assert.equal(guarded.guardSnapshot.status, "blocked");
-  assert.equal(guarded.guardSnapshot.failedKeys.includes("wechatAccount"), true);
+  assert.equal(guarded.guardSnapshot.failedKeys.includes("windowSnapshotMissing"), true);
+  assert.equal(guarded.guardSnapshot.activeWindow, null);
 });
 
 test("inbound service rejects a customer id from another conversation", async () => {
