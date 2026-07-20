@@ -53,7 +53,7 @@ function setupService(overrides = {}) {
   const quotes = new QuotesService({}, localStore, orders, service);
   const reviews = new ReviewsService({}, localStore, {}, {}, notifications, service, orders);
 
-  return { tempDir, localStore, service, reviews, orders, quotes };
+  return { tempDir, localStore, service, reviews, orders, quotes, notifications };
 }
 
 function demoExpectedIdentity() {
@@ -4944,6 +4944,143 @@ test("inbound high value image selection resumes durable lock review and notific
   assert.equal(completedOperation.stage, "completed");
 });
 
+test("inbound low value image selection resumes its exact quote after a post-commit crash without manual lock", async () => {
+  const { localStore, service, notifications } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "selection_low_value_crash_recovery_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 20 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 }] },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    { imageId: "low_crash_candidate_1", position: 1, localPath: "C:\\storage\\low_crash_candidate_1.png" },
+    { imageId: "low_crash_candidate_2", position: 2, localPath: "C:\\storage\\low_crash_candidate_2.png" },
+  ]);
+  const payload = {
+    externalId: "manual-lock-selection-low-value-crash-recovery",
+    text: "我选第2张，按这个继续报价",
+    conversationId: "conversation_demo_1",
+  };
+  const originalCreate = notifications.create.bind(notifications);
+  let injectCrash = true;
+  notifications.create = async (...args) => {
+    const created = await originalCreate(...args);
+    if (injectCrash && args[1] === "低价值客户已选图，已生成报价草稿") {
+      injectCrash = false;
+      throw new Error("injected crash after durable low-value selection commit");
+    }
+    return created;
+  };
+
+  await assert.rejects(
+    () => service.processInboundMessage(payload),
+    /injected crash after durable low-value selection commit/,
+  );
+  const failedOperation = localStore.getInboundMessageOperation("wechat_demo_1", payload.externalId);
+  const committedQuote = localStore.getQuoteDraft(failedOperation.result.recoveryEffect.quoteDraftId);
+  const conversationBeforeRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(failedOperation.status, "retryable");
+  assert.equal(failedOperation.stage, "routed");
+  assert.equal(failedOperation.result.recoveryEffect.kind, "low_value_image_selection");
+  assert.equal(failedOperation.result.recoveryEffect.designJobId, job.id);
+  assert.equal(failedOperation.result.recoveryEffect.selectedImageId, images[1].id);
+  assert.equal(committedQuote.status, "send_queued");
+  assert.ok(committedQuote.sendTaskId);
+  assert.equal(conversationBeforeRecovery.manualLocked, false);
+
+  notifications.create = originalCreate;
+  const recovered = await service.processInboundMessage(payload);
+  const completedOperation = localStore.getInboundMessageOperation("wechat_demo_1", payload.externalId);
+  const conversationAfterRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(recovered.plan.type, "select_design_image_and_create_quote");
+  assert.equal(recovered.plan.reason, "low_value_customer_selected_image_quote_queued");
+  assert.equal(recovered.selection.result.source, "durable_recovery");
+  assert.equal(recovered.quote.id, committedQuote.id);
+  assert.equal(recovered.sendTask.id, committedQuote.sendTaskId);
+  assert.equal(conversationAfterRecovery.manualLocked, false);
+  assert.equal(localStore.listSendTasks().filter((task) => task.id === recovered.sendTask.id).length, 1);
+  assert.equal(localStore.listNotifications().filter(
+    (notice) => notice.target?.effectKey === `${failedOperation.id}:low-value-selection-notification`,
+  ).length, 1);
+  assert.equal(completedOperation.status, "completed");
+  assert.equal(completedOperation.stage, "completed");
+});
+
+test("inbound quote acceptance resumes its exact order after a post-commit crash without manual lock", async () => {
+  const { localStore, service, notifications } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "quote_acceptance_crash_recovery_request_1",
+    status: "quote_created",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 20 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 }] },
+    isHighValue: false,
+  });
+  const [image] = localStore.upsertDesignImages(job.id, [
+    { imageId: "quote_acceptance_crash_candidate", position: 1, localPath: "C:\\storage\\quote_acceptance_crash.png" },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, image.id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+  const payload = {
+    externalId: "manual-lock-quote-acceptance-crash-recovery",
+    text: "可以，就按这个方案下单",
+    conversationId: "conversation_demo_1",
+  };
+  const originalCreate = notifications.create.bind(notifications);
+  let injectCrash = true;
+  notifications.create = async (...args) => {
+    const created = await originalCreate(...args);
+    if (injectCrash && args[1] === "订单草稿已生成") {
+      injectCrash = false;
+      throw new Error("injected crash after durable quote acceptance commit");
+    }
+    return created;
+  };
+
+  await assert.rejects(
+    () => service.processInboundMessage(payload),
+    /injected crash after durable quote acceptance commit/,
+  );
+  const failedOperation = localStore.getInboundMessageOperation("wechat_demo_1", payload.externalId);
+  const marker = failedOperation.result.recoveryEffect;
+  const committedQuote = localStore.getQuoteDraft(marker.quoteDraftId);
+  const committedOrder = localStore.getOrderDraft(marker.orderDraftId);
+  const conversationBeforeRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(failedOperation.status, "retryable");
+  assert.equal(failedOperation.stage, "routed");
+  assert.equal(marker.kind, "low_value_quote_acceptance");
+  assert.equal(marker.phase, "quote_and_order_committed");
+  assert.equal(committedQuote.status, "accepted");
+  assert.equal(committedOrder.quoteDraftId, committedQuote.id);
+  assert.equal(localStore.listOrderDrafts().filter((order) => order.quoteDraftId === committedQuote.id).length, 1);
+  assert.equal(conversationBeforeRecovery.manualLocked, false);
+
+  notifications.create = originalCreate;
+  const recovered = await service.processInboundMessage(payload);
+  const completedOperation = localStore.getInboundMessageOperation("wechat_demo_1", payload.externalId);
+  const conversationAfterRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(recovered.plan.type, "quote_accepted");
+  assert.equal(recovered.plan.reason, "customer_quote_accepted");
+  assert.equal(recovered.quote.id, committedQuote.id);
+  assert.equal(recovered.orderDraft.id, committedOrder.id);
+  assert.equal(recovered.quoteAcceptance.action, "accept_quote_and_create_order");
+  assert.equal(conversationAfterRecovery.manualLocked, false);
+  assert.equal(localStore.listOrderDrafts().filter((order) => order.quoteDraftId === committedQuote.id).length, 1);
+  assert.equal(localStore.listNotifications().filter(
+    (notice) => notice.target?.effectKey === `${failedOperation.id}:order-draft-created-notification`,
+  ).length, 1);
+  assert.equal(completedOperation.status, "completed");
+  assert.equal(completedOperation.stage, "completed");
+});
+
 test("inbound high value budget image selection locks conversation even when flag is stale", async () => {
   const { localStore, service } = setupService();
 
@@ -5465,7 +5602,7 @@ test("payment proof screenshot fingerprint is not treated as design image select
   assert.equal(localStore.listOrderDrafts().some((order) => order.quoteDraftId === quote.id), false);
 });
 
-test("inbound payment proof attachment goes to manual verification without marking paid", async () => {
+test("inbound filename-only payment proof goes to manual verification without marking paid", async () => {
   const { localStore, service, reviews } = setupService();
 
   const job = localStore.createDesignJob({
@@ -5497,9 +5634,9 @@ test("inbound payment proof attachment goes to manual verification without marki
 
   const result = await service.processInboundMessage({
     externalId: "manual-lock-payment-proof-attachment",
-    text: "付款截图发你了",
+    text: "请查收",
     conversationId: "conversation_demo_1",
-    attachments: [{ role: "payment_proof", fileName: "付款截图.png" }],
+    attachments: [{ fileName: "付款截图.png", mimeType: "image/png" }],
   });
 
   const updatedQuote = localStore.getQuoteDraft(quote.id);

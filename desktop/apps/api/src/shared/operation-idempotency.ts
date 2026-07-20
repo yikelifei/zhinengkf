@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 
 const OPERATION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*[A-Za-z0-9]$/;
 const INBOUND_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-const INBOUND_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const OPAQUE_MEDIA_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~+/?=%#:-]*$/;
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
 const EMBEDDED_ENDPOINT_OR_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\\\\[^\\\s]|(?:^|[^:])\/\/|\b(?:file|https?|wss?|tcp):\/\/)/i;
-const EMBEDDED_CREDENTIAL_PATTERN = /(?:^|[^A-Za-z0-9_])(?:access[_-]?token|token|password|passwd|secret)\s*[:=]/i;
+const EMBEDDED_CREDENTIAL_PATTERN = /(?:access[_-]?token|api[_-]?key|authorization|token|password|passwd|secret)\s*[:=]/i;
 
 export const OPERATION_KEY_MIN_LENGTH = 16;
 export const OPERATION_KEY_MAX_LENGTH = 128;
@@ -148,9 +148,13 @@ export function sanitizeInboundOperationAttachments(value: unknown) {
     "imageFingerprint",
     "attachmentFingerprint",
     "fingerprint",
+    "mediaId",
     "role",
     "type",
     "kind",
+    "label",
+    "fileName",
+    "name",
     "mimeType",
   ];
   return value.slice(0, 50).flatMap((item) => {
@@ -162,15 +166,21 @@ export function sanitizeInboundOperationAttachments(value: unknown) {
     const source = item as Record<string, unknown>;
     const sanitized = Object.fromEntries(allowedKeys.flatMap((key) => {
       if (typeof source[key] !== "string" || !String(source[key]).trim()) return [];
-      const safeValue = key === "mimeType"
-        ? sanitizeInboundMimeType(source[key])
-        : key === "role" || key === "type" || key === "kind"
-          ? sanitizeInboundLabel(source[key], 64)
-          : sanitizeInboundBusinessIdentifier(source[key], 512);
+      const safeValue = sanitizeInboundAttachmentField(key, source[key]);
       return safeValue ? [[key, safeValue] as [string, string]] : [];
     }));
     return Object.keys(sanitized).length ? [sanitized] : [];
   });
+}
+
+function sanitizeInboundAttachmentField(key: string, value: unknown) {
+  if (key === "mimeType") return sanitizeInboundMimeType(value);
+  if (key === "mediaId") return sanitizeInboundOpaqueMediaId(value, 512);
+  if (key === "type") return sanitizeInboundMimeType(value) || sanitizeInboundLabel(value, 64);
+  if (key === "role" || key === "kind") return sanitizeInboundLabel(value, 64);
+  if (key === "label") return sanitizeInboundLabel(value, 128);
+  if (key === "fileName" || key === "name") return sanitizeInboundLabel(value, 255);
+  return sanitizeInboundBusinessIdentifier(value, 512);
 }
 
 export function sanitizeInboundOperationAssetIds(value: unknown, options: { rejectInvalid?: boolean } = {}) {
@@ -209,8 +219,18 @@ function sanitizeInboundBusinessIdentifier(value: unknown, maxLength: number) {
 function sanitizeInboundLabel(value: unknown, maxLength: number) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text || text.length > maxLength) return "";
+  if (/[\u0000-\u001f\u007f]/.test(text) || /[\\/]/.test(text)) return "";
   if (EMBEDDED_ENDPOINT_OR_PATH_PATTERN.test(text) || EMBEDDED_CREDENTIAL_PATTERN.test(text)) return "";
-  return INBOUND_LABEL_PATTERN.test(text) ? text : "";
+  return text;
+}
+
+function sanitizeInboundOpaqueMediaId(value: unknown, maxLength: number) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > maxLength) return "";
+  if (/[\u0000-\u001f\u007f\\]/.test(text)) return "";
+  if (EMBEDDED_ENDPOINT_OR_PATH_PATTERN.test(text) || EMBEDDED_CREDENTIAL_PATTERN.test(text)) return "";
+  if (/^(?:[./~]|%2f|%5c)/i.test(text) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(text)) return "";
+  return OPAQUE_MEDIA_ID_PATTERN.test(text) ? text : "";
 }
 
 function sanitizeInboundMimeType(value: unknown) {

@@ -23,7 +23,13 @@ function setup() {
   appConfig.wechatBridgeLockDir = path.join(tempDir, "locks");
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
-  const service = new WechatDispatchService({}, localStore, new WechatSendAdapterService(), { create: async () => ({}) }, {});
+  const service = new WechatDispatchService(
+    {},
+    localStore,
+    new WechatSendAdapterService(),
+    { create: async () => ({}) },
+    { getById: async (id) => localStore.getOrderDraft(id) },
+  );
   return { tempDir, localStore, service };
 }
 
@@ -237,8 +243,12 @@ test("inbound operation snapshot strips host secrets and local paths from attach
     text: "带附件引用的消息",
     externalId: "safe-operation-attachment",
     attachments: [{
-      role: "image",
+      role: "付款凭证",
+      label: "客户付款截图",
+      fileName: "付款截图.png",
+      name: "转账回单.jpg",
       mimeType: "image/png",
+      mediaId: "media/a?b=c+d",
       imageId: "safe-remote-image-id",
       referencedImageId: "C:\\secret\\reference.png",
       remoteImageId: "file:///private/remote.png",
@@ -251,6 +261,10 @@ test("inbound operation snapshot strips host secrets and local paths from attach
       remoteImageId: "opaque|https://internal.example/private",
       mimeType: "image/png C:\\host\\vault.key",
       fingerprint: "opaque-token=credential-value",
+      label: "receipt https://internal.example/private",
+      fileName: "opaque|C:\\Users\\agent\\secret.png",
+      name: "password=hidden-value",
+      mediaId: "opaque|file:///private/media",
     }],
     createdAt: "2030-07-20T13:00:00.000Z",
   });
@@ -259,7 +273,8 @@ test("inbound operation snapshot strips host secrets and local paths from attach
   const snapshot = JSON.stringify(operation.normalizedPayload);
   assert.match(snapshot, /image\/png/);
   assert.match(snapshot, /safe-remote-image-id/);
-  assert.doesNotMatch(snapshot, /operation-secret-token|credential-value|127\.0\.0\.1|internal\.example|secret\\\\(?:attachment|reference)|Users\\\\agent|host\\\\vault|file:\/\/\/private/i);
+  assert.match(snapshot, /付款凭证|客户付款截图|付款截图\.png|转账回单\.jpg|media\/a\?b=c\+d/);
+  assert.doesNotMatch(snapshot, /operation-secret-token|credential-value|hidden-value|127\.0\.0\.1|internal\.example|secret\\\\(?:attachment|reference)|Users\\\\agent|host\\\\vault|file:\/\/\/private/i);
   assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
 });
 
@@ -374,6 +389,107 @@ test("completed inbound replay fails closed when a promised durable reference is
     () => service.processInboundMessage(payload),
     /missing its durable route evaluation/,
   );
+});
+
+test("completed inbound replay fails closed for every existing foreign durable reference", async () => {
+  const { localStore, service } = setup();
+  const payload = {
+    ...primaryIdentity,
+    text: "durable foreign identity",
+    externalId: "completed-replay-foreign-references",
+  };
+  await service.processInboundMessage(payload);
+  const foreignIdentity = {
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_2",
+    customerId: "customer_demo_2",
+  };
+  const foreignRoute = localStore.createRouteEvaluation(
+    { ...foreignIdentity, operationKey: "foreign-replay-route", text: "foreign route", channel: "wechat" },
+    { agentKey: "general", action: "auto_agent", confidence: 0.9 },
+  );
+  const foreignJob = localStore.createDesignJob({
+    ...foreignIdentity,
+    requestId: "foreign-replay-design-job",
+    status: "sent",
+    budget: { quantity: 1 },
+    bundle: { items: [{ skuCode: "FOREIGN", costPrice: 10, salePrice: 20 }] },
+  });
+  const [foreignImage] = localStore.upsertDesignImages(foreignJob.id, [{ imageId: "foreign-image", position: 1 }]);
+  const foreignQuote = localStore.createQuoteFromDesignJob(foreignJob.id, foreignImage.id);
+  const foreignOrder = localStore.upsertOrderDraftFromQuote(foreignQuote.id, {
+    quoteDraftId: foreignQuote.id,
+    designJobId: foreignJob.id,
+    customerId: foreignIdentity.customerId,
+    conversationId: foreignIdentity.conversationId,
+    wechatAccountId: foreignIdentity.wechatAccountId,
+    selectedImageId: foreignImage.id,
+    quantity: 1,
+    unitPrice: 20,
+    totalPrice: 20,
+    totalCost: 10,
+    profit: 10,
+    status: "draft",
+    paymentStatus: "unpaid",
+  });
+  const foreignReply = await service.enqueueManualReply({
+    operationKey: "foreign-replay-send:00000001",
+    ...foreignIdentity,
+    text: "foreign task",
+    operator: "foreign operator",
+  });
+  const foreignTask = foreignReply.task;
+  const foreignNotification = localStore.createNotification("info", "foreign", "foreign", foreignIdentity);
+  const foreignReviewLog = localStore.createReviewLog({
+    targetType: "conversation",
+    targetId: foreignIdentity.conversationId,
+    decision: "foreign",
+    metadata: foreignIdentity,
+  });
+  const base = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  const cases = [
+    ["route evaluation", (result) => { result.routeEvaluationId = foreignRoute.id; }],
+    ["send task", (result) => { result.sendTaskId = foreignTask.id; }],
+    ["design job", (result) => { result.designJobId = foreignJob.id; }],
+    ["notification", (result) => { result.notificationId = foreignNotification.id; }],
+    ["quote draft", (result) => { result.quoteDraftId = foreignQuote.id; }],
+    ["order draft", (result) => { result.orderDraftId = foreignOrder.id; }],
+    ["manual-lock conversation", (result) => {
+      result.manualLock = { conversationId: foreignIdentity.conversationId, blockedSendTaskIds: [], inFlightSendTaskIds: [] };
+    }],
+    ["manual-lock review log", (result) => {
+      result.manualLock = {
+        conversationId: primaryIdentity.conversationId,
+        reviewLogId: foreignReviewLog.id,
+        blockedSendTaskIds: [],
+        inFlightSendTaskIds: [],
+      };
+    }],
+    ["manual-lock send task", (result) => {
+      result.manualLock = {
+        conversationId: primaryIdentity.conversationId,
+        blockedSendTaskIds: [foreignTask.id],
+        inFlightSendTaskIds: [],
+      };
+    }],
+    ["manual-lock send task", (result) => {
+      result.manualLock = {
+        conversationId: primaryIdentity.conversationId,
+        blockedSendTaskIds: [],
+        inFlightSendTaskIds: [foreignTask.id],
+      };
+    }],
+  ];
+  for (const [label, mutate] of cases) {
+    const document = structuredClone(base);
+    const operation = document.inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+    mutate(operation.result);
+    fs.writeFileSync(localStore.filePath, JSON.stringify(document, null, 2));
+    await assert.rejects(
+      () => service.processInboundMessage(payload),
+      new RegExp(`foreign or incomplete durable ${label} identity`),
+    );
+  }
 });
 
 test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {

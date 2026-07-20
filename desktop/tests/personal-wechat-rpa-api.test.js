@@ -91,8 +91,12 @@ test("RPA reservation and dispatch use only syntax-validated attachment business
   await service.processInbound(inbound({
     externalId: "rpa-safe-operation-snapshot",
     attachments: [{
-      role: "image",
+      role: "付款凭证",
+      label: "客户付款截图",
+      fileName: "付款截图.png",
+      name: "转账回单.jpg",
       mimeType: "image/png",
+      mediaId: "media/a?b=c+d",
       token: "rpa-attachment-secret",
       endpoint: "http://127.0.0.1:4888",
       localPath: "C:\\private\\rpa.png",
@@ -107,7 +111,30 @@ test("RPA reservation and dispatch use only syntax-validated attachment business
   assert.match(snapshot, /image\/png/);
   assert.doesNotMatch(snapshot, /rpa-attachment-secret|credential-value|127\.0\.0\.1|internal\.example|Users\\\\agent|private\\\\rpa/i);
   assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
-  assert.deepEqual(dispatch.calls[0].attachments, [{ role: "image", mimeType: "image/png" }]);
+  assert.deepEqual(dispatch.calls[0].attachments, [{
+    mediaId: "media/a?b=c+d",
+    role: "付款凭证",
+    label: "客户付款截图",
+    fileName: "付款截图.png",
+    name: "转账回单.jpg",
+    mimeType: "image/png",
+  }]);
+});
+
+test("RPA attachment allowlist rejects embedded paths URLs credentials controls and fake MIME values", async () => {
+  const { dispatch, service } = setup();
+  await service.processInbound(inbound({
+    externalId: "rpa-reject-embedded-attachment-data",
+    attachments: [{
+      label: "prefix https://private.example/receipt",
+      fileName: "prefix C:\\private\\receipt.png",
+      name: "prefix token=secret-value",
+      mediaId: "prefix file:///private/media",
+      role: "payment\u0000proof",
+      mimeType: "image/png https://private.example/fake",
+    }],
+  }), "test-rpa-token");
+  assert.deepEqual(dispatch.calls[0].attachments, []);
 });
 
 test("RPA inbound rejects malformed attachment containers before reservation", async () => {
