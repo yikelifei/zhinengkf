@@ -22,11 +22,16 @@ const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
 const SCHEMA_VERSION = "smart_kefu_windows_package_verification_v3";
 
-if (require.main === module) main();
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
 
-function main() {
+async function main() {
   const args = new Set(process.argv.slice(2));
-  const result = verifyWindowsPackage({
+  const result = await verifyWindowsPackage({
     outputDir,
     expectUnsigned: args.has("--expect-unsigned"),
     requireSigned: args.has("--require-signed"),
@@ -38,7 +43,7 @@ function main() {
   if (result.status === "FAIL") process.exit(1);
 }
 
-function verifyWindowsPackage(options) {
+async function verifyWindowsPackage(options) {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const repositoryState = resolveRepositoryState({
     repositoryRoot: path.resolve(root, ".."),
@@ -129,6 +134,10 @@ function verifyWindowsPackage(options) {
   }
 
   const failed = checks.some((item) => item.status === "FAIL");
+  const [installerArtifact, executableArtifact] = await Promise.all([
+    installer && fs.existsSync(installer) ? artifactInfo(installer) : null,
+    fs.existsSync(executable) ? artifactInfo(executable) : null,
+  ]);
   return {
     schemaVersion: SCHEMA_VERSION,
     repositoryRevision,
@@ -138,8 +147,8 @@ function verifyWindowsPackage(options) {
     version: packageJson.version,
     verificationProfile: options.requireSigned ? "signed-release" : options.expectUnsigned ? "unsigned-test" : "content-only",
     outputDir: options.outputDir,
-    installer: installer && fs.existsSync(installer) ? artifactInfo(installer) : null,
-    executable: fs.existsSync(executable) ? artifactInfo(executable) : null,
+    installer: installerArtifact,
+    executable: executableArtifact,
     signatures,
     checks,
   };
@@ -277,15 +286,24 @@ function formatSignatures(signatures) {
   return signatures.map((item) => `${path.basename(item.file)}=${item.status}`).join(", ") || "No executable signature evidence.";
 }
 
-function artifactInfo(file) {
-  const stat = fs.statSync(file);
-  return { file, bytes: stat.size, sha256: sha256(file) };
+async function artifactInfo(file) {
+  const before = fs.statSync(file, { bigint: true });
+  const digest = await sha256FileStream(file);
+  const after = fs.statSync(file, { bigint: true });
+  if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
+    throw new Error(`artifact changed while it was hashed: ${file}`);
+  }
+  return { file, bytes: Number(after.size), sha256: digest };
 }
 
-function sha256(file) {
-  const hash = crypto.createHash("sha256");
-  hash.update(fs.readFileSync(file));
-  return hash.digest("hex");
+function sha256FileStream(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(file, { highWaterMark: 1024 * 1024 });
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", () => resolve(hash.digest("hex")));
+  });
 }
 
 function walk(directory, visit) {
@@ -343,6 +361,7 @@ module.exports = {
   isForbiddenArchivePath,
   isForbiddenResourcePath,
   normalizeArchivePath,
+  sha256FileStream,
   validatePackageProvenance,
   verifyWindowsPackage,
 };

@@ -253,7 +253,7 @@ function validArtifact(value) {
     && /^[a-f0-9]{64}$/.test(String(value.sha256 || ""));
 }
 
-function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
+async function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
   const state = inspectCommon("windows", loaded, currentRevision, nowMs);
   if (!state.report || !state.evidence.schemaValid || state.failures.length) {
     return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state);
@@ -291,7 +291,7 @@ function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
   if (state.report.repositoryClean !== true) state.failures.push("signed package report is not bound to a clean repository");
   if (!reportedSignaturesValid) state.failures.push("signed package report signatures are not bound to both exact artifacts");
   if (!reportedChecksComplete) state.failures.push("signed package report is missing required PASS checks");
-  const livePackageVerification = inspectLiveWindowsPackage({
+  const livePackageVerification = await inspectLiveWindowsPackage({
     installer,
     executable,
     report: state.report,
@@ -321,6 +321,7 @@ function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
     runtimeSmokeMode: livePackageVerification.runtimeSmokeMode,
     installerBindingMode: livePackageVerification.installerBindingMode,
     snapshotManifestSha256: livePackageVerification.snapshotManifestSha256 || "",
+    temporaryFilesWritten: livePackageVerification.temporaryFilesWritten === true,
     privateSnapshotCreated: livePackageVerification.privateSnapshotCreated === true,
     signatureInspectionAttempted: livePackageVerification.signatureInspectionAttempted === true,
     installerBindingAttempted: livePackageVerification.installerBindingAttempted === true,
@@ -376,26 +377,30 @@ function inspectDistinctArtifacts(installer, executable, state) {
   return distinct;
 }
 
-function inspectLiveWindowsPackage({ installer, executable, report, currentRevision, state, evidenceRoot, hooks }) {
-  const unavailable = {
-    valid: false,
-    status: "FAIL",
-    authenticodeStatus: "FAIL",
-    runtimeSmokeMode: hooks.mode,
-    installerBindingMode: hooks.mode,
+async function inspectLiveWindowsPackage({ installer, executable, report, currentRevision, state, evidenceRoot, hooks }) {
+  const progress = {
+    temporaryFilesWritten: false,
     privateSnapshotCreated: false,
     signatureInspectionAttempted: false,
     installerBindingAttempted: false,
     runtimeSmokeExecuted: false,
   };
-  if (!installer || !executable) return unavailable;
+  const unavailable = () => ({
+    valid: false,
+    status: "FAIL",
+    authenticodeStatus: "FAIL",
+    runtimeSmokeMode: hooks.mode,
+    installerBindingMode: hooks.mode,
+    ...progress,
+  });
+  if (!installer || !executable) return unavailable();
   const version = String(report.version || "").trim();
   const outputDir = path.dirname(installer.file);
   const expectedInstaller = canonicalArtifactPath(path.join(outputDir, `SmartKefu-Setup-${version}-x64.exe`));
   const expectedExecutable = canonicalArtifactPath(path.join(outputDir, "win-unpacked", "Smart Kefu.exe"));
   if (!version || installer.file !== expectedInstaller || executable.file !== expectedExecutable) {
     state.failures.push("Windows artifacts do not match the versioned installer and unpacked executable layout");
-    return unavailable;
+    return unavailable();
   }
   let snapshot;
   try {
@@ -403,15 +408,18 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     snapshot = createPrivateSnapshot(outputDir, {
       includeTopLevel: [path.basename(installer.file), "win-unpacked"],
     });
-  } catch {
+  } catch (error) {
+    progress.temporaryFilesWritten = error?.temporaryFilesWritten === true;
     state.failures.push("Windows package tree is unsafe or changed while its private snapshot was created");
-    return unavailable;
+    return unavailable();
   }
+  progress.temporaryFilesWritten = true;
+  progress.privateSnapshotCreated = true;
   try {
     const snapshotOutputDir = snapshot.snapshotDirectory;
     const snapshotInstaller = path.join(snapshotOutputDir, path.basename(installer.file));
     const snapshotExecutable = path.join(snapshotOutputDir, "win-unpacked", "Smart Kefu.exe");
-    const verification = verifyWindowsPackage({
+    const verification = await verifyWindowsPackage({
       outputDir: snapshotOutputDir,
       expectUnsigned: false,
       requireSigned: false,
@@ -440,9 +448,9 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     const contentPrerequisitesPass = verification.status === STATUS.PASS
       && !liveChecksFail && !liveChecksBlocked
       && artifactsMatch;
-    const signatureInspectionAttempted = contentPrerequisitesPass;
+    progress.signatureInspectionAttempted = contentPrerequisitesPass;
     let authenticodeStatus = STATUS.BLOCKED;
-    if (signatureInspectionAttempted) {
+    if (progress.signatureInspectionAttempted) {
       const policy = hooks.releasePolicy || loadReleasePolicy();
       const signatureResults = [
         { label: "installer", file: snapshotInstaller },
@@ -461,21 +469,29 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
       authenticodeStatus = combineChainStatus(signatureResults);
     }
 
-    const installerBinding = authenticodeStatus === STATUS.PASS
-      ? hooks.verifyInstallerBinding({
+    let installerBinding;
+    if (authenticodeStatus === STATUS.PASS) {
+      progress.installerBindingAttempted = true;
+      installerBinding = hooks.verifyInstallerBinding({
           installer: snapshotInstaller,
           unpackedDirectory: path.join(snapshotOutputDir, "win-unpacked"),
           tempRoot: snapshot.tempRoot,
-        })
-      : { status: STATUS.BLOCKED, summary: "installer payload parsing was skipped until publisher trust passes", mode: hooks.mode, skipped: true };
+        });
+    } else {
+      installerBinding = { status: STATUS.BLOCKED, summary: "installer payload parsing was skipped until publisher trust passes", mode: hooks.mode, skipped: true };
+    }
     if (!installerBinding.skipped) recordChainStatus(state, installerBinding, "signed installer payload binding");
 
     const trustPrerequisitesPass = contentPrerequisitesPass
       && authenticodeStatus === STATUS.PASS
       && installerBinding.status === STATUS.PASS;
-    const runtimeSmoke = trustPrerequisitesPass
-      ? hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir, tempRoot: snapshot.tempRoot })
-      : { status: STATUS.BLOCKED, summary: "runtime smoke was not executed before content, publisher and installer binding trust passed", mode: hooks.mode, skipped: true };
+    let runtimeSmoke;
+    if (trustPrerequisitesPass) {
+      progress.runtimeSmokeExecuted = true;
+      runtimeSmoke = hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir, tempRoot: snapshot.tempRoot });
+    } else {
+      runtimeSmoke = { status: STATUS.BLOCKED, summary: "runtime smoke was not executed before content, publisher and installer binding trust passed", mode: hooks.mode, skipped: true };
+    }
     if (!runtimeSmoke.skipped) recordChainStatus(state, runtimeSmoke, "packaged runtime smoke");
 
     const snapshotAfter = createTreeManifest(snapshotOutputDir);
@@ -503,14 +519,11 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
       runtimeSmokeMode: runtimeSmoke.mode || hooks.mode,
       installerBindingMode: installerBinding.mode || hooks.mode,
       snapshotManifestSha256: snapshot.snapshotManifest.sha256,
-      privateSnapshotCreated: true,
-      signatureInspectionAttempted,
-      installerBindingAttempted: !installerBinding.skipped,
-      runtimeSmokeExecuted: !runtimeSmoke.skipped,
+      ...progress,
     };
   } catch (error) {
     state.failures.push(`live Windows package verification could not be completed: ${error.message}`);
-    return unavailable;
+    return unavailable();
   } finally {
     try {
       cleanupPrivateTemp(snapshot.cleanupHandle);
@@ -587,7 +600,7 @@ function createTestEvidenceBundleValidator(testHooks = {}) {
   return (options = {}) => validateEvidenceBundleInternal(options, hooks);
 }
 
-function validateEvidenceBundleInternal(options, hooks) {
+async function validateEvidenceBundleInternal(options, hooks) {
   let currentRevision;
   try {
     currentRevision = normalizeRepositoryRevision(options.currentRevision);
@@ -604,7 +617,7 @@ function validateEvidenceBundleInternal(options, hooks) {
         windows: readEvidence(evidenceRoot, options.windowsReport),
       }
     : { staging: { error: true }, recovery: { error: true }, windows: { error: true } };
-  const windowsEvidence = inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, hooks);
+  const windowsEvidence = await inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, hooks);
   const results = [
     inspectStaging(loaded.staging, currentRevision, nowMs),
     inspectRecovery(loaded.recovery, currentRevision, nowMs),
@@ -624,7 +637,7 @@ function validateEvidenceBundleInternal(options, hooks) {
     status: computeStatus(results),
     safety: {
       evidenceInputFilesModified: false,
-      temporaryFilesWritten: windowsEvidence.evidence.privateSnapshotCreated === true,
+      temporaryFilesWritten: windowsEvidence.evidence.temporaryFilesWritten === true,
       localToolExecutionAttempted: windowsEvidence.evidence.signatureInspectionAttempted === true
         || windowsEvidence.evidence.installerBindingAttempted === true,
       packagedRuntimeExecutionAttempted: windowsEvidence.evidence.runtimeSmokeExecuted === true,
@@ -697,21 +710,19 @@ Reads only the explicitly named local reports. The reports must remain inside
 the evidence root. This command does not generate or refresh external evidence.`);
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) return printHelp();
-  const report = validateEvidenceBundle(options);
+  const report = await validateEvidenceBundle(options);
   process.stdout.write(renderMarkdown(report));
   process.exitCode = EXIT_CODE[report.status];
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch {
+  main().catch(() => {
     console.error("[external-evidence-bundle] FAIL: local evidence validation could not be completed");
     process.exitCode = EXIT_CODE.FAIL;
-  }
+  });
 }
 
 module.exports = {

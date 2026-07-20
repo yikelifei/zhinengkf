@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  DEFAULT_EXTRACTION_LIMITS,
   absoluteWindowsPowerShell,
   classifyNativeSmokeFailure,
   cleanupPrivateTemp,
@@ -19,6 +20,7 @@ const {
   loadReleasePolicy,
   manifestsEqual,
   selectEvidenceProcessEnvironment,
+  validateSevenZipListing,
 } = require("../tools/windows-evidence-chain");
 const { createSmokeWorkspace } = require("../tools/smoke-packaged-api");
 
@@ -61,6 +63,27 @@ test("private temp cleanup rejects a replaced directory and preserves its sentin
   assert.equal(fs.readFileSync(sentinel, "utf8"), "preserve\n");
 });
 
+test("failed private temp marker creation reports its write truth and leaves no owned directory", () => {
+  const prefix = "smart-kefu-windows-evidence-";
+  const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(prefix)));
+  const originalWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, ...args) => {
+    if (path.basename(String(file)) === ".smart-kefu-private-temp.json") throw new Error("synthetic marker write failure");
+    return originalWrite(file, ...args);
+  };
+  let failure;
+  try {
+    createPrivateTemp();
+  } catch (error) {
+    failure = error;
+  } finally {
+    fs.writeFileSync = originalWrite;
+  }
+  assert.equal(failure?.temporaryFilesWritten, true);
+  const after = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(prefix) && !before.has(name));
+  assert.deepEqual(after, []);
+});
+
 test("packaged smoke ignores caller runtime deletion targets and cleans only its minted workspace", (t) => {
   const callerDirectory = temporaryDirectory(t);
   const sentinel = path.join(callerDirectory, "caller-sentinel.txt");
@@ -89,6 +112,64 @@ test("package tree budgets fail quickly on oversized files and excessive depth",
     fs.mkdirSync(current);
   }
   assert.throws(() => createTreeManifest(directory, { limits: { maxDepth: 2 } }), /maximum depth/);
+});
+
+test("7-Zip technical listings reject bombs, unsafe paths and every extraction budget before extraction", () => {
+  const listing = (entries) => entries.map((entry) => [
+    `Path = ${entry.path}`,
+    ...(entry.directory ? ["Folder = +"] : [`Size = ${entry.size}`, "Packed Size = 1", "Folder = -"]),
+  ].join("\n")).join("\n\n");
+  const good = listing([
+    { path: "$PLUGINSDIR", directory: true },
+    { path: "$PLUGINSDIR/app-64.7z", size: 100 },
+  ]);
+  const accepted = validateSevenZipListing(good, {
+    archiveBytes: 80,
+    limits: { maxCompressionRatio: 10 },
+  });
+  assert.equal(accepted.totals.files, 1);
+  assert.equal(accepted.totals.totalBytes, 100);
+  assert.equal(accepted.entries[1].path, "$PLUGINSDIR/app-64.7z");
+
+  assert.throws(() => validateSevenZipListing(good, {
+    archiveBytes: 80,
+    limits: { maxFileBytes: 99 },
+  }), /maximum size/);
+  assert.throws(() => validateSevenZipListing(listing([
+    { path: "one.bin", size: 60 },
+    { path: "two.bin", size: 60 },
+  ]), {
+    archiveBytes: 80,
+    limits: { maxTotalBytes: 100 },
+  }), /maximum total bytes/);
+  assert.throws(() => validateSevenZipListing(listing([{ path: "a/b/c.bin", size: 1 }]), {
+    archiveBytes: 1,
+    limits: { maxDepth: 2 },
+  }), /maximum path depth/);
+  assert.throws(() => validateSevenZipListing(listing([
+    { path: "one.bin", size: 1 },
+    { path: "two.bin", size: 1 },
+  ]), {
+    archiveBytes: 1,
+    limits: { maxEntries: 1 },
+  }), /maximum entry count/);
+  assert.throws(() => validateSevenZipListing(listing([{ path: "bomb.bin", size: 201 }]), {
+    archiveBytes: 1,
+    limits: { maxCompressionRatio: 200 },
+  }), /maximum compression ratio/);
+  assert.throws(() => validateSevenZipListing(listing([{ path: "../escape.bin", size: 1 }]), {
+    archiveBytes: 1,
+  }), /unsafe entry path/);
+  assert.throws(() => validateSevenZipListing(listing([{ path: "safe.bin:alternate-stream", size: 1 }]), {
+    archiveBytes: 1,
+  }), /Windows-unsafe entry path/);
+
+  const source = fs.readFileSync(path.resolve(__dirname, "../tools/windows-evidence-chain.js"), "utf8");
+  const preflight = source.indexOf("inspectArchiveBudget(sevenZip, installer");
+  const extraction = source.indexOf('["x", "-y", "-bb0", "-bd"');
+  assert.ok(preflight >= 0 && extraction > preflight, "installer archive list preflight must precede extraction");
+  assert.match(source, /findNamedFile\(outer, "app-64\.7z", extractionLimits\)/);
+  assert.equal(DEFAULT_EXTRACTION_LIMITS.maxTotalBytes, 2 * 1024 * 1024 * 1024);
 });
 
 test("runtime hangs are FAIL while explicit port occupation is BLOCKED", () => {

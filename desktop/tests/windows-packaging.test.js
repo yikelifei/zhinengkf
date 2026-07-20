@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -25,6 +26,7 @@ const {
   SCHEMA_VERSION,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
+  sha256FileStream,
   validatePackageProvenance,
   verifyWindowsPackage,
 } = require("../tools/verify-windows-package");
@@ -44,11 +46,11 @@ test("Windows verification report schema requires repository provenance", () => 
   assert.match(source, /verificationProfile/);
 });
 
-test("Windows verification binds even failed local content evidence to an exact revision", (t) => {
+test("Windows verification binds even failed local content evidence to an exact revision", async (t) => {
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-win-evidence-"));
   t.after(() => fs.rmSync(outputDir, { recursive: true, force: true }));
   const revision = "a".repeat(40);
-  const report = verifyWindowsPackage({
+  const report = await verifyWindowsPackage({
     outputDir,
     expectUnsigned: true,
     requireSigned: false,
@@ -60,7 +62,7 @@ test("Windows verification binds even failed local content evidence to an exact 
   assert.equal(report.repositoryRevision, revision);
   assert.equal(report.verificationProfile, "unsigned-test");
   assert.equal(report.status, "FAIL");
-  assert.throws(() => verifyWindowsPackage({
+  await assert.rejects(() => verifyWindowsPackage({
     outputDir,
     expectUnsigned: true,
     requireSigned: false,
@@ -68,6 +70,18 @@ test("Windows verification binds even failed local content evidence to an exact 
     repositoryRevision: "short",
     repositoryClean: true,
   }), /revision unavailable/);
+});
+
+test("Windows artifact hashing streams bounded chunks instead of materializing the complete file", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-stream-hash-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "artifact.bin");
+  const content = Buffer.alloc(3 * 1024 * 1024 + 17, 0x5a);
+  fs.writeFileSync(file, content);
+  assert.equal(await sha256FileStream(file), crypto.createHash("sha256").update(content).digest("hex"));
+  const source = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
+  assert.match(source, /fs\.createReadStream\(file/);
+  assert.doesNotMatch(source, /hash\.update\(fs\.readFileSync\(file\)\)/);
 });
 
 test("package provenance binds a clean revision and package version", () => {

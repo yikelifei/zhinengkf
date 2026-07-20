@@ -132,9 +132,11 @@ if (stat.size !== BigInt(reported.bytes)) throw new Error();
 const digest = sha256File(file);
 const distinct = inspectDistinctArtifacts(installer, executable, state); if (installer.sha256 !== executable.sha256) {}
 const snapshot = createPrivateSnapshot(outputDir, { includeTopLevel: ["win-unpacked"] });
-const verification = verifyWindowsPackage({ outputDir, runtimeSmokeResult: { status: STATUS.PASS, summary: "runtime smoke is deferred" } });
+const verification = await verifyWindowsPackage({ outputDir, runtimeSmokeResult: { status: STATUS.PASS, summary: "runtime smoke is deferred" } });
 hooks.verifyInstallerBinding({ installer, unpackedDirectory, tempRoot });
 const trustPrerequisitesPass = true; hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir });
+progress.signatureInspectionAttempted = contentPrerequisitesPass; progress.installerBindingAttempted = true; progress.runtimeSmokeExecuted = true;
+const writeTruth = { temporaryFilesWritten: livePackageVerification.temporaryFilesWritten };
 const snapshotAfter = createTreeManifest(snapshotOutputDir);
 const sourceAfter = createTreeManifest(outputDir, snapshot.treeOptions);
 const stable = manifestsEqual(snapshot.snapshotManifest, snapshotAfter) && manifestsEqual(snapshot.sourceManifest, sourceAfter);
@@ -150,9 +152,15 @@ const configured = identityStatus === "CONFIGURED" && allowedPublisherSubjects.l
 const powershell = trustedWindowsSystemTool("WindowsPowerShell", "v1.0", "powershell.exe");
 const script = "Get-AuthenticodeSignature";
 const extractor = "windows-release-extractor-policy.json"; if (hashFile(candidate) !== policy.sha256) throw new Error(); const archive = "app-64.7z";
+validateSevenZipListing(); const maxCompressionRatio = 200; inspectArchiveBudget(sevenZip, installer); findNamedFile(outer, "app-64.7z", extractionLimits);
 throw new Error("signed installer payload does not match");
 const env = selectEvidenceProcessEnvironment({ PACKAGED_SMOKE_OUTPUT_DIR: outputDirectory });
 terminateProcessTree(child); throw new Error("packaged runtime smoke orchestrator timed out");
+`);
+  write(root, "desktop/tools/verify-windows-package.js", `
+async function verifyWindowsPackage() { return artifactInfo(file); }
+async function artifactInfo(file) { return await sha256FileStream(file); }
+function sha256FileStream(file) { return fs.createReadStream(file); }
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
 const OBSERVER_ENV_KEYS = ["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE", "WECHAT_WINDOW_SNAPSHOT_INBOX_DIR"];
@@ -251,7 +259,7 @@ validateSendTask(
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest(value) { return { operationKey: stringOrUndefined(value.operationKey) }; }\nenqueueManualReply(payload) { normalizeOperationKey(payload.operationKey, "operationKey"); }\ncreateDemoSendTask(payload: { operationKey: string }) { normalizeOperationKey(payload?.operationKey, "operationKey"); return this.createLocalSendTask({ operationKey, customerId: conversation.customerId }); }\ncreatePrismaDemoSendTask(payload) { return this.persistence.createSendTask({ operationKey: payload.operationKey, customerId: conversation.customerId }); }\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'buildOrderSendContext();\norderContext: params.orderContext;\nthis.orderSendContext(task);\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id, operationKey: payload?.operationKey });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id, operationKey: payload?.operationKey });\nsetConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n@Post("send-tasks/demo")\ncreateDemoSendTask(payload: { operationKey: string }) { return this.wechat.createDemoSendTask(payload); }\n', true);
-  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", "withInboundEffectLease(); hydrateCompletedInboundReplay(); inboundHighValueSelectionRecovery(); commitInboundHighValueSelection();\n", true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'withInboundEffectLease(); hydrateCompletedInboundReplay(); inboundSelectionRecovery(); "high_value_image_selection"; "low_value_image_selection"; "selection_committed"; "high-value inbound selection recovery lost its durable design job binding"; "low-value inbound selection recovery lost its durable quote binding"; commitInboundHighValueSelection();\n', true);
   write(root, "desktop/packages/rules/wechatWindowEvidence.js", 'WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION; createWechatWindowObserverAttestation(); createHmac("sha256", token); timingSafeEqual(supplied, expected); canonicalObserverAttestation(); canonicalJsonObject();\n');
   write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
@@ -857,6 +865,39 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.equal(JSON.stringify(report).includes(path.resolve(root)), false);
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/project-completion-audit.js"), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
+});
+
+test("completion audit accepts renamed inbound recovery and rejects weakened durable recovery semantics", () => {
+  const renamedRoot = createPassingFixture();
+  const renamedReport = buildAudit(renamedRoot, { includeExternal: false });
+  assert.equal(renamedReport.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.PASS);
+
+  for (const [marker, replacement] of [
+    ["selection_committed", "selection_started"],
+    ["low-value inbound selection recovery lost its durable quote binding", "low-value recovery quote association missing"],
+  ]) {
+    const root = createPassingFixture();
+    const target = path.join(root, "desktop", "apps", "api", "src", "wechat", "wechat-dispatch.service.ts");
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(marker));
+    fs.writeFileSync(target, source.replace(marker, replacement), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.FAIL, marker);
+  }
+});
+
+test("completion audit rejects removed archive-bomb preflight and whole-file Windows hashing", () => {
+  const budgetRoot = createPassingFixture();
+  const chainFile = path.join(budgetRoot, "desktop", "tools", "windows-evidence-chain.js");
+  const chainSource = fs.readFileSync(chainFile, "utf8");
+  fs.writeFileSync(chainFile, chainSource.replace("maxCompressionRatio", "removedCompressionRatioBudget"), "utf8");
+  const budgetReport = buildAudit(budgetRoot, { includeExternal: false });
+  assert.equal(budgetReport.results.find((item) => item.id === "contract.windows_evidence_chain").status, STATUS.FAIL);
+
+  const hashRoot = createPassingFixture();
+  write(hashRoot, "desktop/tools/verify-windows-package.js", "\nhash.update(fs.readFileSync(file));\n", true);
+  const hashReport = buildAudit(hashRoot, { includeExternal: false });
+  assert.equal(hashReport.results.find((item) => item.id === "contract.windows_streaming_artifact_hash").status, STATUS.FAIL);
 });
 
 test("completion audit mutation checks reject fake Web API success and stale build reuse", () => {

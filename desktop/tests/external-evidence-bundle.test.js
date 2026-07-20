@@ -135,7 +135,7 @@ function writeReports(root, values = reports(root)) {
   return paths;
 }
 
-function validate(root, overrides = {}) {
+async function validate(root, overrides = {}) {
   const verifySignature = overrides.verifySignature || ((file, label) => ({
     status: "Valid",
     subject: "CN=Smart Kefu Test Publisher",
@@ -241,10 +241,10 @@ function createWindowsPackageFixture(root) {
   return { installer, executable };
 }
 
-test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly BLOCKED", (t) => {
+test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly BLOCKED", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.schemaVersion, SCHEMA_VERSION);
   assert.equal(report.repositoryRevision, REVISION);
   assert.equal(report.status, STATUS.BLOCKED);
@@ -279,7 +279,7 @@ test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly 
   });
 });
 
-test("runtime smoke is never called before content, publisher policy and installer binding trust", (t) => {
+test("runtime smoke is never called before content, publisher policy and installer binding trust", async (t) => {
   const scenarios = [
     {
       name: "signature",
@@ -302,7 +302,7 @@ test("runtime smoke is never called before content, publisher policy and install
     writeReports(root);
     let bindingCalls = 0;
     let smokeCalls = 0;
-    const report = validate(root, {
+    const report = await validate(root, {
       ...scenario.overrides,
       verifyInstallerBinding: scenario.overrides.verifyInstallerBinding
         ? (...args) => { bindingCalls += 1; return scenario.overrides.verifyInstallerBinding(...args); }
@@ -315,11 +315,11 @@ test("runtime smoke is never called before content, publisher policy and install
   }
 });
 
-test("trusted Windows checks run in content-signature-binding-smoke order", (t) => {
+test("trusted Windows checks run in content-signature-binding-smoke order", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
   const calls = [];
-  const report = validate(root, {
+  const report = await validate(root, {
     verifySignature: (file, label) => {
       calls.push(`signature:${label}`);
       return {
@@ -335,14 +335,14 @@ test("trusted Windows checks run in content-signature-binding-smoke order", (t) 
   assert.deepEqual(calls, ["signature:installer", "signature:executable", "binding", "smoke"]);
 });
 
-test("content failure prevents signature, installer parsing and runtime execution", (t) => {
+test("content failure prevents signature, installer parsing and runtime execution", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
   fs.rmSync(path.join(root, "win-unpacked", "resources", "services", "api", "main.js"));
   let signatureCalls = 0;
   let bindingCalls = 0;
   let smokeCalls = 0;
-  const report = validate(root, {
+  const report = await validate(root, {
     verifySignature: () => { signatureCalls += 1; return { status: "Valid" }; },
     verifyInstallerBinding: () => { bindingCalls += 1; return { status: "PASS", mode: "test-only" }; },
     runPackagedSmoke: () => { smokeCalls += 1; return { status: "PASS", mode: "test-only" }; },
@@ -353,21 +353,54 @@ test("content failure prevents signature, installer parsing and runtime executio
   assert.equal(smokeCalls, 0);
 });
 
-test("old revision, expired evidence and v1 schema remain BLOCKED", (t) => {
+test("thrown chain hooks preserve completed snapshot, signature, tool and runtime attempt truth", async (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const bindingFailure = await validate(root, {
+    verifyInstallerBinding: () => { throw new Error("synthetic binding crash"); },
+  });
+  const bindingWindows = bindingFailure.results.find((item) => item.id === "evidence.windows_package");
+  assert.equal(bindingWindows.status, STATUS.FAIL);
+  assert.equal(bindingWindows.evidence.temporaryFilesWritten, true);
+  assert.equal(bindingWindows.evidence.privateSnapshotCreated, true);
+  assert.equal(bindingWindows.evidence.signatureInspectionAttempted, true);
+  assert.equal(bindingWindows.evidence.installerBindingAttempted, true);
+  assert.equal(bindingWindows.evidence.runtimeSmokeExecuted, false);
+  assert.equal(bindingFailure.safety.temporaryFilesWritten, true);
+  assert.equal(bindingFailure.safety.localToolExecutionAttempted, true);
+  assert.equal(bindingFailure.safety.packagedRuntimeExecutionAttempted, false);
+
+  const runtimeFailure = await validate(root, {
+    runPackagedSmoke: () => { throw new Error("synthetic runtime crash"); },
+  });
+  const runtimeWindows = runtimeFailure.results.find((item) => item.id === "evidence.windows_package");
+  assert.equal(runtimeWindows.status, STATUS.FAIL);
+  assert.equal(runtimeWindows.evidence.temporaryFilesWritten, true);
+  assert.equal(runtimeWindows.evidence.privateSnapshotCreated, true);
+  assert.equal(runtimeWindows.evidence.signatureInspectionAttempted, true);
+  assert.equal(runtimeWindows.evidence.installerBindingAttempted, true);
+  assert.equal(runtimeWindows.evidence.runtimeSmokeExecuted, true);
+  assert.equal(runtimeFailure.safety.temporaryFilesWritten, true);
+  assert.equal(runtimeFailure.safety.localToolExecutionAttempted, true);
+  assert.equal(runtimeFailure.safety.packagedRuntimeExecutionAttempted, true);
+  assert.equal(runtimeFailure.safety.localhostHttpAttempted, true);
+});
+
+test("old revision, expired evidence and v1 schema remain BLOCKED", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.staging.repositoryRevision = OTHER_REVISION;
   values.recovery.generatedAt = "2026-05-01T00:00:00.000Z";
   values.windows.schemaVersion = "smart_kefu_windows_package_verification_v1";
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.BLOCKED);
   assert.match(report.results.find((item) => item.id === "evidence.staging").summary, /revision/i);
   assert.match(report.results.find((item) => item.id === "evidence.database_recovery").summary, /expired/i);
   assert.match(report.results.find((item) => item.id === "evidence.windows_package").summary, /schema/i);
 });
 
-test("unsigned package verification never satisfies signed release evidence", (t) => {
+test("unsigned package verification never satisfies signed release evidence", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.windows.status = "BLOCKED";
@@ -375,45 +408,45 @@ test("unsigned package verification never satisfies signed release evidence", (t
   values.windows.signatures = [{ status: "NotSigned" }, { status: "NotSigned" }];
   values.windows.checks.find((item) => item.name === "Authenticode signing").status = "BLOCKED";
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   const windows = report.results.find((item) => item.id === "evidence.windows_package");
   assert.equal(windows.status, STATUS.BLOCKED);
   assert.match(windows.summary, /unsigned|signed release/i);
 });
 
-test("forged PASS with missing safety fields fails closed", (t) => {
+test("forged PASS with missing safety fields fails closed", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   delete values.recovery.safety.backupArtifactRetained;
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.database_recovery").status, STATUS.FAIL);
 });
 
-test("forged PASS cannot omit fixed staging results or Windows checks", (t) => {
+test("forged PASS cannot omit fixed staging results or Windows checks", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.staging.results = values.staging.results.filter((item) => item.id !== "config.api_access");
   values.windows.checks = values.windows.checks.filter((item) => item.name !== "NSIS installer");
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.staging").status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("signed package evidence requires clean repository provenance", (t) => {
+test("signed package evidence requires clean repository provenance", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.windows.repositoryClean = false;
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("signed release evidence binds each valid signature to an exact artifact", (t) => {
+test("signed release evidence binds each valid signature to an exact artifact", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.windows.signatures = [
@@ -421,12 +454,12 @@ test("signed release evidence binds each valid signature to an exact artifact", 
     { file: values.windows.executable.file, status: "Valid" },
   ];
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("forged PASS checks and injected Valid signature cannot turn one arbitrary exe into two artifacts", (t) => {
+test("forged PASS checks and injected Valid signature cannot turn one arbitrary exe into two artifacts", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   const arbitrary = writePeArtifact(root, "arbitrary.exe");
@@ -438,14 +471,14 @@ test("forged PASS checks and injected Valid signature cannot turn one arbitrary 
   ];
   values.windows.checks = WINDOWS_CHECKS.map((name) => ({ name, status: "PASS" }));
   writeReports(root, values);
-  const report = validate(root, { verifySignature: () => ({ status: "Valid" }) });
+  const report = await validate(root, { verifySignature: () => ({ status: "Valid" }) });
   const windows = report.results.find((item) => item.id === "evidence.windows_package");
   assert.equal(windows.status, STATUS.FAIL);
   assert.equal(windows.evidence.signedArtifactContractValid, false);
   assert.match(windows.summary, /distinct|signature/i);
 });
 
-test("Windows evidence rejects hard-linked artifact aliases", (t) => {
+test("Windows evidence rejects hard-linked artifact aliases", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   const installerPath = values.windows.installer.file;
@@ -461,40 +494,40 @@ test("Windows evidence rejects hard-linked artifact aliases", (t) => {
   values.windows.installer = { file: installerPath, bytes, sha256 };
   values.windows.signatures[1].file = installerPath;
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("Windows evidence reopens artifacts and rejects missing or changed bytes", (t) => {
+test("Windows evidence reopens artifacts and rejects missing or changed bytes", async (t) => {
   const root = temporaryDirectory(t);
   const changed = reports(root);
   fs.appendFileSync(changed.windows.installer.file, "tampered\n", "utf8");
   writeReports(root, changed);
-  let report = validate(root);
+  let report = await validate(root);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 
   const missing = reports(root);
   missing.windows.installer.file = path.join(root, "missing-installer.exe");
   missing.windows.signatures[1].file = missing.windows.installer.file;
   writeReports(root, missing);
-  report = validate(root);
+  report = await validate(root);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("Windows evidence re-verifies Authenticode and blocks when the host cannot verify it", (t) => {
+test("Windows evidence re-verifies Authenticode and blocks when the host cannot verify it", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const invalid = validate(root, { verifySignature: () => ({ status: "NotSigned" }) });
+  const invalid = await validate(root, { verifySignature: () => ({ status: "NotSigned" }) });
   assert.equal(invalid.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 
-  const unavailable = validate(root, { verifySignature: () => ({ status: "Unavailable", unavailable: true }) });
+  const unavailable = await validate(root, { verifySignature: () => ({ status: "Unavailable", unavailable: true }) });
   assert.equal(unavailable.results.find((item) => item.id === "evidence.windows_package").status, STATUS.BLOCKED);
 });
 
-test("a different valid publisher cannot satisfy the checked-in release policy", (t) => {
+test("a different valid publisher cannot satisfy the checked-in release policy", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const report = validate(root, {
+  const report = await validate(root, {
     verifySignature: () => ({
       status: "Valid",
       subject: "CN=Microsoft Windows, O=Microsoft Corporation",
@@ -507,10 +540,10 @@ test("a different valid publisher cannot satisfy the checked-in release policy",
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("stored smoke PASS cannot replace snapshot runtime execution", (t) => {
+test("stored smoke PASS cannot replace snapshot runtime execution", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const report = validate(root, {
+  const report = await validate(root, {
     runPackagedSmoke: () => ({ status: "BLOCKED", summary: "native runner unavailable", mode: "test-only" }),
   });
   const windows = report.results.find((item) => item.id === "evidence.windows_package");
@@ -518,19 +551,19 @@ test("stored smoke PASS cannot replace snapshot runtime execution", (t) => {
   assert.equal(windows.evidence.packageContentReverified, false);
 });
 
-test("installer payload mismatch fails even when report checks and signatures say PASS", (t) => {
+test("installer payload mismatch fails even when report checks and signatures say PASS", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const report = validate(root, {
+  const report = await validate(root, {
     verifyInstallerBinding: () => ({ status: "FAIL", summary: "payload manifest mismatch", mode: "test-only" }),
   });
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("snapshot manifest detects package mutation during verification", (t) => {
+test("snapshot manifest detects package mutation during verification", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
-  const report = validate(root, {
+  const report = await validate(root, {
     runPackagedSmoke: ({ outputDirectory }) => {
       const target = path.join(outputDirectory, "win-unpacked", "resources", "services", "api", "main.js");
       fs.chmodSync(target, 0o600);
@@ -541,7 +574,7 @@ test("snapshot manifest detects package mutation during verification", (t) => {
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("package snapshot rejects directory junctions instead of skipping them", (t) => {
+test("package snapshot rejects directory junctions instead of skipping them", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
   const target = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-junction-target-"));
@@ -553,30 +586,30 @@ test("package snapshot rejects directory junctions instead of skipping them", (t
     if (["EPERM", "ENOTSUP", "EACCES"].includes(error?.code)) return t.skip("junctions are unavailable on this host");
     throw error;
   }
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
-test("secret-bearing input fails without copying the secret into the bundle", (t) => {
+test("secret-bearing input fails without copying the secret into the bundle", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   const secret = "redis://operator:super-secret@redis.internal:6379/0";
   values.staging.redisUrl = secret;
   writeReports(root, values);
-  const report = validate(root);
+  const report = await validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(JSON.stringify(report).includes(secret), false);
 });
 
-test("missing files and paths outside the explicit evidence root are FAIL", (t) => {
+test("missing files and paths outside the explicit evidence root are FAIL", async (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
   fs.rmSync(path.join(root, "recovery.json"));
-  assert.equal(validate(root).status, STATUS.FAIL);
+  assert.equal((await validate(root)).status, STATUS.FAIL);
   const outside = path.join(path.dirname(root), "outside-evidence.json");
   fs.writeFileSync(outside, "{}\n", "utf8");
   t.after(() => fs.rmSync(outside, { force: true }));
-  assert.equal(validate(root, { stagingReport: outside }).status, STATUS.FAIL);
+  assert.equal((await validate(root, { stagingReport: outside })).status, STATUS.FAIL);
 });
 
 test("CLI requires an explicit root and all three report paths", () => {
@@ -598,13 +631,13 @@ test("CLI requires an explicit root and all three report paths", () => {
   assert.throws(() => parseArgs([...args, "--execute"]), /unknown argument/);
 });
 
-test("production validator ignores injected verifier and runner options", (t) => {
+test("production validator ignores injected verifier and runner options", async (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
   values.windows.schemaVersion = "smart_kefu_windows_package_verification_v1";
   writeReports(root, values);
   let called = false;
-  const report = validateEvidenceBundle({
+  const report = await validateEvidenceBundle({
     evidenceRoot: root,
     stagingReport: "staging.json",
     recoveryReport: "recovery.json",
