@@ -127,16 +127,29 @@ if (packageRepositoryState.revision !== initialRepositoryState.revision) throw n
 writePackageProvenance(packageRepositoryState);
 `);
   write(root, "desktop/tools/external-evidence-bundle.js", `
-const requestedStat = fs.lstatSync(requested); if (requestedStat.isSymbolicLink() || !requestedStat.isFile()) throw new Error();
 const stat = fs.statSync(file, { bigint: true }); if (stat.nlink !== 1n) throw new Error();
 if (stat.size !== BigInt(reported.bytes)) throw new Error();
 const digest = sha256File(file);
 const distinct = inspectDistinctArtifacts(installer, executable, state); if (installer.sha256 !== executable.sha256) {}
-const verification = verifyWindowsPackage({ outputDir });
-const liveChecksPass = verification.checks.every((item) => item.status === "PASS");
+const snapshot = createPrivateSnapshot(outputDir);
+const runtimeSmoke = hooks.runPackagedSmoke({ outputDirectory: snapshot.snapshotDirectory });
+const verification = verifyWindowsPackage({ outputDir, runtimeSmokeResult: runtimeSmoke });
+hooks.verifyInstallerBinding({ installer, unpackedDirectory, tempRoot });
+const snapshotAfter = createTreeManifest(snapshotOutputDir);
+const sourceAfter = createTreeManifest(outputDir);
+const stable = manifestsEqual(snapshot.snapshotManifest, snapshotAfter) && manifestsEqual(snapshot.sourceManifest, sourceAfter);
 const bound = verification.repositoryRevision === currentRevision && verification.version === version;
-const actualSignature = verifySignature(artifact.file);
+const evidence = { nativeEvidenceEligible: hooks.mode === "native" };
+`);
+  write(root, "desktop/tools/windows-evidence-chain.js", `
+const stat = fs.lstatSync(file, { bigint: true }); if (stat.isSymbolicLink() || stat.nlink !== 1n) throw new Error();
+const manifest = createTreeManifest(sourceDirectory); if (!manifest) throw new Error("package tree changed while the private snapshot was created");
+const configured = identityStatus === "CONFIGURED" && allowedPublisherSubjects.length && allowedCertificateThumbprints.length;
+const powershell = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 const script = "Get-AuthenticodeSignature";
+const sevenZip = require("7zip-bin").path7za; const archive = "app-64.7z";
+throw new Error("signed installer payload does not match");
+const env = selectEvidenceProcessEnvironment({ PACKAGED_SMOKE_OUTPUT_DIR: outputDirectory });
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
 const OBSERVER_ENV_KEYS = ["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE", "WECHAT_WINDOW_SNAPSHOT_INBOX_DIR"];
