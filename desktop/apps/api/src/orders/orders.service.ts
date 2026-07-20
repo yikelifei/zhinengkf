@@ -88,13 +88,32 @@ export class OrdersService {
   }
 
   async update(id: string, patch: OrderDraftUpdatePatch & ExpectedIdentityPayload) {
+    assertGenericOrderUpdatePatch(patch || {});
+    return this.updateOrderDraft(id, patch || {});
+  }
+
+  async recordVerifiedPayment(
+    id: string,
+    patch: {
+      paymentStatus: "deposit_paid" | "paid";
+      customerNotes?: string;
+      owner?: string;
+    } & ExpectedIdentityPayload,
+  ) {
+    if (!patch || !["deposit_paid", "paid"].includes(String(patch.paymentStatus || ""))) {
+      throw new BadRequestException("付款凭证核验只允许记录定金或全款。");
+    }
+    return this.updateOrderDraft(id, { ...patch, status: "confirmed" });
+  }
+
+  private async updateOrderDraft(id: string, patch: OrderDraftUpdatePatch & ExpectedIdentityPayload) {
     const current = await this.getOrderDraft(id);
     if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
     assertExpectedIdentity(current, patch, "order draft");
 
     const data = cleanOrderDraftPatch(patch || {});
     if (!Object.keys(data).length) {
-      throw new BadRequestException("订单草稿没有可更新的字段，请至少修改状态、付款状态、备注或跟进人。");
+      throw new BadRequestException("订单草稿没有可更新的字段，请至少修改状态、备注或跟进人。");
     }
     assertOrderStatusPaymentReady(current, data);
     assertOrderStatusCommercialReady(current, data);
@@ -943,3 +962,12 @@ type OrderDraftUpdatePatch = {
   customerNotes?: string;
   owner?: string;
 };
+
+function assertGenericOrderUpdatePatch(patch: OrderDraftUpdatePatch) {
+  if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) {
+    throw new BadRequestException("订单付款状态只能通过报价付款凭证核验入口更新。");
+  }
+  if (patch.status !== undefined && !["draft", "processing", "fulfilled", "cancelled"].includes(String(patch.status))) {
+    throw new BadRequestException("通用订单更新不允许直接确认订单；请先核验报价付款凭证。");
+  }
+}

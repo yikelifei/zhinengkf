@@ -303,27 +303,29 @@ test("Prisma cancellation atomically updates order and quote while cancelling on
   });
 });
 
-test("Prisma unpaid and refunded transitions cancel pending sends with payment invalidation history", async (t) => {
+test("Prisma generic order updates reject unpaid and refunded payment transitions before mutation", async (t) => {
   for (const paymentStatus of ["unpaid", "refunded"]) {
     await t.test(paymentStatus, async () => {
       await withPrismaMode(async () => {
-        const { orders, db } = setup({ tasks: [sendTask(`payment-${paymentStatus}`, "queued", "order_confirmation")] });
-        await orders.update("order-1", { ...expectedIdentity(), paymentStatus });
+        const { orders, db, calls } = setup({ tasks: [sendTask(`payment-${paymentStatus}`, "queued", "order_confirmation")] });
+        await assert.rejects(
+          orders.update("order-1", { ...expectedIdentity(), paymentStatus }),
+          /付款状态只能通过报价付款凭证核验入口更新/,
+        );
         const task = db.tasks[0];
-        assert.equal(db.order.paymentStatus, paymentStatus);
-        assert.equal(db.quote.paymentStatus, paymentStatus);
-        assert.equal(task.status, "cancelled");
-        assert.equal(task.errorMessage, "order_payment_not_ready_before_send");
-        assert.equal(task.guardSnapshot.orderSendState.reason, "orderPaymentNotReadyBeforeSend");
-        assert.equal(task.guardSnapshot.history.at(-1).fromStatus, "queued");
+        assert.equal(db.order.paymentStatus, "deposit_paid");
+        assert.equal(db.quote.paymentStatus, "deposit_paid");
+        assert.equal(task.status, "queued");
+        assert.equal(calls.taskUpdates.length, 0);
+        assert.equal(db.reviews.length, 0);
       });
     });
   }
 });
 
-test("Prisma quote payment synchronization reuses transactional order-send invalidation", async () => {
+test("Prisma generic quote update rejects a refund before changing quote, order or sends", async () => {
   await withPrismaMode(async () => {
-    const { orders, prisma, localStore, db } = setup({
+    const { orders, prisma, localStore, db, calls } = setup({
       tasks: [sendTask("quote-refund-order-send", "blocked", "order_followup")],
     });
     const quotes = new QuotesService(prisma, localStore, orders, {
@@ -331,12 +333,14 @@ test("Prisma quote payment synchronization reuses transactional order-send inval
         throw new Error("manual lock must not run for a payment-only quote update");
       },
     });
-    await quotes.update("quote-1", { ...expectedIdentity(), paymentStatus: "refunded", owner: "finance-reviewer" });
-    assert.equal(db.quote.paymentStatus, "refunded");
-    assert.equal(db.order.paymentStatus, "refunded");
-    assert.match(db.order.customerNotes, /报价付款状态已同步为 refunded/);
-    assert.equal(db.tasks[0].status, "cancelled");
-    assert.equal(db.tasks[0].guardSnapshot.cancelReason, "order_payment_not_ready_before_send");
+    await assert.rejects(
+      quotes.update("quote-1", { ...expectedIdentity(), paymentStatus: "refunded", owner: "finance-reviewer" }),
+      /付款状态只能通过付款凭证核验入口更新/,
+    );
+    assert.equal(db.quote.paymentStatus, "deposit_paid");
+    assert.equal(db.order.paymentStatus, "deposit_paid");
+    assert.equal(db.tasks[0].status, "blocked");
+    assert.equal(calls.taskUpdates.length, 0);
   });
 });
 

@@ -3144,9 +3144,7 @@ export async function getQuotePreview(id: string, expected: IdentityExpectation 
 
 export async function updateQuote(id: string, patch: {
   status?: string;
-  paymentStatus?: string;
   customerNotes?: string;
-  owner?: string;
   quantity?: number | string;
   unitPrice?: number | string;
   totalCost?: number | string;
@@ -3156,7 +3154,6 @@ export async function updateQuote(id: string, patch: {
 
 export async function reviseQuoteSelection(id: string, patch: {
   selectedImageId: string;
-  owner?: string;
   note?: string;
 } & IdentityExpectation): Promise<QuoteDraft> {
   return postJson<QuoteDraft>(`/quotes/${id}/revise-selection`, patch);
@@ -3165,7 +3162,6 @@ export async function reviseQuoteSelection(id: string, patch: {
 export async function queueQuoteSend(id: string, expected: IdentityExpectation = {}): Promise<{ quote: QuoteDraft; sendTask: SendTask }> {
   return postJson<{ quote: QuoteDraft; sendTask: SendTask }>(`/quotes/${id}/queue-send`, {
     ...expected,
-    owner: "人工客服",
     note: "报价已进入微信安全发送队列。",
   });
 }
@@ -3181,7 +3177,6 @@ export async function verifyQuotePaymentProofAndQueueConfirmation(
     {
       ...expected,
       paymentStatus,
-      owner: "人工客服",
       note: `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`,
     },
   );
@@ -3203,9 +3198,7 @@ export async function createOrderDraftFromQuote(id: string, expected: IdentityEx
 
 export async function updateOrderDraft(id: string, patch: {
   status?: string;
-  paymentStatus?: string;
   customerNotes?: string;
-  owner?: string;
 } & IdentityExpectation): Promise<OrderDraft> {
   return postJson<OrderDraft>(`/orders/${id}/update`, patch);
 }
@@ -3218,7 +3211,6 @@ export async function getOrderConfirmationPreview(id: string, expected: Identity
 
 export async function reviseOrderSelection(id: string, patch: {
   selectedImageId: string;
-  owner?: string;
   note?: string;
 } & IdentityExpectation): Promise<OrderDraft> {
   return postJson<OrderDraft>(`/orders/${id}/revise-selection`, patch);

@@ -1,7 +1,12 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
-import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("orders")
 @RequireOperatorCapability("view_console")
@@ -42,9 +47,17 @@ export class OrdersController {
   @RequireOperatorCapability("manage_design_executions")
   update(
     @Param("id") id: string,
-    @Body() payload: { status?: string; paymentStatus?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,
+    @Body() payload: { status?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.orders.update(id, payload || {});
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.orders.update(id, { ...trustedPayload, owner: principal.id });
   }
 
   @Post(":id/revise-selection")
@@ -52,7 +65,15 @@ export class OrdersController {
   reviseSelection(
     @Param("id") id: string,
     @Body() payload: { selectedImageId?: string; owner?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.orders.reviseSelectedImage(id, payload || {});
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.orders.reviseSelectedImage(id, { ...trustedPayload, owner: principal.id });
   }
 }

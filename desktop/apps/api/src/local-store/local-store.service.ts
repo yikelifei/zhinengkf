@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
+import { routingCorrectionRequestKey } from "../shared/routing-correction";
 
 const {
   diagnoseWechatWindowSnapshot,
@@ -2131,10 +2132,34 @@ export class LocalStoreService {
   correctRouteEvaluation(routeEvaluationId: string, payload: any = {}) {
     const data = this.read();
     const index = data.routeEvaluations.findIndex((route) => route.id === routeEvaluationId);
-    if (index < 0) throw new Error(`local route evaluation not found: ${routeEvaluationId}`);
+    if (index < 0) throw new NotFoundException(`route evaluation not found: ${routeEvaluationId}`);
     const before = data.routeEvaluations[index];
     const agent = data.agents.find((item) => item.key === payload.agentKey);
-    if (!agent) throw new Error(`agent not found: ${payload.agentKey}`);
+    if (!agent) throw new BadRequestException(`agent not found: ${payload.agentKey}`);
+
+    const requestKey = routingCorrectionRequestKey(routeEvaluationId, payload);
+    if (before.correction?.requestKey === requestKey) {
+      const log = data.reviewLogs.find(
+        (item) => item.targetType === "route_evaluation"
+          && item.targetId === routeEvaluationId
+          && item.metadata?.correctionRequestKey === requestKey,
+      );
+      const sample = log?.metadata?.trainingSampleId
+        ? data.trainingSamples.find((item) => item.id === log.metadata.trainingSampleId)
+        : null;
+      const knowledge = log?.metadata?.knowledgeEntryId
+        ? data.knowledgeEntries.find((item) => item.id === log.metadata.knowledgeEntryId)
+        : null;
+      if (sample && knowledge && log) {
+        return {
+          route: { ...before, agent },
+          trainingSample: sample,
+          knowledgeEntry: knowledge,
+          reviewLog: log,
+        };
+      }
+      throw new InternalServerErrorException("route correction artifacts are incomplete");
+    }
 
     const now = new Date().toISOString();
     const scene = payload.scene || agent.scene || before.scene || "未分类";
@@ -2184,6 +2209,7 @@ export class LocalStoreService {
       missingFields: nextMissingFields,
       correction: {
         corrected: true,
+        requestKey,
         reviewer,
         note,
         correctedAt: now,
@@ -2255,6 +2281,7 @@ export class LocalStoreService {
         source: "routing_correction",
         beforeScene: before.scene,
         afterScene: scene,
+        correctionRequestKey: requestKey,
         trainingSampleId: sample.id,
         knowledgeEntryId: knowledge.id,
       },

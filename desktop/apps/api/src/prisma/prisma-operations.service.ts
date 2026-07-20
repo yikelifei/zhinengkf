@@ -1,8 +1,9 @@
 import path from "node:path";
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma.service";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
+import { routingCorrectionRequestKey } from "../shared/routing-correction";
 
 const rules = require(path.join(process.cwd(), "packages", "rules"));
 const { evaluateTrainingSampleQuality, isSceneClarificationReply, normalizeTrainingSampleStatus, trainingSampleReviewNote } = rules;
@@ -145,6 +146,29 @@ export class PrismaOperationsService {
       assertExpectedIdentity(before, payload, "route evaluation");
       const agent = await tx.customerServiceAgent.findUnique({ where: { key: payload.agentKey } });
       if (!agent) throw new BadRequestException(`agent not found: ${payload.agentKey}`);
+      const requestKey = routingCorrectionRequestKey(id, payload);
+      if (before.correction?.requestKey === requestKey) {
+        const sample = await tx.trainingSample.findFirst({
+          where: { sourceType: "route_correction", sourceRouteId: id },
+          orderBy: { createdAt: "desc" },
+        });
+        const knowledge = sample
+          ? await tx.knowledgeEntry.findFirst({ where: { trainingSampleId: sample.id } })
+          : null;
+        const reviewLog = await tx.reviewLog.findFirst({
+          where: { targetType: "route_evaluation", targetId: id, decision: "correct_scene" },
+          orderBy: { createdAt: "desc" },
+        });
+        if (sample && knowledge && reviewLog) {
+          return serialize({
+            route: { ...before, agent },
+            trainingSample: { ...sample, quality: evaluateTrainingSampleQuality(sample) },
+            knowledgeEntry: knowledge,
+            reviewLog,
+          });
+        }
+        throw new InternalServerErrorException("route correction artifacts are incomplete");
+      }
       const now = new Date();
       const scene = payload.scene || agent.scene || before.scene || "未分类";
       const reviewer = payload.reviewer || "人工客服";
@@ -163,7 +187,7 @@ export class PrismaOperationsService {
         action: before.action === "collect_info" && missingFields.length === 0 ? "auto_agent" : before.action,
         confidence: 100,
         missingFields: jsonValue(missingFields),
-        correction: jsonValue({ corrected: true, reviewer, note, correctedAt: now.toISOString(), before: { agentKey: before.agentKey, scene: before.scene, sceneDecision: before.sceneDecision || null, action: before.action, confidence: before.confidence } }),
+        correction: jsonValue({ corrected: true, requestKey, reviewer, note, correctedAt: now.toISOString(), before: { agentKey: before.agentKey, scene: before.scene, sceneDecision: before.sceneDecision || null, action: before.action, confidence: before.confidence } }),
       }});
       const idealReply = payload.idealReply || before.suggestedReply || `已人工确认该问题应由「${agent.name || agent.key}」处理。`;
       const sample = await tx.trainingSample.create({ data: {
@@ -199,10 +223,10 @@ export class PrismaOperationsService {
       const reviewLog = await tx.reviewLog.create({ data: {
         targetType: "route_evaluation", targetId: id, decision: "correct_scene", reviewer, note,
         beforeStatus: before.agentKey, afterStatus: agent.key,
-        metadata: jsonValue({ source: "routing_correction", beforeScene: before.scene, afterScene: scene, trainingSampleId: sample.id, knowledgeEntryId: knowledge.id, ...identityFields(before) }),
+        metadata: jsonValue({ source: "routing_correction", correctionRequestKey: requestKey, beforeScene: before.scene, afterScene: scene, trainingSampleId: sample.id, knowledgeEntryId: knowledge.id, ...identityFields(before) }),
       }});
       return serialize({ route: { ...corrected, agent }, trainingSample: { ...sample, quality: evaluateTrainingSampleQuality(sample) }, knowledgeEntry: knowledge, reviewLog });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async createChatImport(payload: any, parsed: any) {
