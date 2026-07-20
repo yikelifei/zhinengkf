@@ -3,6 +3,14 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { routingCorrectionRequestKey } from "../shared/routing-correction";
+import {
+  assertExactOperationReplay,
+  createChatImportOperationFingerprint,
+  deterministicOperationId,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+} from "../shared/operation-idempotency";
 
 const {
   diagnoseWechatWindowSnapshot,
@@ -1302,6 +1310,19 @@ export class LocalStoreService {
 
   createDesignJob(payload: any) {
     const data = this.read();
+    const requestedOperation = readRequestOperationMetadata(payload?.requirements);
+    const requestedRequestId = String(payload?.requestId || "").trim();
+    const existing = requestedRequestId
+      ? data.designJobs.find((item) => item.requestId === requestedRequestId)
+      : null;
+    if (existing) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existing.requirements),
+        requestedOperation || { key: requestedRequestId, fingerprint: "" },
+        "local design job create",
+      );
+      return this.hydrateDesignJob(data, existing);
+    }
     const now = new Date().toISOString();
     const identity = this.validateDesignJobIdentity(data, payload);
     const normalizedPayload = {
@@ -2302,8 +2323,32 @@ export class LocalStoreService {
     const data = this.read();
     const now = new Date().toISOString();
     const identity = this.validateOptionalConversationBinding(data, payload, "chat import");
+    const operationKey = payload?.operationKey
+      ? normalizeOperationKey(payload.operationKey, "chat import operationKey")
+      : `legacy:${randomUUID()}`;
+    const operation = requestOperationMetadata(
+      operationKey,
+      createChatImportOperationFingerprint(payload || {}, {
+        customerId: identity.customerId,
+        conversationId: identity.conversationId,
+        wechatAccountId: identity.wechatAccountId,
+      }),
+    );
+    const importId = deterministicOperationId("import", operationKey);
+    const existing = data.chatImports.find((item) => item.id === importId);
+    if (existing) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existing.identityBinding),
+        operation,
+        "chat import create",
+      );
+      const existingSamples = data.trainingSamples
+        .filter((sample) => sample.importId === existing.id)
+        .map((sample) => this.decorateTrainingSample(sample));
+      return { ...existing, samples: existingSamples };
+    }
     const record: any = {
-      id: id("import"),
+      id: importId,
       name: payload.name || `聊天记录导入 ${new Date().toLocaleString("zh-CN")}`,
       source: payload.source || "manual_text",
       channel: payload.channel || "wechat",
@@ -2311,7 +2356,7 @@ export class LocalStoreService {
       customerId: identity.customerId,
       conversationId: identity.conversationId,
       wechatAccountId: identity.wechatAccountId,
-      identityBinding: identity.binding,
+      identityBinding: { ...(identity.binding || {}), requestOperation: operation },
       rawText: payload.text || "",
       messageCount: parsed.messageCount || 0,
       pairCount: parsed.pairCount || 0,
@@ -2322,7 +2367,7 @@ export class LocalStoreService {
     data.chatImports.push(record);
 
     const importedSamples: any[] = [];
-    for (const pair of parsed.pairs || []) {
+    for (const [pairIndex, pair] of (parsed.pairs || []).entries()) {
       const customerText = String(pair.customerText || pair.question || "").trim();
       const idealReply = String(pair.idealReply || pair.agentReply || pair.answer || "").trim();
       const score = Number.isFinite(Number(pair.score)) ? Number(pair.score) : 0;
@@ -2330,7 +2375,7 @@ export class LocalStoreService {
         ? data.agents.find((item) => item.id === payload.agentId)
         : data.agents.find((item) => item.key === pair.agentKey) || data.agents.find((item) => item.key === "general");
       const sample = {
-        id: id("sample"),
+        id: deterministicOperationId("sample", operationKey, pairIndex),
         importId: record.id,
         agentId: agent?.id || null,
         agentKey: agent?.key || pair.agentKey || "general",
@@ -2357,7 +2402,7 @@ export class LocalStoreService {
       data.trainingSamples.push(sample);
       importedSamples.push(sample);
       data.knowledgeEntries.push({
-        id: id("knowledge"),
+        id: deterministicOperationId("knowledge", operationKey, pairIndex),
         agentId: sample.agentId,
         sourceType: "chat_import",
         sourceId: sample.id,

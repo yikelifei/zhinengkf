@@ -11,6 +11,11 @@ import { OrdersService } from "../orders/orders.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  createOperationFingerprint,
+  requestOperationMetadata,
+  stableOperationKey,
+} from "../shared/operation-idempotency";
 import { rules } from "../shared/rules";
 import { resolveWechatWorkImageFile } from "../wechat-work/wechat-work-media";
 import { WechatSendAdapterService, WechatWorkKfDeliveryError } from "./wechat-send-adapter.service";
@@ -1129,6 +1134,7 @@ export class WechatDispatchService {
 
     if (plan.shouldCreateDesignJob) {
       result.designJob = this.createDesignDraftFromInbound({
+        messageId: message.id,
         conversation,
         route,
         assetIds,
@@ -4991,6 +4997,7 @@ export class WechatDispatchService {
   }
 
   private createDesignDraftFromInbound(params: {
+    messageId: string;
     conversation: any;
     route: any;
     assetIds: string[];
@@ -4998,7 +5005,30 @@ export class WechatDispatchService {
     customerText: string;
   }) {
     const giftBox = params.bundleRecommendation?.items?.find((item: any) => item.type === "gift_box") || null;
+    const operationKey = stableOperationKey(
+      "inbound-design",
+      `${params.conversation.id}:${params.messageId}`,
+    );
+    const operation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "inbound-design-job-create",
+        {
+          customerId: params.conversation.customerId,
+          conversationId: params.conversation.id,
+          wechatAccountId: params.conversation.wechatAccountId,
+        },
+        {
+          budget: params.route.budget || {},
+          scene: params.route.scene || "",
+          customerText: params.customerText,
+          assetIds: [...params.assetIds].sort(),
+          bundleRecommendation: params.bundleRecommendation || null,
+        },
+      ),
+    );
     const job = this.localStore.createDesignJob({
+      requestId: operationKey,
       customerId: params.conversation.customerId,
       conversationId: params.conversation.id,
       wechatAccountId: params.conversation.wechatAccountId,
@@ -5021,6 +5051,7 @@ export class WechatDispatchService {
         showAllItems: true,
         noWatermark: true,
         highResolution: true,
+        requestOperation: operation,
       },
       status: "draft",
     });

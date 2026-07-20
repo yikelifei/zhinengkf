@@ -1879,6 +1879,31 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json();
 }
 
+async function postJsonWithNetworkRetry<T>(path: string, body: unknown): Promise<T> {
+  const serializedBody = JSON.stringify(body);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: serializedBody,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `api ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      if (attempt > 0 || !(error instanceof TypeError)) throw error;
+    }
+  }
+  throw new Error("network retry exhausted");
+}
+
+export function createClientOperationKey(scope: "design-job" | "training-import") {
+  return `${scope}:${globalThis.crypto.randomUUID()}`;
+}
+
 async function patchJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
@@ -2527,13 +2552,17 @@ export async function processInboundMessage(payload: {
 }
 
 export async function importChatTranscript(payload: {
+  operationKey: string;
   name?: string;
   source?: string;
   channel?: string;
   agentId?: string;
+  customerId?: string;
+  conversationId?: string;
+  wechatAccountId?: string;
   text: string;
 }): Promise<ChatImport> {
-  return postJson<ChatImport>("/training/chat-imports", payload);
+  return postJsonWithNetworkRetry<ChatImport>("/training/chat-imports", payload);
 }
 
 export async function getSkillSuggestions(filters: ({ agentId?: string; minScore?: number } & IdentityFilters) | string = {}): Promise<SkillSuggestion[]> {
@@ -2571,13 +2600,15 @@ export async function recommendBundle(payload: {
 export async function createDemoDesignJob(
   identity: { wechatAccountId: string; customerId: string; conversationId: string },
   assetIds: string[] = [],
+  operationKey = createClientOperationKey("design-job"),
 ): Promise<DesignJob> {
   const budget = { mode: "per_box", perUnitAmount: 180, quantity: 50, totalAmount: 9000 };
   const scene = "员工福利";
   const recommendation = await recommendBundle({ budget, scene, maxItems: 6 });
   const giftBox = recommendation.items.find((item) => item.type === "gift_box") || null;
 
-  return postJson<DesignJob>("/design-jobs", {
+  return postJsonWithNetworkRetry<DesignJob>("/design-jobs", {
+    operationKey,
     wechatAccountId: identity.wechatAccountId,
     customerId: identity.customerId,
     conversationId: identity.conversationId,

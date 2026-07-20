@@ -27,6 +27,15 @@ import { OrdersService } from "../orders/orders.service";
 import { rules } from "../shared/rules";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { fingerprintImageFile } from "../shared/image-fingerprint";
+import {
+  assertExactOperationReplay,
+  createOperationFingerprint,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+  type RequestOperationMetadata,
+} from "../shared/operation-idempotency";
 
 const SMOKE_TEST_PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -873,7 +882,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   async create(payload: CreateDesignJobPayload) {
-    const requestId = randomUUID();
+    const requestId = normalizeOperationKey(payload?.operationKey, "design job operationKey");
     const identity = await this.validateCreateIdentity(payload);
     const normalizedPayload = {
       ...payload,
@@ -882,11 +891,35 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     };
     const isHighValue = isHighValueBudget(normalizedPayload.budget, appConfig.highValueAmountCny);
     const requestedAssets = this.normalizeRequestedAssets(normalizedPayload);
+    const operation = requestOperationMetadata(
+      requestId,
+      createOperationFingerprint(
+        "design-job-create",
+        {
+          customerId: normalizedPayload.customerId,
+          conversationId: normalizedPayload.conversationId,
+          wechatAccountId: normalizedPayload.wechatAccountId || null,
+        },
+        this.normalizeDesignCreateOperationPayload(normalizedPayload, requestedAssets),
+      ),
+    );
     const check = validateDesignRequest({
       ...normalizedPayload,
       designType: normalizedPayload.designType || "bundle_render",
       assets: requestedAssets,
     });
+    const existing = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(requestId)
+      : await this.prisma.designJob.findUnique({ where: { requestId } });
+    if (existing) return this.replayDesignJobCreate(existing, operation, check);
+
+    const requirements = {
+      useRealSkuImages: true,
+      showAllItems: true,
+      noWatermark: true,
+      highResolution: true,
+      requestOperation: operation,
+    };
 
     if (appConfig.useLocalStore) {
       const job = this.localStore.createDesignJob({
@@ -903,12 +936,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         designType: normalizedPayload.designType || "bundle_render",
         outputCount: normalizedPayload.outputCount || appConfig.defaultOutputCount,
         renderStyle: "真实产品摆拍",
-        requirements: {
-          useRealSkuImages: true,
-          showAllItems: true,
-          noWatermark: true,
-          highResolution: true,
-        },
+        requirements,
         isHighValue,
         status: !check.ok || isHighValue ? "manual_review" : "draft",
         manualQcRequired: true,
@@ -929,36 +957,44 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       return { ...resultJob, readiness: check };
     }
 
-    const job = await this.prisma.designJob.create({
-      data: {
-        requestId,
-        customerId: normalizedPayload.customerId,
-        conversationId: normalizedPayload.conversationId,
-        wechatAccountId: normalizedPayload.wechatAccountId,
-        orderId: normalizedPayload.orderId,
-        budget: normalizedPayload.budget as any,
-        bundle: normalizedPayload.bundle as any,
-        scene: normalizedPayload.scene,
-        customerText: normalizedPayload.customerText,
-        designType: normalizedPayload.designType || "bundle_render",
-        outputCount: normalizedPayload.outputCount || appConfig.defaultOutputCount,
-        renderStyle: "真实产品摆拍",
-        requirements: {
-          useRealSkuImages: true,
-          showAllItems: true,
-          noWatermark: true,
-          highResolution: true,
-        } as any,
-        assets: normalizedPayload.assetIds?.length
-          ? {
-              connect: normalizedPayload.assetIds.map((id) => ({ id })),
-            }
-          : undefined,
-        isHighValue,
-        status: !check.ok || isHighValue ? "manual_review" : "draft",
-        manualQcRequired: true,
-      },
-    });
+    let job: any;
+    try {
+      job = await this.prisma.designJob.create({
+        data: {
+          requestId,
+          customerId: normalizedPayload.customerId,
+          conversationId: normalizedPayload.conversationId,
+          wechatAccountId: normalizedPayload.wechatAccountId,
+          orderId: normalizedPayload.orderId,
+          budget: normalizedPayload.budget as any,
+          bundle: normalizedPayload.bundle as any,
+          scene: normalizedPayload.scene,
+          customerText: normalizedPayload.customerText,
+          designType: normalizedPayload.designType || "bundle_render",
+          outputCount: normalizedPayload.outputCount || appConfig.defaultOutputCount,
+          renderStyle: "真实产品摆拍",
+          requirements: requirements as any,
+          assets: normalizedPayload.assetIds?.length
+            ? {
+                connect: normalizedPayload.assetIds.map((id) => ({ id })),
+              }
+            : undefined,
+          isHighValue,
+          status: !check.ok || isHighValue ? "manual_review" : "draft",
+          manualQcRequired: true,
+        },
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const concurrent = await this.prisma.designJob.findUnique({ where: { requestId } });
+      if (!concurrent) {
+        throw new ConflictException({
+          code: "OPERATION_IN_PROGRESS",
+          message: "design job operation is still being committed; retry with the same operationKey",
+        });
+      }
+      return this.replayDesignJobCreate(concurrent, operation, check);
+    }
 
     if (!check.ok) {
       await this.notifications.create("warning", "设计任务资料不完整", `缺少字段：${check.missing.join(", ")}`, {
@@ -3071,6 +3107,24 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   private normalizeRequestedAssets(payload: CreateDesignJobPayload) {
     const assetIds = Array.isArray(payload.assetIds) ? payload.assetIds.map((assetId) => ({ assetId })) : [];
     return [...(payload.assets || []), ...assetIds];
+  }
+
+  private normalizeDesignCreateOperationPayload(payload: CreateDesignJobPayload, requestedAssets: Array<Record<string, unknown>>) {
+    return {
+      orderId: payload.orderId || null,
+      budget: payload.budget || {},
+      bundle: payload.bundle || {},
+      assets: requestedAssets,
+      scene: payload.scene || "",
+      customerText: payload.customerText || "",
+      designType: payload.designType || "bundle_render",
+      outputCount: payload.outputCount || appConfig.defaultOutputCount,
+    };
+  }
+
+  private replayDesignJobCreate(job: any, operation: RequestOperationMetadata, readiness: any) {
+    assertExactOperationReplay(readRequestOperationMetadata(job?.requirements), operation, "design job create");
+    return { ...job, readiness };
   }
 
   private async findDesignJobWithImages(id: string) {

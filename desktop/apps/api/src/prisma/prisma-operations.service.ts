@@ -4,6 +4,16 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma.service";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { routingCorrectionRequestKey } from "../shared/routing-correction";
+import {
+  assertExactOperationReplay,
+  createChatImportOperationFingerprint,
+  deterministicOperationId,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+  type RequestOperationMetadata,
+} from "../shared/operation-idempotency";
 
 const rules = require(path.join(process.cwd(), "packages", "rules"));
 const { evaluateTrainingSampleQuality, isSceneClarificationReply, normalizeTrainingSampleStatus, trainingSampleReviewNote } = rules;
@@ -230,48 +240,90 @@ export class PrismaOperationsService {
   }
 
   async createChatImport(payload: any, parsed: any) {
-    return this.prisma.$transaction(async (tx: PrismaLike) => {
-      const identity = await this.resolveIdentity(tx, payload, "chat import");
-      const requestedAgent = payload.agentId
-        ? await tx.customerServiceAgent.findUnique({ where: { id: payload.agentId } })
-        : null;
-      if (payload.agentId && !requestedAgent) throw new BadRequestException(`agent not found: ${payload.agentId}`);
-      const pairs = Array.isArray(parsed.pairs) ? parsed.pairs : [];
-      const record = await tx.chatImport.create({ data: {
-        name: payload.name || `聊天记录导入 ${new Date().toLocaleString("zh-CN")}`,
-        source: payload.source || "manual_text", channel: payload.channel || "wechat", agentId: payload.agentId || null,
-        rawText: payload.text || "", messageCount: Number(parsed.messageCount || 0), pairCount: Number(parsed.pairCount || 0),
-        warnings: jsonValue(parsed.warnings || []), ...identity.fields, identityBinding: identity.binding,
-      }});
-      const importedSamples: any[] = [];
-      for (const pair of pairs) {
-        const agent = requestedAgent || await this.getAgentByKey(pair.agentKey || "general", tx);
-        const customerText = String(pair.customerText || pair.question || "").trim();
-        const idealReply = String(pair.idealReply || pair.agentReply || pair.answer || "").trim();
-        const score = Number.isFinite(Number(pair.score)) ? Number(pair.score) : 0;
-        const sample = await tx.trainingSample.create({ data: {
-          importId: record.id, agentId: agent?.id || null, agentKey: agent?.key || pair.agentKey || "general",
-          ...identity.fields, identityBinding: identity.binding, scene: pair.scene || "未分类",
-          sceneScore: Number(pair.sceneScore || 0), sceneScores: jsonValue(pair.sceneScores || []), matchedKeywords: jsonValue(pair.matchedKeywords || []),
-          sceneCheck: jsonValue(pair.sceneCheck), customerText, idealReply, score, status: score >= 70 ? "ready" : "review",
-          skillHints: jsonValue(inferSkillHints(pair)), sourceType: "chat_import",
-          sourceLineStart: integerOrNull(pair.sourceLineStart), sourceLineEnd: integerOrNull(pair.sourceLineEnd),
+    const operationKey = normalizeOperationKey(payload?.operationKey, "chat import operationKey");
+    const importId = deterministicOperationId("import", operationKey);
+    let operation: RequestOperationMetadata | null = null;
+    try {
+      return await this.prisma.$transaction(async (tx: PrismaLike) => {
+        const identity = await this.resolveIdentity(tx, payload, "chat import");
+        operation = requestOperationMetadata(
+          operationKey,
+          createChatImportOperationFingerprint(payload || {}, identity.fields),
+        );
+        const existing = await tx.chatImport.findUnique({ where: { id: importId }, include: { samples: true } });
+        if (existing) return this.replayChatImport(existing, operation);
+        const requestedAgent = payload.agentId
+          ? await tx.customerServiceAgent.findUnique({ where: { id: payload.agentId } })
+          : null;
+        if (payload.agentId && !requestedAgent) throw new BadRequestException(`agent not found: ${payload.agentId}`);
+        const pairs = Array.isArray(parsed.pairs) ? parsed.pairs : [];
+        const identityBinding = jsonValue({
+          ...(identity.fields.conversationId ? { status: "passed" } : {}),
+          ...identity.fields,
+          requestOperation: operation,
+        });
+        const record = await tx.chatImport.create({ data: {
+          id: importId,
+          name: payload.name || `聊天记录导入 ${new Date().toLocaleString("zh-CN")}`,
+          source: payload.source || "manual_text", channel: payload.channel || "wechat", agentId: payload.agentId || null,
+          rawText: payload.text || "", messageCount: Number(parsed.messageCount || 0), pairCount: Number(parsed.pairCount || 0),
+          warnings: jsonValue(parsed.warnings || []), ...identity.fields, identityBinding,
         }});
-        importedSamples.push(sample);
-        await tx.knowledgeEntry.create({ data: {
-          agentId: sample.agentId, trainingSampleId: sample.id, sourceType: "chat_import", sourceId: sample.id,
-          ...identity.fields, identityBinding: identity.binding, title: `${sample.scene}：${customerText.slice(0, 28)}`,
-          content: `客户：${customerText}\n客服：${idealReply}`, tags: jsonValue([sample.scene, sample.agentKey, ...inferSkillHints(pair)]), qualityScore: score,
-        }});
-      }
-      const sceneSummary = summarizeSceneChecks(importedSamples);
-      const updated = await tx.chatImport.update({ where: { id: record.id }, data: { sceneSummary: jsonValue(sceneSummary) } });
-      return serialize({ ...updated, samples: importedSamples.map((sample) => ({ ...sample, quality: evaluateTrainingSampleQuality(sample) })) });
-    });
+        const importedSamples: any[] = [];
+        for (const [pairIndex, pair] of pairs.entries()) {
+          const agent = requestedAgent || await this.getAgentByKey(pair.agentKey || "general", tx);
+          const customerText = String(pair.customerText || pair.question || "").trim();
+          const idealReply = String(pair.idealReply || pair.agentReply || pair.answer || "").trim();
+          const score = Number.isFinite(Number(pair.score)) ? Number(pair.score) : 0;
+          const sample = await tx.trainingSample.create({ data: {
+            id: deterministicOperationId("sample", operationKey, pairIndex),
+            importId: record.id, agentId: agent?.id || null, agentKey: agent?.key || pair.agentKey || "general",
+            ...identity.fields, identityBinding, scene: pair.scene || "未分类",
+            sceneScore: Number(pair.sceneScore || 0), sceneScores: jsonValue(pair.sceneScores || []), matchedKeywords: jsonValue(pair.matchedKeywords || []),
+            sceneCheck: jsonValue(pair.sceneCheck), customerText, idealReply, score, status: score >= 70 ? "ready" : "review",
+            skillHints: jsonValue(inferSkillHints(pair)), sourceType: "chat_import",
+            sourceLineStart: integerOrNull(pair.sourceLineStart), sourceLineEnd: integerOrNull(pair.sourceLineEnd),
+          }});
+          importedSamples.push(sample);
+          await tx.knowledgeEntry.create({ data: {
+            id: deterministicOperationId("knowledge", operationKey, pairIndex),
+            agentId: sample.agentId, trainingSampleId: sample.id, sourceType: "chat_import", sourceId: sample.id,
+            ...identity.fields, identityBinding, title: `${sample.scene}：${customerText.slice(0, 28)}`,
+            content: `客户：${customerText}\n客服：${idealReply}`, tags: jsonValue([sample.scene, sample.agentKey, ...inferSkillHints(pair)]), qualityScore: score,
+          }});
+        }
+        const sceneSummary = summarizeSceneChecks(importedSamples);
+        const updated = await tx.chatImport.update({ where: { id: record.id }, data: { sceneSummary: jsonValue(sceneSummary) } });
+        return serialize({ ...updated, samples: importedSamples.map((sample) => ({ ...sample, quality: evaluateTrainingSampleQuality(sample) })) });
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error) || !operation) throw error;
+      const concurrent = await this.prisma.chatImport.findUnique({
+        where: { id: importId },
+        include: { samples: true },
+      });
+      if (!concurrent) throw error;
+      return this.replayChatImport(concurrent, operation);
+    }
   }
 
   async reviewTrainingSample(id: string, payload: any = {}) {
     return this.prisma.$transaction((tx: PrismaLike) => this.reviewTrainingSampleTx(tx, id, payload));
+  }
+
+  private replayChatImport(record: any, operation: RequestOperationMetadata) {
+    assertExactOperationReplay(
+      readRequestOperationMetadata(record?.identityBinding),
+      operation,
+      "chat import create",
+    );
+    return serialize({
+      ...record,
+      samples: (record.samples || []).map((sample: any) => ({
+        ...sample,
+        quality: evaluateTrainingSampleQuality(sample),
+      })),
+    });
   }
 
   async reviewTrainingSamplesBatch(ids: string[], payload: any, expectedBySampleId: Record<string, ExpectedIdentityPayload> = {}) {

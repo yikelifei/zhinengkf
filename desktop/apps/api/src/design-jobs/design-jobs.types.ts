@@ -1,4 +1,5 @@
 export type CreateDesignJobPayload = {
+  operationKey: string;
   wechatAccountId?: string;
   customerId: string;
   conversationId: string;

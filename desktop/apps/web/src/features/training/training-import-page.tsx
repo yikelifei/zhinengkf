@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  createClientOperationKey,
   getAgents,
   importChatTranscript,
   type Agent,
@@ -78,11 +79,16 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     setBusy(true);
     setError("");
     try {
+      const operationKey = createClientOperationKey("training-import");
       const result = await importChatTranscript({
+        operationKey,
         name: name.trim() || undefined,
         source: source.trim() || undefined,
         channel: channel.trim() || undefined,
         agentId: agentId || undefined,
+        customerId: stableIdentityFilters.customerId,
+        conversationId: stableIdentityFilters.conversationId,
+        wechatAccountId: stableIdentityFilters.wechatAccountId,
         text,
       });
       setTranscript("");
@@ -93,7 +99,7 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     } finally {
       setBusy(false);
     }
-  }, [agentId, channel, name, source, transcript]);
+  }, [agentId, channel, name, source, stableIdentityFilters, transcript]);
 
   return (
     <section className={styles.page} aria-labelledby="training-import-title" aria-busy={busy}>

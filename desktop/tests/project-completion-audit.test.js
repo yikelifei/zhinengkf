@@ -55,7 +55,8 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
   write(root, "desktop/apps/api/src/automation/automation-scheduler.service.ts", 'lowValueAutomationMode === "durable"; bullmq_redis; readiness();\n');
-  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", "listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations();\nroutingCorrectionRequestKey(); before.correction?.requestKey === requestKey; trainingSample.findFirst(); knowledgeEntry.findFirst(); correctionRequestKey: requestKey; TransactionIsolationLevel.Serializable; NotFoundException; BadRequestException;\n");
+  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", 'listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations(); routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; trainingSample.findFirst(); knowledgeEntry.findFirst(); correctionRequestKey: requestKey; TransactionIsolationLevel.Serializable; NotFoundException; BadRequestException; deterministicOperationId("import", operationKey); deterministicOperationId("sample", operationKey, pairIndex); deterministicOperationId("knowledge", operationKey, pairIndex); isUniqueConstraintError(error); replayChatImport();\n');
+  write(root, "desktop/apps/api/src/shared/operation-idempotency.ts", "const OPERATION_KEY_MIN_LENGTH = 16; const OPERATION_KEY_MAX_LENGTH = 128; createOperationFingerprint(); deterministicOperationId(); OPERATION_KEY_REUSED;\n");
   write(root, "desktop/tools/initialize-prisma-agents.js", 'const execute=process.argv.includes("--execute");\nconst requiredConfirmation="INITIALIZE_PRISMA_AGENTS";\nif (!execute) { console.log({status:"PLAN", writesExecuted:false}); process.exit(0); }\nif (confirmation !== requiredConfirmation) throw new Error("refusing");\ninitializePrismaAgentData().catch(() => { process.stderr.write("failed; inspect protected deployment logs"); });\n');
   write(root, "desktop/apps/api/src/agents/agents.service.ts", "PrismaOperationsService; appConfig.useLocalStore; this.requirePrisma().listAgents(); this.requirePrisma().listAgentSkills();\n");
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
@@ -75,7 +76,7 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/storage/asset-content-security.ts", 'sharp(buffer); %PDF-; ACTIVE_PDF_PATTERN; new TextDecoder("utf-8", { fatal: true }); ACTIVE_TEXT_PATTERN; asset fileName extension does not match file content; asset mimeType does not match file content; kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: false;\n');
   write(root, "desktop/apps/api/src/storage/local-file-response.ts", 'X-Content-Type-Options; nosniff; Content-Security-Policy; sandbox; Content-Disposition; "attachment";\n');
   write(root, "desktop/docs/DESIGN_PLATFORM_CONTRACT.md", "DNS rebinding; Content-Disposition; realpath; 不再作为“部署侧未决”项冒充已完成;\n");
-  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash;\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); replayDesignJobCreate();\n');
   write(root, "desktop/apps/api/src/shared/image-fingerprint.ts", 'import sharp from "sharp";\nconst IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";\nsharp().rotate().flatten({}).greyscale().resize(9, 8);\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts", 'fetch(`/cgi-bin/media/get?media_id=${encodeURIComponent(mediaId)}`); errcode === 40007; errcode === 41006; errcode === 45009; retry_exhausted;\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts", 'MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES; LOCAL_STORAGE_ROOT; fs.link(temporaryPath, finalPath); inspectExistingImage();\n');
@@ -142,6 +143,7 @@ function isResumableCompletedExecution(execution) {
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", `
 buildLegacyImageIdentityHash(); legacyIdentityHash; design_platform_callback_auth;
 hasIndependentDesignPlatformCallbackApiKey(); severity: "error"; assertDesignPlatformPreflight();
+normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); replayDesignJobCreate();
 class DesignJobsService {
   async listExecutions(id, expected) {
     if (!expected.expectedWechatAccountId || !expected.expectedConversationId || !expected.expectedCustomerId) throw new Error("complete identity required");
@@ -238,6 +240,9 @@ function resolutionAction(resolution) {
 resolutionAction(execution.availableResolution);
 `);
   write(root, "desktop/apps/web/src/lib/api.ts", `
+function postJsonWithNetworkRetry(path, body) { const serializedBody = JSON.stringify(body); }
+function createClientOperationKey() {}
+const requestPayload: { operationKey: string } = {};
 function designExecutionExpectedIdentityQuery(expected) {
   const params = new URLSearchParams();
   params.set("expectedWechatAccountId", expected.expectedWechatAccountId);

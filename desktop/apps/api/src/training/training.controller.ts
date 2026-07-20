@@ -28,6 +28,7 @@ export class TrainingController {
   importChat(
     @Body()
     payload: {
+      operationKey: string;
       name?: string;
       source?: string;
       channel?: "wechat" | "xiaohongshu" | "douyin" | "manual";

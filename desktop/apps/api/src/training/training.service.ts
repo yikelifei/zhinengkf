@@ -5,6 +5,7 @@ import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 import { PrismaOperationsService } from "../prisma/prisma-operations.service";
+import { normalizeOperationKey } from "../shared/operation-idempotency";
 
 const {
   canonicalSkillName,
@@ -17,6 +18,7 @@ const {
 } = rules;
 
 type ChatImportPayload = {
+  operationKey: string;
   name?: string;
   source?: string;
   channel?: "wechat" | "xiaohongshu" | "douyin" | "manual";
@@ -148,10 +150,12 @@ export class TrainingService {
   }
 
   importChat(payload: ChatImportPayload) {
+    const operationKey = normalizeOperationKey(payload?.operationKey, "chat import operationKey");
     const parsed = parseChatTranscript(payload.text || "");
+    const normalizedPayload = { ...payload, operationKey };
     return appConfig.useLocalStore
-      ? this.localStore.createChatImport(payload, parsed)
-      : this.requirePrisma().createChatImport(payload, parsed);
+      ? this.localStore.createChatImport(normalizedPayload, parsed)
+      : this.requirePrisma().createChatImport(normalizedPayload, parsed);
   }
 
   reviewSample(id: string, payload: TrainingSampleReviewPayload) {

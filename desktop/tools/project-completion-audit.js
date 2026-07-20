@@ -510,6 +510,52 @@ const CONTRACTS = Object.freeze([
     ],
   },
   {
+    id: "contract.request_operation_key",
+    title: "Request-level operation key validation and fingerprints",
+    file: "desktop/apps/api/src/shared/operation-idempotency.ts",
+    patterns: [
+      /OPERATION_KEY_MIN_LENGTH\s*=\s*16/,
+      /OPERATION_KEY_MAX_LENGTH\s*=\s*128/,
+      /createOperationFingerprint/,
+      /deterministicOperationId/,
+      /OPERATION_KEY_REUSED/,
+    ],
+  },
+  {
+    id: "contract.design_job_create_idempotency",
+    title: "Design job create exact replay and unique request claim",
+    file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+    patterns: [
+      /normalizeOperationKey\(payload\?\.operationKey/,
+      /findUnique\(\{ where: \{ requestId \} \}\)/,
+      /isUniqueConstraintError\(error\)/,
+      /replayDesignJobCreate/,
+    ],
+  },
+  {
+    id: "contract.training_import_idempotency",
+    title: "Training import deterministic import, sample and knowledge identities",
+    file: "desktop/apps/api/src/prisma/prisma-operations.service.ts",
+    patterns: [
+      /deterministicOperationId\("import", operationKey\)/,
+      /deterministicOperationId\("sample", operationKey, pairIndex\)/,
+      /deterministicOperationId\("knowledge", operationKey, pairIndex\)/,
+      /isUniqueConstraintError\(error\)/,
+      /replayChatImport/,
+    ],
+  },
+  {
+    id: "contract.web_create_operation_retry",
+    title: "Web create actions reuse the serialized operation request on network retry",
+    file: "desktop/apps/web/src/lib/api.ts",
+    patterns: [
+      /postJsonWithNetworkRetry/,
+      /const serializedBody = JSON\.stringify\(body\)/,
+      /createClientOperationKey/,
+      /operationKey:\s*string/,
+    ],
+  },
+  {
     id: "contract.agents_prisma_route",
     title: "Agent 中心 Prisma 路由",
     file: "desktop/apps/api/src/agents/agents.service.ts",
