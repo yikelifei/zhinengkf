@@ -58,6 +58,40 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
 `);
   write(root, "desktop/packages/rules/index.js", "module.exports={...require('./skuImport')};\n");
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\nupsertCanonicalWechatWorkBinding(); deterministicOperationId("wwacct", key); deterministicOperationId("wwcust", key); singleWechatWorkHistoryId(); for (let attempt = 0; attempt < 4; attempt += 1) {} wechat work canonical binding conflict; tx.wechatWorkBinding.updateMany(); lastInboundAt: { lt: lastInboundAt }; normalizeWechatWorkInboundAt();\n');
+  write(root, "desktop/packages/runtime/service-environment.js", `
+const RUNTIME_KEYS = ["NODE_ENV"];
+const API_KEYS = [...RUNTIME_KEYS, "DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "DESIGN_PLATFORM_ACCESS_TOKEN", "PERSONAL_WECHAT_RPA_TOKEN"];
+const OBSERVER_KEYS = [...RUNTIME_KEYS, "WECHAT_WINDOW_OBSERVER_PROOF_FILE"];
+const BRIDGE_KEYS = [...RUNTIME_KEYS, "WECHAT_BRIDGE_SERVICE_TOKEN_FILE"];
+const PERSONAL_BRIDGE_KEYS = [...BRIDGE_KEYS, "PERSONAL_WECHAT_RPA_CONFIG_FILE"];
+const SERVICE_KEYS = Object.freeze({
+  api: API_KEYS,
+  web: [...RUNTIME_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF"],
+  "design-platform-mock": [...RUNTIME_KEYS],
+  "wechat-window-observer": OBSERVER_KEYS,
+  "wechat-bridge-worker": BRIDGE_KEYS,
+  "personal-wechat-bridge": PERSONAL_BRIDGE_KEYS,
+});
+const WRAPPER_KEYS = new Set(["NODE_ENV", "DESIGN_PLATFORM_RUNTIME_CONFIG"].map((key) => key.toUpperCase()));
+function selectKeys() {}
+function selectServiceEnvironment(serviceName, baseEnv, overrides) { const keys = SERVICE_KEYS[serviceName]; return selectKeys({ ...baseEnv, ...overrides }, keys); }
+function selectWrapperEnvironment(serviceName, env) { const normalized = "NODE_ENV"; if (WRAPPER_KEYS.has(normalized)) return env; }
+function renderWindowsWrapperEnvironment(serviceName, env) { return selectWrapperEnvironment(serviceName, env); }
+`);
+  write(root, "desktop/apps/electron/packaged-runtime.js", `
+function buildApiServiceEnvironment({ baseEnv, token }) { return selectServiceEnvironment("api", baseEnv, { INTERNAL_API_TOKEN: token }); }
+function buildWebServiceEnvironment({ baseEnv, token, webSessionProof }) { return selectServiceEnvironment("web", baseEnv, { INTERNAL_API_TOKEN: token, DESKTOP_WEB_SESSION_PROOF: webSessionProof }); }
+class Manager { start() { const apiEnv = buildApiServiceEnvironment({}); this.spawnService("api", entry, apiEnv); this.spawnService("web", entry, buildWebServiceEnvironment({})); } }
+`);
+  write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
+const OBSERVER_ENV_KEYS = ["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE", "WECHAT_WINDOW_SNAPSHOT_INBOX_DIR"];
+function buildWindowObserverChildEnvironment(baseEnv, overrides) { const allowed = new Set(OBSERVER_ENV_KEYS); return Object.entries({ ...baseEnv, ...overrides }).filter(([key]) => allowed.has(key.toUpperCase())); }
+`);
+  write(root, "desktop/tools/private-runtime-file.js", `
+function assertPrivateRegularFileOrMissing(filePath) { const stat = fs.lstatSync(filePath); if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(); }
+function readPrivateJsonFile(filePath) { return JSON.parse(fs.readFileSync(filePath, "utf8")); }
+function atomicWritePrivateJson(filePath, value) { const temporaryPath = filePath + ".tmp"; const fd = fs.openSync(temporaryPath, "wx", 0o600); fs.fsyncSync(fd); assertPrivateRegularFileOrMissing(filePath); fs.renameSync(temporaryPath, filePath); }
+`);
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\nprotectLocalInflightSendFromCancellation(); protectPrismaInflightSendFromCancellation(); protectInFlightSendTasksForManualLock(); deliveryUnknownReason: "manual_cancel_requested_inflight"; manualReviewRequired: true; automaticRetryBlocked: true; resolveUnknownSendDelivery(); "confirmed_sent"; "confirmed_not_sent"; requireExactSendTaskIdentity(); assertExactOperationReplay(); settleWechatWorkAsyncFailure(); deterministicOperationId("wechat_work_audit", operationKey, "manual-send-delivery-resolution"); deliveryResolutionPriority: "manual_audited_terminal"; previousManualDeliveryResolution; manualDeliveryResolution: null; protectedUnknownInFlightSendTaskIds; cancelledInFlightSendTaskIds: [];\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
@@ -690,6 +724,71 @@ test("completion audit rejects removal of Enterprise WeChat inbound timestamp mo
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
       from: "monotonicWechatWorkInboundAt()",
       to: "overwriteWechatWorkInboundAt()",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
+});
+
+test("completion audit requires runtime secret isolation artifacts and rejects credential drift", () => {
+  const contractIds = [
+    "contract.runtime_service_secret_allowlists",
+    "contract.runtime_wrapper_secret_boundary",
+    "contract.runtime_packaged_service_environment",
+    "contract.runtime_observer_child_environment",
+    "contract.private_runtime_json_safety",
+  ];
+  const baseline = buildAudit(createPassingFixture(), { includeExternal: false });
+  for (const id of contractIds) {
+    assert.equal(baseline.results.find((item) => item.id === id).status, STATUS.PASS, id);
+  }
+
+  const missingTestRoot = createPassingFixture();
+  fs.rmSync(path.join(missingTestRoot, "desktop", "tests", "runtime-secret-isolation.test.js"));
+  const missingTestReport = buildAudit(missingTestRoot, { includeExternal: false });
+  assert.equal(
+    missingTestReport.results.find((item) => item.id === "security.runtime_secret_isolation_tests").status,
+    STATUS.FAIL,
+  );
+
+  const mutations = [
+    {
+      id: "contract.runtime_service_secret_allowlists",
+      file: "desktop/packages/runtime/service-environment.js",
+      from: 'web: [...RUNTIME_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF"]',
+      to: 'web: [...RUNTIME_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF", "DATABASE_URL"]',
+    },
+    {
+      id: "contract.runtime_wrapper_secret_boundary",
+      file: "desktop/packages/runtime/service-environment.js",
+      from: '["NODE_ENV", "DESIGN_PLATFORM_RUNTIME_CONFIG"]',
+      to: '["NODE_ENV", "DESIGN_PLATFORM_RUNTIME_CONFIG", "WECHAT_WORK_SECRET"]',
+    },
+    {
+      id: "contract.runtime_packaged_service_environment",
+      file: "desktop/apps/electron/packaged-runtime.js",
+      from: 'return selectServiceEnvironment("web", baseEnv',
+      to: 'return selectServiceEnvironment("api", baseEnv',
+    },
+    {
+      id: "contract.runtime_observer_child_environment",
+      file: "desktop/apps/api/src/shared/runtime-child-environment.ts",
+      from: '["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE"',
+      to: '["NODE_ENV", "DATABASE_URL", "WECHAT_WINDOW_OBSERVER_PROOF_FILE"',
+    },
+    {
+      id: "contract.private_runtime_json_safety",
+      file: "desktop/tools/private-runtime-file.js",
+      from: "if (stat.isSymbolicLink() || !stat.isFile()) throw new Error();",
+      to: "if (!stat.isFile()) throw new Error();",
     },
   ];
 
