@@ -15,7 +15,7 @@ import styles from "./sales-pages.module.css";
 import { useSalesQuotes } from "./use-sales-records";
 
 export function SalesQuoteDetailPage({ quoteId }: { quoteId: string }) {
-  const { selected, loading, error, ambiguousEmpty, refresh } = useSalesQuotes(quoteId);
+  const { selected, loading, loaded, error, refresh } = useSalesQuotes(quoteId);
   const expected = selected ? identityExpectation(selected) : {};
   const identityReady = hasCompleteIdentity(expected);
 
@@ -32,7 +32,6 @@ export function SalesQuoteDetailPage({ quoteId }: { quoteId: string }) {
         )}
       />
       {error ? <SalesNotice tone="danger">{error}</SalesNotice> : null}
-      {ambiguousEmpty ? <SalesNotice tone="warning">空结果无法证明报价不存在；请检查服务状态后重试。</SalesNotice> : null}
       {loading ? <SalesEmpty title="正在读取报价" detail={`报价 ${quoteId}`} busy /> : selected ? (
         <article className={styles.card}>
           <div className={styles.cardHeader}>
@@ -63,7 +62,7 @@ export function SalesQuoteDetailPage({ quoteId }: { quoteId: string }) {
           </div>
           <Link className={styles.backLink} href="/sales/quotes" data-action-id="sales-quote-back-list">返回报价列表</Link>
         </article>
-      ) : <SalesEmpty title="没有找到报价" detail="返回列表重新选择，避免对错误记录执行操作。" />}
+      ) : <SalesEmpty title={loaded ? "没有找到报价" : "报价状态未确认"} detail={loaded ? "读取成功，请返回列表重新选择。" : "报价列表尚未成功读取，已阻止后续操作。"} />}
     </section>
   );
 }

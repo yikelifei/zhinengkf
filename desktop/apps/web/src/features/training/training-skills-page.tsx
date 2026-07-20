@@ -18,6 +18,7 @@ export type TrainingSkillsPageProps = {
 
 export function TrainingSkillsPage({ identityFilters }: TrainingSkillsPageProps) {
   const [suggestions, setSuggestions] = useState<SkillSuggestion[]>([]);
+  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [includeNeedsReview, setIncludeNeedsReview] = useState(false);
   const [lastResult, setLastResult] = useState<ApplySkillSuggestionsResult | null>(null);
@@ -36,17 +37,17 @@ export function TrainingSkillsPage({ identityFilters }: TrainingSkillsPageProps)
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setSuggestionsLoaded(false);
     try {
       const nextSuggestions = await getSkillSuggestions({ ...stableIdentityFilters, minScore: MINIMUM_SCORE });
       if (sequence !== refreshSequence.current) return;
       setSuggestions(nextSuggestions);
+      setSuggestionsLoaded(true);
       setSelectedKeys(new Set());
       setPendingConfirmation(false);
-      if (!nextSuggestions.length) {
-        setError("技能建议接口返回空结果；当前客户端无法区分真实无建议与读取失败，状态保持未确认。");
-      }
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
+      setSuggestions([]);
       setError(caught instanceof Error ? caught.message : "技能建议读取失败。");
     } finally {
       if (sequence === refreshSequence.current) setBusy(false);
@@ -165,10 +166,10 @@ export function TrainingSkillsPage({ identityFilters }: TrainingSkillsPageProps)
       {notice ? <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">{notice}</div> : null}
 
       <section className={styles.summaryGrid} aria-label="技能建议摘要">
-        <div className={styles.summaryCard}><span>建议总数</span><strong>{suggestions.length}</strong></div>
-        <div className={styles.summaryCard}><span>已选择</span><strong>{selectedSuggestions.length}</strong></div>
-        <div className={styles.summaryCard}><span>需复核</span><strong>{suggestions.filter((item) => item.quality?.needsReview).length}</strong></div>
-        <div className={styles.summaryCard}><span>已阻断</span><strong>{suggestions.filter((item) => suggestionBlocked(item, stableIdentityFilters)).length}</strong></div>
+        <div className={styles.summaryCard}><span>建议总数</span><strong>{suggestionsLoaded ? suggestions.length : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>已选择</span><strong>{suggestionsLoaded ? selectedSuggestions.length : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>需复核</span><strong>{suggestionsLoaded ? suggestions.filter((item) => item.quality?.needsReview).length : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>已阻断</span><strong>{suggestionsLoaded ? suggestions.filter((item) => suggestionBlocked(item, stableIdentityFilters)).length : "—"}</strong></div>
       </section>
 
       <section className={styles.panel} aria-labelledby="skill-suggestion-list-title">
@@ -226,7 +227,9 @@ export function TrainingSkillsPage({ identityFilters }: TrainingSkillsPageProps)
                 );
               })}
             </div>
-          ) : <div className={styles.empty}>服务端没有返回符合阈值的技能建议。</div>}
+          ) : <div className={styles.empty}>{suggestionsLoaded
+            ? "读取成功，当前没有符合阈值的技能建议。"
+            : "技能建议尚未成功读取，当前状态未确认。"}</div>}
         </div>
       </section>
 

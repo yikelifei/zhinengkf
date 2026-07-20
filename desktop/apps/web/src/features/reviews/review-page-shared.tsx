@@ -10,6 +10,7 @@ export type ReviewMutationPageProps = {
 
 export function useReviewCenter(identityFilters?: IdentityFilters) {
   const [center, setCenter] = useState<ReviewCenter | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refreshSequence = useRef(0);
@@ -23,10 +24,12 @@ export function useReviewCenter(identityFilters?: IdentityFilters) {
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setLoaded(false);
     try {
       const nextCenter = await getReviewCenter(stableIdentityFilters);
       if (sequence !== refreshSequence.current) return;
       setCenter(nextCenter);
+      setLoaded(true);
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
       setCenter(null);
@@ -43,7 +46,7 @@ export function useReviewCenter(identityFilters?: IdentityFilters) {
     };
   }, [refresh]);
 
-  return { center, busy, error, setError, refresh };
+  return { center, loaded, busy, error, setError, refresh };
 }
 
 export function formatReviewDate(value?: string | null) {

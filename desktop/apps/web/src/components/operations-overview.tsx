@@ -58,9 +58,12 @@ export type OverviewConversation = {
 export type OperationsOverviewProps = {
   updatedAt?: string;
   channels: OverviewChannel[];
+  channelsLoaded: boolean;
   actions: OverviewAction[];
+  actionsLoaded: boolean;
   metrics: OverviewMetric[];
   conversations: OverviewConversation[];
+  conversationsLoaded: boolean;
   automationLabel: string;
   automationDetail: string;
   automationTone: OverviewTone;
@@ -81,9 +84,12 @@ const toneIcon = {
 export function OperationsOverview({
   updatedAt,
   channels,
+  channelsLoaded,
   actions,
+  actionsLoaded,
   metrics,
   conversations,
+  conversationsLoaded,
   automationLabel,
   automationDetail,
   automationTone,
@@ -157,7 +163,9 @@ export function OperationsOverview({
                 </div>
               );
             }) : (
-              <div className={styles.inlineEmpty}>尚未取得渠道状态，刷新后再试。</div>
+              <div className={styles.inlineEmpty}>
+                {channelsLoaded ? "读取成功，当前没有已登记的渠道。" : "渠道状态尚未成功读取，当前状态未确认。"}
+              </div>
             )}
           </div>
         </article>
@@ -168,7 +176,7 @@ export function OperationsOverview({
               <AlertTriangle size={16} aria-hidden="true" />
               <h3 id="overview-actions-title">待处理事项</h3>
             </div>
-            <span aria-live="polite">{pendingCount} 项</span>
+            <span aria-live="polite">{actionsLoaded ? pendingCount : "—"} 项</span>
           </div>
           <div className={styles.actionList}>
             {actions.length ? actions.map((action) => {
@@ -195,10 +203,12 @@ export function OperationsOverview({
                   <ChevronRight size={15} aria-hidden="true" />
                 </button>
               );
-            }) : (
+            }) : actionsLoaded ? (
               <div className={styles.inlineSuccess}>
                 <CircleCheck size={17} aria-hidden="true" />当前没有必须立即处理的异常。
               </div>
+            ) : (
+              <div className={styles.inlineEmpty}>待处理数据尚未成功读取，当前状态未确认。</div>
             )}
           </div>
         </article>
@@ -312,7 +322,7 @@ export function OperationsOverview({
               </tbody>
             </table>
           </div>
-        ) : (
+        ) : conversationsLoaded ? (
           <div className={styles.emptyState}>
             <MessageCircle size={22} aria-hidden="true" />
             <strong>还没有客户会话</strong>
@@ -323,6 +333,12 @@ export function OperationsOverview({
               onClick={onOpenChannels}
               aria-label="检查微信渠道接入"
             >检查微信接入</button>
+          </div>
+        ) : (
+          <div className={styles.emptyState}>
+            <AlertTriangle size={22} aria-hidden="true" />
+            <strong>最近会话尚未成功读取</strong>
+            <span>当前状态未确认，请刷新后再试。</span>
           </div>
         )}
       </article>

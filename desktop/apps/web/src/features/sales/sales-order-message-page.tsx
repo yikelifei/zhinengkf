@@ -26,7 +26,7 @@ const COPY: Record<OrderMessageKind, { title: string; detail: string; label: str
 };
 
 export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind: OrderMessageKind }) {
-  const { selected, loading, error: loadError, ambiguousEmpty, replace } = useSalesOrders(orderId);
+  const { selected, loading, loaded, error: loadError, replace } = useSalesOrders(orderId);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
@@ -57,7 +57,6 @@ export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind
       <SalesHeader eyebrow="销售 · 订单消息" title={copy.title} detail={copy.detail} />
       {loadError || error ? <SalesNotice tone="danger">{error || loadError}</SalesNotice> : null}
       {notice ? <SalesNotice tone="success">{notice}</SalesNotice> : null}
-      {ambiguousEmpty ? <SalesNotice tone="warning">空结果无法证明订单不存在；已阻止消息入队。</SalesNotice> : null}
       {loading ? <SalesEmpty title="正在读取订单" detail={`订单 ${orderId}`} busy /> : selected ? (
         <article className={styles.card}>
           <div className={styles.cardHeader}><div><h2>{selected.customer?.name || selected.customerId}</h2><p>订单 {selected.id}</p></div><span className={styles.statusPill}>{selected.status}</span></div>
@@ -74,7 +73,7 @@ export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind
           </div>
           <Link className={styles.backLink} href={`/sales/orders/${encodeURIComponent(selected.id)}`} data-action-id="sales-order-message-back">返回订单详情</Link>
         </article>
-      ) : <SalesEmpty title="没有找到订单" detail="返回订单列表重新选择。" />}
+      ) : <SalesEmpty title={loaded ? "没有找到订单" : "订单状态未确认"} detail={loaded ? "读取成功，请返回订单列表重新选择。" : "订单列表尚未成功读取，已阻止消息入队。"} />}
       {confirming && selected ? <SalesConfirmation title={`确认把${copy.label}加入发送队列？`} detail={`${identityLabel(expected)}。系统会创建真实微信发送任务，且不会自动解除人工接管锁。`} confirmLabel="确认入队" confirmActionId={`sales-order-${kind}-confirm`} cancelActionId={`sales-order-${kind}-cancel`} busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => void queueMessage()} /> : null}
     </section>
   );

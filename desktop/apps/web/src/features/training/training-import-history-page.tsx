@@ -7,6 +7,7 @@ import styles from "../governance-pages.module.css";
 
 export function TrainingImportHistoryPage({ identityFilters }: { identityFilters?: IdentityFilters }) {
   const [imports, setImports] = useState<ChatImport[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refreshSequence = useRef(0);
@@ -20,15 +21,15 @@ export function TrainingImportHistoryPage({ identityFilters }: { identityFilters
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setLoaded(false);
     try {
       const nextImports = await getChatImports(stableIdentityFilters);
       if (sequence !== refreshSequence.current) return;
       setImports(nextImports);
-      if (!nextImports.length) {
-        setError("导入记录接口返回空结果；当前客户端无法区分真实空历史与读取失败，状态保持未确认。");
-      }
+      setLoaded(true);
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
+      setImports([]);
       setError(caught instanceof Error ? caught.message : "训练导入历史读取失败。");
     } finally {
       if (sequence === refreshSequence.current) setBusy(false);
@@ -69,7 +70,9 @@ export function TrainingImportHistoryPage({ identityFilters }: { identityFilters
             </article>
           ))}
         </div>
-      ) : <div className={styles.empty}>服务端没有返回导入记录。</div>}
+      ) : <div className={styles.empty}>{loaded
+        ? "读取成功，当前没有聊天记录导入历史。"
+        : "导入历史尚未成功读取，当前状态未确认。"}</div>}
     </section>
   );
 }

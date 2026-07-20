@@ -40,6 +40,7 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
   const [automationReadiness, setAutomationReadiness] = useState<AutomationReadiness | null>(null);
   const [reviewCenter, setReviewCenter] = useState<ReviewCenter | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsLoaded, setNotificationsLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -72,21 +73,16 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
 
     if (sequence !== refreshSequence.current) return;
 
-    const reviewReadIsAmbiguous = Boolean(nextReviewCenter) &&
-      nextReviewCenter!.designJobs.length === 0 &&
-      nextReviewCenter!.quoteDrafts.length === 0 &&
-      nextReviewCenter!.orderDrafts.length === 0 &&
-      nextReviewCenter!.logs.length === 0;
     setChannelStatus(nextChannelStatus);
     setOperations(nextOperations);
     setAutomationStatus(nextAutomationStatus);
     setAutomationReadiness(nextAutomationReadiness);
-    setReviewCenter(reviewReadIsAmbiguous ? null : nextReviewCenter);
+    setReviewCenter(nextReviewCenter);
     setNotifications(nextNotifications);
-    if (!nextChannelStatus || !nextOperations || !nextAutomationStatus || !nextAutomationReadiness) {
-      setError("总览未取得全部关键服务状态。缺失数据保持未知，不会显示为正常。");
-    } else if (reviewReadIsAmbiguous || nextNotifications.length === 0) {
-      setError("审核或通知接口返回空结果；当前客户端无法区分真实空队列与读取失败，总览未将其视为全部正常。");
+    setNotificationsLoaded(results[5].status === "fulfilled");
+    const failedReads = results.filter((result) => result.status === "rejected").length;
+    if (failedReads) {
+      setError(`总览有 ${failedReads} 项服务读取失败，未读到的状态保持未确认。`);
     }
     if (sequence === refreshSequence.current) setBusy(false);
   }, [stableIdentityFilters]);
@@ -191,11 +187,11 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
     {
       id: "notifications",
       label: "未读通知",
-      value: notifications.length ? String(notifications.filter((item) => !item.readAt).length) : "—",
-      detail: notifications.length ? "来自当前身份范围" : "通知读取未确认",
-      tone: notifications.length ? notifications.some((item) => !item.readAt) ? "warning" : "ready" : "danger",
+      value: notificationsLoaded ? String(notifications.filter((item) => !item.readAt).length) : "—",
+      detail: notificationsLoaded ? "来自当前身份范围" : "通知读取未确认",
+      tone: notificationsLoaded ? notifications.some((item) => !item.readAt) ? "warning" : "ready" : "danger",
     },
-  ], [notifications, operations, reviewCenter]);
+  ], [notifications, notificationsLoaded, operations, reviewCenter]);
 
   const conversations = useMemo<OverviewConversation[]>(() => (operations?.records ?? [])
     .slice()
@@ -227,9 +223,12 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       <OperationsOverview
         updatedAt={channelStatus?.updatedAt || automationReadiness?.checkedAt}
         channels={channels}
+        channelsLoaded={channelStatus !== null}
         actions={actions}
+        actionsLoaded={channelStatus !== null && operations !== null && reviewCenter !== null && notificationsLoaded}
         metrics={metrics}
         conversations={conversations}
+        conversationsLoaded={operations !== null}
         automationLabel={automationStatus?.active ? "周期自动化运行中" : automationStatus ? "周期自动化已停止" : "自动化状态未知"}
         automationDetail={automationReadiness?.summary || "请先进入自动化运行页核对就绪检查。"}
         automationTone={automationTone}

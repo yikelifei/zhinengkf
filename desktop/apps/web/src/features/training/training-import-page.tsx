@@ -21,6 +21,7 @@ export type TrainingImportPageProps = {
 
 export function TrainingImportPage({ identityFilters }: TrainingImportPageProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [name, setName] = useState("");
   const [source, setSource] = useState("");
   const [channel, setChannel] = useState("");
@@ -42,6 +43,7 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setAgentsLoaded(false);
     const agentResult = await Promise.resolve(getAgents(stableIdentityFilters))
       .then((value) => ({ status: "fulfilled" as const, value }))
       .catch((reason: unknown) => ({ status: "rejected" as const, reason }));
@@ -50,8 +52,8 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     setAgents(nextAgents);
     if (agentResult.status === "rejected") {
       setError("训练导入页未取得智能体选项，请检查服务后重试。");
-    } else if (!nextAgents.length) {
-      setError("智能体接口返回空结果；当前客户端无法区分真实空目录与读取失败，状态保持未确认。");
+    } else {
+      setAgentsLoaded(true);
     }
     if (sequence === refreshSequence.current) setBusy(false);
   }, [stableIdentityFilters]);
@@ -150,6 +152,9 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
                 <option value="">由服务端按场景识别</option>
                 {agents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.scene}</option>)}
               </select>
+              <small className={styles.helpText}>{agentsLoaded
+                ? agents.length ? `已读取 ${agents.length} 个智能体选项。` : "读取成功，当前没有已配置的智能体。"
+                : "智能体选项尚未成功读取；仍可由服务端按场景识别。"}</small>
             </label>
             <label className={`${styles.field} ${styles.wideField}`}>
               <span>聊天记录正文</span>
