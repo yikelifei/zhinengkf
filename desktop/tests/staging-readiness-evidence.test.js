@@ -8,6 +8,7 @@ const test = require("node:test");
 
 const {
   READ_ONLY_ROUTES,
+  SCHEMA_VERSION,
   STATUS,
   collectStagingReadiness,
   inspectDatabaseUrl,
@@ -16,6 +17,8 @@ const {
   renderMarkdown,
   writeReports,
 } = require("../tools/staging-readiness-evidence");
+
+const TEST_REVISION = "a".repeat(40);
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-staging-evidence-"));
@@ -362,16 +365,19 @@ test("unsafe configuration is FAIL and secret values never enter reports", async
   assert.equal(serialized.includes(env.LOW_VALUE_AUTOMATION_REDIS_URL), false);
 });
 
-test("reports are written as redacted JSON and Chinese Markdown under a run directory", async (t) => {
+test("reports are revision-bound redacted JSON and Chinese Markdown under a run directory", async (t) => {
   const root = temporaryDirectory(t);
   const accounts = path.join(root, "accounts.json");
   fs.writeFileSync(accounts, '{}\n', "utf8");
-  const report = await collectStagingReadiness({ env: validEnvironment(accounts), doctorReport: doctorReport(), execute: false, desktopRoot: root, runId: "report-fixture", generatedAt: "2026-07-19T00:00:00.000Z" });
+  const report = await collectStagingReadiness({ env: validEnvironment(accounts), doctorReport: doctorReport(), execute: false, desktopRoot: root, runId: "report-fixture", generatedAt: "2026-07-19T00:00:00.000Z", repositoryRevision: TEST_REVISION });
   const artifacts = writeReports(report, path.join(root, ".runtime", "staging-readiness-evidence"));
   assert.equal(fs.existsSync(path.join(artifacts.runDirectory, "report.json")), true);
   assert.equal(fs.existsSync(path.join(artifacts.runDirectory, "report.zh-CN.md")), true);
   assert.match(fs.readFileSync(artifacts.latestMarkdown, "utf8"), /预发布就绪与证据报告/);
   assert.match(renderMarkdown(report), /`PASS`/);
+  assert.equal(SCHEMA_VERSION, "smart_kefu_staging_readiness_v2");
+  assert.equal(report.repositoryRevision, TEST_REVISION);
+  assert.match(renderMarkdown(report), new RegExp(TEST_REVISION));
 });
 
 test("CLI requires an explicit execute flag and rejects unknown options", () => {

@@ -48,6 +48,8 @@ npm.cmd run database:recovery:execute -- --confirm "RESTORE ISOLATED REHEARSAL D
 - `desktop/.runtime/database-recovery-rehearsal/latest.md`
 - 单次报告：`desktop/.runtime/database-recovery-rehearsal/<run-id>/`
 
+报告 schema 为 `smart_kefu_database_recovery_rehearsal_v2`，JSON 和 Markdown 都绑定生成时的完整 Git `repositoryRevision`。Git revision 无法读取或格式非法时失败关闭。用于发布证据包时，报告必须为当前 `HEAD`、`mode=execute`、状态 `PASS` 且不超过 30 天；计划模式报告不能替代真实隔离恢复演练。
+
 状态口径：工具、凭据或外部数据库不可用为 `BLOCKED`；任何已经启动的命令返回失败、迁移状态失败或最小一致性不匹配为 `FAIL`；全部证据完成才是 `PASS`。
 
 ## 评审与清理

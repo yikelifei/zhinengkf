@@ -5,9 +5,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const asar = require("@electron/asar");
+const { resolveRepositoryRevision } = require("./repository-provenance");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
+const SCHEMA_VERSION = "smart_kefu_windows_package_verification_v2";
 
 if (require.main === module) main();
 
@@ -27,6 +29,11 @@ function main() {
 
 function verifyWindowsPackage(options) {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const repositoryRevision = resolveRepositoryRevision({
+    repositoryRoot: path.resolve(root, ".."),
+    ...(options.repositoryRevision !== undefined ? { repositoryRevision: options.repositoryRevision } : {}),
+    ...(options.runGitCommand ? { runCommand: options.runGitCommand } : {}),
+  });
   const unpackedDir = path.join(options.outputDir, "win-unpacked");
   const resourcesDir = path.join(unpackedDir, "resources");
   const asarPath = path.join(resourcesDir, "app.asar");
@@ -80,9 +87,12 @@ function verifyWindowsPackage(options) {
 
   const failed = checks.some((item) => item.status === "FAIL");
   return {
+    schemaVersion: SCHEMA_VERSION,
+    repositoryRevision,
     status: failed ? "FAIL" : checks.some((item) => item.status === "BLOCKED") ? "BLOCKED" : "PASS",
     generatedAt: new Date().toISOString(),
     version: packageJson.version,
+    verificationProfile: options.requireSigned ? "signed-release" : options.expectUnsigned ? "unsigned-test" : "content-only",
     outputDir: options.outputDir,
     installer: installer && fs.existsSync(installer) ? artifactInfo(installer) : null,
     executable: fs.existsSync(executable) ? artifactInfo(executable) : null,
@@ -219,6 +229,8 @@ function writeReport(result, directory) {
     `- Status: **${result.status}**`,
     `- Version: \`${result.version}\``,
     `- Generated: ${result.generatedAt}`,
+    `- Repository revision: \`${result.repositoryRevision}\``,
+    `- Verification profile: \`${result.verificationProfile}\``,
     ...(result.installer ? [`- Installer: \`${result.installer.file}\``, `- Installer SHA-256: \`${result.installer.sha256}\``] : []),
     "",
     "| Check | Status | Evidence |",
@@ -233,6 +245,7 @@ function writeReport(result, directory) {
 }
 
 module.exports = {
+  SCHEMA_VERSION,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
   normalizeArchivePath,

@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -11,9 +12,42 @@ const {
   resolvePackagedPaths,
 } = require("../apps/electron/packaged-runtime");
 const {
+  SCHEMA_VERSION,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
+  verifyWindowsPackage,
 } = require("../tools/verify-windows-package");
+
+test("Windows verification report schema requires repository provenance", () => {
+  const source = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
+  assert.equal(SCHEMA_VERSION, "smart_kefu_windows_package_verification_v2");
+  assert.match(source, /repositoryRevision/);
+  assert.match(source, /verificationProfile/);
+});
+
+test("Windows verification binds even failed local content evidence to an exact revision", (t) => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-win-evidence-"));
+  t.after(() => fs.rmSync(outputDir, { recursive: true, force: true }));
+  const revision = "a".repeat(40);
+  const report = verifyWindowsPackage({
+    outputDir,
+    expectUnsigned: true,
+    requireSigned: false,
+    directoryOnly: false,
+    repositoryRevision: revision,
+  });
+  assert.equal(report.schemaVersion, SCHEMA_VERSION);
+  assert.equal(report.repositoryRevision, revision);
+  assert.equal(report.verificationProfile, "unsigned-test");
+  assert.equal(report.status, "FAIL");
+  assert.throws(() => verifyWindowsPackage({
+    outputDir,
+    expectUnsigned: true,
+    requireSigned: false,
+    directoryOnly: false,
+    repositoryRevision: "short",
+  }), /revision unavailable/);
+});
 
 test("packaged services resolve from resources while mutable data resolves under userData", () => {
   const paths = resolvePackagedPaths({

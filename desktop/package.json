@@ -29,6 +29,7 @@
     "release:gate": "node tools/production-release-gate.js",
     "release:gate:isolated": "node tools/production-release-gate.js --isolated-worktree",
     "staging:readiness": "node tools/staging-readiness-evidence.js",
+    "external:evidence:bundle": "node tools/external-evidence-bundle.js",
     "database:recovery:plan": "node tools/database-recovery-rehearsal.js",
     "database:recovery:execute": "node tools/database-recovery-rehearsal.js --execute",
     "qa:responsive": "node tools/run-responsive-layout-qa.js",

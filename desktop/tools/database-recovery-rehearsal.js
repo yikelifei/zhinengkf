@@ -1,14 +1,15 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { resolveRepositoryRevision } = require("./repository-provenance");
 
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
 const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
-const SCHEMA_VERSION = "smart_kefu_database_recovery_rehearsal_v1";
+const SCHEMA_VERSION = "smart_kefu_database_recovery_rehearsal_v2";
 const CONFIRMATION_PREFIX = "RESTORE ISOLATED REHEARSAL DATABASE:";
 const SAFE_TARGET_PATTERN = /(?:^|[_-])(?:rehearsal|restore[_-]?drill|recovery[_-]?drill|sandbox)(?:\d+)?(?:$|[_-])/i;
 const PRODUCTION_PATTERN = /(?:^|[.\-_])(?:prod(?:uction)?|live)(?:\d+)?(?:$|[.\-_])/i;
@@ -233,6 +234,7 @@ function baseReport(options, results, toolEvidence) {
   const status = overallStatus(results);
   return {
     schemaVersion: SCHEMA_VERSION,
+    repositoryRevision: options.repositoryRevision,
     generatedAt: options.generatedAt || new Date().toISOString(),
     runId: options.runId,
     mode: options.execute ? "execute" : "plan",
@@ -254,6 +256,11 @@ function baseReport(options, results, toolEvidence) {
 async function collectDatabaseRecoveryRehearsal(options = {}) {
   const root = options.desktopRoot || desktopRoot;
   const env = options.env || process.env;
+  const repositoryRevision = resolveRepositoryRevision({
+    repositoryRoot: options.repositoryRoot || path.resolve(desktopRoot, ".."),
+    ...(options.repositoryRevision !== undefined ? { repositoryRevision: options.repositoryRevision } : {}),
+    ...(options.runGitCommand ? { runCommand: options.runGitCommand } : {}),
+  });
   const execute = options.execute === true;
   const runId = options.runId || new Date().toISOString().replace(/[:.]/g, "-");
   const reportRoot = options.reportRoot || path.join(root, ".runtime", "database-recovery-rehearsal");
@@ -272,11 +279,11 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
   );
   if (!execute) {
     results.push(result("rehearsal.execution", "备份恢复演练", STATUS.BLOCKED, "当前为离线计划模式；未执行任何外部命令或数据库连接。", { commandsExecuted: 0 }));
-    return baseReport({ ...options, execute, runId }, results, inventory);
+    return baseReport({ ...options, execute, runId, repositoryRevision }, results, inventory);
   }
   if (!safety.ready || missing.length) {
     results.push(result("rehearsal.execution", "备份恢复演练", overallStatus(results) === STATUS.FAIL ? STATUS.FAIL : STATUS.BLOCKED, "安全前置条件或工具链未满足，未执行数据库命令。", { commandsExecuted: 0 }));
-    return baseReport({ ...options, execute, runId }, results, inventory);
+    return baseReport({ ...options, execute, runId, repositoryRevision }, results, inventory);
   }
 
   fs.mkdirSync(runDirectory, { recursive: true });
@@ -295,7 +302,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
       const version = safeVersion(output);
       if (!version) {
         results.push(result("tools.versions", "命令版本证据", STATUS.FAIL, `${name} 版本命令执行失败。`, { failedTool: name }));
-        return baseReport({ ...options, execute, runId }, results, { required: inventory, versions });
+        return baseReport({ ...options, execute, runId, repositoryRevision }, results, { required: inventory, versions });
       }
       versions[name] = version;
     }
@@ -307,7 +314,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
     commandsExecuted += 1;
     if (!commandSucceeded(dump) || !fs.existsSync(backupFile) || fs.statSync(backupFile).size === 0) {
       results.push(result("rehearsal.backup", "临时备份", STATUS.FAIL, "pg_dump 执行失败或未生成备份文件。", { commandExitCode: dump?.status ?? null }));
-      return baseReport({ ...options, execute, runId }, results, { required: inventory, versions });
+      return baseReport({ ...options, execute, runId, repositoryRevision }, results, { required: inventory, versions });
     }
     const backup = { sha256: sha256File(backupFile), bytes: fs.statSync(backupFile).size, format: "custom" };
     results.push(result("rehearsal.backup", "临时备份", STATUS.PASS, "备份已生成并完成 SHA-256 校验。", backup));
@@ -316,7 +323,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
     commandsExecuted += 1;
     if (!commandSucceeded(restore)) {
       results.push(result("rehearsal.restore", "隔离恢复", STATUS.FAIL, "pg_restore 在隔离演练库执行失败。", { commandExitCode: restore?.status ?? null }));
-      return baseReport({ ...options, execute, runId }, results, { required: inventory, versions });
+      return baseReport({ ...options, execute, runId, repositoryRevision }, results, { required: inventory, versions });
     }
     results.push(result("rehearsal.restore", "隔离恢复", STATUS.PASS, "备份已恢复到确认过的隔离演练库。", { cleanRestore: true, ownerAndPrivilegesRestored: false }));
 
@@ -326,7 +333,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
     commandsExecuted += 2;
     if (!commandSucceeded(sourceMigration) || !commandSucceeded(targetMigration)) {
       results.push(result("evidence.migrations", "Prisma 迁移状态", STATUS.FAIL, "源库或恢复库的 Prisma migrate status 失败。", { sourceUpToDate: commandSucceeded(sourceMigration), targetUpToDate: commandSucceeded(targetMigration) }));
-      return baseReport({ ...options, execute, runId }, results, { required: inventory, versions });
+      return baseReport({ ...options, execute, runId, repositoryRevision }, results, { required: inventory, versions });
     }
     results.push(result("evidence.migrations", "Prisma 迁移状态", STATUS.PASS, "源库与恢复库的 Prisma 迁移状态命令均通过。", { sourceUpToDate: true, targetUpToDate: true }));
 
@@ -349,7 +356,7 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
       ));
     }
     results.push(result("rehearsal.execution", "备份恢复演练", overallStatus(results), "演练命令链已结束，临时备份将在报告返回前删除。", { commandsExecuted }));
-    return baseReport({ ...options, execute, runId }, results, { required: inventory, versions });
+    return baseReport({ ...options, execute, runId, repositoryRevision }, results, { required: inventory, versions });
   } finally {
     try { if (fs.existsSync(backupFile)) fs.rmSync(backupFile, { force: true }); } catch { /* report already states retention policy */ }
   }
@@ -362,6 +369,7 @@ function renderMarkdown(report) {
     `- 状态：\`${report.status}\``,
     `- 模式：\`${report.mode}\``,
     `- 生成时间：\`${report.generatedAt}\``,
+    `- 仓库修订：\`${report.repositoryRevision}\``,
     `- 结果：PASS ${report.summary.pass} / BLOCKED ${report.summary.blocked} / FAIL ${report.summary.fail}`,
     "- 脱敏：未记录连接 URL、用户名、密码或业务数据内容；临时备份未保留。",
     "",
