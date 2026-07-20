@@ -55,7 +55,12 @@ test("timeline merges inbound attachments and queued outbound tasks without clai
       { source: "wechat_work", externalUserId: "wm_customer", raw: { msgtype: "text" } },
     ],
   });
-  const reply = await service.enqueueManualReply({ ...primaryIdentity, text: "收到，我先核对附件。", operator: "客服甲" });
+  const reply = await service.enqueueManualReply({
+    ...primaryIdentity,
+    text: "收到，我先核对附件。",
+    operator: "客服甲",
+    operationKey: "conversation-attachment-reply-1",
+  });
   const timeline = await service.listConversationTimeline(primaryIdentity);
   const inbound = timeline.find((item) => item.externalId === "external-attachment-1");
   const outbound = timeline.find((item) => item.sendTaskId === reply.task.id);
@@ -69,7 +74,11 @@ test("timeline merges inbound attachments and queued outbound tasks without clai
 test("read state is isolated, inbound-only, and idempotent", async () => {
   const { localStore, service } = setup();
   localStore.createMessage({ ...primaryIdentity, text: "新的未读消息", externalId: "unread-1" });
-  await service.enqueueManualReply({ ...primaryIdentity, text: "人工回复不增加未读" });
+  await service.enqueueManualReply({
+    ...primaryIdentity,
+    text: "人工回复不增加未读",
+    operationKey: "conversation-read-state-reply-1",
+  });
   const before = localStore.listConversations().find((item) => item.id === primaryIdentity.conversationId);
   assert.equal(before.unreadCount >= 2, true);
   const first = await service.markConversationMessagesRead(primaryIdentity);
@@ -84,23 +93,56 @@ test("read state is isolated, inbound-only, and idempotent", async () => {
 
 test("external inbound replay is idempotent within the conversation", () => {
   const { localStore } = setup();
-  const first = localStore.createMessage({ ...primaryIdentity, text: "一次", externalId: "same-event" });
-  const replay = localStore.createMessage({ ...primaryIdentity, text: "重复", externalId: "same-event" });
+  const payload = { ...primaryIdentity, text: "一次", externalId: "same-event" };
+  const first = localStore.createMessage(payload);
+  const replay = localStore.createMessage(payload);
   const timeline = localStore.listConversationTimeline(primaryIdentity);
   assert.equal(replay.id, first.id);
   assert.equal(timeline.filter((item) => item.externalId === "same-event").length, 1);
+  assert.throws(
+    () => localStore.createMessage({ ...payload, text: "同一外部事件被替换为不同内容" }),
+    /inbound message create operationKey was already used with different identity or payload/,
+  );
 });
 
 test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {
   const { localStore, service, tempDir } = setup();
   localStore.updateConversation(primaryIdentity.conversationId, { manualLocked: true });
   await assert.rejects(() => service.enqueueTextMessage({ ...primaryIdentity, text: "自动消息" }), /会话已人工接管/);
-  await assert.rejects(() => service.enqueueManualReply({ ...primaryIdentity, customerId: "customer_demo_2", text: "错客户" }), /customer binding invalid/);
-  await assert.rejects(() => service.enqueueManualReply({ ...primaryIdentity, text: "   " }), /text is required/);
-  await assert.rejects(() => service.enqueueManualReply({ ...primaryIdentity, text: "超".repeat(2001) }), /exceeds 2000 characters/);
-  const boundary = await service.enqueueManualReply({ ...primaryIdentity, text: "界".repeat(2000), operator: "客服甲" });
+  await assert.rejects(
+    () => service.enqueueManualReply({
+      ...primaryIdentity,
+      customerId: "customer_demo_2",
+      text: "错客户",
+      operationKey: "conversation-wrong-customer-1",
+    }),
+    /customer binding invalid/,
+  );
+  await assert.rejects(
+    () => service.enqueueManualReply({ ...primaryIdentity, text: "   ", operationKey: "conversation-empty-reply-1" }),
+    /text is required/,
+  );
+  await assert.rejects(
+    () => service.enqueueManualReply({
+      ...primaryIdentity,
+      text: "超".repeat(2001),
+      operationKey: "conversation-oversized-reply-1",
+    }),
+    /exceeds 2000 characters/,
+  );
+  const boundary = await service.enqueueManualReply({
+    ...primaryIdentity,
+    text: "界".repeat(2000),
+    operator: "客服甲",
+    operationKey: "conversation-boundary-reply-1",
+  });
   assert.equal(boundary.task.payload.text.length, 2000);
-  const result = await service.enqueueManualReply({ ...primaryIdentity, text: "人工接管后的可信回复", operator: "客服甲" });
+  const result = await service.enqueueManualReply({
+    ...primaryIdentity,
+    text: "人工接管后的可信回复",
+    operator: "客服甲",
+    operationKey: "conversation-manual-takeover-reply-1",
+  });
   assert.equal(result.task.status, "queued");
   assert.equal(result.task.payload.source, "manual_reply");
   assert.equal(result.task.guardSnapshot.manualReply, true);
@@ -119,5 +161,13 @@ test("manual reply uses safe queue while automation stays blocked by manual take
 
 test("inbound service rejects a customer id from another conversation", async () => {
   const { service } = setup();
-  await assert.rejects(() => service.processInboundMessage({ ...primaryIdentity, customerId: "customer_demo_2", text: "串线请求" }), /inbound customer binding invalid/);
+  await assert.rejects(
+    () => service.processInboundMessage({
+      ...primaryIdentity,
+      customerId: "customer_demo_2",
+      externalId: "conversation-cross-customer-1",
+      text: "串线请求",
+    }),
+    /inbound customer binding invalid/,
+  );
 });
