@@ -31,6 +31,12 @@ function doctorReport(overrides = {}) {
       { id: "api", status: "ready", missing: [] },
       { id: "web", status: "ready", missing: [] },
       { id: "database", status: "ready", missing: [], details: { mode: "prisma-postgresql" } },
+      {
+        id: "automation_scheduler",
+        status: "ready",
+        missing: [],
+        details: { enabled: true, mode: "durable", durable: true, redisUrlConfigured: true, liveConnectionChecked: false },
+      },
       { id: "design_platform", status: "ready", missing: [], details: { adapter: "art_image_local" } },
       { id: "model_chain", status: "ready", missing: [], details: { attemptOrder: ["primary"] } },
     ],
@@ -60,6 +66,9 @@ function validEnvironment(accountsConfigFile) {
     PERSONAL_WECHAT_RPA_ENDPOINT: "http://127.0.0.1:3211",
     PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: accountsConfigFile,
     PERSONAL_WECHAT_SEND: "0",
+    LOW_VALUE_AUTOMATION_ENABLED: "true",
+    LOW_VALUE_AUTOMATION_MODE: "durable",
+    LOW_VALUE_AUTOMATION_REDIS_URL: "redis://automation:secret-that-never-enters-the-report@127.0.0.1:6379/0",
   };
 }
 
@@ -89,6 +98,43 @@ function successfulResponse(route) {
   }
   if (route === "/wechat/bridge/status") {
     return { worker: { ok: true }, outbox: { ignoredCount: 0 }, dispatch: { staleCount: 0 }, locks: { staleCount: 0 } };
+  }
+  if (route === "/automation/status") {
+    return {
+      mode: "durable",
+      evidenceSource: "bullmq_redis",
+      durableEvidenceSource: "bullmq_redis",
+      scheduler: {
+        mode: "durable",
+        enabled: true,
+        active: true,
+        evidenceSource: "bullmq_redis",
+        configured: true,
+        connected: true,
+        scheduled: true,
+        workerReady: true,
+        localConcurrency: 1,
+        globalConcurrency: 1,
+        queueName: "low-value-automation",
+        schedulerId: "low-value-automation-schedule-v1",
+        attempts: 1,
+        maxStalledCount: 0,
+        durableEvidence: {
+          available: true,
+          scheduler: { present: true, next: 1770000000000 },
+          globalConcurrency: 1,
+          workerCount: 1,
+          counts: { waiting: 0, active: 0, delayed: 1, completed: 4, failed: 0 },
+          latestCompleted: { id: "sensitive-job-id", result: { payload: "must-not-enter-report" } },
+        },
+      },
+    };
+  }
+  if (route === "/automation/readiness") {
+    return {
+      ready: true,
+      checks: [{ key: "automation_scheduler", ok: true, severity: "info", detail: "must-not-enter-report" }],
+    };
   }
   throw new Error(`unexpected route: ${route}`);
 }
@@ -175,6 +221,105 @@ test("execute blocks when migration or channel audit evidence is missing", async
   assert.equal(report.results.find((item) => item.id === "evidence.wechat_work").status, STATUS.BLOCKED);
 });
 
+test("automation evidence requires durable BullMQ/Redis runtime and only keeps whitelisted fields", async (t) => {
+  const root = temporaryDirectory(t);
+  installPrismaCliFixture(root);
+  const accounts = path.join(root, "accounts.json");
+  fs.writeFileSync(accounts, '{}\n', "utf8");
+  const env = validEnvironment(accounts);
+  const redisSecret = env.LOW_VALUE_AUTOMATION_REDIS_URL;
+  const jobPayload = "raw-job-payload-must-not-enter-report";
+  const report = await collectStagingReadiness({
+    env,
+    doctorReport: doctorReport(),
+    execute: true,
+    runCommand: () => ({ status: 0, stdout: "Database schema is up to date!\n", stderr: "" }),
+    fetchJson: async (_url, options) => {
+      if (options.route === "/automation/status") {
+        const response = successfulResponse(options.route);
+        response.scheduler.globalConcurrency = 2;
+        response.scheduler.maxStalledCount = null;
+        response.scheduler.redisUrl = redisSecret;
+        response.scheduler.durableEvidence.workerCount = 0;
+        response.scheduler.durableEvidence.counts.failed = null;
+        response.scheduler.durableEvidence.latestCompleted = { result: { payload: jobPayload } };
+        return response;
+      }
+      if (options.route === "/automation/readiness") {
+        return {
+          ready: false,
+          checks: [{ key: "automation_scheduler", ok: false, severity: "error", detail: redisSecret }],
+        };
+      }
+      return successfulResponse(options.route);
+    },
+    desktopRoot: root,
+    runId: "automation-blocked-fixture",
+    generatedAt: "2026-07-19T00:00:00.000Z",
+  });
+  const automation = report.results.find((item) => item.id === "evidence.automation_queue");
+  const serialized = JSON.stringify(report);
+  assert.equal(automation.status, STATUS.BLOCKED);
+  assert.match(automation.blockers.join(" "), /global concurrency=1/);
+  assert.match(automation.blockers.join(" "), /max stalled count=0/);
+  assert.match(automation.blockers.join(" "), /worker count>=1/);
+  assert.match(automation.blockers.join(" "), /queue counts available/);
+  assert.equal(serialized.includes(redisSecret), false);
+  assert.equal(serialized.includes(jobPayload), false);
+  assert.equal(serialized.includes("must-not-enter-report"), false);
+  assert.deepEqual(Object.keys(automation.evidence).sort(), [
+    "active",
+    "configured",
+    "connected",
+    "counts",
+    "durableEvidenceAvailable",
+    "enabled",
+    "evidenceSource",
+    "globalConcurrency",
+    "localConcurrency",
+    "maxStalledCount",
+    "mode",
+    "queueName",
+    "readinessCheckOk",
+    "readinessReady",
+    "scheduled",
+    "schedulerId",
+    "schedulerPresent",
+    "templateAttempts",
+    "workerCount",
+    "workerReady",
+  ]);
+});
+
+test("automation static inventory fails closed when durable mode is not configured", async (t) => {
+  const root = temporaryDirectory(t);
+  const accounts = path.join(root, "accounts.json");
+  fs.writeFileSync(accounts, '{}\n', "utf8");
+  const env = validEnvironment(accounts);
+  const report = await collectStagingReadiness({
+    env,
+    doctorReport: doctorReport({
+      components: doctorReport().components.map((component) => component.id === "automation_scheduler"
+        ? { ...component, status: "blocked", missing: [env.LOW_VALUE_AUTOMATION_REDIS_URL], details: { enabled: true, mode: "interval", durable: false, redisUrlConfigured: false } }
+        : component),
+    }),
+    execute: false,
+    desktopRoot: root,
+    runId: "automation-static-blocked-fixture",
+    generatedAt: "2026-07-19T00:00:00.000Z",
+  });
+  const automation = report.results.find((item) => item.id === "config.automation_queue");
+  assert.equal(automation.status, STATUS.BLOCKED);
+  assert.equal(JSON.stringify(report).includes(env.LOW_VALUE_AUTOMATION_REDIS_URL), false);
+  assert.deepEqual(automation.evidence, {
+    enabled: true,
+    mode: "other",
+    durable: false,
+    redisUrlConfigured: false,
+    liveConnectionChecked: false,
+  });
+});
+
 test("execute fails closed when the locked local Prisma CLI is unavailable", async (t) => {
   const root = temporaryDirectory(t);
   const accounts = path.join(root, "accounts.json");
@@ -214,6 +359,7 @@ test("unsafe configuration is FAIL and secret values never enter reports", async
   for (const secret of [env.DATABASE_URL, env.INTERNAL_API_TOKEN, env.WECHAT_WORK_SECRET, env.DESIGN_PLATFORM_ACCESS_TOKEN]) {
     assert.equal(serialized.includes(secret), false);
   }
+  assert.equal(serialized.includes(env.LOW_VALUE_AUTOMATION_REDIS_URL), false);
 });
 
 test("reports are written as redacted JSON and Chinese Markdown under a run directory", async (t) => {
@@ -240,6 +386,8 @@ test("source contract contains no mutating staging route or migration deploy com
   const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
   assert.match(packageJson.scripts["staging:readiness"], /staging-readiness-evidence\.js/);
   assert.deepEqual(READ_ONLY_ROUTES.every((route) => !/send-text|sync|callback$/i.test(route)), true);
+  assert.equal(READ_ONLY_ROUTES.includes("/automation/status"), true);
+  assert.equal(READ_ONLY_ROUTES.includes("/automation/readiness"), true);
   assert.doesNotMatch(source, /npm\W+exec/);
   assert.doesNotMatch(source, /prisma\W+migrate\W+deploy/);
   assert.doesNotMatch(source, /method:\s*["']POST["']/);
