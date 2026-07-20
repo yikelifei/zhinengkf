@@ -10,6 +10,7 @@ import {
   createInboundMessageOperationFingerprint,
   createSendTaskOperationFingerprint,
   deterministicOperationId,
+  InboundLeaseLostError,
   monotonicInboundOperationStage,
   normalizeOperationKey,
   readRequestOperationMetadata,
@@ -1278,7 +1279,7 @@ export class LocalStoreService {
       current.claimToken !== claimToken ||
       Date.parse(String(current.leaseExpiresAt || "")) <= Date.now()
     ) {
-      throw new BadRequestException("inbound operation claim changed before stage commit");
+      throw new InboundLeaseLostError("inbound operation claim changed before stage commit");
     }
     const nextPatch = { ...patch };
     if ("stage" in nextPatch) {
@@ -1302,7 +1303,7 @@ export class LocalStoreService {
       !Number.isFinite(Date.parse(String(current.leaseExpiresAt || ""))) ||
       Date.parse(String(current.leaseExpiresAt)) <= now
     ) {
-      throw new BadRequestException("inbound operation lease is no longer owned by this claim");
+      throw new InboundLeaseLostError("inbound operation lease is no longer owned by this claim");
     }
     const nextLease = normalizeInstant(leaseExpiresAt);
     if (!nextLease || Date.parse(nextLease) <= now) {
@@ -1332,7 +1333,7 @@ export class LocalStoreService {
       operation.claimToken !== payload.claimToken ||
       Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now()
     ) {
-      throw new BadRequestException("inbound operation lease changed before high-value selection commit");
+      throw new InboundLeaseLostError("inbound operation lease changed before high-value selection commit");
     }
     const jobIndex = data.designJobs.findIndex((item) => item.id === payload.designJobId);
     if (jobIndex < 0) throw new NotFoundException(`local design job not found: ${payload.designJobId}`);

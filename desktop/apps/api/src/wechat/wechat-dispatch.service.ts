@@ -17,6 +17,7 @@ import {
   createInboundMessageOperationFingerprint,
   createOperationFingerprint,
   deterministicOperationId,
+  InboundLeaseLostError,
   inboundOperationStageAtLeast,
   isUniqueConstraintError,
   normalizeOperationKey,
@@ -74,7 +75,6 @@ const {
 const BRIDGE_OUTBOX_VERSION = "wechat_bridge_outbox_v1";
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
 const INBOUND_OPERATION_LEASE_MS = 5 * 60 * 1000;
-const INBOUND_OPERATION_HEARTBEAT_MS = 30 * 1000;
 
 type IdentityFilter = {
   wechatAccountId?: string;
@@ -1302,43 +1302,40 @@ export class WechatDispatchService {
   }
 
   private async withInboundEffectLease<T>(operationId: string, claimToken: string, effect: () => Promise<T> | T) {
-    const renew = () => this.persistence.renewInboundOperationLease(
+    // This is only a preflight owner check for idempotent local effects and
+    // stable send-task/notification operations. Prisma business mutations
+    // must additionally fence the operation row inside their own transaction.
+    await this.persistence.renewInboundOperationLease(
       operationId,
       claimToken,
       this.nextInboundLeaseExpiry(),
     );
-    await renew();
-    let heartbeatError: unknown = null;
-    let pendingHeartbeat: Promise<unknown> = Promise.resolve();
-    const heartbeat = setInterval(() => {
-      pendingHeartbeat = pendingHeartbeat
-        .then(() => renew())
-        .catch((error) => {
-          heartbeatError ||= error;
-        });
-    }, INBOUND_OPERATION_HEARTBEAT_MS);
-    heartbeat.unref?.();
-    try {
-      const result = await effect();
-      await pendingHeartbeat;
-      if (heartbeatError) throw heartbeatError;
-      await renew();
-      return result;
-    } finally {
-      clearInterval(heartbeat);
-    }
+    return effect();
   }
 
   private async completeInboundProcessing(operationId: string, claimToken: string, result: any) {
+    const manualLock = result?.manualLock
+      ? {
+          conversationId: durableEntityId(result.manualLock?.conversation, "manual-lock conversation"),
+          blockedSendTaskIds: durableEntityIds(result.manualLock?.blockedSendTasks),
+          inFlightSendTaskIds: durableEntityIds(result.manualLock?.inFlightSendTasks),
+          reviewLogId: durableEntityId(result.manualLock?.log, "manual-lock review log"),
+        }
+      : null;
     const durableResult = {
       messageId: result?.message?.id || null,
       routeEvaluationId: result?.route?.id || null,
       sendTaskId: result?.sendTask?.id || null,
       designJobId: result?.designJob?.id || null,
       notificationId: result?.notification?.id || null,
+      quoteDraftId: durableEntityId(result?.quote, "quote draft"),
+      orderDraftId: durableEntityId(result?.orderDraft, "order draft"),
       outcome: result?.plan?.type || (result?.duplicate ? "duplicate" : "processed"),
-      plan: result?.plan || null,
-      bundleRecommendation: result?.bundleRecommendation || null,
+      plan: durableJsonSnapshot(result?.plan),
+      bundleRecommendation: durableJsonSnapshot(result?.bundleRecommendation),
+      selection: durableSelectionSnapshot(result?.selection),
+      quoteAcceptance: durableJsonSnapshot(result?.quoteAcceptance),
+      manualLock,
     };
     await this.persistence.advanceInboundOperation(operationId, claimToken, {
       stage: "effects_committed",
@@ -1365,12 +1362,23 @@ export class WechatDispatchService {
     const sendTaskId = String(durable.sendTaskId || operation?.sendTaskId || "").trim();
     const designJobId = String(durable.designJobId || "").trim();
     const notificationId = String(durable.notificationId || "").trim();
-    const [message, route, sendTask, designJob, notification] = await Promise.all([
+    const quoteDraftId = String(durable.quoteDraftId || "").trim();
+    const orderDraftId = String(durable.orderDraftId || "").trim();
+    const manualLockRef = isPlainObject(durable.manualLock) ? durable.manualLock : null;
+    const manualConversationId = String(manualLockRef?.conversationId || "").trim();
+    const manualReviewLogId = String(manualLockRef?.reviewLogId || "").trim();
+    const blockedSendTaskIds = durableStringIds(manualLockRef?.blockedSendTaskIds);
+    const inFlightSendTaskIds = durableStringIds(manualLockRef?.inFlightSendTaskIds);
+    const [message, route, sendTask, designJob, notification, quote, orderDraft, manualConversation, manualReviewLog] = await Promise.all([
       this.persistence.findInboundMessageByExternalId(operation.wechatAccountId, operation.externalId),
       routeEvaluationId ? this.persistence.getRouteEvaluation(routeEvaluationId) : null,
       sendTaskId ? this.persistence.getSendTask(sendTaskId) : null,
       designJobId ? this.persistence.getDesignJob(designJobId) : null,
       notificationId ? this.persistence.getNotification(notificationId) : null,
+      quoteDraftId ? this.persistence.getQuoteDraft(quoteDraftId) : null,
+      orderDraftId ? this.orders.getById(orderDraftId) : null,
+      manualConversationId ? this.persistence.getConversation(manualConversationId) : null,
+      manualReviewLogId ? this.persistence.getReviewLog(manualReviewLogId) : null,
     ]);
     if (!message || (messageId && String(message.id || "") !== messageId)) {
       throw new BadRequestException("completed inbound operation is missing its durable message");
@@ -1380,8 +1388,22 @@ export class WechatDispatchService {
       ["send task", sendTaskId, sendTask],
       ["design job", designJobId, designJob],
       ["notification", notificationId, notification],
+      ["quote draft", quoteDraftId, quote],
+      ["order draft", orderDraftId, orderDraft],
+      ["manual-lock conversation", manualConversationId, manualConversation],
+      ["manual-lock review log", manualReviewLogId, manualReviewLog],
     ] as const) {
       if (id && !value) throw new BadRequestException(`completed inbound operation is missing its durable ${label}`);
+    }
+    const [blockedSendTasks, inFlightSendTasks] = await Promise.all([
+      Promise.all(blockedSendTaskIds.map((id) => this.persistence.getSendTask(id))),
+      Promise.all(inFlightSendTaskIds.map((id) => this.persistence.getSendTask(id))),
+    ]);
+    if (blockedSendTasks.some((item) => !item) || inFlightSendTasks.some((item) => !item)) {
+      throw new BadRequestException("completed inbound operation is missing its durable manual-lock send task");
+    }
+    if (manualLockRef && !manualConversationId) {
+      throw new BadRequestException("completed inbound operation has an incomplete durable manual-lock reference");
     }
     const outcome = String(durable.outcome || "processed");
     const plan = isPlainObject(durable.plan)
@@ -1404,6 +1426,18 @@ export class WechatDispatchService {
       sendTask,
       designJob,
       notification,
+      quote,
+      orderDraft,
+      selection: hydrateDurableSelection(durable.selection, designJob),
+      quoteAcceptance: Object.prototype.hasOwnProperty.call(durable, "quoteAcceptance") ? durable.quoteAcceptance : null,
+      manualLock: manualLockRef
+        ? {
+            conversation: manualConversation,
+            blockedSendTasks,
+            inFlightSendTasks,
+            log: manualReviewLog,
+          }
+        : null,
       bundleRecommendation: durable.bundleRecommendation || null,
       operationId: operation?.id || null,
     };
@@ -1523,6 +1557,11 @@ export class WechatDispatchService {
 
     try {
     const message = await this.persistence.createMessage({
+      inboundFence: {
+        operationId: inboundOperation.id,
+        claimToken,
+        leaseExpiresAt: this.nextInboundLeaseExpiry(),
+      },
       conversationId: conversation.id,
       customerId: conversation.customerId,
       wechatAccountId: payload.wechatAccountId,
@@ -1564,7 +1603,7 @@ export class WechatDispatchService {
       skills,
       knowledgeEntries,
     });
-    const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, {
+    const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, claimToken, {
         channel: conversation.channel || "wechat",
         text: payload.text || "",
         customerId: conversation.customerId,
@@ -1665,8 +1704,12 @@ export class WechatDispatchService {
     }
   }
 
-  private async createPrismaInboundRouteEvaluationOnce(operationId: string, data: Record<string, unknown>) {
-    const model = (this.prisma as any).routeEvaluation;
+  private async createPrismaInboundRouteEvaluationOnce(
+    operationId: string,
+    claimToken: string,
+    data: Record<string, unknown>,
+  ) {
+    const prisma = this.prisma as any;
     const id = deterministicOperationId("route", operationId);
     const assertReplay = (existing: any) => {
       if (
@@ -1678,13 +1721,27 @@ export class WechatDispatchService {
       }
       return existing;
     };
-    const existing = await model.findUnique({ where: { id } });
-    if (existing) return assertReplay(existing);
     try {
-      return await model.create({ data: { id, ...data } });
+      return await prisma.$transaction(async (tx: any) => {
+        const fenced = await tx.inboundMessageOperation.updateMany({
+          where: {
+            id: operationId,
+            status: "processing",
+            claimToken,
+            leaseExpiresAt: { gt: new Date() },
+          },
+          data: { leaseExpiresAt: new Date(this.nextInboundLeaseExpiry()) },
+        });
+        if (fenced.count !== 1) {
+          throw new InboundLeaseLostError("inbound operation lease changed before route evaluation commit");
+        }
+        const existing = await tx.routeEvaluation.findUnique({ where: { id } });
+        if (existing) return assertReplay(existing);
+        return tx.routeEvaluation.create({ data: { id, ...data } });
+      });
     } catch (error) {
       if (!isUniqueConstraintError(error)) throw error;
-      const winner = await model.findUnique({ where: { id } });
+      const winner = await prisma.routeEvaluation.findUnique({ where: { id } });
       if (!winner) throw error;
       return assertReplay(winner);
     }
@@ -1699,7 +1756,7 @@ export class WechatDispatchService {
     route: any;
     payload: { text?: string; attachments?: Array<Record<string, unknown>> };
   }) {
-    const recovery = inboundHighValueSelectionRecovery(params.operationResult);
+    const recovery = inboundSelectionRecovery(params.operationResult);
     if (recovery) {
       const recoveryJob = await (this.prisma as any).designJob.findUnique({
         where: { id: recovery.designJobId },
@@ -1719,13 +1776,58 @@ export class WechatDispatchService {
       if (!recoveryCandidate) {
         throw new BadRequestException("high-value inbound selection recovery lost its durable image binding");
       }
-      return this.finishPrismaHighValueSelection(params, recoveryJob, recovery.selectedImageId, {
+      const recoveredSelection = {
         action: "select_image",
         ok: true,
         reviewRequired: false,
-        reason: "high_value_customer_selected_image",
+        reason: recovery.kind === "high_value_image_selection"
+          ? "high_value_customer_selected_image"
+          : "low_value_customer_selected_image",
         result: { candidate: recoveryCandidate, imageId: recovery.selectedImageId, source: "durable_recovery" },
+      };
+      if (recovery.kind === "high_value_image_selection") {
+        return this.finishPrismaHighValueSelection(params, recoveryJob, recovery.selectedImageId, recoveredSelection);
+      }
+      const recoveredQuote = await (this.prisma as any).quoteDraft.findFirst({
+        where: { designJobId: recovery.designJobId, selectedImageId: recovery.selectedImageId },
+        include: { customer: true, selectedImage: true, designJob: true },
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
       });
+      if (!recoveredQuote) {
+        throw new BadRequestException("low-value inbound selection recovery lost its durable quote binding");
+      }
+      const quoteSend = await this.tryQueuePrismaLowValueQuoteAfterSelection(recoveredQuote, recoveryJob);
+      const notification = await this.notifications.create(
+        "info",
+        "低价值客户已选图，已生成报价草稿",
+        "客户选图恢复完成，系统已确认候选图与报价草稿的持久化绑定。",
+        {
+          effectKey: `${params.operationId}:low-value-selection-notification`,
+          designJobId: recoveryJob.id,
+          quoteDraftId: quoteSend.quote?.id,
+          selectedImageId: recovery.selectedImageId,
+          wechatAccountId: params.conversation.wechatAccountId,
+          conversationId: params.conversation.id,
+          customerId: params.conversation.customerId,
+        },
+      );
+      return {
+        message: params.message,
+        route: params.route,
+        plan: {
+          type: "select_design_image_and_create_quote",
+          reason: quoteSend.sendTask ? "low_value_customer_selected_image_quote_queued" : "low_value_customer_selected_image",
+          shouldNotifyHuman: false,
+          shouldCreateDesignJob: false,
+          shouldQueueReply: Boolean(quoteSend.sendTask),
+        },
+        sendTask: quoteSend.sendTask,
+        designJob: recoveryJob,
+        notification,
+        bundleRecommendation: null,
+        selection: recoveredSelection,
+        quote: quoteSend.quote,
+      };
     }
     if (this.hasInboundPaymentProof(params.payload)) return null;
     const identity = {
@@ -1785,11 +1887,36 @@ export class WechatDispatchService {
     }
     const feedback = this.inboundSelectionFeedback(params.payload, selectionPlan.result);
     const highValueReview = this.shouldManualReviewSelectedJob(job);
+    const recoveryEffect = {
+      kind: highValueReview ? "high_value_image_selection" : "low_value_image_selection",
+      phase: "selection_committed",
+      designJobId: job.id,
+      selectedImageId,
+      routeEvaluationId: params.route.id,
+    };
     let updatedJob: any;
     let quote: any = null;
     try {
       const initialRevisionSignature = designSelectionRevisionSignature(job);
       const committed = await prisma.$transaction(async (tx: any) => {
+        const fenced = await tx.inboundMessageOperation.updateMany({
+          where: {
+            id: params.operationId,
+            status: "processing",
+            claimToken: params.claimToken,
+            leaseExpiresAt: { gt: new Date() },
+          },
+          data: {
+            result: {
+              ...(isPlainObject(params.operationResult) ? params.operationResult : {}),
+              recoveryEffect,
+            },
+            leaseExpiresAt: new Date(this.nextInboundLeaseExpiry()),
+          },
+        });
+        if (fenced.count !== 1) {
+          throw new InboundLeaseLostError("inbound operation lease changed before design selection commit");
+        }
         const current = await tx.designJob.findFirst({
           where: {
             id: job.id,
@@ -1821,33 +1948,6 @@ export class WechatDispatchService {
           include: { images: true, revisions: true, customer: true, conversation: true },
         });
         if (highValueReview) {
-          const recoveryEffect = {
-            kind: "high_value_image_selection",
-            phase: "selection_committed",
-            designJobId: current.id,
-            selectedImageId,
-            routeEvaluationId: params.route.id,
-          };
-          if (params.claimToken) {
-            const fenced = await tx.inboundMessageOperation.updateMany({
-              where: {
-                id: params.operationId,
-                status: "processing",
-                claimToken: params.claimToken,
-                leaseExpiresAt: { gt: new Date() },
-              },
-              data: {
-                result: {
-                  ...(isPlainObject(params.operationResult) ? params.operationResult : {}),
-                  recoveryEffect,
-                },
-                leaseExpiresAt: new Date(this.nextInboundLeaseExpiry()),
-              },
-            });
-            if (fenced.count !== 1) {
-              throw new BadRequestException("inbound operation lease changed before high-value selection commit");
-            }
-          }
           return { job: nextJob, quote: null };
         }
         const pricing = prismaQuotePricing(job);
@@ -1884,6 +1984,7 @@ export class WechatDispatchService {
       updatedJob = committed.job;
       quote = committed.quote;
     } catch (error) {
+      if (error instanceof InboundLeaseLostError) throw error;
       if (error instanceof BadRequestException) {
         return this.createPrismaInboundSelectionReview(params, job, "selection_revision_changed_before_commit", selectionPlan);
       }
@@ -1910,7 +2011,7 @@ export class WechatDispatchService {
         shouldCreateDesignJob: false,
         shouldQueueReply: Boolean(quoteSend.sendTask),
       },
-      sendTask: null,
+      sendTask: quoteSend.sendTask,
       designJob: updatedJob,
       notification,
       bundleRecommendation: null,
@@ -5976,7 +6077,7 @@ export class WechatDispatchService {
       attachments?: Array<Record<string, unknown>>;
     };
   }) {
-    const recovery = inboundHighValueSelectionRecovery(params.operationResult);
+    const recovery = inboundSelectionRecovery(params.operationResult);
     if (recovery) {
       const recoveryJob = this.localStore.getDesignJob(recovery.designJobId);
       if (!recoveryJob || !this.jobMatchesConversationIdentity(recoveryJob, params.conversation)) {
@@ -7781,16 +7882,19 @@ export class WechatDispatchService {
   }
 }
 
-function inboundHighValueSelectionRecovery(value: unknown) {
+function inboundSelectionRecovery(value: unknown) {
   const result = isPlainObject(value) ? value : {};
   const effect = isPlainObject(result.recoveryEffect) ? result.recoveryEffect : {};
-  if (effect.kind !== "high_value_image_selection" || effect.phase !== "selection_committed") return null;
+  if (
+    !["high_value_image_selection", "low_value_image_selection"].includes(String(effect.kind || "")) ||
+    effect.phase !== "selection_committed"
+  ) return null;
   const designJobId = String(effect.designJobId || "").trim();
   const selectedImageId = String(effect.selectedImageId || "").trim();
   if (!designJobId || !selectedImageId) {
-    throw new BadRequestException("high-value inbound selection recovery marker is incomplete");
+    throw new BadRequestException("inbound selection recovery marker is incomplete");
   }
-  return { designJobId, selectedImageId };
+  return { kind: String(effect.kind), designJobId, selectedImageId };
 }
 
 function isOlderThan(value: unknown, now: Date, minutes: number) {
@@ -7917,6 +8021,82 @@ function stringOrUndefined(value: unknown) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function durableJsonSnapshot(value: unknown) {
+  if (value === undefined || value === null) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    throw new BadRequestException("inbound durable business result is not JSON serializable");
+  }
+}
+
+function durableEntityIds(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new BadRequestException("inbound durable entity references must be an array");
+  const ids = value.map((item: any) => String(item?.id || "").trim());
+  if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+    throw new BadRequestException("inbound durable entity references contain a missing or duplicate id");
+  }
+  return ids;
+}
+
+function durableEntityId(value: unknown, label: string) {
+  if (value === undefined || value === null) return null;
+  const entityId = isPlainObject(value) ? String(value.id || "").trim() : "";
+  if (!entityId) throw new BadRequestException(`inbound ${label} result is missing its durable id`);
+  return entityId;
+}
+
+function durableStringIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const ids = value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (ids.length !== value.length || new Set(ids).size !== ids.length) {
+    throw new BadRequestException("completed inbound operation has invalid durable entity references");
+  }
+  return ids;
+}
+
+function durableSelectionSnapshot(value: unknown) {
+  if (!isPlainObject(value)) return null;
+  const result = isPlainObject(value.result) ? value.result : {};
+  const candidate = isPlainObject(result.candidate) ? result.candidate : {};
+  return {
+    action: String(value.action || ""),
+    ok: value.ok === true,
+    reviewRequired: value.reviewRequired === true,
+    reason: String(value.reason || ""),
+    result: {
+      imageId: String(result.imageId || candidate.id || candidate.imageId || ""),
+      source: String(result.source || ""),
+      candidateId: String(candidate.id || ""),
+    },
+  };
+}
+
+function hydrateDurableSelection(value: unknown, designJob: any) {
+  if (!isPlainObject(value)) return null;
+  const result = isPlainObject(value.result) ? value.result : {};
+  const candidateId = String(result.candidateId || result.imageId || "").trim();
+  const candidates = Array.isArray(designJob?.images) ? designJob.images : [];
+  const candidate = candidateId
+    ? candidates.find((item: any) => String(item?.id || "") === candidateId || String(item?.imageId || "") === candidateId) || null
+    : null;
+  if (candidateId && designJob && !candidate) {
+    throw new BadRequestException("completed inbound operation is missing its durable selection candidate");
+  }
+  return {
+    action: String(value.action || ""),
+    ok: value.ok === true,
+    reviewRequired: value.reviewRequired === true,
+    reason: String(value.reason || ""),
+    result: {
+      imageId: String(result.imageId || candidateId),
+      source: String(result.source || ""),
+      candidate,
+    },
+  };
 }
 
 function assertManualReleaseReason(reason: unknown, context: string) {

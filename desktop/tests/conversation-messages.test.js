@@ -245,6 +245,12 @@ test("inbound operation snapshot strips host secrets and local paths from attach
       token: "operation-secret-token",
       endpoint: "http://127.0.0.1:3999",
       localPath: "C:\\secret\\attachment.png",
+    }, {
+      role: "reference",
+      imageId: "opaque|C:\\Users\\agent\\secret.png",
+      remoteImageId: "opaque|https://internal.example/private",
+      mimeType: "image/png C:\\host\\vault.key",
+      fingerprint: "opaque-token=credential-value",
     }],
     createdAt: "2030-07-20T13:00:00.000Z",
   });
@@ -253,7 +259,7 @@ test("inbound operation snapshot strips host secrets and local paths from attach
   const snapshot = JSON.stringify(operation.normalizedPayload);
   assert.match(snapshot, /image\/png/);
   assert.match(snapshot, /safe-remote-image-id/);
-  assert.doesNotMatch(snapshot, /operation-secret-token|127\.0\.0\.1|secret\\\\(?:attachment|reference)|file:\/\/\/private/i);
+  assert.doesNotMatch(snapshot, /operation-secret-token|credential-value|127\.0\.0\.1|internal\.example|secret\\\\(?:attachment|reference)|Users\\\\agent|host\\\\vault|file:\/\/\/private/i);
   assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
 });
 
@@ -265,6 +271,9 @@ test("inbound assetIds reject non-strings, credentials, endpoints, absolute path
     ["file:///private/asset.png"],
     ["C:\\private\\asset.png"],
     ["\\\\server\\share\\asset.png"],
+    ["opaque|C:\\private\\asset.png"],
+    ["opaque|https://private.example/asset"],
+    ["opaque-token=secret-value"],
     ["asset-id\u0000hidden"],
   ];
   for (const [index, assetIds] of unsafeValues.entries()) {

@@ -334,7 +334,18 @@ export class PersonalWechatRpaService {
     const messageType = String(payload.messageType || "text").trim().toLowerCase();
     const externalId = String(payload.externalId || "").trim();
     const conversationType = String(payload.conversationType || "direct").trim().toLowerCase();
-    const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+    if (payload.attachments !== undefined && !Array.isArray(payload.attachments)) {
+      throw new BadRequestException("attachments must be an array of allowlisted business references");
+    }
+    if (Array.isArray(payload.attachments) && payload.attachments.length > 50) {
+      throw new BadRequestException("attachments must contain at most 50 business references");
+    }
+    if (Array.isArray(payload.attachments) && payload.attachments.some(
+      (item) => !item || typeof item !== "object" || Array.isArray(item),
+    )) {
+      throw new BadRequestException("attachments must contain only business reference objects");
+    }
+    const attachments = sanitizeInboundOperationAttachments(payload.attachments);
     const createdAtText = String(payload.createdAt || "").trim() || new Date().toISOString();
 
     if (!identity.accountNickname) throw new BadRequestException("personal WeChat RPA account nickname is not configured");

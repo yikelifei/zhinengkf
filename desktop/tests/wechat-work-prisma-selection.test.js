@@ -41,7 +41,10 @@ function setup(options = {}) {
   localStore.filePath = path.join(tempDir, "local-store.json");
   const initialJob = options.initialJob === undefined ? designJob() : options.initialJob;
   const currentJob = options.currentJob === undefined ? initialJob : options.currentJob;
-  const calls = { jobQueries: [], jobUpdates: [], imageUpdates: [], operationUpdates: [], quotes: [], reviews: [], notifications: [] };
+  const calls = {
+    jobQueries: [], jobUpdates: [], imageUpdates: [], operationUpdates: [], quotes: [], reviews: [], notifications: [],
+    messageWrites: [], routeWrites: [],
+  };
   const tx = {
     designJob: {
       async findFirst(query) {
@@ -66,8 +69,20 @@ function setup(options = {}) {
     inboundMessageOperation: {
       async updateMany(query) {
         calls.operationUpdates.push(query);
-        return { count: 1 };
+        return { count: options.fenceCount === undefined ? 1 : options.fenceCount };
       },
+    },
+    message: {
+      async findFirst() { return null; },
+      async create(query) { calls.messageWrites.push(query); return { id: "message-created", ...query.data }; },
+    },
+    routeEvaluation: {
+      async findUnique() { return null; },
+      async create(query) { calls.routeWrites.push(query); return { id: query.data.id, ...query.data }; },
+    },
+    conversation: {
+      async findUnique() { return conversation(); },
+      async updateMany() { return { count: 1 }; },
     },
     quoteDraft: {
       async create(query) {
@@ -134,6 +149,8 @@ function conversation(patch = {}) {
 
 function params(payload = { text: "第1张" }, conversationPatch = {}) {
   return {
+    operationId: "inbound-selection-operation",
+    claimToken: "inbound-selection-owner",
     conversation: conversation(conversationPatch),
     message: { id: "message-a" },
     route: { id: "route-a" },
@@ -212,6 +229,65 @@ test("Prisma high-value selection records a fenced recovery marker before post-c
   assert.equal(calls.reviews.length, 2);
   assert.equal(calls.reviews.filter((item) => item.targetType === "design_job").length, 1);
   assert.equal(calls.notifications.filter((item) => item.metadata?.effectKey?.endsWith(":high-value-selection-notification")).length, 1);
+});
+
+test("Prisma selection lease CAS failure performs no business mutation, lock, review or notification", async () => {
+  const { service, calls } = setup({ fenceCount: 0 });
+  let lockCalls = 0;
+  service.lockConversationForManualReview = async () => {
+    lockCalls += 1;
+    return {};
+  };
+
+  await assert.rejects(
+    () => service.handlePrismaInboundImageSelection(params()),
+    (error) => {
+      assert.equal(error.name, "InboundLeaseLostError");
+      assert.equal(error.getResponse().code, "INBOUND_LEASE_LOST");
+      return true;
+    },
+  );
+
+  assert.equal(calls.operationUpdates.length, 1);
+  assert.equal(calls.jobUpdates.length, 0);
+  assert.equal(calls.imageUpdates.length, 0);
+  assert.equal(calls.quotes.length, 0);
+  assert.equal(calls.reviews.length, 0);
+  assert.equal(calls.notifications.length, 0);
+  assert.equal(lockCalls, 0);
+});
+
+test("Prisma message and route durable writes fence the inbound owner in the same transaction", async () => {
+  const { service, calls } = setup({ fenceCount: 0 });
+  const fence = {
+    operationId: "inbound-stale-owner",
+    claimToken: "owner-a",
+    leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+
+  await assert.rejects(
+    () => service.persistence.createMessage({
+      inboundFence: fence,
+      conversationId: "conversation-a",
+      customerId: "customer-a",
+      wechatAccountId: "account-a",
+      externalId: "external-a",
+      text: "stale write",
+    }),
+    (error) => error.name === "InboundLeaseLostError",
+  );
+  await assert.rejects(
+    () => service.createPrismaInboundRouteEvaluationOnce(
+      fence.operationId,
+      fence.claimToken,
+      { conversationId: "conversation-a", customerId: "customer-a", text: "stale write" },
+    ),
+    (error) => error.name === "InboundLeaseLostError",
+  );
+
+  assert.equal(calls.messageWrites.length, 0);
+  assert.equal(calls.routeWrites.length, 0);
+  assert.equal(calls.operationUpdates.length, 2);
 });
 
 test("Prisma selection defers quote-acceptance text to the quote acceptance policy", async () => {

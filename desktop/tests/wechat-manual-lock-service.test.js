@@ -4854,6 +4854,20 @@ test("inbound high value image selection locks conversation and leaves human rev
   assert.doesNotMatch(designLog.note, /High-value customer selected/);
   assert.ok(lockLog);
   assert.match(lockLog.note, /高价值客户已选图/);
+
+  const replay = await service.processInboundMessage({
+    externalId: "manual-lock-selection-high-value",
+    text: "我选第2张，按这个继续报价",
+    conversationId: "conversation_demo_1",
+  });
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.designJob.id, result.designJob.id);
+  assert.equal(replay.selection.result.imageId, result.selection.result.imageId);
+  assert.equal(replay.selection.result.candidate.id, images[1].id);
+  assert.equal(replay.manualLock.conversation.id, "conversation_demo_1");
+  assert.equal(replay.manualLock.conversation.manualLocked, true);
+  assert.equal(replay.manualLock.log.id, lockLog.id);
+  assert.equal(localStore.listReviewLogs().filter((log) => log.id === lockLog.id).length, 1);
 });
 
 test("inbound high value image selection resumes durable lock review and notification after a post-commit crash", async () => {
@@ -5115,6 +5129,18 @@ test("sent low-value quote becomes unpaid order draft after customer accepts wit
   assert.equal(selection.quote.selectedImageId, images[1].id);
   assert.equal(selection.sendTask.status, "queued");
 
+  const selectionReplay = await service.processInboundMessage({
+    externalId: "manual-lock-quote-accept-selection",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "我选第2张，就按这个报价",
+  });
+  assert.equal(selectionReplay.duplicate, true);
+  assert.equal(selectionReplay.quote.id, selection.quote.id);
+  assert.equal(selectionReplay.sendTask.id, selection.sendTask.id);
+  assert.equal(selectionReplay.selection.result.imageId, selection.selection.result.imageId);
+  assert.equal(selectionReplay.selection.result.candidate.id, images[1].id);
+
   createPassingWechatWindowSnapshot(localStore, "我选第2张，就按这个报价");
   const sendScan = await service.processSafeSendQueue({ adapter: "windows_bridge" });
   assert.equal(sendScan.processed.length, 1);
@@ -5147,6 +5173,17 @@ test("sent low-value quote becomes unpaid order draft after customer accepts wit
   assert.ok(notification);
   assert.match(notification.body, /order|draft|payment|订单|付款/);
   assert.equal(notification.target.confirmationReason, "payment_not_ready");
+
+  const acceptanceReplay = await service.processInboundMessage({
+    externalId: "manual-lock-quote-accept-unpaid",
+    text: "可以，就按这个方案下单",
+    conversationId: "conversation_demo_1",
+  });
+  assert.equal(acceptanceReplay.duplicate, true);
+  assert.equal(acceptanceReplay.quote.id, acceptance.quote.id);
+  assert.equal(acceptanceReplay.orderDraft.id, acceptance.orderDraft.id);
+  assert.equal(acceptanceReplay.quoteAcceptance.action, acceptance.quoteAcceptance.action);
+  assert.equal(acceptanceReplay.quoteAcceptance.reason, acceptance.quoteAcceptance.reason);
 });
 
 test("sent low-value quote does not mark paid when customer asks how to pay deposit", async () => {

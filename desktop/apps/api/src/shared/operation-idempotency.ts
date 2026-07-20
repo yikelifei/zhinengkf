@@ -2,6 +2,11 @@ import { BadRequestException, ConflictException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 
 const OPERATION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*[A-Za-z0-9]$/;
+const INBOUND_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const INBOUND_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const MIME_TYPE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+const EMBEDDED_ENDPOINT_OR_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\\\\[^\\\s]|(?:^|[^:])\/\/|\b(?:file|https?|wss?|tcp):\/\/)/i;
+const EMBEDDED_CREDENTIAL_PATTERN = /(?:^|[^A-Za-z0-9_])(?:access[_-]?token|token|password|passwd|secret)\s*[:=]/i;
 
 export const OPERATION_KEY_MIN_LENGTH = 16;
 export const OPERATION_KEY_MAX_LENGTH = 128;
@@ -10,6 +15,13 @@ export type RequestOperationMetadata = {
   key: string;
   fingerprint: string;
 };
+
+export class InboundLeaseLostError extends ConflictException {
+  constructor(message = "inbound operation lease is no longer owned by this claim") {
+    super({ code: "INBOUND_LEASE_LOST", message });
+    this.name = "InboundLeaseLostError";
+  }
+}
 
 const INBOUND_OPERATION_STAGE_ORDER = [
   "reserved",
@@ -148,12 +160,15 @@ export function sanitizeInboundOperationAttachments(value: unknown) {
     }
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const source = item as Record<string, unknown>;
-    const sanitized = Object.fromEntries(
-      allowedKeys
-        .filter((key) => typeof source[key] === "string" && String(source[key]).trim())
-        .map((key) => [key, sanitizeInboundBusinessIdentifier(source[key], 512)])
-        .filter((entry): entry is [string, string] => Boolean(entry[1])),
-    );
+    const sanitized = Object.fromEntries(allowedKeys.flatMap((key) => {
+      if (typeof source[key] !== "string" || !String(source[key]).trim()) return [];
+      const safeValue = key === "mimeType"
+        ? sanitizeInboundMimeType(source[key])
+        : key === "role" || key === "type" || key === "kind"
+          ? sanitizeInboundLabel(source[key], 64)
+          : sanitizeInboundBusinessIdentifier(source[key], 512);
+      return safeValue ? [[key, safeValue] as [string, string]] : [];
+    }));
     return Object.keys(sanitized).length ? [sanitized] : [];
   });
 }
@@ -186,9 +201,23 @@ function sanitizeInboundBusinessIdentifier(value: unknown, maxLength: number) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text || text.length > maxLength) return "";
   if (/[\u0000-\u001f\u007f]/.test(text)) return "";
-  if (/^(?:[a-z]:[\\/]|\\\\|\/\/|\/|file:|https?:\/\/|wss?:\/\/|tcp:\/\/)/i.test(text)) return "";
-  if (/(?:^|[?&;\s])(?:token|access_token|password|passwd|secret)\s*[:=]/i.test(text)) return "";
+  if (EMBEDDED_ENDPOINT_OR_PATH_PATTERN.test(text) || EMBEDDED_CREDENTIAL_PATTERN.test(text)) return "";
+  if (!INBOUND_IDENTIFIER_PATTERN.test(text)) return "";
   return text;
+}
+
+function sanitizeInboundLabel(value: unknown, maxLength: number) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > maxLength) return "";
+  if (EMBEDDED_ENDPOINT_OR_PATH_PATTERN.test(text) || EMBEDDED_CREDENTIAL_PATTERN.test(text)) return "";
+  return INBOUND_LABEL_PATTERN.test(text) ? text : "";
+}
+
+function sanitizeInboundMimeType(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > 127) return "";
+  if (EMBEDDED_ENDPOINT_OR_PATH_PATTERN.test(text) || EMBEDDED_CREDENTIAL_PATTERN.test(text)) return "";
+  return MIME_TYPE_PATTERN.test(text) ? text.toLowerCase() : "";
 }
 
 export function inboundOperationStageAtLeast(current: unknown, expected: unknown) {
