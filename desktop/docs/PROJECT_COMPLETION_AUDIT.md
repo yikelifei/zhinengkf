@@ -24,7 +24,7 @@ npm.cmd run project:completion:audit
 
 `FAIL` 的优先级高于 `BLOCKED`。真实环境缺失不能掩盖内部代码缺口。
 
-审计 schema `smart_kefu_project_completion_audit_v3` 还固定检查两组输入边界：设计平台请求必须在 Axios 实例和请求拦截器两层保持零重定向并显式拒绝 30x；SKU 文件导入必须保留规范 Base64、输入字节、ZIP/解压和工作表资源上限。对应安全测试文件也属于必需制品，删除实现标记或测试会产生仓库内 `FAIL`。
+审计 schema `smart_kefu_project_completion_audit_v3` 还固定检查两组输入边界：设计平台请求必须在 Axios 实例和请求拦截器两层保持零重定向并显式拒绝 30x；SKU 文件导入必须保留规范 Base64、输入字节、ZIP/解压和工作表资源上限。XLSX XML 契约还要求只前进索引扫描器、在第 N+1 个元素读取标签体前终止、限制标签/文本片段/单单元格/累计解码文本，并明确禁止 `sharedStrings`、`row`、`cell` 恢复为 `match`/`matchAll` 全量物化；审计变异测试会分别删除早停条件和注入禁用正则，确认两种漂移都产生仓库内 `FAIL`。对应安全测试文件也属于必需制品，删除实现标记或测试会产生仓库内 `FAIL`。
 
 ## 固定 LocalStore 清单
 

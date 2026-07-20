@@ -14,7 +14,16 @@ const SKU_IMPORT_LIMITS = Object.freeze({
   maxWorksheetRows: 5000,
   maxWorksheetCells: 100000,
   maxWorksheetColumns: 256,
+  maxXmlTagBytes: 16 * 1024,
+  maxTextRunsPerCell: 4096,
+  maxCellTextBytes: 256 * 1024,
   maxFinalTextBytes: 2 * MEBIBYTE,
+});
+
+const XML_SCANNER_CONTRACT = Object.freeze({
+  strategy: "forward-only-index-scanner",
+  materializesMatchArrays: false,
+  rejectsElementNPlusOneBeforeBodyScan: true,
 });
 
 class SkuImportError extends Error {
@@ -693,20 +702,16 @@ function decodeXmlEntry(buffer) {
 function parseSharedStrings(xml) {
   if (!xml) return [];
   const strings = [];
-  const items = xml.match(/<si\b[\s\S]*?<\/si>/g) || [];
-  if (items.length > SKU_IMPORT_LIMITS.maxSharedStrings) {
-    throw new SkuImportError("SKU_IMPORT_SHARED_STRING_LIMIT", "共享字符串数量超过允许上限");
-  }
   let totalBytes = 0;
-  for (const item of items) {
-    const textParts = [...item.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1]));
-    const value = textParts.join("");
-    totalBytes += Buffer.byteLength(value, "utf8");
-    if (totalBytes > SKU_IMPORT_LIMITS.maxFinalTextBytes) {
-      throw new SkuImportError("SKU_IMPORT_TEXT_TOO_LARGE", "共享字符串文本超过允许大小");
-    }
+  scanXmlElements(xml, "si", {
+    limit: SKU_IMPORT_LIMITS.maxSharedStrings,
+    limitCode: "SKU_IMPORT_SHARED_STRING_LIMIT",
+    limitMessage: "共享字符串数量超过允许上限",
+  }, (element) => {
+    const value = extractXmlTextRuns(xml, element.contentStart, element.contentEnd);
+    totalBytes = addDecodedTextBytes(totalBytes, value, "共享字符串文本超过允许大小");
     strings.push(value);
-  }
+  });
   return strings;
 }
 
@@ -730,22 +735,25 @@ function resolveFirstWorksheetName(entries) {
 
 function parseWorksheetRows(xml, sharedStrings) {
   const rows = [];
-  const rowMatches = xml.match(/<row\b[\s\S]*?<\/row>/g) || [];
-  if (rowMatches.length > SKU_IMPORT_LIMITS.maxWorksheetRows) {
-    throw new SkuImportError("SKU_IMPORT_ROW_LIMIT", "工作表行数超过允许上限");
-  }
   let totalCells = 0;
-  for (const rowXml of rowMatches) {
+  let totalDecodedBytes = 0;
+  scanXmlElements(xml, "row", {
+    limit: SKU_IMPORT_LIMITS.maxWorksheetRows,
+    limitCode: "SKU_IMPORT_ROW_LIMIT",
+    limitMessage: "工作表行数超过允许上限",
+  }, (rowElement) => {
     const row = [];
-    const cellMatches = rowXml.match(/<c\b[\s\S]*?<\/c>/g) || [];
-    totalCells += cellMatches.length;
-    if (totalCells > SKU_IMPORT_LIMITS.maxWorksheetCells) {
-      throw new SkuImportError("SKU_IMPORT_CELL_LIMIT", "工作表单元格数量超过允许上限");
-    }
     const occupiedColumns = new Set();
-    for (const cellXml of cellMatches) {
-      const ref = (cellXml.match(/\br="([^"]+)"/) || [])[1] || "";
-      const type = (cellXml.match(/\bt="([^"]+)"/) || [])[1] || "";
+    scanXmlElements(xml, "c", {
+      start: rowElement.contentStart,
+      end: rowElement.contentEnd,
+      limit: SKU_IMPORT_LIMITS.maxWorksheetCells - totalCells,
+      limitCode: "SKU_IMPORT_CELL_LIMIT",
+      limitMessage: "工作表单元格数量超过允许上限",
+    }, (cellElement) => {
+      totalCells += 1;
+      const ref = readXmlAttribute(xml, cellElement.start, cellElement.openEnd, "r");
+      const type = readXmlAttribute(xml, cellElement.start, cellElement.openEnd, "t");
       const index = ref ? columnIndexFromCellRef(ref) : row.length;
       if (index >= SKU_IMPORT_LIMITS.maxWorksheetColumns) {
         throw new SkuImportError("SKU_IMPORT_COLUMN_LIMIT", "工作表列数超过允许上限");
@@ -754,20 +762,21 @@ function parseWorksheetRows(xml, sharedStrings) {
         throw new SkuImportError("SKU_IMPORT_CELL_DUPLICATE", "工作表同一行包含重复单元格引用");
       }
       occupiedColumns.add(index);
-      row[index] = parseCellValue(cellXml, type, sharedStrings);
-    }
+      const value = parseCellValue(xml, cellElement.contentStart, cellElement.contentEnd, type, sharedStrings);
+      totalDecodedBytes = addDecodedTextBytes(totalDecodedBytes, value, "工作表提取文本超过允许大小");
+      row[index] = value;
+    });
     const trimmed = trimTrailingEmptyCells(row);
     if (trimmed.some((cell) => String(cell || "").trim())) rows.push(trimmed);
-  }
+  });
   return rows;
 }
 
-function parseCellValue(cellXml, type, sharedStrings) {
+function parseCellValue(xml, start, end, type, sharedStrings) {
   if (type === "inlineStr") {
-    const textParts = [...cellXml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1]));
-    return textParts.join("");
+    return extractXmlTextRuns(xml, start, end);
   }
-  const value = (cellXml.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || "";
+  const value = extractFirstXmlElementText(xml, "v", start, end);
   if (type === "s") {
     if (!/^\d+$/.test(value)) {
       throw new SkuImportError("SKU_IMPORT_SHARED_STRING_INDEX", "共享字符串索引无效");
@@ -778,7 +787,191 @@ function parseCellValue(cellXml, type, sharedStrings) {
     }
     return sharedStrings[index];
   }
-  return xmlUnescape(value);
+  return value;
+}
+
+function scanXmlElements(xml, tagName, options, visitor) {
+  const startBoundary = options.start ?? 0;
+  const endBoundary = options.end ?? xml.length;
+  let cursor = startBoundary;
+  let count = 0;
+  while (cursor < endBoundary) {
+    const start = findNextXmlStartTag(xml, tagName, cursor, endBoundary);
+    if (start < 0) break;
+    count += 1;
+    if (count > options.limit) {
+      throw new SkuImportError(options.limitCode, options.limitMessage);
+    }
+    const openEnd = findXmlTagEnd(xml, start, endBoundary);
+    if (isSelfClosingXmlTag(xml, start, openEnd)) {
+      visitor({ start, openEnd, contentStart: openEnd + 1, contentEnd: openEnd + 1 });
+      cursor = openEnd + 1;
+      continue;
+    }
+    const close = findNextXmlClosingTag(xml, tagName, openEnd + 1, endBoundary);
+    if (!close) {
+      throw new SkuImportError("SKU_IMPORT_XML_MALFORMED", `工作簿 XML 的 <${tagName}> 标签未闭合`);
+    }
+    visitor({ start, openEnd, contentStart: openEnd + 1, contentEnd: close.start });
+    cursor = close.end + 1;
+  }
+  return count;
+}
+
+function findNextXmlStartTag(xml, tagName, start, end) {
+  const needle = `<${tagName}`;
+  let cursor = start;
+  while (cursor < end) {
+    const found = xml.indexOf(needle, cursor);
+    if (found < 0 || found >= end) return -1;
+    if (isXmlNameBoundary(xml.charCodeAt(found + needle.length))) return found;
+    cursor = found + needle.length;
+  }
+  return -1;
+}
+
+function findNextXmlClosingTag(xml, tagName, start, end) {
+  const needle = `</${tagName}`;
+  let cursor = start;
+  while (cursor < end) {
+    const found = xml.indexOf(needle, cursor);
+    if (found < 0 || found >= end) return null;
+    if (isXmlNameBoundary(xml.charCodeAt(found + needle.length))) {
+      const closeEnd = findXmlTagEnd(xml, found, end);
+      return { start: found, end: closeEnd };
+    }
+    cursor = found + needle.length;
+  }
+  return null;
+}
+
+function isXmlNameBoundary(code) {
+  return code === 9 || code === 10 || code === 13 || code === 32 || code === 47 || code === 62;
+}
+
+function findXmlTagEnd(xml, start, end) {
+  let quote = 0;
+  const hardEnd = Math.min(end, start + SKU_IMPORT_LIMITS.maxXmlTagBytes + 1);
+  for (let index = start + 1; index < hardEnd; index += 1) {
+    const code = xml.charCodeAt(index);
+    if (quote) {
+      if (code === quote) quote = 0;
+      continue;
+    }
+    if (code === 34 || code === 39) {
+      quote = code;
+    } else if (code === 62) {
+      if (Buffer.byteLength(xml.slice(start, index + 1), "utf8") > SKU_IMPORT_LIMITS.maxXmlTagBytes) {
+        throw new SkuImportError("SKU_IMPORT_XML_TAG_LIMIT", "工作簿 XML 标签超过允许大小");
+      }
+      return index;
+    }
+  }
+  if (hardEnd < end) {
+    throw new SkuImportError("SKU_IMPORT_XML_TAG_LIMIT", "工作簿 XML 标签超过允许大小");
+  }
+  throw new SkuImportError("SKU_IMPORT_XML_MALFORMED", "工作簿 XML 标签未闭合");
+}
+
+function isSelfClosingXmlTag(xml, start, openEnd) {
+  let cursor = openEnd - 1;
+  while (cursor > start && isXmlWhitespace(xml.charCodeAt(cursor))) cursor -= 1;
+  return xml.charCodeAt(cursor) === 47;
+}
+
+function isXmlWhitespace(code) {
+  return code === 9 || code === 10 || code === 13 || code === 32;
+}
+
+function readXmlAttribute(xml, start, openEnd, name) {
+  let cursor = start + 1;
+  while (cursor < openEnd && !isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+  while (cursor < openEnd) {
+    while (cursor < openEnd && isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+    if (cursor >= openEnd || xml.charCodeAt(cursor) === 47) break;
+    const nameStart = cursor;
+    while (cursor < openEnd && !isXmlWhitespace(xml.charCodeAt(cursor)) && xml.charCodeAt(cursor) !== 61) cursor += 1;
+    const attributeName = xml.slice(nameStart, cursor);
+    while (cursor < openEnd && isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+    if (xml.charCodeAt(cursor) !== 61) {
+      while (cursor < openEnd && !isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+      continue;
+    }
+    cursor += 1;
+    while (cursor < openEnd && isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+    const quote = xml.charCodeAt(cursor);
+    if (quote !== 34 && quote !== 39) {
+      while (cursor < openEnd && !isXmlWhitespace(xml.charCodeAt(cursor))) cursor += 1;
+      continue;
+    }
+    const valueStart = ++cursor;
+    while (cursor < openEnd && xml.charCodeAt(cursor) !== quote) cursor += 1;
+    if (cursor >= openEnd) {
+      throw new SkuImportError("SKU_IMPORT_XML_MALFORMED", "工作簿 XML 属性未闭合");
+    }
+    if (attributeName === name) return xmlUnescape(xml.slice(valueStart, cursor));
+    cursor += 1;
+  }
+  return "";
+}
+
+function extractXmlTextRuns(xml, start, end) {
+  const parts = [];
+  let cellBytes = 0;
+  scanXmlElements(xml, "t", {
+    start,
+    end,
+    limit: SKU_IMPORT_LIMITS.maxTextRunsPerCell,
+    limitCode: "SKU_IMPORT_TEXT_RUN_LIMIT",
+    limitMessage: "单元格文本片段数量超过允许上限",
+  }, (element) => {
+    const part = decodeBoundedXmlText(xml, element.contentStart, element.contentEnd);
+    cellBytes += Buffer.byteLength(part, "utf8");
+    if (cellBytes > SKU_IMPORT_LIMITS.maxCellTextBytes) {
+      throw new SkuImportError("SKU_IMPORT_CELL_TEXT_LIMIT", "单个单元格文本超过允许大小");
+    }
+    parts.push(part);
+  });
+  return parts.join("");
+}
+
+function extractFirstXmlElementText(xml, tagName, start, end) {
+  const elementStart = findNextXmlStartTag(xml, tagName, start, end);
+  if (elementStart < 0) return "";
+  const openEnd = findXmlTagEnd(xml, elementStart, end);
+  if (isSelfClosingXmlTag(xml, elementStart, openEnd)) return "";
+  const close = findNextXmlClosingTag(xml, tagName, openEnd + 1, end);
+  if (!close) {
+    throw new SkuImportError("SKU_IMPORT_XML_MALFORMED", `工作簿 XML 的 <${tagName}> 标签未闭合`);
+  }
+  return decodeBoundedXmlText(xml, openEnd + 1, close.start);
+}
+
+function decodeBoundedXmlText(xml, start, end) {
+  if (end - start > SKU_IMPORT_LIMITS.maxCellTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_CELL_TEXT_LIMIT", "单个单元格文本超过允许大小");
+  }
+  const raw = xml.slice(start, end);
+  if (Buffer.byteLength(raw, "utf8") > SKU_IMPORT_LIMITS.maxCellTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_CELL_TEXT_LIMIT", "单个单元格文本超过允许大小");
+  }
+  const decoded = xmlUnescape(raw);
+  if (Buffer.byteLength(decoded, "utf8") > SKU_IMPORT_LIMITS.maxCellTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_CELL_TEXT_LIMIT", "单个单元格文本超过允许大小");
+  }
+  return decoded;
+}
+
+function addDecodedTextBytes(totalBytes, value, message) {
+  const cellBytes = Buffer.byteLength(value, "utf8");
+  if (cellBytes > SKU_IMPORT_LIMITS.maxCellTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_CELL_TEXT_LIMIT", "单个单元格文本超过允许大小");
+  }
+  const nextTotal = totalBytes + cellBytes;
+  if (nextTotal > SKU_IMPORT_LIMITS.maxFinalTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_TEXT_TOO_LARGE", message);
+  }
+  return nextTotal;
 }
 
 function columnIndexFromCellRef(ref) {

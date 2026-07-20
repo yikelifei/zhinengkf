@@ -40,9 +40,18 @@ function createPassingFixture() {
   write(root, "desktop/packages/rules/skuImport.js", `
 const SKU_IMPORT_LIMITS = {
   maxZipEntries: 256, maxZipEntryUncompressedBytes: 1, maxZipTotalUncompressedBytes: 1,
-  maxSharedStrings: 1, maxWorksheetRows: 1, maxWorksheetCells: 1, maxFinalTextBytes: 1,
+  maxSharedStrings: 1, maxWorksheetRows: 1, maxWorksheetCells: 1,
+  maxXmlTagBytes: 1, maxTextRunsPerCell: 1, maxCellTextBytes: 1, maxFinalTextBytes: 1,
 };
+const XML_SCANNER_CONTRACT = Object.freeze({
+  strategy: "forward-only-index-scanner",
+  materializesMatchArrays: false,
+  rejectsElementNPlusOneBeforeBodyScan: true,
+});
 function isCanonicalBase64() {}
+function scanXmlElements(xml, tagName, options) { let count = 0; const start = findNextXmlStartTag(xml, tagName, 0, xml.length); count += 1; if (count > options.limit) throw new Error(); const openEnd = findXmlTagEnd(xml, start, xml.length); "SKU_IMPORT_XML_MALFORMED"; "SKU_IMPORT_XML_TAG_LIMIT"; "SKU_IMPORT_TEXT_RUN_LIMIT"; "SKU_IMPORT_CELL_TEXT_LIMIT"; }
+function findNextXmlStartTag(xml, tagName, start, end) { const needle = tagName; let cursor = start; const found = xml.indexOf(needle, cursor); cursor = found + needle.length; }
+function findXmlTagEnd() {}
 function parseSkuImportFile() { "SKU_IMPORT_ZIP_BOUNDS"; "SKU_IMPORT_ZIP64_UNSUPPORTED"; "SKU_IMPORT_ZIP_MULTIDISK"; "SKU_IMPORT_ZIP_ENCRYPTED"; "SKU_IMPORT_ZIP_DESCRIPTOR"; "SKU_IMPORT_ZIP_LOCAL_OVERLAP"; "SKU_IMPORT_ZIP_CRC"; maxOutputLength: SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes; }
 function buildSkuImportTemplateXlsx() {}
 module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
@@ -1115,4 +1124,40 @@ test("completion audit requires zero redirects and bounded SKU workbook parsing"
   );
   report = buildAudit(importRoot, { includeExternal: false });
   assert.equal(report.results.find((item) => item.id === "contract.excel_import_limits").status, STATUS.FAIL);
+});
+
+test("completion audit rejects regex XML materialization and weakened N+1 early stop", () => {
+  for (const mutation of [
+    {
+      name: "shared string match materialization",
+      mutate: (source) => `${source}\nconst items = xml.match(/<si>/g);\n`,
+      evidence: "forbidden",
+    },
+    {
+      name: "row match materialization",
+      mutate: (source) => `${source}\nconst rowMatches = xml.match(/<row>/g);\n`,
+      evidence: "forbidden",
+    },
+    {
+      name: "removed N+1 check",
+      mutate: (source) => source.replace("if (count > options.limit)", "if (false)"),
+      evidence: "missing",
+    },
+    {
+      name: "moved N+1 check after tag body scan",
+      mutate: (source) => source.replace(
+        "if (count > options.limit) throw new Error(); const openEnd = findXmlTagEnd(xml, start, xml.length);",
+        "const openEnd = findXmlTagEnd(xml, start, xml.length); if (count > options.limit) throw new Error();",
+      ),
+      evidence: "missing",
+    },
+  ]) {
+    const root = createPassingFixture();
+    const sourcePath = path.join(root, "desktop", "packages", "rules", "skuImport.js");
+    fs.writeFileSync(sourcePath, mutation.mutate(fs.readFileSync(sourcePath, "utf8")), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.excel_import_limits");
+    assert.equal(contract.status, STATUS.FAIL, mutation.name);
+    assert.ok(contract.evidence[mutation.evidence].length > 0, mutation.name);
+  }
 });
