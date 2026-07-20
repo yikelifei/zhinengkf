@@ -57,7 +57,7 @@ function buildSkuImportTemplateXlsx() {}
 module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
 `);
   write(root, "desktop/packages/rules/index.js", "module.exports={...require('./skuImport')};\n");
-  write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\nupsertCanonicalWechatWorkBinding(); deterministicOperationId("wwacct", key); deterministicOperationId("wwcust", key); singleWechatWorkHistoryId(); for (let attempt = 0; attempt < 4; attempt += 1) {} wechat work canonical binding conflict;\n');
+  write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\nupsertCanonicalWechatWorkBinding(); deterministicOperationId("wwacct", key); deterministicOperationId("wwcust", key); singleWechatWorkHistoryId(); for (let attempt = 0; attempt < 4; attempt += 1) {} wechat work canonical binding conflict; tx.wechatWorkBinding.updateMany(); lastInboundAt: { lt: lastInboundAt }; normalizeWechatWorkInboundAt();\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\nprotectLocalInflightSendFromCancellation(); protectPrismaInflightSendFromCancellation(); protectInFlightSendTasksForManualLock(); deliveryUnknownReason: "manual_cancel_requested_inflight"; manualReviewRequired: true; automaticRetryBlocked: true; resolveUnknownSendDelivery(); "confirmed_sent"; "confirmed_not_sent"; requireExactSendTaskIdentity(); assertExactOperationReplay(); settleWechatWorkAsyncFailure(); deterministicOperationId("wechat_work_audit", operationKey, "manual-send-delivery-resolution"); deliveryResolutionPriority: "manual_audited_terminal"; previousManualDeliveryResolution; manualDeliveryResolution: null; protectedUnknownInFlightSendTaskIds; cancelledInFlightSendTaskIds: [];\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
@@ -154,7 +154,7 @@ validateSendTask(
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'queueSendWithProvenance(id, manualQuoteQueueRequest(options), false);\nqueueSendWithProvenance(id, manualQuoteQueueRequest(options), true);\nsource: "low_value_quote_send"; quoteDraftId: quote.id; queuedBy: "low_value_automation"; automation: trustedAutomation;\nfunction manualQuoteQueueRequest() {}\n', true);
-  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\n');
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\nmonotonicWechatWorkInboundAt(); normalizeWechatWorkInboundAt(); currentValue >= incoming;\n');
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
@@ -669,6 +669,39 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.equal(JSON.stringify(report).includes(path.resolve(root)), false);
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/project-completion-audit.js"), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
+});
+
+test("completion audit rejects removal of Enterprise WeChat inbound timestamp monotonicity", () => {
+  const mutations = [
+    {
+      id: "contract.wechat_work_canonical_binding",
+      file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+      from: "tx.wechatWorkBinding.updateMany()",
+      to: "tx.wechatWorkBinding.update()",
+    },
+    {
+      id: "contract.wechat_work_canonical_binding",
+      file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+      from: "lastInboundAt: { lt: lastInboundAt }",
+      to: "lastInboundAt",
+    },
+    {
+      id: "contract.local_wechat_work_binding_timestamp_monotonic",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: "monotonicWechatWorkInboundAt()",
+      to: "overwriteWechatWorkInboundAt()",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
 });
 
 test("idempotency audit rejects mutable-identity-first replay and browser operation-key drift", () => {

@@ -232,6 +232,89 @@ test("Prisma Enterprise WeChat canonical binding stays stable under concurrent f
   assert.equal(database.state.bindings.size, 5);
 });
 
+test("Prisma Enterprise WeChat binding lastInboundAt advances monotonically", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createCanonicalBindingPrisma();
+  const persistence = new WechatPersistence(database.prisma, {});
+  const identity = { openKfid: "wk-time", externalUserId: "wm-time" };
+
+  await persistence.upsertWechatWorkBinding({ ...identity, sendTime: 100 });
+  const newest = await persistence.upsertWechatWorkBinding({ ...identity, sendTime: 300 });
+  const writesAfterNewest = database.state.writeCount;
+  const stale = await persistence.upsertWechatWorkBinding({ ...identity, sendTime: 200 });
+  const absent = await persistence.upsertWechatWorkBinding(identity);
+  const notANumber = await persistence.upsertWechatWorkBinding({ ...identity, sendTime: Number.NaN });
+
+  assert.equal(newest.lastInboundAt.toISOString(), new Date(300_000).toISOString());
+  assert.equal(stale.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+  assert.equal(absent.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+  assert.equal(notANumber.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+  assert.equal(database.state.writeCount, writesAfterNewest);
+  await assert.rejects(
+    () => persistence.upsertWechatWorkBinding({ ...identity, sendTime: Number.POSITIVE_INFINITY }),
+    /sendTime is invalid/,
+  );
+});
+
+test("Prisma Enterprise WeChat binding rejects a stale event that commits after a newer event", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  let releaseStale;
+  let staleReached;
+  const staleReachedPromise = new Promise((resolve) => { staleReached = resolve; });
+  const releaseStalePromise = new Promise((resolve) => { releaseStale = resolve; });
+  const database = createCanonicalBindingPrisma({
+    async beforeBindingUpdateMany({ data }) {
+      if (data.lastInboundAt.getTime() !== 200_000) return;
+      staleReached();
+      await releaseStalePromise;
+    },
+  });
+  const persistence = new WechatPersistence(database.prisma, {});
+  const identity = { openKfid: "wk-race-time", externalUserId: "wm-race-time" };
+  await persistence.upsertWechatWorkBinding({ ...identity, sendTime: 100 });
+
+  const staleWrite = persistence.upsertWechatWorkBinding({ ...identity, sendTime: 200 });
+  await staleReachedPromise;
+  const newest = await persistence.upsertWechatWorkBinding({ ...identity, sendTime: 300 });
+  releaseStale();
+  const staleWinner = await staleWrite;
+
+  assert.equal(newest.lastInboundAt.toISOString(), new Date(300_000).toISOString());
+  assert.equal(staleWinner.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+  const stored = [...database.state.bindings.values()].find((item) => item.openKfid === identity.openKfid);
+  assert.equal(stored.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+});
+
+test("LocalStore Enterprise WeChat binding lastInboundAt advances monotonically", () => {
+  const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-local-timestamp-"));
+  const previousFile = process.env.LOCAL_STORE_FILE;
+  process.env.LOCAL_STORE_FILE = path.join(localRoot, "store.json");
+  try {
+    const localStore = new LocalStoreService();
+    const identity = { openKfid: "wk-local-time", externalUserId: "wm-local-time" };
+    localStore.upsertWechatWorkBinding({ ...identity, sendTime: 100 });
+    const newest = localStore.upsertWechatWorkBinding({ ...identity, sendTime: 300 });
+    const stale = localStore.upsertWechatWorkBinding({ ...identity, sendTime: 200 });
+    const absent = localStore.upsertWechatWorkBinding(identity);
+    const notANumber = localStore.upsertWechatWorkBinding({ ...identity, sendTime: Number.NaN });
+
+    assert.equal(newest.lastInboundAt, new Date(300_000).toISOString());
+    assert.equal(stale.lastInboundAt, newest.lastInboundAt);
+    assert.equal(absent.lastInboundAt, newest.lastInboundAt);
+    assert.equal(notANumber.lastInboundAt, newest.lastInboundAt);
+    assert.throws(
+      () => localStore.upsertWechatWorkBinding({ ...identity, sendTime: Number.POSITIVE_INFINITY }),
+      /sendTime is invalid/,
+    );
+  } finally {
+    if (previousFile === undefined) delete process.env.LOCAL_STORE_FILE;
+    else process.env.LOCAL_STORE_FILE = previousFile;
+    fs.rmSync(localRoot, { recursive: true, force: true });
+  }
+});
+
 test("Prisma Enterprise WeChat canonical binding retries every P2002 create boundary", async (t) => {
   t.after(() => { appConfig.useLocalStore = true; });
   appConfig.useLocalStore = false;
@@ -361,6 +444,24 @@ function createCanonicalBindingPrisma(options = {}) {
         state.bindings.set(where.id, updated);
         state.writeCount += 1;
         return hydrate(updated);
+      },
+      async updateMany({ where, data }) {
+        if (options.beforeBindingUpdateMany) {
+          await options.beforeBindingUpdateMany({ where, data, state });
+        }
+        const current = state.bindings.get(where.id);
+        if (!current) return { count: 0 };
+        const incoming = data.lastInboundAt;
+        const currentTime = current.lastInboundAt == null ? null : new Date(current.lastInboundAt).getTime();
+        const acceptsNull = where.OR?.some((condition) => condition.lastInboundAt === null) || false;
+        const timestampCondition = where.OR?.find((condition) => condition.lastInboundAt?.lt)?.lastInboundAt;
+        const acceptsTimestamp = timestampCondition?.lt instanceof Date
+          && currentTime != null
+          && currentTime < timestampCondition.lt.getTime();
+        if (currentTime == null ? !acceptsNull : !acceptsTimestamp) return { count: 0 };
+        state.bindings.set(where.id, { ...current, ...data });
+        state.writeCount += 1;
+        return { count: 1 };
       },
     },
     wechatAccount: {

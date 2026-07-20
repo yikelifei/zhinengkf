@@ -381,6 +381,19 @@ const CONTRACTS = Object.freeze([
       /singleWechatWorkHistoryId/,
       /for \(let attempt = 0; attempt < 4; attempt \+= 1\)/,
       /wechat work canonical binding conflict/,
+      /tx\.wechatWorkBinding\.updateMany/,
+      /lastInboundAt:\s*\{\s*lt:\s*lastInboundAt\s*\}/,
+      /normalizeWechatWorkInboundAt/,
+    ],
+  },
+  {
+    id: "contract.local_wechat_work_binding_timestamp_monotonic",
+    title: "LocalStore 浼佷笟寰俊鍏ョ珯鏃堕棿鎴冲崟璋冩帹杩?",
+    file: "desktop/apps/api/src/local-store/local-store.service.ts",
+    patterns: [
+      /monotonicWechatWorkInboundAt/,
+      /normalizeWechatWorkInboundAt/,
+      /currentValue >= incoming/,
     ],
   },
   {

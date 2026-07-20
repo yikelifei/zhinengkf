@@ -775,7 +775,7 @@ export class WechatPersistence {
       throw new BadRequestException("wechat work binding requires openKfid and externalUserId");
     }
     const prisma = this.prisma as any;
-    const lastInboundAt = payload.sendTime ? new Date(payload.sendTime * 1000) : null;
+    const lastInboundAt = this.normalizeWechatWorkInboundAt(payload.sendTime);
     let lastConflict: unknown = null;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
@@ -817,11 +817,22 @@ export class WechatPersistence {
     if (existing) {
       this.assertCanonicalWechatWorkBinding(existing, { openKfid, externalUserId, accountId, customerId });
       if (!lastInboundAt) return existing;
-      return tx.wechatWorkBinding.update({
-        where: { id: existing.id },
+      await tx.wechatWorkBinding.updateMany({
+        where: {
+          id: existing.id,
+          OR: [
+            { lastInboundAt: null },
+            { lastInboundAt: { lt: lastInboundAt } },
+          ],
+        },
         data: { lastInboundAt },
-        include,
       });
+      const winner = await tx.wechatWorkBinding.findUnique({ where: { id: existing.id }, include });
+      if (!winner) {
+        throw new BadRequestException("wechat work canonical binding disappeared during timestamp advance");
+      }
+      this.assertCanonicalWechatWorkBinding(winner, { openKfid, externalUserId, accountId, customerId });
+      return winner;
     }
 
     let account = accountHistory.find((item: any) => item.wechatAccountId === accountId)?.wechatAccount
@@ -903,6 +914,15 @@ export class WechatPersistence {
       throw new BadRequestException(`wechat work canonical binding conflict: ${conflictMessage}`);
     }
     return ids[0] || "";
+  }
+
+  private normalizeWechatWorkInboundAt(sendTime?: number) {
+    if (!sendTime) return null;
+    const lastInboundAt = new Date(sendTime * 1000);
+    if (Number.isNaN(lastInboundAt.getTime())) {
+      throw new BadRequestException("wechat work binding sendTime is invalid");
+    }
+    return lastInboundAt;
   }
 
   private wechatWorkCanonicalKey(kind: string, externalIdentity: string) {

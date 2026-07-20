@@ -522,6 +522,7 @@ export class LocalStoreService {
     if (!openKfid || !externalUserId) throw new Error("wechat work binding requires openKfid and externalUserId");
     const data = this.read();
     const now = new Date().toISOString();
+    const incomingLastInboundAt = this.normalizeWechatWorkInboundAt(payload.sendTime);
     const bindingIndex = data.wechatWorkBindings.findIndex(
       (item) => item.openKfid === openKfid && item.externalUserId === externalUserId,
     );
@@ -582,7 +583,7 @@ export class LocalStoreService {
         title: customer.name,
         customerId: customer.id,
         wechatAccountId: account.id,
-        lastMessageAt: payload.sendTime ? new Date(payload.sendTime * 1000).toISOString() : null,
+        lastMessageAt: incomingLastInboundAt,
         manualLocked: false,
         wechatWork: { openKfid, externalUserId },
         createdAt: now,
@@ -601,12 +602,27 @@ export class LocalStoreService {
       conversationId: conversation.id,
       createdAt: current?.createdAt || now,
       updatedAt: now,
-      lastInboundAt: payload.sendTime ? new Date(payload.sendTime * 1000).toISOString() : current?.lastInboundAt || null,
+      lastInboundAt: this.monotonicWechatWorkInboundAt(current?.lastInboundAt, incomingLastInboundAt),
     };
     if (bindingIndex >= 0) data.wechatWorkBindings[bindingIndex] = binding;
     else data.wechatWorkBindings.push(binding);
     this.write(data);
     return { ...binding, wechatAccount: account, customer, conversation };
+  }
+
+  private normalizeWechatWorkInboundAt(sendTime?: number) {
+    if (!sendTime) return null;
+    const lastInboundAt = new Date(sendTime * 1000);
+    if (Number.isNaN(lastInboundAt.getTime())) {
+      throw new BadRequestException("wechat work binding sendTime is invalid");
+    }
+    return lastInboundAt.toISOString();
+  }
+
+  private monotonicWechatWorkInboundAt(current: unknown, incoming: string | null) {
+    const currentValue = String(current || "").trim() || null;
+    if (!incoming || (currentValue && currentValue >= incoming)) return currentValue;
+    return incoming;
   }
 
   getWechatWorkBinding(openKfid: string, externalUserId: string) {
