@@ -73,6 +73,14 @@ POST /v1/assets/upload
 
 客服平台会把返回的 `remoteAssetId` 和 `url` 放入创建设计任务的 `assets`，设计平台必须用这些素材作为真实 SKU 图、客户 Logo 或参考图来源。
 
+#### 客服平台本地资产摄取边界
+
+- base64、UTF-8 文本和 HTTP(S) URL 下载统一复用图片指纹的最大字节数；当前为 20 MiB，边界值允许，超限在生成本地路径前返回 `400 Bad Request`。
+- base64 必须使用规范字符和 padding；`data:` URL 只接受以 `;base64,` 承载的形式，普通 percent-encoded `data:` 内容不落盘。
+- URL 只接受 `http:` 或 `https:`。下载复用 `DESIGN_PLATFORM_TIMEOUT_MS`，同时设置 Axios `maxContentLength`、`maxBodyLength`，并在下载后按真实字节数二次校验。
+- 任何格式错误或超限都不得留下资产文件。服务不会把设计平台凭据附加到普通资产 URL 请求。
+- 私网地址、DNS 重绑定和生产域名 allowlist 仍需要部署负责人结合实际内网拓扑、代理和出口策略确认；仓库当前不臆造统一阻断规则。上线前应在反向代理或 egress 层记录该确认和验证证据。
+
 ### 创建设计任务
 
 ```http

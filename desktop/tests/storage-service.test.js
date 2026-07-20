@@ -16,7 +16,199 @@ require("ts-node").register({
 const axiosModule = require("axios");
 const axios = axiosModule.default || axiosModule;
 const { appConfig } = require("../apps/api/src/shared/app-config");
+const { MAX_IMAGE_FINGERPRINT_BYTES } = require("../apps/api/src/shared/image-fingerprint");
 const { StorageService } = require("../apps/api/src/storage/storage.service");
+
+async function storageFixture(t) {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "smart-kefu-storage-assets-"));
+  const originalRoot = appConfig.localStorageRoot;
+  appConfig.localStorageRoot = tempRoot;
+  t.after(async () => {
+    appConfig.localStorageRoot = originalRoot;
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  });
+  return tempRoot;
+}
+
+async function listFiles(root) {
+  const files = [];
+  const pending = [root];
+  while (pending.length) {
+    const current = pending.pop();
+    let entries;
+    try {
+      entries = await fsp.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) pending.push(target);
+      else if (entry.isFile()) files.push(target);
+    }
+  }
+  return files.sort();
+}
+
+test("asset base64 ingestion is strict and rejected payloads never reach disk", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const invalidValues = [
+    "",
+    "not base64",
+    "AAAA=",
+    "AA=A",
+    "data:text/plain,hello",
+    "data:text/plain;base64,%%%",
+    "data:text/plain;base64,AAAA\n",
+  ];
+
+  for (const base64 of invalidValues) {
+    await assert.rejects(
+      () => service.saveAssetFromBase64({ ownerType: "customer", ownerId: "c1", fileName: "bad.bin", base64 }),
+      (error) => error?.getStatus?.() === 400,
+    );
+  }
+  assert.deepEqual(await listFiles(tempRoot), []);
+});
+
+test("base64 and UTF-8 text assets share the exact byte boundary before writing", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const boundary = Buffer.alloc(MAX_IMAGE_FINGERPRINT_BYTES, 0x61);
+
+  const base64Saved = await service.saveAssetFromBase64({
+    ownerType: "customer",
+    ownerId: "c1",
+    fileName: "boundary.bin",
+    base64: `data:application/octet-stream;base64,${boundary.toString("base64")}`,
+  });
+  const textSaved = await service.saveAssetFromText({
+    ownerType: "customer",
+    ownerId: "c1",
+    fileName: "boundary.txt",
+    text: "a".repeat(MAX_IMAGE_FINGERPRINT_BYTES),
+  });
+  assert.equal(base64Saved.sizeBytes, MAX_IMAGE_FINGERPRINT_BYTES);
+  assert.equal(textSaved.sizeBytes, MAX_IMAGE_FINGERPRINT_BYTES);
+  assert.equal((await listFiles(tempRoot)).length, 2);
+
+  await assert.rejects(
+    () =>
+      service.saveAssetFromBase64({
+        ownerType: "customer",
+        ownerId: "c1",
+        fileName: "too-large.bin",
+        base64: Buffer.alloc(MAX_IMAGE_FINGERPRINT_BYTES + 1).toString("base64"),
+      }),
+    (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
+  );
+  await assert.rejects(
+    () =>
+      service.saveAssetFromText({
+        ownerType: "customer",
+        ownerId: "c1",
+        fileName: "too-large.txt",
+        text: "a".repeat(MAX_IMAGE_FINGERPRINT_BYTES + 1),
+      }),
+    (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
+  );
+  assert.equal((await listFiles(tempRoot)).length, 2);
+});
+
+test("asset URL ingestion rejects non-http schemes before axios or disk", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const originalGet = axios.get;
+  let calls = 0;
+  axios.get = async () => {
+    calls += 1;
+    return { data: Buffer.from("unexpected") };
+  };
+  t.after(() => {
+    axios.get = originalGet;
+  });
+
+  for (const url of ["ftp://example.com/a.png", "file:///C:/temp/a.png", "data:image/png;base64,AAAA", "not-a-url"]) {
+    await assert.rejects(
+      () => service.saveAssetFromUrl({ ownerType: "customer", ownerId: "c1", fileName: "bad.bin", url }),
+      (error) => error?.getStatus?.() === 400 && /http\(s\)/.test(error.message),
+    );
+  }
+  assert.equal(calls, 0);
+  assert.deepEqual(await listFiles(tempRoot), []);
+});
+
+test("asset URL download uses bounded timeout options and checks bytes again before disk", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const originalGet = axios.get;
+  const originalTimeout = appConfig.designPlatformTimeoutMs;
+  const calls = [];
+  appConfig.designPlatformTimeoutMs = 4321;
+  axios.get = async (url, config) => {
+    calls.push({ url, config });
+    return { data: Buffer.alloc(calls.length === 1 ? MAX_IMAGE_FINGERPRINT_BYTES : MAX_IMAGE_FINGERPRINT_BYTES + 1) };
+  };
+  t.after(() => {
+    axios.get = originalGet;
+    appConfig.designPlatformTimeoutMs = originalTimeout;
+  });
+
+  const saved = await service.saveAssetFromUrl({
+    ownerType: "customer",
+    ownerId: "c1",
+    fileName: "boundary.bin",
+    url: "https://cdn.example.com/boundary.bin",
+  });
+  assert.equal(saved.sizeBytes, MAX_IMAGE_FINGERPRINT_BYTES);
+  assert.deepEqual(calls[0].config, {
+    responseType: "arraybuffer",
+    timeout: 4321,
+    maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
+    maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
+  });
+  assert.equal((await listFiles(tempRoot)).length, 1);
+
+  await assert.rejects(
+    () =>
+      service.saveAssetFromUrl({
+        ownerType: "customer",
+        ownerId: "c1",
+        fileName: "too-large.bin",
+        url: "http://cdn.example.com/too-large.bin",
+      }),
+    (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
+  );
+  assert.equal((await listFiles(tempRoot)).length, 1);
+});
+
+test("axios download size rejection becomes BadRequest without creating an asset file", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const originalGet = axios.get;
+  axios.get = async () => {
+    const error = new Error("maxContentLength size of 20971520 exceeded");
+    error.code = "ERR_BAD_RESPONSE";
+    throw error;
+  };
+  t.after(() => {
+    axios.get = originalGet;
+  });
+
+  await assert.rejects(
+    () =>
+      service.saveAssetFromUrl({
+        ownerType: "customer",
+        ownerId: "c1",
+        fileName: "too-large.bin",
+        url: "https://cdn.example.com/too-large.bin",
+      }),
+    (error) => error?.getStatus?.() === 400 && /maximum size/.test(error.message),
+  );
+  assert.deepEqual(await listFiles(tempRoot), []);
+});
 
 test("design image downloader rejects local file paths from callbacks", async () => {
   const service = new StorageService();
