@@ -775,75 +775,170 @@ export class WechatPersistence {
       throw new BadRequestException("wechat work binding requires openKfid and externalUserId");
     }
     const prisma = this.prisma as any;
-    return prisma.$transaction(async (tx: any) => {
-      const existing = await tx.wechatWorkBinding.findUnique({
+    const lastInboundAt = payload.sendTime ? new Date(payload.sendTime * 1000) : null;
+    let lastConflict: unknown = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        return await prisma.$transaction((tx: any) =>
+          this.upsertCanonicalWechatWorkBinding(tx, { openKfid, externalUserId, lastInboundAt }),
+        );
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) throw error;
+        lastConflict = error;
+      }
+    }
+    throw lastConflict;
+  }
+
+  private async upsertCanonicalWechatWorkBinding(
+    tx: any,
+    payload: { openKfid: string; externalUserId: string; lastInboundAt: Date | null },
+  ) {
+    const { openKfid, externalUserId, lastInboundAt } = payload;
+    const include = { wechatAccount: true, customer: true, conversation: true };
+    const [existing, accountHistory, customerHistory] = await Promise.all([
+      tx.wechatWorkBinding.findUnique({
         where: { openKfid_externalUserId: { openKfid, externalUserId } },
-        include: { wechatAccount: true, customer: true, conversation: true },
+        include,
+      }),
+      tx.wechatWorkBinding.findMany({ where: { openKfid }, include: { wechatAccount: true } }),
+      tx.wechatWorkBinding.findMany({ where: { externalUserId }, include: { customer: true } }),
+    ]);
+
+    const accountId = this.singleWechatWorkHistoryId(
+      accountHistory.map((item: any) => item.wechatAccountId),
+      "openKfid maps to multiple WeChat accounts",
+    ) || deterministicOperationId("wwacct", this.wechatWorkCanonicalKey("account", openKfid));
+    const customerId = this.singleWechatWorkHistoryId(
+      customerHistory.map((item: any) => item.customerId),
+      "externalUserId maps to multiple customers",
+    ) || deterministicOperationId("wwcust", this.wechatWorkCanonicalKey("customer", externalUserId));
+
+    if (existing) {
+      this.assertCanonicalWechatWorkBinding(existing, { openKfid, externalUserId, accountId, customerId });
+      if (!lastInboundAt) return existing;
+      return tx.wechatWorkBinding.update({
+        where: { id: existing.id },
+        data: { lastInboundAt },
+        include,
       });
-      const accountSource = existing || await tx.wechatWorkBinding.findFirst({
-        where: { openKfid },
-        include: { wechatAccount: true },
-      });
-      const customerSource = existing || await tx.wechatWorkBinding.findFirst({
-        where: { externalUserId },
-        include: { customer: true },
-      });
-      const account = accountSource?.wechatAccount || await tx.wechatAccount.create({
+    }
+
+    let account = accountHistory.find((item: any) => item.wechatAccountId === accountId)?.wechatAccount
+      || await tx.wechatAccount.findUnique({ where: { id: accountId } });
+    if (!account) {
+      account = await tx.wechatAccount.create({
         data: {
+          id: accountId,
           displayName: `企业微信客服 ${shortExternalId(openKfid)}`,
           alias: shortExternalId(openKfid),
           isActive: true,
         },
       });
-      const customer = customerSource?.customer || await tx.customer.create({
+    }
+
+    let customer = customerHistory.find((item: any) => item.customerId === customerId)?.customer
+      || await tx.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      customer = await tx.customer.create({
         data: {
+          id: customerId,
           name: `企业微信客户 ${shortExternalId(externalUserId)}`,
           source: "wechat_work_kf",
           tags: ["企业微信客服"],
         },
       });
-      const externalChatId = `wechat_work_kf:${openKfid}:${externalUserId}`;
-      const conversation = existing?.conversation || await tx.conversation.upsert({
-        where: {
-          wechatAccountId_externalChatId: {
-            wechatAccountId: account.id,
-            externalChatId,
-          },
-        },
-        update: {
-          customerId: customer.id,
-          channel: "work_wechat",
-          ...(payload.sendTime ? { lastMessageAt: new Date(payload.sendTime * 1000) } : {}),
-        },
-        create: {
+    }
+
+    const externalChatId = `wechat_work_kf:${openKfid}:${externalUserId}`;
+    let conversation = await tx.conversation.findUnique({
+      where: { wechatAccountId_externalChatId: { wechatAccountId: accountId, externalChatId } },
+    });
+    if (conversation) {
+      this.assertCanonicalWechatWorkConversation(conversation, { accountId, customerId, externalChatId });
+      if (lastInboundAt) {
+        conversation = await tx.conversation.update({
+          where: { id: conversation.id },
+          data: { lastMessageAt: lastInboundAt },
+        });
+      }
+    } else {
+      conversation = await tx.conversation.create({
+        data: {
+          id: deterministicOperationId(
+            "wwconv",
+            this.wechatWorkCanonicalKey("conversation", `${openKfid}:${externalUserId}`),
+          ),
           channel: "work_wechat",
           externalChatId,
           title: customer.name,
-          customerId: customer.id,
-          wechatAccountId: account.id,
-          lastMessageAt: payload.sendTime ? new Date(payload.sendTime * 1000) : null,
+          customerId,
+          wechatAccountId: accountId,
+          lastMessageAt: lastInboundAt,
           manualLocked: false,
         },
       });
-      return tx.wechatWorkBinding.upsert({
-        where: { openKfid_externalUserId: { openKfid, externalUserId } },
-        update: {
-          wechatAccountId: account.id,
-          customerId: customer.id,
-          conversationId: conversation.id,
-          ...(payload.sendTime ? { lastInboundAt: new Date(payload.sendTime * 1000) } : {}),
-        },
-        create: {
-          openKfid,
-          externalUserId,
-          wechatAccountId: account.id,
-          customerId: customer.id,
-          conversationId: conversation.id,
-          lastInboundAt: payload.sendTime ? new Date(payload.sendTime * 1000) : null,
-        },
-        include: { wechatAccount: true, customer: true, conversation: true },
-      });
+    }
+
+    return tx.wechatWorkBinding.create({
+      data: {
+        id: deterministicOperationId(
+          "wwbind",
+          this.wechatWorkCanonicalKey("binding", `${openKfid}:${externalUserId}`),
+        ),
+        openKfid,
+        externalUserId,
+        wechatAccountId: accountId,
+        customerId,
+        conversationId: conversation.id,
+        lastInboundAt,
+      },
+      include,
     });
+  }
+
+  private singleWechatWorkHistoryId(values: unknown[], conflictMessage: string) {
+    const ids = [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+    if (ids.length > 1) {
+      throw new BadRequestException(`wechat work canonical binding conflict: ${conflictMessage}`);
+    }
+    return ids[0] || "";
+  }
+
+  private wechatWorkCanonicalKey(kind: string, externalIdentity: string) {
+    const corpScope = String(appConfig.wechatWorkCorpId || "wechat-work-default").trim();
+    return `${corpScope}:${kind}:${externalIdentity}`;
+  }
+
+  private assertCanonicalWechatWorkBinding(
+    binding: any,
+    expected: { openKfid: string; externalUserId: string; accountId: string; customerId: string },
+  ) {
+    const valid =
+      binding.openKfid === expected.openKfid
+      && binding.externalUserId === expected.externalUserId
+      && binding.wechatAccountId === expected.accountId
+      && binding.customerId === expected.customerId
+      && binding.conversation?.id === binding.conversationId
+      && binding.conversation?.wechatAccountId === expected.accountId
+      && binding.conversation?.customerId === expected.customerId;
+    if (!valid) {
+      throw new BadRequestException("wechat work canonical binding conflict: stored identity is inconsistent");
+    }
+  }
+
+  private assertCanonicalWechatWorkConversation(
+    conversation: any,
+    expected: { accountId: string; customerId: string; externalChatId: string },
+  ) {
+    if (
+      conversation.wechatAccountId !== expected.accountId
+      || conversation.customerId !== expected.customerId
+      || conversation.externalChatId !== expected.externalChatId
+      || conversation.channel !== "work_wechat"
+    ) {
+      throw new BadRequestException("wechat work canonical binding conflict: conversation identity is inconsistent");
+    }
   }
 
   async getWechatWorkBinding(openKfid: string, externalUserId: string) {

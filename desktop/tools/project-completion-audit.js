@@ -361,6 +361,19 @@ const CONTRACTS = Object.freeze([
     patterns: [/if \(this\.isLocal\)/, /wechatWorkBinding/, /wechatWorkAuditLog/, /wechatSendTask/],
   },
   {
+    id: "contract.wechat_work_canonical_binding",
+    title: "企业微信首次绑定使用确定性身份与竞争赢家回放",
+    file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+    patterns: [
+      /upsertCanonicalWechatWorkBinding/,
+      /deterministicOperationId\("wwacct"/,
+      /deterministicOperationId\("wwcust"/,
+      /singleWechatWorkHistoryId/,
+      /for \(let attempt = 0; attempt < 4; attempt \+= 1\)/,
+      /wechat work canonical binding conflict/,
+    ],
+  },
+  {
     id: "contract.wechat_prisma_send_atomicity",
     title: "Prisma 发送任务、attempt 与订单报价原子迁移",
     file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
