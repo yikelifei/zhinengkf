@@ -127,6 +127,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/internal-api-security.test.js",
   },
   {
+    id: "security.wechat_inbound_auth",
+    title: "通用微信入站可信调用边界测试",
+    file: "desktop/tests/wechat-inbound-auth.test.js",
+  },
+  {
     id: "security.wechat_window_observer_evidence",
     title: "微信窗口 observer 证据签名与发送失败关闭测试",
     file: "desktop/tests/wechat-window-evidence-security.test.js",
@@ -1159,6 +1164,7 @@ function highRiskOperatorRouteResults(root) {
     catalog: "desktop/apps/api/src/catalog/catalog.controller.ts",
     notifications: "desktop/apps/api/src/notifications/notifications.controller.ts",
     orders: "desktop/apps/api/src/orders/orders.controller.ts",
+    wechat: "desktop/apps/api/src/wechat/wechat.controller.ts",
     wechatWork: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
     reviews: "desktop/apps/api/src/reviews/reviews.controller.ts",
     quotes: "desktop/apps/api/src/quotes/quotes.controller.ts",
@@ -1242,6 +1248,12 @@ function highRiskOperatorRouteResults(root) {
     /@TrustedOperator\(\) principal/,
     /reviewer:\s*_untrustedReviewer/,
     /reviewer:\s*principal\.id/,
+  ]);
+
+  check("wechat-inbound", sources.wechat, /@Post\(["']inbound\/messages["']\)/, [
+    /@RequireOperatorCapability\(["']approve_send["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+    /@TrustedOperator\(\) _principal/,
   ]);
 
   check("wechat-work-sync", sources.wechatWork, /@Post\(["']kf\/sync["']\)/, [
@@ -1345,7 +1357,7 @@ function highRiskOperatorRouteResults(root) {
     "高风险操作路由与可信审计人边界",
     ok ? STATUS.PASS : STATUS.FAIL,
     ok
-      ? "操作员写入、渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信审计人；企业微信 readiness/callback 保持专用公开入口。"
+      ? "操作员写入、通用微信入站、渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信主体；企业微信 readiness/callback 保持专用公开入口。"
       : "高风险路由守卫、可信审计人覆盖或企业微信公开入口边界发生漂移。",
     { path: paths.wechatWork, paths: Object.values(paths), missing, forbidden },
   )];

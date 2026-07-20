@@ -81,15 +81,20 @@ export class WechatController {
   }
 
   @Post("inbound/messages")
-  processInboundMessage(@Body() payload: {
-    wechatAccountId?: string;
-    conversationId?: string;
-    customerId?: string;
-    text: string;
-    externalId?: string;
-    assetIds?: string[];
-    attachments?: Array<Record<string, unknown>>;
-  }) {
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  processInboundMessage(
+    @Body() payload: {
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      text: string;
+      externalId?: string;
+      assetIds?: string[];
+      attachments?: Array<Record<string, unknown>>;
+    },
+    @TrustedOperator() _principal: TrustedOperatorPrincipal,
+  ) {
     return this.wechat.processInboundMessage(payload || { text: "" });
   }
 

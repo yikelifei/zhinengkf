@@ -767,8 +767,13 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(api, /queueOrderConfirmation\([\s\S]*manualRelease: ManualReleaseOptions = \{\}/);
   assert.match(api, /queueOrderFollowup\([\s\S]*manualRelease: ManualReleaseOptions = \{\}/);
   assert.match(api, /\.\.\.manualRelease,[\s\S]*owner: "人工客服"/);
-  assert.match(api, /validateSendTask\(id: string, mode: "correct" \| "wrong_chat", expected: IdentityExpectation = \{\}\)/);
-  assert.match(api, /`\/wechat\/send-tasks\/\$\{id\}\/validate`, \{ \.\.\.expected, mode \}/);
+  const validateSendTaskClient = api.slice(
+    api.indexOf("export async function validateSendTask("),
+    api.indexOf("export async function validateSendTaskCurrentWindow("),
+  );
+  assert.match(validateSendTaskClient, /validateSendTask\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(validateSendTaskClient, /`\/wechat\/send-tasks\/\$\{id\}\/validate`, expected/);
+  assert.doesNotMatch(validateSendTaskClient, /\b(?:activeWindow|mode)\b/);
   assert.match(api, /validateSendTaskCurrentWindow\(id: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /`\/wechat\/send-tasks\/\$\{id\}\/validate-current-window`, expected/);
   assert.match(assetsController, /ExpectedIdentityPayload/);
@@ -842,7 +847,12 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(wechatController, /setConversationManualLock\([\s\S]*\} & ExpectedIdentityPayload/);
   assert.match(wechatController, /queueOrderConfirmation\([\s\S]*releaseManualLock\?: boolean;[\s\S]*releaseReason\?: string;/);
   assert.match(wechatController, /queueOrderFollowup\([\s\S]*releaseManualLock\?: boolean;[\s\S]*releaseReason\?: string;/);
-  assert.match(wechatController, /@Body\(\) payload: \{ mode\?: "correct" \| "wrong_chat"; activeWindow\?: Record<string, unknown> \} & ExpectedIdentityPayload/);
+  const validateSendTaskController = wechatController.slice(
+    wechatController.indexOf('@Post("send-tasks/:id/validate")'),
+    wechatController.indexOf('@Post("send-tasks/:id/validate-current-window")'),
+  );
+  assert.match(validateSendTaskController, /@Body\(\) payload: ExpectedIdentityPayload/);
+  assert.doesNotMatch(validateSendTaskController, /\b(?:activeWindow|mode)\b/);
   assert.match(wechatController, /validateWithCurrentWindow\(@Param\("id"\) id: string, @Body\(\) payload: ExpectedIdentityPayload = \{\}\)/);
   assert.match(wechatController, /this\.wechat\.validateSendTaskWithCurrentWindow\(id, payload \|\| \{\}\)/);
   assert.match(wechatController, /listSendAttempts\([\s\S]*@Query\("sendTaskId"\) sendTaskId\?: string,[\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string,[\s\S]*@Query\("conversationId"\) conversationId\?: string,[\s\S]*@Query\("customerId"\) customerId\?: string/);
@@ -854,11 +864,15 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(wechatService, /private assertManualLockTransitionHasExpectedIdentity\(payload: ExpectedIdentityPayload, action: string\)/);
   assert.match(wechatService, /throw new BadRequestException\(`\$\{action\}必须带完整会话身份：\$\{missing\.join\(", "\)\}`\)/);
   assert.match(wechatService, /cancelInFlightSendTasksForManualLock\(conversationId: string, reviewer: string\)[\s\S]*this\.cancelSendTask\(task\.id, \{[\s\S]*expectedWechatAccountId: task\.wechatAccountId,[\s\S]*expectedConversationId: task\.conversationId,[\s\S]*expectedCustomerId: task\.customerId \|\| task\.conversation\?\.customerId,[\s\S]*reason,/);
-  assert.match(wechatService, /validateSendTask\([\s\S]*\} & ExpectedIdentityPayload = \{\}/);
-  assert.match(wechatService, /assertExpectedIdentity\(task, params, "send task"\)/);
+  const validateSendTaskService = wechatService.slice(
+    wechatService.indexOf("  validateSendTask(id: string"),
+    wechatService.indexOf("  validateSendTaskWithCurrentWindow("),
+  );
+  assert.match(validateSendTaskService, /validateSendTask\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(validateSendTaskService, /this\.validateSendTaskWithCurrentWindow\(id, expected\)/);
+  assert.doesNotMatch(validateSendTaskService, /\b(?:activeWindow|mode)\b/);
   assert.match(wechatService, /validateSendTaskWithCurrentWindow\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
   assert.match(wechatService, /assertExpectedIdentity\(task, expected, "send task"\)/);
-  assert.match(wechatService, /this\.validateSendTaskWithCurrentWindow\(id, params\)/);
   assert.match(wechatService, /listSendAttempts\(filter: \{ sendTaskId\?: string; wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
   assert.match(wechatService, /if \(filter\.sendTaskId\) \{[\s\S]*this\.assertSendAttemptListIdentity\(filter\)/);
   assert.match(wechatService, /send attempts require conversation identity: \$\{missing\.join\(", "\)\}/);

@@ -226,7 +226,7 @@ test("stable and port-stack launchers share the internal API token without writi
   assert.doesNotMatch(stableWrapperSection, /INTERNAL_API_TOKEN/);
 });
 
-test("API bootstrap installs exact Origin enforcement while callback and worker routes remain unguarded", () => {
+test("API bootstrap keeps dedicated callbacks public while generic inbound requires a trusted operator", () => {
   const main = read("apps/api/src/main.ts");
   const personal = read("apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller.ts");
   const wechat = read("apps/api/src/wechat/wechat.controller.ts");
@@ -238,7 +238,9 @@ test("API bootstrap installs exact Origin enforcement while callback and worker 
   const bridgeAck = methodSection(wechat, '@Post("send-tasks/:id/bridge-ack")', "acknowledgeBridgeSend");
   assert.doesNotMatch(bridgeAck, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
   const inbound = methodSection(wechat, '@Post("inbound/messages")', "processInboundMessage");
-  assert.doesNotMatch(inbound, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
+  assert.match(inbound, /@RequireOperatorCapability\("approve_send"\)/);
+  assert.match(inbound, /@UseGuards\(OperatorAccessGuard\)/);
+  assert.match(inbound, /@TrustedOperator\(\) _principal: TrustedOperatorPrincipal/);
 });
 
 function methodSection(source, decorator, methodName) {

@@ -320,7 +320,7 @@ test("controller status accepts only the internal proof and protected controller
   assert.match(designJobs, /@Post\(":id\/executions\/:executionId\/resolve-refund"\)[\s\S]*?principal\.id/);
 });
 
-test("high-risk operator routes use the existing capability matrix while public machine ingress stays unguarded", () => {
+test("high-risk operator routes use the existing capability matrix while dedicated callbacks stay public", () => {
   assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, ReviewsController), "view_console");
   assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, AutomationController), "view_console");
   assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, TrainingController), "view_console");
