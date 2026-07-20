@@ -95,7 +95,7 @@ function createServices(store, notifications) {
 
 function createPassingWechatWindowSnapshot(store, recentMessageText = "") {
   return store.createWechatWindowSnapshot({
-    source: "test",
+    source: "windows_foreground_observer",
     isOnline: true,
     wechatAccountId: "wechat_1",
     accountDisplayName: "客服微信1",
@@ -105,6 +105,13 @@ function createPassingWechatWindowSnapshot(store, recentMessageText = "") {
     recentCustomerId: "customer_1",
     recentMessageText,
     confidence: 1,
+    diagnostic: {
+      observerEvidence: {
+        verified: true,
+        version: "wechat_window_observer_v1",
+        nonceHash: "c".repeat(64),
+      },
+    },
     capturedAt: new Date().toISOString(),
   });
 }

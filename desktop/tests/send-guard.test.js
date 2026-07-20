@@ -19,6 +19,16 @@ const conversation = { id: "conv-1", title: "王总-端午礼盒", customerId: "
 const customer = { id: "customer-1", name: "王总" };
 
 const boundConversation = { ...conversation, wechatAccountId: "wechat-1" };
+const trustedObserverEvidence = {
+  source: "windows_foreground_observer",
+  diagnostic: {
+    observerEvidence: {
+      verified: true,
+      version: "wechat_window_observer_v1",
+      nonceHash: "a".repeat(64),
+    },
+  },
+};
 const boundDesignJob = {
   id: "design-1",
   conversationId: "conv-1",
@@ -50,6 +60,7 @@ test("passes send guard when account, chat, customer and queue head all match", 
     conversation,
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
@@ -68,6 +79,7 @@ test("blocks send guard when active chat is another customer", () => {
     conversation,
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: "李经理-企业伴手礼",
       recentCustomerId: "customer-1",
@@ -86,6 +98,7 @@ test("blocks send guard when task is not first in account queue", () => {
     conversation,
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
@@ -104,6 +117,7 @@ test("blocks send guard when conversation is manually locked", () => {
     conversation: { ...conversation, manualLocked: true },
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: "王总-端午礼盒",
       recentCustomerId: "customer-1",
@@ -124,6 +138,7 @@ test("passes send guard when current window snapshot is fresh", () => {
     conversation,
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: conversation.title,
       recentCustomerId: "customer-1",
@@ -145,6 +160,7 @@ test("blocks send guard when current window snapshot is stale", () => {
     conversation,
     customer,
     activeWindow: {
+      ...trustedObserverEvidence,
       wechatAccountId: "wechat-1",
       chatTitle: conversation.title,
       recentCustomerId: "customer-1",

@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const {
+  readWechatWindowObserverProofToken,
+  wechatWindowObserverServiceEnv,
+} = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -16,6 +20,9 @@ const apiPort = numberEnv("API_PORT", 3200);
 const apiBase = String(process.env.BRIDGE_API_BASE || process.env.WECHAT_WINDOW_OBSERVER_API_BASE || `http://127.0.0.1:${apiPort}/api`).replace(/\/$/, "");
 const args = new Set(process.argv.slice(2));
 const requestedBridgeMode = resolveBridgeMode();
+const observerProofFile = path.resolve(
+  process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key"),
+);
 
 const services = buildServices();
 
@@ -35,6 +42,8 @@ async function main() {
     stopWorkers();
     return;
   }
+
+  readWechatWindowObserverProofToken(observerProofFile);
 
   if (!args.has("--no-api-check")) {
     await assertApiReadyForSafeWorkers();
@@ -87,6 +96,7 @@ function buildServices() {
       env: {
         WECHAT_WINDOW_OBSERVER_API_BASE: apiBase,
         WECHAT_WINDOW_OBSERVER_SCAN: "true",
+        WECHAT_WINDOW_OBSERVER_PROOF_FILE: observerProofFile,
       },
     },
     {
@@ -208,10 +218,7 @@ function startWorker(service) {
   const stderr = fs.openSync(stderrPath, "a");
   const child = spawn(process.execPath, service.commandArgs, {
     cwd: desktopRoot,
-    env: {
-      ...process.env,
-      ...service.env,
-    },
+    env: workerEnv(service),
     detached: true,
     stdio: ["ignore", stdout, stderr],
     windowsHide: true,
@@ -273,7 +280,11 @@ function buildWindowsWorkerWrapper(service, stdoutPath, stderrPath, launcherLogP
 }
 
 function windowsWorkerEnv(service) {
-  return windowsSafeEnv({
+  return windowsSafeEnv(workerEnv(service));
+}
+
+function workerEnv(service) {
+  return wechatWindowObserverServiceEnv({
     ...process.env,
     PATH: process.env.PATH || process.env.Path || "",
     SystemRoot: process.env.SystemRoot || process.env.WINDIR || "C:\\WINDOWS",
@@ -282,7 +293,7 @@ function windowsWorkerEnv(service) {
     TEMP: process.env.TEMP || process.env.TMP || runtimeDir,
     TMP: process.env.TMP || process.env.TEMP || runtimeDir,
     ...service.env,
-  });
+  }, service.name, observerProofFile);
 }
 
 function stopWorkers() {

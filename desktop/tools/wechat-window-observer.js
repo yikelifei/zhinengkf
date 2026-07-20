@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
+const { createWechatWindowObserverEvidence } = require("../packages/rules/wechatWindowEvidence");
+const { readWechatWindowObserverProofToken } = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(desktopRoot, ".runtime");
@@ -46,7 +48,7 @@ async function runOnce(config = readConfig(), capture = captureForegroundWindow)
   fs.mkdirSync(config.inboxDir, { recursive: true });
   const windowInfo = await Promise.resolve(capture(config));
   const snapshot = buildSnapshotFromWindow(windowInfo, config);
-  const snapshotFile = config.dryRun ? "" : writeSnapshotFile(config.inboxDir, snapshot);
+  const snapshotFile = config.dryRun ? "" : writeSnapshotFile(config.inboxDir, snapshot, config.proofToken);
   const scanResult = config.scan && !config.dryRun
     ? await postJson(`${config.apiBase}/wechat/window-snapshots/inbox/scan`, {}, config)
     : null;
@@ -212,10 +214,11 @@ $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
   }
 }
 
-function writeSnapshotFile(inboxDir, snapshot) {
+function writeSnapshotFile(inboxDir, snapshot, proofToken) {
   fs.mkdirSync(inboxDir, { recursive: true });
   const filePath = path.join(inboxDir, `${Date.now()}-${safeFileSegment(snapshot.wechatAccountId || "unbound")}.json`);
-  fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  const evidence = createWechatWindowObserverEvidence(snapshot, proofToken);
+  fs.writeFileSync(filePath, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return filePath;
 }
 
@@ -293,6 +296,7 @@ function readConfig() {
     valueArg("--config") || process.env.WECHAT_WINDOW_OBSERVER_CONFIG_FILE || path.join(runtimeDir, "wechat-window-observer-config.json"),
   );
   const fileConfig = readJsonIfExists(configFile);
+  const dryRun = hasArg("--dry-run");
   return {
     ...fileConfig,
     configFile,
@@ -309,8 +313,9 @@ function readConfig() {
       30000,
     ),
     scan: hasArg("--scan") || String(process.env.WECHAT_WINDOW_OBSERVER_SCAN || fileConfig.scan || "").toLowerCase() === "true",
-    dryRun: hasArg("--dry-run"),
+    dryRun,
     watch: hasArg("--watch"),
+    proofToken: dryRun ? "" : readWechatWindowObserverProofToken(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE),
   };
 }
 
@@ -396,6 +401,7 @@ Environment:
   WECHAT_WINDOW_OBSERVER_CONFIG_FILE=.runtime/wechat-window-observer-config.json
   WECHAT_WINDOW_SNAPSHOT_INBOX_DIR=.runtime/wechat-window-snapshots
   WECHAT_WINDOW_OBSERVER_STATUS_FILE=.runtime/wechat-window-observer-status.json
+  WECHAT_WINDOW_OBSERVER_PROOF_FILE=.runtime/wechat-window-observer-proof.key
   WECHAT_WINDOW_OBSERVER_SCAN=true
 
 Config example:
@@ -419,5 +425,6 @@ module.exports = {
   ruleMatchesWindow,
   runOnce,
   safeFileSegment,
+  writeSnapshotFile,
   writeObserverStatus,
 };

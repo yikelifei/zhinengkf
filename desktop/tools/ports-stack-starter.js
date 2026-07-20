@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { ensureInternalApiToken } = require("./internal-api-session");
+const { createWechatWindowObserverProofSession } = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -40,6 +41,9 @@ const conflictMode = realDesignMode ? "mock" : "real";
 const managedPorts = [numberEnv("WEB_PORT", 3100), numberEnv("API_PORT", 3200), numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)];
 const stackStarterLockFile = path.join(runtimeDir, `ports-stack-starter-${supervisorMode}.lock`);
 const internalApiToken = ensureInternalApiToken();
+const observerProofSession = {
+  tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
+};
 let stackStarterLockHeld = false;
 
 main().catch((error) => {
@@ -116,6 +120,8 @@ async function main() {
       return;
     }
 
+    Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
+
     if (realDesignMode) {
       fs.writeFileSync(realModeLockFile, `${new Date().toISOString()}\n`, "utf8");
       writeRealDesignRuntimeConfig();
@@ -169,6 +175,7 @@ async function main() {
     const env = {
       ...process.env,
       INTERNAL_API_TOKEN: internalApiToken,
+      WECHAT_WINDOW_OBSERVER_PROOF_FILE: observerProofSession.tokenFile,
     };
     if (mockDesignMode) {
       env.DESIGN_PLATFORM_ADAPTER = "standard_v1";

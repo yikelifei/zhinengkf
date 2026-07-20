@@ -197,11 +197,6 @@ export class WechatController {
     return this.wechat.captureWindowObserverOnce();
   }
 
-  @Post("window-snapshots")
-  createWindowSnapshot(@Body() payload: Record<string, unknown>) {
-    return this.wechat.createWindowSnapshot(payload || {});
-  }
-
   @Post("window-snapshots/inbox/scan")
   scanWindowSnapshotInbox() {
     return this.wechat.scanWindowSnapshotInbox();

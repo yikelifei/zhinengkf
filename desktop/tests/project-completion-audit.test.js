@@ -740,6 +740,14 @@ test("missing desktop session security artifact prevents a completion PASS", () 
   assert.equal(report.results.find((item) => item.id === "security.desktop_session_proof").status, STATUS.FAIL);
 });
 
+test("missing wechat window observer evidence security artifact prevents a completion PASS", () => {
+  const root = createPassingFixture();
+  fs.rmSync(path.join(root, "desktop", "tests", "wechat-window-evidence-security.test.js"));
+  const report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.status, STATUS.FAIL);
+  assert.equal(report.results.find((item) => item.id === "security.wechat_window_observer_evidence").status, STATUS.FAIL);
+});
+
 test("design reconciliation UI is a required artifact with a fail-closed action contract", () => {
   const root = createPassingFixture();
   const componentPath = path.join(root, "desktop", "apps", "web", "src", "components", "design-execution-reconciliation-panel.tsx");

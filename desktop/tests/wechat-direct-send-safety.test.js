@@ -992,7 +992,7 @@ test("window observer public endpoints expose summaries without local paths", ()
   );
   const captureSection = service.slice(
     service.indexOf("  captureWindowObserverOnce()"),
-    service.indexOf("  createWindowSnapshot("),
+    service.indexOf("  private createVerifiedWindowSnapshot("),
   );
   const scanSection = service.slice(
     service.indexOf("  scanWindowSnapshotInbox()"),

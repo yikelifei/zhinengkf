@@ -127,6 +127,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/internal-api-security.test.js",
   },
   {
+    id: "security.wechat_window_observer_evidence",
+    title: "微信窗口 observer 证据签名与发送失败关闭测试",
+    file: "desktop/tests/wechat-window-evidence-security.test.js",
+  },
+  {
     id: "security.design_platform_credentials",
     title: "设计平台逐凭据 origin 绑定测试",
     file: "desktop/tests/design-platform-credential-security.test.js",

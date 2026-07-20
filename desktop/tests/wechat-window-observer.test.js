@@ -96,6 +96,7 @@ test("runOnce writes a snapshot file without scanning in default mode", async ()
       apiBase: "http://127.0.0.1:3200/api",
       inboxDir: dir,
       statusFile: path.join(dir, "status.json"),
+      proofToken: "1".repeat(64),
       scan: false,
       dryRun: false,
       accounts: [{ wechatAccountId: "wechat_demo_1", processNames: ["WeChat"], titleIncludes: ["Wang"] }],
@@ -108,8 +109,10 @@ test("runOnce writes a snapshot file without scanning in default mode", async ()
   assert.equal(result.scanResult, null);
 
   const saved = JSON.parse(fs.readFileSync(result.snapshotFile, "utf8"));
-  assert.equal(saved.wechatAccountId, "wechat_demo_1");
-  assert.equal(saved.recentCustomerId, "customer_demo_1");
+  assert.equal(saved.version, "wechat_window_observer_v1");
+  assert.match(saved.signature, /^[a-f0-9]{64}$/);
+  assert.equal(saved.snapshot.wechatAccountId, "wechat_demo_1");
+  assert.equal(saved.snapshot.recentCustomerId, "customer_demo_1");
 });
 
 test("observer status avoids leaking raw chat title", () => {

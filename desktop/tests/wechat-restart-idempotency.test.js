@@ -381,7 +381,7 @@ function createPendingBridgeSend(localStore, service, text) {
     guardSnapshot: { requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"] },
   });
   localStore.createWechatWindowSnapshot({
-    source: "fault_injection",
+    source: "windows_foreground_observer",
     isOnline: true,
     wechatAccountId: "wechat_demo_1",
     accountDisplayName: "客服微信1号",
@@ -391,6 +391,13 @@ function createPendingBridgeSend(localStore, service, text) {
     recentMessageText: text,
     confidence: 1,
     capturedAt: new Date().toISOString(),
+    diagnostic: {
+      observerEvidence: {
+        verified: true,
+        version: "wechat_window_observer_v1",
+        nonceHash: "d".repeat(64),
+      },
+    },
   });
   return service.executeSend(task.id, { adapter: "windows_bridge" });
 }

@@ -37,6 +37,7 @@ const {
   inspectBundleAutomationReadiness,
   latestCandidateRound,
   normalizeWechatWindowSnapshot,
+  verifyWechatWindowObserverEvidence,
   planInboundAutomation,
   planInboundQuoteAcceptance,
   planCustomerImageSelection,
@@ -1685,6 +1686,7 @@ export class WechatDispatchService {
         ...process.env,
         WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: appConfig.wechatWindowSnapshotInboxDir,
         WECHAT_WINDOW_OBSERVER_STATUS_FILE: appConfig.wechatWindowObserverStatusFile,
+        WECHAT_WINDOW_OBSERVER_PROOF_FILE: appConfig.wechatWindowObserverProofFile,
       },
       encoding: "utf8",
       timeout: 15000,
@@ -1708,6 +1710,7 @@ export class WechatDispatchService {
         ...process.env,
         WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: appConfig.wechatWindowSnapshotInboxDir,
         WECHAT_WINDOW_OBSERVER_STATUS_FILE: appConfig.wechatWindowObserverStatusFile,
+        WECHAT_WINDOW_OBSERVER_PROOF_FILE: appConfig.wechatWindowObserverProofFile,
       },
       encoding: "utf8",
       timeout: 15000,
@@ -1729,21 +1732,29 @@ export class WechatDispatchService {
     };
   }
 
-  createWindowSnapshot(payload: Record<string, unknown>) {
-    if (!appConfig.useLocalStore) return this.createPrismaWindowSnapshot(payload);
-    const snapshot = normalizeWechatWindowSnapshot(payload || {});
+  private createVerifiedWindowSnapshot(snapshotPayload: Record<string, unknown>, observerEvidence: Record<string, unknown>) {
+    const snapshot = normalizeWechatWindowSnapshot(snapshotPayload || {});
     const account = this.localStore.listWechatAccounts().find((item) => item.id === snapshot.wechatAccountId) || null;
     const conversations = this.localStore.listConversations(snapshot.wechatAccountId || undefined);
-    const diagnostic = diagnoseWechatWindowSnapshot({ snapshot, account, conversations });
+    const diagnostic = {
+      ...diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
+      observerEvidence: { ...observerEvidence, verified: true, verifiedAt: new Date().toISOString() },
+    };
     return this.localStore.createWechatWindowSnapshot({ ...snapshot, diagnostic });
   }
 
-  private async createPrismaWindowSnapshot(payload: Record<string, unknown>) {
-    const snapshot = normalizeWechatWindowSnapshot(payload || {});
+  private async createVerifiedPrismaWindowSnapshot(
+    snapshotPayload: Record<string, unknown>,
+    observerEvidence: Record<string, unknown>,
+  ) {
+    const snapshot = normalizeWechatWindowSnapshot(snapshotPayload || {});
     const accounts = await this.persistence.listAccounts();
     const account = accounts.find((item: any) => item.id === snapshot.wechatAccountId) || null;
     const conversations = await this.persistence.listConversations(snapshot.wechatAccountId || undefined);
-    const diagnostic = diagnoseWechatWindowSnapshot({ snapshot, account, conversations });
+    const diagnostic = {
+      ...diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
+      observerEvidence: { ...observerEvidence, verified: true, verifiedAt: new Date().toISOString() },
+    };
     const activeConversation = conversations.find((conversation: any) => {
       if (snapshot.externalChatId && conversation.externalChatId === snapshot.externalChatId) return true;
       if (snapshot.chatTitle && String(conversation.title || "").trim() === String(snapshot.chatTitle || "").trim()) return true;
@@ -1751,9 +1762,23 @@ export class WechatDispatchService {
     });
     return this.persistence.createWindowSnapshot({
       ...snapshot,
+      id: `observer_${String(observerEvidence.nonceHash || "")}`,
       activeConversationId: activeConversation?.id || null,
       diagnostic,
     });
+  }
+
+  private assertObserverNonceUnused(nonceHash: string) {
+    const replayed = this.localStore
+      .listWechatWindowSnapshots(500)
+      .some((snapshot: any) => snapshot?.diagnostic?.observerEvidence?.nonceHash === nonceHash);
+    if (replayed) throw new Error("observer evidence replay rejected");
+  }
+
+  private async assertPrismaObserverNonceUnused(nonceHash: string) {
+    const snapshots = await this.persistence.listWindowSnapshots({ limit: 300 });
+    const replayed = snapshots.some((snapshot: any) => snapshot?.diagnostic?.observerEvidence?.nonceHash === nonceHash);
+    if (replayed) throw new Error("observer evidence replay rejected");
   }
 
   scanWindowSnapshotInbox() {
@@ -1765,15 +1790,21 @@ export class WechatDispatchService {
     const processed: any[] = [];
     const failed: any[] = [];
     for (const entry of entries) {
+      let claimedPath = entry.filePath;
       try {
-        const data = readJsonFile(entry.filePath);
+        claimedPath = claimJsonInboxFile(entry.filePath, inboxDir);
+        const data = readJsonFile(claimedPath);
         const snapshots = normalizeWindowSnapshotInboxPayload(data);
-        if (!snapshots.length) throw new Error("window snapshot inbox file must contain a snapshot object or snapshots array");
-        const created = snapshots.map((snapshot, index) => {
-          if (!isPlainObject(snapshot)) throw new Error(`snapshot[${index}] must be a JSON object`);
-          return this.createWindowSnapshot({ source: "window_snapshot_inbox", ...snapshot });
+        if (snapshots.length !== 1) throw new Error("window snapshot inbox file must contain exactly one observer evidence envelope");
+        const created = snapshots.map((evidence, index) => {
+          const verified = verifyWechatWindowObserverEvidence(evidence, appConfig.wechatWindowObserverProofToken, {
+            maxAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
+          });
+          if (!verified.ok) throw new Error(`observer evidence[${index}] rejected: ${verified.reason}`);
+          this.assertObserverNonceUnused(verified.evidence.nonceHash);
+          return this.createVerifiedWindowSnapshot(trustedObserverSnapshot(verified.snapshot, verified.evidence), verified.evidence);
         });
-        moveJsonInboxFile(entry.filePath, inboxDir, "processed");
+        moveJsonInboxFile(claimedPath, inboxDir, "processed");
         processed.push({
           fileName: entry.fileName,
           modifiedAt: entry.modifiedAt,
@@ -1783,7 +1814,7 @@ export class WechatDispatchService {
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown window snapshot inbox error";
-        moveJsonInboxFile(entry.filePath, inboxDir, "failed");
+        if (fs.existsSync(claimedPath)) moveJsonInboxFile(claimedPath, inboxDir, "failed");
         failed.push({ fileName: entry.fileName, modifiedAt: entry.modifiedAt, ageSeconds: entry.ageSeconds, errorMessage });
       }
     }
@@ -1799,24 +1830,28 @@ export class WechatDispatchService {
     const failed: any[] = [];
 
     for (const entry of entries) {
+      let claimedPath = entry.filePath;
       try {
-        const data = readJsonFile(entry.filePath);
+        claimedPath = claimJsonInboxFile(entry.filePath, inboxDir);
+        const data = readJsonFile(claimedPath);
         const snapshots = normalizeWindowSnapshotInboxPayload(data);
-        if (!snapshots.length) {
-          throw new Error("window snapshot inbox file must contain a snapshot object or snapshots array");
+        if (snapshots.length !== 1) {
+          throw new Error("window snapshot inbox file must contain exactly one observer evidence envelope");
         }
 
         const created = [];
-        for (const [index, snapshot] of snapshots.entries()) {
-          if (!isPlainObject(snapshot)) {
-            throw new Error(`snapshot[${index}] must be a JSON object`);
-          }
-          created.push(await this.createPrismaWindowSnapshot({
-            source: "window_snapshot_inbox",
-            ...snapshot,
-          }));
+        for (const [index, evidence] of snapshots.entries()) {
+          const verified = verifyWechatWindowObserverEvidence(evidence, appConfig.wechatWindowObserverProofToken, {
+            maxAgeSeconds: appConfig.wechatWindowSnapshotMaxAgeSeconds,
+          });
+          if (!verified.ok) throw new Error(`observer evidence[${index}] rejected: ${verified.reason}`);
+          await this.assertPrismaObserverNonceUnused(verified.evidence.nonceHash);
+          created.push(await this.createVerifiedPrismaWindowSnapshot(
+            trustedObserverSnapshot(verified.snapshot, verified.evidence),
+            verified.evidence,
+          ));
         }
-        moveJsonInboxFile(entry.filePath, inboxDir, "processed");
+        moveJsonInboxFile(claimedPath, inboxDir, "processed");
         processed.push({
           fileName: entry.fileName,
           modifiedAt: entry.modifiedAt,
@@ -1826,7 +1861,7 @@ export class WechatDispatchService {
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown window snapshot inbox error";
-        moveJsonInboxFile(entry.filePath, inboxDir, "failed");
+        if (fs.existsSync(claimedPath)) moveJsonInboxFile(claimedPath, inboxDir, "failed");
         failed.push({
           fileName: entry.fileName,
           modifiedAt: entry.modifiedAt,
@@ -1867,7 +1902,10 @@ export class WechatDispatchService {
       conversation,
       otherConversation: conversations.find((item) => item.id !== conversation.id) || null,
     });
-    const diagnostic = diagnoseWechatWindowSnapshot({ snapshot, account, conversations });
+    const diagnostic = markWindowDiagnosticNonSendable(
+      diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
+      "demo_snapshot",
+    );
     return this.localStore.createWechatWindowSnapshot({ ...snapshot, diagnostic });
   }
 
@@ -1898,11 +1936,10 @@ export class WechatDispatchService {
       conversation,
       otherConversation,
     });
-    const diagnostic = diagnoseWechatWindowSnapshot({
-      snapshot,
-      account,
-      conversations,
-    });
+    const diagnostic = markWindowDiagnosticNonSendable(
+      diagnoseWechatWindowSnapshot({ snapshot, account, conversations }),
+      "demo_snapshot",
+    );
     return this.persistence.createWindowSnapshot({
       ...snapshot,
       diagnostic,
@@ -6971,6 +7008,45 @@ function normalizeWindowSnapshotInboxPayload(data: unknown): unknown[] {
   if (Array.isArray(data)) return data;
   if (isPlainObject(data) && Array.isArray(data.snapshots)) return data.snapshots;
   return [data];
+}
+
+function claimJsonInboxFile(filePath: string, inboxDir: string) {
+  const root = path.resolve(inboxDir);
+  const source = path.resolve(filePath);
+  const relative = path.relative(root, source);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("refuse to claim file outside window snapshot inbox");
+  }
+  const processingDir = path.join(root, "processing");
+  fs.mkdirSync(processingDir, { recursive: true });
+  const parsed = path.parse(source);
+  const target = path.join(processingDir, `${parsed.name}-${process.pid}-${Date.now()}${parsed.ext}`);
+  fs.renameSync(source, target);
+  return target;
+}
+
+function markWindowDiagnosticNonSendable(diagnostic: Record<string, unknown>, reason: string) {
+  return {
+    ...diagnostic,
+    observerEvidence: {
+      verified: false,
+      reason,
+    },
+  };
+}
+
+function trustedObserverSnapshot(snapshot: Record<string, unknown>, evidence: Record<string, unknown>) {
+  const hasAccount = Boolean(String(snapshot.wechatAccountId || snapshot.accountDisplayName || "").trim());
+  const hasConversation = Boolean(
+    String(snapshot.externalChatId || snapshot.chatTitle || snapshot.recentCustomerId || "").trim(),
+  );
+  const confidence = Math.min(0.99, (snapshot.isOnline === true ? 0.55 : 0.15) + (hasAccount ? 0.2 : 0) + (hasConversation ? 0.2 : 0));
+  return {
+    ...snapshot,
+    source: "windows_foreground_observer",
+    capturedAt: String(evidence.issuedAt || ""),
+    confidence: Number(confidence.toFixed(2)),
+  };
 }
 
 function moveJsonInboxFile(filePath: string, inboxDir: string, status: "processed" | "failed") {

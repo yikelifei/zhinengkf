@@ -33,8 +33,20 @@ function runtimePath(...segments: string[]) {
   return path.join(runtimeDir, ...segments);
 }
 
+function readRuntimeSecret(filePath: string): string {
+  try {
+    const value = String(fs.readFileSync(filePath, "utf8") || "").trim();
+    return /^[a-f0-9]{64}$/i.test(value) ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 const designPlatformRuntimeConfigPath = path.resolve(
   process.env.DESIGN_PLATFORM_RUNTIME_CONFIG || runtimePath("design-platform-config.json"),
+);
+const wechatWindowObserverProofFile = path.resolve(
+  process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || runtimePath("wechat-window-observer-proof.key"),
 );
 
 function readRuntimeConfig(): Record<string, unknown> {
@@ -167,6 +179,8 @@ export const appConfig = {
   wechatBridgeWorkerStatusFile: path.resolve(process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE || runtimePath("wechat-bridge-worker-status.json")),
   wechatWindowSnapshotInboxDir: path.resolve(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR || runtimePath("wechat-window-snapshots")),
   wechatWindowObserverStatusFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE || runtimePath("wechat-window-observer-status.json")),
+  wechatWindowObserverProofFile,
+  wechatWindowObserverProofToken: readRuntimeSecret(wechatWindowObserverProofFile),
   wechatWindowSnapshotMaxAgeSeconds: numberEnv("WECHAT_WINDOW_SNAPSHOT_MAX_AGE_SECONDS", 30),
   wechatWindowSnapshotScanLimit: numberEnv("WECHAT_WINDOW_SNAPSHOT_SCAN_LIMIT", 5),
   wechatWorkCorpId: process.env.WECHAT_WORK_CORP_ID || "",

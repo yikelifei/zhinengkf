@@ -23,4 +23,5 @@ module.exports = {
   ...require("./skuImport"),
   ...require("./skuCatalogAudit"),
   ...require("./wechatWindow"),
+  ...require("./wechatWindowEvidence"),
 };

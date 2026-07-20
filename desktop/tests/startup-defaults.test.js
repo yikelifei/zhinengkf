@@ -1459,6 +1459,25 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   }
 });
 
+test("wechat window observer proof is runtime-generated and scoped only to API plus observer", () => {
+  const session = readText("tools/wechat-window-observer-session.js");
+  const startDev = readText("tools/start-dev-ports.js");
+  const stackStarter = readText("tools/ports-stack-starter.js");
+  const stableRuntime = readText("tools/stable-runtime-launcher.js");
+  const safeWorkers = readText("tools/start-wechat-safe-workers.js");
+  const acceptance = readText("tools/run-product-acceptance.js");
+
+  assert.match(session, /randomBytes\(32\)\.toString\("hex"\)/);
+  assert.match(session, /TRUSTED_SERVICE_NAMES = new Set\(\["api", "wechat-window-observer"\]\)/);
+  assert.match(session, /withoutWechatWindowObserverProof/);
+  assert.match(startDev, /wechatWindowObserverServiceEnv\(internalEnv, service\?\.name, observerProofSession\.tokenFile\)/);
+  assert.match(stackStarter, /createWechatWindowObserverProofSession\(runtimeDir/);
+  assert.match(stableRuntime, /createWechatWindowObserverProofSession\(runtimeDir/);
+  assert.match(safeWorkers, /readWechatWindowObserverProofToken\(observerProofFile\)/);
+  assert.match(acceptance, /wechatWindowObserverServiceEnv\(serviceEnv, "api", observerProofSession\.tokenFile\)/);
+  assert.match(acceptance, /withoutWechatWindowObserverProof\(process\.env\)/);
+});
+
 test("web build script refuses to build while dev web port is occupied", () => {
   const buildWeb = readText("tools/build-web.js");
   const syncStandaloneAssets = readText("tools/sync-web-standalone-assets.js");

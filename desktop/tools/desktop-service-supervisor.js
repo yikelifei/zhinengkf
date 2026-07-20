@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { ensureInternalApiToken } = require("./internal-api-session");
+const { ensureWechatWindowObserverProofSession } = require("./wechat-window-observer-session");
 
 process.env.INTERNAL_API_TOKEN = ensureInternalApiToken();
 
@@ -17,6 +18,9 @@ const modeArgs = realDesignMode
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.join(process.cwd(), ".runtime");
+if (!process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE) {
+  process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE = ensureWechatWindowObserverProofSession(runtimeDir).tokenFile;
+}
 const stableRuntimeDir = path.join(process.cwd(), ".runtime-stable");
 const logsDir = path.join(runtimeDir, "logs");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");

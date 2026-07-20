@@ -10,6 +10,10 @@ const {
   internalApiServiceEnv,
   withoutInternalApiToken,
 } = require("./internal-api-session");
+const {
+  ensureWechatWindowObserverProofSession,
+  wechatWindowObserverServiceEnv,
+} = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -45,6 +49,7 @@ const webStandaloneBuildIdPath = path.join(
   "BUILD_ID",
 );
 const internalApiToken = ensureInternalApiToken();
+const observerProofSession = ensureWechatWindowObserverProofSession(runtimeDir);
 const args = new Set(process.argv.slice(2));
 const includeApi = !args.has("--no-api");
 const statusOnly = args.has("--status");
@@ -1613,10 +1618,11 @@ function truncateText(value, maxLength) {
 }
 
 function serviceEnv(service) {
-  return internalApiServiceEnv({
+  const internalEnv = internalApiServiceEnv({
     ...process.env,
     ...serviceDefaultEnv(service),
   }, service?.name, internalApiToken);
+  return wechatWindowObserverServiceEnv(internalEnv, service?.name, observerProofSession.tokenFile);
 }
 
 function windowsSafeEnv(env) {

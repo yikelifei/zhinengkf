@@ -1,5 +1,7 @@
 "use strict";
 
+const { isTrustedWechatWindowObserverSnapshot } = require("./wechatWindowEvidence");
+
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
 
 function validateSendGuard({
@@ -17,6 +19,16 @@ function validateSendGuard({
   const windowState = activeWindow || {};
   const queueHeadId = accountQueueTaskIds[0];
   const manualOperatorSend = isManualOperatorSend(task);
+
+  checks.push({
+    key: "verifiedObserverEvidence",
+    label: "verified observer window evidence",
+    expected: "verified windows_foreground_observer",
+    actual: windowState?.diagnostic?.observerEvidence?.verified === true
+      ? String(windowState.source || "unknown")
+      : "unverified",
+    passed: isTrustedWechatWindowObserverSnapshot(windowState),
+  });
 
   checks.push(check("wechatAccount", "微信账号正确", task?.wechatAccountId, windowState.wechatAccountId || windowState.accountId));
   checks.push(

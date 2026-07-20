@@ -5,6 +5,12 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const { createWechatWindowObserverEvidence } = require("../packages/rules/wechatWindowEvidence");
+const {
+  createWechatWindowObserverProofSession,
+  wechatWindowObserverServiceEnv,
+  withoutWechatWindowObserverProof,
+} = require("./wechat-window-observer-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
@@ -198,8 +204,9 @@ async function runStackStartup(context) {
     .toString("base64")
     .replace(/=$/, "");
   const internalApiToken = crypto.randomBytes(32).toString("hex");
+  const observerProofSession = createWechatWindowObserverProofSession(context.serviceRuntimeDir);
   const serviceEnv = {
-    ...process.env,
+    ...withoutWechatWindowObserverProof(process.env),
     NEXT_TELEMETRY_DISABLED: "1",
     USE_LOCAL_STORE: "true",
     WEB_PORT: String(webPort),
@@ -244,6 +251,8 @@ async function runStackStartup(context) {
   };
   context.serviceEnv = serviceEnv;
   context.internalApiToken = internalApiToken;
+  context.observerProofToken = observerProofSession.token;
+  context.observerProofFile = observerProofSession.tokenFile;
   context.wechatWork = {
     token: serviceEnv.WECHAT_WORK_TOKEN,
     aesKey: serviceEnv.WECHAT_WORK_ENCODING_AES_KEY,
@@ -268,7 +277,8 @@ async function runStackStartup(context) {
   if (!fs.existsSync(apiEntry)) throw new Error(`API build entry missing: ${apiEntry}`);
 
   spawnService(context, "mock-design", [path.join(desktopRoot, "tools", "mock-design-platform.js")], serviceEnv);
-  spawnService(context, "api", [apiEntry], serviceEnv);
+  const apiServiceEnv = wechatWindowObserverServiceEnv(serviceEnv, "api", observerProofSession.tokenFile);
+  spawnService(context, "api", [apiEntry], apiServiceEnv);
   spawnService(
     context,
     "web",
@@ -411,6 +421,28 @@ async function runPersonalBridgeNoSend(context) {
     },
   });
   assert(snapshot.diagnostic?.ok !== false, "demo window snapshot is not safe");
+  assert(snapshot.diagnostic?.observerEvidence?.verified === false, "demo window snapshot became trusted send evidence");
+  const observerEvidence = createWechatWindowObserverEvidence({
+    source: "windows_foreground_observer",
+    isOnline: true,
+    wechatAccountId: task.wechatAccountId,
+    accountDisplayName: task.wechatAccount?.displayName || "",
+    windowHandle: "acceptance-observer",
+    processId: process.pid,
+    chatTitle: task.conversation?.title || task.conversation?.externalChatId || "",
+    activeChatTitle: task.conversation?.title || task.conversation?.externalChatId || "",
+    externalChatId: task.conversation?.externalChatId || "",
+    recentCustomerId: task.customerId || task.conversation?.customerId || "",
+    recentMessageText: "",
+    confidence: 0.99,
+    capturedAt: new Date().toISOString(),
+    raw: { acceptanceNoSend: true },
+  }, context.observerProofToken);
+  const observerInboxFile = path.join(context.serviceEnv.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, "acceptance-observer.json");
+  fs.mkdirSync(path.dirname(observerInboxFile), { recursive: true });
+  fs.writeFileSync(observerInboxFile, `${JSON.stringify(observerEvidence, null, 2)}\n`, "utf8");
+  const observerScan = await requestJson(context, "/wechat/window-snapshots/inbox/scan", { method: "POST", body: {} });
+  assert(Number(observerScan.processed?.length || 0) === 1, "signed observer evidence was not accepted");
   const execution = await requestJson(context, `/wechat/send-tasks/${encodeURIComponent(task.id)}/execute`, {
     method: "POST",
     body: { adapter: "windows_bridge", ...expected },

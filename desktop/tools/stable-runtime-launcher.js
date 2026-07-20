@@ -8,6 +8,10 @@ const {
   internalApiServiceEnv,
   withoutInternalApiToken,
 } = require("./internal-api-session");
+const {
+  createWechatWindowObserverProofSession,
+  wechatWindowObserverServiceEnv,
+} = require("./wechat-window-observer-session");
 const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
 
 const root = path.resolve(__dirname, "..");
@@ -24,6 +28,9 @@ const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standal
 const webNextDir = path.join(root, "apps", "web", ".next");
 const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
 const internalApiToken = ensureInternalApiToken();
+const observerProofSession = {
+  tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
+};
 
 const ports = {
   web: Number(process.env.WEB_PORT || 3100),
@@ -68,6 +75,7 @@ if (fs.existsSync(stopRequestFile)) {
   process.exit(0);
 }
 acquireSingleInstanceLock();
+Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
 if (specs[0].args[0] === webRuntimeServerPath) {
   writeWebRuntimeServer();
 } else {
@@ -286,7 +294,7 @@ function webStandaloneBuildReady() {
 }
 
 function serviceEnv(port, serviceName) {
-  return internalApiServiceEnv({
+  const internalEnv = internalApiServiceEnv({
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
@@ -311,6 +319,7 @@ function serviceEnv(port, serviceName) {
     WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
   }, serviceName, internalApiToken);
+  return wechatWindowObserverServiceEnv(internalEnv, serviceName, observerProofSession.tokenFile);
 }
 
 function acquireSingleInstanceLock() {
