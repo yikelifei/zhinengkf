@@ -38,6 +38,8 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(pkg.scripts["dev:stack"], /--webpack/);
   assert.match(pkg.scripts["dev:stack:real"], /--webpack/);
   assert.equal(pkg.scripts["build:web"], "node tools/build-web.js");
+  assert.equal(pkg.scripts["release:gate"], "node tools/production-release-gate.js");
+  assert.equal(pkg.scripts["release:gate:isolated"], "node tools/production-release-gate.js --isolated-worktree");
   assert.equal(pkg.scripts["wechat:bridge:once"], "node tools/wechat-bridge-worker.js --once");
   assert.equal(pkg.scripts["wechat:bridge:watch"], "node tools/wechat-bridge-worker.js --watch");
   assert.equal(pkg.scripts["wechat:bridge:dispatch"], "node tools/wechat-bridge-worker.js --once --mode dispatch");

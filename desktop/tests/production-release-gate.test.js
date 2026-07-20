@@ -12,10 +12,15 @@ const {
   checkMigrationInventory,
   compareVersions,
   computeOverallStatus,
+  createReport,
+  isLinkedWorktreeLayout,
+  parseGateOptions,
   parseVersion,
+  resolveCommandFailureStatus,
   renderMarkdownReport,
   scanSecretEntries,
 } = require("../tools/production-release-gate");
+const { classifyPortOwners } = require("../tools/build-web");
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-release-gate-"));
@@ -37,6 +42,100 @@ test("overall status uses FAIL before BLOCKED before PASS", () => {
     computeOverallStatus([{ status: STATUS.BLOCKED }, { status: STATUS.FAIL }, { status: STATUS.PASS }]),
     STATUS.FAIL,
   );
+});
+
+test("isolated release gate defaults to distinct valid ports and allows explicit overrides", () => {
+  assert.deepEqual(parseGateOptions([]), { mode: "default", ports: null, ownerCheckWebPort: null });
+  assert.deepEqual(parseGateOptions(["--isolated-worktree"], {}), {
+    mode: "isolated-worktree",
+    ports: { web: 31911, api: 32911, mock: 37911 },
+    ownerCheckWebPort: 3100,
+  });
+  assert.deepEqual(
+    parseGateOptions(["--isolated-worktree"], {
+      RELEASE_GATE_ISOLATED_WEB_PORT: "41911",
+      RELEASE_GATE_ISOLATED_API_PORT: "42911",
+      RELEASE_GATE_ISOLATED_MOCK_PORT: "47911",
+      WEB_PORT: "41000",
+    }),
+    {
+      mode: "isolated-worktree",
+      ports: { web: 41911, api: 42911, mock: 47911 },
+      ownerCheckWebPort: 41000,
+    },
+  );
+  assert.throws(
+    () => parseGateOptions(["--isolated-worktree"], { RELEASE_GATE_ISOLATED_WEB_PORT: "0" }),
+    /valid TCP port/i,
+  );
+  assert.throws(
+    () =>
+      parseGateOptions(["--isolated-worktree"], {
+        RELEASE_GATE_ISOLATED_WEB_PORT: "31911",
+        RELEASE_GATE_ISOLATED_API_PORT: "31911",
+      }),
+    /distinct/i,
+  );
+  assert.throws(() => parseGateOptions(["--unknown"]), /unsupported argument/i);
+});
+
+test("isolated release gate accepts only linked worktree git layouts", () => {
+  assert.equal(isLinkedWorktreeLayout("D:/repo/.git/worktrees/wave9", "D:/repo/.git"), true);
+  assert.equal(isLinkedWorktreeLayout("D:/repo/.git", "D:/repo/.git"), false);
+  assert.equal(isLinkedWorktreeLayout("", "D:/repo/.git"), false);
+  assert.equal(isLinkedWorktreeLayout("D:/other/git-dir", "D:/repo/.git"), false);
+});
+
+test("web build foreign-owner override fails closed for same-root and unknown owners", () => {
+  const currentRoot = "D:/repo/.runtime/wave9/desktop";
+  assert.deepEqual(
+    classifyPortOwners([], new Map(), currentRoot),
+    { status: "free", ownerPids: [], foreignPids: [], sameRootPids: [], unknownPids: [] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(
+      ["101"],
+      new Map([["101", 'node "D:/repo/desktop/.runtime-stable/web-standalone-server.js"']]),
+      currentRoot,
+    ),
+    { status: "foreign", ownerPids: ["101"], foreignPids: ["101"], sameRootPids: [], unknownPids: [] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(
+      ["202"],
+      new Map([["202", 'node "D:/repo/.runtime/wave9/desktop/.runtime/web-standalone-server.js"']]),
+      currentRoot,
+    ),
+    { status: "same-root", ownerPids: ["202"], foreignPids: [], sameRootPids: ["202"], unknownPids: [] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(["303"], new Map([["303", ""]]), currentRoot),
+    { status: "unknown", ownerPids: ["303"], foreignPids: [], sameRootPids: [], unknownPids: ["303"] },
+  );
+});
+
+test("isolated owner safety exit is BLOCKED while compile failures remain FAIL", () => {
+  const isolatedMapping = { 2: STATUS.BLOCKED };
+  assert.equal(resolveCommandFailureStatus(2, STATUS.FAIL, isolatedMapping), STATUS.BLOCKED);
+  assert.equal(resolveCommandFailureStatus(1, STATUS.FAIL, isolatedMapping), STATUS.FAIL);
+  assert.equal(resolveCommandFailureStatus(null, STATUS.FAIL, isolatedMapping), STATUS.FAIL);
+});
+
+test("release report discloses default or isolated-worktree execution mode and ports", () => {
+  const defaultReport = createReport([{ status: STATUS.PASS }], { mode: "default", ports: null });
+  assert.equal(defaultReport.mode, "default");
+  assert.equal(defaultReport.ports, null);
+
+  const isolatedReport = createReport([{ status: STATUS.BLOCKED }], {
+    mode: "isolated-worktree",
+    ports: { web: 31911, api: 32911, mock: 37911 },
+    ownerCheckWebPort: 41000,
+  });
+  assert.equal(isolatedReport.mode, "isolated-worktree");
+  assert.deepEqual(isolatedReport.ports, { web: 31911, api: 32911, mock: 37911 });
+  assert.match(renderMarkdownReport(isolatedReport), /运行模式：`isolated-worktree`/);
+  assert.match(renderMarkdownReport(isolatedReport), /Web=31911, API=32911, Mock=37911/);
+  assert.match(renderMarkdownReport(isolatedReport), /owner 安全检查端口：41000/);
 });
 
 test("dependency lock check detects drift and accepts synchronized manifests", (t) => {
