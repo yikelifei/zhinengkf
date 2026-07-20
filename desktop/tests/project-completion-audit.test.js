@@ -41,15 +41,18 @@ function createPassingFixture() {
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\n');
-  write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\n');
+  write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
   write(root, "desktop/apps/api/src/automation/automation-scheduler.service.ts", 'lowValueAutomationMode === "durable"; bullmq_redis; readiness();\n');
-  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", "listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations();\n");
+  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", "listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations();\nroutingCorrectionRequestKey(); before.correction?.requestKey === requestKey; trainingSample.findFirst(); knowledgeEntry.findFirst(); correctionRequestKey: requestKey; TransactionIsolationLevel.Serializable; NotFoundException; BadRequestException;\n");
   write(root, "desktop/tools/initialize-prisma-agents.js", 'const execute=process.argv.includes("--execute");\nconst requiredConfirmation="INITIALIZE_PRISMA_AGENTS";\nif (!execute) { console.log({status:"PLAN", writesExecuted:false}); process.exit(0); }\nif (confirmation !== requiredConfirmation) throw new Error("refusing");\ninitializePrismaAgentData().catch(() => { process.stderr.write("failed; inspect protected deployment logs"); });\n');
   write(root, "desktop/apps/api/src/agents/agents.service.ts", "PrismaOperationsService; appConfig.useLocalStore; this.requirePrisma().listAgents(); this.requirePrisma().listAgentSkills();\n");
-  write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation();\n");
+  write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
+  write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\n');
+  write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
   write(root, "desktop/apps/api/src/automation/automation.service.ts", "listAutomationRuns(); saveAutomationRun();\n");
@@ -302,10 +305,16 @@ export class ReviewsController {
 export class QuotesController {
   @Post(":id/update")
   @RequireOperatorCapability("manage_design_executions")
-  update() {}
+  update(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
   @Post(":id/revise-selection")
   @RequireOperatorCapability("manage_design_executions")
-  revise() {}
+  revise(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
   @Post(":id/queue-send")
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
@@ -378,8 +387,18 @@ export class NotificationsController {
 @UseGuards(OperatorAccessGuard)
 export class OrdersController {
   @Post("from-quote/:quoteId") @RequireOperatorCapability("manage_design_executions") create() {}
-  @Post(":id/update") @RequireOperatorCapability("manage_design_executions") update() {}
-  @Post(":id/revise-selection") @RequireOperatorCapability("manage_design_executions") revise() {}
+  @Post(":id/update")
+  @RequireOperatorCapability("manage_design_executions")
+  update(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
+  @Post(":id/revise-selection")
+  @RequireOperatorCapability("manage_design_executions")
+  revise(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
 }
 `);
   write(root, "desktop/apps/api/src/routing/routing.controller.ts", `
@@ -387,6 +406,9 @@ export class OrdersController {
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
 export class RoutingController {
+  @Post("evaluate")
+  @RequireOperatorCapability("manage_training")
+  evaluate() {}
   @Post("evaluations/:id/correct")
   @RequireOperatorCapability("manage_training")
   correct(@Body() body, @TrustedOperator() principal) {
@@ -544,6 +566,16 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       from: "reviewer: principal.id",
       to: 'reviewer: "browser_operator"',
     },
+    {
+      file: "desktop/apps/api/src/routing/routing.controller.ts",
+      from: '@Post("evaluate")\n  @RequireOperatorCapability("manage_training")',
+      to: '@Post("evaluate")\n  @RequireOperatorCapability("view_console")',
+    },
+    {
+      file: "desktop/apps/api/src/quotes/quotes.controller.ts",
+      from: "owner: principal.id",
+      to: 'owner: "browser_operator"',
+    },
   ];
   for (const mutation of mutations) {
     const root = createPassingFixture();
@@ -555,6 +587,51 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
     const contract = report.results.find((item) => item.id === "contract.high_risk_operator_routes");
     assert.equal(contract.status, STATUS.FAIL, mutation.file);
     assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0);
+  }
+});
+
+test("completion audit detects payment and routing correction boundary drift", () => {
+  const mutations = [
+    {
+      id: "contract.payment_update_boundaries",
+      file: "desktop/apps/api/src/quotes/quotes.service.ts",
+      from: "报价付款状态只能通过付款凭证核验入口更新",
+      to: "付款状态可直接更新",
+    },
+    {
+      id: "contract.order_payment_update_boundaries",
+      file: "desktop/apps/api/src/orders/orders.service.ts",
+      from: "async recordVerifiedPayment",
+      to: "async updatePayment",
+    },
+    {
+      id: "contract.routing_correction_idempotency",
+      file: "desktop/apps/api/src/prisma/prisma-operations.service.ts",
+      from: "before.correction?.requestKey === requestKey",
+      to: "false",
+    },
+    {
+      id: "contract.routing_correction_local_parity",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: "throw new BadRequestException",
+      to: "throw new Error",
+    },
+    {
+      id: "contract.payment_update_web_surface",
+      file: "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx",
+      from: "付款状态（只读）",
+      to: "付款状态",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
   }
 });
 

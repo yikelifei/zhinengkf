@@ -467,6 +467,7 @@ test("remaining operator-facing mutation controllers require a trusted local ses
     [OrdersController, "reviseSelection", "manage_design_executions"],
     [QuotesController, "update", "manage_design_executions"],
     [QuotesController, "reviseSelection", "manage_design_executions"],
+    [RoutingController, "evaluate", "manage_training"],
     [RoutingController, "correctEvaluation", "manage_training"],
   ];
   for (const [controllerClass, methodName, capability] of expectedCapabilities) {
@@ -508,6 +509,33 @@ test("routing correction discards a browser-owned reviewer", async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0][1].reviewer, "local_admin");
   assert.equal(JSON.stringify(calls[0]).includes("attacker"), false);
+});
+
+test("generic quote and order mutations bind owner to the trusted operator", async () => {
+  const calls = [];
+  const quotes = new QuotesController({
+    update: async (...args) => calls.push(["quote-update", ...args]),
+    reviseSelectedImage: async (...args) => calls.push(["quote-revise", ...args]),
+  });
+  const orders = new OrdersController({
+    update: async (...args) => calls.push(["order-update", ...args]),
+    reviseSelectedImage: async (...args) => calls.push(["order-revise", ...args]),
+  });
+  const forged = { owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker" };
+
+  await quotes.update("quote-1", { ...forged, status: "manual_review" }, LOCAL_ADMIN_PRINCIPAL);
+  await quotes.reviseSelection("quote-1", { ...forged, selectedImageId: "image-1" }, LOCAL_ADMIN_PRINCIPAL);
+  await orders.update("order-1", { ...forged, status: "processing" }, LOCAL_ADMIN_PRINCIPAL);
+  await orders.reviseSelection("order-1", { ...forged, selectedImageId: "image-1" }, LOCAL_ADMIN_PRINCIPAL);
+
+  assert.equal(calls.length, 4);
+  for (const [name, _id, payload] of calls) {
+    assert.equal(payload.owner, "local_admin", name);
+    assert.equal(payload.actor, undefined, name);
+    assert.equal(payload.operator, undefined, name);
+    assert.equal(payload.reviewer, undefined, name);
+    assert.equal(JSON.stringify(payload).includes("attacker"), false, name);
+  }
 });
 
 function executionContext(handler, controllerClass, request) {

@@ -44,15 +44,22 @@ export class QuotesController {
     @Body()
     payload: {
       status?: string;
-      paymentStatus?: string;
       customerNotes?: string;
       owner?: string;
       quantity?: number | string;
       unitPrice?: number | string;
       totalCost?: number | string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.quotes.update(id, payload || {});
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.quotes.update(id, { ...trustedPayload, owner: principal.id });
   }
 
   @Post(":id/revise-selection")
@@ -65,8 +72,16 @@ export class QuotesController {
       owner?: string;
       note?: string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.quotes.reviseSelectedImage(id, payload || {});
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.quotes.reviseSelectedImage(id, { ...trustedPayload, owner: principal.id });
   }
 
   @Post(":id/queue-send")

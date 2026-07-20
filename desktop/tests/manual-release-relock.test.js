@@ -1183,9 +1183,9 @@ test("verified quote payment proof creates confirmed order and queues safe confi
       };
       return orderRecord;
     },
-    update: async (id, patch) => {
+    recordVerifiedPayment: async (id, patch) => {
       assert.equal(id, "order_1");
-      orderRecord = { ...orderRecord, ...patch };
+      orderRecord = { ...orderRecord, ...patch, status: "confirmed" };
       return orderRecord;
     },
   };
@@ -1292,9 +1292,9 @@ test("verified high-value payment proof keeps manual handoff instead of queueing
       };
       return orderRecord;
     },
-    update: async (id, patch) => {
+    recordVerifiedPayment: async (id, patch) => {
       assert.equal(id, "order_high_1");
-      orderRecord = { ...orderRecord, ...patch };
+      orderRecord = { ...orderRecord, ...patch, status: "confirmed" };
       return orderRecord;
     },
   };

@@ -394,7 +394,73 @@ const CONTRACTS = Object.freeze([
     id: "contract.routing_prisma_route",
     title: "路由与纠正 Prisma 路由",
     file: "desktop/apps/api/src/routing/routing.service.ts",
-    patterns: [/PrismaOperationsService/, /if \(!appConfig\.useLocalStore\)/, /evaluatePrisma/, /correctRouteEvaluation/],
+    patterns: [
+      /PrismaOperationsService/,
+      /if \(!appConfig\.useLocalStore\)/,
+      /evaluatePrisma/,
+      /correctRouteEvaluation/,
+      /notifyCorrectionBestEffort/,
+      /notification delivery is non-authoritative/,
+      /NotFoundException/,
+    ],
+  },
+  {
+    id: "contract.payment_update_boundaries",
+    title: "付款状态专用核验与通用更新边界",
+    file: "desktop/apps/api/src/quotes/quotes.service.ts",
+    patterns: [
+      /assertGenericQuoteUpdatePatch\(patch \|\| \{\}\)/,
+      /hasOwnProperty\.call\(patch, ["']paymentStatus["']\)/,
+      /updateQuoteDraft\(id, \{ \.\.\.payload, \.\.\.quotePatch \}, true\)/,
+      /orders\.recordVerifiedPayment/,
+      /付款状态只能通过付款凭证核验入口更新/,
+    ],
+  },
+  {
+    id: "contract.order_payment_update_boundaries",
+    title: "订单付款状态专用核验边界",
+    file: "desktop/apps/api/src/orders/orders.service.ts",
+    patterns: [
+      /assertGenericOrderUpdatePatch\(patch \|\| \{\}\)/,
+      /async recordVerifiedPayment\(/,
+      /["']deposit_paid["'], ["']paid["']/,
+      /hasOwnProperty\.call\(patch, ["']paymentStatus["']\)/,
+      /付款状态只能通过报价付款凭证核验入口更新/,
+    ],
+  },
+  {
+    id: "contract.routing_correction_idempotency",
+    title: "场景纠正幂等与本地/Prisma 错误语义",
+    file: "desktop/apps/api/src/prisma/prisma-operations.service.ts",
+    patterns: [
+      /routingCorrectionRequestKey/,
+      /before\.correction\?\.requestKey === requestKey/,
+      /trainingSample\.findFirst/,
+      /knowledgeEntry\.findFirst/,
+      /correctionRequestKey: requestKey/,
+      /TransactionIsolationLevel\.Serializable/,
+      /NotFoundException/,
+      /BadRequestException/,
+    ],
+  },
+  {
+    id: "contract.routing_correction_local_parity",
+    title: "本地场景纠正幂等与错误语义",
+    file: "desktop/apps/api/src/local-store/local-store.service.ts",
+    patterns: [
+      /routingCorrectionRequestKey/,
+      /before\.correction\?\.requestKey === requestKey/,
+      /correctionRequestKey: requestKey/,
+      /throw new NotFoundException\(`route evaluation not found:/,
+      /throw new BadRequestException\(`agent not found:/,
+    ],
+  },
+  {
+    id: "contract.payment_update_web_surface",
+    title: "付款状态前端只读与专用核验入口",
+    file: "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx",
+    patterns: [/付款状态（只读）/, /负责人（可信会话记录）/, /需从报价页核验付款凭证/],
+    forbidden: [/update\(["']paymentStatus["']/, /update\(["']owner["']/],
   },
   {
     id: "contract.training_prisma_route",
@@ -910,6 +976,21 @@ function highRiskOperatorRouteResults(root) {
       new RegExp(`@RequireOperatorCapability\\(["']${capability}["']\\)`),
     ]);
   }
+  for (const [label, sourceKey, routePattern] of [
+    ["orders-update-trusted", "orders", /@Post\(["']:id\/update["']\)/],
+    ["orders-revise-trusted", "orders", /@Post\(["']:id\/revise-selection["']\)/],
+    ["quotes-update-trusted", "quotes", /@Post\(["']:id\/update["']\)/],
+    ["quotes-revise-trusted", "quotes", /@Post\(["']:id\/revise-selection["']\)/],
+  ]) {
+    check(label, sources[sourceKey], routePattern, [
+      /@TrustedOperator\(\) principal/,
+      /owner:\s*_untrustedOwner/,
+      /owner:\s*principal\.id/,
+    ]);
+  }
+  check("routing-evaluate", sources.routing, /@Post\(["']evaluate["']\)/, [
+    /@RequireOperatorCapability\(["']manage_training["']\)/,
+  ]);
   check("routing-correction", sources.routing, /@Post\(["']evaluations\/:id\/correct["']\)/, [
     /@RequireOperatorCapability\(["']manage_training["']\)/,
     /@TrustedOperator\(\) principal/,
