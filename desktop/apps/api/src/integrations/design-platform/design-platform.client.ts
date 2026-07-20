@@ -1,5 +1,13 @@
 import { Injectable } from "@nestjs/common";
-import axios, { AxiosInstance, AxiosResponse } from "axios";
+import axios, {
+  AxiosAdapter,
+  AxiosHeaders,
+  AxiosInstance,
+  AxiosRequestTransformer,
+  AxiosResponse,
+  AxiosResponseTransformer,
+  InternalAxiosRequestConfig,
+} from "axios";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +16,15 @@ import { rules } from "../../shared/rules";
 import { DesignPlatformJobPayload } from "./design-platform.types";
 
 const { inspectRealDesignReferences } = rules;
+
+const trustedValidateStatus = (status: number) => status >= 200 && status < 300;
+
+function copyTransform<T>(value: T | T[] | undefined): T | T[] | undefined {
+  return Array.isArray(value) ? [...value] : value;
+}
+
+const trustedTransformRequest = copyTransform<AxiosRequestTransformer>(axios.defaults.transformRequest);
+const trustedTransformResponse = copyTransform<AxiosResponseTransformer>(axios.defaults.transformResponse);
 
 type DesignImageResult = {
   imageId: string;
@@ -115,29 +132,29 @@ function designPlatformRedirectError(response: AxiosResponse) {
 @Injectable()
 export class DesignPlatformClient {
   private readonly http: AxiosInstance;
+  private transport: AxiosAdapter;
+  private readonly guardedAdapter: AxiosAdapter;
 
   constructor() {
+    this.transport = axios.getAdapter(axios.defaults.adapter);
+    this.guardedAdapter = async (config) => {
+      this.applyTrustedRequestBoundary(config);
+      this.applyTrustedCredentialHeaders(config);
+      assertTrustedDesignPlatformTarget(config.baseURL, config.url);
+      return this.transport(config);
+    };
     this.http = axios.create({
-      baseURL: appConfig.designPlatformBaseUrl,
+      baseURL: trustedDesignPlatformBaseUrl().toString(),
       timeout: appConfig.designPlatformTimeoutMs,
       maxRedirects: 0,
+      adapter: this.guardedAdapter,
+      proxy: false,
+      validateStatus: trustedValidateStatus,
     });
     this.http.interceptors.request.use((config) => {
-      config.baseURL = appConfig.designPlatformBaseUrl;
-      config.timeout = appConfig.designPlatformTimeoutMs;
-      config.maxRedirects = 0;
-      const headers = config.headers as Record<string, string>;
-      const explicitDeviceId =
-        typeof (config.headers as any)?.get === "function"
-          ? String((config.headers as any).get("x-art-device-id") || "")
-          : String(headers["x-art-device-id"] || headers["X-Art-Device-Id"] || "");
-      const credentials = designPlatformCredentialsForTarget(config.baseURL, config.url, explicitDeviceId);
-      if (credentials.authorization) headers.Authorization = credentials.authorization;
-      else delete headers.Authorization;
-      if (credentials.cookie) headers.Cookie = credentials.cookie;
-      else delete headers.Cookie;
-      if (credentials.deviceId) headers["x-art-device-id"] = credentials.deviceId;
-      else delete headers["x-art-device-id"];
+      assertTrustedDesignPlatformTarget(appConfig.designPlatformBaseUrl, config.url);
+      this.applyTrustedRequestBoundary(config);
+      this.applyTrustedCredentialHeaders(config);
       return config;
     });
     this.http.interceptors.response.use((response) => {
@@ -148,9 +165,18 @@ export class DesignPlatformClient {
     });
   }
 
+  static createForTesting(transport: AxiosAdapter) {
+    if (typeof transport !== "function") {
+      throw new TypeError("design platform test transport must be an Axios adapter function");
+    }
+    const client = new DesignPlatformClient();
+    client.transport = transport;
+    return client;
+  }
+
   async health() {
     if (this.useArtImageLocalAdapter()) {
-      const response = await this.http.get("/api/health", { timeout: 10000 });
+      const response = await this.http.get("api/health");
       const data = this.unwrapApiData(response.data);
       return {
         adapter: appConfig.designPlatformAdapter,
@@ -158,7 +184,7 @@ export class DesignPlatformClient {
       };
     }
 
-    const response = await this.http.get("/v1/health");
+    const response = await this.http.get("v1/health");
     return response.data;
   }
 
@@ -168,7 +194,7 @@ export class DesignPlatformClient {
     }
 
     try {
-      const response = await this.http.get("/api/auth/session", { timeout: 10000 });
+      const response = await this.http.get("api/auth/session");
       const data = this.unwrapApiData(response.data) as Record<string, unknown>;
       return {
         required: true,
@@ -196,7 +222,7 @@ export class DesignPlatformClient {
       return { required: false, active: true, reason: "not_required" };
     }
 
-    const response = await this.http.get("/api/activation/status", { timeout: 10000 });
+    const response = await this.http.get("api/activation/status");
     return this.unwrapApiData(response.data) as ArtImageLocalActivationStatus;
   }
 
@@ -214,10 +240,9 @@ export class DesignPlatformClient {
 
     const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
     const response = await this.http.post(
-      "/api/auth/login",
+      "api/auth/login",
       { email, password, deviceId },
       {
-        timeout: 30000,
         headers: {
           "x-art-client": "art-ai-studio",
           "x-art-device-id": deviceId,
@@ -254,10 +279,9 @@ export class DesignPlatformClient {
 
     const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
     const response = await this.http.post(
-      "/api/activation/redeem",
+      "api/activation/redeem",
       { code, deviceId, deviceLabel },
       {
-        timeout: 30000,
         headers: {
           "x-art-client": "art-ai-studio",
           "x-art-device-id": deviceId,
@@ -274,7 +298,7 @@ export class DesignPlatformClient {
       throw new Error("art_image_local generation must be dispatched through DesignPlatformExecutionService");
     }
 
-    const response = await this.http.post("/v1/design-jobs", payload);
+    const response = await this.http.post("v1/design-jobs", payload);
     return response.data;
   }
 
@@ -283,7 +307,7 @@ export class DesignPlatformClient {
       return this.uploadArtImageLocalAsset(payload);
     }
 
-    const response = await this.http.post("/v1/assets/upload", payload);
+    const response = await this.http.post("v1/assets/upload", payload);
     return response.data;
   }
 
@@ -292,7 +316,7 @@ export class DesignPlatformClient {
       throw new Error(`art_image_local status must be read from durable execution: ${externalJobId}`);
     }
 
-    const response = await this.http.get(`/v1/design-jobs/${encodeURIComponent(externalJobId)}`);
+    const response = await this.http.get(`v1/design-jobs/${encodeURIComponent(externalJobId)}`);
     return response.data;
   }
 
@@ -301,7 +325,7 @@ export class DesignPlatformClient {
       throw new Error(`art_image_local results must be read from durable execution: ${externalJobId}`);
     }
 
-    const response = await this.http.get(`/v1/design-jobs/${encodeURIComponent(externalJobId)}/results`);
+    const response = await this.http.get(`v1/design-jobs/${encodeURIComponent(externalJobId)}/results`);
     return response.data;
   }
 
@@ -314,7 +338,7 @@ export class DesignPlatformClient {
       };
     }
 
-    const response = await this.http.post(`/v1/design-jobs/${encodeURIComponent(externalJobId)}/cancel`);
+    const response = await this.http.post(`v1/design-jobs/${encodeURIComponent(externalJobId)}/cancel`);
     return response.data;
   }
 
@@ -324,6 +348,48 @@ export class DesignPlatformClient {
 
   private useArtImageLocalAdapter() {
     return appConfig.designPlatformAdapter === "art_image_local";
+  }
+
+  private applyTrustedRequestBoundary(config: InternalAxiosRequestConfig) {
+    config.baseURL = trustedDesignPlatformBaseUrl().toString();
+    config.timeout = appConfig.designPlatformTimeoutMs;
+    config.maxRedirects = 0;
+    config.adapter = this.guardedAdapter;
+    config.proxy = false;
+    config.validateStatus = trustedValidateStatus;
+    config.transformRequest = copyTransform(trustedTransformRequest);
+    config.transformResponse = copyTransform(trustedTransformResponse);
+    config.allowAbsoluteUrls = false;
+    delete config.transport;
+    delete config.socketPath;
+    delete config.allowedSocketPaths;
+    delete config.httpAgent;
+    delete config.httpsAgent;
+    delete config.beforeRedirect;
+    delete config.auth;
+    delete config.lookup;
+    delete config.family;
+    delete config.insecureHTTPParser;
+    delete config.fetchOptions;
+    delete config.httpVersion;
+    delete config.http2Options;
+  }
+
+  private applyTrustedCredentialHeaders(config: InternalAxiosRequestConfig) {
+    const headers = AxiosHeaders.from(config.headers);
+    const explicitDeviceId = acceptsExplicitDeviceId(config.url)
+      ? String(headers.get("x-art-device-id") || "")
+      : "";
+    const credentials = designPlatformCredentialsForTarget(config.baseURL, config.url, explicitDeviceId);
+    headers.delete("Authorization");
+    headers.delete("Cookie");
+    headers.delete("x-art-device-id");
+    headers.delete("Proxy-Authorization");
+    headers.delete("Host");
+    if (credentials.authorization) headers.set("Authorization", credentials.authorization);
+    if (credentials.cookie) headers.set("Cookie", credentials.cookie);
+    if (credentials.deviceId) headers.set("x-art-device-id", credentials.deviceId);
+    config.headers = headers;
   }
 
   private async uploadArtImageLocalAsset(payload: Record<string, unknown>) {
@@ -338,8 +404,7 @@ export class DesignPlatformClient {
     const mimeType = inferMimeType(String(payload.mimeType || ""), fileName, localPath);
     const buffer = await readFile(localPath);
     const body = buildMultipartBody("file", fileName, mimeType, buffer);
-    const response = await this.http.post("/api/local-assets", body.buffer, {
-      timeout: appConfig.designPlatformTimeoutMs,
+    const response = await this.http.post("api/local-assets", body.buffer, {
       headers: {
         "Content-Type": `multipart/form-data; boundary=${body.boundary}`,
         "Content-Length": String(body.buffer.length),
@@ -366,9 +431,7 @@ export class DesignPlatformClient {
   ): Promise<ArtImageLocalGenerationOutcome> {
     try {
       const requestBody = await this.buildArtImageLocalRequest({ ...payload, requestId: externalJobId });
-      const response = await this.http.post("/api/local-generate", requestBody, {
-        timeout: appConfig.designPlatformTimeoutMs,
-      });
+      const response = await this.http.post("api/local-generate", requestBody);
       const data = this.unwrapApiData(response.data) as { results?: ArtImageLocalResult[]; credits?: unknown; refund?: unknown };
       if (!isRecord(data) || !Array.isArray(data.results)) {
         return {
@@ -811,6 +874,76 @@ export function designPlatformCredentialsForTarget(
   } catch {
     return { authorization: "", cookie: "", deviceId: "" };
   }
+}
+
+function trustedDesignPlatformBaseUrl() {
+  const base = new URL(appConfig.designPlatformBaseUrl);
+  if (base.protocol !== "http:" && base.protocol !== "https:") {
+    throw designPlatformBoundaryError("configured base URL must use HTTP or HTTPS");
+  }
+  if (base.username || base.password || base.search || base.hash) {
+    throw designPlatformBoundaryError("configured base URL must not contain credentials, query or fragment");
+  }
+  base.pathname = `${base.pathname.replace(/\/+$/, "")}/`;
+  return base;
+}
+
+function acceptsExplicitDeviceId(requestUrl: string | undefined) {
+  return requestUrl === "api/auth/login" || requestUrl === "api/activation/redeem";
+}
+
+function assertTrustedDesignPlatformTarget(baseUrl: string | undefined, requestUrl: string | undefined) {
+  const trustedBase = trustedDesignPlatformBaseUrl();
+  const rawUrl = String(requestUrl || "");
+  if (!rawUrl || rawUrl !== rawUrl.trim()) {
+    throw designPlatformBoundaryError("request URL must be a non-empty fixed relative path");
+  }
+  if (/^[a-z][a-z\d+.-]*:/i.test(rawUrl) || /^[\\/]/.test(rawUrl) || rawUrl.includes("\\")) {
+    throw designPlatformBoundaryError("absolute and protocol-relative request URLs are blocked");
+  }
+  if (rawUrl.includes("#")) {
+    throw designPlatformBoundaryError("request URL fragments are blocked");
+  }
+
+  const rawPath = rawUrl.split("?", 1)[0];
+  for (const segment of rawPath.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      throw designPlatformBoundaryError("request URL contains malformed escaping");
+    }
+    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
+      throw designPlatformBoundaryError("request URL path traversal is blocked");
+    }
+  }
+
+  if (baseUrl) {
+    const configuredBase = new URL(baseUrl);
+    configuredBase.pathname = `${configuredBase.pathname.replace(/\/+$/, "")}/`;
+    if (
+      configuredBase.origin !== trustedBase.origin ||
+      configuredBase.pathname !== trustedBase.pathname ||
+      configuredBase.search ||
+      configuredBase.hash ||
+      configuredBase.username ||
+      configuredBase.password
+    ) {
+      throw designPlatformBoundaryError("request base URL is outside the configured trusted base");
+    }
+  }
+
+  const finalUrl = new URL(rawUrl, trustedBase);
+  if (finalUrl.origin !== trustedBase.origin || !finalUrl.pathname.startsWith(trustedBase.pathname)) {
+    throw designPlatformBoundaryError("request URL is outside the configured trusted origin and base path");
+  }
+  return finalUrl;
+}
+
+function designPlatformBoundaryError(message: string) {
+  const error = new Error(message) as Error & { code: string };
+  error.code = "DESIGN_PLATFORM_REQUEST_TARGET_BLOCKED";
+  return error;
 }
 
 function safeIdPart(value: string) {

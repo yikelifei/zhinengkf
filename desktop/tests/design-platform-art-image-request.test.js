@@ -76,7 +76,7 @@ test("design platform activation redeem is wired before account login", () => {
   const webDesignModelSource = fs.readFileSync(webDesignModelSourcePath, "utf8");
 
   assert.match(clientSource, /redeemArtImageLocalActivation/);
-  assert.match(clientSource, /"\/api\/activation\/redeem"/);
+  assert.match(clientSource, /"api\/activation\/redeem"/);
   assert.match(clientSource, /"x-art-device-id": deviceId/);
   assert.match(controllerSource, /@Post\("activation\/redeem"\)/);
   assert.match(controllerSource, /updateDesignPlatformRuntimeConfig\(\{\s*adapter: "art_image_local",\s*deviceId,/);
