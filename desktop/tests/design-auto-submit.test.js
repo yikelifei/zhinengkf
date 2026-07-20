@@ -259,6 +259,19 @@ test("low-value automation submits complete draft to design platform with custom
   const localStore = {
     getDesignJob: (id) => (id === job.id ? job : null),
     listDesignJobs: () => [job],
+    beginDesignJobSubmitOperation: ({ operationKey, requestFingerprint, operationIdentity }) => {
+      if (!job.submitOperationKey) {
+        job = {
+          ...job,
+          submitOperationKey: operationKey,
+          submitRequestFingerprint: requestFingerprint,
+          submitOperationIdentity: operationIdentity,
+          submitDispatchStatus: "prepared",
+        };
+        return { job, created: true };
+      }
+      return { job, created: false };
+    },
     updateDesignJob: (id, patch) => {
       assert.equal(id, job.id);
       job = { ...job, ...patch };

@@ -28,7 +28,8 @@ test("design platform callback endpoint is surfaced in config UI and submit payl
   assert.match(appConfigSource, /callbackUrl:/);
   assert.match(controllerSource, /hasCallbackApiKey/);
   assert.match(typesSource, /callback\?: \{/);
-  assert.match(serviceSource, /callback: this\.buildDesignPlatformCallback\(job\.requestId\)/);
+  assert.match(serviceSource, /callback: this\.buildDesignPlatformCallback\(requestIdOverride \|\| job\.requestId\)/);
+  assert.match(serviceSource, /operationRequestId: binding\.operationRequestId/);
   assert.match(serviceSource, /fallbackPolling: true/);
   assert.match(mockPlatformSource, /notifyCallback\(current, body\.callback\)/);
   assert.match(webApiSource, /callbackUrl\?: string/);

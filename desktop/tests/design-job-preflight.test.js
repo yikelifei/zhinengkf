@@ -137,6 +137,17 @@ test("design job submit stops before calling platform when output count is below
           currentJob = { ...currentJob, ...patch };
           return currentJob;
         },
+        beginDesignJobSubmitOperation: ({ designJobId, operationKey, requestFingerprint, operationIdentity }) => {
+          assert.equal(designJobId, job.id);
+          currentJob = {
+            ...currentJob,
+            submitOperationKey: operationKey,
+            submitRequestFingerprint: requestFingerprint,
+            submitOperationIdentity: operationIdentity,
+            submitDispatchStatus: "prepared",
+          };
+          return { job: currentJob, created: true };
+        },
         createReviewLog: (payload) => {
           reviewLogs.push(payload);
           return { id: `review-${reviewLogs.length}`, ...payload };
@@ -160,20 +171,18 @@ test("design job submit stops before calling platform when output count is below
       },
     };
 
-    await assert.rejects(() => service.submit(job.id), /design job preflight failed/);
+    await assert.rejects(
+      () => service.submit(job.id, { operationKey: "test-submit-preflight-output-1" }),
+      /design job preflight failed/,
+    );
 
     assert.equal(platformCalled, false);
-    assert.equal(currentJob.status, "manual_review");
-    assert.equal(currentJob.manualQcRequired, true);
-    assert.match(currentJob.errorMessage, /preflight failed/);
-    assert.equal(manualLocks.at(-1).conversationId, "conversation-1");
-    assert.equal(manualLocks.at(-1).payload.reason, "design_platform_submit_failed");
-    assert.equal(reviewLogs.at(-1).decision, "design_platform_submit_failed");
-    assert.equal(reviewLogs.at(-1).beforeStatus, "failed");
-    assert.equal(reviewLogs.at(-1).afterStatus, "manual_review");
-    assert.equal(reviewLogs.at(-1).metadata.source, "submit_design_job");
-    assert.equal(notifications.at(-1)[0], "warning");
-    assert.equal(notifications.at(-1)[3].designJobId, job.id);
+    assert.equal(currentJob.status, "draft");
+    assert.equal(currentJob.submitDispatchStatus, "local_failed");
+    assert.match(currentJob.submitDispatchError, /preflight failed/);
+    assert.equal(manualLocks.length, 0);
+    assert.equal(reviewLogs.length, 0);
+    assert.equal(notifications.length, 0);
   } finally {
     Object.assign(appConfig, previous);
   }
@@ -221,6 +230,16 @@ test("standard submit with a missing callback key stops before asset upload or r
       {
         getDesignJob: () => currentJob,
         updateDesignJob: (_id, patch) => (currentJob = { ...currentJob, ...patch }),
+        beginDesignJobSubmitOperation: ({ operationKey, requestFingerprint, operationIdentity }) => {
+          currentJob = {
+            ...currentJob,
+            submitOperationKey: operationKey,
+            submitRequestFingerprint: requestFingerprint,
+            submitOperationIdentity: operationIdentity,
+            submitDispatchStatus: "prepared",
+          };
+          return { job: currentJob, created: true };
+        },
         createReviewLog: () => ({}),
       },
       { create: async () => ({}) },
@@ -234,7 +253,10 @@ test("standard submit with a missing callback key stops before asset upload or r
     const callbackCheck = preflight.checks.find((check) => check.key === "design_platform_callback_auth");
     assert.equal(callbackCheck.ok, false);
     assert.equal(callbackCheck.severity, "error");
-    await assert.rejects(() => service.submit(job.id), /design job preflight failed/);
+    await assert.rejects(
+      () => service.submit(job.id, { operationKey: "test-submit-preflight-callback-1" }),
+      /design job preflight failed/,
+    );
     assert.equal(uploadCalls, 0);
     assert.equal(createCalls, 0);
   } finally {

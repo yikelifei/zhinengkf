@@ -860,6 +860,9 @@ test("initial design callback hands to manual review when invalid image metadata
 });
 
 test("revision callback saves local files with versioned image ids", async (t) => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  t.after(() => { appConfig.useLocalStore = previousUseLocalStore; });
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-revision-images-"));
   t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
   const saved = [];
@@ -884,7 +887,7 @@ test("revision callback saves local files with versioned image ids", async (t) =
       status: "submitted",
     }),
     updateDesignRevision: (id, patch) => ({ id, ...patch }),
-    updateDesignJob: (id, patch) => ({ ...job, id, ...patch, images: upsertedImages }),
+    updateDesignJob: (id, patch) => Object.assign(job, { id, ...patch, images: upsertedImages }),
     upsertDesignImages: (designJobId, images) => {
       upsertedImages = images.map((image) => ({ ...image, designJobId }));
       return upsertedImages;
@@ -927,6 +930,9 @@ test("revision callback saves local files with versioned image ids", async (t) =
 });
 
 test("revision callback does not double-prefix already versioned image ids", async (t) => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  t.after(() => { appConfig.useLocalStore = previousUseLocalStore; });
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-revision-versioned-"));
   t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
   const saved = [];
@@ -951,7 +957,7 @@ test("revision callback does not double-prefix already versioned image ids", asy
       status: "submitted",
     }),
     updateDesignRevision: (id, patch) => ({ id, ...patch }),
-    updateDesignJob: (id, patch) => ({ ...job, id, ...patch, images: upsertedImages }),
+    updateDesignJob: (id, patch) => Object.assign(job, { id, ...patch, images: upsertedImages }),
     upsertDesignImages: (designJobId, images) => {
       upsertedImages = images.map((image) => ({ ...image, designJobId }));
       return upsertedImages;

@@ -7,6 +7,7 @@ import {
   ResolveDesignExecutionRefundPayload,
   ResolveUnknownDesignExecutionPayload,
   SelectDesignImagePayload,
+  SubmitDesignJobPayload,
 } from "./design-jobs.types";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 import {
@@ -101,7 +102,7 @@ export class DesignJobsController {
   @Post(":id/submit")
   @RequireOperatorCapability("manage_design_executions")
   @UseGuards(OperatorAccessGuard)
-  submit(@Param("id") id: string, @Body() body: ExpectedIdentityPayload = {}) {
+  submit(@Param("id") id: string, @Body() body: SubmitDesignJobPayload & ExpectedIdentityPayload) {
     return this.designJobs.submit(id, body || {});
   }
 

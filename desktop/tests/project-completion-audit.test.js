@@ -149,7 +149,7 @@ validateSendTask(
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'queueSendWithProvenance(id, manualQuoteQueueRequest(options), false);\nqueueSendWithProvenance(id, manualQuoteQueueRequest(options), true);\nsource: "low_value_quote_send"; quoteDraftId: quote.id; queuedBy: "low_value_automation"; automation: trustedAutomation;\nfunction manualQuoteQueueRequest() {}\n', true);
-  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\n');
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\n');
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
@@ -246,6 +246,12 @@ buildLegacyImageIdentityHash(); legacyIdentityHash; design_platform_callback_aut
 hasIndependentDesignPlatformCallbackApiKey(); severity: "error"; assertDesignPlatformPreflight();
 normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: \`\${effectRoot}:handoff-review\`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);
 async create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }
+const DESIGN_CALLBACK_CLAIM_LEASE_MS = 1;
+function designSubmitOperation() {}
+normalizeOperationKey(payload.operationKey, "design revision operationKey");
+function claimDesignCallback() { this.localStore.claimDesignJobCallback(); prisma.designJob.updateMany(); return "in_progress"; callbackStatus: "processing"; }
+function markDesignCallbackOutcomeUnknown() { return { callbackStatus: "outcome_unknown" }; }
+function commitDesignCallbackCompletion() { return prisma.$transaction(() => {}); }
 class DesignJobsService {
   async listExecutions(id, expected) {
     if (!expected.expectedWechatAccountId || !expected.expectedConversationId || !expected.expectedCustomerId) throw new Error("complete identity required");
@@ -604,7 +610,8 @@ export class TrainingController {
   apply() {}
 }
 `);
-  write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\nmodel DesignPlatformExecution { operationKey String @unique requestId String @unique scopeKey String processRunId String acceptanceStatus DesignPlatformAcceptanceStatus refundStatus DesignPlatformRefundStatus }\nenum DesignPlatformExecutionStatus { outcome_unknown explicit_failed cancel_requested }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
+  write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\nmodel DesignPlatformExecution { operationKey String @unique requestId String @unique scopeKey String processRunId String acceptanceStatus DesignPlatformAcceptanceStatus refundStatus DesignPlatformRefundStatus }\nmodel DesignJob { submitOperationKey String? @unique callbackOperationKey String? @unique callbackRequestFingerprint String? callbackStatus String? callbackClaimedAt DateTime? }\nmodel DesignRevision { operationKey String? @unique externalRequestId String? @unique designJobId String revisionNumber Int @@unique([designJobId, revisionNumber]) }\nenum DesignPlatformExecutionStatus { outcome_unknown explicit_failed cancel_requested }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
+  write(root, "desktop/prisma/migrations/20260720113000_design_external_operation_idempotency/migration.sql", 'ALTER TABLE "DesignJob" ADD COLUMN "callbackStatus" TEXT, ADD COLUMN "callbackClaimedAt" TIMESTAMP(3);\nCREATE UNIQUE INDEX "DesignJob_submitOperationKey_key" ON "DesignJob"("submitOperationKey");\nCREATE UNIQUE INDEX "DesignJob_callbackOperationKey_key" ON "DesignJob"("callbackOperationKey");\nCREATE UNIQUE INDEX "DesignRevision_operationKey_key" ON "DesignRevision"("operationKey");\nCREATE UNIQUE INDEX "DesignRevision_externalRequestId_key" ON "DesignRevision"("externalRequestId");\nCREATE UNIQUE INDEX "DesignRevision_designJobId_revisionNumber_key" ON "DesignRevision"("designJobId", "revisionNumber");\n');
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
   return root;
@@ -671,6 +678,55 @@ test("idempotency audit rejects mutable-identity-first replay and browser operat
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
     assert.match(source, new RegExp(mutation.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
+});
+
+test("completion audit requires design external operation and callback claim CAS safety", () => {
+  const contractIds = [
+    "contract.design_external_operation_idempotency",
+    "contract.local_design_callback_cas",
+    "contract.prisma_design_external_operation_schema",
+    "contract.prisma_design_external_operation_migration",
+  ];
+  const baseline = buildAudit(createPassingFixture(), { includeExternal: false });
+  for (const id of contractIds) {
+    assert.equal(baseline.results.find((item) => item.id === id).status, STATUS.PASS, id);
+  }
+
+  const mutations = [
+    {
+      id: "contract.design_external_operation_idempotency",
+      file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+      from: 'return "in_progress"',
+      to: 'return "outcome_unknown"',
+    },
+    {
+      id: "contract.local_design_callback_cas",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: 'localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"',
+      to: '"outcome_unknown"',
+    },
+    {
+      id: "contract.prisma_design_external_operation_schema",
+      file: "desktop/prisma/schema.prisma",
+      from: "callbackOperationKey String? @unique",
+      to: "callbackOperationKey String?",
+    },
+    {
+      id: "contract.prisma_design_external_operation_migration",
+      file: "desktop/prisma/migrations/20260720113000_design_external_operation_idempotency/migration.sql",
+      from: 'CREATE UNIQUE INDEX "DesignJob_callbackOperationKey_key"',
+      to: 'CREATE INDEX "DesignJob_callbackOperationKey_key"',
+    },
+  ];
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
     fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
     const report = buildAudit(root, { includeExternal: false });
     assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);

@@ -180,7 +180,7 @@ test("standard design platform payload blocks formal submission when SKU image u
   }
 });
 
-test("initial design submit failure marks design job failed and hands it to manual review", async () => {
+test("initial design submit with an unverifiable response fails closed without a second POST", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
 
@@ -215,6 +215,17 @@ test("initial design submit failure marks design job failed and hands it to manu
       designJob = { ...designJob, ...patch };
       return designJob;
     },
+    beginDesignJobSubmitOperation: ({ designJobId, operationKey, requestFingerprint, operationIdentity }) => {
+      assert.equal(designJobId, designJob.id);
+      designJob = {
+        ...designJob,
+        submitOperationKey: operationKey,
+        submitRequestFingerprint: requestFingerprint,
+        submitOperationIdentity: operationIdentity,
+        submitDispatchStatus: "prepared",
+      };
+      return { job: designJob, created: true };
+    },
     createReviewLog: (payload) => {
       reviewLogs.push(payload);
       return payload;
@@ -237,22 +248,23 @@ test("initial design submit failure marks design job failed and hands it to manu
     const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, wechatDispatch, {}, {});
     service.assertDesignPlatformPreflight = async () => ({ ok: true });
 
-    await assert.rejects(() => service.submit(designJob.id), /design platform offline/);
+    await assert.rejects(
+      () => service.submit(designJob.id, { operationKey: "test-submit-platform-offline-1" }),
+      (error) => error?.response?.code === "DESIGN_DISPATCH_OUTCOME_UNKNOWN",
+    );
 
     assert.equal(designJob.status, "manual_review");
-    assert.equal(designJob.errorMessage, "design platform offline");
-    assert.equal(reviewLogs.at(-1).decision, "design_platform_submit_failed");
-    assert.equal(reviewLogs.at(-1).beforeStatus, "failed");
-    assert.equal(reviewLogs.at(-1).metadata.source, "submit_design_job");
-    assert.equal(manualLocks.at(-1).conversationId, "conversation-1");
-    assert.equal(manualLocks.at(-1).payload.reason, "design_platform_submit_failed");
-    assert.equal(notices.some((notice) => String(notice[1]).includes("设计任务失败已转人工")), true);
+    assert.equal(designJob.submitDispatchStatus, "outcome_unknown");
+    assert.match(designJob.errorMessage, /可能已接受任务/);
+    assert.equal(reviewLogs.length, 0);
+    assert.equal(manualLocks.length, 0);
+    assert.equal(notices.some((notice) => String(notice[1]).includes("设计平台提交结果未知")), true);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }
 });
 
-test("revision submit failure marks revision failed and hands design job to manual review", async () => {
+test("revision pre-dispatch asset failure stays locally retryable with the same operation key", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
 
@@ -292,7 +304,7 @@ test("revision submit failure marks revision failed and hands design job to manu
 
   const localStore = {
     getDesignJob: () => designJob,
-    listDesignRevisions: () => [],
+    listDesignRevisions: () => (revision ? [revision] : []),
     createDesignRevision: (payload) => {
       revision = {
         id: "revision-1",
@@ -302,7 +314,7 @@ test("revision submit failure marks revision failed and hands design job to manu
       return revision;
     },
     updateDesignRevision: (id, patch) => {
-      assert.equal(id, "revision-1");
+      assert.equal(id, revision.id);
       revision = { ...revision, ...patch };
       return revision;
     },
@@ -339,19 +351,24 @@ test("revision submit failure marks revision failed and hands design job to manu
     const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, wechatDispatch, {}, {});
     service.assertDesignPlatformPreflight = async () => ({ ok: true });
 
-    const result = await service.requestRevision("design-1", {
-      instruction: "make the logo bigger",
-      expectedWechatAccountId: "wechat-1",
-      expectedConversationId: "conversation-1",
-      expectedCustomerId: "customer-1",
-    });
+    await assert.rejects(
+      () => service.requestRevision("design-1", {
+        operationKey: "test-revision-upload-failure-1",
+        instruction: "make the logo bigger",
+        expectedWechatAccountId: "wechat-1",
+        expectedConversationId: "conversation-1",
+        expectedCustomerId: "customer-1",
+      }),
+      /design asset upload failed: customer-logo\.png/,
+    );
 
     assert.equal(createDesignJobCalled, false);
-    assert.equal(result.revision.status, "failed");
-    assert.equal(result.job.status, "manual_review");
-    assert.match(result.errorMessage, /design asset upload failed: customer-logo\.png/);
-    assert.equal(reviewLogs.at(-1).decision, "design_revision_submit_failed");
-    assert.equal(notices.some((notice) => String(notice[1]).includes("改图提交设计平台失败")), true);
+    assert.equal(revision.status, "requested");
+    assert.equal(revision.dispatchStatus, "local_failed");
+    assert.match(revision.dispatchError, /design asset upload failed: customer-logo\.png/);
+    assert.equal(designJob.status, "completed");
+    assert.equal(reviewLogs.length, 0);
+    assert.equal(notices.length, 0);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }

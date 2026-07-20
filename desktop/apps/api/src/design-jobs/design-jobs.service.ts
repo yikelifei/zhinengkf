@@ -45,6 +45,8 @@ const SMOKE_TEST_PNG_BYTES = Buffer.from(
   "base64",
 );
 
+const DESIGN_CALLBACK_CLAIM_LEASE_MS = 15 * 60 * 1000;
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -89,6 +91,7 @@ import {
   ResolveDesignExecutionRefundPayload,
   ResolveUnknownDesignExecutionPayload,
   SelectDesignImagePayload,
+  SubmitDesignJobPayload,
 } from "./design-jobs.types";
 import { DesignPlatformExecutionService } from "./design-platform-execution.service";
 
@@ -181,6 +184,8 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   private readonly activeResultPolls = new Set<string>();
   private readonly activeExecutionPromises = new Map<string, Promise<void>>();
   private readonly activeCreateEffectPromises = new Map<string, Promise<any>>();
+  private readonly activeExternalOperationPromises = new Map<string, Promise<any>>();
+  private readonly activeDesignCallbackPromises = new Map<string, Promise<any>>();
   private activeRecoveryReconciliation: Promise<void> | null = null;
   private recoveryStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryInterval: ReturnType<typeof setInterval> | null = null;
@@ -563,7 +568,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       }
 
       try {
-        submitted.push(await this.submit(job.id));
+        submitted.push(await this.submit(job.id, {
+          operationKey: stableOperationKey("design-auto-submit", job.id),
+        }));
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown error";
         failed.push({
@@ -1020,64 +1027,16 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     return this.completeDesignJobCreateEffects(job, operation, check);
   }
 
-  async submit(id: string, expected: ExpectedIdentityPayload = {}) {
+  async submit(id: string, expected: SubmitDesignJobPayload & ExpectedIdentityPayload) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
-
-    let remote: any;
-    try {
-      await this.assertDesignPlatformPreflight(id);
-      const payload = await this.buildDesignPlatformPayload(job);
-      if (this.usesDurableArtImageExecutions()) {
-        const updated = await this.beginDurableArtImageExecution(job, payload, null, "initial");
-        const waitMessage = buildWaitingMessage({ scene: job.scene || "", outputCount: job.outputCount });
-        if (job.wechatAccountId) {
-          await this.queueDesignTextMessage(job, waitMessage, "design-waiting-message");
-        }
-        return updated;
-      }
-      remote = await this.designPlatform.createDesignJob(payload);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "unknown design submit error";
-      await this.failDesignJobForManualReview(job, {
-        reason: "design_platform_submit_failed",
-        source: "submit_design_job",
-        errorMessage,
-      });
-      throw error;
-    }
-
-    const externalJobId = remote.externalJobId || remote.jobId || remote.id;
-    const waitMessage = buildWaitingMessage({
-      scene: job.scene || "",
-      outputCount: job.outputCount,
-    });
-
-    const updated = appConfig.useLocalStore
-      ? this.localStore.updateDesignJob(id, {
-          externalJobId,
-          status: "submitted",
-          submittedAt: new Date().toISOString(),
-          waitMessageSentAt: new Date().toISOString(),
-        })
-      : await this.prisma.designJob.update({
-          where: { id },
-          data: {
-            externalJobId,
-            status: "submitted",
-            submittedAt: new Date(),
-            waitMessageSentAt: new Date(),
-          },
-        });
-
-    if (job.wechatAccountId) {
-      await this.queueDesignTextMessage(job, waitMessage, "design-waiting-message");
-    }
-    this.scheduleResultPoll(job.requestId, externalJobId);
-    return updated;
+    const operation = this.designSubmitOperation(job, expected.operationKey);
+    const begun = await this.beginDesignSubmitOperation(job, operation);
+    this.assertDesignSubmitOperationReplay(begun.job, operation, job.id);
+    return this.runExternalOperationOnce(operation.key, () => this.completeDesignSubmitOperation(begun.job, operation));
   }
 
   async preflight(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -1650,6 +1609,38 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, payload, "design job");
+    const operationKey = normalizeOperationKey(payload.operationKey, "design revision operationKey");
+    const selectedImageId = payload.selectedImageId || this.findSelectedImageId(job);
+    const operation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "design-revision-request",
+        this.designOperationIdentity(job),
+        {
+          designJobId: job.id,
+          requestId: job.requestId,
+          instruction: String(payload.instruction || "").trim(),
+          sourceText: String(payload.sourceText || payload.instruction || "").trim(),
+          selectedImageId: selectedImageId || null,
+        },
+      ),
+    );
+    const existingOperation = appConfig.useLocalStore
+      ? this.localStore.listDesignRevisions().find((revision: any) => revision.operationKey === operation.key)
+      : await prisma.designRevision.findUnique({ where: { operationKey: operation.key } });
+    if (existingOperation) {
+      this.assertDesignRevisionOperationReplay(existingOperation, operation, job);
+      const replayDecision = decideRevisionPolicy({
+        instruction: existingOperation.instruction,
+        revisionCount: Math.max(0, Number(existingOperation.revisionNumber || 1) - 1),
+        isHighValue: job.isHighValue,
+        budget: job.budget,
+        highValueAmountCny: appConfig.highValueAmountCny,
+      });
+      return this.runExternalOperationOnce(operation.key, () =>
+        this.completeDesignRevisionOperation(job, existingOperation, replayDecision, operation),
+      );
+    }
     this.assertDesignJobCanRequestRevision(job);
     if (this.usesDurableArtImageExecutions()) await this.platformExecutions!.assertRetryAllowed(job.id);
 
@@ -1666,195 +1657,50 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
     if (!decision.ok) {
       await this.notifications.create("warning", "改图要求不完整", decision.reason, {
+        effectKey: stableOperationKey("design-revision-invalid", operation.key),
         designJobId: job.id,
       });
       return { decision, revision: null, job };
     }
-
-    const selectedImageId = payload.selectedImageId || this.findSelectedImageId(job);
     let revision: DesignRevisionLike;
-    if (appConfig.useLocalStore) {
-      revision = this.localStore.createDesignRevision({
-        designJobId: job.id,
-        selectedImageId,
-        revisionNumber: decision.revisionNumber,
-        instruction: String(payload.instruction || "").trim(),
-        sourceText: payload.sourceText || payload.instruction,
-        policyAction: decision.action,
-        status: decision.submitAllowed ? "requested" : "manual_review",
-        chargeRequired: decision.chargeRequired,
-        manualReviewRequired: decision.manualReviewRequired,
-      });
-    } else {
-      revision = await prisma.designRevision.create({
-        data: {
-          designJobId: job.id,
-          selectedImageId,
-          revisionNumber: decision.revisionNumber,
-          instruction: String(payload.instruction || "").trim(),
-          sourceText: payload.sourceText || payload.instruction,
-          policyAction: decision.action,
-          status: decision.submitAllowed ? "requested" : "manual_review",
-          chargeRequired: decision.chargeRequired,
-          manualReviewRequired: decision.manualReviewRequired,
-        },
-      });
-    }
-
-    if (!decision.submitAllowed) {
-      const manualLock = job.conversationId
-        ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
-            expectedWechatAccountId: job.wechatAccountId,
-            expectedConversationId: job.conversationId,
-            expectedCustomerId: job.customerId,
-            locked: true,
-            reviewer: "system",
-            reason: decision.reason,
-            note: decision.reason,
-          })
-        : null;
-      const blockedSendTasks = manualLock?.blockedSendTasks || [];
-      const inFlightSendTasks = manualLock?.inFlightSendTasks || [];
-      await this.notifications.create(
-        decision.chargeRequired ? "warning" : "info",
-        decision.chargeRequired ? "改图已超出自动处理范围" : "高价值客户改图待人工审核",
-        blockedSendTasks.length
-          ? `${decision.reason} 已暂停 ${blockedSendTasks.length} 个待发送任务。`
-          : decision.reason,
-        {
-          designJobId: job.id,
-          revisionId: revision.id,
-          conversationId: job.conversationId,
-          blockedSendTaskIds: blockedSendTasks.map((task: any) => task.id),
-          inFlightSendTaskIds: inFlightSendTasks.map((task: any) => task.id),
-        },
-      );
-      const updated = appConfig.useLocalStore
-        ? this.localStore.updateDesignJob(job.id, {
-            status: "manual_review",
-            manualQcRequired: true,
-            revisionCount: decision.revisionNumber,
-            revisionPolicy: decision,
-          })
-        : await prisma.designJob.update({
-            where: { id: job.id },
-            data: {
-              status: "manual_review",
-              manualQcRequired: true,
-              revisionCount: decision.revisionNumber,
-              revisionPolicy: decision as any,
-            },
-            include: { images: true, assets: true, revisions: true },
-          });
-      await this.createReviewLog({
-        targetType: "design_revision",
-        targetId: revision.id,
-        decision: decision.action,
-        reviewer: "system",
-        note: decision.reason,
-        beforeStatus: job.status || "",
-        afterStatus: "manual_review",
-        metadata: {
-          source: "design_revision_policy",
-          designJobId: job.id,
-          wechatAccountId: job.wechatAccountId,
-          conversationId: job.conversationId,
-          customerId: job.customerId,
-          revisionId: revision.id,
-          revisionNumber: decision.revisionNumber,
-          chargeRequired: decision.chargeRequired,
-          blockedSendTaskIds: blockedSendTasks.map((task: any) => task.id),
-          inFlightSendTaskIds: inFlightSendTasks.map((task: any) => task.id),
-        },
-      });
-      return { decision, revision, job: updated };
-    }
-
-    await this.assertDesignPlatformPreflight(job.id);
-
-    let remote: any;
-    try {
-      const payloadForPlatform = await this.buildDesignPlatformPayload(job, revision);
-      if (this.usesDurableArtImageExecutions()) {
-        let updated = await this.beginDurableArtImageExecution(job, payloadForPlatform, revision, "initial");
-        const externalJobId = updated.externalJobId;
-        revision = appConfig.useLocalStore
-          ? this.localStore.listDesignRevisions(job.id).find((item: any) => item.id === revision.id)
-          : await prisma.designRevision.findUnique({ where: { id: revision.id } });
-        updated = appConfig.useLocalStore
-          ? this.localStore.updateDesignJob(job.id, { revisionPolicy: decision })
-          : await prisma.designJob.update({
-              where: { id: job.id },
-              data: { revisionPolicy: decision as any },
-              include: { images: true, assets: true, revisions: true },
-            });
-        await this.notifications.create("info", "改图已提交设计平台", decision.reason, {
-          designJobId: job.id,
-          revisionId: revision.id,
-          externalJobId,
-        });
-        if (job.wechatAccountId) {
-          const text = `收到，我按您说的“${String(payload.instruction || "").trim()}”重新处理一版，出来后再发您确认。`;
-          await this.queueDesignTextMessage(job, text, "design-revision-waiting-message");
-        }
-        return { decision, revision, job: updated };
-      }
-      remote = await this.designPlatform.createDesignJob(payloadForPlatform);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "unknown design revision submit error";
-      revision = await this.updateRevision(revision.id, { status: "failed" });
-      await this.notifications.create("error", "改图提交设计平台失败", errorMessage, {
-        designJobId: job.id,
-        revisionId: revision.id,
-      });
-      const updated = await this.failDesignJobForManualReview(job, {
-        reason: "design_revision_submit_failed",
-        source: "design_revision",
-        errorMessage,
-      });
-      return { decision, revision, job: updated, errorMessage };
-    }
-    const externalJobId = remote.externalJobId || remote.jobId || remote.id;
-    revision = await this.updateRevision(revision.id, {
-      externalJobId,
-      status: "submitted",
-    });
-
-    const updated = appConfig.useLocalStore
-      ? this.localStore.updateDesignJob(job.id, {
-          externalJobId,
-          status: "submitted",
-          submittedAt: new Date().toISOString(),
-          revisionCount: decision.revisionNumber,
-          revisionPolicy: decision,
-          errorMessage: "",
-        })
-      : await prisma.designJob.update({
-          where: { id: job.id },
-          data: {
-            externalJobId,
-            status: "submitted",
-            submittedAt: new Date(),
-            revisionCount: decision.revisionNumber,
-            revisionPolicy: decision as any,
-            errorMessage: "",
-          },
-          include: { images: true, assets: true, revisions: true },
-        });
-
-    await this.notifications.create("info", "改图已提交设计平台", decision.reason, {
+    const revisionData = {
+      id: deterministicOperationId("revision", operation.key),
       designJobId: job.id,
-      revisionId: revision.id,
-      externalJobId,
-    });
-
-    if (job.wechatAccountId) {
-      const text = `收到，我按您说的“${String(payload.instruction || "").trim()}”重新处理一版，出来后再发您确认。`;
-      await this.queueDesignTextMessage(job, text, "design-revision-waiting-message");
+      selectedImageId,
+      revisionNumber: decision.revisionNumber,
+      instruction: String(payload.instruction || "").trim(),
+      sourceText: payload.sourceText || payload.instruction,
+      policyAction: decision.action,
+      status: decision.submitAllowed ? "requested" : "manual_review",
+      chargeRequired: decision.chargeRequired,
+      manualReviewRequired: decision.manualReviewRequired,
+      operationKey: operation.key,
+      requestFingerprint: operation.fingerprint,
+      operationIdentity: this.designOperationIdentity(job),
+      externalRequestId: stableOperationKey("design-revision-request", `${job.id}:${operation.key}`),
+      dispatchStatus: decision.submitAllowed ? "prepared" : "not_required",
+    };
+    if (appConfig.useLocalStore) {
+      revision = this.localStore.createDesignRevision(revisionData);
+    } else {
+      try {
+        revision = await prisma.designRevision.create({ data: revisionData });
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) throw error;
+        const winner = await prisma.designRevision.findUnique({ where: { operationKey: operation.key } });
+        if (!winner) {
+          throw new ConflictException({
+            code: "DESIGN_REVISION_CONCURRENT_CHANGE",
+            message: "another revision was allocated concurrently; refresh before creating a different operation",
+          });
+        }
+        revision = winner;
+      }
     }
-
-    this.scheduleResultPoll(job.requestId, externalJobId);
-    return { decision, revision, job: updated };
+    this.assertDesignRevisionOperationReplay(revision, operation, job);
+    return this.runExternalOperationOnce(operation.key, () =>
+      this.completeDesignRevisionOperation(job, revision, decision, operation),
+    );
   }
 
   async cancel(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -1864,6 +1710,47 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
     this.assertDesignJobCanCancel(job);
+    let cancelled: { cancelled: boolean; job: any };
+    if (appConfig.useLocalStore) {
+      cancelled = typeof (this.localStore as any).cancelDesignJobIfCurrent === "function"
+        ? this.localStore.cancelDesignJobIfCurrent({
+            designJobId: job.id,
+            status: String(job.status || ""),
+            externalJobId: job.externalJobId,
+          })
+        : {
+            cancelled: job.callbackStatus !== "retry_dispatching",
+            job: job.callbackStatus === "retry_dispatching"
+              ? job
+              : this.localStore.updateDesignJob(job.id, { status: "cancelled" }),
+          };
+    } else {
+      const prisma = this.prisma as any;
+      const changed = await prisma.designJob.updateMany({
+        where: {
+          id: job.id,
+          status: job.status,
+          externalJobId: job.externalJobId || null,
+          OR: [{ callbackStatus: null }, { callbackStatus: { not: "retry_dispatching" } }],
+        },
+        data: {
+          status: "cancelled",
+          ...(job.callbackStatus === "processing" || job.callbackStatus === "failure_settled"
+            ? { callbackStatus: "rejected", callbackSettledAt: new Date() }
+            : {}),
+        },
+      });
+      cancelled = {
+        cancelled: changed.count === 1,
+        job: await prisma.designJob.findUnique({ where: { id: job.id }, include: { assets: true } }),
+      };
+    }
+    if (!cancelled.cancelled) {
+      throw new ConflictException({
+        code: "DESIGN_JOB_CONCURRENT_CHANGE",
+        message: "design job changed while cancellation was being claimed; refresh before retrying",
+      });
+    }
     let remoteResult: Record<string, unknown> | null = null;
     if (job.externalJobId) {
       try {
@@ -1885,25 +1772,449 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       designJobId: job.id,
       externalJobId: job.externalJobId,
     });
-    const updated = appConfig.useLocalStore
-      ? this.localStore.updateDesignJob(job.id, { status: "cancelled" })
-      : await this.prisma.designJob.update({ where: { id: job.id }, data: { status: "cancelled" } });
-    return { job: updated, remoteResult };
+    return { job: cancelled.job, remoteResult };
+  }
+
+  private async findDesignCallbackOperation(requestId: string) {
+    if (appConfig.useLocalStore) {
+      const direct = this.localStore.getDesignJob(requestId);
+      if (direct) return { job: direct, revision: null, operationRequestId: direct.requestId };
+      const revision = this.localStore.listDesignRevisions().find((item: any) => item.externalRequestId === requestId);
+      const job = revision ? this.localStore.getDesignJob(revision.designJobId) : null;
+      return job ? { job, revision, operationRequestId: revision.externalRequestId } : null;
+    }
+    const prisma = this.prisma as any;
+    const direct = await prisma.designJob.findUnique({ where: { requestId }, include: { images: true } });
+    if (direct) return { job: direct, revision: null, operationRequestId: direct.requestId };
+    const revision = await prisma.designRevision.findUnique({
+      where: { externalRequestId: requestId },
+      include: { designJob: { include: { images: true } } },
+    });
+    return revision?.designJob
+      ? { job: revision.designJob, revision, operationRequestId: revision.externalRequestId }
+      : null;
+  }
+
+  private designCallbackOperation(payload: DesignPlatformCallbackPayload) {
+    const externalJobId = String(payload.externalJobId || "").trim();
+    const requestId = String(payload.requestId || "").trim();
+    return requestOperationMetadata(
+      stableOperationKey("design-callback", `${requestId}:${externalJobId}`),
+      createOperationFingerprint(
+        "design-platform-callback",
+        { requestId, externalJobId },
+        {
+          status: payload.status,
+          errorMessage: String(payload.errorMessage || "").trim(),
+          images: this.normalizeCallbackImages(payload.images || []).map((image: any) => ({
+            imageId: image.imageId,
+            downloadUrl: image.downloadUrl,
+            width: image.width || null,
+            height: image.height || null,
+          })),
+        },
+      ),
+    );
+  }
+
+  private callbackClaimMode(job: any, operation: RequestOperationMetadata) {
+    if (!job?.callbackOperationKey) return null;
+    if (job.callbackOperationKey !== operation.key) return "replay";
+    if (job.callbackStatus === "failure_settled" && job.callbackRequestFingerprint === operation.fingerprint) {
+      return "resume_failure";
+    }
+    if (["processing", "retry_dispatching"].includes(String(job.callbackStatus || ""))) {
+      const claimedAt = Date.parse(String(job.callbackClaimedAt || ""));
+      if (Number.isFinite(claimedAt) && Date.now() - claimedAt <= DESIGN_CALLBACK_CLAIM_LEASE_MS) {
+        return "in_progress";
+      }
+      return "outcome_unknown";
+    }
+    return "replay";
+  }
+
+  private async claimDesignCallback(job: any, payload: DesignPlatformCallbackPayload, operation: RequestOperationMetadata) {
+    const existingMode = this.callbackClaimMode(job, operation);
+    if (existingMode) return { mode: existingMode, job };
+    const externalJobId = String(payload.externalJobId || "").trim();
+    if (appConfig.useLocalStore) {
+      if (typeof (this.localStore as any).claimDesignJobCallback !== "function") {
+        if (String(job.externalJobId || "") !== externalJobId || !["submitted", "generating"].includes(job.status)) {
+          return { mode: "replay", job };
+        }
+        return {
+          mode: "claimed",
+          job: this.localStore.updateDesignJob(job.id, {
+            callbackOperationKey: operation.key,
+            callbackRequestFingerprint: operation.fingerprint,
+            callbackStatus: "processing",
+            callbackClaimedAt: new Date().toISOString(),
+            callbackSettledAt: null,
+          }),
+        };
+      }
+      return this.localStore.claimDesignJobCallback({
+        designJobId: job.id,
+        externalJobId,
+        operationKey: operation.key,
+        requestFingerprint: operation.fingerprint,
+      });
+    }
+    const prisma = this.prisma as any;
+    try {
+      const changed = await prisma.designJob.updateMany({
+        where: {
+          id: job.id,
+          externalJobId,
+          status: { in: ["submitted", "generating"] },
+          callbackOperationKey: null,
+        },
+        data: {
+          callbackOperationKey: operation.key,
+          callbackRequestFingerprint: operation.fingerprint,
+          callbackStatus: "processing",
+          callbackClaimedAt: new Date(),
+          callbackSettledAt: null,
+        },
+      });
+      if (changed.count === 1) {
+        return {
+          mode: "claimed",
+          job: await prisma.designJob.findUnique({ where: { id: job.id }, include: { images: true } }),
+        };
+      }
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+    }
+    const current = await prisma.designJob.findUnique({ where: { id: job.id }, include: { images: true } });
+    return { mode: this.callbackClaimMode(current, operation) || "replay", job: current };
+  }
+
+  private async markDesignCallbackOutcomeUnknown(designJobId: string, operationKey: string) {
+    if (appConfig.useLocalStore) {
+      if (typeof (this.localStore as any).markDesignJobCallbackOutcomeUnknown !== "function") {
+        const current = this.localStore.getDesignJob(designJobId);
+        if (current?.callbackOperationKey !== operationKey) return current;
+        return this.localStore.updateDesignJob(designJobId, {
+          status: "manual_review",
+          manualQcRequired: true,
+          errorMessage: "设计平台回调处理结果未知，禁止自动重放，必须人工核对。",
+          callbackStatus: "outcome_unknown",
+          callbackSettledAt: new Date().toISOString(),
+        });
+      }
+      return this.localStore.markDesignJobCallbackOutcomeUnknown({ designJobId, operationKey });
+    }
+    const prisma = this.prisma as any;
+    await prisma.designJob.updateMany({
+      where: {
+        id: designJobId,
+        callbackOperationKey: operationKey,
+        callbackStatus: { in: ["processing", "retry_dispatching"] },
+      },
+      data: {
+        status: "manual_review",
+        manualQcRequired: true,
+        errorMessage: "设计平台回调处理结果未知，禁止自动重放，必须人工核对。",
+        callbackStatus: "outcome_unknown",
+        callbackSettledAt: new Date(),
+      },
+    });
+    return prisma.designJob.findUnique({ where: { id: designJobId }, include: { images: true } });
+  }
+
+  private async beginDesignCallbackRetry(
+    designJobId: string,
+    operation: RequestOperationMetadata,
+  ) {
+    if (appConfig.useLocalStore) {
+      if (typeof (this.localStore as any).beginDesignJobCallbackRetry !== "function") {
+        const current = this.localStore.getDesignJob(designJobId);
+        if (
+          current?.status !== "failed"
+          || current?.callbackOperationKey !== operation.key
+          || current?.callbackRequestFingerprint !== operation.fingerprint
+          || current?.callbackStatus !== "failure_settled"
+        ) return { started: false, job: current };
+        return {
+          started: true,
+          job: this.localStore.updateDesignJob(designJobId, {
+            callbackStatus: "retry_dispatching",
+            callbackClaimedAt: new Date().toISOString(),
+          }),
+        };
+      }
+      return this.localStore.beginDesignJobCallbackRetry({
+        designJobId,
+        operationKey: operation.key,
+        requestFingerprint: operation.fingerprint,
+      });
+    }
+    const prisma = this.prisma as any;
+    const changed = await prisma.designJob.updateMany({
+      where: {
+        id: designJobId,
+        status: "failed",
+        callbackOperationKey: operation.key,
+        callbackRequestFingerprint: operation.fingerprint,
+        callbackStatus: "failure_settled",
+      },
+      data: { callbackStatus: "retry_dispatching", callbackClaimedAt: new Date() },
+    });
+    return {
+      started: changed.count === 1,
+      job: await prisma.designJob.findUnique({ where: { id: designJobId }, include: { assets: true, revisions: true } }),
+    };
+  }
+
+  private async settleDesignCallbackFailure(
+    job: any,
+    payload: DesignPlatformCallbackPayload,
+    operation: RequestOperationMetadata | undefined,
+    errorMessage: string,
+  ) {
+    if (!operation) {
+      return {
+        settled: true,
+        resumed: false,
+        job,
+        revision: await this.finishLatestRevision(job.id, "failed", [], errorMessage),
+      };
+    }
+    const externalJobId = String(payload.externalJobId || "").trim();
+    if (appConfig.useLocalStore) {
+      if (typeof (this.localStore as any).settleDesignJobCallbackFailure !== "function") {
+        const current = this.localStore.getDesignJob(job.id);
+        if (
+          current?.callbackOperationKey === operation.key
+          && current?.callbackRequestFingerprint === operation.fingerprint
+          && current?.callbackStatus === "failure_settled"
+        ) {
+          return { settled: true, resumed: true, job: current, revision: null };
+        }
+        if (
+          current?.callbackOperationKey !== operation.key
+          || current?.callbackRequestFingerprint !== operation.fingerprint
+          || current?.callbackStatus !== "processing"
+          || String(current?.externalJobId || "") !== externalJobId
+          || !["submitted", "generating"].includes(String(current?.status || ""))
+        ) return { settled: false, resumed: false, job: current, revision: null };
+        const revision = (this.localStore as any).getLatestActiveDesignRevision?.(job.id) || null;
+        const failedRevision = revision && typeof (this.localStore as any).updateDesignRevision === "function"
+          ? (this.localStore as any).updateDesignRevision(revision.id, {
+              status: "failed",
+              resultImageIds: [],
+              errorMessage,
+            })
+          : revision;
+        const failedJob = this.localStore.updateDesignJob(job.id, {
+          status: "failed",
+          errorMessage,
+          callbackStatus: "failure_settled",
+          callbackSettledAt: new Date().toISOString(),
+        });
+        return { settled: true, resumed: false, job: failedJob, revision: failedRevision };
+      }
+      return this.localStore.settleDesignJobCallbackFailure({
+        designJobId: job.id,
+        externalJobId,
+        operationKey: operation.key,
+        requestFingerprint: operation.fingerprint,
+        errorMessage,
+      });
+    }
+    const prisma = this.prisma as any;
+    return prisma.$transaction(async (tx: any) => {
+      const current = await tx.designJob.findUnique({ where: { id: job.id } });
+      if (
+        current?.callbackOperationKey === operation.key
+        && current?.callbackRequestFingerprint === operation.fingerprint
+        && current?.callbackStatus === "failure_settled"
+      ) {
+        const revision = await tx.designRevision.findFirst({
+          where: { designJobId: job.id, status: "failed" },
+          orderBy: { updatedAt: "desc" },
+        });
+        return { settled: true, resumed: true, job: current, revision };
+      }
+      const changed = await tx.designJob.updateMany({
+        where: {
+          id: job.id,
+          externalJobId,
+          status: { in: ["submitted", "generating"] },
+          callbackOperationKey: operation.key,
+          callbackRequestFingerprint: operation.fingerprint,
+          callbackStatus: "processing",
+        },
+        data: {
+          status: "failed",
+          errorMessage,
+          callbackStatus: "failure_settled",
+          callbackSettledAt: new Date(),
+        },
+      });
+      if (changed.count !== 1) {
+        return {
+          settled: false,
+          resumed: false,
+          job: await tx.designJob.findUnique({ where: { id: job.id } }),
+          revision: null,
+        };
+      }
+      const revision = await tx.designRevision.findFirst({
+        where: { designJobId: job.id, status: { in: ["submitted", "generating"] } },
+        orderBy: { updatedAt: "desc" },
+      });
+      const failedRevision = revision
+        ? await tx.designRevision.update({
+            where: { id: revision.id },
+            data: { status: "failed", resultImageIds: [], errorMessage },
+          })
+        : null;
+      return {
+        settled: true,
+        resumed: false,
+        job: await tx.designJob.findUnique({ where: { id: job.id } }),
+        revision: failedRevision,
+      };
+    });
+  }
+
+  private async commitDesignCallbackCompletion(input: {
+    job: any;
+    payload: DesignPlatformCallbackPayload;
+    operation: RequestOperationMetadata;
+    nextStatus: string;
+    images: any[];
+    resultImageIds: string[];
+  }) {
+    const externalJobId = String(input.payload.externalJobId || "").trim();
+    if (appConfig.useLocalStore) {
+      if (typeof (this.localStore as any).commitDesignJobCallbackCompletion !== "function") {
+        const current = this.localStore.getDesignJob(input.job.id);
+        if (
+          current?.callbackOperationKey !== input.operation.key
+          || current?.callbackRequestFingerprint !== input.operation.fingerprint
+          || current?.callbackStatus !== "processing"
+          || String(current?.externalJobId || "") !== externalJobId
+          || !["submitted", "generating"].includes(String(current?.status || ""))
+        ) return { committed: false, job: current };
+        this.localStore.upsertDesignImages(input.job.id, input.images);
+        await this.finishLatestRevision(input.job.id, "completed", input.resultImageIds);
+        return {
+          committed: true,
+          job: this.localStore.updateDesignJob(input.job.id, {
+            status: input.nextStatus,
+            completedAt: new Date().toISOString(),
+            callbackStatus: "settled",
+            callbackSettledAt: new Date().toISOString(),
+          }),
+        };
+      }
+      return this.localStore.commitDesignJobCallbackCompletion({
+        designJobId: input.job.id,
+        externalJobId,
+        operationKey: input.operation.key,
+        requestFingerprint: input.operation.fingerprint,
+        status: input.nextStatus,
+        completedAt: new Date().toISOString(),
+        images: input.images,
+        resultImageIds: input.resultImageIds,
+      });
+    }
+    const prisma = this.prisma as any;
+    return prisma.$transaction(async (tx: any) => {
+      const changed = await tx.designJob.updateMany({
+        where: {
+          id: input.job.id,
+          externalJobId,
+          status: { in: ["submitted", "generating"] },
+          callbackOperationKey: input.operation.key,
+          callbackRequestFingerprint: input.operation.fingerprint,
+          callbackStatus: "processing",
+        },
+        data: {
+          status: input.nextStatus,
+          completedAt: new Date(),
+          callbackStatus: "settled",
+          callbackSettledAt: new Date(),
+        },
+      });
+      if (changed.count !== 1) {
+        return {
+          committed: false,
+          job: await tx.designJob.findUnique({ where: { id: input.job.id }, include: { images: true } }),
+        };
+      }
+      for (const image of input.images) {
+        await tx.designImageCandidate.upsert({
+          where: { designJobId_imageId: { designJobId: input.job.id, imageId: image.imageId } },
+          update: {
+            downloadUrl: image.downloadUrl,
+            localPath: image.localPath,
+            width: image.width,
+            height: image.height,
+            fingerprint: image.fingerprint,
+            legacyIdentityHash: image.legacyIdentityHash,
+            position: image.position,
+          },
+          create: { designJobId: input.job.id, ...image },
+        });
+      }
+      const revision = await tx.designRevision.findFirst({
+        where: { designJobId: input.job.id, status: { in: ["submitted", "generating"] } },
+        orderBy: { updatedAt: "desc" },
+      });
+      if (revision) {
+        await tx.designRevision.update({
+          where: { id: revision.id },
+          data: { status: "completed", resultImageIds: input.resultImageIds, errorMessage: "" },
+        });
+      }
+      return {
+        committed: true,
+        job: await tx.designJob.findUnique({ where: { id: input.job.id }, include: { images: true } }),
+      };
+    });
+  }
+
+  private async cleanupUncommittedDesignCallbackFiles(jobId: string, savedImages: Array<{ localPath?: string }>) {
+    for (const item of savedImages) {
+      if (item.localPath) await this.removeUnusableDownloadedDesignImage(jobId, item.localPath);
+    }
   }
 
   async handleDesignPlatformCallback(payload: DesignPlatformCallbackPayload) {
-    const job = appConfig.useLocalStore
-      ? this.localStore.getDesignJob(payload.requestId)
-      : await this.prisma.designJob.findUnique({
-          where: { requestId: payload.requestId },
-          include: { images: true },
-    });
+    if (this.usesDurableArtImageExecutions()) return this.processDesignPlatformCallback(payload);
+    const operation = this.designCallbackOperation(payload);
+    const active = this.activeDesignCallbackPromises.get(operation.key);
+    if (active) return active;
+    const promise = this.processDesignPlatformCallback(payload, operation);
+    this.activeDesignCallbackPromises.set(operation.key, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.activeDesignCallbackPromises.get(operation.key) === promise) {
+        this.activeDesignCallbackPromises.delete(operation.key);
+      }
+    }
+  }
+
+  private async processDesignPlatformCallback(
+    payload: DesignPlatformCallbackPayload,
+    callbackOperation?: RequestOperationMetadata,
+  ) {
+    const binding = await this.findDesignCallbackOperation(payload.requestId);
+    const job = binding?.job;
     if (!job) throw new Error(`design job not found by requestId: ${payload.requestId}`);
-    const callbackBinding = validateDesignCallbackBinding({ payload, job });
+    const callbackBinding = validateDesignCallbackBinding({
+      payload,
+      job,
+      operationRequestId: binding.operationRequestId,
+    });
     if (!callbackBinding.ok) {
       throw new BadRequestException(`design callback binding invalid: ${callbackBinding.reason}`);
     }
-    const automaticRetryAllowed = await this.designCallbackAllowsAutomaticRetry(payload);
     const terminalStatusLabel = this.designJobTerminalStatusLabel(job.status);
     if (terminalStatusLabel) {
       const notificationTitle = String(job.status || "") === "cancelled" ? "已忽略取消任务回调" : "已忽略终态任务回调";
@@ -1915,39 +2226,71 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       });
       return job;
     }
+    if (callbackOperation) {
+      const claim = await this.claimDesignCallback(job, payload, callbackOperation);
+      if (claim.mode === "replay") return claim.job;
+      if (claim.mode === "in_progress") return claim.job;
+      if (claim.mode === "outcome_unknown") {
+        const blocked = await this.markDesignCallbackOutcomeUnknown(job.id, callbackOperation.key);
+        await this.notifications.create(
+          "error",
+          "设计平台回调处理结果未知",
+          "检测到未完成的回调处理，系统已禁止自动重放，必须人工核对。",
+          {
+            effectKey: stableOperationKey("design-callback-outcome-unknown", callbackOperation.key),
+            designJobId: job.id,
+            externalJobId: payload.externalJobId,
+          },
+        );
+        throw new ConflictException({
+          code: "DESIGN_CALLBACK_OUTCOME_UNKNOWN",
+          message: "design callback processing outcome is unknown; automatic replay is blocked",
+          designJobId: blocked.id,
+        });
+      }
+    }
+    const automaticRetryAllowed = await this.designCallbackAllowsAutomaticRetry(payload);
 
     if (payload.status === "failed") {
-      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], payload.errorMessage);
-      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const errorMessage = payload.errorMessage || "设计平台返回失败";
+      const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
+      if (!failure.settled) return failure.job;
+      const failedRevision = failure.revision;
+      const retryCount = this.designResultRetryCount(failure.job, failedRevision);
       await this.notifications.create(retryCount < 1 ? "warning" : "error", "设计平台出图失败", payload.errorMessage || "未返回失败原因", {
+        ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-failed", callbackOperation.key) } : {}),
         designJobId: job.id,
       });
       if (automaticRetryAllowed && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", payload.errorMessage || "设计平台返回失败", {}, failedRevision);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision, callbackOperation);
       }
       await this.notifications.create("error", "设计任务已转人工", "自动重试后仍失败，需要客服人工处理。", {
+        ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-failed-manual", callbackOperation.key) } : {}),
         designJobId: job.id,
       });
-      return this.failDesignJobForManualReview(job, {
+      return this.failDesignJobForManualReview(failure.job, {
         reason: "design_platform_failed_after_retry",
         source: "design_platform_callback",
-        errorMessage: payload.errorMessage || "设计平台返回失败",
+        errorMessage,
       });
     }
 
     const images = this.normalizeCallbackImages(payload.images || []);
     if (!images.length) {
       const errorMessage = "design platform completed without images";
-      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
+      if (!failure.settled) return failure.job;
+      const failedRevision = failure.revision;
+      const retryCount = this.designResultRetryCount(failure.job, failedRevision);
       await this.notifications.create(retryCount < 1 ? "warning" : "error", "设计平台未返回图片", errorMessage, {
+        ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-empty", callbackOperation.key) } : {}),
         designJobId: job.id,
         externalJobId: payload.externalJobId || job.externalJobId,
       });
       if (automaticRetryAllowed && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision, callbackOperation);
       }
-      return this.failDesignJobForManualReview(job, {
+      return this.failDesignJobForManualReview(failure.job, {
         reason: "design_platform_completed_without_images",
         source: "design_platform_callback",
         errorMessage,
@@ -1956,23 +2299,26 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const imageMetadataCheck = this.validateCallbackImages(job, images);
     if (!imageMetadataCheck.ok) {
       const errorMessage = `design platform returned invalid image metadata: ${imageMetadataCheck.reasons.join("; ")}`;
-      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
+      if (!failure.settled) return failure.job;
+      const failedRevision = failure.revision;
+      const retryCount = this.designResultRetryCount(failure.job, failedRevision);
       const retryableFailure = this.isInitialDesignResult(job) || Boolean(failedRevision);
       await this.notifications.create(
         retryCount < 1 && retryableFailure ? "warning" : "error",
         "设计平台图片数据无效",
         imageMetadataCheck.reasons.join("；"),
         {
+          ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-invalid-images", callbackOperation.key) } : {}),
           designJobId: job.id,
           externalJobId: payload.externalJobId || job.externalJobId,
           invalidImageReasons: imageMetadataCheck.reasons,
         },
       );
       if (automaticRetryAllowed && retryableFailure && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision, callbackOperation);
       }
-      return this.failDesignJobForManualReview(job, {
+      return this.failDesignJobForManualReview(failure.job, {
         reason: "design_platform_invalid_image_metadata",
         source: "design_platform_callback",
         errorMessage,
@@ -1981,13 +2327,15 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const minimumInitialImageCount = this.minimumRequiredInitialImageCount(job);
     if (this.isInitialDesignResult(job) && images.length < minimumInitialImageCount) {
       const errorMessage = `design platform returned only ${images.length} candidate images; expected at least ${minimumInitialImageCount}`;
-      await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = Number(job.retryCount || 0);
+      const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
+      if (!failure.settled) return failure.job;
+      const retryCount = Number(failure.job.retryCount || 0);
       await this.notifications.create(
         retryCount < 1 ? "warning" : "error",
         "设计平台候选图不足",
         `只返回 ${images.length} 张候选图，至少需要 ${minimumInitialImageCount} 张。`,
         {
+          ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-insufficient-images", callbackOperation.key) } : {}),
           designJobId: job.id,
           externalJobId: payload.externalJobId || job.externalJobId,
           returnedImageCount: images.length,
@@ -1995,9 +2343,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         },
       );
       if (automaticRetryAllowed && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failure.revision, callbackOperation);
       }
-      return this.failDesignJobForManualReview(job, {
+      return this.failDesignJobForManualReview(failure.job, {
         reason: "design_platform_insufficient_images",
         source: "design_platform_callback",
         errorMessage,
@@ -2035,14 +2383,18 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const requiredLocalImageCount = this.minimumRequiredLocalImageCount(job);
     if (localSavedCount < requiredLocalImageCount) {
       const errorMessage = `design platform saved only ${localSavedCount} local image files; expected at least ${requiredLocalImageCount}`;
-      const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
-      const retryCount = this.designResultRetryCount(job, failedRevision);
+      const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
+      if (callbackOperation) await this.cleanupUncommittedDesignCallbackFiles(job.id, savedImages);
+      if (!failure.settled) return failure.job;
+      const failedRevision = failure.revision;
+      const retryCount = this.designResultRetryCount(failure.job, failedRevision);
       const retryableFailure = this.isInitialDesignResult(job) || Boolean(failedRevision);
       await this.notifications.create(
         retryCount < 1 && retryableFailure ? "warning" : "error",
         "设计图本地保存不足",
         `只有 ${localSavedCount} 张候选图保存到本地，至少需要 ${requiredLocalImageCount} 张才能安全发给客户。`,
         {
+          ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-local-save-failed", callbackOperation.key) } : {}),
           designJobId: job.id,
           externalJobId: payload.externalJobId || job.externalJobId,
           localSavedCount,
@@ -2051,16 +2403,16 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         },
       );
       if (automaticRetryAllowed && retryableFailure && retryCount < 1) {
-        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision);
+        return this.retryDesignJob(job.id, "automatic", errorMessage, {}, failedRevision, callbackOperation);
       }
-      return this.failDesignJobForManualReview(job, {
+      return this.failDesignJobForManualReview(failure.job, {
         reason: "design_platform_local_image_save_failed",
         source: "design_platform_callback",
         errorMessage,
       });
     }
 
-    if (downloadFailureCount) {
+    if (downloadFailureCount && !callbackOperation) {
       await this.notifications.create(
         "warning",
         "设计图本地保存失败",
@@ -2101,6 +2453,48 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         });
         return { ...accepted, durableAcceptanceCommitted: true };
       }
+    }
+
+    const persistedImages = savedImages.map(({ image, imageId, position, fingerprint, legacyIdentityHash, localPath }) => ({
+      imageId,
+      downloadUrl: sanitizePersistedImageUrl(image.downloadUrl),
+      width: image.width,
+      height: image.height,
+      localPath,
+      fingerprint,
+      legacyIdentityHash,
+      position,
+    }));
+    if (callbackOperation) {
+      const committed = await this.commitDesignCallbackCompletion({
+        job,
+        payload,
+        operation: callbackOperation,
+        nextStatus,
+        images: persistedImages,
+        resultImageIds: images.map((image) => this.versionedImageId(job, image.imageId)),
+      });
+      if (!committed.committed) {
+        await this.cleanupUncommittedDesignCallbackFiles(job.id, savedImages);
+        return committed.job;
+      }
+      if (downloadFailureCount) {
+        await this.notifications.create(
+          "warning",
+          "设计图本地保存失败",
+          `有 ${downloadFailureCount} 张候选图没有保存到本地文件，自动微信发图会等待人工确认。`,
+          {
+            effectKey: stableOperationKey("design-callback-download-warning", callbackOperation.key),
+            designJobId: job.id,
+            externalJobId: payload.externalJobId || job.externalJobId,
+          },
+        );
+      }
+      await this.notifications.create("info", "设计图已生成", `已生成 ${images.length} 张候选图`, {
+        effectKey: stableOperationKey("design-callback-completed", callbackOperation.key),
+        designJobId: job.id,
+      });
+      return committed.job;
     }
 
     if (appConfig.useLocalStore) {
@@ -2664,11 +3058,12 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     return metadata;
   }
 
-  private async queueDesignTextMessage(job: any, text: string, reason: string) {
+  private async queueDesignTextMessage(job: any, text: string, reason: string, operationKey?: string) {
     if (!job.wechatAccountId || !job.conversationId) return null;
+    const resolvedOperationKey = operationKey || stableOperationKey("design-message", `${job.id}:${reason}:${text}`);
     try {
       return await this.wechatDispatch.enqueueTextMessage({
-        operationKey: stableOperationKey("design-message", `${job.id}:${reason}:${text}`),
+        operationKey: resolvedOperationKey,
         wechatAccountId: job.wechatAccountId,
         conversationId: job.conversationId,
         designJobId: job.id,
@@ -2682,6 +3077,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           "自动话术已暂停",
           "该会话已人工接管，系统没有创建新的自动发送任务。",
           {
+            ...(operationKey ? { effectKey: stableOperationKey("design-wait-paused", operationKey) } : {}),
             designJobId: job.id,
             requestId: job.requestId,
             conversationId: job.conversationId,
@@ -2707,6 +3103,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     reason?: string,
     expected: ExpectedIdentityPayload = {},
     revision?: DesignRevisionLike | null,
+    callbackOperation?: RequestOperationMetadata,
   ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -2717,6 +3114,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     try {
       await this.assertDesignPlatformPreflight(job.id);
       const payload = await this.buildDesignPlatformPayload(job, revision);
+      if (callbackOperation && !this.usesDurableArtImageExecutions()) {
+        const retryClaim = await this.beginDesignCallbackRetry(job.id, callbackOperation);
+        if (!retryClaim.started) return retryClaim.job;
+      }
       const retryCount = Number(job.retryCount || 0) + 1;
       const revisionRetryCount = revision?.id ? Number(revision.retryCount || 0) + 1 : undefined;
       if (this.usesDurableArtImageExecutions()) {
@@ -2753,6 +3154,11 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
             retryCount,
             submittedAt: new Date().toISOString(),
             errorMessage: "",
+            callbackOperationKey: null,
+            callbackRequestFingerprint: null,
+            callbackStatus: null,
+            callbackClaimedAt: null,
+            callbackSettledAt: null,
           })
         : await this.prisma.designJob.update({
             where: { id: job.id },
@@ -2762,6 +3168,11 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
               retryCount,
               submittedAt: new Date(),
               errorMessage: "",
+              callbackOperationKey: null,
+              callbackRequestFingerprint: null,
+              callbackStatus: null,
+              callbackClaimedAt: null,
+              callbackSettledAt: null,
             },
           });
       await this.notifications.create(
@@ -2774,10 +3185,13 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       return updated;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "未知错误";
+      if (callbackOperation) await this.markDesignCallbackOutcomeUnknown(job.id, callbackOperation.key);
       await this.notifications.create("error", "设计任务重试失败", errorMessage, {
+        ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-retry-failed", callbackOperation.key) } : {}),
         designJobId: job.id,
         externalJobId: job.externalJobId,
       });
+      if (callbackOperation) return this.loadDesignJobWithAssets(job.id);
       return this.failDesignJobForManualReview(job, {
         reason: "design_platform_retry_submit_failed",
         source: "retry_design_job",
@@ -2786,7 +3200,547 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     }
   }
 
-  private async buildDesignPlatformPayload(job: any, revision?: DesignRevisionLike | null): Promise<DesignPlatformJobPayload> {
+  private assertDesignRevisionOperationReplay(
+    revision: any,
+    operation: RequestOperationMetadata,
+    job: any,
+  ) {
+    if (revision?.designJobId !== job.id) {
+      throw new ConflictException({
+        code: "OPERATION_KEY_REUSED",
+        message: "design revision operationKey belongs to another design job",
+      });
+    }
+    assertStoredOperationIdentityReplay(
+      revision.operationIdentity || {},
+      this.designOperationIdentity(job),
+      "design revision",
+    );
+    assertExactOperationReplay(
+      revision.operationKey && revision.requestFingerprint
+        ? { key: revision.operationKey, fingerprint: revision.requestFingerprint }
+        : null,
+      operation,
+      "design revision",
+    );
+  }
+
+  private async completeDesignRevisionOperation(
+    originalJob: any,
+    storedRevision: any,
+    decision: any,
+    operation: RequestOperationMetadata,
+  ) {
+    let job = await this.loadDesignJobWithAssets(originalJob.id);
+    let revision = await this.loadDesignRevision(storedRevision.id);
+    this.assertDesignRevisionOperationReplay(revision, operation, job);
+
+    if (!decision.submitAllowed) {
+      return this.completeManualDesignRevision(job, revision, decision, operation);
+    }
+    if (revision.dispatchStatus === "accepted") {
+      return this.completeDesignRevisionEffects(job, revision, decision, operation);
+    }
+    if (revision.dispatchStatus === "outcome_unknown") throw this.designDispatchOutcomeUnknown("revision");
+    if (revision.dispatchStatus === "explicit_failed") throw this.designDispatchExplicitFailure("revision");
+    if (revision.dispatchStatus === "dispatching") {
+      await this.markDesignRevisionDispatchFailure(job, revision, "outcome_unknown", "dispatch claim survived without a verifiable response");
+      throw this.designDispatchOutcomeUnknown("revision");
+    }
+
+    let platformPayload: DesignPlatformJobPayload;
+    try {
+      await this.assertDesignPlatformPreflight(job.id);
+      platformPayload = await this.buildDesignPlatformPayload(job, revision, revision.externalRequestId);
+    } catch (error) {
+      await this.updateRevision(revision.id, { dispatchStatus: "local_failed", dispatchError: this.errorMessage(error) });
+      throw error;
+    }
+
+    const claimed = await this.claimDesignRevisionDispatch(revision.id, operation.key);
+    if (!claimed) {
+      revision = await this.loadDesignRevision(revision.id);
+      if (revision.dispatchStatus === "accepted") {
+        return this.completeDesignRevisionEffects(job, revision, decision, operation);
+      }
+      await this.markDesignRevisionDispatchFailure(job, revision, "outcome_unknown", "dispatch claim could not be recovered safely");
+      throw this.designDispatchOutcomeUnknown("revision");
+    }
+
+    try {
+      let externalJobId: string;
+      if (this.usesDurableArtImageExecutions()) {
+        const updated = await this.beginDurableArtImageExecution(job, platformPayload, revision, "initial");
+        externalJobId = String(updated.externalJobId || "").trim();
+      } else {
+        const remote = await this.designPlatform.createDesignJob(platformPayload);
+        externalJobId = String(remote?.externalJobId || remote?.jobId || remote?.id || "").trim();
+      }
+      if (!externalJobId) throw Object.assign(new Error("design platform response did not contain an external job id"), { code: "MALFORMED_SUCCESS_RESPONSE" });
+      revision = await this.updateRevision(revision.id, {
+        externalJobId,
+        status: "submitted",
+        dispatchStatus: "accepted",
+        dispatchError: null,
+      });
+      job = await this.updateDesignRevisionJob(job.id, {
+        externalJobId,
+        status: "submitted",
+        submittedAt: new Date(),
+        revisionCount: revision.revisionNumber,
+        revisionPolicy: decision,
+        errorMessage: null,
+        callbackOperationKey: null,
+        callbackRequestFingerprint: null,
+        callbackStatus: null,
+        callbackClaimedAt: null,
+        callbackSettledAt: null,
+      });
+    } catch (error) {
+      const status = this.isExplicitDesignDispatchFailure(error) ? "explicit_failed" : "outcome_unknown";
+      await this.markDesignRevisionDispatchFailure(job, revision, status, this.errorMessage(error));
+      if (status === "outcome_unknown") throw this.designDispatchOutcomeUnknown("revision");
+      throw this.designDispatchExplicitFailure("revision");
+    }
+    return this.completeDesignRevisionEffects(job, revision, decision, operation);
+  }
+
+  private async completeManualDesignRevision(job: any, revision: any, decision: any, operation: RequestOperationMetadata) {
+    const effectRoot = stableOperationKey("design-revision-manual", operation.key);
+    const manualLock = job.conversationId
+      ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          expectedWechatAccountId: job.wechatAccountId,
+          expectedConversationId: job.conversationId,
+          expectedCustomerId: job.customerId,
+          locked: true,
+          reviewer: "system",
+          reason: decision.reason,
+          note: decision.reason,
+          effectKey: effectRoot,
+        })
+      : null;
+    const blockedSendTasks = manualLock?.blockedSendTasks || [];
+    const inFlightSendTasks = manualLock?.inFlightSendTasks || [];
+    await this.notifications.create(
+      decision.chargeRequired ? "warning" : "info",
+      decision.chargeRequired ? "改图已超出自动处理范围" : "高价值客户改图待人工审核",
+      blockedSendTasks.length ? `${decision.reason} 已暂停 ${blockedSendTasks.length} 个待发送任务。` : decision.reason,
+      {
+        effectKey: stableOperationKey("design-revision-manual-notice", operation.key),
+        designJobId: job.id,
+        revisionId: revision.id,
+        conversationId: job.conversationId,
+        customerId: job.customerId,
+        wechatAccountId: job.wechatAccountId,
+        blockedSendTaskIds: blockedSendTasks.map((task: any) => task.id),
+        inFlightSendTaskIds: inFlightSendTasks.map((task: any) => task.id),
+      },
+    );
+    const updated = await this.updateDesignRevisionJob(job.id, {
+      status: "manual_review",
+      manualQcRequired: true,
+      revisionCount: revision.revisionNumber,
+      revisionPolicy: decision,
+    });
+    await this.createReviewLog({
+      targetType: "design_revision",
+      targetId: revision.id,
+      decision: decision.action,
+      reviewer: "system",
+      note: decision.reason,
+      beforeStatus: job.status || "",
+      afterStatus: "manual_review",
+      metadata: {
+        effectKey: stableOperationKey("design-revision-manual-review", operation.key),
+        source: "design_revision_policy",
+        designJobId: job.id,
+        wechatAccountId: job.wechatAccountId,
+        conversationId: job.conversationId,
+        customerId: job.customerId,
+        revisionId: revision.id,
+        revisionNumber: revision.revisionNumber,
+        chargeRequired: decision.chargeRequired,
+        blockedSendTaskIds: blockedSendTasks.map((task: any) => task.id),
+        inFlightSendTaskIds: inFlightSendTasks.map((task: any) => task.id),
+      },
+    });
+    return { decision, revision, job: updated };
+  }
+
+  private async completeDesignRevisionEffects(job: any, revision: any, decision: any, operation: RequestOperationMetadata) {
+    job = await this.loadDesignJobWithAssets(job.id);
+    revision = await this.loadDesignRevision(revision.id);
+    await this.notifications.create("info", "改图已提交设计平台", decision.reason, {
+      effectKey: stableOperationKey("design-revision-submitted", operation.key),
+      designJobId: job.id,
+      revisionId: revision.id,
+      externalJobId: revision.externalJobId,
+      conversationId: job.conversationId,
+      customerId: job.customerId,
+      wechatAccountId: job.wechatAccountId,
+    });
+    if (job.wechatAccountId) {
+      const text = `收到，我按您说的“${String(revision.instruction || "").trim()}”重新处理一版，出来后再发您确认。`;
+      await this.queueDesignTextMessage(
+        job,
+        text,
+        "design-revision-waiting-message",
+        stableOperationKey("design-revision-wait", operation.key),
+      );
+      if (!revision.waitMessageSentAt) {
+        revision = await this.updateRevision(revision.id, { waitMessageSentAt: appConfig.useLocalStore ? new Date().toISOString() : new Date() });
+      }
+    }
+    if (!this.usesDurableArtImageExecutions() && revision.externalJobId) {
+      this.scheduleResultPoll(revision.externalRequestId || job.requestId, revision.externalJobId);
+    }
+    return { decision, revision, job: await this.loadDesignJobWithAssets(job.id) };
+  }
+
+  private async loadDesignRevision(id: string) {
+    return appConfig.useLocalStore
+      ? this.localStore.listDesignRevisions().find((revision: any) => revision.id === id)
+      : (this.prisma as any).designRevision.findUnique({ where: { id } });
+  }
+
+  private async claimDesignRevisionDispatch(id: string, operationKey: string) {
+    if (appConfig.useLocalStore) {
+      const revision = await this.loadDesignRevision(id);
+      if (!revision || revision.operationKey !== operationKey || !["prepared", "local_failed"].includes(revision.dispatchStatus)) return null;
+      return this.localStore.updateDesignRevision(id, { dispatchStatus: "dispatching", dispatchError: null });
+    }
+    const changed = await (this.prisma as any).designRevision.updateMany({
+      where: { id, operationKey, dispatchStatus: { in: ["prepared", "local_failed"] } },
+      data: { dispatchStatus: "dispatching", dispatchError: null },
+    });
+    return changed.count === 1;
+  }
+
+  private async updateDesignRevisionJob(id: string, patch: Record<string, unknown>) {
+    if (appConfig.useLocalStore) {
+      const localPatch = { ...patch };
+      if (localPatch.submittedAt instanceof Date) localPatch.submittedAt = (localPatch.submittedAt as Date).toISOString();
+      return this.localStore.updateDesignJob(id, localPatch);
+    }
+    return (this.prisma as any).designJob.update({
+      where: { id },
+      data: patch,
+      include: { images: true, assets: true, revisions: true },
+    });
+  }
+
+  private async markDesignRevisionDispatchFailure(job: any, revision: any, dispatchStatus: string, dispatchError: string) {
+    const message = dispatchStatus === "outcome_unknown"
+      ? "设计平台可能已接受改图任务，但本地没有可验证响应；禁止再次提交，必须人工核对。"
+      : "设计平台明确拒绝了改图任务，已转人工处理。";
+    const updatedRevision = await this.updateRevision(revision.id, {
+      dispatchStatus,
+      dispatchError: dispatchStatus === "outcome_unknown" ? "design platform acceptance outcome is unknown" : dispatchError,
+      status: "manual_review",
+      manualReviewRequired: true,
+    });
+    const updatedJob = await this.updateDesignRevisionJob(job.id, {
+      status: "manual_review",
+      manualQcRequired: true,
+      errorMessage: message,
+    });
+    await this.notifications.create("error", dispatchStatus === "outcome_unknown" ? "改图提交结果未知" : "改图提交失败", message, {
+      effectKey: stableOperationKey("design-revision-dispatch-failure", `${revision.operationKey}:${dispatchStatus}`),
+      designJobId: job.id,
+      revisionId: revision.id,
+      conversationId: job.conversationId,
+      customerId: job.customerId,
+      wechatAccountId: job.wechatAccountId,
+    });
+    return { revision: updatedRevision, job: updatedJob };
+  }
+
+  private designSubmitOperation(job: any, rawOperationKey: unknown): RequestOperationMetadata {
+    const key = normalizeOperationKey(rawOperationKey, "design submit operationKey");
+    return requestOperationMetadata(
+      key,
+      createOperationFingerprint(
+        "design-job-submit",
+        this.designOperationIdentity(job),
+        {
+          requestId: job.requestId,
+          designType: job.designType,
+          renderStyle: job.renderStyle,
+          outputCount: job.outputCount,
+          budget: job.budget,
+          bundle: job.bundle,
+          requirements: job.requirements,
+          customerText: job.customerText || null,
+          scene: job.scene || null,
+          orderId: job.orderId || null,
+          assetIds: (job.assets || []).map((asset: any) => String(asset.id || asset.assetId || "")).filter(Boolean).sort(),
+        },
+      ),
+    );
+  }
+
+  private designOperationIdentity(job: any) {
+    return {
+      customerId: job.customerId || null,
+      conversationId: job.conversationId || null,
+      wechatAccountId: job.wechatAccountId || null,
+    };
+  }
+
+  private async beginDesignSubmitOperation(job: any, operation: RequestOperationMetadata) {
+    if (
+      !job.submitOperationKey
+      && job.externalJobId
+      && ["submitted", "generating", "completed", "ready_to_send", "selected"].includes(String(job.status || ""))
+    ) {
+      throw new ConflictException({
+        code: "DESIGN_ALREADY_SUBMITTED",
+        message: "design job already has an external submission and cannot start another operation",
+      });
+    }
+    const operationIdentity = this.designOperationIdentity(job);
+    if (appConfig.useLocalStore) {
+      return this.localStore.beginDesignJobSubmitOperation({
+        designJobId: job.id,
+        operationKey: operation.key,
+        requestFingerprint: operation.fingerprint,
+        operationIdentity,
+      });
+    }
+    const prisma = this.prisma as any;
+    const owner = await prisma.designJob.findUnique({
+      where: { submitOperationKey: operation.key },
+      include: { assets: true },
+    });
+    if (owner) return { job: owner, created: false };
+    try {
+      const changed = await prisma.designJob.updateMany({
+        where: { id: job.id, submitOperationKey: null },
+        data: {
+          submitOperationKey: operation.key,
+          submitRequestFingerprint: operation.fingerprint,
+          submitOperationIdentity: operationIdentity,
+          submitDispatchStatus: "prepared",
+          submitDispatchError: null,
+        },
+      });
+      if (changed.count === 1) {
+        return {
+          job: await prisma.designJob.findUnique({ where: { id: job.id }, include: { assets: true } }),
+          created: true,
+        };
+      }
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+    }
+    const concurrent = await prisma.designJob.findFirst({
+      where: { OR: [{ id: job.id }, { submitOperationKey: operation.key }] },
+      include: { assets: true },
+    });
+    if (!concurrent) {
+      throw new ConflictException({ code: "OPERATION_IN_PROGRESS", message: "design submit operation is being committed" });
+    }
+    return { job: concurrent, created: false };
+  }
+
+  private assertDesignSubmitOperationReplay(job: any, operation: RequestOperationMetadata, designJobId: string) {
+    if (job?.id !== designJobId) {
+      throw new ConflictException({
+        code: "OPERATION_KEY_REUSED",
+        message: "design submit operationKey belongs to another design job",
+      });
+    }
+    assertStoredOperationIdentityReplay(job.submitOperationIdentity || {}, this.designOperationIdentity(job), "design submit");
+    assertExactOperationReplay(
+      job.submitOperationKey && job.submitRequestFingerprint
+        ? { key: job.submitOperationKey, fingerprint: job.submitRequestFingerprint }
+        : null,
+      operation,
+      "design submit",
+    );
+  }
+
+  private async runExternalOperationOnce<T>(operationKey: string, action: () => Promise<T>): Promise<T> {
+    const active = this.activeExternalOperationPromises.get(operationKey);
+    if (active) return active as Promise<T>;
+    const promise = action();
+    this.activeExternalOperationPromises.set(operationKey, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.activeExternalOperationPromises.get(operationKey) === promise) {
+        this.activeExternalOperationPromises.delete(operationKey);
+      }
+    }
+  }
+
+  private async completeDesignSubmitOperation(storedJob: any, operation: RequestOperationMetadata) {
+    let job = await this.loadDesignJobWithAssets(storedJob.id);
+    this.assertDesignSubmitOperationReplay(job, operation, storedJob.id);
+    if (job.submitDispatchStatus === "accepted") return this.completeDesignSubmitEffects(job, operation);
+    if (job.submitDispatchStatus === "outcome_unknown") throw this.designDispatchOutcomeUnknown("submit");
+    if (job.submitDispatchStatus === "explicit_failed") throw this.designDispatchExplicitFailure("submit");
+    if (job.submitDispatchStatus === "dispatching") {
+      await this.markDesignSubmitDispatchFailure(job.id, "outcome_unknown", "dispatch claim survived without a verifiable response");
+      throw this.designDispatchOutcomeUnknown("submit");
+    }
+
+    let platformPayload: DesignPlatformJobPayload;
+    try {
+      await this.assertDesignPlatformPreflight(job.id);
+      platformPayload = await this.buildDesignPlatformPayload(job, null, job.requestId);
+    } catch (error) {
+      await this.updateDesignSubmitOperation(job.id, { submitDispatchStatus: "local_failed", submitDispatchError: this.errorMessage(error) });
+      throw error;
+    }
+
+    const claimed = await this.claimDesignSubmitDispatch(job.id, operation.key);
+    if (!claimed) {
+      job = await this.loadDesignJobWithAssets(job.id);
+      if (job.submitDispatchStatus === "accepted") return this.completeDesignSubmitEffects(job, operation);
+      await this.markDesignSubmitDispatchFailure(job.id, "outcome_unknown", "dispatch claim could not be recovered safely");
+      throw this.designDispatchOutcomeUnknown("submit");
+    }
+
+    try {
+      if (this.usesDurableArtImageExecutions()) {
+        await this.beginDurableArtImageExecution(job, platformPayload, null, "initial");
+      } else {
+        const remote = await this.designPlatform.createDesignJob(platformPayload);
+        const externalJobId = String(remote?.externalJobId || remote?.jobId || remote?.id || "").trim();
+        if (!externalJobId) throw Object.assign(new Error("design platform response did not contain an external job id"), { code: "MALFORMED_SUCCESS_RESPONSE" });
+        await this.updateDesignSubmitOperation(job.id, {
+          externalJobId,
+          status: "submitted",
+          submittedAt: new Date(),
+          errorMessage: null,
+          callbackOperationKey: null,
+          callbackRequestFingerprint: null,
+          callbackStatus: null,
+          callbackClaimedAt: null,
+          callbackSettledAt: null,
+        });
+      }
+      job = await this.updateDesignSubmitOperation(job.id, {
+        submitDispatchStatus: "accepted",
+        submitDispatchError: null,
+      });
+    } catch (error) {
+      const status = this.isExplicitDesignDispatchFailure(error) ? "explicit_failed" : "outcome_unknown";
+      await this.markDesignSubmitDispatchFailure(job.id, status, this.errorMessage(error));
+      if (status === "outcome_unknown") throw this.designDispatchOutcomeUnknown("submit");
+      throw this.designDispatchExplicitFailure("submit");
+    }
+    return this.completeDesignSubmitEffects(job, operation);
+  }
+
+  private async completeDesignSubmitEffects(job: any, operation: RequestOperationMetadata) {
+    const latest = await this.loadDesignJobWithAssets(job.id);
+    if (latest.wechatAccountId) {
+      const waitMessage = buildWaitingMessage({ scene: latest.scene || "", outputCount: latest.outputCount });
+      await this.queueDesignTextMessage(
+        latest,
+        waitMessage,
+        "design-waiting-message",
+        stableOperationKey("design-wait", operation.key),
+      );
+      if (!latest.waitMessageSentAt) {
+        await this.updateDesignSubmitOperation(latest.id, { waitMessageSentAt: new Date() });
+      }
+    }
+    if (!this.usesDurableArtImageExecutions() && latest.externalJobId) {
+      this.scheduleResultPoll(latest.requestId, latest.externalJobId);
+    }
+    return this.loadDesignJobWithAssets(latest.id);
+  }
+
+  private async loadDesignJobWithAssets(id: string) {
+    return appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : (this.prisma as any).designJob.findUnique({ where: { id }, include: { assets: true, images: true, revisions: true } });
+  }
+
+  private async claimDesignSubmitDispatch(id: string, operationKey: string) {
+    if (appConfig.useLocalStore) {
+      const job = this.localStore.getDesignJob(id);
+      if (!job || job.submitOperationKey !== operationKey || !["prepared", "local_failed"].includes(job.submitDispatchStatus)) return null;
+      return this.localStore.updateDesignJob(id, { submitDispatchStatus: "dispatching", submitDispatchError: null });
+    }
+    const changed = await (this.prisma as any).designJob.updateMany({
+      where: { id, submitOperationKey: operationKey, submitDispatchStatus: { in: ["prepared", "local_failed"] } },
+      data: { submitDispatchStatus: "dispatching", submitDispatchError: null },
+    });
+    return changed.count === 1;
+  }
+
+  private async updateDesignSubmitOperation(id: string, patch: Record<string, unknown>) {
+    if (appConfig.useLocalStore) {
+      const localPatch = { ...patch };
+      for (const key of ["submittedAt", "waitMessageSentAt"]) {
+        if (localPatch[key] instanceof Date) localPatch[key] = (localPatch[key] as Date).toISOString();
+      }
+      return this.localStore.updateDesignJob(id, localPatch);
+    }
+    return (this.prisma as any).designJob.update({
+      where: { id },
+      data: patch,
+      include: { assets: true, images: true, revisions: true },
+    });
+  }
+
+  private async markDesignSubmitDispatchFailure(id: string, dispatchStatus: string, dispatchError: string) {
+    const job = await this.updateDesignSubmitOperation(id, {
+      submitDispatchStatus: dispatchStatus,
+      submitDispatchError: dispatchStatus === "outcome_unknown" ? "design platform acceptance outcome is unknown" : dispatchError,
+      status: "manual_review",
+      manualQcRequired: true,
+      errorMessage: dispatchStatus === "outcome_unknown"
+        ? "设计平台可能已接受任务，但本地没有可验证响应；禁止再次提交，必须人工核对。"
+        : "设计平台明确拒绝了任务，已转人工处理。",
+    });
+    await this.notifications.create(
+      "error",
+      dispatchStatus === "outcome_unknown" ? "设计平台提交结果未知" : "设计平台提交失败",
+      job.errorMessage,
+      {
+        effectKey: stableOperationKey("design-dispatch-failure", `${job.submitOperationKey}:${dispatchStatus}`),
+        designJobId: id,
+        conversationId: job.conversationId,
+        customerId: job.customerId,
+        wechatAccountId: job.wechatAccountId,
+      },
+    );
+    return job;
+  }
+
+  private designDispatchOutcomeUnknown(kind: "submit" | "revision") {
+    return new ConflictException({
+      code: "DESIGN_DISPATCH_OUTCOME_UNKNOWN",
+      message: `${kind} may have been accepted by the design platform; automatic retry is blocked pending manual verification`,
+    });
+  }
+
+  private designDispatchExplicitFailure(kind: "submit" | "revision") {
+    return new ConflictException({
+      code: "DESIGN_DISPATCH_EXPLICIT_FAILED",
+      message: `${kind} was explicitly rejected by the design platform and requires manual review`,
+    });
+  }
+
+  private isExplicitDesignDispatchFailure(error: unknown) {
+    const status = Number((error as any)?.response?.status || 0);
+    return status >= 400 && status < 500 && ![408, 425, 429].includes(status);
+  }
+
+  private errorMessage(error: unknown) {
+    return error instanceof Error ? error.message : "unknown design platform error";
+  }
+
+  private async buildDesignPlatformPayload(
+    job: any,
+    revision?: DesignRevisionLike | null,
+    requestIdOverride?: string,
+  ): Promise<DesignPlatformJobPayload> {
     const requestedAssets = [
       ...(job.assets || []),
       ...this.bundleImageAssetsForDesignPlatform(job.bundle || {}, job.assets || []),
@@ -2798,7 +3752,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       throw new BadRequestException(`design asset upload failed: ${failedNames}`);
     }
     return {
-      requestId: job.requestId,
+      requestId: requestIdOverride || job.requestId,
       wechatAccountId: job.wechatAccountId,
       customerId: job.customerId,
       conversationId: job.conversationId,
@@ -2811,7 +3765,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       renderStyle: job.renderStyle,
       requirements: job.requirements as Record<string, unknown>,
       customerText: job.customerText,
-      callback: this.buildDesignPlatformCallback(job.requestId),
+      callback: this.buildDesignPlatformCallback(requestIdOverride || job.requestId),
       revision: revision
         ? {
             revisionId: revision.id,

@@ -637,6 +637,20 @@ test("client operation reservation reuses an unconfirmed form key and rotates on
   assert.equal(completeClientOperation(first, first.key), null);
   const afterSuccess = reserveClientOperation("training-import", payload, null);
   assert.notEqual(afterSuccess.key, first.key);
+
+  const submitIntent = {
+    designJobId: "design-1",
+    requestId: "design-create-1",
+    scene: "employee gift",
+    outputCount: 6,
+    budget: { totalAmount: 1000 },
+    expected: { expectedConversationId: "conversation-1" },
+  };
+  const submit = reserveClientOperation("design-submit", submitIntent, null);
+  const afterDataRefresh = reserveClientOperation("design-submit", { ...submitIntent }, submit);
+  assert.equal(afterDataRefresh.key, submit.key);
+  const changedSubmitIntent = reserveClientOperation("design-submit", { ...submitIntent, outputCount: 4 }, submit);
+  assert.notEqual(changedSubmitIntent.key, submit.key);
 });
 
 test("LocalStore send task replay survives conversation deletion and rejects guard context drift", () => {

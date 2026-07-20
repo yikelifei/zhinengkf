@@ -676,7 +676,7 @@ test("design job manual actions carry and enforce expected conversation identity
   const controller = readProjectFile("apps/api/src/design-jobs/design-jobs.controller.ts");
   const service = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
 
-  assert.match(api, /submitDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /submitDesignJob\(\s*id: string,\s*operationKey: string,\s*expected: IdentityExpectation = \{\},/);
   assert.match(api, /preflightDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /pollDesignJob\(\s*id: string,\s*expected: IdentityExpectation = \{\},/);
   assert.match(api, /retryDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
@@ -695,7 +695,7 @@ test("design job manual actions carry and enforce expected conversation identity
     assert.match(controller, /pollActiveResults\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
     assert.match(controller, /autoSubmitDrafts\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
     assert.match(controller, /scanHighValueHandoffs\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
-    assert.match(controller, /submit\(@Param\("id"\) id: string, @Body\(\) body: ExpectedIdentityPayload = \{\}\)/);
+    assert.match(controller, /submit\(@Param\("id"\) id: string, @Body\(\) body: SubmitDesignJobPayload & ExpectedIdentityPayload\)/);
   assert.match(controller, /@Post\(":id\/quick-confirm-send"\)[\s\S]*?@RequireOperatorCapability\("approve_send"\)/);
   assert.match(controller, /quickConfirmSend\([\s\S]*?@TrustedOperator\(\) principal: TrustedOperatorPrincipal/);
   assert.match(controller, /reviewer: `\$\{principal\.displayName\} \[\$\{principal\.id\}\]`/);
@@ -709,7 +709,7 @@ test("design job manual actions carry and enforce expected conversation identity
     assert.match(service, /scanTimeouts\(filter: IdentityFilter = \{\}\)/);
     assert.match(service, /this\.localStore\.listDesignJobs\(filter\)/);
   assert.match(service, /cleanIdentityWhere\(filter\)/);
-  assert.match(service, /async submit\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(service, /async submit\(id: string, expected: SubmitDesignJobPayload & ExpectedIdentityPayload\)/);
   assert.match(service, /async quickConfirmAndQueueSend\([\s\S]*ExpectedIdentityPayload = \{\}/);
   assert.match(service, /this\.assertDesignJobHasCompleteSendIdentity\(job\)/);
   assert.match(service, /private assertDesignJobHasCompleteSendIdentity\(job: any\)/);

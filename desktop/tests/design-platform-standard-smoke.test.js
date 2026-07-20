@@ -152,6 +152,7 @@ test("standard design platform smoke submits, polls, saves images, and keeps upl
     });
 
     const submitted = await service.submit(job.id, {
+      operationKey: "standard-smoke-submit-0001",
       expectedWechatAccountId: "wechat_smoke_1",
       expectedConversationId: "conversation_smoke_1",
       expectedCustomerId: "customer_smoke_1",

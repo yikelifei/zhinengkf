@@ -15,9 +15,14 @@ export type CreateDesignJobPayload = {
 };
 
 export type CreateDesignRevisionPayload = {
+  operationKey: string;
   instruction: string;
   selectedImageId?: string;
   sourceText?: string;
+};
+
+export type SubmitDesignJobPayload = {
+  operationKey: string;
 };
 
 export type SelectDesignImagePayload = {

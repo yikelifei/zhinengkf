@@ -78,6 +78,12 @@ function localStoreNumberEnv(name: string, fallback: number) {
 }
 
 const MAX_WECHAT_WINDOW_SNAPSHOTS = localStoreNumberEnv("LOCAL_STORE_MAX_WECHAT_WINDOW_SNAPSHOTS", 500);
+const DESIGN_CALLBACK_CLAIM_LEASE_MS = 15 * 60 * 1000;
+
+function localDesignCallbackClaimIsFresh(value: unknown) {
+  const claimedAt = Date.parse(String(value || ""));
+  return Number.isFinite(claimedAt) && Date.now() - claimedAt <= DESIGN_CALLBACK_CLAIM_LEASE_MS;
+}
 
 function resolveLocalStoreFilePath() {
   if (process.env.LOCAL_STORE_FILE) return path.resolve(process.env.LOCAL_STORE_FILE);
@@ -1427,6 +1433,254 @@ export class LocalStoreService {
     return this.hydrateDesignJob(data, data.designJobs[index]);
   }
 
+  beginDesignJobSubmitOperation(payload: {
+    designJobId: string;
+    operationKey: string;
+    requestFingerprint: string;
+    operationIdentity: Record<string, unknown>;
+  }) {
+    const data = this.read();
+    const operationOwner = data.designJobs.find((item) => item.submitOperationKey === payload.operationKey);
+    if (operationOwner) return { job: this.hydrateDesignJob(data, operationOwner), created: false };
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (job.submitOperationKey) return { job: this.hydrateDesignJob(data, job), created: false };
+    const now = new Date().toISOString();
+    data.designJobs[index] = {
+      ...job,
+      submitOperationKey: payload.operationKey,
+      submitRequestFingerprint: payload.requestFingerprint,
+      submitOperationIdentity: payload.operationIdentity,
+      submitDispatchStatus: "prepared",
+      submitDispatchError: null,
+      updatedAt: now,
+    };
+    this.write(data);
+    return { job: this.hydrateDesignJob(data, data.designJobs[index]), created: true };
+  }
+
+  claimDesignJobCallback(payload: {
+    designJobId: string;
+    externalJobId: string;
+    operationKey: string;
+    requestFingerprint: string;
+  }) {
+    const data = this.read();
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (job.callbackOperationKey) {
+      if (job.callbackOperationKey !== payload.operationKey) {
+        return { mode: "replay", job: this.hydrateDesignJob(data, job) };
+      }
+      if (job.callbackStatus === "failure_settled" && job.callbackRequestFingerprint === payload.requestFingerprint) {
+        return { mode: "resume_failure", job: this.hydrateDesignJob(data, job) };
+      }
+      if (["processing", "retry_dispatching"].includes(job.callbackStatus)) {
+        return {
+          mode: localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown",
+          job: this.hydrateDesignJob(data, job),
+        };
+      }
+      return { mode: "replay", job: this.hydrateDesignJob(data, job) };
+    }
+    if (
+      String(job.externalJobId || "") !== payload.externalJobId
+      || !["submitted", "generating"].includes(String(job.status || ""))
+    ) {
+      return { mode: "replay", job: this.hydrateDesignJob(data, job) };
+    }
+    const now = new Date().toISOString();
+    data.designJobs[index] = {
+      ...job,
+      callbackOperationKey: payload.operationKey,
+      callbackRequestFingerprint: payload.requestFingerprint,
+      callbackStatus: "processing",
+      callbackClaimedAt: now,
+      callbackSettledAt: null,
+      updatedAt: now,
+    };
+    this.write(data);
+    return { mode: "claimed", job: this.hydrateDesignJob(data, data.designJobs[index]) };
+  }
+
+  settleDesignJobCallbackFailure(payload: {
+    designJobId: string;
+    externalJobId: string;
+    operationKey: string;
+    requestFingerprint: string;
+    errorMessage: string;
+  }) {
+    const data = this.read();
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (
+      job.callbackOperationKey === payload.operationKey
+      && job.callbackRequestFingerprint === payload.requestFingerprint
+      && job.callbackStatus === "failure_settled"
+    ) {
+      const revision = latestActiveLocalDesignRevision(data, job.id, ["failed"]);
+      return { settled: true, resumed: true, job: this.hydrateDesignJob(data, job), revision };
+    }
+    if (
+      job.callbackOperationKey !== payload.operationKey
+      || job.callbackRequestFingerprint !== payload.requestFingerprint
+      || job.callbackStatus !== "processing"
+      || String(job.externalJobId || "") !== payload.externalJobId
+      || !["submitted", "generating"].includes(String(job.status || ""))
+    ) {
+      return { settled: false, resumed: false, job: this.hydrateDesignJob(data, job), revision: null };
+    }
+    const now = new Date().toISOString();
+    const revisionIndex = latestActiveLocalDesignRevisionIndex(data, job.id);
+    let revision = null;
+    if (revisionIndex >= 0) {
+      data.designRevisions[revisionIndex] = {
+        ...data.designRevisions[revisionIndex],
+        status: "failed",
+        resultImageIds: [],
+        errorMessage: payload.errorMessage,
+        updatedAt: now,
+      };
+      revision = data.designRevisions[revisionIndex];
+    }
+    data.designJobs[index] = {
+      ...job,
+      status: "failed",
+      errorMessage: payload.errorMessage,
+      callbackStatus: "failure_settled",
+      callbackSettledAt: now,
+      updatedAt: now,
+    };
+    this.write(data);
+    return { settled: true, resumed: false, job: this.hydrateDesignJob(data, data.designJobs[index]), revision };
+  }
+
+  beginDesignJobCallbackRetry(payload: { designJobId: string; operationKey: string; requestFingerprint: string }) {
+    const data = this.read();
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (
+      job.callbackOperationKey !== payload.operationKey
+      || job.callbackRequestFingerprint !== payload.requestFingerprint
+      || job.callbackStatus !== "failure_settled"
+      || job.status !== "failed"
+    ) return { started: false, job: this.hydrateDesignJob(data, job) };
+    const now = new Date().toISOString();
+    data.designJobs[index] = { ...job, callbackStatus: "retry_dispatching", callbackClaimedAt: now, updatedAt: now };
+    this.write(data);
+    return { started: true, job: this.hydrateDesignJob(data, data.designJobs[index]) };
+  }
+
+  markDesignJobCallbackOutcomeUnknown(payload: { designJobId: string; operationKey: string }) {
+    const data = this.read();
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (job.callbackOperationKey !== payload.operationKey || !["processing", "retry_dispatching"].includes(job.callbackStatus)) {
+      return this.hydrateDesignJob(data, job);
+    }
+    const now = new Date().toISOString();
+    data.designJobs[index] = {
+      ...job,
+      status: "manual_review",
+      manualQcRequired: true,
+      errorMessage: "设计平台回调处理结果未知，禁止自动重放，必须人工核对。",
+      callbackStatus: "outcome_unknown",
+      callbackSettledAt: now,
+      updatedAt: now,
+    };
+    this.write(data);
+    return this.hydrateDesignJob(data, data.designJobs[index]);
+  }
+
+  commitDesignJobCallbackCompletion(payload: {
+    designJobId: string;
+    externalJobId: string;
+    operationKey: string;
+    requestFingerprint: string;
+    status: string;
+    completedAt: string;
+    images: any[];
+    resultImageIds: string[];
+  }) {
+    const data = this.read();
+    const jobIndex = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (jobIndex < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[jobIndex];
+    if (
+      job.callbackOperationKey !== payload.operationKey
+      || job.callbackRequestFingerprint !== payload.requestFingerprint
+      || job.callbackStatus !== "processing"
+      || String(job.externalJobId || "") !== payload.externalJobId
+      || !["submitted", "generating"].includes(String(job.status || ""))
+    ) return { committed: false, job: this.hydrateDesignJob(data, job) };
+    const now = payload.completedAt;
+    for (const image of payload.images) {
+      const imageIndex = data.designImages.findIndex(
+        (item) => item.designJobId === job.id && item.imageId === image.imageId,
+      );
+      const existing = imageIndex >= 0 ? data.designImages[imageIndex] : null;
+      const record = {
+        ...(existing || {}),
+        id: existing?.id || id("image"),
+        createdAt: existing?.createdAt || now,
+        ...image,
+        selected: typeof image.selected === "boolean" ? image.selected : Boolean(existing?.selected),
+        customerFeedback: image.customerFeedback !== undefined ? image.customerFeedback : existing?.customerFeedback,
+        designJobId: job.id,
+      };
+      if (imageIndex >= 0) data.designImages[imageIndex] = record;
+      else data.designImages.push(record);
+    }
+    const revisionIndex = latestActiveLocalDesignRevisionIndex(data, job.id);
+    if (revisionIndex >= 0) {
+      data.designRevisions[revisionIndex] = {
+        ...data.designRevisions[revisionIndex],
+        status: "completed",
+        resultImageIds: payload.resultImageIds,
+        errorMessage: "",
+        updatedAt: now,
+      };
+    }
+    data.designJobs[jobIndex] = {
+      ...job,
+      status: payload.status,
+      completedAt: now,
+      callbackStatus: "settled",
+      callbackSettledAt: now,
+      updatedAt: now,
+    };
+    this.write(data);
+    return { committed: true, job: this.hydrateDesignJob(data, data.designJobs[jobIndex]) };
+  }
+
+  cancelDesignJobIfCurrent(payload: { designJobId: string; status: string; externalJobId?: string | null }) {
+    const data = this.read();
+    const index = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (index < 0) throw new Error(`local design job not found: ${payload.designJobId}`);
+    const job = data.designJobs[index];
+    if (
+      String(job.status || "") !== payload.status
+      || String(job.externalJobId || "") !== String(payload.externalJobId || "")
+      || job.callbackStatus === "retry_dispatching"
+    ) return { cancelled: false, job: this.hydrateDesignJob(data, job) };
+    const now = new Date().toISOString();
+    data.designJobs[index] = {
+      ...job,
+      status: "cancelled",
+      ...(job.callbackStatus === "processing" || job.callbackStatus === "failure_settled"
+        ? { callbackStatus: "rejected", callbackSettledAt: now }
+        : {}),
+      updatedAt: now,
+    };
+    this.write(data);
+    return { cancelled: true, job: this.hydrateDesignJob(data, data.designJobs[index]) };
+  }
+
   listDesignPlatformExecutions(filter: { designJobId?: string; status?: string; acceptanceStatus?: string } = {}) {
     return this.read()
       .designPlatformExecutions
@@ -1918,6 +2172,14 @@ export class LocalStoreService {
 
   createDesignRevision(payload: any) {
     const data = this.read();
+    if (payload.operationKey) {
+      const existing = data.designRevisions.find((item) => item.operationKey === payload.operationKey);
+      if (existing) return existing;
+    }
+    const numberOwner = data.designRevisions.find(
+      (item) => item.designJobId === payload.designJobId && Number(item.revisionNumber) === Number(payload.revisionNumber),
+    );
+    if (numberOwner) throw Object.assign(new Error("design revision number changed concurrently"), { code: "P2002" });
     const now = new Date().toISOString();
     const record: any = {
       id: id("revision"),
@@ -1932,6 +2194,13 @@ export class LocalStoreService {
       chargeRequired: Boolean(payload.chargeRequired),
       manualReviewRequired: Boolean(payload.manualReviewRequired),
       externalJobId: payload.externalJobId || null,
+      operationKey: payload.operationKey || null,
+      requestFingerprint: payload.requestFingerprint || null,
+      operationIdentity: payload.operationIdentity || null,
+      externalRequestId: payload.externalRequestId || null,
+      dispatchStatus: payload.dispatchStatus || null,
+      dispatchError: payload.dispatchError || null,
+      waitMessageSentAt: payload.waitMessageSentAt || null,
       resultImageIds: payload.resultImageIds || [],
       createdAt: now,
       updatedAt: now,
@@ -1945,7 +2214,7 @@ export class LocalStoreService {
   updateDesignRevision(idOrExternalJobId: string, patch: any, options: { skipIdentityValidation?: boolean } = {}) {
     const data = this.read();
     const index = data.designRevisions.findIndex(
-      (item) => item.id === idOrExternalJobId || item.externalJobId === idOrExternalJobId,
+      (item) => item.id === idOrExternalJobId || item.externalJobId === idOrExternalJobId || item.externalRequestId === idOrExternalJobId,
     );
     if (index < 0) throw new Error(`local design revision not found: ${idOrExternalJobId}`);
     const current = data.designRevisions[index];
@@ -2490,6 +2759,17 @@ export class LocalStoreService {
 
   createSendTask(payload: any) {
     const data = this.read();
+    if (payload.id) {
+      const existing = data.sendTasks.find((item) => item.id === payload.id);
+      if (existing) {
+        assertExactOperationReplay(
+          readRequestOperationMetadata(existing.guardSnapshot),
+          readRequestOperationMetadata(payload.guardSnapshot) || { key: String(payload.id), fingerprint: "" },
+          "local send task",
+        );
+        return this.hydrateSendTask(data, existing);
+      }
+    }
     const now = new Date().toISOString();
     const operationKey = payload.operationKey ? normalizeOperationKey(payload.operationKey) : null;
     const taskId = operationKey ? deterministicOperationId("send", operationKey) : payload.id || id("send");
@@ -3499,6 +3779,21 @@ export class LocalStoreService {
 
 function id(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
+function latestActiveLocalDesignRevisionIndex(data: StoreData, designJobId: string) {
+  return data.designRevisions
+    .map((revision, index) => ({ revision, index }))
+    .filter(({ revision }) => revision.designJobId === designJobId)
+    .filter(({ revision }) => ["submitted", "generating"].includes(revision.status))
+    .sort((a, b) => String(b.revision.updatedAt || b.revision.createdAt).localeCompare(String(a.revision.updatedAt || a.revision.createdAt)))[0]?.index ?? -1;
+}
+
+function latestActiveLocalDesignRevision(data: StoreData, designJobId: string, statuses = ["submitted", "generating"]) {
+  return data.designRevisions
+    .filter((revision) => revision.designJobId === designJobId)
+    .filter((revision) => statuses.includes(revision.status))
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0] || null;
 }
 
 function isTerminalWechatWorkAudit(record: any) {

@@ -92,6 +92,11 @@ POST /v1/assets/upload
 
 ### 创建设计任务
 
+`requestId` 是创建调用的稳定请求标识。本仓库的 mock 对相同 `requestId` 与相同请求体返回同一任务；相同
+`requestId` 携带不同请求体会返回 `409`。`standard_v1` 不使用未约定的幂等请求头：若上游在接受后未返回可验证
+响应，本地会把该调用标记为 `outcome_unknown` 并转人工核对，禁止自动再次 `POST`，因此不对未知上游承诺
+exactly-once。
+
 ```http
 POST /v1/design-jobs
 ```

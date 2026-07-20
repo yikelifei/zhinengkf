@@ -210,7 +210,8 @@ test("duplicate submit persists prepared/dispatching/generating before one POST 
   service.assertDesignPlatformPreflight = async () => ({ ok: true });
   service.buildDesignPlatformPayload = async () => ({ ...artPayload(), requestId: job.requestId });
 
-  await Promise.all([service.submit(job.id), service.submit(job.id)]);
+  const submitRequest = { operationKey: "test-durable-submit-outcome-unknown-1" };
+  await Promise.all([service.submit(job.id, submitRequest), service.submit(job.id, submitRequest)]);
   await Promise.all([...service.activeExecutionPromises.values()]);
   assert.equal(postCount, 1);
   assert.equal(localStore.listDesignPlatformExecutions({ designJobId: job.id }).length, 1);
@@ -245,7 +246,7 @@ test("21 minute timeout scan protects a live durable execution and never permits
   service.assertDesignPlatformPreflight = async () => ({ ok: true });
   service.buildDesignPlatformPayload = async () => ({ ...artPayload(), requestId: job.requestId });
 
-  await service.submit(job.id);
+  await service.submit(job.id, { operationKey: "test-durable-submit-timeout-scan-1" });
   const active = localStore.listDesignPlatformExecutions({ designJobId: job.id })[0];
   assert.equal(active.status, "generating");
   assert.equal(postCount, 1);
@@ -271,7 +272,10 @@ test("21 minute timeout scan protects a live durable execution and never permits
   localStore.updateDesignJob(job.id, { status: "quick_confirm", errorMessage: null });
   const revisionCount = localStore.listDesignRevisions(job.id).length;
   await assert.rejects(
-    () => service.requestRevision(job.id, { instruction: "make it brighter" }),
+    () => service.requestRevision(job.id, {
+      operationKey: "test-durable-revision-active-execution-1",
+      instruction: "make it brighter",
+    }),
     /active design platform execution is still in progress/,
   );
   assert.equal(localStore.listDesignRevisions(job.id).length, revisionCount);
@@ -741,7 +745,7 @@ test("refund failed never starts a second POST and persisted notification uses o
   const service = new DesignJobsService({}, platform, localStore, notifications, {}, wechat, {}, {}, executions);
   service.assertDesignPlatformPreflight = async () => ({ ok: true });
   service.buildDesignPlatformPayload = async () => ({ ...artPayload(), requestId: job.requestId });
-  await service.submit(job.id);
+  await service.submit(job.id, { operationKey: "test-durable-submit-refund-failed-1" });
   await Promise.all([...service.activeExecutionPromises.values()]);
   assert.equal(postCount, 1);
   assert.equal(localStore.getDesignJob(job.id).retryCount, 0);
@@ -814,7 +818,7 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
   );
   service.assertDesignPlatformPreflight = async () => ({ ok: true });
   service.buildDesignPlatformPayload = async () => ({ ...artPayload(), requestId: job.requestId });
-  await service.submit(job.id);
+  await service.submit(job.id, { operationKey: "test-durable-submit-partial-refund-1" });
   await Promise.all([...service.activeExecutionPromises.values()]);
   const execution = localStore.listDesignPlatformExecutions({ designJobId: job.id })[0];
   assert.equal(execution.status, "completed");
@@ -882,7 +886,7 @@ test("safe refunded terminal failure retries at most once with a new stable exec
   );
   service.assertDesignPlatformPreflight = async () => ({ ok: true });
   service.buildDesignPlatformPayload = async () => ({ ...artPayload(), requestId: job.requestId });
-  await service.submit(job.id);
+  await service.submit(job.id, { operationKey: "test-durable-submit-safe-refund-1" });
   for (let index = 0; index < 10 && service.activeExecutionPromises.size; index += 1) {
     await Promise.all([...service.activeExecutionPromises.values()]);
   }

@@ -2,8 +2,14 @@
 
 import { Play, SearchCheck } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
-import { identityExpectation, type DesignJobPreflightResult } from "../../lib/api";
+import { useRef, useState } from "react";
+import {
+  completeClientOperation,
+  identityExpectation,
+  reserveClientOperation,
+  type DesignJobPreflightResult,
+  type PendingClientOperation,
+} from "../../lib/api";
 import { preflightDesignJob, submitDesignJob } from "./api";
 import styles from "./design-pages.module.css";
 import { DesignConfirmation, DesignEmpty, DesignNotice, DesignPageHeader, errorText } from "./design-ui";
@@ -16,6 +22,7 @@ export function DesignJobSubmitPage({ jobId }: { jobId: string }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const pendingSubmitOperation = useRef<PendingClientOperation | null>(null);
   const expected = selected ? identityExpectation(selected) : {};
   const identityReady = Boolean(expected.expectedWechatAccountId && expected.expectedConversationId && expected.expectedCustomerId);
 
@@ -34,8 +41,20 @@ export function DesignJobSubmitPage({ jobId }: { jobId: string }) {
   async function submit() {
     if (!selected || !identityReady || !preflight?.ok || preflight.designJobId !== selected.id) return;
     setConfirming(false); setBusy("submit"); setError(""); setNotice("");
+    const requestIntent = {
+      designJobId: selected.id,
+      requestId: selected.requestId,
+      scene: selected.scene || null,
+      outputCount: selected.outputCount,
+      budget: selected.budget,
+      bundle: selected.bundle || null,
+      expected,
+    };
+    const operation = reserveClientOperation("design-submit", requestIntent, pendingSubmitOperation.current);
+    pendingSubmitOperation.current = operation;
     try {
-      const updated = await submitDesignJob(selected.id, expected);
+      const updated = await submitDesignJob(selected.id, operation.key, expected);
+      pendingSubmitOperation.current = completeClientOperation(pendingSubmitOperation.current, operation.key);
       replace(updated); setPreflight(null); setNotice(`任务 ${updated.requestId} 已正式提交。`);
     } catch (cause) { setError(errorText(cause, "设计任务提交失败")); }
     finally { setBusy(""); }

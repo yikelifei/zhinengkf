@@ -281,10 +281,7 @@ test("revision request refuses customer-facing terminal design jobs before creat
         },
       },
       localStoreOverrides: {
-        listDesignRevisions: () => {
-          revisionStoreTouched = true;
-          return [];
-        },
+        listDesignRevisions: () => [],
         createDesignRevision: () => {
           revisionStoreTouched = true;
           throw new Error("terminal design job revision must not be created");
@@ -295,6 +292,7 @@ test("revision request refuses customer-facing terminal design jobs before creat
     await assert.rejects(
       () =>
         service.requestRevision(job.id, {
+          operationKey: "test-revision-terminal-blocked-1",
           wechatAccountId: job.wechatAccountId,
           conversationId: job.conversationId,
           customerId: job.customerId,
@@ -346,13 +344,14 @@ test("revision request still allows sent design jobs before quote creation", asy
         },
       },
       localStoreOverrides: {
-        listDesignRevisions: () => [],
+        getDesignJob: () => job,
+        listDesignRevisions: () => (revision ? [revision] : []),
         createDesignRevision: (payload) => {
           revision = { id: "revision-1", ...payload };
           return revision;
         },
         updateDesignRevision: (id, patch) => {
-          assert.equal(id, "revision-1");
+          assert.equal(id, revision.id);
           revision = { ...revision, ...patch };
           return revision;
         },
@@ -367,6 +366,7 @@ test("revision request still allows sent design jobs before quote creation", asy
     service.scheduleResultPoll = () => {};
 
     const result = await service.requestRevision(job.id, {
+      operationKey: "test-revision-sent-allowed-1",
       instruction: "把背景改成暖色",
     });
 

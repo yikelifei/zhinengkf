@@ -1,5 +1,10 @@
 import { createClientOperationKey } from "./client-operation-key";
-export { createClientOperationKey } from "./client-operation-key";
+export {
+  completeClientOperation,
+  createClientOperationKey,
+  reserveClientOperation,
+} from "./client-operation-key";
+export type { PendingClientOperation } from "./client-operation-key";
 
 export type DesignJob = {
   id: string;
@@ -3005,8 +3010,12 @@ export async function runDesignPlatformSmokeTest(): Promise<DesignPlatformSmokeT
   return postJson<DesignPlatformSmokeTestResult>("/integrations/design-platform/smoke-test", {});
 }
 
-export async function submitDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJob> {
-  return postJson<DesignJob>(`/design-jobs/${id}/submit`, expected);
+export async function submitDesignJob(
+  id: string,
+  operationKey: string,
+  expected: IdentityExpectation = {},
+): Promise<DesignJob> {
+  return postJson<DesignJob>(`/design-jobs/${id}/submit`, { ...expected, operationKey });
 }
 
 export async function preflightDesignJob(id: string, expected: IdentityExpectation = {}): Promise<DesignJobPreflightResult> {
@@ -3098,6 +3107,7 @@ export async function getDesignJobRevisions(id: string, expected: IdentityExpect
 }
 
 export async function requestDesignRevision(id: string, payload: {
+  operationKey: string;
   instruction: string;
   selectedImageId?: string;
   sourceText?: string;

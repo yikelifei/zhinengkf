@@ -389,6 +389,16 @@ model DesignJob {
   revisionPolicy     Json?
   errorMessage       String?
   waitMessageSentAt  DateTime?
+  submitOperationKey String?         @unique
+  submitRequestFingerprint String?
+  submitOperationIdentity Json?
+  submitDispatchStatus String?
+  submitDispatchError String?
+  callbackOperationKey String?         @unique
+  callbackRequestFingerprint String?
+  callbackStatus       String?
+  callbackClaimedAt    DateTime?
+  callbackSettledAt    DateTime?
   submittedAt        DateTime?
   completedAt        DateTime?
   createdAt          DateTime        @default(now())
@@ -449,6 +459,13 @@ model DesignRevision {
   chargeRequired       Boolean               @default(false)
   manualReviewRequired Boolean               @default(false)
   externalJobId        String?
+  operationKey         String?               @unique
+  requestFingerprint   String?
+  operationIdentity    Json?
+  externalRequestId    String?               @unique
+  dispatchStatus       String?
+  dispatchError        String?
+  waitMessageSentAt    DateTime?
   resultImageIds       Json?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
@@ -458,6 +475,7 @@ model DesignRevision {
 
   @@index([designJobId, createdAt])
   @@index([status, createdAt])
+  @@unique([designJobId, revisionNumber])
 }
 
 model DesignPlatformExecution {

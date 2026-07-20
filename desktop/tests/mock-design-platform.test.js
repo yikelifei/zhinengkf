@@ -25,6 +25,11 @@ test("mock design platform returns a reachable uploaded asset url", async () => 
   try {
     await waitForHealth(port);
 
+    const request = { requestId: "mock-replay-request-1", outputCount: 2 };
+    const firstJob = await postJson(port, "/v1/design-jobs", request);
+    const replayedJob = await postJson(port, "/v1/design-jobs", { outputCount: 2, requestId: "mock-replay-request-1" });
+    assert.equal(replayedJob.externalJobId, firstJob.externalJobId);
+
     const uploaded = await postJson(port, "/v1/assets/upload", {
       assetId: "sku-asset-1",
       fileName: "sku.png",

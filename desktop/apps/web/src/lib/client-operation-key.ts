@@ -1,5 +1,7 @@
 export type ClientOperationScope =
   | "design-job"
+  | "design-submit"
+  | "design-revision"
   | "training-import"
   | "manual-reply"
   | "design-send"

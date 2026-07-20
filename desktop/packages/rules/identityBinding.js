@@ -74,8 +74,9 @@ function validateDesignJobIdentity({ payload, conversation }) {
   return summarize(checks, "设计任务绑定关系正确");
 }
 
-function validateDesignCallbackBinding({ payload, job }) {
+function validateDesignCallbackBinding({ payload, job, operationRequestId }) {
   const checks = [];
+  const expectedRequestId = operationRequestId || job?.requestId || "";
 
   checks.push({
     key: "designJobExists",
@@ -88,9 +89,9 @@ function validateDesignCallbackBinding({ payload, job }) {
   checks.push({
     key: "callbackRequestMatchesJob",
     label: "callback requestId matches design job",
-    expected: job?.requestId || "",
+    expected: expectedRequestId,
     actual: payload?.requestId || "",
-    passed: Boolean(job?.requestId && payload?.requestId === job.requestId),
+    passed: Boolean(expectedRequestId && payload?.requestId === expectedRequestId),
   });
 
   const expectedExternalJobId = job?.externalJobId || "";

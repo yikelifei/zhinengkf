@@ -7,6 +7,7 @@ const { randomUUID } = require("node:crypto");
 
 const port = Number(process.env.MOCK_DESIGN_PLATFORM_PORT || 3700);
 const jobs = new Map();
+const jobsByRequestId = new Map();
 const assets = new Map();
 const keepAlive = setInterval(() => undefined, 60_000);
 
@@ -18,6 +19,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname === "/v1/design-jobs") {
     const body = await readJson(req);
+    const requestId = String(body.requestId || "").trim();
+    if (!requestId) return json(res, { error: "requestId is required" }, 400);
+    const requestFingerprint = stableJson(body);
+    const replay = jobsByRequestId.get(requestId);
+    if (replay) {
+      if (replay.requestFingerprint !== requestFingerprint) {
+        return json(res, { error: "requestId was already used with a different payload" }, 409);
+      }
+      return json(res, { externalJobId: replay.job.externalJobId, status: replay.job.status });
+    }
     const externalJobId = `mock-${randomUUID()}`;
     const job = {
       externalJobId,
@@ -32,6 +43,7 @@ const server = http.createServer(async (req, res) => {
       })),
     };
     jobs.set(externalJobId, job);
+    jobsByRequestId.set(requestId, { job, requestFingerprint });
     setTimeout(() => {
       const current = jobs.get(externalJobId);
       if (current) {
@@ -173,6 +185,12 @@ function readJson(req) {
       }
     });
   });
+}
+
+function stableJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
 }
 
 function notifyCallback(job, callback) {
