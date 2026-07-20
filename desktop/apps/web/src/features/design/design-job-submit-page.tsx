@@ -16,7 +16,7 @@ import { DesignConfirmation, DesignEmpty, DesignNotice, DesignPageHeader, errorT
 import { useDesignJobs } from "./use-design-job";
 
 export function DesignJobSubmitPage({ jobId }: { jobId: string }) {
-  const { selected, loading, error: loadError, replace } = useDesignJobs(jobId);
+  const { selected, loading, loaded, error: loadError, replace } = useDesignJobs(jobId);
   const [preflight, setPreflight] = useState<DesignJobPreflightResult | null>(null);
   const [busy, setBusy] = useState<"" | "preflight" | "submit">("");
   const [error, setError] = useState("");
@@ -76,7 +76,7 @@ export function DesignJobSubmitPage({ jobId }: { jobId: string }) {
           {preflight ? <div className={styles.preflight}><strong>预检 {preflight.ok ? "通过" : "未通过"}</strong><ul>{preflight.checks.map((check) => <li className={check.ok ? styles.ok : styles.bad} key={check.key}><span>{check.label}</span><small>{check.detail || "无明细"}</small></li>)}</ul></div> : null}
           <Link className={styles.backLink} href={`/design/jobs/${encodeURIComponent(selected.id)}`} data-action-id="design-job-submit-back">返回任务详情</Link>
         </article>
-      ) : <DesignEmpty title="没有找到设计任务" detail="返回任务列表重新选择。" />}
+      ) : loaded ? <DesignEmpty title="没有找到设计任务" detail="读取成功；请返回任务列表重新选择。" /> : <DesignEmpty title="设计任务状态未确认" detail="任务尚未成功读取，已阻止预检与提交。" />}
       {confirming && selected ? <DesignConfirmation title="确认正式提交这条设计任务？" detail={`任务 ${selected.requestId} 已通过预检。提交后会调用外部设计平台。`} confirmLabel="确认正式提交" confirmActionId="design-job-submit-confirm" cancelActionId="design-job-submit-cancel" busy={busy === "submit"} danger onCancel={() => setConfirming(false)} onConfirm={() => void submit()} /> : null}
     </section>
   );

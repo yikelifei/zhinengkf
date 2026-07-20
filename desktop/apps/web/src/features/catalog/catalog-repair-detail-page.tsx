@@ -9,7 +9,7 @@ import { CatalogConfirmation, CatalogEmpty, CatalogHeader, CatalogNotice, catalo
 import { useCatalogRepairQueue } from "./use-catalog-records";
 
 export function CatalogRepairDetailPage({ skuCode }: { skuCode: string }) {
-  const { selected, loading, error: loadError } = useCatalogRepairQueue(skuCode);
+  const { selected, loading, loaded, error: loadError } = useCatalogRepairQueue(skuCode);
   const [stock, setStock] = useState("");
   const [supplier, setSupplier] = useState("");
   const [leadTimeDays, setLeadTimeDays] = useState("");
@@ -62,7 +62,7 @@ export function CatalogRepairDetailPage({ skuCode }: { skuCode: string }) {
           <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="catalog-repair-detail-save-request" disabled={busy}><Wrench size={16} aria-hidden="true" />准备提交修复</button></div>
           <Link className={styles.backLink} href="/catalog/repair" data-action-id="catalog-repair-detail-back">返回修复队列</Link>
         </form>
-      ) : <CatalogEmpty title="修复任务不存在" detail="它可能已完成或已从队列移除；请返回队列刷新。" />}
+      ) : loaded ? <CatalogEmpty title="修复任务不存在" detail="读取成功；它可能已完成或已从队列移除。" /> : <CatalogEmpty title="修复任务状态未确认" detail="修复队列尚未成功读取，已阻止修复提交。" />}
       {confirming && selected ? <CatalogConfirmation title="确认修复这个 SKU？" detail={`将通过现有批量更新接口只修改 ${selected.skuCode}。该接口没有操作员或 expected identity 字段。`} confirmLabel="确认修复" confirmActionId="catalog-repair-detail-save-confirm" cancelActionId="catalog-repair-detail-save-cancel" busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => void repair()} /> : null}
     </section>
   );

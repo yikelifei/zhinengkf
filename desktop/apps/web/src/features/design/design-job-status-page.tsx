@@ -17,7 +17,7 @@ import { DesignEmpty, DesignNotice, DesignPageHeader, errorText, formatDesignDat
 import { useDesignJobs } from "./use-design-job";
 
 export function DesignJobStatusPage({ jobId }: { jobId: string }) {
-  const { selected, loading, error: loadError, replace } = useDesignJobs(jobId);
+  const { selected, loading, loaded, error: loadError, replace } = useDesignJobs(jobId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -122,7 +122,7 @@ export function DesignJobStatusPage({ jobId }: { jobId: string }) {
           />
           <Link className={styles.backLink} href={`/design/jobs/${encodeURIComponent(selected.id)}`} data-action-id="design-job-status-back">返回任务详情</Link>
         </article>
-      ) : <DesignEmpty title="没有找到设计任务" detail="返回任务列表重新选择。" />}
+      ) : loaded ? <DesignEmpty title="没有找到设计任务" detail="读取成功；请返回任务列表重新选择。" /> : <DesignEmpty title="设计任务状态未确认" detail="任务尚未成功读取，已阻止远端状态同步。" />}
     </section>
   );
 }

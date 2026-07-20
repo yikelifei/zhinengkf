@@ -8,7 +8,7 @@ import { CatalogEmpty, CatalogHeader, CatalogNotice, money } from "./catalog-ui"
 import { useCatalogProducts } from "./use-catalog-records";
 
 export function CatalogProductsPage() {
-  const { records, loading, error, refresh } = useCatalogProducts();
+  const { records, loading, loaded, error, refresh } = useCatalogProducts();
   const [search, setSearch] = useState("");
   const filtered = useMemo(() => {
     const term = search.trim().toLocaleLowerCase("zh-CN");
@@ -25,13 +25,13 @@ export function CatalogProductsPage() {
       />
       {error ? <CatalogNotice tone="danger">{error}</CatalogNotice> : null}
       <article className={styles.card} aria-label="商品查询结果">
-        <div className={styles.cardHeader}><div><h2>全部商品</h2><p>{filtered.length} / {records.length}</p></div></div>
+        <div className={styles.cardHeader}><div><h2>全部商品</h2><p>{loaded ? `${filtered.length} / ${records.length}` : "读取未确认"}</p></div></div>
         <label className={styles.searchField}><span>搜索 SKU 或名称</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-        {loading ? <CatalogEmpty title="正在读取商品" detail="已知内置降级商品会被拒绝。" busy /> : filtered.length ? (
+        {loading ? <CatalogEmpty title="正在读取商品" detail="已知内置降级商品会被拒绝。" busy /> : loaded && filtered.length ? (
           <ul className={styles.selectionList}>
             {filtered.map((sku) => <li key={sku.id}><Link href={`/catalog/products/${encodeURIComponent(sku.skuCode)}`} data-action-id={`catalog-products-open-${sku.skuCode}`} aria-label={`查看商品 ${sku.skuCode}`}><span><strong>{sku.name}</strong><small>{sku.skuCode} · {sku.category || "未分类"}</small></span><span className={styles.rowMeta}><em>{money(sku.salePrice)}</em></span></Link></li>)}
           </ul>
-        ) : <CatalogEmpty title={search.trim() ? "没有匹配商品" : "没有可信商品记录"} detail={search.trim() ? "清除搜索词后重试。" : "商品接口失败时不会展示内置降级商品。"} />}
+        ) : loaded ? <CatalogEmpty title={search.trim() ? "没有匹配商品" : "读取成功，当前没有商品"} detail={search.trim() ? "清除搜索词后重试。" : "商品接口已返回可信空结果。"} /> : <CatalogEmpty title="商品列表状态未确认" detail="商品列表尚未成功读取，不能据此认定没有商品。" />}
       </article>
     </section>
   );

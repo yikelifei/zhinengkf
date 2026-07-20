@@ -12,7 +12,7 @@ import { useCatalogProducts } from "./use-catalog-records";
 const EMPTY_DRAFT: SkuPayload = { skuCode: "", name: "", type: "item", category: "", salePrice: 0, costPrice: 0, stock: 0, sceneTags: [], material: "", supplier: "", leadTimeDays: 0, mainImagePath: "", angleImages: [], matchingRules: {}, replacementSkuCodes: [], isActive: true };
 
 export function CatalogProductEditorPage({ skuCode = "" }: { skuCode?: string }) {
-  const { selected, loading, error: loadError, replace } = useCatalogProducts(skuCode);
+  const { selected, loading, loaded, error: loadError, replace } = useCatalogProducts(skuCode);
   const [draft, setDraft] = useState<SkuPayload>(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -55,7 +55,7 @@ export function CatalogProductEditorPage({ skuCode = "" }: { skuCode?: string })
       <CatalogHeader eyebrow="商品中心 · 编辑" title={skuCode ? "编辑商品" : "新建商品"} detail="本页只新增或保存一个 SKU，不执行导入、修复或审计。" />
       {loadError || error ? <CatalogNotice tone="danger">{error || loadError}</CatalogNotice> : null}
       {notice ? <CatalogNotice tone="success">{notice}</CatalogNotice> : null}
-      {skuCode && !selected ? <CatalogEmpty title="没有找到商品" detail="返回商品列表重新选择。" /> : (
+      {skuCode && !loaded ? <CatalogEmpty title="商品状态未确认" detail="商品尚未成功读取，已阻止编辑保存。" /> : skuCode && !selected ? <CatalogEmpty title="没有找到商品" detail="读取成功；请返回商品列表重新选择。" /> : (
         <form className={styles.card} onSubmit={(event) => { event.preventDefault(); const validation = validate(); if (validation) { setError(validation); return; } setConfirming(true); }}>
           <div className={styles.cardHeader}><div><h2>{skuCode ? `编辑 ${skuCode}` : "填写新商品资料"}</h2><p>保存会写入商品目录；现有接口不接受操作员身份字段。</p></div></div>
           <div className={styles.formGrid}>

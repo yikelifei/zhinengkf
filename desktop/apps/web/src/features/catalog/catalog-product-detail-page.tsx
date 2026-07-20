@@ -7,7 +7,7 @@ import { CatalogEmpty, CatalogHeader, CatalogNotice, money } from "./catalog-ui"
 import { useCatalogProducts } from "./use-catalog-records";
 
 export function CatalogProductDetailPage({ skuCode }: { skuCode: string }) {
-  const { selected, loading, error, refresh } = useCatalogProducts(skuCode);
+  const { selected, loading, loaded, error, refresh } = useCatalogProducts(skuCode);
   return (
     <section className={styles.page} aria-label="商品详情">
       <CatalogHeader
@@ -33,7 +33,7 @@ export function CatalogProductDetailPage({ skuCode }: { skuCode: string }) {
           <div className={styles.formActions}><Link className={styles.primaryLink} href={`/catalog/editor?sku=${encodeURIComponent(selected.skuCode)}`} data-action-id="catalog-product-open-editor"><Edit3 size={16} aria-hidden="true" />编辑这个商品</Link></div>
           <Link className={styles.backLink} href="/catalog/products" data-action-id="catalog-product-back-list">返回商品列表</Link>
         </article>
-      ) : <CatalogEmpty title="没有找到商品" detail="返回商品列表重新选择。" />}
+      ) : loaded ? <CatalogEmpty title="没有找到商品" detail="读取成功；请返回商品列表重新选择。" /> : <CatalogEmpty title="商品状态未确认" detail="商品详情尚未成功读取，不能据此认定商品不存在。" />}
     </section>
   );
 }

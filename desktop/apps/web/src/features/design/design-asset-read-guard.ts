@@ -35,6 +35,11 @@ export function createDesignAssetOperationGuard(initialIdentity: DesignAssetRead
       sequence += 1;
     },
 
+    invalidate(identity: DesignAssetReadIdentity) {
+      currentIdentityKey = identityKey(identity);
+      sequence += 1;
+    },
+
     begin(identity: DesignAssetReadIdentity): DesignAssetReadRequest {
       const requestIdentityKey = identityKey(identity);
       if (requestIdentityKey !== currentIdentityKey) {
