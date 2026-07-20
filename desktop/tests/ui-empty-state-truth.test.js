@@ -67,7 +67,7 @@ test("listed consumers distinguish trusted empty data from unread or failed data
 
   const assets = read("apps/web/src/features/design/design-assets-page.tsx");
   assert.match(assets, /setAssetsLoaded\(true\)/);
-  assert.match(assets, /catch \(cause\) \{ setAssets\(\[\]\); setAssetsLoaded\(false\);/);
+  assert.match(assets, /onError: \(cause\) => \{ setAssets\(\[\]\); setAssetsLoaded\(false\);/);
   assert.doesNotMatch(assets, /assets\.length \?[^:]+:\s*<DesignEmpty title="当前客户尚无素材"/);
 });
 
