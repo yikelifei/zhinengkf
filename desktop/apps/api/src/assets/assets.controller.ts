@@ -1,10 +1,13 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Post, Query, Res, UseGuards } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { AssetsService } from "./assets.service";
 import { UploadAssetPayload } from "./assets.types";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 
 @Controller("assets")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class AssetsController {
   constructor(private readonly assets: AssetsService) {}
 
@@ -20,6 +23,7 @@ export class AssetsController {
   }
 
   @Post("upload")
+  @RequireOperatorCapability("manage_design_executions")
   upload(@Body() payload: UploadAssetPayload) {
     return this.assets.upload(payload);
   }
@@ -44,6 +48,7 @@ export class AssetsController {
   }
 
   @Post("demo-customer-logo")
+  @RequireOperatorCapability("manage_design_executions")
   createDemoCustomerLogo(@Body() payload: { customerId?: string } & ExpectedIdentityPayload) {
     if (!payload?.customerId) throw new BadRequestException("customerId is required for demo customer logo");
     return this.assets.createDemoCustomerLogo(payload.customerId, payload);

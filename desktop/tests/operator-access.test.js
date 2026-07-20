@@ -12,11 +12,18 @@ require("ts-node").register({
 });
 
 const { appConfig } = require("../apps/api/src/shared/app-config");
+const { AgentsController } = require("../apps/api/src/agents/agents.controller");
+const { AiProviderController } = require("../apps/api/src/ai/ai-provider.controller");
 const { AutomationController } = require("../apps/api/src/automation/automation.controller");
+const { AssetsController } = require("../apps/api/src/assets/assets.controller");
+const { CatalogController } = require("../apps/api/src/catalog/catalog.controller");
 const { DesignJobsController } = require("../apps/api/src/design-jobs/design-jobs.controller");
 const { DesignPlatformController } = require("../apps/api/src/integrations/design-platform/design-platform.controller");
 const { QuotesController } = require("../apps/api/src/quotes/quotes.controller");
+const { NotificationsController } = require("../apps/api/src/notifications/notifications.controller");
+const { OrdersController } = require("../apps/api/src/orders/orders.controller");
 const { ReviewsController } = require("../apps/api/src/reviews/reviews.controller");
+const { RoutingController } = require("../apps/api/src/routing/routing.controller");
 const { TrainingController } = require("../apps/api/src/training/training.controller");
 const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
@@ -423,6 +430,84 @@ test("high-risk controllers discard browser-owned reviewer and owner fields", as
     if (name.startsWith("review") || name === "batchReviewSamples") assert.equal(actualPayload.reviewer, "local_admin", name);
     if (name === "queueSend" || name === "verifyPaymentProof") assert.equal(actualPayload.owner, "local_admin", name);
   }
+});
+
+test("remaining operator-facing mutation controllers require a trusted local session", () => {
+  for (const controllerClass of [
+    AgentsController,
+    AiProviderController,
+    AssetsController,
+    CatalogController,
+    NotificationsController,
+    OrdersController,
+    QuotesController,
+    RoutingController,
+  ]) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, controllerClass),
+      "view_console",
+      `${controllerClass.name} class boundary`,
+    );
+  }
+
+  const expectedCapabilities = [
+    [AssetsController, "upload", "manage_design_executions"],
+    [AssetsController, "createDemoCustomerLogo", "manage_design_executions"],
+    [CatalogController, "createDemoSkuImages", "manage_design_executions"],
+    [CatalogController, "upsertSku", "manage_design_executions"],
+    [CatalogController, "batchUpdateSkus", "manage_design_executions"],
+    [CatalogController, "deactivateSku", "manage_design_executions"],
+    [CatalogController, "restoreSku", "manage_design_executions"],
+    [CatalogController, "bulkUpsert", "manage_design_executions"],
+    [CatalogController, "importText", "manage_design_executions"],
+    [CatalogController, "importFile", "manage_design_executions"],
+    [NotificationsController, "createDemo", "manage_training"],
+    [OrdersController, "createFromQuote", "manage_design_executions"],
+    [OrdersController, "update", "manage_design_executions"],
+    [OrdersController, "reviseSelection", "manage_design_executions"],
+    [QuotesController, "update", "manage_design_executions"],
+    [QuotesController, "reviseSelection", "manage_design_executions"],
+    [RoutingController, "correctEvaluation", "manage_training"],
+  ];
+  for (const [controllerClass, methodName, capability] of expectedCapabilities) {
+    const handler = controllerClass.prototype[methodName];
+    assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, handler), capability, `${controllerClass.name}.${methodName}`);
+  }
+
+  const guard = new OperatorAccessGuard(new Reflector(), new OperatorAccessService());
+  for (const [controllerClass, methodName] of [
+    [AssetsController, "upload"],
+    [CatalogController, "upsertSku"],
+    [NotificationsController, "markRead"],
+    [OrdersController, "update"],
+    [QuotesController, "update"],
+    [RoutingController, "correctEvaluation"],
+  ]) {
+    const handler = controllerClass.prototype[methodName];
+    assert.throws(
+      () => guard.canActivate(executionContext(handler, controllerClass, { headers: {}, body: {} })),
+      (error) => error?.getStatus?.() === 403,
+      `${controllerClass.name}.${methodName} missing token`,
+    );
+    const request = { headers: { [INTERNAL_API_TOKEN_HEADER]: VALID_TOKEN }, body: {} };
+    assert.equal(guard.canActivate(executionContext(handler, controllerClass, request)), true);
+    assert.equal(request.trustedOperator.id, "local_admin");
+  }
+});
+
+test("routing correction discards a browser-owned reviewer", async () => {
+  const calls = [];
+  const controller = new RoutingController({
+    correctEvaluation: async (...args) => calls.push(args),
+  });
+  await controller.correctEvaluation(
+    "evaluation-1",
+    { agentKey: "sales", reviewer: "attacker", note: "safe" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1].reviewer, "local_admin");
+  assert.equal(JSON.stringify(calls[0]).includes("attacker"), false);
 });
 
 function executionContext(handler, controllerClass, request) {

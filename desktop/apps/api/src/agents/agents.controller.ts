@@ -1,7 +1,10 @@
-import { Controller, Get, Param, Query } from "@nestjs/common";
+import { Controller, Get, Param, Query, UseGuards } from "@nestjs/common";
 import { AgentsService } from "./agents.service";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 
 @Controller("agents")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class AgentsController {
   constructor(private readonly agents: AgentsService) {}
 

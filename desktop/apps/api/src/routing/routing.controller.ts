@@ -1,8 +1,16 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { RoutingService } from "./routing.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("routing")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class RoutingController {
   constructor(private readonly routing: RoutingService) {}
 
@@ -21,10 +29,13 @@ export class RoutingController {
   }
 
   @Post("evaluations/:id/correct")
+  @RequireOperatorCapability("manage_training")
   correctEvaluation(
     @Param("id") id: string,
     @Body() payload: { agentKey: string; scene?: string; reviewer?: string; note?: string; idealReply?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.routing.correctEvaluation(id, payload);
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload;
+    return this.routing.correctEvaluation(id, { ...trustedPayload, reviewer: principal.id });
   }
 }
