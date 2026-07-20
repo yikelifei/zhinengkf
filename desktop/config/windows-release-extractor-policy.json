@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "smart_kefu_windows_extractor_policy_v1",
+  "source": "electron-builder-cache",
+  "cacheVersion": "7zip@1.0.0",
+  "executableName": "7za.exe",
+  "sha256": "223b873c50380fe9a39f1a22b6abf8d46db506e1c08d08312902f6f3cd1f7ac3"
+}

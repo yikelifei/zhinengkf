@@ -131,25 +131,28 @@ const stat = fs.statSync(file, { bigint: true }); if (stat.nlink !== 1n) throw n
 if (stat.size !== BigInt(reported.bytes)) throw new Error();
 const digest = sha256File(file);
 const distinct = inspectDistinctArtifacts(installer, executable, state); if (installer.sha256 !== executable.sha256) {}
-const snapshot = createPrivateSnapshot(outputDir);
-const runtimeSmoke = hooks.runPackagedSmoke({ outputDirectory: snapshot.snapshotDirectory });
-const verification = verifyWindowsPackage({ outputDir, runtimeSmokeResult: runtimeSmoke });
+const snapshot = createPrivateSnapshot(outputDir, { includeTopLevel: ["win-unpacked"] });
+const verification = verifyWindowsPackage({ outputDir, runtimeSmokeResult: { status: STATUS.PASS, summary: "runtime smoke is deferred" } });
 hooks.verifyInstallerBinding({ installer, unpackedDirectory, tempRoot });
+const trustPrerequisitesPass = true; hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir });
 const snapshotAfter = createTreeManifest(snapshotOutputDir);
-const sourceAfter = createTreeManifest(outputDir);
+const sourceAfter = createTreeManifest(outputDir, snapshot.treeOptions);
 const stable = manifestsEqual(snapshot.snapshotManifest, snapshotAfter) && manifestsEqual(snapshot.sourceManifest, sourceAfter);
+cleanupPrivateTemp(snapshot.cleanupHandle);
 const bound = verification.repositoryRevision === currentRevision && verification.version === version;
 const evidence = { nativeEvidenceEligible: hooks.mode === "native" };
 `);
   write(root, "desktop/tools/windows-evidence-chain.js", `
 const stat = fs.lstatSync(file, { bigint: true }); if (stat.isSymbolicLink() || stat.nlink !== 1n) throw new Error();
-const manifest = createTreeManifest(sourceDirectory); if (!manifest) throw new Error("package tree changed while the private snapshot was created");
+const treeOptions = {}; const manifest = createTreeManifest(sourceDirectory, treeOptions); if (!manifest) throw new Error("package tree changed while the private snapshot was created");
+throw new Error("package tree exceeds maximum total bytes"); throw new Error("private temp cleanup requires its creation handle");
 const configured = identityStatus === "CONFIGURED" && allowedPublisherSubjects.length && allowedCertificateThumbprints.length;
-const powershell = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+const powershell = trustedWindowsSystemTool("WindowsPowerShell", "v1.0", "powershell.exe");
 const script = "Get-AuthenticodeSignature";
-const sevenZip = require("7zip-bin").path7za; const archive = "app-64.7z";
+const extractor = "windows-release-extractor-policy.json"; if (hashFile(candidate) !== policy.sha256) throw new Error(); const archive = "app-64.7z";
 throw new Error("signed installer payload does not match");
 const env = selectEvidenceProcessEnvironment({ PACKAGED_SMOKE_OUTPUT_DIR: outputDirectory });
+terminateProcessTree(child); throw new Error("packaged runtime smoke orchestrator timed out");
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
 const OBSERVER_ENV_KEYS = ["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE", "WECHAT_WINDOW_SNAPSHOT_INBOX_DIR"];

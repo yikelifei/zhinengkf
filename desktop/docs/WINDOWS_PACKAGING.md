@@ -61,11 +61,15 @@ npm.cmd run package:win:signed
 
 报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及全部构建成功、调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。只有二次 HEAD/clean 检查通过后，构建工具才生成临时 `.package-provenance.json` 并收入 asar；验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。
 
-外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，但报告中的 `checks[].status`、历史 smoke JSON 和 `Valid` 字样都不能替代现场复核。验证器会从 evidence root 到安装器、`win-unpacked`、`resources`、`app.asar`、services 和 smoke 的每一级路径拒绝符号链接、junction/reparse point、硬链接和未知节点；随后把完整输出复制到权限收紧的私有临时快照，对源树与快照计算逐文件 SHA-256 清单，并在验证结束时同时重算两棵树以检测中途变化。所有 PE、asar、resources、provenance、签名与 runtime smoke 都针对同一个快照。
+外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，但报告中的 `checks[].status`、历史 smoke JSON 和 `Valid` 字样都不能替代现场复核。验证器只把版本化安装器和 `win-unpacked` 纳入白名单快照，并对文件数、总字节、目录深度及单文件大小执行上限；从 evidence root 到安装器、`resources`、`app.asar` 和 services 的每一级路径都会拒绝符号链接、junction/reparse point、硬链接及未知节点。私有临时目录携带随机所有权标记与目录身份，清理前会原子改名并再次核对，调用者提供的 runtime 目录绝不会成为递归删除目标。源树与快照在验证前后都计算逐文件 SHA-256 清单，以检测中途变化。
 
-正式签名身份由 `config/windows-release-signing-policy.json` 控制，必须在受控发布变更中把 `identityStatus` 改为 `CONFIGURED`，并填写公司证书的精确 publisher subject 与 thumbprint。当前仓库故意保持 `UNCONFIGURED`，所以任何文件即使显示 Authenticode `Valid` 也只能 `BLOCKED`，不能成为正式签名证据。原生验证使用绝对 `System32\WindowsPowerShell\v1.0\powershell.exe`，同时核对 product name、original filename、版本和 x64 PE。不得把 Microsoft 或其他厂商的已签名 EXE 当作本项目证据。
+正式签名身份由 `config/windows-release-signing-policy.json` 控制，必须在受控发布变更中把 `identityStatus` 改为 `CONFIGURED`，并填写公司证书的精确 publisher subject 与 thumbprint。当前仓库故意保持 `UNCONFIGURED`，所以任何文件即使显示 Authenticode `Valid` 也只能 `BLOCKED`，不能成为正式签名证据。原生验证不信任 `SystemRoot`、`windir` 或 `PATH`，只接受规范 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`；无法取得可信系统目录时保持 `BLOCKED`。同时核对 product name、original filename、版本和 x64 PE，不得把 Microsoft 或其他厂商的已签名 EXE 当作项目证据。
 
-安装器内容绑定优先使用项目依赖中的 `7zip-bin`：先只读提取 electron-builder NSIS，再提取唯一 `app-64.7z`，其完整清单必须与快照的 `win-unpacked` 完全一致；没有 extractor、无法识别该 payload 或无法证明一致时保持 `BLOCKED`/`FAIL`，不做浅层 NSIS 猜测。外部 runtime 证明会从同一快照在隔离的 32191/32190 端口重新执行 packaged smoke，并仅传递最小 OS 环境与临时目录；历史 `packaged-api-smoke.json` 单独不能令该项通过。
+安装器内容绑定使用 electron-builder 自身缓存的 `7zip@1.0.0`，其版本与可执行文件 SHA-256 固定在 `config/windows-release-extractor-policy.json`。验证器不通过 `NODE_PATH` 加载 extractor，且拒绝哈希不符、歧义、junction/reparse point 或硬链接的缓存项。它先提取 electron-builder NSIS，再提取唯一 `app-64.7z`，完整清单必须与快照的 `win-unpacked` 一致；缺少固定版本 extractor 属于 `BLOCKED`，已存在但被替换、解析超时或 payload 不一致属于 `FAIL`。
+
+现场复核顺序固定为：白名单哈希与包内容 → 原生 Authenticode/发布者策略 → NSIS payload 绑定 → packaged runtime smoke。前置任一项未通过时绝不执行包内 EXE。Runtime smoke 仅传递最小 OS 环境与内部创建的临时目录，在隔离端口 32191/32190 进行 localhost 探测，并使用可靠的 Windows 进程树终止与退出确认；包自身启动或响应超时是 `FAIL`，只有明确端口占用、平台或工具缺失才是 `BLOCKED`。历史 `packaged-api-smoke.json` 单独不能令该项通过。
+
+外部证据报告会如实记录私有临时写入、系统工具执行、包内 runtime 执行和 localhost 探测。最小环境与临时目录不是 OS 沙箱；高风险或来源未受信的工件仍应在 Windows Sandbox 或一次性虚拟机中复核。
 
 即使 `signed-release` 报告通过，SmartScreen reputation、目标机安装/卸载和人工启动仍不在该报告结构内，必须继续作为人工 `BLOCKED` 补证；未签名报告绝不能满足正式签名项。
 

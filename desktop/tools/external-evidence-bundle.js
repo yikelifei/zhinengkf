@@ -321,6 +321,10 @@ function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
     runtimeSmokeMode: livePackageVerification.runtimeSmokeMode,
     installerBindingMode: livePackageVerification.installerBindingMode,
     snapshotManifestSha256: livePackageVerification.snapshotManifestSha256 || "",
+    privateSnapshotCreated: livePackageVerification.privateSnapshotCreated === true,
+    signatureInspectionAttempted: livePackageVerification.signatureInspectionAttempted === true,
+    installerBindingAttempted: livePackageVerification.installerBindingAttempted === true,
+    runtimeSmokeExecuted: livePackageVerification.runtimeSmokeExecuted === true,
     testOnly: hooks.mode === "test-only",
     nativeEvidenceEligible: hooks.mode === "native",
   });
@@ -379,6 +383,10 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     authenticodeStatus: "FAIL",
     runtimeSmokeMode: hooks.mode,
     installerBindingMode: hooks.mode,
+    privateSnapshotCreated: false,
+    signatureInspectionAttempted: false,
+    installerBindingAttempted: false,
+    runtimeSmokeExecuted: false,
   };
   if (!installer || !executable) return unavailable;
   const version = String(report.version || "").trim();
@@ -392,7 +400,9 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
   let snapshot;
   try {
     assertSafePath(assertSafeRoot(evidenceRoot), outputDir, "directory");
-    snapshot = createPrivateSnapshot(outputDir);
+    snapshot = createPrivateSnapshot(outputDir, {
+      includeTopLevel: [path.basename(installer.file), "win-unpacked"],
+    });
   } catch {
     state.failures.push("Windows package tree is unsafe or changed while its private snapshot was created");
     return unavailable;
@@ -401,8 +411,6 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     const snapshotOutputDir = snapshot.snapshotDirectory;
     const snapshotInstaller = path.join(snapshotOutputDir, path.basename(installer.file));
     const snapshotExecutable = path.join(snapshotOutputDir, "win-unpacked", "Smart Kefu.exe");
-    const runtimeSmoke = hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir, tempRoot: snapshot.tempRoot });
-    recordChainStatus(state, runtimeSmoke, "packaged runtime smoke");
     const verification = verifyWindowsPackage({
       outputDir: snapshotOutputDir,
       expectUnsigned: false,
@@ -411,7 +419,7 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
       repositoryRevision: currentRevision,
       repositoryClean: true,
       trustStoredSmokeReport: false,
-      runtimeSmokeResult: runtimeSmoke,
+      runtimeSmokeResult: { status: STATUS.PASS, summary: "runtime smoke is deferred until trust prerequisites pass" },
       inspectSignatures: false,
     });
     const liveChecksFail = !Array.isArray(verification.checks)
@@ -429,32 +437,49 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     && verification.executable?.sha256 === executable.sha256;
     if (!artifactsMatch) state.failures.push("private snapshot artifacts do not match the reported installer and executable bytes");
 
-    const policy = hooks.releasePolicy || loadReleasePolicy();
-    const signatureResults = [
-      { label: "installer", file: snapshotInstaller },
-      { label: "executable", file: snapshotExecutable },
-    ].map((artifact) => {
-      let signature;
-      try {
-        signature = hooks.verifySignature(artifact.file, artifact.label, version);
-      } catch {
-        signature = { status: "Unavailable", unavailable: true, mode: hooks.mode };
-      }
-      const policyResult = evaluateArtifactPolicy({ ...artifact, version, policy, signature });
-      recordChainStatus(state, policyResult, `${artifact.label} release policy`);
-      return policyResult;
-    });
-    const authenticodeStatus = combineChainStatus(signatureResults);
+    const contentPrerequisitesPass = verification.status === STATUS.PASS
+      && !liveChecksFail && !liveChecksBlocked
+      && artifactsMatch;
+    const signatureInspectionAttempted = contentPrerequisitesPass;
+    let authenticodeStatus = STATUS.BLOCKED;
+    if (signatureInspectionAttempted) {
+      const policy = hooks.releasePolicy || loadReleasePolicy();
+      const signatureResults = [
+        { label: "installer", file: snapshotInstaller },
+        { label: "executable", file: snapshotExecutable },
+      ].map((artifact) => {
+        let signature;
+        try {
+          signature = hooks.verifySignature(artifact.file, artifact.label, version);
+        } catch {
+          signature = { status: "Unavailable", unavailable: true, mode: hooks.mode };
+        }
+        const policyResult = evaluateArtifactPolicy({ ...artifact, version, policy, signature });
+        recordChainStatus(state, policyResult, `${artifact.label} release policy`);
+        return policyResult;
+      });
+      authenticodeStatus = combineChainStatus(signatureResults);
+    }
 
-    const installerBinding = hooks.verifyInstallerBinding({
-      installer: snapshotInstaller,
-      unpackedDirectory: path.join(snapshotOutputDir, "win-unpacked"),
-      tempRoot: snapshot.tempRoot,
-    });
-    recordChainStatus(state, installerBinding, "signed installer payload binding");
+    const installerBinding = authenticodeStatus === STATUS.PASS
+      ? hooks.verifyInstallerBinding({
+          installer: snapshotInstaller,
+          unpackedDirectory: path.join(snapshotOutputDir, "win-unpacked"),
+          tempRoot: snapshot.tempRoot,
+        })
+      : { status: STATUS.BLOCKED, summary: "installer payload parsing was skipped until publisher trust passes", mode: hooks.mode, skipped: true };
+    if (!installerBinding.skipped) recordChainStatus(state, installerBinding, "signed installer payload binding");
+
+    const trustPrerequisitesPass = contentPrerequisitesPass
+      && authenticodeStatus === STATUS.PASS
+      && installerBinding.status === STATUS.PASS;
+    const runtimeSmoke = trustPrerequisitesPass
+      ? hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir, tempRoot: snapshot.tempRoot })
+      : { status: STATUS.BLOCKED, summary: "runtime smoke was not executed before content, publisher and installer binding trust passed", mode: hooks.mode, skipped: true };
+    if (!runtimeSmoke.skipped) recordChainStatus(state, runtimeSmoke, "packaged runtime smoke");
 
     const snapshotAfter = createTreeManifest(snapshotOutputDir);
-    const sourceAfter = createTreeManifest(outputDir);
+    const sourceAfter = createTreeManifest(outputDir, snapshot.treeOptions);
     const stable = manifestsEqual(snapshot.snapshotManifest, snapshotAfter)
       && manifestsEqual(snapshot.sourceManifest, sourceAfter);
     if (!stable) state.failures.push("package tree changed while the private snapshot was being verified");
@@ -478,13 +503,17 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
       runtimeSmokeMode: runtimeSmoke.mode || hooks.mode,
       installerBindingMode: installerBinding.mode || hooks.mode,
       snapshotManifestSha256: snapshot.snapshotManifest.sha256,
+      privateSnapshotCreated: true,
+      signatureInspectionAttempted,
+      installerBindingAttempted: !installerBinding.skipped,
+      runtimeSmokeExecuted: !runtimeSmoke.skipped,
     };
   } catch (error) {
     state.failures.push(`live Windows package verification could not be completed: ${error.message}`);
     return unavailable;
   } finally {
     try {
-      cleanupPrivateTemp(snapshot.tempRoot);
+      cleanupPrivateTemp(snapshot.cleanupHandle);
     } catch {
       state.failures.push("private Windows evidence snapshot could not be cleaned safely");
     }
@@ -575,10 +604,11 @@ function validateEvidenceBundleInternal(options, hooks) {
         windows: readEvidence(evidenceRoot, options.windowsReport),
       }
     : { staging: { error: true }, recovery: { error: true }, windows: { error: true } };
+  const windowsEvidence = inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, hooks);
   const results = [
     inspectStaging(loaded.staging, currentRevision, nowMs),
     inspectRecovery(loaded.recovery, currentRevision, nowMs),
-    inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, hooks),
+    windowsEvidence,
     result(
       "manual.windows_smartscreen",
       "Windows SmartScreen 与安装现场证据",
@@ -593,13 +623,19 @@ function validateEvidenceBundleInternal(options, hooks) {
     generatedAt: new Date(nowMs).toISOString(),
     status: computeStatus(results),
     safety: {
-      localFilesReadOnly: true,
-      networkAttempted: false,
+      evidenceInputFilesModified: false,
+      temporaryFilesWritten: windowsEvidence.evidence.privateSnapshotCreated === true,
+      localToolExecutionAttempted: windowsEvidence.evidence.signatureInspectionAttempted === true
+        || windowsEvidence.evidence.installerBindingAttempted === true,
+      packagedRuntimeExecutionAttempted: windowsEvidence.evidence.runtimeSmokeExecuted === true,
+      localhostHttpAttempted: windowsEvidence.evidence.runtimeSmokeExecuted === true,
       packagingAttempted: false,
       databaseCommandAttempted: false,
       recoveryAttempted: false,
       realMessageSendAttempted: false,
-      externalMutationCount: 0,
+      externalMutationIsolation: windowsEvidence.evidence.runtimeSmokeExecuted === true
+        ? "minimal environment and temporary roots; not an OS sandbox"
+        : "packaged runtime was not executed",
       secretsIncluded: false,
     },
     verificationMode: hooks.mode,
@@ -620,7 +656,7 @@ function renderMarkdown(report) {
     `- 状态：**${report.status}**`,
     `- 仓库修订：\`${report.repositoryRevision}\``,
     `- 生成时间：${report.generatedAt}`,
-    "- 安全边界：只读本地 JSON；不联网、不打包、不执行数据库或恢复命令、不发送消息。",
+    "- 安全边界：不修改输入证据、不联网访问外部服务、不打包、不执行数据库或恢复命令、不发送消息；Windows 现场复核会写入并清理私有临时目录、运行受信系统工具，并仅在内容/签名/安装器绑定通过后执行包内 runtime 与 localhost 探测。最小环境不是 OS 沙箱。",
     "",
     "| 状态 | 证据 | 结论 |",
     "| --- | --- | --- |",

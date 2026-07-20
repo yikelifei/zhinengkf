@@ -185,6 +185,17 @@ test("packaged smoke waits for child shutdown before another build can replace r
   const smoke = fs.readFileSync(path.join(root, "tools", "smoke-packaged-api.js"), "utf8");
   assert.match(smoke, /await Promise\.all\(processes\.reverse\(\)\.map\(stopChild\)\)/);
   assert.match(smoke, /child\.once\("exit"/);
+  assert.match(smoke, /terminateProcessTree\(child\)/);
+  assert.match(smoke, /createSmokeWorkspace\(\)/);
+  assert.doesNotMatch(smoke, /PACKAGED_SMOKE_RUNTIME_DIR/);
+  assert.doesNotMatch(smoke, /fs\.rmSync\(smokeRoot/);
+  assert.match(smoke, /MAX_CAPTURE_BYTES/);
+  assert.match(smoke, /MAX_HTTP_BODY_BYTES/);
+  assert.match(smoke, /HTTP_REQUEST_DEADLINE_MS/);
+  const chain = fs.readFileSync(path.join(root, "tools", "windows-evidence-chain.js"), "utf8");
+  assert.match(chain, /trustedWindowsSystemTool\("taskkill\.exe"\)/);
+  assert.match(chain, /\["\/PID", String\(pid\), "\/T", "\/F"\]/);
+  assert.match(chain, /await waitForProcessExit\(pid\)/);
   assert.match(smoke, /require\(\"sharp\"\)/);
   assert.match(smoke, /dhash64:v1:0000000000000000/);
   assert.match(smoke, /apiHealth\.statusCode !== 200/);
