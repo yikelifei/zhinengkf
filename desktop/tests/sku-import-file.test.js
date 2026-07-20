@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { performance } = require("node:perf_hooks");
 const test = require("node:test");
 const zlib = require("node:zlib");
 
@@ -159,7 +160,7 @@ test("bounds deflate output even when ZIP declarations under-report actual data"
   assert.match(parseSkuImportFile(cumulative).errors[0].message, /SKU_IMPORT_ZIP_TOTAL_LIMIT/);
 });
 
-test("bounds shared strings, worksheet rows, worksheet cells and final extracted text", () => {
+test("bounds shared strings, worksheet rows, worksheet cells and decoded cell text", () => {
   const sharedEntries = minimalXlsxEntries([["sku", "name", "price"], ["SAFE-1", "safe", "10"]]);
   sharedEntries["xl/sharedStrings.xml"] = `<sst>${"<si><t>x</t></si>".repeat(SKU_IMPORT_LIMITS.maxSharedStrings + 1)}</sst>`;
   assert.match(parseSkuImportFile(buildZip(sharedEntries)).errors[0].message, /SKU_IMPORT_SHARED_STRING_LIMIT/);
@@ -177,8 +178,128 @@ test("bounds shared strings, worksheet rows, worksheet cells and final extracted
   );
   assert.match(parseSkuImportFile(buildMinimalXlsx(cellRows)).errors[0].message, /SKU_IMPORT_CELL_LIMIT/);
 
-  const finalText = "x".repeat(SKU_IMPORT_LIMITS.maxFinalTextBytes + 1);
-  assert.match(parseSkuImportFile(buildMinimalXlsx([[finalText]])).errors[0].message, /SKU_IMPORT_TEXT_TOO_LARGE/);
+  const oversizedCell = "x".repeat(SKU_IMPORT_LIMITS.maxCellTextBytes + 1);
+  assert.match(parseSkuImportFile(buildMinimalXlsx([[oversizedCell]])).errors[0].message, /SKU_IMPORT_CELL_TEXT_LIMIT/);
+
+  const cumulativeCells = Array.from(
+    { length: Math.floor(SKU_IMPORT_LIMITS.maxFinalTextBytes / SKU_IMPORT_LIMITS.maxCellTextBytes) + 1 },
+    () => "x".repeat(SKU_IMPORT_LIMITS.maxCellTextBytes),
+  );
+  assert.match(parseSkuImportFile(buildMinimalXlsx([cumulativeCells])).errors[0].message, /SKU_IMPORT_TEXT_TOO_LARGE/);
+
+  const textRunEntries = minimalXlsxEntries([["sku", "name", "price"]]);
+  textRunEntries["xl/sharedStrings.xml"] = `<sst><si>${"<t/>".repeat(SKU_IMPORT_LIMITS.maxTextRunsPerCell + 1)}</si></sst>`;
+  assert.match(parseSkuImportFile(buildDeflatedXlsx(textRunEntries)).errors[0].message, /SKU_IMPORT_TEXT_RUN_LIMIT/);
+
+  const tagEntries = minimalXlsxEntries([["sku", "name", "price"]]);
+  tagEntries["xl/sharedStrings.xml"] = `<sst><si data="${"界".repeat(Math.floor(SKU_IMPORT_LIMITS.maxXmlTagBytes / 3) + 1)}"></si></sst>`;
+  assert.match(parseSkuImportFile(buildDeflatedXlsx(tagEntries)).errors[0].message, /SKU_IMPORT_XML_TAG_LIMIT/);
+});
+
+test("preserves sharedStrings rich text and inlineStr workbook compatibility", () => {
+  const entries = minimalXlsxEntries([]);
+  entries["xl/sharedStrings.xml"] = `<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>SKU编号</t></si>
+  <si><t>商品名称</t></si>
+  <si><t>售价</t></si>
+  <si><t>SHARED-1</t></si>
+  <si><r><t>共享</t></r><r><t>礼盒&amp;套装</t></r></si>
+  <si><t>88</t></si>
+</sst>`;
+  entries["xl/worksheets/sheet1.xml"] = `<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+  <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>
+  <row r="2"><c r="A2" t="s"><v>3</v></c><c r="B2" t="s"><v>4</v></c><c r="C2" t="s"><v>5</v></c></row>
+</sheetData></worksheet>`;
+
+  const result = parseSkuImportFile(buildZip(entries));
+  assert.equal(result.ok, true);
+  assert.equal(result.rows[0].skuCode, "SHARED-1");
+  assert.equal(result.rows[0].name, "共享礼盒&套装");
+  assert.equal(result.rows[0].salePrice, 88);
+});
+
+test("stops at shared string N+1 before scanning its malformed tag body", () => {
+  const entries = minimalXlsxEntries([["sku", "name", "price"], ["SAFE-1", "safe", "10"]]);
+  entries["xl/sharedStrings.xml"] = `<sst>${"<si/>".repeat(SKU_IMPORT_LIMITS.maxSharedStrings)}<si ${"x".repeat(SKU_IMPORT_LIMITS.maxXmlTagBytes + 1)}</sst>`;
+  const result = parseSkuImportFile(buildDeflatedXlsx(entries));
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0].message, /SKU_IMPORT_SHARED_STRING_LIMIT/);
+  assert.doesNotMatch(result.errors[0].message, /SKU_IMPORT_XML_TAG_LIMIT|SKU_IMPORT_XML_MALFORMED/);
+});
+
+test("rejects a low-compression-ratio million-tag shared string attack with early stop", () => {
+  const entries = minimalXlsxEntries([["sku", "name", "price"], ["SAFE-1", "safe", "10"]]);
+  const millionTags = "<si></si>".repeat(1_000_000);
+  entries["xl/sharedStrings.xml"] = `<sst>${millionTags}</sst>`;
+  const workbook = buildDeflatedXlsx(entries);
+  assert.ok(workbook.length < Buffer.byteLength(entries["xl/sharedStrings.xml"], "utf8") / 100);
+
+  const startedAt = performance.now();
+  const result = parseSkuImportFile(workbook);
+  const elapsedMs = performance.now() - startedAt;
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0].message, /SKU_IMPORT_SHARED_STRING_LIMIT/);
+  assert.ok(elapsedMs < 2000, `million-tag early stop took ${elapsedMs.toFixed(1)}ms`);
+});
+
+test("rejects unclosed 64KiB and multi-megabyte XML samples in bounded time", () => {
+  const samples = [
+    {
+      sampleBytes: 64 * 1024,
+      entry: "xl/sharedStrings.xml",
+      content: (payload) => `<sst><si>${payload}</sst>`,
+    },
+    {
+      sampleBytes: 512 * 1024,
+      entry: "xl/worksheets/sheet1.xml",
+      content: (payload) => `<worksheet><sheetData><row>${payload}</sheetData></worksheet>`,
+    },
+    {
+      sampleBytes: 2 * 1024 * 1024,
+      entry: "xl/worksheets/sheet1.xml",
+      content: (payload) => `<worksheet><sheetData><row><c>${payload}</row></sheetData></worksheet>`,
+    },
+  ];
+  for (const sample of samples) {
+    const entries = minimalXlsxEntries([["sku", "name", "price"], ["SAFE-1", "safe", "10"]]);
+    entries[sample.entry] = sample.content("x".repeat(sample.sampleBytes));
+    const workbook = buildDeflatedXlsx(entries);
+    const startedAt = performance.now();
+    const result = parseSkuImportFile(workbook);
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(result.ok, false);
+    assert.match(result.errors[0].message, /SKU_IMPORT_XML_MALFORMED/);
+    assert.ok(elapsedMs < 2000, `${sample.sampleBytes}-byte unclosed XML took ${elapsedMs.toFixed(1)}ms`);
+  }
+});
+
+test("stops million worksheet row and cell tags at their N+1 resource limits", () => {
+  for (const attack of [
+    {
+      code: "SKU_IMPORT_ROW_LIMIT",
+      xml: () => `<worksheet><sheetData>${"<row/>".repeat(1_000_000)}</sheetData></worksheet>`,
+    },
+    {
+      code: "SKU_IMPORT_CELL_LIMIT",
+      xml: () => {
+        const row = `<row>${"<c/>".repeat(SKU_IMPORT_LIMITS.maxWorksheetColumns)}</row>`;
+        return `<worksheet><sheetData>${row.repeat(Math.ceil(1_000_000 / SKU_IMPORT_LIMITS.maxWorksheetColumns))}</sheetData></worksheet>`;
+      },
+    },
+  ]) {
+    const entries = minimalXlsxEntries([]);
+    entries["xl/worksheets/sheet1.xml"] = attack.xml();
+    const workbook = buildDeflatedXlsx(entries);
+    assert.ok(workbook.length < Buffer.byteLength(entries["xl/worksheets/sheet1.xml"], "utf8") / 100);
+    const startedAt = performance.now();
+    const result = parseSkuImportFile(workbook);
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(result.ok, false);
+    assert.match(result.errors[0].message, new RegExp(attack.code));
+    assert.ok(elapsedMs < 2000, `${attack.code} million-tag early stop took ${elapsedMs.toFixed(1)}ms`);
+  }
 });
 
 function buildMinimalXlsx(rows) {
@@ -239,6 +360,14 @@ function columnName(index) {
 
 function buildZip(entries) {
   return buildZipRecords(Object.entries(entries).map(([name, content]) => ({ name, content })));
+}
+
+function buildDeflatedXlsx(entries) {
+  return buildZipRecords(Object.entries(entries).map(([name, content]) => ({
+    name,
+    content,
+    method: name === "xl/sharedStrings.xml" || name.startsWith("xl/worksheets/") ? 8 : 0,
+  })));
 }
 
 function buildZipRecords(entries) {
