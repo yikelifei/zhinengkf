@@ -62,9 +62,31 @@ test("each write URL selects exactly one explicit commerce action", () => {
 test("catalog import and audit remain separate workflows", () => {
   const importPage = read("apps/web/src/features/catalog/catalog-import-page.tsx");
   const auditPage = read("apps/web/src/features/catalog/catalog-audit-page.tsx");
+  const catalogReads = read("apps/web/src/features/catalog/use-catalog-records.ts");
   assert.match(importPage, /previewSkuImportText/);
   assert.match(importPage, /bulkUpsertSkus/);
   assert.doesNotMatch(importPage, /batchUpdateSkus|recommendBundle/);
-  assert.match(auditPage, /getSkuCatalogAudit/);
+  assert.match(auditPage, /useCatalogRepairQueue/);
+  assert.match(catalogReads, /getSkuCatalogAudit/);
   assert.doesNotMatch(auditPage, /bulkUpsertSkus|batchUpdateSkus|upsertSku/);
+  assert.doesNotMatch(catalogReads, /bulkUpsertSkus|batchUpdateSkus|upsertSku/);
+});
+
+test("catalog write forms bind mutable inputs to the active request", () => {
+  const importPage = read("apps/web/src/features/catalog/catalog-import-page.tsx");
+  assert.match(importPage, /previewSequence = useRef\(0\)/);
+  assert.match(importPage, /sequence !== previewSequence\.current/);
+  assert.ok((importPage.match(/disabled=\{Boolean\(busy\)\}/g) || []).length >= 5);
+
+  const editor = read("apps/web/src/features/catalog/catalog-product-editor-page.tsx");
+  assert.match(editor, /saveSequence = useRef\(0\)/);
+  assert.match(editor, /editorIdentityRef\.current !== requestIdentity/);
+  assert.ok((editor.match(/disabled=\{busy\}/g) || []).length >= 13);
+
+  const repair = read("apps/web/src/features/catalog/catalog-repair-detail-page.tsx");
+  assert.match(repair, /repairSequence = useRef\(0\)/);
+  assert.ok((repair.match(/disabled=\{busy\}/g) || []).length >= 4);
+
+  const bundles = read("apps/web/src/features/catalog/catalog-bundles-page.tsx");
+  assert.ok((bundles.match(/disabled=\{busy\}/g) || []).length >= 6);
 });

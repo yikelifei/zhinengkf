@@ -2,7 +2,7 @@
 
 import { Save } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SkuPayload } from "../../lib/api";
 import { upsertSku } from "./api";
 import styles from "./catalog-pages.module.css";
@@ -18,13 +18,19 @@ export function CatalogProductEditorPage({ skuCode = "" }: { skuCode?: string })
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const saveSequence = useRef(0);
+  const editorIdentity = skuCode || "new-sku";
+  const editorIdentityRef = useRef(editorIdentity);
+  editorIdentityRef.current = editorIdentity;
 
   useEffect(() => {
-    if (!skuCode) { setDraft(EMPTY_DRAFT); return; }
-    if (selected) {
+    if (!skuCode) {
+      setDraft(EMPTY_DRAFT);
+    } else if (selected) {
       const { id: _id, ...payload } = selected;
       setDraft({ ...EMPTY_DRAFT, ...payload, sceneTags: payload.sceneTags || [], angleImages: payload.angleImages || [], matchingRules: payload.matchingRules || {}, replacementSkuCodes: payload.replacementSkuCodes || [], isActive: payload.isActive !== false });
     }
+    return () => { saveSequence.current += 1; };
   }, [selected, skuCode]);
 
   function update<K extends keyof SkuPayload>(key: K, value: SkuPayload[K]) {
@@ -40,12 +46,22 @@ export function CatalogProductEditorPage({ skuCode = "" }: { skuCode?: string })
   async function save() {
     const validation = validate();
     if (validation) { setConfirming(false); setError(validation); return; }
+    const sequence = ++saveSequence.current;
+    const requestIdentity = editorIdentity;
+    const requestDraft = {
+      ...draft,
+      sceneTags: [...(draft.sceneTags || [])],
+      angleImages: [...(draft.angleImages || [])],
+      replacementSkuCodes: [...(draft.replacementSkuCodes || [])],
+      matchingRules: { ...(draft.matchingRules || {}) },
+    };
     setConfirming(false); setBusy(true); setError(""); setNotice("");
     try {
-      const saved = await upsertSku({ ...draft, skuCode: draft.skuCode.trim(), name: draft.name.trim(), category: draft.category?.trim(), supplier: draft.supplier?.trim(), material: draft.material?.trim() });
+      const saved = await upsertSku({ ...requestDraft, skuCode: requestDraft.skuCode.trim(), name: requestDraft.name.trim(), category: requestDraft.category?.trim(), supplier: requestDraft.supplier?.trim(), material: requestDraft.material?.trim() });
+      if (sequence !== saveSequence.current || editorIdentityRef.current !== requestIdentity) return;
       replace(saved); setDraft((current) => ({ ...current, ...saved })); setNotice(`商品 ${saved.skuCode} 已保存。`);
-    } catch (cause) { setError(catalogError(cause, "商品保存失败")); }
-    finally { setBusy(false); }
+    } catch (cause) { if (sequence === saveSequence.current && editorIdentityRef.current === requestIdentity) setError(catalogError(cause, "商品保存失败")); }
+    finally { if (sequence === saveSequence.current && editorIdentityRef.current === requestIdentity) setBusy(false); }
   }
 
   if (skuCode && loading) return <section className={styles.page}><CatalogHeader eyebrow="商品中心 · 编辑" title="商品编辑" detail="正在读取要编辑的商品。" /><CatalogEmpty title="正在读取商品" detail={`SKU ${skuCode}`} busy /></section>;
@@ -59,18 +75,18 @@ export function CatalogProductEditorPage({ skuCode = "" }: { skuCode?: string })
         <form className={styles.card} onSubmit={(event) => { event.preventDefault(); const validation = validate(); if (validation) { setError(validation); return; } setConfirming(true); }}>
           <div className={styles.cardHeader}><div><h2>{skuCode ? `编辑 ${skuCode}` : "填写新商品资料"}</h2><p>保存会写入商品目录；现有接口不接受操作员身份字段。</p></div></div>
           <div className={styles.formGrid}>
-            <label><span>SKU 编码</span><input value={draft.skuCode} onChange={(event) => update("skuCode", event.target.value)} /></label>
-            <label><span>商品名称</span><input value={draft.name} onChange={(event) => update("name", event.target.value)} /></label>
-            <label><span>类型</span><select value={draft.type} onChange={(event) => update("type", event.target.value as SkuPayload["type"])}><option value="gift_box">礼盒</option><option value="item">内搭商品</option><option value="accessory">配件</option></select></label>
-            <label><span>分类</span><input value={draft.category || ""} onChange={(event) => update("category", event.target.value)} /></label>
-            <label><span>售价</span><input type="number" min="0" step="0.01" value={draft.salePrice} onChange={(event) => update("salePrice", Number(event.target.value))} /></label>
-            <label><span>成本</span><input type="number" min="0" step="0.01" value={draft.costPrice} onChange={(event) => update("costPrice", Number(event.target.value))} /></label>
-            <label><span>库存</span><input type="number" min="0" step="1" value={draft.stock} onChange={(event) => update("stock", Number(event.target.value))} /></label>
-            <label><span>供应商</span><input value={draft.supplier || ""} onChange={(event) => update("supplier", event.target.value)} /></label>
-            <label><span>交期（天）</span><input type="number" min="0" step="1" value={draft.leadTimeDays || 0} onChange={(event) => update("leadTimeDays", Number(event.target.value))} /></label>
-            <label><span>材质</span><input value={draft.material || ""} onChange={(event) => update("material", event.target.value)} /></label>
-            <label className={styles.fullField}><span>场景标签（逗号分隔）</span><input value={(draft.sceneTags || []).join(",")} onChange={(event) => update("sceneTags", event.target.value.split(/[,，]/).map((item) => item.trim()).filter(Boolean))} /></label>
-            <label className={styles.checkboxField}><input type="checkbox" checked={draft.isActive !== false} onChange={(event) => update("isActive", event.target.checked)} /><span>商品启用</span></label>
+            <label><span>SKU 编码</span><input value={draft.skuCode} disabled={busy} onChange={(event) => update("skuCode", event.target.value)} /></label>
+            <label><span>商品名称</span><input value={draft.name} disabled={busy} onChange={(event) => update("name", event.target.value)} /></label>
+            <label><span>类型</span><select value={draft.type} disabled={busy} onChange={(event) => update("type", event.target.value as SkuPayload["type"])}><option value="gift_box">礼盒</option><option value="item">内搭商品</option><option value="accessory">配件</option></select></label>
+            <label><span>分类</span><input value={draft.category || ""} disabled={busy} onChange={(event) => update("category", event.target.value)} /></label>
+            <label><span>售价</span><input type="number" min="0" step="0.01" value={draft.salePrice} disabled={busy} onChange={(event) => update("salePrice", Number(event.target.value))} /></label>
+            <label><span>成本</span><input type="number" min="0" step="0.01" value={draft.costPrice} disabled={busy} onChange={(event) => update("costPrice", Number(event.target.value))} /></label>
+            <label><span>库存</span><input type="number" min="0" step="1" value={draft.stock} disabled={busy} onChange={(event) => update("stock", Number(event.target.value))} /></label>
+            <label><span>供应商</span><input value={draft.supplier || ""} disabled={busy} onChange={(event) => update("supplier", event.target.value)} /></label>
+            <label><span>交期（天）</span><input type="number" min="0" step="1" value={draft.leadTimeDays || 0} disabled={busy} onChange={(event) => update("leadTimeDays", Number(event.target.value))} /></label>
+            <label><span>材质</span><input value={draft.material || ""} disabled={busy} onChange={(event) => update("material", event.target.value)} /></label>
+            <label className={styles.fullField}><span>场景标签（逗号分隔）</span><input value={(draft.sceneTags || []).join(",")} disabled={busy} onChange={(event) => update("sceneTags", event.target.value.split(/[,，]/).map((item) => item.trim()).filter(Boolean))} /></label>
+            <label className={styles.checkboxField}><input type="checkbox" checked={draft.isActive !== false} disabled={busy} onChange={(event) => update("isActive", event.target.checked)} /><span>商品启用</span></label>
           </div>
           <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="catalog-product-editor-save-request" disabled={busy}><Save size={16} aria-hidden="true" />准备保存商品</button></div>
           <Link className={styles.backLink} href={skuCode ? `/catalog/products/${encodeURIComponent(skuCode)}` : "/catalog/products"} data-action-id="catalog-product-editor-back">{skuCode ? "返回商品详情" : "返回商品列表"}</Link>
