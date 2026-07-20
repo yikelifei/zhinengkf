@@ -465,6 +465,54 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
 });
 
+test("asset ingestion audit contract fails when bounded input markers drift", () => {
+  const baselineRoot = createPassingFixture();
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(baseline.results.find((item) => item.id === "contract.asset_ingestion_limits").status, STATUS.PASS);
+
+  const mutations = [
+    { name: "shared byte limit", from: "MAX_IMAGE_FINGERPRINT_BYTES", to: "LEGACY_IMAGE_LIMIT", all: true },
+    {
+      name: "base64 decoded byte assertion",
+      from: "assertAssetSize(decodeBase64(params.base64))",
+      to: "decodeBase64(params.base64)",
+    },
+    { name: "UTF-8 text byte count", from: 'Buffer.byteLength(params.text, "utf8")', to: "params.text.length" },
+    { name: "URL protocol normalization", from: "normalizeAssetUrl(params.url)", to: "params.url" },
+    {
+      name: "download timeout",
+      from: "timeout: appConfig.designPlatformTimeoutMs",
+      to: "timeout: 0",
+    },
+    {
+      name: "download content length",
+      from: "maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES",
+      to: "maxContentLength: Infinity",
+    },
+    {
+      name: "download body length",
+      from: "maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES",
+      to: "maxBodyLength: Infinity",
+    },
+    { name: "canonical base64 validation", from: "isCanonicalBase64Text", to: "isBase64Text" },
+    { name: "HTTP(S) URL restriction", from: "asset URL must use http(s)", to: "asset URL is invalid" },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, "desktop", "apps", "api", "src", "storage", "storage.service.ts");
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.name);
+    const mutated = mutation.all ? source.split(mutation.from).join(mutation.to) : source.replace(mutation.from, mutation.to);
+    fs.writeFileSync(target, mutated, "utf8");
+
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.asset_ingestion_limits");
+    assert.equal(contract.status, STATUS.FAIL, mutation.name);
+    assert.ok(contract.evidence.missing.length > 0, mutation.name);
+  }
+});
+
 test("completion audit fails when high-risk route guards, trusted actors or public callback boundaries drift", () => {
   const baselineRoot = createPassingFixture();
   const baseline = buildAudit(baselineRoot, { includeExternal: false });
