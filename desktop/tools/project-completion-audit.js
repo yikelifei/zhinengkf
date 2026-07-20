@@ -19,6 +19,7 @@ const REQUIRED_ARTIFACTS = Object.freeze([
   { id: "windows.verifier", title: "Windows 安装包验证工具", file: "desktop/tools/verify-windows-package.js" },
   { id: "windows.config", title: "electron-builder 白名单配置", file: "desktop/electron-builder.yml" },
   { id: "windows.guide", title: "Windows 打包说明", file: "desktop/docs/WINDOWS_PACKAGING.md" },
+  { id: "windows.readiness_proof", title: "打包启动 HMAC 证明", file: "desktop/packages/runtime/packaged-readiness-proof.js" },
   { id: "ci.workflow", title: "Windows 质量流水线", file: ".github/workflows/windows-quality.yml" },
   { id: "prisma.schema", title: "Prisma PostgreSQL schema", file: "desktop/prisma/schema.prisma" },
   {
@@ -310,8 +311,10 @@ const CONTRACTS = Object.freeze([
       /DESKTOP_WEB_SESSION_PROOF:\s*webSessionProof/,
       /this\.spawnService\("api",[\s\S]*?apiEnv/,
       /this\.spawnService\([\s\S]*?"web"[\s\S]*?buildWebServiceEnvironment\(/,
-      /waitForHttp\(API_URL, api, 45_000, validateApiHealthResponse\)/,
+      /validateApiReadinessResponse\(response, this\.token, this\.webSessionProof\)/,
+      /desktopReadinessChallengeHeaders\(this\.webSessionProof\)/,
       /waitForHttp\(WEB_URL, web, 45_000, validateWebOverviewResponse\)/,
+      /validateWebApiReadinessResponse\(response, this\.token, this\.webSessionProof\)/,
     ],
   },
   {
@@ -321,6 +324,8 @@ const CONTRACTS = Object.freeze([
     patterns: [
       /response\.statusCode === 200 && validateResponse\(response\)/,
       /payload\?\.ok === true && payload\?\.service === "smart-kefu-desktop-api"/,
+      /verifyApiReadinessProof\(token, challenge, payload\?\.\[API_READINESS_PROOF_FIELD\]\)/,
+      /verifyWebReadinessProof\(/,
       /contentType\.includes\("text\/html"\)/,
       /overview-center/,
       /validateWebOverviewResponse/,
@@ -328,7 +333,7 @@ const CONTRACTS = Object.freeze([
   },
   {
     id: "contract.packaged_smoke_proof_chain",
-    title: "Packaged smoke covers missing-proof denial and verified Electron cookie success",
+    title: "Packaged smoke covers missing-proof denial and launch-bound API/Web HMAC success",
     file: "desktop/tools/smoke-packaged-api.js",
     patterns: [
       /apiHealth\.statusCode !== 200/,
@@ -336,7 +341,46 @@ const CONTRACTS = Object.freeze([
       /desktop_session_proof_missing/,
       /desktopSessionCookieHeader\(desktopWebSessionProof\)/,
       /authenticatedProxyHealth\.statusCode !== 200/,
-      /validateApiHealthResponse\(authenticatedProxyHealth\)/,
+      /validateApiReadinessResponse\(response, token, desktopWebSessionProof\)/,
+      /validateWebApiReadinessResponse\(/,
+      /launch_bound_web_api_hmac/,
+    ],
+  },
+  {
+    id: "contract.packaged_readiness_hmac",
+    title: "Packaged readiness proofs are launch-bound HMACs with constant-time verification",
+    file: "desktop/packages/runtime/packaged-readiness-proof.js",
+    patterns: [
+      /crypto\.createHmac\("sha256", Buffer\.from\(token, "hex"\)\)/,
+      /smart-kefu-api-readiness-v1/,
+      /smart-kefu-web-readiness-v1/,
+      /function verifyApiReadinessProof/,
+      /function verifyWebReadinessProof/,
+      /crypto\.timingSafeEqual/,
+    ],
+  },
+  {
+    id: "contract.windows_package_provenance_truth",
+    title: "Windows packaging forces a clean Web build before final provenance capture",
+    file: "desktop/tools/build-windows-package.js",
+    patterns: [
+      /runNpm\(\["run", "build:web"\],[\s\S]*?FORCE_WEB_CLEAN_BUILD:\s*"1"/,
+      /runNpm\(\["run", "build:web"\],[\s\S]*?assertBuildInputs\(\);[\s\S]*?requireCleanRepository\(\)/,
+      /packageRepositoryState\.revision !== initialRepositoryState\.revision/,
+      /writePackageProvenance\(packageRepositoryState\)/,
+    ],
+  },
+  {
+    id: "contract.external_windows_artifact_truth",
+    title: "External evidence reopens artifacts and rechecks hash, bytes, and Authenticode",
+    file: "desktop/tools/external-evidence-bundle.js",
+    patterns: [
+      /fs\.lstatSync\(requested\)\.isSymbolicLink\(\)/,
+      /actualSize !== artifact\.reportedSize/,
+      /sha256File\(file\)/,
+      /verifySignature\(artifact\.file\)/,
+      /Get-AuthenticodeSignature/,
+      /requiredChecksValid/,
     ],
   },
   {

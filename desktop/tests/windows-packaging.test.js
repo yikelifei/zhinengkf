@@ -11,9 +11,12 @@ const root = path.resolve(__dirname, "..");
 const {
   buildApiServiceEnvironment,
   buildWebServiceEnvironment,
+  desktopReadinessChallengeHeaders,
   desktopSessionCookieHeader,
   resolvePackagedPaths,
   validateApiHealthResponse,
+  validateApiReadinessResponse,
+  validateWebApiReadinessResponse,
   validateWebOverviewResponse,
   waitForHttp,
 } = require("../apps/electron/packaged-runtime");
@@ -26,6 +29,12 @@ const {
   verifyWindowsPackage,
 } = require("../tools/verify-windows-package");
 const { PACKAGE_PROVENANCE_SCHEMA_VERSION } = require("../tools/repository-provenance");
+const {
+  API_READINESS_PROOF_FIELD,
+  WEB_READINESS_PROOF_FIELD,
+  createApiReadinessProof,
+  createWebReadinessProof,
+} = require("../packages/runtime/packaged-readiness-proof");
 
 test("Windows verification report schema requires repository provenance", () => {
   const source = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
@@ -160,6 +169,7 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /prisma:generate/);
   assert.match(buildScript, /build:api/);
   assert.match(buildScript, /build:web/);
+  assert.match(buildScript, /FORCE_WEB_CLEAN_BUILD: "1"/);
   assert.match(buildScript, /process\.env\.npm_execpath/);
   assert.match(buildScript, /smoke-packaged-api\.js/);
   assert.match(buildScript, /sharp-win32-x64\.node/);
@@ -180,9 +190,10 @@ test("packaged smoke waits for child shutdown before another build can replace r
   assert.match(smoke, /apiHealth\.statusCode !== 200/);
   assert.match(smoke, /overview\.statusCode !== 200/);
   assert.match(smoke, /desktopSessionCookieHeader\(desktopWebSessionProof\)/);
-  assert.match(smoke, /authenticatedProxyHealth\.statusCode !== 200/);
+  assert.match(smoke, /validateApiReadinessResponse\(response, token, desktopWebSessionProof\)/);
+  assert.match(smoke, /validateWebApiReadinessResponse\(/);
   assert.match(smoke, /external_no_cookie_fail_closed/);
-  assert.match(smoke, /verified_electron_cookie/);
+  assert.match(smoke, /launch_bound_web_api_hmac/);
 });
 
 test("packaged readiness rejects preoccupied 3xx, auth, not-found and unrelated HTTP listeners", async (t) => {
@@ -212,11 +223,14 @@ test("packaged readiness rejects preoccupied 3xx, auth, not-found and unrelated 
   await assert.rejects(waitForUrl(child, url, 35, validateApiHealthResponse), /timed out waiting/);
 });
 
-test("packaged readiness accepts exact API health and Web overview truth", async (t) => {
+test("packaged readiness accepts launch-bound API HMAC and exact Web overview truth", async (t) => {
+  const token = "c".repeat(64);
+  const challenge = "d".repeat(64);
+  const apiProof = createApiReadinessProof(token, challenge);
   const server = http.createServer((request, response) => {
     if (request.url === "/api/health") {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ ok: true, service: "smart-kefu-desktop-api" }));
+      response.end(JSON.stringify({ ok: true, service: "smart-kefu-desktop-api", [API_READINESS_PROOF_FIELD]: apiProof }));
       return;
     }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -227,23 +241,33 @@ test("packaged readiness accepts exact API health and Web overview truth", async
   const address = server.address();
   const child = { exitCode: null, killed: false, serviceName: "fixture" };
 
-  const api = await waitForHttp(`http://127.0.0.1:${address.port}/api/health`, child, 500, validateApiHealthResponse);
+  const api = await waitForHttp(
+    `http://127.0.0.1:${address.port}/api/health`,
+    child,
+    500,
+    (response) => validateApiReadinessResponse(response, token, challenge),
+    { headers: desktopReadinessChallengeHeaders(challenge) },
+  );
   assert.equal(api.statusCode, 200);
   const overview = await waitForUrl(child, `http://127.0.0.1:${address.port}/overview`, 500, validateWebOverviewResponse);
   assert.equal(overview.statusCode, 200);
 });
 
-test("packaged readiness rejects matching service content from a foreign desktop session", async (t) => {
+test("packaged readiness rejects listeners that ignore or reflect the cookie without the server-held token", async (t) => {
   const launchProof = "a".repeat(64);
-  const foreignProof = "b".repeat(64);
+  const token = "b".repeat(64);
+  let serveValidProof = false;
   const server = http.createServer((request, response) => {
-    if (request.headers.cookie === desktopSessionCookieHeader(foreignProof)) {
-      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ ok: true, service: "smart-kefu-desktop-api" }));
-      return;
-    }
-    response.writeHead(403, { "content-type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ code: "desktop_session_proof_mismatch" }));
+    const reflectedCookieProof = String(request.headers.cookie || "").split("=").pop();
+    const apiProof = serveValidProof ? createApiReadinessProof(token, launchProof) : reflectedCookieProof;
+    const webProof = serveValidProof ? createWebReadinessProof(token, launchProof, apiProof) : reflectedCookieProof;
+    response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({
+      ok: true,
+      service: "smart-kefu-desktop-api",
+      [API_READINESS_PROOF_FIELD]: apiProof,
+      [WEB_READINESS_PROOF_FIELD]: webProof,
+    }));
   });
   await listenOnLoopback(server);
   t.after(() => closeServer(server));
@@ -252,18 +276,19 @@ test("packaged readiness rejects matching service content from a foreign desktop
   const child = { exitCode: null, killed: false, serviceName: "web" };
 
   await assert.rejects(
-    waitForHttp(url, child, 35, validateApiHealthResponse, {
+    waitForHttp(url, child, 35, (response) => validateWebApiReadinessResponse(response, token, launchProof), {
       headers: { Cookie: desktopSessionCookieHeader(launchProof) },
     }),
     /Timed out waiting/,
   );
-  const accepted = await waitForHttp(url, child, 500, validateApiHealthResponse, {
-    headers: { Cookie: desktopSessionCookieHeader(foreignProof) },
-  });
+  serveValidProof = true;
+  const accepted = await waitForHttp(url, child, 500, (response) => (
+    validateWebApiReadinessResponse(response, token, launchProof)
+  ), { headers: { Cookie: desktopSessionCookieHeader(launchProof) } });
   assert.equal(accepted.statusCode, 200);
 
   const runtime = fs.readFileSync(path.join(root, "apps", "electron", "packaged-runtime.js"), "utf8");
-  assert.match(runtime, /waitForHttp\(PROXY_HEALTH_URL, web, 45_000, validateApiHealthResponse/);
+  assert.match(runtime, /validateWebApiReadinessResponse\(response, this\.token, this\.webSessionProof\)/);
   assert.match(runtime, /Cookie: desktopSessionCookieHeader\(this\.webSessionProof\)/);
 });
 

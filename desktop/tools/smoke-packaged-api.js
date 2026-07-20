@@ -6,9 +6,11 @@ const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
-  validateApiHealthResponse,
+  validateApiReadinessResponse,
   validateExactHttp200,
+  validateWebApiReadinessResponse,
   validateWebOverviewResponse,
+  desktopReadinessChallengeHeaders,
   desktopSessionCookieHeader,
 } = require("../apps/electron/packaged-runtime");
 
@@ -83,7 +85,13 @@ async function main() {
     });
     const api = spawnService("api", apiEntry, readOnlyRoot, commonEnv);
     processes.push(api);
-    const apiHealth = await waitForUrl(api, apiHealthUrl, 45_000, validateApiHealthResponse);
+    const apiHealth = await waitForUrl(
+      api,
+      apiHealthUrl,
+      45_000,
+      (response) => validateApiReadinessResponse(response, token, desktopWebSessionProof),
+      { headers: desktopReadinessChallengeHeaders(desktopWebSessionProof) },
+    );
     if (apiHealth.statusCode !== 200) {
       throw new Error(`packaged API health returned ${apiHealth.statusCode}, expected 200`);
     }
@@ -106,7 +114,11 @@ async function main() {
     const authenticatedProxyHealth = await requestUrl(proxyHealthUrl, {
       headers: { Cookie: desktopSessionCookieHeader(desktopWebSessionProof) },
     });
-    if (authenticatedProxyHealth.statusCode !== 200 || !validateApiHealthResponse(authenticatedProxyHealth)) {
+    if (authenticatedProxyHealth.statusCode !== 200 || !validateWebApiReadinessResponse(
+      authenticatedProxyHealth,
+      token,
+      desktopWebSessionProof,
+    )) {
       throw new Error(`packaged Web API proxy did not reach the API with valid Electron proof (${authenticatedProxyHealth.statusCode})`);
     }
 
@@ -120,10 +132,10 @@ async function main() {
 
     writeReport({
       status: "PASS",
-      apiHealth: { statusCode: apiHealth.statusCode },
+      apiHealth: { statusCode: apiHealth.statusCode, mode: "launch_bound_api_hmac" },
       overview: { statusCode: overview.statusCode },
       proxyHealth: { statusCode: proxyHealth.statusCode, mode: "external_no_cookie_fail_closed" },
-      authenticatedProxyHealth: { statusCode: authenticatedProxyHealth.statusCode, mode: "verified_electron_cookie" },
+      authenticatedProxyHealth: { statusCode: authenticatedProxyHealth.statusCode, mode: "launch_bound_web_api_hmac" },
       staticAsset: { statusCode: staticAsset.statusCode, bytes: staticAsset.body.length },
       ports: { api: apiPort, web: webPort },
       cwd: "resources/services/runtime-root",
@@ -213,13 +225,13 @@ function spawnService(name, entry, cwd, env) {
   return child;
 }
 
-function waitForUrl(child, url, timeoutMs, validateResponse = validateExactHttp200) {
+function waitForUrl(child, url, timeoutMs, validateResponse = validateExactHttp200, requestOptions = {}) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) return reject(new Error(`${child.serviceName} exited with ${child.exitCode}`));
       try {
-        const response = await requestUrl(url);
+        const response = await requestUrl(url, requestOptions);
         if (response.statusCode === 200 && validateResponse(response)) return resolve(response);
       } catch {}
       if (Date.now() >= deadline) return reject(new Error(`timed out waiting for ${url}`));

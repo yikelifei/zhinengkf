@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -44,7 +45,9 @@ function temporaryDirectory(t) {
   return directory;
 }
 
-function reports() {
+function reports(root) {
+  const installer = writeArtifact(root, "SmartKefu-Setup-0.1.0-x64.exe", "signed installer fixture\n");
+  const executable = writeArtifact(root, "win-unpacked/Smart Kefu.exe", "signed executable fixture\n");
   return {
     staging: {
       schemaVersion: "smart_kefu_staging_readiness_v2",
@@ -94,18 +97,18 @@ function reports() {
       status: "PASS",
       verificationProfile: "signed-release",
       version: "0.1.0",
-      installer: { file: "C:/release/SmartKefu-Setup.exe", bytes: 4096, sha256: "d".repeat(64) },
-      executable: { file: "C:/release/win-unpacked/SmartKefu.exe", bytes: 2048, sha256: "e".repeat(64) },
+      installer,
+      executable,
       signatures: [
-        { file: "C:/release/win-unpacked/SmartKefu.exe", status: "Valid" },
-        { file: "C:/release/SmartKefu-Setup.exe", status: "Valid" },
+        { file: executable.file, status: "Valid" },
+        { file: installer.file, status: "Valid" },
       ],
       checks: WINDOWS_CHECKS.map((name) => ({ name, status: "PASS" })),
     },
   };
 }
 
-function writeReports(root, values = reports()) {
+function writeReports(root, values = reports(root)) {
   const paths = {
     staging: path.join(root, "staging.json"),
     recovery: path.join(root, "recovery.json"),
@@ -125,8 +128,18 @@ function validate(root, overrides = {}) {
     windowsReport: "windows.json",
     currentRevision: REVISION,
     now: NOW,
+    verifySignature: () => ({ status: "Valid" }),
     ...overrides,
   });
+}
+
+function writeArtifact(root, relative, content) {
+  const file = path.join(root, ...relative.split("/"));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, "utf8");
+  const bytes = fs.statSync(file).size;
+  const sha256 = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  return { file, bytes, sha256 };
 }
 
 test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly BLOCKED", (t) => {
@@ -160,7 +173,7 @@ test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly 
 
 test("old revision, expired evidence and v1 schema remain BLOCKED", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   values.staging.repositoryRevision = OTHER_REVISION;
   values.recovery.generatedAt = "2026-05-01T00:00:00.000Z";
   values.windows.schemaVersion = "smart_kefu_windows_package_verification_v1";
@@ -174,7 +187,7 @@ test("old revision, expired evidence and v1 schema remain BLOCKED", (t) => {
 
 test("unsigned package verification never satisfies signed release evidence", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   values.windows.status = "BLOCKED";
   values.windows.verificationProfile = "unsigned-test";
   values.windows.signatures = [{ status: "NotSigned" }, { status: "NotSigned" }];
@@ -188,7 +201,7 @@ test("unsigned package verification never satisfies signed release evidence", (t
 
 test("forged PASS with missing safety fields fails closed", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   delete values.recovery.safety.backupArtifactRetained;
   writeReports(root, values);
   const report = validate(root);
@@ -198,7 +211,7 @@ test("forged PASS with missing safety fields fails closed", (t) => {
 
 test("forged PASS cannot omit fixed staging results or Windows checks", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   values.staging.results = values.staging.results.filter((item) => item.id !== "config.api_access");
   values.windows.checks = values.windows.checks.filter((item) => item.name !== "NSIS installer");
   writeReports(root, values);
@@ -210,7 +223,7 @@ test("forged PASS cannot omit fixed staging results or Windows checks", (t) => {
 
 test("signed package evidence requires clean repository provenance", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   values.windows.repositoryClean = false;
   writeReports(root, values);
   const report = validate(root);
@@ -220,7 +233,7 @@ test("signed package evidence requires clean repository provenance", (t) => {
 
 test("signed release evidence binds each valid signature to an exact artifact", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   values.windows.signatures = [
     { file: values.windows.executable.file, status: "Valid" },
     { file: values.windows.executable.file, status: "Valid" },
@@ -231,9 +244,35 @@ test("signed release evidence binds each valid signature to an exact artifact", 
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
+test("Windows evidence reopens artifacts and rejects missing or changed bytes", (t) => {
+  const root = temporaryDirectory(t);
+  const changed = reports(root);
+  fs.appendFileSync(changed.windows.installer.file, "tampered\n", "utf8");
+  writeReports(root, changed);
+  let report = validate(root);
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+
+  const missing = reports(root);
+  missing.windows.installer.file = path.join(root, "missing-installer.exe");
+  missing.windows.signatures[1].file = missing.windows.installer.file;
+  writeReports(root, missing);
+  report = validate(root);
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
+test("Windows evidence re-verifies Authenticode and blocks when the host cannot verify it", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const invalid = validate(root, { verifySignature: () => ({ status: "NotSigned" }) });
+  assert.equal(invalid.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+
+  const unavailable = validate(root, { verifySignature: () => ({ status: "Unavailable", unavailable: true }) });
+  assert.equal(unavailable.results.find((item) => item.id === "evidence.windows_package").status, STATUS.BLOCKED);
+});
+
 test("secret-bearing input fails without copying the secret into the bundle", (t) => {
   const root = temporaryDirectory(t);
-  const values = reports();
+  const values = reports(root);
   const secret = "redis://operator:super-secret@redis.internal:6379/0";
   values.staging.redisUrl = secret;
   writeReports(root, values);
@@ -276,6 +315,9 @@ test("source contract is local read-only and package script is explicit", () => 
   const source = fs.readFileSync(path.resolve(__dirname, "..", "tools", "external-evidence-bundle.js"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
   assert.match(packageJson.scripts["external:evidence:bundle"], /external-evidence-bundle\.js$/);
+  assert.match(source, /Get-AuthenticodeSignature/);
+  assert.match(source, /sha256File\(file\)/);
+  assert.match(source, /stat\.size !== reported\.bytes/);
   assert.doesNotMatch(source, /\bfetch\s*\(/);
   assert.doesNotMatch(source, /writeFile|appendFile|rmSync|unlink/);
   assert.doesNotMatch(source, /prisma|pg_dump|pg_restore|electron-builder|send_msg|method:\s*["']POST/);

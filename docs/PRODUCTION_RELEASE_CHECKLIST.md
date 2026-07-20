@@ -69,7 +69,7 @@ cd desktop
 npm.cmd run external:evidence:bundle -- --evidence-root C:\release-evidence\candidate --staging-report staging.json --recovery-report recovery.json --windows-report windows.json
 ```
 
-三个路径必须显式指定且位于 evidence root 内；工具只接受当前 `HEAD`、当前 schema、有效期内的 `PASS` 报告，不会联网或执行任何外部动作。完整口径见 `docs/EXTERNAL_EVIDENCE_BUNDLE.md`。该校验不会自动清除本门禁或完成度审计的外部 `BLOCKED`，SmartScreen 与目标 Windows 安装验收仍必须人工补证。
+三个路径必须显式指定且位于 evidence root 内；工具只接受当前 `HEAD`、当前 schema、有效期内的 `PASS` 报告，并重开 Windows 报告中的真实安装器/主程序，重算字节数与 SHA-256、重新验证 Authenticode。文件缺失或不一致为 `FAIL`，本机无法验证签名为 `BLOCKED`；工具不会联网或执行任何外部动作。完整口径见 `docs/EXTERNAL_EVIDENCE_BUNDLE.md`。该校验不会自动清除本门禁或完成度审计的外部 `BLOCKED`，SmartScreen 与目标 Windows 安装验收仍必须人工补证。
 
 ## 状态口径
 
@@ -141,7 +141,7 @@ npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
 - [ ] 已在受控签名机运行 `package:win:signed`，安装器与主程序 Authenticode 均为 Valid；证书和密码未进入仓库、报告或安装包资源。
 - [ ] 已在目标 Windows 机器记录操作系统版本、安装器 SHA-256、签名发布者、测试时间与操作员，并通过安装器完成全新安装；开始菜单/桌面快捷方式、首次启动、API 健康检查、Web 工作台和 Electron 窗口均有截图或脱敏日志证据。随后从 Windows“已安装的应用”执行卸载，确认程序文件和快捷方式移除、`%APPDATA%/Smart Kefu` 客户数据按设计保留，并记录卸载结果。
 - [ ] 已记录同一 SHA-256 签名安装器的 SmartScreen 检查结果、发布者、Windows 版本、时间与截图证据；若仍出现未知发布者、信誉警告或无法验证，发布继续保持 `BLOCKED`，不得用 Authenticode `Valid` 代替该证据。
-- [ ] 三份 JSON 报告均绑定当前 `repositoryRevision`；Windows 报告还必须为 `repositoryClean=true` 且包内 provenance 与当前 revision/版本一致，并已通过 `external:evidence:bundle` 的 schema、revision、时效和失败关闭字段校验。
+- [ ] 三份 JSON 报告均绑定当前 `repositoryRevision`；Windows 报告还必须为 `repositoryClean=true` 且包内 provenance 与当前 revision/版本一致。打包时 Web 必须强制 clean build，provenance 必须在全部构建成功及第二次 HEAD/clean 校验后生成；`external:evidence:bundle` 已重开同一安装器/主程序并通过实际字节数、SHA-256、Authenticode、schema、revision、时效和失败关闭字段校验。
 - [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
 - [ ] 预发布证据报告中的企业微信、个人微信桥和设计平台只读检查均为 `PASS`。
 - [ ] 微信客户端版本、登录账号、窗口识别和人工接管流程已由授权操作员验收。

@@ -10,6 +10,7 @@ files:
   - apps/electron/main.js
   - apps/electron/preload.js
   - apps/electron/packaged-runtime.js
+  - packages/runtime/packaged-readiness-proof.js
   - packages/runtime/service-environment.js
   - package.json
   - .package-provenance.json
