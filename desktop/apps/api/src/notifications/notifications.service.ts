@@ -3,6 +3,7 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import { deterministicOperationId, isUniqueConstraintError } from "../shared/operation-idempotency";
 
 @Injectable()
 export class NotificationsService {
@@ -13,6 +14,8 @@ export class NotificationsService {
 
   create(level: string, title: string, body?: string, target?: Record<string, unknown>) {
     if (appConfig.useLocalStore) return this.localStore.createNotification(level, title, body, target);
+    const effectKey = String(target?.effectKey || "").trim();
+    if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);
     return this.prisma.notification.create({
       data: {
         level,
@@ -21,6 +24,29 @@ export class NotificationsService {
         target: (target || {}) as any,
       },
     });
+  }
+
+  private async createPrismaNotificationOnce(
+    effectKey: string,
+    level: string,
+    title: string,
+    body?: string,
+    target?: Record<string, unknown>,
+  ) {
+    const notification = this.prisma.notification as any;
+    const id = deterministicOperationId("notice", effectKey);
+    const existing = typeof notification.findUnique === "function"
+      ? await notification.findUnique({ where: { id } })
+      : null;
+    if (existing) return existing;
+    try {
+      return await notification.create({ data: { id, level, title, body, target: (target || {}) as any } });
+    } catch (error) {
+      if (!isUniqueConstraintError(error) || typeof notification.findUnique !== "function") throw error;
+      const winner = await notification.findUnique({ where: { id } });
+      if (!winner) throw error;
+      return winner;
+    }
   }
 
   list(options: { unreadOnly?: boolean; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {

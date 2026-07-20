@@ -8,6 +8,7 @@
 - 设计平台客户端/回调契约、SKU 商品库、礼盒推荐、预算与高价值转人工、设计任务、选图、报价/订单和安全发送队列。设计平台 Axios 实例和每次请求拦截器均固定 `maxRedirects=0`，30x 响应显式失败，登录、激活、凭据与 POST body 不会被自动转发到其他 origin、协议或私网地址。
 - `art_image_local` 每次生成使用独立 `DesignPlatformExecution` 做 durable begin/CAS/outcome/acceptance/recovery；timeout、5xx、连接重置或进程重启期间的在途请求均 fail-closed 为 `outcome_unknown`，禁止自动重生成和重复扣费。
 - 企业微信加密回调、`sync_msg`、文本/图片媒体发送、身份绑定、幂等/审计；`WechatPersistence` 在 `USE_LOCAL_STORE=false` 时使用 Prisma 保存绑定、消息、任务、attempt 与审计日志。
+- 设计任务与聊天训练导入的创建幂等会先按确定性操作键读取已保存记录，再使用记录中的账号/会话/客户身份校验原请求；因此会话被删除或重新绑定后，同一精确请求仍能安全重放，显式提交错误身份则失败关闭。设计任务持久化后的提醒、人工锁定与复核副作用按 `effectKey` 去重并分阶段恢复，只有全部完成后才写入 `completedAt`。训练页面在网络响应丢失时保留同一操作键，内容或身份变化才换键，成功后才清除。
 - SKU 上传文件解析支持 `.xlsx`、`.csv`、`.tsv`、`.txt`，包括标准 XLSX 模板生成和模板回读测试；规范 Base64、输入字节、ZIP 目录/路径/重复条目、单项与累计解压、共享字符串、行/列/单元格和最终文本均有 fail-closed 上限。ZIP64、多磁盘和加密条目被拒绝，data descriptor、CRC、本地条目区间及声明/实际大小必须一致。XLSX 的 `sharedStrings`、`row`、`cell` 与文本片段使用只前进、不物化匹配数组的索引扫描器，第 N+1 个元素在读取标签体前立即拒绝；单标签、文本片段数、单单元格解码文本及累计解码文本均设硬上限，未闭合大标签按线性路径返回受控错误。旧文档中的“Excel 文件解析未实现”已过期。
 - 候选图与企业微信客户入站图片对真实 JPG/PNG 字节生成 `dhash64:v1`：EXIF 旋转、白底、灰度 `9x8`，使用 XOR/popcount 汉明距离强阈值匹配；旧元数据 SHA-256 仅保留为 `legacyIdentityHash`，不参与自动匹配。
 - 企业微信入站图片使用官方临时素材下载接口，流式限制 2 MB，并在 `LOCAL_STORAGE_ROOT` 下使用确定性路径和原子 no-clobber 发布；明确永久失败才落人工复核，网络/5xx/限流失败会中止当前同步页。

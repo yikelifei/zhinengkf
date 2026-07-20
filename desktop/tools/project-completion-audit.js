@@ -546,6 +546,7 @@ const CONTRACTS = Object.freeze([
       /OPERATION_KEY_MAX_LENGTH\s*=\s*128/,
       /createOperationFingerprint/,
       /deterministicOperationId/,
+      /assertStoredOperationIdentityReplay/,
       /OPERATION_KEY_REUSED/,
     ],
   },
@@ -557,7 +558,20 @@ const CONTRACTS = Object.freeze([
       /normalizeOperationKey\(payload\?\.operationKey/,
       /findUnique\(\{ where: \{ requestId \} \}\)/,
       /isUniqueConstraintError\(error\)/,
-      /replayDesignJobCreate/,
+      /async create\(payload: CreateDesignJobPayload\)[\s\S]*?const existing =[\s\S]*?if \(existing\)[\s\S]*?completeDesignJobCreateEffects\(existing,[\s\S]*?const identity = await this\.validateCreateIdentity\(payload\)/,
+      /activeCreateEffectPromises/,
+      /requirements\.createEffects/,
+      /effectKey:\s*`\$\{effectRoot\}:/,
+      /completedAt:\s*new Date\(\)\.toISOString\(\)/,
+      /deterministicOperationId\("review", effectKey\)/,
+    ],
+  },
+  {
+    id: "contract.local_chat_import_existing_first",
+    title: "Local training import replays stored identity before mutable conversation lookup",
+    file: "desktop/apps/api/src/local-store/local-store.service.ts",
+    patterns: [
+      /createChatImport\(payload: any, parsed: any\)[\s\S]*?const existing = data\.chatImports\.find[\s\S]*?if \(existing\)[\s\S]*?assertStoredOperationIdentityReplay[\s\S]*?return \{ \.\.\.existing, samples: existingSamples \};[\s\S]*?const identity = this\.validateOptionalConversationBinding/,
     ],
   },
   {
@@ -570,6 +584,7 @@ const CONTRACTS = Object.freeze([
       /deterministicOperationId\("knowledge", operationKey, pairIndex\)/,
       /isUniqueConstraintError\(error\)/,
       /replayChatImport/,
+      /async createChatImport\(payload: any, parsed: any\)[\s\S]*?chatImport\.findUnique[\s\S]*?assertStoredOperationIdentityReplay[\s\S]*?return this\.replayChatImport\(existing, operation\);[\s\S]*?const identity = await this\.resolveIdentity/,
     ],
   },
   {
@@ -581,6 +596,30 @@ const CONTRACTS = Object.freeze([
       /const serializedBody = JSON\.stringify\(body\)/,
       /createClientOperationKey/,
       /operationKey:\s*string/,
+    ],
+    forbidden: [/operationKey\s*=\s*createClientOperationKey/],
+  },
+  {
+    id: "contract.web_client_operation_lifecycle",
+    title: "Web form actions retain one operation key until exact-payload success",
+    file: "desktop/apps/web/src/lib/client-operation-key.ts",
+    patterns: [
+      /reserveClientOperation/,
+      /pending\?\.scope === scope && pending\.payloadSignature === payloadSignature/,
+      /completeClientOperation/,
+      /pending\?\.key === completedKey \? null : pending/,
+      /\.sort\(\)/,
+    ],
+  },
+  {
+    id: "contract.training_import_operation_lifecycle",
+    title: "Training import preserves failed operation keys and clears only after success",
+    file: "desktop/apps/web/src/features/training/training-import-page.tsx",
+    patterns: [
+      /pendingImportOperation = useRef<PendingClientOperation \| null>\(null\)/,
+      /reserveClientOperation\("training-import", requestPayload, pendingImportOperation\.current\)/,
+      /operationKey: operation\.key/,
+      /await importChatTranscript[\s\S]*?pendingImportOperation\.current = completeClientOperation/,
     ],
   },
   {

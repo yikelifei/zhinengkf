@@ -26,6 +26,10 @@ npm.cmd run project:completion:audit
 
 审计 schema `smart_kefu_project_completion_audit_v3` 还固定检查两组输入边界：设计平台请求必须在 Axios 实例和请求拦截器两层保持零重定向并显式拒绝 30x；SKU 文件导入必须保留规范 Base64、输入字节、ZIP/解压和工作表资源上限。XLSX XML 契约还要求只前进索引扫描器、在第 N+1 个元素读取标签体前终止、限制标签/文本片段/单单元格/累计解码文本，并明确禁止 `sharedStrings`、`row`、`cell` 恢复为 `match`/`matchAll` 全量物化；审计变异测试会分别删除早停条件和注入禁用正则，确认两种漂移都产生仓库内 `FAIL`。对应安全测试文件也属于必需制品，删除实现标记或测试会产生仓库内 `FAIL`。
 
+## 创建幂等与副作用恢复契约
+
+审计会验证设计任务和聊天训练导入都先读取确定性既有记录，再访问可变会话；重放必须按已保存身份重建指纹，并拒绝调用方显式提交的错误身份。设计任务创建还必须保留可恢复的 `requirements.createEffects`、确定性通知/复核 `effectKey` 和最终 `completedAt`。Web 端训练表单必须对相同 payload 复用待完成操作键，只在成功后清除；`createDemoDesignJob` 不允许用默认参数暗中生成新键。对应变异测试会把查询顺序调回错误路径、提前清键或恢复隐式 demo key，确认审计产生仓库内 `FAIL`。
+
 ## 固定 LocalStore 清单
 
 审计器维护显式清单，不只搜索 `not implemented`：

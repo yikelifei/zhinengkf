@@ -92,6 +92,25 @@ export function assertExactOperationReplay(
   });
 }
 
+export function assertStoredOperationIdentityReplay(
+  storedIdentity: Record<string, unknown>,
+  requestedIdentity: Record<string, unknown>,
+  label: string,
+) {
+  const stored = normalizedIdentity(storedIdentity);
+  const requested = normalizedIdentity(requestedIdentity);
+  const conversationMismatch = stored.conversationId
+    ? requested.conversationId !== stored.conversationId
+    : Boolean(requested.conversationId);
+  const explicitCustomerMismatch = Boolean(requested.customerId) && requested.customerId !== stored.customerId;
+  const explicitAccountMismatch = Boolean(requested.wechatAccountId) && requested.wechatAccountId !== stored.wechatAccountId;
+  if (!conversationMismatch && !explicitCustomerMismatch && !explicitAccountMismatch) return stored;
+  throw new ConflictException({
+    code: "OPERATION_KEY_REUSED",
+    message: `${label} operationKey was already used with different identity or payload`,
+  });
+}
+
 export function isUniqueConstraintError(error: unknown) {
   return Boolean(error && typeof error === "object" && (error as { code?: unknown }).code === "P2002");
 }
@@ -110,4 +129,12 @@ function stableSerialize(value: unknown): string {
 function normalizedOptionalString(value: unknown) {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || null;
+}
+
+function normalizedIdentity(value: Record<string, unknown>) {
+  return {
+    customerId: normalizedOptionalString(value.customerId),
+    conversationId: normalizedOptionalString(value.conversationId),
+    wechatAccountId: normalizedOptionalString(value.wechatAccountId),
+  };
 }

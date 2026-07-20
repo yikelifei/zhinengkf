@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  createClientOperationKey,
   getAgents,
   importChatTranscript,
   type Agent,
   type IdentityFilters,
 } from "../../lib/api";
+import {
+  completeClientOperation,
+  reserveClientOperation,
+  type PendingClientOperation,
+} from "../../lib/client-operation-key";
 import styles from "../governance-pages.module.css";
 
 export type TrainingImportPageProps = {
@@ -27,6 +31,7 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const refreshSequence = useRef(0);
+  const pendingImportOperation = useRef<PendingClientOperation | null>(null);
   const stableIdentityFilters = useMemo<IdentityFilters>(() => ({
     wechatAccountId: identityFilters?.wechatAccountId,
     conversationId: identityFilters?.conversationId,
@@ -78,19 +83,24 @@ export function TrainingImportPage({ identityFilters }: TrainingImportPageProps)
     }
     setBusy(true);
     setError("");
+    const requestPayload = {
+      name: name.trim() || undefined,
+      source: source.trim() || undefined,
+      channel: channel.trim() || undefined,
+      agentId: agentId || undefined,
+      customerId: stableIdentityFilters.customerId,
+      conversationId: stableIdentityFilters.conversationId,
+      wechatAccountId: stableIdentityFilters.wechatAccountId,
+      text,
+    };
+    const operation = reserveClientOperation("training-import", requestPayload, pendingImportOperation.current);
+    pendingImportOperation.current = operation;
     try {
-      const operationKey = createClientOperationKey("training-import");
       const result = await importChatTranscript({
-        operationKey,
-        name: name.trim() || undefined,
-        source: source.trim() || undefined,
-        channel: channel.trim() || undefined,
-        agentId: agentId || undefined,
-        customerId: stableIdentityFilters.customerId,
-        conversationId: stableIdentityFilters.conversationId,
-        wechatAccountId: stableIdentityFilters.wechatAccountId,
-        text,
+        operationKey: operation.key,
+        ...requestPayload,
       });
+      pendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);
       setTranscript("");
       setPendingConfirmation(false);
       setNotice(`导入完成：解析 ${result.messageCount} 条消息，生成 ${result.pairCount} 组训练对话。`);

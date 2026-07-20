@@ -13,6 +13,8 @@ import { appConfig } from "../shared/app-config";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import {
   createOperationFingerprint,
+  deterministicOperationId,
+  isUniqueConstraintError,
   requestOperationMetadata,
   stableOperationKey,
 } from "../shared/operation-idempotency";
@@ -837,7 +839,7 @@ export class WechatDispatchService {
 
   async setConversationManualLock(
     id: string,
-    payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload = {},
+    payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string; effectKey?: string } & ExpectedIdentityPayload = {},
   ) {
     const before = await this.persistence.getConversation(id);
     if (!before) throw new BadRequestException(`conversation not found: ${id}`);
@@ -879,6 +881,7 @@ export class WechatDispatchService {
       beforeStatus: transition.beforeStatus,
       afterStatus: transition.afterStatus,
       metadata: {
+        ...(payload.effectKey ? { effectKey: `${payload.effectKey}:review` } : {}),
         ...transition.metadata,
         wechatAccountId: before.wechatAccountId || null,
         wechatAccountName: before.wechatAccount?.displayName || before.wechatAccount?.alias || null,
@@ -894,6 +897,7 @@ export class WechatDispatchService {
       transition.locked ? "会话已锁定人工处理" : "会话已解除人工锁定",
       transition.locked ? lockNoticeParts.join(" ") : note,
       {
+        ...(payload.effectKey ? { effectKey: `${payload.effectKey}:notification` } : {}),
         conversationId: id,
         customerId: before.customerId,
         wechatAccountId: before.wechatAccountId,
@@ -908,6 +912,7 @@ export class WechatDispatchService {
         "发送中任务已因人工接管取消",
         `${before.title || id} 有 ${inFlightSendTasks.length} 个发送中任务已取消；如桥接程序已开始操作，请人工核查微信窗口是否已经发出。`,
         {
+          ...(payload.effectKey ? { effectKey: `${payload.effectKey}:inflight-notification` } : {}),
           conversationId: id,
           customerId: before.customerId,
           wechatAccountId: before.wechatAccountId,
@@ -6587,7 +6592,20 @@ export class WechatDispatchService {
   }) {
     if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
     const prisma = this.prisma as any;
-    return prisma.reviewLog.create({ data: payload });
+    const effectKey = String(payload.metadata?.effectKey || "").trim();
+    const effectId = effectKey ? deterministicOperationId("review", effectKey) : "";
+    if (effectId && typeof prisma.reviewLog.findUnique === "function") {
+      const existing = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (existing) return existing;
+    }
+    try {
+      return await prisma.reviewLog.create({ data: effectId ? { id: effectId, ...payload } : payload });
+    } catch (error) {
+      if (!effectId || !isUniqueConstraintError(error) || typeof prisma.reviewLog.findUnique !== "function") throw error;
+      const winner = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (!winner) throw error;
+      return winner;
+    }
   }
 }
 
