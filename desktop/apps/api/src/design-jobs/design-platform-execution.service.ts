@@ -765,14 +765,9 @@ export class DesignPlatformExecutionService {
     const prisma = this.prisma as any;
     return prisma.$transaction(async (tx: any) => {
       const execution = await tx.designPlatformExecution.findUnique({ where: { id: executionId } });
-      const resumableCompleted =
-        execution?.status === "completed" && execution?.acceptanceStatus === "manual_review";
-      if (
-        !execution ||
-        (execution.status !== "explicit_failed" && !resumableCompleted) ||
-        !["failed", "unknown"].includes(execution.refundStatus)
-      ) {
-        throw new Error("only an unsafe explicit failure refund can be resolved");
+      const resumableCompleted = isResumableCompletedExecution(execution);
+      if (!isUnsafeRefundResolutionEligible(execution)) {
+        throw new Error("only an eligible unsafe refund can be resolved");
       }
       const changed = await tx.designPlatformExecution.updateMany({
         where: {
@@ -789,7 +784,7 @@ export class DesignPlatformExecutionService {
           resolvedAt: resumableCompleted ? null : new Date(),
         },
       });
-      if (changed.count !== 1) throw new Error("only an unsafe explicit failure refund can be resolved");
+      if (changed.count !== 1) throw new Error("only an eligible unsafe refund can be resolved");
       return tx.designPlatformExecution.findUnique({ where: { id: executionId } });
     });
   }
@@ -908,7 +903,7 @@ function toPublicExecutionView(execution: any): DesignPlatformExecutionView {
   const availableResolution: DesignExecutionAvailableResolution =
     execution?.status === "outcome_unknown" && !execution?.resolvedAt
       ? "confirmed_not_generated_refunded"
-      : execution?.status === "explicit_failed" && ["failed", "unknown"].includes(execution?.refundStatus)
+      : isUnsafeRefundResolutionEligible(execution)
         ? "confirmed_refunded"
         : null;
   return {
@@ -933,6 +928,18 @@ function toPublicExecutionView(execution: any): DesignPlatformExecutionView {
     resolvedAt: safeTimestamp(execution?.resolvedAt),
     availableResolution,
   };
+}
+
+function isUnsafeRefundResolutionEligible(execution: any) {
+  return Boolean(
+    execution
+    && (execution.status === "explicit_failed" || isResumableCompletedExecution(execution))
+    && ["failed", "unknown"].includes(execution.refundStatus),
+  );
+}
+
+function isResumableCompletedExecution(execution: any) {
+  return execution?.status === "completed" && execution?.acceptanceStatus === "manual_review";
 }
 
 function sanitizeIdentifier(value: unknown) {

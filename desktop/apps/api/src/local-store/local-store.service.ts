@@ -1723,7 +1723,7 @@ export class LocalStoreService {
       (execution.status !== "explicit_failed" && !resumableCompleted) ||
       !["failed", "unknown"].includes(execution.refundStatus)
     ) {
-      throw new Error("only an unsafe explicit failure refund can be resolved");
+      throw new Error("only an eligible unsafe refund can be resolved");
     }
     if (resolution !== "confirmed_refunded" || !String(reviewer || "").trim()) {
       throw new Error("explicit confirmed_refunded resolution and reviewer are required");
