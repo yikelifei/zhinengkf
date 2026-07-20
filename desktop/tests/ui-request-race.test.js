@@ -7,7 +7,10 @@ const test = require("node:test");
 
 require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "CommonJS" } });
 
-const { runLatestNotificationOperation } = require("../apps/web/src/features/notifications/notification-operation-guard");
+const {
+  notificationScopeKey,
+  runLatestNotificationOperation,
+} = require("../apps/web/src/features/notifications/notification-operation-guard");
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
@@ -68,6 +71,23 @@ test("stale notification rejection cannot erase a newer successful response", as
   staleMutation.reject(new Error("old filter failed"));
   assert.equal(await stale, false);
   assert.deepEqual(state, { records: [{ id: "new" }], loaded: true, error: "" });
+});
+
+test("notification scope changes hide old rows and invalidate an open bulk confirmation", () => {
+  const allScope = notificationScopeKey(false, { wechatAccountId: "account-a", customerId: "customer-a" });
+  const unreadScope = notificationScopeKey(true, { wechatAccountId: "account-a", customerId: "customer-a" });
+  const otherIdentityScope = notificationScopeKey(false, { wechatAccountId: "account-b", customerId: "customer-b" });
+  assert.notEqual(allScope, unreadScope);
+  assert.notEqual(allScope, otherIdentityScope);
+
+  const controller = read("apps/web/src/features/notifications/use-notifications-controller.ts");
+  assert.match(controller, /loadedScopeKey === scopeKey/);
+  assert.match(controller, /scopeLoaded \? notifications : \[\]/);
+  assert.match(controller, /expectedScopeKey !== scopeKey/);
+  const page = read("apps/web/src/features/notifications/notifications-page.tsx");
+  assert.match(page, /confirmationScopeKey === controller\.scopeKey/);
+  assert.match(page, /controller\.markAllRead\(confirmationScopeKey\)/);
+  assert.match(page, /controller\.loaded && controller\.notifications\.length/);
 });
 
 test("design catalog and sales shared reads fence stale responses and unmount cleanup", () => {

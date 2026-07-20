@@ -9,10 +9,12 @@ export type NotificationsPageProps = { identityFilters?: IdentityFilters };
 
 export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
   const controller = useNotificationsController(identityFilters);
-  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [confirmationScopeKey, setConfirmationScopeKey] = useState<string | null>(null);
+  const confirmationOpen = confirmationScopeKey === controller.scopeKey;
 
   async function confirmMarkAll() {
-    if (await controller.markAllRead()) setConfirmationOpen(false);
+    if (!confirmationScopeKey) return;
+    if (await controller.markAllRead(confirmationScopeKey)) setConfirmationScopeKey(null);
   }
 
   const statusClass = !controller.loaded
@@ -53,12 +55,12 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
               <input type="checkbox" checked={controller.unreadOnly} disabled={controller.busy} onChange={(event) => controller.setUnreadOnly(event.target.checked)} />
               只看未读
             </label>
-            <button className={styles.button} type="button" data-action-id="notifications-mark-all-request" aria-label="请求将当前身份范围内的通知全部标为已读" onClick={() => setConfirmationOpen(true)} disabled={controller.busy || controller.unreadCount === 0}>
+            <button className={styles.button} type="button" data-action-id="notifications-mark-all-request" aria-label="请求将当前身份范围内的通知全部标为已读" onClick={() => setConfirmationScopeKey(controller.scopeKey)} disabled={controller.busy || controller.unreadCount === 0}>
               全部标为已读
             </button>
           </div>
 
-          {controller.notifications.length ? (
+          {controller.loaded && controller.notifications.length ? (
             <div className={styles.recordList}>
               {controller.notifications.map((notification) => (
                 <NotificationRow
@@ -81,7 +83,7 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
           <p>只作用于当前页面绑定的身份范围，共 {controller.unreadCount} 条未读通知；操作后重新读取服务端结果。</p>
           <div className={styles.buttonRow}>
             <button className={styles.primaryButton} type="button" data-action-id="notifications-mark-all-confirm" aria-label="确认全部标为已读" onClick={() => void confirmMarkAll()} disabled={controller.busy}>确认处理</button>
-            <button className={styles.button} type="button" data-action-id="notifications-mark-all-cancel" aria-label="取消全部标为已读" onClick={() => setConfirmationOpen(false)} disabled={controller.busy}>取消</button>
+            <button className={styles.button} type="button" data-action-id="notifications-mark-all-cancel" aria-label="取消全部标为已读" onClick={() => setConfirmationScopeKey(null)} disabled={controller.busy}>取消</button>
           </div>
         </section>
       ) : null}
