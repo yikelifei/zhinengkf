@@ -396,6 +396,9 @@ resolutionAction(execution.availableResolution);
 function postJsonWithNetworkRetry(path, body) { const serializedBody = JSON.stringify(body); }
 function createClientOperationKey() {}
 const requestPayload: { operationKey: string } = {};
+export async function getDesignJobs() { const response = await fetch("/design-jobs"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
+export async function getSkus() { const response = await fetch("/catalog/skus"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
+export async function getAssets() { const response = await fetch("/assets"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
 export async function createDemoDesignJob(identity, assetIds, operationKey: string) {}
 export async function createDemoSendTask(conversationId, operationKey: string, wechatAccountId, expected, text) {
   return postJsonWithNetworkRetry<SendTask>("/wechat/send-tasks/demo", {
@@ -427,6 +430,20 @@ export async function resolveUnknownDesignExecution(designJobId, executionId, ex
 export async function resolveDesignExecutionRefund(designJobId, executionId, expected) {
   return post(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-refund\`,
     { ...expected, resolution: "confirmed_refunded" });
+}
+`);
+  write(root, "desktop/tools/build-web.js", `
+function main() {
+  if (standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) reuseExistingBuild();
+  if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
+}
+function runNextBuild() {
+  if (result.status === 0) waitForBuildOutputReady(60);
+  if (result.status === 0 && !hasNextBuildErrorOutput(result) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
+  if (retry.status === 0) waitForBuildOutputReady(60);
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
 }
 `);
   write(root, "desktop/apps/web/src/lib/client-operation-key.ts", `
@@ -759,6 +776,39 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.equal(JSON.stringify(report).includes(path.resolve(root)), false);
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/project-completion-audit.js"), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
+});
+
+test("completion audit mutation checks reject fake Web API success and stale build reuse", () => {
+  const mutations = [
+    {
+      id: "contract.web_api_failure_truth",
+      file: "desktop/apps/web/src/lib/api.ts",
+      from: "export async function getDesignJobs()",
+      to: "const sampleDesignJobs = []; return sampleDesignJobs; export async function getDesignJobs()",
+    },
+    {
+      id: "contract.web_build_freshness",
+      file: "desktop/tools/build-web.js",
+      from: "if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale())",
+      to: "if (!standaloneServerExists() && productionBuildReady())",
+    },
+    {
+      id: "contract.web_build_freshness",
+      file: "desktop/tools/build-web.js",
+      from: "if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale())",
+      to: "if (productionBuildReady() && !hasNextBuildErrorOutput(result))",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
 });
 
 test("completion audit rejects removal of Enterprise WeChat inbound timestamp monotonicity", () => {
