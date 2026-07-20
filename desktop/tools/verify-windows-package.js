@@ -9,6 +9,14 @@ const {
   PACKAGE_PROVENANCE_SCHEMA_VERSION,
   resolveRepositoryState,
 } = require("./repository-provenance");
+const {
+  assertSafePath,
+  assertSafeRoot,
+  evaluateArtifactPolicy,
+  inspectNativeAuthenticode,
+  inspectPeArchitecture,
+  loadReleasePolicy,
+} = require("./windows-evidence-chain");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
@@ -45,6 +53,12 @@ function verifyWindowsPackage(options) {
   const executable = path.join(unpackedDir, "Smart Kefu.exe");
   const installer = findInstaller(options.outputDir, packageJson.version);
   const checks = [];
+  let safeOutputRoot = null;
+  try {
+    safeOutputRoot = assertSafeRoot(options.outputDir);
+  } catch (error) {
+    checks.push({ name: "package tree path safety", status: "FAIL", detail: error.message });
+  }
 
   checks.push({
     name: "repository worktree clean",
@@ -52,30 +66,32 @@ function verifyWindowsPackage(options) {
     detail: repositoryState.clean ? "Git worktree was clean when package verification started." : "Git worktree is dirty; package provenance cannot be bound to HEAD.",
   });
 
-  checkExists(checks, "unpacked application", unpackedDir);
-  checkExists(checks, "Windows executable entry", executable);
+  checkExists(checks, "unpacked application", unpackedDir, safeOutputRoot, "directory");
+  checkExists(checks, "Windows executable entry", executable, safeOutputRoot);
   checkPortableExecutable(checks, "Windows executable PE format", executable);
-  checkExists(checks, "application asar", asarPath);
-  checkExists(checks, "packaged API entry", path.join(resourcesDir, "services", "api", "main.js"));
-  checkExists(checks, "packaged API storage code", path.join(resourcesDir, "services", "api", "storage", "storage.service.js"));
-  checkExists(checks, "packaged Web entry", path.join(resourcesDir, "services", "web", "apps", "web", "server.js"));
-  checkExists(checks, "packaged rules entry", path.join(resourcesDir, "services", "runtime-root", "packages", "rules", "index.js"));
-  checkExists(checks, "packaged window observer", path.join(resourcesDir, "services", "runtime-root", "tools", "wechat-window-observer.js"));
-  checkExists(checks, "packaged placeholder-only AI settings", path.join(resourcesDir, "services", "runtime-root", "config", "settings.yaml"));
-  checkExists(checks, "packaged Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@prisma", "client", "default.js"));
-  checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"));
-  checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "lib", "index.js"));
-  checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"));
+  checkExists(checks, "application asar", asarPath, safeOutputRoot);
+  checkExists(checks, "packaged API entry", path.join(resourcesDir, "services", "api", "main.js"), safeOutputRoot);
+  checkExists(checks, "packaged API storage code", path.join(resourcesDir, "services", "api", "storage", "storage.service.js"), safeOutputRoot);
+  checkExists(checks, "packaged Web entry", path.join(resourcesDir, "services", "web", "apps", "web", "server.js"), safeOutputRoot);
+  checkExists(checks, "packaged rules entry", path.join(resourcesDir, "services", "runtime-root", "packages", "rules", "index.js"), safeOutputRoot);
+  checkExists(checks, "packaged window observer", path.join(resourcesDir, "services", "runtime-root", "tools", "wechat-window-observer.js"), safeOutputRoot);
+  checkExists(checks, "packaged placeholder-only AI settings", path.join(resourcesDir, "services", "runtime-root", "config", "settings.yaml"), safeOutputRoot);
+  checkExists(checks, "packaged Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@prisma", "client", "default.js"), safeOutputRoot);
+  checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"), safeOutputRoot);
+  checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "lib", "index.js"), safeOutputRoot);
+  checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"), safeOutputRoot);
   if (!options.directoryOnly) {
-    checkExists(checks, "NSIS installer", installer);
+    checkExists(checks, "NSIS installer", installer, safeOutputRoot);
     checkPortableExecutable(checks, "NSIS installer PE format", installer);
   }
 
-  const smokeReport = readJson(path.join(options.outputDir, "verification", "packaged-api-smoke.json"));
+  const smokeReport = options.runtimeSmokeResult || (options.trustStoredSmokeReport === false
+    ? { status: "BLOCKED", summary: "stored smoke JSON is not trusted by external evidence validation" }
+    : readJson(path.join(options.outputDir, "verification", "packaged-api-smoke.json")));
   checks.push({
     name: "packaged API smoke",
-    status: smokeReport?.status === "PASS" ? "PASS" : "FAIL",
-      detail: smokeReport?.status === "PASS" ? `API, overview, static asset, and Web-to-API proxy passed on isolated ports; rules and Prisma loaded from read-only runtime root` : smokeReport?.error || "missing smoke report",
+    status: smokeReport?.status === "PASS" ? "PASS" : smokeReport?.status === "BLOCKED" ? "BLOCKED" : "FAIL",
+      detail: smokeReport?.status === "PASS" ? `API, overview, static asset, and Web-to-API proxy passed on isolated ports; rules and Prisma loaded from read-only runtime root` : smokeReport?.summary || smokeReport?.error || "missing smoke report",
   });
 
   if (fs.existsSync(asarPath)) {
@@ -84,13 +100,25 @@ function verifyWindowsPackage(options) {
   if (fs.existsSync(resourcesDir)) verifySensitiveFiles(checks, resourcesDir);
 
   const signingTargets = [executable, ...(!options.directoryOnly && installer ? [installer] : [])].filter(Boolean);
-  const signatures = signingTargets.filter((item) => fs.existsSync(item)).map(readSignature);
+  const signatures = options.inspectSignatures === false
+    ? []
+    : signingTargets.filter((item) => fs.existsSync(item)).map(readSignature);
   const allSigned = signatures.length > 0 && signatures.every((item) => item.status === "Valid");
   if (options.requireSigned) {
+    const policy = loadReleasePolicy();
+    const policyResults = signingTargets.map((file) => evaluateArtifactPolicy({
+      label: file === executable ? "executable" : "installer",
+      file,
+      version: packageJson.version,
+      policy,
+      signature: signatures.find((item) => item.file === file),
+    }));
+    const policyStatus = policyResults.some((item) => item.status === "FAIL")
+      ? "FAIL" : policyResults.some((item) => item.status === "BLOCKED") ? "BLOCKED" : "PASS";
     checks.push({
       name: "Authenticode signing",
-      status: allSigned ? "PASS" : "FAIL",
-      detail: allSigned ? "All executable artifacts have valid signatures." : formatSignatures(signatures),
+      status: !allSigned ? "FAIL" : policyStatus,
+      detail: !allSigned ? formatSignatures(signatures) : policyResults.map((item) => item.summary).join("; "),
     });
   } else if (options.expectUnsigned) {
     checks.push({
@@ -217,45 +245,32 @@ function findInstaller(directory, version) {
     .map((name) => path.join(directory, name))[0] || null;
 }
 
-function checkExists(checks, name, target) {
-  checks.push({ name, status: target && fs.existsSync(target) ? "PASS" : "FAIL", detail: target || "not found" });
+function checkExists(checks, name, target, safeRoot = null, expectedType = "file") {
+  try {
+    if (!target || !fs.existsSync(target)) throw new Error("not found");
+    if (safeRoot) assertSafePath(safeRoot, target, expectedType);
+    checks.push({ name, status: "PASS", detail: target });
+  } catch (error) {
+    checks.push({ name, status: "FAIL", detail: `${target || "not found"}: ${error.message}` });
+  }
 }
 
 function checkPortableExecutable(checks, name, target) {
-  let valid = false;
+  let result = { valid: false, architecture: "unknown" };
   try {
-    const descriptor = fs.openSync(target, "r");
-    try {
-      const dosHeader = Buffer.alloc(64);
-      if (fs.readSync(descriptor, dosHeader, 0, dosHeader.length, 0) === dosHeader.length
-        && dosHeader[0] === 0x4d && dosHeader[1] === 0x5a) {
-        const peOffset = dosHeader.readUInt32LE(0x3c);
-        const peSignature = Buffer.alloc(4);
-        valid = peOffset >= dosHeader.length
-          && fs.readSync(descriptor, peSignature, 0, peSignature.length, peOffset) === peSignature.length
-          && peSignature.equals(Buffer.from([0x50, 0x45, 0x00, 0x00]));
-      }
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    result = inspectPeArchitecture(target);
   } catch {
-    valid = false;
+    result = { valid: false, architecture: "unknown" };
   }
   checks.push({
     name,
-    status: valid ? "PASS" : "FAIL",
-    detail: valid ? `${path.basename(target)} has DOS and PE signatures.` : "missing or invalid Windows PE executable",
+    status: result.valid && result.architecture === "x64" ? "PASS" : "FAIL",
+    detail: result.valid ? `${path.basename(target)} is a ${result.architecture} PE executable.` : "missing or invalid Windows PE executable",
   });
 }
 
 function readSignature(file) {
-  const escaped = file.replace(/'/g, "''");
-  const result = spawnSync(
-    "powershell.exe",
-    ["-NoProfile", "-Command", `(Get-AuthenticodeSignature -LiteralPath '${escaped}').Status.ToString()`],
-    { encoding: "utf8", windowsHide: true },
-  );
-  return { file, status: String(result.stdout || "Unknown").trim() || "Unknown" };
+  return { file, ...inspectNativeAuthenticode(file) };
 }
 
 function formatSignatures(signatures) {
@@ -276,8 +291,11 @@ function sha256(file) {
 function walk(directory, visit) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const current = path.join(directory, entry.name);
-    if (entry.isDirectory()) walk(current, visit);
-    else if (entry.isFile()) visit(current);
+    const stat = fs.lstatSync(current);
+    if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw new Error(`resource tree contains a symbolic link or junction: ${current}`);
+    if (entry.isDirectory() && stat.isDirectory()) walk(current, visit);
+    else if (entry.isFile() && stat.isFile()) visit(current);
+    else throw new Error(`resource tree contains an unsupported filesystem node: ${current}`);
   }
 }
 

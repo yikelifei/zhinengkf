@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "smart_kefu_windows_release_signing_policy_v1",
+  "identityStatus": "UNCONFIGURED",
+  "allowedPublisherSubjects": [],
+  "allowedCertificateThumbprints": [],
+  "productName": "Smart Kefu",
+  "executableOriginalFilename": "Smart Kefu.exe",
+  "installerOriginalFilename": "SmartKefu-Setup-{version}-x64.exe",
+  "architecture": "x64",
+  "installerFormat": "electron-builder-nsis",
+  "versionMatch": "semver-prefix"
+}

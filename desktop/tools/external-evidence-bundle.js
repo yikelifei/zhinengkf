@@ -3,9 +3,21 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-const { resolveRepositoryRevision, normalizeRepositoryRevision } = require("./repository-provenance");
+const { resolveRepositoryState, normalizeRepositoryRevision } = require("./repository-provenance");
 const { verifyWindowsPackage } = require("./verify-windows-package");
+const {
+  assertSafePath,
+  assertSafeRoot,
+  cleanupPrivateTemp,
+  createPrivateSnapshot,
+  createTreeManifest,
+  evaluateArtifactPolicy,
+  inspectNativeAuthenticode,
+  loadReleasePolicy,
+  manifestsEqual,
+  runNativePackagedSmoke,
+  verifyNativeInstallerBinding,
+} = require("./windows-evidence-chain");
 
 const SCHEMA_VERSION = "smart_kefu_external_evidence_bundle_v1";
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
@@ -63,12 +75,14 @@ function pathInside(root, target) {
 
 function resolveEvidencePath(evidenceRoot, requestedPath) {
   if (!String(requestedPath || "").trim()) throw new Error("evidence report path is required");
-  const root = fs.realpathSync(path.resolve(evidenceRoot));
+  const safeRoot = assertSafeRoot(evidenceRoot);
+  const root = safeRoot.requested;
   const candidate = path.isAbsolute(requestedPath)
     ? path.resolve(requestedPath)
     : path.resolve(root, requestedPath);
   if (!pathInside(root, candidate)) throw new Error("evidence report path escapes evidence root");
-  const resolved = fs.realpathSync(candidate);
+  assertSafePath(safeRoot, candidate, "file");
+  const resolved = fs.realpathSync.native(candidate);
   if (!pathInside(root, resolved)) throw new Error("evidence report path escapes evidence root");
   const stat = fs.statSync(resolved);
   if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_REPORT_BYTES) throw new Error("evidence report file is invalid");
@@ -239,10 +253,17 @@ function validArtifact(value) {
     && /^[a-f0-9]{64}$/.test(String(value.sha256 || ""));
 }
 
-function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, verifySignature = verifyAuthenticode) {
+function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, hooks) {
   const state = inspectCommon("windows", loaded, currentRevision, nowMs);
   if (!state.report || !state.evidence.schemaValid || state.failures.length) {
     return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state);
+  }
+  if (hooks.mode === "native" && hooks.repositoryClean !== true) {
+    state.failures.push("native Windows evidence verification requires a clean verifier repository");
+    return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state, {
+      signedReleaseProfile: false,
+      nativeEvidenceEligible: false,
+    });
   }
   const signedProfile = state.report.verificationProfile === "signed-release";
   if (!signedProfile || state.report.status !== STATUS.PASS) {
@@ -276,41 +297,12 @@ function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, verifySign
     report: state.report,
     currentRevision,
     state,
+    evidenceRoot,
+    hooks,
   });
-  let signaturesValid = reportedSignaturesValid;
-  for (const artifact of artifacts.filter(Boolean)) {
-    const reportedSignature = signatures.find((item) => canonicalArtifactPath(item?.file) === artifact.file);
-    if (reportedSignature?.status !== "Valid") {
-      signaturesValid = false;
-      state.failures.push(`${artifact.label} report does not contain a valid Authenticode result`);
-      continue;
-    }
-    let actualSignature;
-    try {
-      actualSignature = verifySignature(artifact.file);
-    } catch {
-      actualSignature = { status: "Unavailable", unavailable: true };
-    }
-    const actualStatus = typeof actualSignature === "string" ? actualSignature : actualSignature?.status;
-    if (actualStatus === "Valid") {
-      const rechecked = inspectLocalArtifact(artifact.label, artifact.reported, state, evidenceRoot, { recordFailure: false });
-      if (!rechecked || rechecked.sha256 !== artifact.sha256 || rechecked.bytes !== artifact.bytes
-        || rechecked.identity !== artifact.identity) {
-        signaturesValid = false;
-        state.failures.push(`${artifact.label} changed while its signature was being verified`);
-      }
-    } else if (actualSignature?.unavailable || actualStatus === "Unavailable" || actualStatus === "Unknown") {
-      signaturesValid = false;
-      state.blockers.push(`${artifact.label} Authenticode could not be verified on this host`);
-    } else {
-      signaturesValid = false;
-      state.failures.push(`${artifact.label} Authenticode status is not Valid`);
-    }
-  }
   const valid = artifacts.every(Boolean)
     && distinctArtifacts
     && state.report.repositoryClean === true
-    && signaturesValid
     && reportedSignaturesValid
     && reportedChecksComplete
     && livePackageVerification.valid;
@@ -324,7 +316,13 @@ function inspectWindows(loaded, currentRevision, nowMs, evidenceRoot, verifySign
     distinctRegularArtifacts: distinctArtifacts,
     packageContentReverified: livePackageVerification.valid,
     packageVerificationStatus: livePackageVerification.status,
-    authenticodeReverified: signaturesValid,
+    authenticodeReverified: livePackageVerification.authenticodeStatus === STATUS.PASS,
+    signatureVerifierMode: hooks.mode,
+    runtimeSmokeMode: livePackageVerification.runtimeSmokeMode,
+    installerBindingMode: livePackageVerification.installerBindingMode,
+    snapshotManifestSha256: livePackageVerification.snapshotManifestSha256 || "",
+    testOnly: hooks.mode === "test-only",
+    nativeEvidenceEligible: hooks.mode === "native",
   });
 }
 
@@ -338,14 +336,12 @@ function inspectLocalArtifact(label, reported, state, evidenceRoot, options = {}
     return fail(`${label} artifact metadata is invalid`);
   }
   try {
-    const root = fs.realpathSync(path.resolve(evidenceRoot));
+    const safeRoot = assertSafeRoot(evidenceRoot);
+    const root = safeRoot.canonical;
     const requested = path.resolve(reported.file);
     if (!pathInside(root, requested)) return fail(`${label} artifact escapes evidence root`);
-    const requestedStat = fs.lstatSync(requested);
-    if (requestedStat.isSymbolicLink() || !requestedStat.isFile()) {
-      return fail(`${label} artifact must be a regular file, not a symbolic link`);
-    }
-    const file = fs.realpathSync(requested);
+    assertSafePath(safeRoot, requested, "file");
+    const file = fs.realpathSync.native(requested);
     if (!pathInside(root, file)) return fail(`${label} artifact escapes evidence root`);
     const stat = fs.statSync(file, { bigint: true });
     if (!stat.isFile() || stat.size <= 0) return fail(`${label} artifact is missing or invalid`);
@@ -376,8 +372,14 @@ function inspectDistinctArtifacts(installer, executable, state) {
   return distinct;
 }
 
-function inspectLiveWindowsPackage({ installer, executable, report, currentRevision, state }) {
-  const unavailable = { valid: false, status: "FAIL" };
+function inspectLiveWindowsPackage({ installer, executable, report, currentRevision, state, evidenceRoot, hooks }) {
+  const unavailable = {
+    valid: false,
+    status: "FAIL",
+    authenticodeStatus: "FAIL",
+    runtimeSmokeMode: hooks.mode,
+    installerBindingMode: hooks.mode,
+  };
   if (!installer || !executable) return unavailable;
   const version = String(report.version || "").trim();
   const outputDir = path.dirname(installer.file);
@@ -387,37 +389,117 @@ function inspectLiveWindowsPackage({ installer, executable, report, currentRevis
     state.failures.push("Windows artifacts do not match the versioned installer and unpacked executable layout");
     return unavailable;
   }
-  let verification;
+  let snapshot;
   try {
-    verification = verifyWindowsPackage({
-      outputDir,
+    assertSafePath(assertSafeRoot(evidenceRoot), outputDir, "directory");
+    snapshot = createPrivateSnapshot(outputDir);
+  } catch {
+    state.failures.push("Windows package tree is unsafe or changed while its private snapshot was created");
+    return unavailable;
+  }
+  try {
+    const snapshotOutputDir = snapshot.snapshotDirectory;
+    const snapshotInstaller = path.join(snapshotOutputDir, path.basename(installer.file));
+    const snapshotExecutable = path.join(snapshotOutputDir, "win-unpacked", "Smart Kefu.exe");
+    const runtimeSmoke = hooks.runPackagedSmoke({ outputDirectory: snapshotOutputDir, tempRoot: snapshot.tempRoot });
+    recordChainStatus(state, runtimeSmoke, "packaged runtime smoke");
+    const verification = verifyWindowsPackage({
+      outputDir: snapshotOutputDir,
       expectUnsigned: false,
       requireSigned: false,
       directoryOnly: false,
       repositoryRevision: currentRevision,
       repositoryClean: true,
+      trustStoredSmokeReport: false,
+      runtimeSmokeResult: runtimeSmoke,
+      inspectSignatures: false,
     });
-  } catch {
-    state.failures.push("live Windows package content verification could not be completed");
-    return unavailable;
-  }
-  const liveChecksPass = Array.isArray(verification.checks)
-    && verification.checks.length > 0
-    && verification.checks.every((item) => item?.status === STATUS.PASS);
-  const artifactsMatch = canonicalArtifactPath(verification.installer?.file) === installer.file
-    && canonicalArtifactPath(verification.executable?.file) === executable.file
-    && verification.installer?.bytes === installer.bytes
+    const liveChecksFail = !Array.isArray(verification.checks)
+      || verification.checks.length === 0
+      || verification.checks.some((item) => item?.status === STATUS.FAIL);
+    const liveChecksBlocked = Array.isArray(verification.checks)
+      && verification.checks.some((item) => item?.status === STATUS.BLOCKED);
+    if (liveChecksFail) state.failures.push("private snapshot package content, ASAR, resources or provenance verification failed");
+    else if (liveChecksBlocked) state.blockers.push("private snapshot package verification is incomplete on this host");
+    const artifactsMatch = canonicalArtifactPath(verification.installer?.file) === canonicalArtifactPath(snapshotInstaller)
+      && canonicalArtifactPath(verification.executable?.file) === canonicalArtifactPath(snapshotExecutable)
+      && verification.installer?.bytes === installer.bytes
     && verification.installer?.sha256 === installer.sha256
     && verification.executable?.bytes === executable.bytes
     && verification.executable?.sha256 === executable.sha256;
-  const valid = verification.status === STATUS.PASS
-    && liveChecksPass
-    && artifactsMatch
-    && verification.repositoryRevision === currentRevision
-    && verification.repositoryClean === true
-    && verification.version === version;
-  if (!valid) state.failures.push("live Windows package content, ASAR, provenance, revision or version verification failed");
-  return { valid, status: verification.status };
+    if (!artifactsMatch) state.failures.push("private snapshot artifacts do not match the reported installer and executable bytes");
+
+    const policy = hooks.releasePolicy || loadReleasePolicy();
+    const signatureResults = [
+      { label: "installer", file: snapshotInstaller },
+      { label: "executable", file: snapshotExecutable },
+    ].map((artifact) => {
+      let signature;
+      try {
+        signature = hooks.verifySignature(artifact.file, artifact.label, version);
+      } catch {
+        signature = { status: "Unavailable", unavailable: true, mode: hooks.mode };
+      }
+      const policyResult = evaluateArtifactPolicy({ ...artifact, version, policy, signature });
+      recordChainStatus(state, policyResult, `${artifact.label} release policy`);
+      return policyResult;
+    });
+    const authenticodeStatus = combineChainStatus(signatureResults);
+
+    const installerBinding = hooks.verifyInstallerBinding({
+      installer: snapshotInstaller,
+      unpackedDirectory: path.join(snapshotOutputDir, "win-unpacked"),
+      tempRoot: snapshot.tempRoot,
+    });
+    recordChainStatus(state, installerBinding, "signed installer payload binding");
+
+    const snapshotAfter = createTreeManifest(snapshotOutputDir);
+    const sourceAfter = createTreeManifest(outputDir);
+    const stable = manifestsEqual(snapshot.snapshotManifest, snapshotAfter)
+      && manifestsEqual(snapshot.sourceManifest, sourceAfter);
+    if (!stable) state.failures.push("package tree changed while the private snapshot was being verified");
+
+    const valid = verification.status === STATUS.PASS
+      && !liveChecksFail && !liveChecksBlocked
+      && artifactsMatch
+      && verification.repositoryRevision === currentRevision
+      && verification.repositoryClean === true
+      && verification.version === version
+      && runtimeSmoke.status === STATUS.PASS
+      && authenticodeStatus === STATUS.PASS
+      && installerBinding.status === STATUS.PASS
+      && stable;
+    const status = valid ? STATUS.PASS
+      : state.failures.length ? STATUS.FAIL : STATUS.BLOCKED;
+    return {
+      valid,
+      status,
+      authenticodeStatus,
+      runtimeSmokeMode: runtimeSmoke.mode || hooks.mode,
+      installerBindingMode: installerBinding.mode || hooks.mode,
+      snapshotManifestSha256: snapshot.snapshotManifest.sha256,
+    };
+  } catch (error) {
+    state.failures.push(`live Windows package verification could not be completed: ${error.message}`);
+    return unavailable;
+  } finally {
+    try {
+      cleanupPrivateTemp(snapshot.tempRoot);
+    } catch {
+      state.failures.push("private Windows evidence snapshot could not be cleaned safely");
+    }
+  }
+}
+
+function recordChainStatus(state, item, label) {
+  if (item?.status === STATUS.FAIL) state.failures.push(`${label}: ${item.summary || "verification failed"}`);
+  else if (item?.status !== STATUS.PASS) state.blockers.push(`${label}: ${item?.summary || "verification is unavailable"}`);
+}
+
+function combineChainStatus(items) {
+  if (items.some((item) => item?.status === STATUS.FAIL)) return STATUS.FAIL;
+  if (items.some((item) => item?.status !== STATUS.PASS)) return STATUS.BLOCKED;
+  return STATUS.PASS;
 }
 
 function canonicalArtifactPath(value) {
@@ -446,19 +528,37 @@ function sha256File(file) {
   return hash.digest("hex");
 }
 
-function verifyAuthenticode(file) {
-  if (process.platform !== "win32") return { status: "Unavailable", unavailable: true };
-  const escaped = file.replace(/'/g, "''");
-  const result = spawnSync(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", `(Get-AuthenticodeSignature -LiteralPath '${escaped}').Status.ToString()`],
-    { encoding: "utf8", windowsHide: true, shell: false, timeout: 30_000 },
-  );
-  if (result.error || result.status !== 0) return { status: "Unavailable", unavailable: true };
-  return { status: String(result.stdout || "Unknown").trim() || "Unknown" };
+function nativeHooks() {
+  const repositoryState = resolveRepositoryState({ repositoryRoot: path.resolve(__dirname, "..", "..") });
+  return {
+    mode: "native",
+    repositoryClean: repositoryState.clean,
+    repositoryRevision: repositoryState.revision,
+    verifySignature: inspectNativeAuthenticode,
+    runPackagedSmoke: runNativePackagedSmoke,
+    verifyInstallerBinding: verifyNativeInstallerBinding,
+    releasePolicy: null,
+  };
 }
 
 function validateEvidenceBundle(options = {}) {
+  const hooks = nativeHooks();
+  return validateEvidenceBundleInternal({ ...options, currentRevision: hooks.repositoryRevision }, hooks);
+}
+
+function createTestEvidenceBundleValidator(testHooks = {}) {
+  const hooks = {
+    mode: "test-only",
+    verifySignature: testHooks.verifySignature || (() => ({ status: "Unavailable", unavailable: true, mode: "test-only" })),
+    runPackagedSmoke: testHooks.runPackagedSmoke || (() => ({ status: "BLOCKED", summary: "test smoke hook is not configured", mode: "test-only" })),
+    verifyInstallerBinding: testHooks.verifyInstallerBinding || (() => ({ status: "BLOCKED", summary: "test installer hook is not configured", mode: "test-only" })),
+    releasePolicy: testHooks.releasePolicy || null,
+    repositoryClean: true,
+  };
+  return (options = {}) => validateEvidenceBundleInternal(options, hooks);
+}
+
+function validateEvidenceBundleInternal(options, hooks) {
   let currentRevision;
   try {
     currentRevision = normalizeRepositoryRevision(options.currentRevision);
@@ -478,7 +578,7 @@ function validateEvidenceBundle(options = {}) {
   const results = [
     inspectStaging(loaded.staging, currentRevision, nowMs),
     inspectRecovery(loaded.recovery, currentRevision, nowMs),
-    inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, options.verifySignature || verifyAuthenticode),
+    inspectWindows(loaded.windows, currentRevision, nowMs, evidenceRoot, hooks),
     result(
       "manual.windows_smartscreen",
       "Windows SmartScreen 与安装现场证据",
@@ -502,6 +602,7 @@ function validateEvidenceBundle(options = {}) {
       externalMutationCount: 0,
       secretsIncluded: false,
     },
+    verificationMode: hooks.mode,
     summary: {
       pass: results.filter((item) => item.status === STATUS.PASS).length,
       blocked: results.filter((item) => item.status === STATUS.BLOCKED).length,
@@ -563,8 +664,7 @@ the evidence root. This command does not generate or refresh external evidence.`
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) return printHelp();
-  const currentRevision = resolveRepositoryRevision({ repositoryRoot: path.resolve(__dirname, "..", "..") });
-  const report = validateEvidenceBundle({ ...options, currentRevision });
+  const report = validateEvidenceBundle(options);
   process.stdout.write(renderMarkdown(report));
   process.exitCode = EXIT_CODE[report.status];
 }
@@ -586,5 +686,7 @@ module.exports = {
   renderMarkdown,
   sha256File,
   validateEvidenceBundle,
-  verifyAuthenticode,
 };
+if (process.env.NODE_TEST_CONTEXT) {
+  module.exports.__createTestEvidenceBundleValidator = createTestEvidenceBundleValidator;
+}

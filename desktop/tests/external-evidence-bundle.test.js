@@ -14,6 +14,7 @@ const {
   parseArgs,
   renderMarkdown,
   validateEvidenceBundle,
+  __createTestEvidenceBundleValidator,
 } = require("../tools/external-evidence-bundle");
 
 const REVISION = "a".repeat(40);
@@ -40,6 +41,19 @@ const WINDOWS_CHECKS = [
   "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ];
 let cachedAsarFixture = null;
+const TEST_POLICY = Object.freeze({
+  schemaVersion: "smart_kefu_windows_release_signing_policy_v1",
+  identityStatus: "CONFIGURED",
+  allowedPublisherSubjects: ["CN=Smart Kefu Test Publisher"],
+  allowedCertificateThumbprints: ["A".repeat(40)],
+  productName: "Smart Kefu",
+  executableOriginalFilename: "Smart Kefu.exe",
+  installerOriginalFilename: "SmartKefu-Setup-{version}-x64.exe",
+  architecture: "x64",
+  installerFormat: "electron-builder-nsis",
+  versionMatch: "semver-prefix",
+  configured: true,
+});
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-evidence-bundle-"));
@@ -122,15 +136,35 @@ function writeReports(root, values = reports(root)) {
 }
 
 function validate(root, overrides = {}) {
-  return validateEvidenceBundle({
+  const verifySignature = overrides.verifySignature || ((file, label) => ({
+    status: "Valid",
+    subject: "CN=Smart Kefu Test Publisher",
+    thumbprint: "A".repeat(40),
+    productName: "Smart Kefu",
+    originalFilename: label === "installer" ? "SmartKefu-Setup-0.1.0-x64.exe" : "Smart Kefu.exe",
+    productVersion: "0.1.0",
+    fileVersion: "0.1.0",
+    mode: "test-only",
+  }));
+  const validator = __createTestEvidenceBundleValidator({
+    verifySignature,
+    runPackagedSmoke: overrides.runPackagedSmoke || (() => ({ status: "PASS", summary: "test smoke passed", mode: "test-only" })),
+    verifyInstallerBinding: overrides.verifyInstallerBinding || (() => ({ status: "PASS", summary: "test installer binding passed", mode: "test-only" })),
+    releasePolicy: overrides.releasePolicy || TEST_POLICY,
+  });
+  const bundleOptions = { ...overrides };
+  delete bundleOptions.verifySignature;
+  delete bundleOptions.runPackagedSmoke;
+  delete bundleOptions.verifyInstallerBinding;
+  delete bundleOptions.releasePolicy;
+  return validator({
     evidenceRoot: root,
     stagingReport: "staging.json",
     recoveryReport: "recovery.json",
     windowsReport: "windows.json",
     currentRevision: REVISION,
     now: NOW,
-    verifySignature: () => ({ status: "Valid" }),
-    ...overrides,
+    ...bundleOptions,
   });
 }
 
@@ -150,6 +184,9 @@ function writePeArtifact(root, relative, marker = 0) {
   content.write("MZ", 0, "ascii");
   content.writeUInt32LE(128, 0x3c);
   content.write("PE\0\0", 128, "binary");
+  content.writeUInt16LE(0x8664, 132);
+  content.writeUInt16LE(0xf0, 148);
+  content.writeUInt16LE(0x20b, 152);
   content[200] = marker;
   fs.writeFileSync(file, content);
   const bytes = fs.statSync(file).size;
@@ -224,6 +261,8 @@ test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly 
   assert.equal(windows.evidence.packageContentReverified, true);
   assert.equal(windows.evidence.distinctRegularArtifacts, true);
   assert.equal(windows.evidence.packageVerificationStatus, STATUS.PASS);
+  assert.equal(report.verificationMode, "test-only");
+  assert.equal(windows.evidence.nativeEvidenceEligible, false);
   assert.match(renderMarkdown(report), /SmartScreen/);
   assert.deepEqual(report.safety, {
     localFilesReadOnly: true,
@@ -375,6 +414,72 @@ test("Windows evidence re-verifies Authenticode and blocks when the host cannot 
   assert.equal(unavailable.results.find((item) => item.id === "evidence.windows_package").status, STATUS.BLOCKED);
 });
 
+test("a different valid publisher cannot satisfy the checked-in release policy", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const report = validate(root, {
+    verifySignature: () => ({
+      status: "Valid",
+      subject: "CN=Microsoft Windows, O=Microsoft Corporation",
+      thumbprint: "B".repeat(40),
+      productName: "Microsoft Windows",
+      originalFilename: "notepad.exe",
+      productVersion: "10.0.0.0",
+    }),
+  });
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
+test("stored smoke PASS cannot replace snapshot runtime execution", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const report = validate(root, {
+    runPackagedSmoke: () => ({ status: "BLOCKED", summary: "native runner unavailable", mode: "test-only" }),
+  });
+  const windows = report.results.find((item) => item.id === "evidence.windows_package");
+  assert.equal(windows.status, STATUS.BLOCKED);
+  assert.equal(windows.evidence.packageContentReverified, false);
+});
+
+test("installer payload mismatch fails even when report checks and signatures say PASS", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const report = validate(root, {
+    verifyInstallerBinding: () => ({ status: "FAIL", summary: "payload manifest mismatch", mode: "test-only" }),
+  });
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
+test("snapshot manifest detects package mutation during verification", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const report = validate(root, {
+    runPackagedSmoke: ({ outputDirectory }) => {
+      const target = path.join(outputDirectory, "win-unpacked", "resources", "services", "api", "main.js");
+      fs.chmodSync(target, 0o600);
+      fs.appendFileSync(target, "mutated during verification\n", "utf8");
+      return { status: "PASS", summary: "test hook returned PASS", mode: "test-only" };
+    },
+  });
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
+test("package snapshot rejects directory junctions instead of skipping them", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-junction-target-"));
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+  const junction = path.join(root, "win-unpacked", "resources", "linked-services");
+  try {
+    fs.symlinkSync(target, junction, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "ENOTSUP", "EACCES"].includes(error?.code)) return t.skip("junctions are unavailable on this host");
+    throw error;
+  }
+  const report = validate(root);
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
 test("secret-bearing input fails without copying the secret into the bundle", (t) => {
   const root = temporaryDirectory(t);
   const values = reports(root);
@@ -416,17 +521,44 @@ test("CLI requires an explicit root and all three report paths", () => {
   assert.throws(() => parseArgs([...args, "--execute"]), /unknown argument/);
 });
 
+test("production validator ignores injected verifier and runner options", (t) => {
+  const root = temporaryDirectory(t);
+  const values = reports(root);
+  values.windows.schemaVersion = "smart_kefu_windows_package_verification_v1";
+  writeReports(root, values);
+  let called = false;
+  const report = validateEvidenceBundle({
+    evidenceRoot: root,
+    stagingReport: "staging.json",
+    recoveryReport: "recovery.json",
+    windowsReport: "windows.json",
+    currentRevision: REVISION,
+    now: NOW,
+    verifySignature: () => { called = true; return { status: "Valid" }; },
+    runPackagedSmoke: () => { called = true; return { status: "PASS" }; },
+    verifyInstallerBinding: () => { called = true; return { status: "PASS" }; },
+  });
+  assert.equal(called, false);
+  assert.equal(report.verificationMode, "native");
+  assert.notEqual(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.PASS);
+});
+
 test("source contract is local read-only and package script is explicit", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "tools", "external-evidence-bundle.js"), "utf8");
+  const chain = fs.readFileSync(path.resolve(__dirname, "..", "tools", "windows-evidence-chain.js"), "utf8");
   const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
   assert.match(packageJson.scripts["external:evidence:bundle"], /external-evidence-bundle\.js$/);
-  assert.match(source, /Get-AuthenticodeSignature/);
+  assert.match(chain, /Get-AuthenticodeSignature/);
+  assert.match(chain, /System32[\s\S]*WindowsPowerShell[\s\S]*powershell\.exe/);
+  assert.match(chain, /createPrivateSnapshot/);
+  assert.match(chain, /verifyNativeInstallerBinding/);
   assert.match(source, /sha256File\(file\)/);
   assert.match(source, /stat\.size !== BigInt\(reported\.bytes\)/);
   assert.match(source, /stat\.nlink !== 1n/);
   assert.match(source, /inspectDistinctArtifacts/);
   assert.match(source, /verifyWindowsPackage\(\{/);
-  assert.match(source, /liveChecksPass/);
+  assert.match(source, /liveChecksFail/);
+  assert.doesNotMatch(source, /options\.verifySignature/);
   assert.doesNotMatch(source, /\bfetch\s*\(/);
   assert.doesNotMatch(source, /writeFile|appendFile|rmSync|unlink/);
   assert.doesNotMatch(source, /prisma|pg_dump|pg_restore|electron-builder|send_msg|method:\s*["']POST/);

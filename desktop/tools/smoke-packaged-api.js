@@ -13,17 +13,18 @@ const {
   desktopReadinessChallengeHeaders,
   desktopSessionCookieHeader,
 } = require("../apps/electron/packaged-runtime");
+const { selectEvidenceProcessEnvironment } = require("./windows-evidence-chain");
 
 const root = path.resolve(__dirname, "..");
-const outputDir = path.join(root, "release", "windows");
+const outputDir = path.resolve(process.env.PACKAGED_SMOKE_OUTPUT_DIR || path.join(root, "release", "windows"));
 const unpackedDir = path.join(outputDir, "win-unpacked");
 const resourcesDir = path.join(unpackedDir, "resources");
 const executable = path.join(unpackedDir, "Smart Kefu.exe");
 const apiEntry = path.join(resourcesDir, "services", "api", "main.js");
 const webEntry = path.join(resourcesDir, "services", "web", "apps", "web", "server.js");
 const readOnlyRoot = path.join(resourcesDir, "services", "runtime-root");
-const smokeRoot = path.join(outputDir, ".packaged-full-stack-smoke");
-const reportFile = path.join(outputDir, "verification", "packaged-api-smoke.json");
+const smokeRoot = path.resolve(process.env.PACKAGED_SMOKE_RUNTIME_DIR || path.join(outputDir, ".packaged-full-stack-smoke"));
+const reportFile = path.resolve(process.env.PACKAGED_SMOKE_REPORT_FILE || path.join(outputDir, "verification", "packaged-api-smoke.json"));
 const apiPort = Number(process.env.PACKAGED_API_SMOKE_PORT || 32191);
 const webPort = Number(process.env.PACKAGED_WEB_SMOKE_PORT || 32190);
 const apiHealthUrl = `http://127.0.0.1:${apiPort}/api/health`;
@@ -58,8 +59,7 @@ async function main() {
   fs.mkdirSync(smokeRoot, { recursive: true });
   const token = crypto.randomBytes(32).toString("hex");
   const desktopWebSessionProof = crypto.randomBytes(32).toString("hex");
-  const commonEnv = {
-    ...process.env,
+  const commonEnv = selectEvidenceProcessEnvironment({
     ELECTRON_RUN_AS_NODE: "1",
     NODE_ENV: "production",
     HOSTNAME: "127.0.0.1",
@@ -75,7 +75,7 @@ async function main() {
       path.join(resourcesDir, "app.asar", "node_modules"),
       path.join(resourcesDir, "app.asar.unpacked", "node_modules"),
     ].join(path.delimiter),
-  };
+  }, smokeRoot);
 
   const processes = [];
   try {

@@ -59,7 +59,13 @@ npm.cmd run package:win:signed
 
 报告写入 `release/windows/verification/latest.{json,md}`。
 
-报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及全部构建成功、调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。只有二次 HEAD/clean 检查通过后，构建工具才生成临时 `.package-provenance.json` 并收入 asar；验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`。它要求安装器和主程序是证据根内两个不同、非符号链接、非硬链接且内容不等价的普通 PE 文件，并对实际目录重新运行同一套只读包验证器，复核固定命名、资源树、asar 条目、包内 provenance、revision/version、实际字节数、SHA-256 与 Authenticode；报告中的 `checks[].status` 不能替代现场复核，任何缺失、变化或本机不可可靠验证的结果都不会通过。
+报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及全部构建成功、调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。只有二次 HEAD/clean 检查通过后，构建工具才生成临时 `.package-provenance.json` 并收入 asar；验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。
+
+外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，但报告中的 `checks[].status`、历史 smoke JSON 和 `Valid` 字样都不能替代现场复核。验证器会从 evidence root 到安装器、`win-unpacked`、`resources`、`app.asar`、services 和 smoke 的每一级路径拒绝符号链接、junction/reparse point、硬链接和未知节点；随后把完整输出复制到权限收紧的私有临时快照，对源树与快照计算逐文件 SHA-256 清单，并在验证结束时同时重算两棵树以检测中途变化。所有 PE、asar、resources、provenance、签名与 runtime smoke 都针对同一个快照。
+
+正式签名身份由 `config/windows-release-signing-policy.json` 控制，必须在受控发布变更中把 `identityStatus` 改为 `CONFIGURED`，并填写公司证书的精确 publisher subject 与 thumbprint。当前仓库故意保持 `UNCONFIGURED`，所以任何文件即使显示 Authenticode `Valid` 也只能 `BLOCKED`，不能成为正式签名证据。原生验证使用绝对 `System32\WindowsPowerShell\v1.0\powershell.exe`，同时核对 product name、original filename、版本和 x64 PE。不得把 Microsoft 或其他厂商的已签名 EXE 当作本项目证据。
+
+安装器内容绑定优先使用项目依赖中的 `7zip-bin`：先只读提取 electron-builder NSIS，再提取唯一 `app-64.7z`，其完整清单必须与快照的 `win-unpacked` 完全一致；没有 extractor、无法识别该 payload 或无法证明一致时保持 `BLOCKED`/`FAIL`，不做浅层 NSIS 猜测。外部 runtime 证明会从同一快照在隔离的 32191/32190 端口重新执行 packaged smoke，并仅传递最小 OS 环境与临时目录；历史 `packaged-api-smoke.json` 单独不能令该项通过。
 
 即使 `signed-release` 报告通过，SmartScreen reputation、目标机安装/卸载和人工启动仍不在该报告结构内，必须继续作为人工 `BLOCKED` 补证；未签名报告绝不能满足正式签名项。
 
