@@ -6,6 +6,7 @@ import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/ident
 import { routingCorrectionRequestKey } from "../shared/routing-correction";
 import {
   assertExactOperationReplay,
+  assertStoredOperationIdentityReplay,
   createChatImportOperationFingerprint,
   deterministicOperationId,
   isUniqueConstraintError,
@@ -245,13 +246,24 @@ export class PrismaOperationsService {
     let operation: RequestOperationMetadata | null = null;
     try {
       return await this.prisma.$transaction(async (tx: PrismaLike) => {
+        const existing = await tx.chatImport.findUnique({ where: { id: importId }, include: { samples: true } });
+        if (existing) {
+          const storedIdentity = assertStoredOperationIdentityReplay(
+            identityFields(existing),
+            payload || {},
+            "chat import create",
+          );
+          operation = requestOperationMetadata(
+            operationKey,
+            createChatImportOperationFingerprint(payload || {}, storedIdentity),
+          );
+          return this.replayChatImport(existing, operation);
+        }
         const identity = await this.resolveIdentity(tx, payload, "chat import");
         operation = requestOperationMetadata(
           operationKey,
           createChatImportOperationFingerprint(payload || {}, identity.fields),
         );
-        const existing = await tx.chatImport.findUnique({ where: { id: importId }, include: { samples: true } });
-        if (existing) return this.replayChatImport(existing, operation);
         const requestedAgent = payload.agentId
           ? await tx.customerServiceAgent.findUnique({ where: { id: payload.agentId } })
           : null;

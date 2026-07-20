@@ -5,6 +5,7 @@ import { BadRequestException, Injectable, InternalServerErrorException, NotFound
 import { routingCorrectionRequestKey } from "../shared/routing-correction";
 import {
   assertExactOperationReplay,
+  assertStoredOperationIdentityReplay,
   createChatImportOperationFingerprint,
   deterministicOperationId,
   normalizeOperationKey,
@@ -1929,9 +1930,14 @@ export class LocalStoreService {
 
   createNotification(level: string, title: string, body?: string, target?: any) {
     const data = this.read();
+    const effectKey = String(target?.effectKey || "").trim();
+    if (effectKey) {
+      const existing = data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey);
+      if (existing) return existing;
+    }
     const identity = this.resolveTargetIdentity(data, target || {}, "notification target");
     const record = {
-      id: id("notice"),
+      id: effectKey ? deterministicOperationId("notice", effectKey) : id("notice"),
       level,
       title,
       body,
@@ -2322,10 +2328,36 @@ export class LocalStoreService {
   createChatImport(payload: any, parsed: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const identity = this.validateOptionalConversationBinding(data, payload, "chat import");
     const operationKey = payload?.operationKey
       ? normalizeOperationKey(payload.operationKey, "chat import operationKey")
       : `legacy:${randomUUID()}`;
+    const importId = deterministicOperationId("import", operationKey);
+    const existing = data.chatImports.find((item) => item.id === importId);
+    if (existing) {
+      const storedIdentity = assertStoredOperationIdentityReplay(
+        {
+          customerId: existing.customerId,
+          conversationId: existing.conversationId,
+          wechatAccountId: existing.wechatAccountId,
+        },
+        payload || {},
+        "chat import create",
+      );
+      const replayOperation = requestOperationMetadata(
+        operationKey,
+        createChatImportOperationFingerprint(payload || {}, storedIdentity),
+      );
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existing.identityBinding),
+        replayOperation,
+        "chat import create",
+      );
+      const existingSamples = data.trainingSamples
+        .filter((sample) => sample.importId === existing.id)
+        .map((sample) => this.decorateTrainingSample(sample));
+      return { ...existing, samples: existingSamples };
+    }
+    const identity = this.validateOptionalConversationBinding(data, payload, "chat import");
     const operation = requestOperationMetadata(
       operationKey,
       createChatImportOperationFingerprint(payload || {}, {
@@ -2334,19 +2366,6 @@ export class LocalStoreService {
         wechatAccountId: identity.wechatAccountId,
       }),
     );
-    const importId = deterministicOperationId("import", operationKey);
-    const existing = data.chatImports.find((item) => item.id === importId);
-    if (existing) {
-      assertExactOperationReplay(
-        readRequestOperationMetadata(existing.identityBinding),
-        operation,
-        "chat import create",
-      );
-      const existingSamples = data.trainingSamples
-        .filter((sample) => sample.importId === existing.id)
-        .map((sample) => this.decorateTrainingSample(sample));
-      return { ...existing, samples: existingSamples };
-    }
     const record: any = {
       id: importId,
       name: payload.name || `聊天记录导入 ${new Date().toLocaleString("zh-CN")}`,
@@ -2942,8 +2961,14 @@ export class LocalStoreService {
 
   createReviewLog(payload: any) {
     const data = this.read();
+    const effectKey = String(payload?.metadata?.effectKey || "").trim();
+    if (effectKey) {
+      const existing = data.reviewLogs.find((log) => String(log?.metadata?.effectKey || "") === effectKey);
+      if (existing) return existing;
+    }
     const now = new Date().toISOString();
     const record = this.buildReviewLogRecord(data, payload, now);
+    if (effectKey) record.id = deterministicOperationId("review", effectKey);
     data.reviewLogs.push(record);
     this.write(data);
     return record;

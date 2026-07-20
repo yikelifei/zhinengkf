@@ -68,13 +68,13 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "docs/PRODUCTION_RELEASE_CHECKLIST.md", "npm run project:completion:audit\nnpm run package:win:signed\nnpm run database:recovery:execute\n真实签名证据保持 BLOCKED\n");
   write(root, "desktop/apps/api/src/automation/automation-queue.runtime.ts", 'import { Queue, Worker } from "bullmq";\nnew Queue("x", { connection: {} }); new Worker("x", async()=>{}, { connection: {} });\n');
   write(root, "desktop/apps/api/src/automation/automation-scheduler.service.ts", 'lowValueAutomationMode === "durable"; bullmq_redis; readiness();\n');
-  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", 'listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); createChatImport(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations(); routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; trainingSample.findFirst(); knowledgeEntry.findFirst(); correctionRequestKey: requestKey; TransactionIsolationLevel.Serializable; NotFoundException; BadRequestException; deterministicOperationId("import", operationKey); deterministicOperationId("sample", operationKey, pairIndex); deterministicOperationId("knowledge", operationKey, pairIndex); isUniqueConstraintError(error); replayChatImport();\n');
-  write(root, "desktop/apps/api/src/shared/operation-idempotency.ts", "const OPERATION_KEY_MIN_LENGTH = 16; const OPERATION_KEY_MAX_LENGTH = 128; createOperationFingerprint(); deterministicOperationId(); OPERATION_KEY_REUSED;\n");
+  write(root, "desktop/apps/api/src/prisma/prisma-operations.service.ts", 'listAgents(); listAgentSkills(); createRouteEvaluation(); correctRouteEvaluation(); reviewTrainingSample(); applyAgentSkillSuggestions(); listConversations(); listConversationAudit(); updateConversationOperations(); routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; trainingSample.findFirst(); knowledgeEntry.findFirst(); correctionRequestKey: requestKey; TransactionIsolationLevel.Serializable; NotFoundException; BadRequestException; deterministicOperationId("import", operationKey); deterministicOperationId("sample", operationKey, pairIndex); deterministicOperationId("knowledge", operationKey, pairIndex); isUniqueConstraintError(error); replayChatImport();\nasync createChatImport(payload: any, parsed: any) { const existing = await tx.chatImport.findUnique({ where: { id: importId } }); if (existing) { assertStoredOperationIdentityReplay(); return this.replayChatImport(existing, operation); } const identity = await this.resolveIdentity(tx, payload, "chat import"); }\n');
+  write(root, "desktop/apps/api/src/shared/operation-idempotency.ts", "const OPERATION_KEY_MIN_LENGTH = 16; const OPERATION_KEY_MAX_LENGTH = 128; createOperationFingerprint(); deterministicOperationId(); assertStoredOperationIdentityReplay(); OPERATION_KEY_REUSED;\n");
   write(root, "desktop/tools/initialize-prisma-agents.js", 'const execute=process.argv.includes("--execute");\nconst requiredConfirmation="INITIALIZE_PRISMA_AGENTS";\nif (!execute) { console.log({status:"PLAN", writesExecuted:false}); process.exit(0); }\nif (confirmation !== requiredConfirmation) throw new Error("refusing");\ninitializePrismaAgentData().catch(() => { process.stderr.write("failed; inspect protected deployment logs"); });\n');
   write(root, "desktop/apps/api/src/agents/agents.service.ts", "PrismaOperationsService; appConfig.useLocalStore; this.requirePrisma().listAgents(); this.requirePrisma().listAgentSkills();\n");
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
-  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\n');
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\n');
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
@@ -89,7 +89,7 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/storage/asset-content-security.ts", 'sharp(buffer); %PDF-; ACTIVE_PDF_PATTERN; new TextDecoder("utf-8", { fatal: true }); ACTIVE_TEXT_PATTERN; asset fileName extension does not match file content; asset mimeType does not match file content; kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: false;\n');
   write(root, "desktop/apps/api/src/storage/local-file-response.ts", 'X-Content-Type-Options; nosniff; Content-Security-Policy; sandbox; Content-Disposition; "attachment";\n');
   write(root, "desktop/docs/DESIGN_PLATFORM_CONTRACT.md", "DNS rebinding; Content-Disposition; realpath; 不再作为“部署侧未决”项冒充已完成;\n");
-  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); replayDesignJobCreate();\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: `${effectRoot}:handoff-review`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);\nasync create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }\n');
   write(root, "desktop/apps/api/src/shared/image-fingerprint.ts", 'import sharp from "sharp";\nconst IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";\nsharp().rotate().flatten({}).greyscale().resize(9, 8);\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts", 'fetch(`/cgi-bin/media/get?media_id=${encodeURIComponent(mediaId)}`); errcode === 40007; errcode === 41006; errcode === 45009; retry_exhausted;\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts", 'MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES; LOCAL_STORAGE_ROOT; fs.link(temporaryPath, finalPath); inspectExistingImage();\n');
@@ -156,7 +156,8 @@ function isResumableCompletedExecution(execution) {
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", `
 buildLegacyImageIdentityHash(); legacyIdentityHash; design_platform_callback_auth;
 hasIndependentDesignPlatformCallbackApiKey(); severity: "error"; assertDesignPlatformPreflight();
-normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); replayDesignJobCreate();
+normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: \`\${effectRoot}:handoff-review\`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);
+async create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }
 class DesignJobsService {
   async listExecutions(id, expected) {
     if (!expected.expectedWechatAccountId || !expected.expectedConversationId || !expected.expectedCustomerId) throw new Error("complete identity required");
@@ -256,6 +257,7 @@ resolutionAction(execution.availableResolution);
 function postJsonWithNetworkRetry(path, body) { const serializedBody = JSON.stringify(body); }
 function createClientOperationKey() {}
 const requestPayload: { operationKey: string } = {};
+export async function createDemoDesignJob(identity, assetIds, operationKey: string) {}
 function designExecutionExpectedIdentityQuery(expected) {
   const params = new URLSearchParams();
   params.set("expectedWechatAccountId", expected.expectedWechatAccountId);
@@ -274,6 +276,20 @@ export async function resolveDesignExecutionRefund(designJobId, executionId, exp
   return post(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-refund\`,
     { ...expected, resolution: "confirmed_refunded" });
 }
+`);
+  write(root, "desktop/apps/web/src/lib/client-operation-key.ts", `
+function reserveClientOperation(scope, payload, pending) {
+  const payloadSignature = stableClientPayload(payload);
+  if (pending?.scope === scope && pending.payloadSignature === payloadSignature) return pending;
+}
+function completeClientOperation(pending, completedKey) { return pending?.key === completedKey ? null : pending; }
+function stableClientPayload(value) { return Object.keys(value).sort(); }
+`);
+  write(root, "desktop/apps/web/src/features/training/training-import-page.tsx", `
+const pendingImportOperation = useRef<PendingClientOperation | null>(null);
+const operation = reserveClientOperation("training-import", requestPayload, pendingImportOperation.current);
+await importChatTranscript({ operationKey: operation.key });
+pendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);
 `);
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.controller.ts", `
 @Controller("wechat-work")
@@ -519,6 +535,51 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.equal(JSON.stringify(report).includes(path.resolve(root)), false);
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/project-completion-audit.js"), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
+});
+
+test("idempotency audit rejects mutable-identity-first replay and browser operation-key drift", () => {
+  const mutations = [
+    {
+      id: "contract.design_job_create_idempotency",
+      file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+      from: "const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload);",
+      to: "const identity = await this.validateCreateIdentity(payload); const existing = findUnique({ where: { requestId } }); if (existing) return existing;",
+    },
+    {
+      id: "contract.local_chat_import_existing_first",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: "const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, \"chat import\");",
+      to: "const identity = this.validateOptionalConversationBinding(data, payload, \"chat import\"); const existing = data.chatImports.find((item) => item.id === importId); if (existing) return existing;",
+    },
+    {
+      id: "contract.training_import_idempotency",
+      file: "desktop/apps/api/src/prisma/prisma-operations.service.ts",
+      from: "const existing = await tx.chatImport.findUnique({ where: { id: importId } }); if (existing) { assertStoredOperationIdentityReplay(); return this.replayChatImport(existing, operation); } const identity = await this.resolveIdentity(tx, payload, \"chat import\");",
+      to: "const identity = await this.resolveIdentity(tx, payload, \"chat import\"); const existing = await tx.chatImport.findUnique({ where: { id: importId } }); if (existing) return existing;",
+    },
+    {
+      id: "contract.web_create_operation_retry",
+      file: "desktop/apps/web/src/lib/api.ts",
+      from: "operationKey: string",
+      to: 'operationKey = createClientOperationKey("design-job")',
+    },
+    {
+      id: "contract.training_import_operation_lifecycle",
+      file: "desktop/apps/web/src/features/training/training-import-page.tsx",
+      from: "await importChatTranscript({ operationKey: operation.key });\npendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);",
+      to: "pendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);\nawait importChatTranscript({ operationKey: operation.key });",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.match(source, new RegExp(mutation.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
 });
 
 test("asset ingestion audit contract fails when bounded input markers drift", () => {

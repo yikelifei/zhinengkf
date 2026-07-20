@@ -29,7 +29,9 @@ import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/ident
 import { fingerprintImageFile } from "../shared/image-fingerprint";
 import {
   assertExactOperationReplay,
+  assertStoredOperationIdentityReplay,
   createOperationFingerprint,
+  deterministicOperationId,
   isUniqueConstraintError,
   normalizeOperationKey,
   readRequestOperationMetadata,
@@ -177,6 +179,7 @@ type DesignPlatformSmokeTestResult = {
 export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly activeResultPolls = new Set<string>();
   private readonly activeExecutionPromises = new Map<string, Promise<void>>();
+  private readonly activeCreateEffectPromises = new Map<string, Promise<any>>();
   private activeRecoveryReconciliation: Promise<void> | null = null;
   private recoveryStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryInterval: ReturnType<typeof setInterval> | null = null;
@@ -883,6 +886,42 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
   async create(payload: CreateDesignJobPayload) {
     const requestId = normalizeOperationKey(payload?.operationKey, "design job operationKey");
+    const existing = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(requestId)
+      : await this.prisma.designJob.findUnique({ where: { requestId } });
+    if (existing) {
+      const storedIdentity = assertStoredOperationIdentityReplay(
+        {
+          customerId: existing.customerId,
+          conversationId: existing.conversationId,
+          wechatAccountId: existing.wechatAccountId,
+        },
+        payload as any,
+        "design job create",
+      );
+      const replayPayload = {
+        ...payload,
+        customerId: String(storedIdentity.customerId || ""),
+        conversationId: String(storedIdentity.conversationId || payload.conversationId || ""),
+        wechatAccountId: storedIdentity.wechatAccountId || undefined,
+      } as CreateDesignJobPayload;
+      const replayAssets = this.normalizeRequestedAssets(replayPayload);
+      const replayOperation = requestOperationMetadata(
+        requestId,
+        createOperationFingerprint(
+          "design-job-create",
+          storedIdentity,
+          this.normalizeDesignCreateOperationPayload(replayPayload, replayAssets),
+        ),
+      );
+      const replayReadiness = validateDesignRequest({
+        ...replayPayload,
+        designType: replayPayload.designType || "bundle_render",
+        assets: replayAssets,
+      });
+      return this.completeDesignJobCreateEffects(existing, replayOperation, replayReadiness);
+    }
+
     const identity = await this.validateCreateIdentity(payload);
     const normalizedPayload = {
       ...payload,
@@ -908,11 +947,6 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       designType: normalizedPayload.designType || "bundle_render",
       assets: requestedAssets,
     });
-    const existing = appConfig.useLocalStore
-      ? this.localStore.getDesignJob(requestId)
-      : await this.prisma.designJob.findUnique({ where: { requestId } });
-    if (existing) return this.replayDesignJobCreate(existing, operation, check);
-
     const requirements = {
       useRealSkuImages: true,
       showAllItems: true,
@@ -941,20 +975,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         status: !check.ok || isHighValue ? "manual_review" : "draft",
         manualQcRequired: true,
       });
-      if (!check.ok) {
-        await this.notifications.create("warning", "设计任务资料不完整", `缺少字段：${check.missing.join(", ")}`, {
-          designJobId: job.id,
-        });
-      }
-      const resultJob = isHighValue
-        ? await this.handoffDesignJobToManual(job, {
-            reason: "high_value_customer",
-            source: "create_design_job",
-            beforeStatus: "created",
-            note: "金额达到高价值线，需要人工确认方案、报价和跟进节奏。",
-          })
-        : job;
-      return { ...resultJob, readiness: check };
+      return this.completeDesignJobCreateEffects(job, operation, check);
     }
 
     let job: any;
@@ -993,23 +1014,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           message: "design job operation is still being committed; retry with the same operationKey",
         });
       }
-      return this.replayDesignJobCreate(concurrent, operation, check);
+      return this.completeDesignJobCreateEffects(concurrent, operation, check);
     }
-
-    if (!check.ok) {
-      await this.notifications.create("warning", "设计任务资料不完整", `缺少字段：${check.missing.join(", ")}`, {
-        designJobId: job.id,
-      });
-    }
-    const resultJob = isHighValue
-      ? await this.handoffDesignJobToManual(job, {
-          reason: "high_value_customer",
-          source: "create_design_job",
-          beforeStatus: "created",
-          note: "金额达到高价值线，需要人工确认方案、报价和跟进节奏。",
-        })
-      : job;
-    return { ...resultJob, readiness: check };
+    return this.completeDesignJobCreateEffects(job, operation, check);
   }
 
   async submit(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -2610,7 +2617,20 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }) {
     if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
     const prisma = this.prisma as any;
-    return prisma.reviewLog.create({ data: payload });
+    const effectKey = String(payload.metadata?.effectKey || "").trim();
+    const effectId = effectKey ? deterministicOperationId("review", effectKey) : "";
+    if (effectId && typeof prisma.reviewLog.findUnique === "function") {
+      const existing = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (existing) return existing;
+    }
+    try {
+      return await prisma.reviewLog.create({ data: effectId ? { id: effectId, ...payload } : payload });
+    } catch (error) {
+      if (!effectId || !isUniqueConstraintError(error) || typeof prisma.reviewLog.findUnique !== "function") throw error;
+      const winner = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (!winner) throw error;
+      return winner;
+    }
   }
 
   private buildManualHandoffMetadata(
@@ -3122,9 +3142,173 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     };
   }
 
-  private replayDesignJobCreate(job: any, operation: RequestOperationMetadata, readiness: any) {
+  private async completeDesignJobCreateEffects(job: any, operation: RequestOperationMetadata, readiness: any): Promise<any> {
     assertExactOperationReplay(readRequestOperationMetadata(job?.requirements), operation, "design job create");
-    return { ...job, readiness };
+    const active = this.activeCreateEffectPromises.get(job.id);
+    if (active) {
+      try {
+        return await active;
+      } catch {
+        if (this.activeCreateEffectPromises.get(job.id) === active) {
+          this.activeCreateEffectPromises.delete(job.id);
+        }
+        return this.completeDesignJobCreateEffects(job, operation, readiness);
+      }
+    }
+    const promise = this.runDesignJobCreateEffects(job, operation, readiness);
+    this.activeCreateEffectPromises.set(job.id, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.activeCreateEffectPromises.get(job.id) === promise) {
+        this.activeCreateEffectPromises.delete(job.id);
+      }
+    }
+  }
+
+  private async runDesignJobCreateEffects(job: any, operation: RequestOperationMetadata, readiness: any) {
+    let current = await this.loadDesignJobForCreateEffects(job.id);
+    assertExactOperationReplay(readRequestOperationMetadata(current?.requirements), operation, "design job create");
+    let effects = this.readDesignJobCreateEffects(current);
+    if (effects.completedAt) return { ...current, readiness };
+    const effectRoot = `design-job-create:${operation.key}`;
+
+    if (!readiness.ok && effects.readinessNotification !== "completed") {
+      await this.notifications.create(
+        "warning",
+        "设计任务资料不完整",
+        `缺少字段：${readiness.missing.join(", ")}`,
+        {
+          effectKey: `${effectRoot}:readiness-notification`,
+          designJobId: current.id,
+          requestId: current.requestId,
+          conversationId: current.conversationId,
+          customerId: current.customerId,
+          wechatAccountId: current.wechatAccountId,
+        },
+      );
+      current = await this.markDesignJobCreateEffects(current.id, operation, { readinessNotification: "completed" });
+      effects = this.readDesignJobCreateEffects(current);
+    }
+
+    if (current.isHighValue) {
+      if (effects.manualStatus !== "completed") {
+        current = await this.markDesignJobCreateEffects(
+          current.id,
+          operation,
+          { manualStatus: "completed" },
+          { status: "manual_review", manualQcRequired: true },
+        );
+        effects = this.readDesignJobCreateEffects(current);
+      }
+
+      if (effects.manualLock !== "completed") {
+        const manualLock = await this.wechatDispatch.setConversationManualLock(current.conversationId, {
+          expectedWechatAccountId: current.wechatAccountId,
+          expectedConversationId: current.conversationId,
+          expectedCustomerId: current.customerId,
+          locked: true,
+          reviewer: "system",
+          reason: "high_value_customer",
+          note: "金额达到高价值线，需要人工确认方案、报价和跟进节奏。",
+          effectKey: `${effectRoot}:manual-lock`,
+        });
+        current = await this.markDesignJobCreateEffects(current.id, operation, {
+          manualLock: "completed",
+          blockedSendTaskIds: (manualLock?.blockedSendTasks || []).map((task: any) => task.id),
+          inFlightSendTaskIds: (manualLock?.inFlightSendTasks || []).map((task: any) => task.id),
+        });
+        effects = this.readDesignJobCreateEffects(current);
+      }
+
+      const blockedSendTaskIds = Array.isArray(effects.blockedSendTaskIds) ? effects.blockedSendTaskIds : [];
+      const inFlightSendTaskIds = Array.isArray(effects.inFlightSendTaskIds) ? effects.inFlightSendTaskIds : [];
+      if (effects.handoffNotification !== "completed") {
+        const note = "金额达到高价值线，需要人工确认方案、报价和跟进节奏。";
+        await this.notifications.create(
+          "warning",
+          "设计任务已转人工",
+          blockedSendTaskIds.length ? `${note} 已暂停 ${blockedSendTaskIds.length} 个待发送任务。` : note,
+          {
+            effectKey: `${effectRoot}:handoff-notification`,
+            designJobId: current.id,
+            requestId: current.requestId,
+            conversationId: current.conversationId,
+            customerId: current.customerId,
+            wechatAccountId: current.wechatAccountId,
+            blockedSendTaskIds,
+            inFlightSendTaskIds,
+          },
+        );
+        current = await this.markDesignJobCreateEffects(current.id, operation, { handoffNotification: "completed" });
+        effects = this.readDesignJobCreateEffects(current);
+      }
+
+      if (effects.handoffReviewLog !== "completed") {
+        await this.createReviewLog({
+          targetType: "design_job",
+          targetId: current.id,
+          decision: "high_value_customer",
+          reviewer: "system",
+          note: "金额达到高价值线，需要人工确认方案、报价和跟进节奏。",
+          beforeStatus: "created",
+          afterStatus: "manual_review",
+          metadata: {
+            effectKey: `${effectRoot}:handoff-review`,
+            ...this.buildManualHandoffMetadata(current, {
+              reason: "high_value_customer",
+              source: "create_design_job",
+            }),
+            blockedSendTaskIds,
+            inFlightSendTaskIds,
+          },
+        });
+        current = await this.markDesignJobCreateEffects(current.id, operation, { handoffReviewLog: "completed" });
+      }
+    }
+
+    current = await this.markDesignJobCreateEffects(current.id, operation, { completedAt: new Date().toISOString() });
+    return { ...current, readiness };
+  }
+
+  private async loadDesignJobForCreateEffects(id: string) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException(`design job not found while completing create effects: ${id}`);
+    return job;
+  }
+
+  private readDesignJobCreateEffects(job: any): Record<string, any> {
+    const requirements = isPlainObject(job?.requirements) ? job.requirements : {};
+    return isPlainObject(requirements.createEffects) ? requirements.createEffects : {};
+  }
+
+  private async markDesignJobCreateEffects(
+    id: string,
+    operation: RequestOperationMetadata,
+    effectPatch: Record<string, unknown>,
+    jobPatch: Record<string, unknown> = {},
+  ) {
+    const latest = await this.loadDesignJobForCreateEffects(id);
+    assertExactOperationReplay(readRequestOperationMetadata(latest?.requirements), operation, "design job create");
+    const requirements = isPlainObject(latest.requirements) ? latest.requirements : {};
+    const createEffects = this.readDesignJobCreateEffects(latest);
+    const patch = {
+      ...jobPatch,
+      requirements: {
+        ...requirements,
+        createEffects: {
+          version: 1,
+          ...createEffects,
+          ...effectPatch,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    return appConfig.useLocalStore
+      ? this.localStore.updateDesignJob(id, patch)
+      : this.prisma.designJob.update({ where: { id }, data: patch as any });
   }
 
   private async findDesignJobWithImages(id: string) {

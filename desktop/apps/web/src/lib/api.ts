@@ -1,3 +1,6 @@
+import { createClientOperationKey } from "./client-operation-key";
+export { createClientOperationKey } from "./client-operation-key";
+
 export type DesignJob = {
   id: string;
   requestId: string;
@@ -1900,10 +1903,6 @@ async function postJsonWithNetworkRetry<T>(path: string, body: unknown): Promise
   throw new Error("network retry exhausted");
 }
 
-export function createClientOperationKey(scope: "design-job" | "training-import") {
-  return `${scope}:${globalThis.crypto.randomUUID()}`;
-}
-
 async function patchJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
@@ -2600,7 +2599,7 @@ export async function recommendBundle(payload: {
 export async function createDemoDesignJob(
   identity: { wechatAccountId: string; customerId: string; conversationId: string },
   assetIds: string[] = [],
-  operationKey = createClientOperationKey("design-job"),
+  operationKey: string,
 ): Promise<DesignJob> {
   const budget = { mode: "per_box", perUnitAmount: 180, quantity: 50, totalAmount: 9000 };
   const scene = "员工福利";

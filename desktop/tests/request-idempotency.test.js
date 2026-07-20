@@ -14,12 +14,20 @@ require("ts-node").register({
 
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
+const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
 const { PrismaOperationsService } = require("../apps/api/src/prisma/prisma-operations.service");
 const { TrainingService } = require("../apps/api/src/training/training.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const {
+  createChatImportOperationFingerprint,
+  deterministicOperationId,
   normalizeOperationKey,
+  requestOperationMetadata,
 } = require("../apps/api/src/shared/operation-idempotency");
+const {
+  completeClientOperation,
+  reserveClientOperation,
+} = require("../apps/web/src/lib/client-operation-key");
 
 const DESIGN_KEY = "design-job:11111111-1111-4111-8111-111111111111";
 const TRAINING_KEY = "training-import:22222222-2222-4222-8222-222222222222";
@@ -84,6 +92,12 @@ function createStore(overrides = {}) {
     "utf8",
   );
   return { store, tempDir };
+}
+
+function mutateStore(store, mutate) {
+  const data = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
+  mutate(data);
+  fs.writeFileSync(store.filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
 function designPayload(overrides = {}) {
@@ -151,6 +165,18 @@ test("LocalStore design create replays after a lost response and rejects key reu
     assert.equal(replay.requestId, DESIGN_KEY);
     assert.equal(store.listDesignJobs().length, 1);
     assert.equal(notificationCount, 1);
+    mutateStore(store, (data) => { data.conversations = []; });
+    assert.equal((await service.create(designPayload())).id, replay.id);
+    mutateStore(store, (data) => {
+      data.conversations = [{
+        id: "conversation-1",
+        customerId: "customer-2",
+        wechatAccountId: "wechat-1",
+        channel: "personal_wechat",
+        title: "Rebound customer",
+      }];
+    });
+    assert.equal((await service.create(designPayload())).id, replay.id);
     await assert.rejects(
       service.create(designPayload({ customerText: "Changed request under the same key." })),
       /already used with different identity or payload/,
@@ -159,6 +185,73 @@ test("LocalStore design create replays after a lost response and rejects key reu
       service.create(designPayload({ customerId: "customer-2", conversationId: "conversation-2" })),
       /already used with different identity or payload/,
     );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("LocalStore design create resumes interrupted effects without duplicate notifications or reviews", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const { store, tempDir } = createStore();
+  const originalNotification = store.createNotification.bind(store);
+  const originalReviewLog = store.createReviewLog.bind(store);
+  let failHandoffNotificationAfterCommit = true;
+  let failReviewAfterCommit = true;
+  let manualLockAttempts = 0;
+  store.createNotification = (level, title, body, target) => {
+    const record = originalNotification(level, title, body, target);
+    if (String(target?.effectKey || "").endsWith(":handoff-notification") && failHandoffNotificationAfterCommit) {
+      failHandoffNotificationAfterCommit = false;
+      throw new Error("simulated response loss after notification commit");
+    }
+    return record;
+  };
+  store.createReviewLog = (payload) => {
+    const record = originalReviewLog(payload);
+    if (String(payload?.metadata?.effectKey || "").endsWith(":handoff-review") && failReviewAfterCommit) {
+      failReviewAfterCommit = false;
+      throw new Error("simulated response loss after review commit");
+    }
+    return record;
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    store,
+    { create: (...args) => store.createNotification(...args) },
+    {},
+    {
+      setConversationManualLock: async () => {
+        manualLockAttempts += 1;
+        if (manualLockAttempts === 1) throw new Error("simulated manual lock interruption");
+        return { blockedSendTasks: [{ id: "send-1" }], inFlightSendTasks: [] };
+      },
+    },
+    {},
+    {},
+    {},
+  );
+  const payload = designPayload({
+    budget: { mode: "per_box", perUnitAmount: 2000, quantity: 10, totalAmount: 20000 },
+  });
+  try {
+    appConfig.useLocalStore = true;
+    await assert.rejects(service.create(payload), /manual lock interruption/);
+    await assert.rejects(service.create(payload), /notification commit/);
+    await assert.rejects(service.create(payload), /review commit/);
+    const recovered = await service.create(payload);
+    const responseLostReplay = await service.create(payload);
+
+    assert.equal(responseLostReplay.id, recovered.id);
+    assert.equal(manualLockAttempts, 2);
+    assert.ok(recovered.requirements.createEffects.completedAt);
+    const notifications = store.listNotifications({ limit: 100 });
+    const notificationEffectKeys = notifications.map((item) => item.target.effectKey).filter(Boolean);
+    assert.equal(notificationEffectKeys.length, new Set(notificationEffectKeys).size);
+    assert.equal(notificationEffectKeys.filter((key) => key.endsWith(":handoff-notification")).length, 1);
+    const designReviews = store.listReviewLogs(100).filter((item) => item.targetType === "design_job");
+    assert.equal(designReviews.filter((item) => String(item.metadata?.effectKey || "").endsWith(":handoff-review")).length, 1);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -188,6 +281,17 @@ test("concurrent LocalStore chat imports create one import, sample and knowledge
     assert.equal(store.listChatImports().length, 1);
     assert.equal(store.listTrainingSamples().length, 1);
     assert.equal(store.listKnowledgeEntries().length, 1);
+    mutateStore(store, (data) => { data.conversations = []; });
+    assert.equal(training.importChat(payload).id, first.id);
+    mutateStore(store, (data) => {
+      data.conversations = [{
+        id: "conversation-1",
+        customerId: "customer-2",
+        wechatAccountId: "wechat-1",
+        channel: "personal_wechat",
+      }];
+    });
+    assert.equal(training.importChat(payload).id, first.id);
     assert.throws(
       () => training.importChat({ ...payload, text: `${payload.text}\n客户：changed` }),
       /already used with different identity or payload/,
@@ -209,18 +313,33 @@ test("concurrent LocalStore chat imports create one import, sample and knowledge
 test("concurrent Prisma design create relies on unique requestId and returns the winning job", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   let stored = null;
+  let conversation = { id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" };
+  let conversationLookups = 0;
   let createCalls = 0;
   const prisma = {
     conversation: {
-      findUnique: async () => ({ id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" }),
+      findUnique: async () => {
+        conversationLookups += 1;
+        return conversation;
+      },
     },
     designJob: {
-      findUnique: async ({ where }) => (where.requestId && stored?.requestId === where.requestId ? stored : null),
+      findUnique: async ({ where }) => (
+        (where.requestId && stored?.requestId === where.requestId)
+        || (where.id && stored?.id === where.id)
+          ? stored
+          : null
+      ),
       create: async ({ data }) => {
         createCalls += 1;
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (stored) throw Object.assign(new Error("unique requestId"), { code: "P2002" });
         stored = { id: "design-prisma-1", ...data };
+        return stored;
+      },
+      update: async ({ where, data }) => {
+        assert.equal(where.id, stored.id);
+        stored = { ...stored, ...data };
         return stored;
       },
     },
@@ -237,6 +356,111 @@ test("concurrent Prisma design create relies on unique requestId and returns the
     assert.equal(replay.id, first.id);
     assert.equal(stored.requestId, DESIGN_KEY);
     assert.equal(createCalls, 2);
+    const lookupsAfterCreate = conversationLookups;
+    conversation = null;
+    assert.equal((await service.create(designPayload())).id, first.id);
+    assert.equal(conversationLookups, lookupsAfterCreate);
+    conversation = { id: "conversation-1", customerId: "customer-2", wechatAccountId: "wechat-1" };
+    assert.equal((await service.create(designPayload())).id, first.id);
+    assert.equal(conversationLookups, lookupsAfterCreate);
+    await assert.rejects(
+      service.create(designPayload({ customerId: "customer-2" })),
+      /already used with different identity or payload/,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("Prisma P2002 winner replay completes interrupted high-value effects exactly once", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  let stored = null;
+  let createCalls = 0;
+  let manualLockCalls = 0;
+  let failReviewAfterCommit = true;
+  const notificationsById = new Map();
+  const reviewsById = new Map();
+  const prisma = {
+    conversation: {
+      findUnique: async () => ({ id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" }),
+    },
+    designJob: {
+      findUnique: async ({ where }) => (
+        (where.requestId && stored?.requestId === where.requestId)
+        || (where.id && stored?.id === where.id)
+          ? stored
+          : null
+      ),
+      create: async ({ data }) => {
+        createCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (stored) throw Object.assign(new Error("unique requestId"), { code: "P2002" });
+        stored = { id: "design-prisma-effects", ...data };
+        return stored;
+      },
+      update: async ({ where, data }) => {
+        assert.equal(where.id, stored.id);
+        stored = { ...stored, ...data };
+        return stored;
+      },
+    },
+    notification: {
+      findUnique: async ({ where }) => notificationsById.get(where.id) || null,
+      create: async ({ data }) => {
+        if (notificationsById.has(data.id)) throw Object.assign(new Error("duplicate notification"), { code: "P2002" });
+        const record = { ...data };
+        notificationsById.set(data.id, record);
+        return record;
+      },
+    },
+    reviewLog: {
+      findUnique: async ({ where }) => reviewsById.get(where.id) || null,
+      create: async ({ data }) => {
+        if (reviewsById.has(data.id)) throw Object.assign(new Error("duplicate review"), { code: "P2002" });
+        const record = { ...data };
+        reviewsById.set(data.id, record);
+        if (failReviewAfterCommit) {
+          failReviewAfterCommit = false;
+          throw new Error("simulated response loss after prisma review commit");
+        }
+        return record;
+      },
+    },
+  };
+  const service = new DesignJobsService(
+    prisma,
+    {},
+    {},
+    new NotificationsService(prisma, {}),
+    {},
+    {
+      setConversationManualLock: async () => {
+        manualLockCalls += 1;
+        return { blockedSendTasks: [], inFlightSendTasks: [] };
+      },
+    },
+    {},
+    {},
+    {},
+  );
+  const payload = designPayload({
+    budget: { mode: "per_box", perUnitAmount: 2000, quantity: 10, totalAmount: 20000 },
+  });
+  try {
+    appConfig.useLocalStore = false;
+    const outcomes = await Promise.allSettled([service.create(payload), service.create(payload)]);
+    assert.equal(outcomes.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(outcomes.filter((item) => item.status === "rejected").length, 1);
+    assert.equal(createCalls, 2);
+    assert.equal(manualLockCalls, 1);
+    assert.equal(reviewsById.size, 1);
+    assert.equal(notificationsById.size, new Set(notificationsById.keys()).size);
+    assert.ok(stored.requirements.createEffects.completedAt);
+
+    const replay = await service.create(payload);
+    assert.equal(replay.id, stored.id);
+    assert.equal(manualLockCalls, 1);
+    assert.equal(reviewsById.size, 1);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }
@@ -322,7 +546,7 @@ test("concurrent Prisma chat imports wait for the unique import claim and replay
   );
 });
 
-test("Web create callers generate one operation key per action and retry the serialized request unchanged", () => {
+test("Web create callers retain one operation key until the exact action succeeds", () => {
   const api = fs.readFileSync(path.resolve(__dirname, "../apps/web/src/lib/api.ts"), "utf8");
   const page = fs.readFileSync(
     path.resolve(__dirname, "../apps/web/src/features/training/training-import-page.tsx"),
@@ -331,8 +555,85 @@ test("Web create callers generate one operation key per action and retry the ser
 
   assert.match(api, /function postJsonWithNetworkRetry/);
   assert.match(api, /const serializedBody = JSON\.stringify\(body\)/);
-  assert.match(api, /operationKey = createClientOperationKey\("design-job"\)/);
+  assert.match(api, /operationKey: string,/);
+  assert.doesNotMatch(api, /operationKey = createClientOperationKey\("design-job"\)/);
   assert.match(api, /postJsonWithNetworkRetry<ChatImport>\("\/training\/chat-imports", payload\)/);
-  assert.match(page, /const operationKey = createClientOperationKey\("training-import"\)/);
-  assert.match(page, /operationKey,/);
+  assert.match(page, /pendingImportOperation = useRef<PendingClientOperation \| null>\(null\)/);
+  assert.match(page, /reserveClientOperation\("training-import", requestPayload, pendingImportOperation\.current\)/);
+  assert.match(page, /operationKey: operation\.key/);
+  assert.match(page, /completeClientOperation\(pendingImportOperation\.current, operation\.key\)/);
+});
+
+test("Prisma chat import replays stored identity after conversation deletion and rejects wrong identity", async () => {
+  const payload = {
+    operationKey: TRAINING_KEY,
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    wechatAccountId: "wechat-1",
+    name: "parcel training",
+    text: "normalized transcript",
+  };
+  const storedIdentity = {
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    wechatAccountId: "wechat-1",
+  };
+  const operation = requestOperationMetadata(
+    TRAINING_KEY,
+    createChatImportOperationFingerprint(payload, storedIdentity),
+  );
+  const record = {
+    id: deterministicOperationId("import", TRAINING_KEY),
+    ...storedIdentity,
+    identityBinding: { status: "passed", ...storedIdentity, requestOperation: operation },
+    samples: [],
+  };
+  let conversationLookups = 0;
+  const tx = {
+    chatImport: { findUnique: async () => record },
+    conversation: {
+      findUnique: async () => {
+        conversationLookups += 1;
+        return null;
+      },
+    },
+  };
+  const operations = new PrismaOperationsService({ $transaction: async (callback) => callback(tx) });
+
+  assert.equal((await operations.createChatImport(payload, parsedTranscript)).id, record.id);
+  assert.equal(conversationLookups, 0);
+  await assert.rejects(
+    operations.createChatImport({ ...payload, customerId: "customer-2" }, parsedTranscript),
+    /already used with different identity or payload/,
+  );
+  await assert.rejects(
+    operations.createChatImport({ ...payload, conversationId: "conversation-2" }, parsedTranscript),
+    /already used with different identity or payload/,
+  );
+  assert.equal(conversationLookups, 0);
+});
+
+test("client operation reservation reuses an unconfirmed form key and rotates only on mutation or success", () => {
+  const payload = {
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    wechatAccountId: "wechat-1",
+    text: "same transcript",
+  };
+  const first = reserveClientOperation("training-import", payload, null);
+  const afterTwoLostNetworkResponses = reserveClientOperation(
+    "training-import",
+    { text: "same transcript", wechatAccountId: "wechat-1", customerId: "customer-1", conversationId: "conversation-1" },
+    first,
+  );
+  assert.equal(afterTwoLostNetworkResponses.key, first.key);
+  assert.equal(completeClientOperation(first, "different-key"), first);
+
+  const changedText = reserveClientOperation("training-import", { ...payload, text: "changed transcript" }, first);
+  assert.notEqual(changedText.key, first.key);
+  const changedIdentity = reserveClientOperation("training-import", { ...payload, customerId: "customer-2" }, first);
+  assert.notEqual(changedIdentity.key, first.key);
+  assert.equal(completeClientOperation(first, first.key), null);
+  const afterSuccess = reserveClientOperation("training-import", payload, null);
+  assert.notEqual(afterSuccess.key, first.key);
 });
