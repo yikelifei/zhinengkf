@@ -10,6 +10,7 @@ import {
   type IdentityFilters,
   type NotificationItem,
 } from "../../lib/api";
+import { runLatestNotificationOperation } from "./notification-operation-guard";
 
 export function useNotificationsController(identityFilters?: IdentityFilters) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -56,38 +57,41 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
 
   const markOneRead = useCallback(async (notification: NotificationItem) => {
     if (notification.readAt) return;
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const updated = await markNotificationRead(notification.id, notificationIdentityExpectation(notification));
-      setNotifications((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setNotice("已标记“" + notification.title + "”为已读。");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "通知状态更新失败，服务端未确认结果。");
-    } finally {
-      setBusy(false);
-    }
+    await runLatestNotificationOperation({
+      begin: () => ++refreshSequence.current,
+      isCurrent: (sequence) => sequence === refreshSequence.current,
+      operation: () => markNotificationRead(notification.id, notificationIdentityExpectation(notification)),
+      onStart: () => { setBusy(true); setError(""); setNotice(""); },
+      onSuccess: (updated) => {
+        setNotifications((current) => current.map((item) => item.id === updated.id ? updated : item));
+        setNotice("已标记“" + notification.title + "”为已读。");
+      },
+      onError: (caught) => setError(caught instanceof Error ? caught.message : "通知状态更新失败，服务端未确认结果。"),
+      onFinally: () => setBusy(false),
+    });
   }, []);
 
   const markAllRead = useCallback(async () => {
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const result = await markAllNotificationsRead(filters);
-      setNotice("服务端已标记 " + result.count + " 条通知为已读。");
-      setNotifications(await getNotifications(unreadOnly, filters));
-      setLoaded(true);
-      return true;
-    } catch (caught) {
-      setNotifications([]);
-      setLoaded(false);
-      setError(caught instanceof Error ? caught.message : "批量标记失败，服务端未确认结果。");
-      return false;
-    } finally {
-      setBusy(false);
-    }
+    return runLatestNotificationOperation({
+      begin: () => ++refreshSequence.current,
+      isCurrent: (sequence) => sequence === refreshSequence.current,
+      operation: async () => {
+        const result = await markAllNotificationsRead(filters);
+        return { result, notifications: await getNotifications(unreadOnly, filters) };
+      },
+      onStart: () => { setBusy(true); setError(""); setNotice(""); },
+      onSuccess: ({ result, notifications: next }) => {
+        setNotice("服务端已标记 " + result.count + " 条通知为已读。");
+        setNotifications(next);
+        setLoaded(true);
+      },
+      onError: (caught) => {
+        setNotifications([]);
+        setLoaded(false);
+        setError(caught instanceof Error ? caught.message : "批量标记失败，服务端未确认结果。");
+      },
+      onFinally: () => setBusy(false),
+    });
   }, [filters, unreadOnly]);
 
   return {

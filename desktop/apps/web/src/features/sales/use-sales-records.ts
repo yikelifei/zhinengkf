@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getOrderDrafts,
   getQuotes,
@@ -14,25 +14,33 @@ export function useSalesQuotes(quoteId = "") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const requestSequence = useRef(0);
 
   const refresh = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     setLoading(true);
     setError("");
     setLoaded(false);
     try {
       const rows = await getQuotes();
+      if (sequence !== requestSequence.current) return;
       setRecords(rows);
       setLoaded(true);
     } catch (cause) {
-      setRecords([]);
-      setLoaded(false);
-      setError(salesError(cause, "报价读取失败"));
+      if (sequence === requestSequence.current) {
+        setRecords([]);
+        setLoaded(false);
+        setError(salesError(cause, "报价读取失败"));
+      }
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
   }, [quoteId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    return () => { requestSequence.current += 1; };
+  }, [refresh]);
 
   const selected = useMemo(
     () => records.find((record) => record.id === quoteId) || null,
@@ -51,25 +59,33 @@ export function useSalesOrders(orderId = "") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const requestSequence = useRef(0);
 
   const refresh = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     setLoading(true);
     setError("");
     setLoaded(false);
     try {
       const rows = await getOrderDrafts();
+      if (sequence !== requestSequence.current) return;
       setRecords(rows);
       setLoaded(true);
     } catch (cause) {
-      setRecords([]);
-      setLoaded(false);
-      setError(salesError(cause, "订单读取失败"));
+      if (sequence === requestSequence.current) {
+        setRecords([]);
+        setLoaded(false);
+        setError(salesError(cause, "订单读取失败"));
+      }
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
   }, [orderId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    return () => { requestSequence.current += 1; };
+  }, [refresh]);
 
   const selected = useMemo(
     () => records.find((record) => record.id === orderId) || null,

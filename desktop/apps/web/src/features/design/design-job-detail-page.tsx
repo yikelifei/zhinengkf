@@ -11,7 +11,7 @@ import { designImagePreviewSrc } from "./model";
 import { useDesignJobs } from "./use-design-job";
 
 export function DesignJobDetailPage({ jobId }: { jobId: string }) {
-  const { selected, loading, error, refresh, replace } = useDesignJobs(jobId);
+  const { selected, loading, loaded, error, refresh, replace } = useDesignJobs(jobId);
   const [repairingImageId, setRepairingImageId] = useState("");
   const [repairNotice, setRepairNotice] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
   const expected = selected ? identityExpectation(selected) : {};
@@ -89,7 +89,7 @@ export function DesignJobDetailPage({ jobId }: { jobId: string }) {
           </div>
           <Link className={styles.backLink} href="/design/jobs" data-action-id="design-job-back-list">返回任务列表</Link>
         </article>
-      ) : <DesignEmpty title="没有找到设计任务" detail="返回任务列表重新选择。" />}
+      ) : loaded ? <DesignEmpty title="没有找到设计任务" detail="读取成功；请返回任务列表重新选择。" /> : <DesignEmpty title="设计任务状态未确认" detail="任务详情尚未成功读取，不能据此认定任务不存在。" />}
     </section>
   );
 }

@@ -50,7 +50,7 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
         <div className={styles.panelBody}>
           <div className={styles.actionBar}>
             <label className={styles.checkLabel}>
-              <input type="checkbox" checked={controller.unreadOnly} onChange={(event) => controller.setUnreadOnly(event.target.checked)} />
+              <input type="checkbox" checked={controller.unreadOnly} disabled={controller.busy} onChange={(event) => controller.setUnreadOnly(event.target.checked)} />
               只看未读
             </label>
             <button className={styles.button} type="button" data-action-id="notifications-mark-all-request" aria-label="请求将当前身份范围内的通知全部标为已读" onClick={() => setConfirmationOpen(true)} disabled={controller.busy || controller.unreadCount === 0}>

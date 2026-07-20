@@ -7,7 +7,7 @@ import { DesignEmpty, DesignNotice, DesignPageHeader, formatDesignDate } from ".
 import { useDesignJobs } from "./use-design-job";
 
 export function DesignJobsPage() {
-  const { records, loading, error, refresh } = useDesignJobs();
+  const { records, loading, loaded, error, refresh } = useDesignJobs();
   return (
     <section className={styles.page} aria-label="设计任务列表">
       <DesignPageHeader
@@ -18,8 +18,8 @@ export function DesignJobsPage() {
       />
       {error ? <DesignNotice tone="danger">{error}</DesignNotice> : null}
       <article className={styles.card} aria-label="设计任务查询结果">
-        <div className={styles.cardHeader}><div><h2>全部任务</h2><p>{records.length} 条可信记录</p></div></div>
-        {loading ? <DesignEmpty title="正在读取设计任务" detail="已知内置降级记录会被拒绝。" busy /> : records.length ? (
+        <div className={styles.cardHeader}><div><h2>全部任务</h2><p>{loaded ? `${records.length} 条可信记录` : "读取未确认"}</p></div></div>
+        {loading ? <DesignEmpty title="正在读取设计任务" detail="已知内置降级记录会被拒绝。" busy /> : loaded && records.length ? (
           <ul className={styles.selectionList}>
             {records.map((job) => (
               <li key={job.id}>
@@ -30,7 +30,7 @@ export function DesignJobsPage() {
               </li>
             ))}
           </ul>
-        ) : <DesignEmpty title="没有可展示的真实任务" detail="任务 API 不可用时不会展示内置样例。" />}
+        ) : loaded ? <DesignEmpty title="读取成功，当前没有设计任务" detail="任务 API 已返回可信空结果。" /> : <DesignEmpty title="设计任务状态未确认" detail="任务列表尚未成功读取，不能据此认定没有任务。" />}
       </article>
     </section>
   );

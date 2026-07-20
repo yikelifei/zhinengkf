@@ -242,6 +242,41 @@ test("identity invalidation during upload preparation prevents the stale mutatio
   assert.deepEqual(harness.state, { assets: [], loaded: false, busy: "", error: "", notice: "" });
 });
 
+test("normalized-equal identity invalidation fences the first of two upload mutations", async () => {
+  const identityA = identity("a");
+  const preparationA = deferred();
+  const harness = createOperationHarness(identityA);
+  let firstMutationCalls = 0;
+  let secondMutationCalls = 0;
+
+  const firstOperation = harness.upload(identityA, {
+    prepare: () => preparationA.promise,
+    mutate: async () => { firstMutationCalls += 1; return { fileName: "stale.png" }; },
+    refresh: async () => [{ id: "stale-asset" }],
+  });
+
+  harness.guard.invalidate({
+    ownerId: ` ${identityA.ownerId} `,
+    wechatAccountId: identityA.wechatAccountId,
+    conversationId: identityA.conversationId,
+    customerId: identityA.customerId,
+  });
+  const secondOperation = harness.upload(identityA, {
+    prepare: async () => "base64-current",
+    mutate: async () => { secondMutationCalls += 1; return { fileName: "current.png" }; },
+    refresh: async () => [{ id: "current-asset" }],
+  });
+
+  preparationA.resolve("base64-stale");
+  await Promise.all([firstOperation, secondOperation]);
+
+  assert.equal(firstMutationCalls, 0);
+  assert.equal(secondMutationCalls, 1);
+  assert.deepEqual(harness.state.assets, [{ id: "current-asset" }]);
+  assert.equal(harness.state.notice, "current.png uploaded");
+  assert.doesNotMatch(harness.events.join(" "), /stale\.png/);
+});
+
 test("dispose blocks every in-flight upload continuation and activate supports StrictMode effect replay", async () => {
   const identityA = identity("a");
   const uploadA = deferred();
@@ -269,7 +304,8 @@ test("design assets page wires identity changes, upload refresh, and unmount int
   assert.match(page, /runGuardedDesignAssetMutation\(\{/);
   assert.match(page, /assetOperationGuard\.activate\(\)/);
   assert.match(page, /return \(\) => assetOperationGuard\.dispose\(\)/);
-  assert.match(page, /assetOperationGuard\.setIdentity\(identity\)/);
+  assert.match(page, /assetOperationGuard\.invalidate\(identity\)/);
   assert.match(page, /function invalidateAssetOperations/);
+  assert.match(page, /disabled=\{Boolean\(busy\)\}/);
   assert.doesNotMatch(page, /await refreshAssets\(\)/);
 });
