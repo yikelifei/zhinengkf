@@ -862,11 +862,15 @@ function designReconciliationResults(root) {
   const unexpectedViewFields = actualViewFields.filter((field) => !DESIGN_EXECUTION_PUBLIC_VIEW_FIELDS.includes(field));
   const publicList = extractBalancedBlock(executionService, /async listPublicForDesignJob\s*\([^)]*\)\s*[^\{]*/);
   const projection = extractBalancedBlock(executionService, /function toPublicExecutionView\s*\([^)]*\)\s*[^\{]*/);
+  const refundEligibility = extractBalancedBlock(executionService, /function isUnsafeRefundResolutionEligible\s*\([^)]*\)\s*[^\{]*/);
+  const resumableEligibility = extractBalancedBlock(executionService, /function isResumableCompletedExecution\s*\([^)]*\)\s*[^\{]*/);
+  const unsafeRefundResolution = extractBalancedBlock(executionService, /async resolveUnsafeRefund\s*\([^)]*\)\s*[^\{]*/);
   const publicListChecks = patternFailures(publicList, [/\.map\(toPublicExecutionView\)/]);
   const projectionChecks = patternFailures(projection, [
     /availableResolution/,
     /confirmed_not_generated_refunded/,
     /confirmed_refunded/,
+    /isUnsafeRefundResolutionEligible\(execution\)/,
   ], [
     /\.\.\.\s*execution/,
     /\boperationKey\b/,
@@ -876,13 +880,31 @@ function designReconciliationResults(root) {
     /\brefundSummary\b/,
     /\berrorMessage\b/,
   ]);
+  const refundEligibilityChecks = patternFailures(refundEligibility, [
+    /execution\s*&&\s*\(execution\.status\s*===\s*["']explicit_failed["']\s*\|\|\s*isResumableCompletedExecution\(execution\)\)\s*&&\s*\[["']failed["'],\s*["']unknown["']\]\.includes\(execution\.refundStatus\)/,
+  ]);
+  const resumableEligibilityChecks = patternFailures(resumableEligibility, [
+    /execution\?\.status\s*===\s*["']completed["']\s*&&\s*execution\?\.acceptanceStatus\s*===\s*["']manual_review["']/,
+  ]);
+  const unsafeRefundResolutionChecks = patternFailures(unsafeRefundResolution, [
+    /const resumableCompleted\s*=\s*isResumableCompletedExecution\(execution\)/,
+    /if \(!isUnsafeRefundResolutionEligible\(execution\)\)/,
+    /resumableCompleted\s*\?\s*\{\s*acceptanceStatus:\s*["']pending["']\s*\}\s*:\s*\{\}/,
+    /resolvedAt:\s*resumableCompleted\s*\?\s*null\s*:\s*new Date\(\)/,
+  ]);
+  const publicViewMissingContracts = [
+    ...publicListChecks.missing.map((item) => `list-${item}`),
+    ...projectionChecks.missing.map((item) => `projection-${item}`),
+    ...refundEligibilityChecks.missing.map((item) => `refund-eligibility-${item}`),
+    ...resumableEligibilityChecks.missing.map((item) => `resumable-eligibility-${item}`),
+    ...unsafeRefundResolutionChecks.missing.map((item) => `refund-resolution-${item}`),
+  ];
   const publicViewOk = Boolean(viewBody)
     && missingViewFields.length === 0
     && unexpectedViewFields.length === 0
     && /type DesignExecutionAvailableResolution\s*=\s*\|?\s*["']confirmed_not_generated_refunded["']\s*\|\s*["']confirmed_refunded["']\s*\|\s*null/.test(types)
     && /availableResolution\??\s*:\s*DesignExecutionAvailableResolution/.test(viewBody)
-    && publicListChecks.missing.length === 0
-    && projectionChecks.missing.length === 0
+    && publicViewMissingContracts.length === 0
     && projectionChecks.forbidden.length === 0;
 
   const getRoute = extractRouteSection(controller, /@Get\(["']:id\/executions["']\)/);
@@ -1011,7 +1033,7 @@ function designReconciliationResults(root) {
         actualFields: actualViewFields,
         missingFields: missingViewFields,
         unexpectedFields: unexpectedViewFields,
-        missingContracts: [...publicListChecks.missing, ...projectionChecks.missing],
+        missingContracts: publicViewMissingContracts,
         forbidden: projectionChecks.forbidden,
       },
     ),
