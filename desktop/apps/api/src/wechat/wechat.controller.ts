@@ -63,7 +63,7 @@ export class WechatController {
   @UseGuards(OperatorAccessGuard)
   enqueueManualReply(
     @Param("id") id: string,
-    @Body() payload: { text?: string; operator?: string } & ExpectedIdentityPayload,
+    @Body() payload: { text?: string; operator?: string; operationKey?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
@@ -75,6 +75,7 @@ export class WechatController {
       customerId: payload.expectedCustomerId,
       text: payload.text,
       operator: principal.id,
+      operationKey: payload.operationKey,
     });
   }
 
@@ -106,13 +107,16 @@ export class WechatController {
       conversationId?: string;
       customerId?: string;
       text: string;
-      externalId?: string;
+      externalId: string;
       assetIds?: string[];
       attachments?: Array<Record<string, unknown>>;
     },
     @TrustedOperator() _principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.processInboundMessage(payload || { text: "" });
+    if (!String(payload?.externalId || "").trim()) {
+      throw new BadRequestException("externalId is required");
+    }
+    return this.wechat.processInboundMessage(payload);
   }
 
   @Get("send-tasks")
@@ -279,6 +283,7 @@ export class WechatController {
       reason?: string;
       releaseManualLock?: boolean;
       releaseReason?: string;
+      operationKey?: string;
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
@@ -291,6 +296,7 @@ export class WechatController {
       reason: payload?.reason,
       releaseManualLock: payload?.releaseManualLock,
       releaseReason: payload?.releaseReason,
+      operationKey: payload?.operationKey,
     });
   }
 
@@ -306,6 +312,7 @@ export class WechatController {
       reason?: string;
       releaseManualLock?: boolean;
       releaseReason?: string;
+      operationKey?: string;
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
@@ -318,6 +325,7 @@ export class WechatController {
       reason: payload?.reason,
       releaseManualLock: payload?.releaseManualLock,
       releaseReason: payload?.releaseReason,
+      operationKey: payload?.operationKey,
     });
   }
 

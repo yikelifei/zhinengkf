@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { identityExpectation, reviewOrder, type OrderDraft } from "../../lib/api";
+import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import styles from "../governance-pages.module.css";
 import { formatReviewDate, formatReviewMoney, trustedReviewer, useReviewCenter, type ReviewMutationPageProps } from "./review-page-shared";
 
@@ -29,6 +30,7 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
   const [followupType, setFollowupType] = useState<FollowupType | "">("");
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingOrderReview | null>(null);
+  const pendingOperationRef = useRef<PendingClientOperation | null>(null);
   const operator = trustedReviewer(reviewer);
   const activeOrder = center?.orderDrafts.find((order) => order.id === reviewId) || null;
 
@@ -70,14 +72,26 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
     setActionBusy(true);
     setError("");
     setNotice("");
+    const operationPayload = {
+      id: order.id,
+      decision: pendingConfirmation.decision,
+      followupType: pendingConfirmation.followupType,
+      reviewer: operator,
+      note: note.trim(),
+      identity: identityExpectation(order),
+    };
+    const operation = reserveClientOperation("review-action", operationPayload, pendingOperationRef.current);
+    pendingOperationRef.current = operation;
     try {
       await reviewOrder(order.id, {
+        operationKey: operation.key,
         decision: pendingConfirmation.decision,
         reviewer: operator,
         note: note.trim(),
         followupType: pendingConfirmation.followupType,
         ...identityExpectation(order),
       });
+      pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
       setNotice(`订单 ${order.id} 已提交“${orderDecisionLabel(pendingConfirmation.decision)}”审核。`);
       setPendingConfirmation(null);
       setNote("");

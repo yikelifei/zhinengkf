@@ -36,6 +36,7 @@ import {
   normalizeOperationKey,
   readRequestOperationMetadata,
   requestOperationMetadata,
+  stableOperationKey,
   type RequestOperationMetadata,
 } from "../shared/operation-idempotency";
 
@@ -2273,7 +2274,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
   async quickConfirmAndQueueSend(
     id: string,
-    options: { releaseManualLock?: boolean; reviewer?: string; releaseReason?: string } & ExpectedIdentityPayload = {},
+    options: { operationKey?: string; releaseManualLock?: boolean; reviewer?: string; releaseReason?: string } & ExpectedIdentityPayload = {},
   ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -2282,6 +2283,11 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           include: { images: true },
     });
     if (!job) throw new Error(`design job not found: ${id}`);
+    const operationKey = options.releaseManualLock
+      ? normalizeOperationKey(options.operationKey, "operationKey")
+      : options.operationKey
+        ? normalizeOperationKey(options.operationKey, "operationKey")
+        : stableOperationKey("design-send", `${job.id}:quick-confirm`);
     assertExpectedIdentity(job, options, "design job");
     this.assertDesignJobHasCompleteSendIdentity(job);
 
@@ -2319,6 +2325,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (options.releaseManualLock) {
       assertManualReleaseReason(options.releaseReason, "design send manual release");
       await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+        effectKey: `${operationKey}:manual-unlock`,
         expectedWechatAccountId: job.wechatAccountId,
         expectedConversationId: job.conversationId,
         expectedCustomerId: job.customerId,
@@ -2331,8 +2338,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
     try {
       const sendTask = await this.wechatDispatch.enqueueDesignImages({
+        operationKey,
         wechatAccountId: job.wechatAccountId,
         conversationId: job.conversationId,
+        customerId: job.customerId,
         designJobId: job.id,
         imagePaths,
         textBeforeImages: "我先把几版礼盒效果图发您，您可以直接引用喜欢的那张告诉我。",
@@ -2354,6 +2363,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           beforeStatus: job.status || "",
           afterStatus: "sent",
           metadata: {
+            effectKey: `${operationKey}:review-log`,
             source: "manual_release_design_send",
             conversationId: job.conversationId,
             wechatAccountId: job.wechatAccountId,
@@ -2368,6 +2378,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     } catch (error) {
       if (options.releaseManualLock) {
         await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          effectKey: `${operationKey}:manual-relock`,
           expectedWechatAccountId: job.wechatAccountId,
           expectedConversationId: job.conversationId,
           expectedCustomerId: job.customerId,
@@ -2657,6 +2668,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!job.wechatAccountId || !job.conversationId) return null;
     try {
       return await this.wechatDispatch.enqueueTextMessage({
+        operationKey: stableOperationKey("design-message", `${job.id}:${reason}:${text}`),
         wechatAccountId: job.wechatAccountId,
         conversationId: job.conversationId,
         designJobId: job.id,

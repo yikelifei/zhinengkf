@@ -109,7 +109,7 @@ test("execute send revalidates queued order payment and cancellation before adap
   );
 
   assert.match(service, /private validateQueuedOrderSendState\(task: any\)/);
-  assert.match(service, /orderDraftId = String\(automation\.orderDraftId \|\| ""\)/);
+  assert.match(service, /const orderContext = this\.orderSendContext\(task\)[\s\S]*orderDraftId = String\(orderContext\.orderDraftId \|\| ""\)/);
   assert.match(service, /this\.localStore\.getOrderDraft\(orderDraftId\)/);
   assert.match(service, /orderCancelledBeforeSend/);
   assert.match(service, /orderPaymentNotReadyBeforeSend/);
@@ -397,9 +397,9 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload[\s\S]*expectedConversationId: order\?\.conversationId/);
   assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload[\s\S]*expectedCustomerId: order\?\.customerId/);
   assert.doesNotMatch(wechatService, /expectedCustomerId: order\?\.customerId \|\| order\?\.quoteDraft\?\.customerId \|\| designJob\?\.customerId/);
-  assert.match(lowValueOrderConfirmationSection, /queueOrderConfirmation\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
-  assert.match(lowValueOrderFollowupSection, /queueOrderFollowup\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
-  assert.match(inboundAcceptanceSection, /queueOrderConfirmation\(result\.orderDraft\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(result\.orderDraft\)/);
+  assert.match(lowValueOrderConfirmationSection, /queueLowValueOrderConfirmation\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
+  assert.match(lowValueOrderFollowupSection, /queueLowValueOrderFollowup\(order\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(order\)/);
+  assert.match(inboundAcceptanceSection, /queueLowValueOrderConfirmation\(result\.orderDraft\.id, \{[\s\S]*\.\.\.this\.expectedIdentityFromOrder\(result\.orderDraft\)/);
   assert.match(wechatService, /private assertHighValueOrderHasManualRelease/);
   assert.match(wechatService, /private isHighValueOrder\(order: any\)[\s\S]*isHighValueBudget\(designJob\?\.budget, threshold\)/);
   assert.match(wechatService, /assertExpectedIdentity\(taskBeforeValidation, params, "send task"\)/);
@@ -680,7 +680,7 @@ test("design job manual actions carry and enforce expected conversation identity
   assert.match(api, /preflightDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /pollDesignJob\(\s*id: string,\s*expected: IdentityExpectation = \{\},/);
   assert.match(api, /retryDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
-  assert.match(api, /quickConfirmSend\(id: string, expected: IdentityExpectation = \{\}\)/);
+  assert.match(api, /quickConfirmSend\(id: string, operationKey: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /cancelDesignJob\(id: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /createQuote\(id: string, expected: IdentityExpectation = \{\}\)/);
   assert.match(api, /markManualReview\(id: string, expected: IdentityExpectation = \{\}\)/);
@@ -1225,15 +1225,15 @@ test("quote and order APIs filter records by next-step actionability", () => {
   assert.match(wechatDispatchService, /function orderSendContextLabel\(context: string\)/);
   assert.match(wechatDispatchService, /this\.assertOrderSendTaskStillQueueable\(task\)/);
   assert.match(wechatDispatchService, /private assertOrderSendTaskStillQueueable\(task: any\)/);
-  assert.match(wechatDispatchService, /const orderDraftId = String\(automation\.orderDraftId \|\| ""\)/);
+  assert.match(wechatDispatchService, /const orderDraftId = String\(orderContext\.orderDraftId \|\| ""\)/);
   assert.match(wechatDispatchService, /if \(!orderDraftId\) return/);
   assert.match(wechatDispatchService, /order draft not found for send task requeue/);
   assert.match(wechatDispatchService, /this\.assertOrderConversationUnlocked\(order, context\)[\s\S]*this\.assertOrderPaymentReadyForSend\(order, context\)/);
   assert.match(wechatDispatchService, /this\.assertOrderProfitReadyForSend\(order, context\)/);
   assert.match(wechatDispatchService, /order send task requeue binding invalid/);
   assert.match(wechatDispatchService, /private async markLinkedOrderSendFailed\(task: any, reason: string\)/);
-  assert.match(wechatDispatchService, /const orderDraftId = String\(automation\.orderDraftId \|\| task\?\.payload\?\.orderDraftId \|\| ""\)\.trim\(\)/);
-  assert.match(wechatDispatchService, /source === "order_followup" \|\| automation\.followupType/);
+  assert.match(wechatDispatchService, /const orderDraftId = String\(orderContext\.orderDraftId \|\| task\?\.payload\?\.orderDraftId \|\| ""\)\.trim\(\)/);
+  assert.match(wechatDispatchService, /source === "order_followup" \|\| orderContext\.followupType/);
   assert.match(wechatDispatchService, /private hasOrderDraftBinding\(task: any\)/);
   assert.match(wechatDispatchService, /markLinkedQuoteSent\(task: any\)[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) return/);
   assert.match(wechatDispatchService, /markLinkedQuoteFailed\(task: any, reason: string\)[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) \{[\s\S]*this\.markLinkedOrderSendFailed\(task, reason\);[\s\S]*return;[\s\S]*\}/);

@@ -6,6 +6,12 @@ import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/ident
 import { rules } from "../shared/rules";
 import { OrdersService } from "../orders/orders.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
+import {
+  deterministicOperationId,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  stableOperationKey,
+} from "../shared/operation-idempotency";
 
 const {
   buildQuoteCustomerMessage,
@@ -19,6 +25,7 @@ const {
 } = rules;
 
 type QuoteQueueRequest = {
+  operationKey?: string;
   owner?: string;
   note?: string;
   releaseManualLock?: boolean;
@@ -284,11 +291,15 @@ export class QuotesService {
     this.assertQuoteHasCompleteSendIdentity(quote);
     this.assertQuoteReadyForSend(quote);
     this.assertHighValueQuoteHasManualRelease(quote, options);
+    const operationKey = lowValueAutomation
+      ? stableOperationKey("quote-send", `${quote.id}:low-value-send`)
+      : normalizeOperationKey(options.operationKey, "operationKey");
 
     const text = this.buildCustomerMessage(quote);
     if (options.releaseManualLock && designJob.conversationId) {
       assertManualReleaseReason(options.releaseReason, "quote send manual release");
       await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+        effectKey: `${operationKey}:manual-unlock`,
         expectedWechatAccountId: designJob.wechatAccountId,
         expectedConversationId: designJob.conversationId,
         expectedCustomerId: quote.customerId || designJob.customerId,
@@ -310,8 +321,10 @@ export class QuotesService {
           }
         : undefined;
       sendTask = await this.wechatDispatch.enqueueQuoteMessage({
+        operationKey,
         wechatAccountId: designJob.wechatAccountId,
         conversationId: designJob.conversationId,
+        customerId: quote.customerId || designJob.customerId,
         designJobId: designJob.id,
         quoteDraftId: quote.id,
         text,
@@ -320,6 +333,7 @@ export class QuotesService {
     } catch (error) {
       if (options.releaseManualLock && designJob.conversationId) {
         await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+          effectKey: `${operationKey}:manual-relock`,
           expectedWechatAccountId: designJob.wechatAccountId,
           expectedConversationId: designJob.conversationId,
           expectedCustomerId: quote.customerId || designJob.customerId,
@@ -358,6 +372,7 @@ export class QuotesService {
         beforeStatus: quote.status || "",
         afterStatus: updated.status,
         metadata: {
+          effectKey: `${operationKey}:review-log`,
           source: "manual_release_quote_send",
           conversationId: designJob.conversationId,
           wechatAccountId: designJob.wechatAccountId,
@@ -376,11 +391,13 @@ export class QuotesService {
   async verifyPaymentProofAndQueueConfirmation(
     id: string,
     payload: {
+      operationKey?: string;
       paymentStatus?: "deposit_paid" | "paid";
       owner?: string;
       note?: string;
     } & ExpectedIdentityPayload = {},
   ) {
+    const operationKey = normalizeOperationKey(payload.operationKey, "operationKey");
     const paymentStatus = normalizeVerifiedPaymentStatus(payload.paymentStatus);
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new BadRequestException(`quote draft not found: ${id}`);
@@ -416,6 +433,7 @@ export class QuotesService {
     if (this.isHighValueQuote(quote)) {
       if (conversationId) {
         await this.wechatDispatch.setConversationManualLock(conversationId, {
+          effectKey: `${operationKey}:payment-high-value-lock`,
           expectedWechatAccountId: payload.expectedWechatAccountId,
           expectedConversationId: payload.expectedConversationId,
           expectedCustomerId: payload.expectedCustomerId,
@@ -434,6 +452,7 @@ export class QuotesService {
         beforeStatus: quote.status || "",
         afterStatus: "accepted",
         metadata: {
+          effectKey: `${operationKey}:payment-review`,
           source: "manual_payment_proof_verified_high_value",
           quoteDraftId: id,
           orderDraftId: confirmedOrder.id,
@@ -455,6 +474,7 @@ export class QuotesService {
 
     if (conversationId) {
       await this.wechatDispatch.setConversationManualLock(conversationId, {
+        effectKey: `${operationKey}:payment-unlock`,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -467,6 +487,7 @@ export class QuotesService {
 
     try {
       const confirmation = await this.wechatDispatch.queueOrderConfirmation(confirmedOrder.id, {
+        operationKey,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -483,6 +504,7 @@ export class QuotesService {
         beforeStatus: quote.status || "",
         afterStatus: "accepted",
         metadata: {
+          effectKey: `${operationKey}:payment-review`,
           source: "manual_payment_proof_verified",
           quoteDraftId: id,
           orderDraftId: confirmedOrder.id,
@@ -498,6 +520,7 @@ export class QuotesService {
     } catch (error) {
       if (conversationId) {
         await this.wechatDispatch.setConversationManualLock(conversationId, {
+          effectKey: `${operationKey}:payment-relock`,
           expectedWechatAccountId: payload.expectedWechatAccountId,
           expectedConversationId: payload.expectedConversationId,
           expectedCustomerId: payload.expectedCustomerId,
@@ -824,7 +847,20 @@ export class QuotesService {
   }) {
     if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
     const prisma = this.prisma as any;
-    return prisma.reviewLog.create({ data: payload });
+    const effectKey = String(payload.metadata?.effectKey || "").trim();
+    const effectId = effectKey ? deterministicOperationId("review", effectKey) : "";
+    if (effectId && typeof prisma.reviewLog.findUnique === "function") {
+      const existing = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (existing) return existing;
+    }
+    try {
+      return await prisma.reviewLog.create({ data: effectId ? { id: effectId, ...payload } : payload });
+    } catch (error) {
+      if (!effectId || !isUniqueConstraintError(error) || typeof prisma.reviewLog.findUnique !== "function") throw error;
+      const winner = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (!winner) throw error;
+      return winner;
+    }
   }
 }
 

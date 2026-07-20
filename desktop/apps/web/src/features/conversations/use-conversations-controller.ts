@@ -18,6 +18,11 @@ import type {
 } from "../../lib/api";
 import { conversationsFeatureApi, type ConversationsFeatureApi } from "./api";
 import {
+  completeClientOperation,
+  reserveClientOperation,
+  type PendingClientOperation,
+} from "../../lib/client-operation-key";
+import {
   channelLabel,
   conversationIdentity,
   DEFAULT_CONVERSATION_FILTERS,
@@ -78,6 +83,7 @@ export function useConversationsController(
   const refreshSequence = useRef(0);
   const timelineSequence = useRef(0);
   const selectedConversationIdRef = useRef<string | null>(null);
+  const pendingReplyOperationRef = useRef<PendingClientOperation | null>(null);
   selectedConversationIdRef.current = selectedConversationId;
 
   const refreshWorkspace = useCallback(async () => {
@@ -343,8 +349,15 @@ export function useConversationsController(
     setReplyBusy(true);
     setReplyFeedback("");
     const identity = conversationIdentity(conversation);
+    const operation = reserveClientOperation(
+      "manual-reply",
+      { identity, text, operator: currentOperator },
+      pendingReplyOperationRef.current,
+    );
+    pendingReplyOperationRef.current = operation;
     try {
-      const queued = await api.queueManualConversationReply(identity, text, currentOperator);
+      const queued = await api.queueManualConversationReply(identity, text, operation.key, currentOperator);
+      pendingReplyOperationRef.current = completeClientOperation(pendingReplyOperationRef.current, operation.key);
       const queuedSummary = `回复任务 ${queued.task.id} 已成功入队。`;
       setReplyText("");
       setReplyFeedback(queuedSummary);

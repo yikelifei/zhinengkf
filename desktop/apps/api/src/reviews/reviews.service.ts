@@ -13,6 +13,7 @@ import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 const { isHighValueBudget, quoteNeedsPaymentProofReview } = rules;
 
 type ReviewPayload = ExpectedIdentityPayload & {
+  operationKey?: string;
   decision: string;
   reviewer?: string;
   note?: string;
@@ -107,6 +108,7 @@ export class ReviewsService {
 
     if (decision === "approve_send") {
       const sendTask = await this.designJobs.quickConfirmAndQueueSend(id, {
+        operationKey: payload.operationKey,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -233,6 +235,7 @@ export class ReviewsService {
         throw new BadRequestException("付款凭证报价需要先人工核验金额和收款账户，再标记定金或全款，不能按普通报价通过。");
       }
       result = await this.quotes.queueSend(id, {
+        operationKey: payload.operationKey,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -292,6 +295,7 @@ export class ReviewsService {
 
     if (decision === "approve_confirmation") {
       result = await this.wechat.queueOrderConfirmation(id, {
+        operationKey: payload.operationKey,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,
@@ -310,6 +314,7 @@ export class ReviewsService {
     } else if (decision === "approve_followup") {
       const followupType = payload.followupType || "delivery";
       result = await this.wechat.queueOrderFollowup(id, {
+        operationKey: payload.operationKey,
         expectedWechatAccountId: payload.expectedWechatAccountId,
         expectedConversationId: payload.expectedConversationId,
         expectedCustomerId: payload.expectedCustomerId,

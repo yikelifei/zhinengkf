@@ -2,8 +2,9 @@
 
 import { FilePlus2, Send } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createOrderDraftFromQuote, identityExpectation, queueQuoteSend } from "../../lib/api";
+import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import {
   hasCompleteIdentity,
   identityLabel,
@@ -25,6 +26,7 @@ export function SalesQuoteActionPage({ quoteId, action }: { quoteId: string; act
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const pendingOperationRef = useRef<PendingClientOperation | null>(null);
   const expected = selected ? identityExpectation(selected) : {};
   const identityReady = hasCompleteIdentity(expected);
   const isSend = action === "send";
@@ -34,7 +36,10 @@ export function SalesQuoteActionPage({ quoteId, action }: { quoteId: string; act
     setConfirming(false); setBusy(true); setError(""); setNotice("");
     try {
       if (isSend) {
-        const result = await queueQuoteSend(selected.id, expected);
+        const operation = reserveClientOperation("quote-send", { id: selected.id, expected }, pendingOperationRef.current);
+        pendingOperationRef.current = operation;
+        const result = await queueQuoteSend(selected.id, operation.key, expected);
+        pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
         replace(result.quote);
         setNotice(`报价 ${selected.id} 已进入微信安全发送队列；入队成功不等于客户已收到。`);
       } else {

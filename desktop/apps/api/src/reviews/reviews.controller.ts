@@ -27,7 +27,7 @@ export class ReviewsController {
   @RequireOperatorCapability("approve_send")
   reviewDesignJob(
     @Param("id") id: string,
-    @Body() payload: { decision: string; reviewer?: string; note?: string } & ExpectedIdentityPayload,
+    @Body() payload: { decision: string; reviewer?: string; note?: string; operationKey?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || { decision: "approve_images" };
@@ -38,7 +38,7 @@ export class ReviewsController {
   @RequireOperatorCapability("approve_send")
   reviewQuote(
     @Param("id") id: string,
-    @Body() payload: { decision: string; reviewer?: string; note?: string } & ExpectedIdentityPayload,
+    @Body() payload: { decision: string; reviewer?: string; note?: string; operationKey?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || { decision: "approve_quote" };
@@ -55,6 +55,7 @@ export class ReviewsController {
       reviewer?: string;
       note?: string;
       followupType?: "production" | "delivery";
+      operationKey?: string;
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {

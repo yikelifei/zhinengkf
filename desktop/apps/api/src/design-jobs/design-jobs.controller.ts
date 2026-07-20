@@ -195,7 +195,7 @@ export class DesignJobsController {
   repairLocalImageFile(
     @Param("id") id: string,
     @Param("imageId") imageId: string,
-    @Body() body: ExpectedIdentityPayload = {},
+    @Body() body: ExpectedIdentityPayload & { operationKey?: string } = {},
   ) {
     return this.designJobs.repairLocalDesignImage(id, imageId, body || {});
   }
@@ -232,11 +232,12 @@ export class DesignJobsController {
   @RequireOperatorCapability("approve_send")
   quickConfirmSend(
     @Param("id") id: string,
-    @Body() body: ExpectedIdentityPayload = {},
+    @Body() body: ExpectedIdentityPayload & { operationKey?: string } = {},
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     return this.designJobs.quickConfirmAndQueueSend(id, {
       ...(body || {}),
+      operationKey: body?.operationKey,
       releaseManualLock: true,
       reviewer: `${principal.displayName} [${principal.id}]`,
       releaseReason: "manual_quick_confirm_send",

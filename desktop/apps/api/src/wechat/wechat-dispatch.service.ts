@@ -15,6 +15,7 @@ import {
   createOperationFingerprint,
   deterministicOperationId,
   isUniqueConstraintError,
+  normalizeOperationKey,
   requestOperationMetadata,
   stableOperationKey,
 } from "../shared/operation-idempotency";
@@ -69,6 +70,7 @@ type IdentityFilter = {
 };
 
 type OrderQueueRequest = {
+  operationKey?: string;
   type?: "production" | "delivery";
   owner?: string;
   note?: string;
@@ -112,8 +114,10 @@ export class WechatDispatchService {
   }
 
   async enqueueDesignImages(params: {
+    operationKey: string;
     wechatAccountId: string;
     conversationId: string;
+    customerId?: string;
     designJobId: string;
     imagePaths: string[];
     textBeforeImages?: string;
@@ -131,38 +135,26 @@ export class WechatDispatchService {
       binding,
       ...(params.automation ? { automation: params.automation } : {}),
     };
-    if (appConfig.useLocalStore) {
-      return this.createLocalSendTask({
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: params.designJobId,
-        payload: {
-          kind: "design_images",
-          textBeforeImages: params.textBeforeImages || "",
-          imagePaths: params.imagePaths,
-        },
-        guardSnapshot,
-      });
-    }
-    return this.prisma.wechatSendTask.create({
-      data: {
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: params.designJobId,
-        status: "queued",
-        payload: {
-          kind: "design_images",
-          textBeforeImages: params.textBeforeImages || "",
-          imagePaths: params.imagePaths,
-        },
-        guardSnapshot: guardSnapshot as any,
+    return this.persistence.createSendTask({
+      operationKey: params.operationKey,
+      wechatAccountId: params.wechatAccountId,
+      conversationId: params.conversationId,
+      customerId: params.customerId || binding.customerId,
+      designJobId: params.designJobId,
+      payload: {
+        kind: "design_images",
+        textBeforeImages: params.textBeforeImages || "",
+        imagePaths: params.imagePaths,
       },
+      guardSnapshot,
     });
   }
 
   async enqueueQuoteMessage(params: {
+    operationKey: string;
     wechatAccountId: string;
     conversationId: string;
+    customerId?: string;
     quoteDraftId: string;
     designJobId?: string;
     text: string;
@@ -188,30 +180,20 @@ export class WechatDispatchService {
       ...(params.automation ? { automation: params.automation } : {}),
     };
 
-    if (appConfig.useLocalStore) {
-      return this.createLocalSendTask({
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: binding.designJobId || params.designJobId,
-        quoteDraftId: params.quoteDraftId,
-        payload,
-        guardSnapshot,
-      });
-    }
-    return (this.prisma as any).wechatSendTask.create({
-      data: {
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: binding.designJobId || params.designJobId,
-        quoteDraftId: params.quoteDraftId,
-        status: "queued",
-        payload,
-        guardSnapshot,
-      },
+    return this.persistence.createSendTask({
+      operationKey: params.operationKey,
+      wechatAccountId: params.wechatAccountId,
+      conversationId: params.conversationId,
+      customerId: params.customerId || binding.customerId,
+      designJobId: binding.designJobId || params.designJobId,
+      quoteDraftId: params.quoteDraftId,
+      payload,
+      guardSnapshot,
     });
   }
 
   async enqueueTextMessage(params: {
+    operationKey: string;
     wechatAccountId: string;
     conversationId: string;
     customerId?: string;
@@ -257,26 +239,15 @@ export class WechatDispatchService {
         : {}),
     };
 
-    if (appConfig.useLocalStore) {
-      return this.createLocalSendTask({
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: binding.designJobId || params.designJobId,
-        quoteDraftId: params.quoteDraftId,
-        payload,
-        guardSnapshot,
-      });
-    }
-    return (this.prisma as any).wechatSendTask.create({
-      data: {
-        wechatAccountId: params.wechatAccountId,
-        conversationId: params.conversationId,
-        designJobId: binding.designJobId || params.designJobId,
-        quoteDraftId: params.quoteDraftId,
-        status: "queued",
-        payload,
-        guardSnapshot,
-      },
+    return this.persistence.createSendTask({
+      operationKey: params.operationKey,
+      wechatAccountId: params.wechatAccountId,
+      conversationId: params.conversationId,
+      customerId: params.customerId || binding.customerId,
+      designJobId: binding.designJobId || params.designJobId,
+      quoteDraftId: params.quoteDraftId,
+      payload,
+      guardSnapshot,
     });
   }
 
@@ -336,6 +307,9 @@ export class WechatDispatchService {
         ? (bundleSnapshot as any).items
         : [];
     const paymentStatus = this.orderPaymentStatus(order);
+    const operationKey = provenance
+      ? stableOperationKey("order-confirm", `${order.id}:order-confirmation`)
+      : normalizeOperationKey(payload.operationKey, "operationKey");
     const trustedAutomation = provenance
       ? this.buildLowValueOrderAutomation(order, paymentStatus, provenance)
       : undefined;
@@ -351,8 +325,10 @@ export class WechatDispatchService {
       selectedImagePosition: this.orderSelectedImage(order)?.position,
     });
     const sendTask = await this.enqueueTextMessage({
+      operationKey,
       wechatAccountId: order.wechatAccountId,
       conversationId: order.conversationId,
+      customerId: order.customerId,
       designJobId: order.designJobId,
       quoteDraftId: order.quoteDraftId,
       text: message,
@@ -372,6 +348,7 @@ export class WechatDispatchService {
       "订单确认已入队",
       "系统已根据订单草稿生成客户确认话术，并放入微信安全发送队列。",
       {
+        effectKey: `${operationKey}:notification`,
         orderDraftId: order.id,
         quoteDraftId: order.quoteDraftId,
         designJobId: order.designJobId,
@@ -436,6 +413,9 @@ export class WechatDispatchService {
 
     const context = this.buildOrderMessageContext(order);
     const followupType = payload.type || (order.status === "fulfilled" ? "delivery" : "production");
+    const operationKey = provenance
+      ? stableOperationKey("order-followup", `${order.id}:${followupType}`)
+      : normalizeOperationKey(payload.operationKey, "operationKey");
     const paymentStatus = this.orderPaymentStatus(order);
     const trustedAutomation = provenance
       ? this.buildLowValueOrderAutomation(order, paymentStatus, provenance, followupType)
@@ -452,8 +432,10 @@ export class WechatDispatchService {
       items: context.items,
     });
     const sendTask = await this.enqueueTextMessage({
+      operationKey,
       wechatAccountId: order.wechatAccountId,
       conversationId: order.conversationId,
+      customerId: order.customerId,
       designJobId: order.designJobId,
       quoteDraftId: order.quoteDraftId,
       text: message,
@@ -466,6 +448,7 @@ export class WechatDispatchService {
       followupType === "delivery" ? "订单交期说明已入队" : "订单生产通知已入队",
       "系统已根据订单草稿生成客户跟进话术，并放入微信安全发送队列。",
       {
+        effectKey: `${operationKey}:notification`,
         orderDraftId: order.id,
         quoteDraftId: order.quoteDraftId,
         designJobId: order.designJobId,
@@ -886,12 +869,13 @@ export class WechatDispatchService {
     }
   }
 
-  async enqueueManualReply(payload: IdentityFilter & { text?: string; operator?: string }) {
+  async enqueueManualReply(payload: IdentityFilter & { text?: string; operator?: string; operationKey?: string }) {
     const conversation = await this.requireCompleteConversationIdentity(payload, "manual reply");
     const text = String(payload.text || "").trim();
     if (!text) throw new BadRequestException("manual reply text is required");
     if (text.length > 2000) throw new BadRequestException("manual reply text exceeds 2000 characters");
     const task = await this.enqueueTextMessage({
+      operationKey: normalizeOperationKey(payload.operationKey, "operationKey"),
       wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
       customerId: conversation.customerId,
@@ -1006,28 +990,34 @@ export class WechatDispatchService {
     conversationId?: string;
     customerId?: string;
     text: string;
-    externalId?: string;
+    externalId: string;
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
     createdAt?: string;
   }) {
+    const externalId = String(payload.externalId || "").trim();
+    if (!externalId) throw new BadRequestException("externalId is required");
     if (!appConfig.useLocalStore) return this.processPrismaInboundMessage(payload);
     const conversation = this.resolveInboundConversation(payload);
-    const externalId = String(payload.externalId || "").trim();
-    const duplicate = externalId
-      ? this.localStore.findInboundMessageByExternalId(conversation.wechatAccountId, externalId)
-      : null;
+    const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
+    const messagePayload = {
+      conversationId: conversation.id,
+      customerId: payload.customerId || conversation.customerId,
+      wechatAccountId: payload.wechatAccountId || conversation.wechatAccountId,
+      direction: "inbound",
+      text: payload.text || "",
+      externalId,
+      attachments: payload.attachments || [],
+      createdAt: payload.createdAt,
+      assetIds,
+      metadata: { assetIds },
+    };
+    const duplicate = this.localStore.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
     if (duplicate) {
-      const sameIdentity =
-        String(duplicate.conversationId || "") === String(conversation.id || "") &&
-        String(duplicate.customerId || "") === String(conversation.customerId || "");
-      const sameContent = String(duplicate.text || "") === String(payload.text || "");
-      if (!sameIdentity || !sameContent) {
-        throw new BadRequestException("duplicate inbound externalId conflict: identity or content changed");
-      }
+      const replay = this.localStore.createMessage(messagePayload);
       return {
         duplicate: true,
-        message: duplicate,
+        message: replay,
         route: null,
         plan: {
           type: "duplicate_ignored",
@@ -1042,19 +1032,8 @@ export class WechatDispatchService {
         bundleRecommendation: null,
       };
     }
-    const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
     this.validateInboundAssetBinding(conversation, assetIds);
-    const message = this.localStore.createMessage({
-      conversationId: conversation.id,
-      customerId: payload.customerId || conversation.customerId,
-      wechatAccountId: payload.wechatAccountId,
-      direction: "inbound",
-      text: payload.text || "",
-      externalId: payload.externalId,
-      attachments: payload.attachments || [],
-      createdAt: payload.createdAt,
-      metadata: { assetIds },
-    });
+    const message = this.localStore.createMessage(messagePayload);
     const clarificationContext = this.findLatestSceneClarification(conversation.id);
     const sceneMemory = this.listSceneMemorySamples({
       wechatAccountId: conversation.wechatAccountId,
@@ -1217,8 +1196,10 @@ export class WechatDispatchService {
 
     if (plan.shouldQueueReply) {
       result.sendTask = this.createLocalSendTask({
+        operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
         wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
+        customerId: conversation.customerId,
         designJobId: result.designJob?.id,
         payload: {
           kind: "text",
@@ -1389,8 +1370,10 @@ export class WechatDispatchService {
         conversationId: conversation.id,
       });
       sendTask = await this.persistence.createSendTask({
+        operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
         wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
+        customerId: conversation.customerId,
         payload: {
           kind: "text",
           text: buildInboundReplyText(route, plan),
@@ -1653,8 +1636,10 @@ export class WechatDispatchService {
       items: Array.isArray(designJob?.bundle?.items) ? designJob.bundle.items : [],
     });
     const sendTask = await this.enqueueQuoteMessage({
+      operationKey: stableOperationKey("quote-send", `${quote.id}:selected-image`),
       wechatAccountId: designJob.wechatAccountId,
       conversationId: designJob.conversationId,
+      customerId: quote.customerId || designJob.customerId,
       designJobId: designJob.id,
       quoteDraftId: quote.id,
       text,
@@ -5543,8 +5528,10 @@ export class WechatDispatchService {
       items: Array.isArray(designJob?.bundle?.items) ? designJob.bundle.items : [],
     });
     const sendTask = await this.enqueueQuoteMessage({
+      operationKey: stableOperationKey("quote-send", `${quote.id}:selected-image`),
       wechatAccountId: designJob.wechatAccountId,
       conversationId: designJob.conversationId,
+      customerId: quote.customerId || designJob.customerId,
       designJobId: designJob.id,
       quoteDraftId: quote.id,
       text,

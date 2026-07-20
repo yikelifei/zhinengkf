@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { identityExpectation, reviewQuote, type QuoteDraft } from "../../lib/api";
+import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import styles from "../governance-pages.module.css";
 import { formatReviewDate, formatReviewMoney, trustedReviewer, useReviewCenter, type ReviewMutationPageProps } from "./review-page-shared";
 
@@ -25,6 +26,7 @@ export function ReviewQuotesPage({ identityFilters, reviewer, reviewId }: Review
   const [note, setNote] = useState("");
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingQuoteReview | null>(null);
+  const pendingOperationRef = useRef<PendingClientOperation | null>(null);
   const operator = trustedReviewer(reviewer);
   const activeQuote = center?.quoteDrafts.find((quote) => quote.id === reviewId) || null;
 
@@ -53,13 +55,24 @@ export function ReviewQuotesPage({ identityFilters, reviewer, reviewId }: Review
     setActionBusy(true);
     setError("");
     setNotice("");
+    const operationPayload = {
+      id: quote.id,
+      decision: pendingConfirmation.decision,
+      reviewer: operator,
+      note: note.trim(),
+      identity: identityExpectation(quote),
+    };
+    const operation = reserveClientOperation("review-action", operationPayload, pendingOperationRef.current);
+    pendingOperationRef.current = operation;
     try {
       await reviewQuote(quote.id, {
+        operationKey: operation.key,
         decision: pendingConfirmation.decision,
         reviewer: operator,
         note: note.trim(),
         ...identityExpectation(quote),
       });
+      pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
       setNotice(`报价 ${quote.id} 已提交“${quoteDecisionLabel(pendingConfirmation.decision)}”审核。`);
       setPendingConfirmation(null);
       setNote("");

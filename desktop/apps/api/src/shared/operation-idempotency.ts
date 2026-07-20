@@ -53,6 +53,65 @@ export function createChatImportOperationFingerprint(payload: Record<string, unk
   );
 }
 
+export function createSendTaskOperationFingerprint(
+  payload: Record<string, unknown>,
+  identity: Record<string, unknown>,
+) {
+  const guard = payload.guardSnapshot && typeof payload.guardSnapshot === "object"
+    ? payload.guardSnapshot as Record<string, unknown>
+    : {};
+  return createOperationFingerprint(
+    "wechat-send-task-create",
+    {
+      customerId: normalizedOptionalString(identity.customerId),
+      conversationId: normalizedOptionalString(identity.conversationId),
+      wechatAccountId: normalizedOptionalString(identity.wechatAccountId),
+    },
+    {
+      designJobId: normalizedOptionalString(payload.designJobId),
+      quoteDraftId: normalizedOptionalString(payload.quoteDraftId),
+      payload: payload.payload || {},
+      guard: {
+        source: guard.source,
+        reason: guard.reason,
+        orderContext: guard.orderContext,
+        automation: guard.automation,
+        manualReply: guard.manualReply,
+        queuedBy: guard.queuedBy,
+        policy: guard.policy,
+        requiredChecks: guard.requiredChecks,
+      },
+    },
+  );
+}
+
+export function createInboundMessageOperationFingerprint(
+  payload: Record<string, unknown>,
+  identity: Record<string, unknown>,
+) {
+  const metadata = payload.metadata && typeof payload.metadata === "object"
+    ? payload.metadata as Record<string, unknown>
+    : {};
+  return createOperationFingerprint(
+    "wechat-inbound-message-create",
+    {
+      customerId: normalizedOptionalString(identity.customerId),
+      conversationId: normalizedOptionalString(identity.conversationId),
+      wechatAccountId: normalizedOptionalString(identity.wechatAccountId),
+    },
+    {
+      direction: normalizedOptionalString(payload.direction) || "inbound",
+      text: String(payload.text || "").replace(/\r\n?/g, "\n"),
+      attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+      assetIds: Array.isArray(payload.assetIds)
+        ? payload.assetIds
+        : Array.isArray(metadata.assetIds)
+          ? metadata.assetIds
+          : [],
+    },
+  );
+}
+
 export function deterministicOperationId(prefix: string, operationKey: string, suffix?: string | number) {
   const digest = createHash("sha256")
     .update(suffix === undefined ? operationKey : `${operationKey}:${suffix}`)
