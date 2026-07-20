@@ -106,7 +106,7 @@ test("manual reply submit means guarded queueing, never direct delivery", () => 
   assert.match(thread, /data-action-id="conversations\.reply\.enqueue"[\s\S]*?disabled=\{sendDisabled\}[\s\S]*?aria-label="将人工回复提交到安全发送队列"/);
 
   const sendReply = controller.match(/const sendReply = useCallback[\s\S]*?\n  }, \[[^\]]+\]\);/)?.[0] || "";
-  assert.match(sendReply, /api\.queueManualConversationReply\(identity, text, currentOperator\)/);
+  assert.match(sendReply, /api\.queueManualConversationReply\(identity, text, operation\.key, currentOperator\)/);
   assert.doesNotMatch(sendReply, /executeSendTask|processSafeSendQueue|personalWechatDirectSend/);
   assert.match(controller, /onSendReply:\s*\(\) => void sendReply\(\)/);
   assert.doesNotMatch(thread, /queueManualConversationReply|executeSendTask|processSafeSendQueue|\bfetch\s*\(/);

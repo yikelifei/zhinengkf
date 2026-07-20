@@ -27,7 +27,7 @@ test("safe inbound reply uses AI after rules and scoped knowledge", async () => 
   const calls = [];
   const ai = { generateInboundSuggestion: async (input) => { calls.push(input); return { text: "收到，我帮您核对订单 123 的物流进度。", provider: "backup", model: "demo", attempts: 2 }; } };
   const { service } = setup(ai);
-  const result = await service.processInboundMessage({ wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "物流快递单号 123 已停滞三天，请帮我查物流进度" });
+  const result = await service.processInboundMessage({ externalId: "ai-suggestion-safe-inbound", wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "物流快递单号 123 已停滞三天，请帮我查物流进度" });
   assert.equal(calls.length, 1);
   assert.equal("conversationId" in calls[0], false);
   assert.equal(result.route.suggestedReply, "收到，我帮您核对订单 123 的物流进度。");
@@ -39,7 +39,7 @@ test("high-risk inbound is forced to human without calling AI", async () => {
   let calls = 0;
   const ai = { generateInboundSuggestion: async () => { calls += 1; throw new Error("must not run"); } };
   const { service } = setup(ai);
-  const result = await service.processInboundMessage({ wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "我要投诉并报警维权" });
+  const result = await service.processInboundMessage({ externalId: "ai-suggestion-high-risk-inbound", wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "我要投诉并报警维权" });
   assert.equal(calls, 0);
   assert.equal(result.plan.shouldNotifyHuman, true);
   assert.equal(result.sendTask, null);
@@ -49,7 +49,7 @@ test("high-risk inbound is forced to human without calling AI", async () => {
 test("provider failure falls back to the existing rule reply without interrupting inbound", async () => {
   const ai = { generateInboundSuggestion: async () => { throw new Error("provider unavailable"); } };
   const { service } = setup(ai);
-  const result = await service.processInboundMessage({ wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "物流快递单号 456 已停滞两天，请帮我查物流进度" });
+  const result = await service.processInboundMessage({ externalId: "ai-suggestion-provider-fallback", wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "物流快递单号 456 已停滞两天，请帮我查物流进度" });
   assert.equal(result.route.replyDraft.aiAssistance.used, false);
   assert.equal(result.route.replyDraft.aiAssistance.authority, "rule_fallback");
   assert.equal(result.route.suggestedReply, result.route.replyDraft.ruleSuggestedReply);

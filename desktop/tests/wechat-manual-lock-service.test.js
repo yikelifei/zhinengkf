@@ -2377,12 +2377,13 @@ test("demo send task and window snapshot require matching conversation identity"
   const { service } = setupService();
 
   assert.throws(
-    () => service.createDemoSendTask({ conversationId: "conversation_demo_1", wechatAccountId: "wechat_demo_1" }),
+    () => service.createDemoSendTask({ operationKey: "demo-send-missing-identity", conversationId: "conversation_demo_1", wechatAccountId: "wechat_demo_1" }),
     /demo send task requires conversation identity/,
   );
   assert.throws(
     () =>
       service.createDemoSendTask({
+        operationKey: "demo-send-mismatched-identity",
         conversationId: "conversation_demo_1",
         wechatAccountId: "wechat_demo_1",
         expectedWechatAccountId: "wechat_demo_2",
@@ -2393,6 +2394,7 @@ test("demo send task and window snapshot require matching conversation identity"
   );
 
   const task = service.createDemoSendTask({
+    operationKey: "demo-send-matching-identity",
     conversationId: "conversation_demo_1",
     wechatAccountId: "wechat_demo_1",
     expectedWechatAccountId: "wechat_demo_1",
