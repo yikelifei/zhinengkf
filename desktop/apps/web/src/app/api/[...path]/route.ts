@@ -1,11 +1,16 @@
 import "server-only";
 
 import {
+  API_READINESS_PROOF_FIELD,
+  READINESS_CHALLENGE_HEADER,
+  WEB_READINESS_PROOF_FIELD,
   buildDesktopApiUpstreamHeaders,
   canonicalDesktopProxyPath,
+  createWebReadinessProof,
   evaluateDesktopSessionProof,
   isForbiddenWebProxyIngress,
   requiresDesktopSessionProof,
+  verifyApiReadinessProof,
 } from "../../../lib/desktop-session-proof";
 
 const INTERNAL_API_TOKEN_HEADER = "x-internal-api-token";
@@ -56,9 +61,12 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
   upstreamUrl.search = requestUrl.search;
 
   const headers = buildDesktopApiUpstreamHeaders(request.headers, token, INTERNAL_API_TOKEN_HEADER);
+  const method = request.method.toUpperCase();
+  const desktopSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim();
+  const isReadinessHealth = method === "GET" && canonicalPath.path === "health";
+  if (isReadinessHealth) headers.set(READINESS_CHALLENGE_HEADER, desktopSessionProof);
 
   try {
-    const method = request.method.toUpperCase();
     const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
     const upstream = await fetch(upstreamUrl, {
       method,
@@ -70,6 +78,16 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
     });
     const responseHeaders = new Headers(upstream.headers);
     for (const header of RESPONSE_HEADERS_TO_REMOVE) responseHeaders.delete(header);
+    if (isReadinessHealth) {
+      const responseBody = Buffer.from(await upstream.arrayBuffer());
+      const boundBody = bindPackagedReadinessBody(responseBody, token, desktopSessionProof, upstream.ok);
+      if (boundBody !== responseBody) responseHeaders.set("content-type", "application/json; charset=utf-8");
+      return new Response(boundBody.toString("utf8"), {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
+      });
+    }
     return new Response(method === "HEAD" ? null : upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
@@ -77,6 +95,20 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
     });
   } catch {
     return jsonError(502, "desktop_api_unavailable", "The local desktop API is unavailable.");
+  }
+}
+
+function bindPackagedReadinessBody(body: Buffer, internalSecret: string, desktopSessionProof: string, upstreamOk: boolean) {
+  if (!upstreamOk) return body;
+  try {
+    const payload = JSON.parse(body.toString("utf8"));
+    const apiProof = payload?.[API_READINESS_PROOF_FIELD];
+    if (!verifyApiReadinessProof(internalSecret, desktopSessionProof, apiProof)) return body;
+    const webProof = createWebReadinessProof(internalSecret, desktopSessionProof, apiProof);
+    if (!webProof) return body;
+    return Buffer.from(JSON.stringify({ ...payload, [WEB_READINESS_PROOF_FIELD]: webProof }), "utf8");
+  } catch {
+    return body;
   }
 }
 

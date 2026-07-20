@@ -1,7 +1,9 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { resolveRepositoryRevision, normalizeRepositoryRevision } = require("./repository-provenance");
 
 const SCHEMA_VERSION = "smart_kefu_external_evidence_bundle_v1";
@@ -236,7 +238,7 @@ function validArtifact(value) {
     && /^[a-f0-9]{64}$/.test(String(value.sha256 || ""));
 }
 
-function inspectWindows(loaded, currentRevision, nowMs) {
+function inspectWindows(loaded, currentRevision, nowMs, verifySignature = verifyAuthenticode) {
   const state = inspectCommon("windows", loaded, currentRevision, nowMs);
   if (!state.report || !state.evidence.schemaValid || state.failures.length) {
     return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state);
@@ -247,20 +249,129 @@ function inspectWindows(loaded, currentRevision, nowMs) {
     return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state, { signedReleaseProfile: false });
   }
   const checks = Array.isArray(state.report.checks) ? state.report.checks : [];
-  const artifactFiles = [state.report.installer?.file, state.report.executable?.file];
+  const artifacts = [
+    inspectLocalArtifact("installer", state.report.installer, state),
+    inspectLocalArtifact("executable", state.report.executable, state),
+  ];
+  const artifactFiles = artifacts.filter(Boolean).map((item) => item.file);
   const signatures = Array.isArray(state.report.signatures) ? state.report.signatures : [];
-  const signatureFiles = new Set(signatures.map((item) => item?.file));
-  const valid = validArtifact(state.report.installer)
-    && validArtifact(state.report.executable)
-    && state.report.repositoryClean === true
+  const signatureFiles = new Set(signatures.map((item) => canonicalArtifactPath(item?.file)).filter(Boolean));
+  const reportedSignaturesValid = artifactFiles.length === 2
     && signatures.length === artifactFiles.length
-    && signatures.every((item) => typeof item?.file === "string" && item.file.trim() && item.status === "Valid")
-    && artifactFiles.every((file) => signatureFiles.has(file))
-    && checks.length > 0
+    && signatures.every((item) => item?.status === "Valid")
+    && artifactFiles.every((file) => signatureFiles.has(file));
+  const requiredChecksValid = checks.length > 0
     && checks.every((item) => item?.status === STATUS.PASS)
     && WINDOWS_REQUIRED_CHECKS.every((name) => checks.some((item) => item?.name === name && item.status === STATUS.PASS));
-  if (!valid) state.failures.push("PASS signed package report is missing artifact, smoke, content or Authenticode evidence");
-  return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state, { signedReleaseProfile: true, signedArtifactContractValid: valid });
+  if (state.report.repositoryClean !== true) state.failures.push("signed package report is not bound to a clean repository");
+  if (!reportedSignaturesValid) state.failures.push("signed package report signatures are not bound to both exact artifacts");
+  if (!requiredChecksValid) state.failures.push("signed package report is missing required PASS checks");
+  let signaturesValid = reportedSignaturesValid;
+  for (const artifact of artifacts.filter(Boolean)) {
+    const reportedSignature = signatures.find((item) => canonicalArtifactPath(item?.file) === artifact.file);
+    if (reportedSignature?.status !== "Valid") {
+      signaturesValid = false;
+      state.failures.push(`${artifact.label} report does not contain a valid Authenticode result`);
+      continue;
+    }
+    let actualSignature;
+    try {
+      actualSignature = verifySignature(artifact.file);
+    } catch {
+      actualSignature = { status: "Unavailable", unavailable: true };
+    }
+    const actualStatus = typeof actualSignature === "string" ? actualSignature : actualSignature?.status;
+    if (actualStatus === "Valid") {
+      const rechecked = inspectLocalArtifact(artifact.label, artifact.reported, state, { recordFailure: false });
+      if (!rechecked || rechecked.sha256 !== artifact.sha256 || rechecked.bytes !== artifact.bytes) {
+        signaturesValid = false;
+        state.failures.push(`${artifact.label} changed while its signature was being verified`);
+      }
+    } else if (actualSignature?.unavailable || actualStatus === "Unavailable" || actualStatus === "Unknown") {
+      signaturesValid = false;
+      state.blockers.push(`${artifact.label} Authenticode could not be verified on this host`);
+    } else {
+      signaturesValid = false;
+      state.failures.push(`${artifact.label} Authenticode status is not Valid`);
+    }
+  }
+  const valid = artifacts.every(Boolean)
+    && state.report.repositoryClean === true
+    && signaturesValid
+    && reportedSignaturesValid
+    && requiredChecksValid;
+  if (!valid && !state.failures.length && !state.blockers.length) {
+    state.failures.push("PASS signed package report is missing artifact, smoke, content or Authenticode evidence");
+  }
+  return finalizeEvidence("evidence.windows_package", "Windows 正式包证据", state, {
+    signedReleaseProfile: true,
+    signedArtifactContractValid: valid,
+    artifactsRecomputed: artifacts.length === 2 && artifacts.every(Boolean),
+    authenticodeReverified: signaturesValid,
+  });
+}
+
+function inspectLocalArtifact(label, reported, state, options = {}) {
+  const recordFailure = options.recordFailure !== false;
+  const fail = (message) => {
+    if (recordFailure) state.failures.push(message);
+    return null;
+  };
+  if (!validArtifact(reported) || !path.isAbsolute(reported.file) || path.extname(reported.file).toLowerCase() !== ".exe") {
+    return fail(`${label} artifact metadata is invalid`);
+  }
+  try {
+    const requested = path.resolve(reported.file);
+    if (fs.lstatSync(requested).isSymbolicLink()) return fail(`${label} artifact must not be a symbolic link`);
+    const file = fs.realpathSync(requested);
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size <= 0) return fail(`${label} artifact is missing or invalid`);
+    const digest = sha256File(file);
+    if (stat.size !== reported.bytes || digest !== String(reported.sha256).toLowerCase()) {
+      return fail(`${label} artifact bytes or SHA-256 do not match the report`);
+    }
+    return { label, file: canonicalArtifactPath(file), bytes: stat.size, sha256: digest, reported };
+  } catch {
+    return fail(`${label} artifact is missing or unreadable`);
+  }
+}
+
+function canonicalArtifactPath(value) {
+  if (typeof value !== "string" || !value.trim() || !path.isAbsolute(value)) return "";
+  try {
+    const resolved = fs.realpathSync(path.resolve(value));
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  } catch {
+    return "";
+  }
+}
+
+function sha256File(file) {
+  const hash = crypto.createHash("sha256");
+  const descriptor = fs.openSync(file, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return hash.digest("hex");
+}
+
+function verifyAuthenticode(file) {
+  if (process.platform !== "win32") return { status: "Unavailable", unavailable: true };
+  const escaped = file.replace(/'/g, "''");
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", `(Get-AuthenticodeSignature -LiteralPath '${escaped}').Status.ToString()`],
+    { encoding: "utf8", windowsHide: true, shell: false, timeout: 30_000 },
+  );
+  if (result.error || result.status !== 0) return { status: "Unavailable", unavailable: true };
+  return { status: String(result.stdout || "Unknown").trim() || "Unknown" };
 }
 
 function validateEvidenceBundle(options = {}) {
@@ -283,7 +394,7 @@ function validateEvidenceBundle(options = {}) {
   const results = [
     inspectStaging(loaded.staging, currentRevision, nowMs),
     inspectRecovery(loaded.recovery, currentRevision, nowMs),
-    inspectWindows(loaded.windows, currentRevision, nowMs),
+    inspectWindows(loaded.windows, currentRevision, nowMs, options.verifySignature || verifyAuthenticode),
     result(
       "manual.windows_smartscreen",
       "Windows SmartScreen 与安装现场证据",
@@ -389,5 +500,7 @@ module.exports = {
   STATUS,
   parseArgs,
   renderMarkdown,
+  sha256File,
   validateEvidenceBundle,
+  verifyAuthenticode,
 };

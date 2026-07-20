@@ -94,15 +94,45 @@ function buildApiServiceEnvironment({ baseEnv, token }) { return selectServiceEn
 function buildWebServiceEnvironment({ baseEnv, token, webSessionProof }) { return selectServiceEnvironment("web", baseEnv, { INTERNAL_API_TOKEN: token, DESKTOP_WEB_SESSION_PROOF: webSessionProof }); }
 function waitForHttp(url, child, timeout, validateResponse) { if (response.statusCode === 200 && validateResponse(response)) return response; }
 function validateApiHealthResponse(response) { const payload = {}; return payload?.ok === true && payload?.service === "smart-kefu-desktop-api"; }
+function desktopReadinessChallengeHeaders() { return {}; }
+function validateApiReadinessResponse(response, token, challenge) { const payload = {}; return verifyApiReadinessProof(token, challenge, payload?.[API_READINESS_PROOF_FIELD]); }
+function validateWebApiReadinessResponse(response, token, challenge) { return verifyWebReadinessProof(token, challenge, "api-proof", "web-proof"); }
 function validateWebOverviewResponse(response) { const contentType = "text/html"; return contentType.includes("text/html") && "overview-center"; }
-class Manager { start() { const apiEnv = buildApiServiceEnvironment({}); const api = this.spawnService("api", entry, apiEnv); waitForHttp(API_URL, api, 45_000, validateApiHealthResponse); const web = this.spawnService("web", entry, buildWebServiceEnvironment({})); waitForHttp(WEB_URL, web, 45_000, validateWebOverviewResponse); } }
+class Manager { start() { const apiEnv = buildApiServiceEnvironment({}); const api = this.spawnService("api", entry, apiEnv); waitForHttp(API_URL, api, 45_000, (response) => validateApiReadinessResponse(response, this.token, this.webSessionProof), { headers: desktopReadinessChallengeHeaders(this.webSessionProof) }); const web = this.spawnService("web", entry, buildWebServiceEnvironment({})); waitForHttp(WEB_URL, web, 45_000, validateWebOverviewResponse); waitForHttp(PROXY_HEALTH_URL, web, 45_000, (response) => validateWebApiReadinessResponse(response, this.token, this.webSessionProof)); } }
 `);
   write(root, "desktop/tools/smoke-packaged-api.js", `
 if (apiHealth.statusCode !== 200) throw new Error("API not ready");
 if (overview.statusCode !== 200) throw new Error("Web not ready");
 if (proxyHealthBody?.code !== "desktop_session_proof_missing") throw new Error("missing proof accepted");
 const cookie = desktopSessionCookieHeader(desktopWebSessionProof);
-if (authenticatedProxyHealth.statusCode !== 200 || !validateApiHealthResponse(authenticatedProxyHealth)) throw new Error("proxy failed");
+waitForUrl(API_URL, (response) => validateApiReadinessResponse(response, token, desktopWebSessionProof));
+if (authenticatedProxyHealth.statusCode !== 200 || !validateWebApiReadinessResponse(authenticatedProxyHealth, token, desktopWebSessionProof)) throw new Error("proxy failed");
+const mode = "launch_bound_web_api_hmac";
+`);
+  write(root, "desktop/packages/runtime/packaged-readiness-proof.js", `
+const crypto = require("node:crypto");
+const API_DOMAIN = "smart-kefu-api-readiness-v1";
+const WEB_DOMAIN = "smart-kefu-web-readiness-v1";
+function createProof(token, message) { return crypto.createHmac("sha256", Buffer.from(token, "hex")).update(message).digest("hex"); }
+function verifyApiReadinessProof() { return safeEqual(); }
+function verifyWebReadinessProof() { return safeEqual(); }
+function safeEqual(expected, actual) { return crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(actual, "hex")); }
+`);
+  write(root, "desktop/tools/build-windows-package.js", `
+const initialRepositoryState = requireCleanRepository();
+runNpm(["run", "build:web"], { FORCE_WEB_CLEAN_BUILD: "1" });
+assertBuildInputs();
+const packageRepositoryState = requireCleanRepository();
+if (packageRepositoryState.revision !== initialRepositoryState.revision) throw new Error();
+writePackageProvenance(packageRepositoryState);
+`);
+  write(root, "desktop/tools/external-evidence-bundle.js", `
+const stat = fs.lstatSync(requested); if (fs.lstatSync(requested).isSymbolicLink()) throw new Error();
+const actualSize = stat.size; if (actualSize !== artifact.reportedSize) throw new Error();
+const digest = sha256File(file);
+const actualSignature = verifySignature(artifact.file);
+const requiredChecksValid = true;
+const script = "Get-AuthenticodeSignature";
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
 const OBSERVER_ENV_KEYS = ["NODE_ENV", "WECHAT_WINDOW_OBSERVER_PROOF_FILE", "WECHAT_WINDOW_SNAPSHOT_INBOX_DIR"];

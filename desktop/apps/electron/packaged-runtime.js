@@ -6,6 +6,13 @@ const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { selectServiceEnvironment } = require("../../packages/runtime/service-environment");
+const {
+  API_READINESS_PROOF_FIELD,
+  READINESS_CHALLENGE_HEADER,
+  WEB_READINESS_PROOF_FIELD,
+  verifyApiReadinessProof,
+  verifyWebReadinessProof,
+} = require("../../packages/runtime/packaged-readiness-proof");
 
 const API_URL = "http://127.0.0.1:3200/api/health";
 const WEB_URL = "http://127.0.0.1:3100/overview";
@@ -131,6 +138,12 @@ function desktopSessionCookieHeader(proof) {
   return `${DESKTOP_SESSION_COOKIE}=${value}`;
 }
 
+function desktopReadinessChallengeHeaders(proof) {
+  const value = String(proof || "").trim();
+  if (!DESKTOP_SESSION_PROOF_PATTERN.test(value)) throw new Error("Packaged desktop readiness challenge is invalid");
+  return { [READINESS_CHALLENGE_HEADER]: value };
+}
+
 function validateExactHttp200(response) {
   return response?.statusCode === 200;
 }
@@ -139,11 +152,32 @@ function validateApiHealthResponse(response) {
   if (!validateExactHttp200(response)) return false;
   const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
   if (!contentType.includes("application/json")) return false;
+  const payload = parseApiHealthPayload(response);
+  return payload?.ok === true && payload?.service === "smart-kefu-desktop-api";
+}
+
+function validateApiReadinessResponse(response, token, challenge) {
+  if (!validateApiHealthResponse(response)) return false;
+  const payload = parseApiHealthPayload(response);
+  return verifyApiReadinessProof(token, challenge, payload?.[API_READINESS_PROOF_FIELD]);
+}
+
+function validateWebApiReadinessResponse(response, token, challenge) {
+  if (!validateApiReadinessResponse(response, token, challenge)) return false;
+  const payload = parseApiHealthPayload(response);
+  return verifyWebReadinessProof(
+    token,
+    challenge,
+    payload?.[API_READINESS_PROOF_FIELD],
+    payload?.[WEB_READINESS_PROOF_FIELD],
+  );
+}
+
+function parseApiHealthPayload(response) {
   try {
-    const payload = JSON.parse(Buffer.from(response.body || "").toString("utf8"));
-    return payload?.ok === true && payload?.service === "smart-kefu-desktop-api";
+    return JSON.parse(Buffer.from(response?.body || "").toString("utf8"));
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -183,7 +217,13 @@ class PackagedServiceManager {
     });
     try {
       const api = this.spawnService("api", this.paths.apiEntry, apiEnv, this.paths.readOnlyRoot);
-      await waitForHttp(API_URL, api, 45_000, validateApiHealthResponse);
+      await waitForHttp(
+        API_URL,
+        api,
+        45_000,
+        (response) => validateApiReadinessResponse(response, this.token, this.webSessionProof),
+        { headers: desktopReadinessChallengeHeaders(this.webSessionProof) },
+      );
       const web = this.spawnService(
         "web",
         this.paths.webEntry,
@@ -198,7 +238,9 @@ class PackagedServiceManager {
         this.paths.runtimeDir,
       );
       await waitForHttp(WEB_URL, web, 45_000, validateWebOverviewResponse);
-      await waitForHttp(PROXY_HEALTH_URL, web, 45_000, validateApiHealthResponse, {
+      await waitForHttp(PROXY_HEALTH_URL, web, 45_000, (response) => (
+        validateWebApiReadinessResponse(response, this.token, this.webSessionProof)
+      ), {
         headers: { Cookie: desktopSessionCookieHeader(this.webSessionProof) },
       });
     } catch (error) {
@@ -248,11 +290,14 @@ module.exports = {
   buildApiServiceEnvironment,
   buildServiceEnvironment,
   buildWebServiceEnvironment,
+  desktopReadinessChallengeHeaders,
   desktopSessionCookieHeader,
   requestHttp,
   resolvePackagedPaths,
   validateApiHealthResponse,
+  validateApiReadinessResponse,
   validateExactHttp200,
+  validateWebApiReadinessResponse,
   validateWebOverviewResponse,
   waitForHttp,
 };

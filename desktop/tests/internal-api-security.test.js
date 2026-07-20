@@ -30,6 +30,13 @@ const {
   requiresDesktopSessionProof,
 } = require("../apps/web/src/lib/desktop-session-proof");
 const { PackagedServiceManager, buildApiServiceEnvironment } = require("../apps/electron/packaged-runtime");
+const {
+  READINESS_CHALLENGE_HEADER,
+  createApiReadinessProof,
+  createWebReadinessProof,
+  verifyApiReadinessProof,
+  verifyWebReadinessProof,
+} = require("../packages/runtime/packaged-readiness-proof");
 
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -111,7 +118,7 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
   assert.match(route, /buildDesktopApiUpstreamHeaders\(request\.headers, token, INTERNAL_API_TOKEN_HEADER\)/);
   const proofHelper = read("apps/web/src/lib/desktop-session-proof.ts");
   assert.match(proofHelper, /headers\.delete\("cookie"\)/);
-  assert.match(proofHelper, /headers\.delete\(internalApiTokenHeader\);\s*headers\.set\(internalApiTokenHeader, internalApiToken\);/);
+  assert.match(proofHelper, /headers\.delete\(internalApiTokenHeader\);\s*headers\.delete\(READINESS_CHALLENGE_HEADER\);\s*headers\.set\(internalApiTokenHeader, internalApiToken\);/);
   assert.match(route, /http:\/\/127\.0\.0\.1:\$\{apiPort\}/);
   assert.match(route, /export const POST = proxyDesktopApi/);
   assert.doesNotMatch(route, /NEXT_PUBLIC|console\.(?:log|error)|token\s*:/);
@@ -154,7 +161,31 @@ test("desktop proxy requires a verified Electron proof for every method and stri
   );
   assert.equal(upstream.get("cookie"), null);
   assert.equal(upstream.get("x-internal-api-token"), "a".repeat(64));
+  assert.equal(upstream.get(READINESS_CHALLENGE_HEADER), null);
   assert.equal(upstream.get("x-request-id"), "request-1");
+});
+
+test("packaged readiness HMAC binds API and Web responses to one launch without exposing the token", () => {
+  const token = "a".repeat(64);
+  const challenge = "b".repeat(64);
+  const otherToken = "c".repeat(64);
+  const apiProof = createApiReadinessProof(token, challenge);
+  const webProof = createWebReadinessProof(token, challenge, apiProof);
+
+  assert.match(apiProof, /^[a-f0-9]{64}$/);
+  assert.match(webProof, /^[a-f0-9]{64}$/);
+  assert.equal(verifyApiReadinessProof(token, challenge, apiProof), true);
+  assert.equal(verifyApiReadinessProof(otherToken, challenge, apiProof), false);
+  assert.equal(verifyApiReadinessProof(token, "d".repeat(64), apiProof), false);
+  assert.equal(verifyWebReadinessProof(token, challenge, apiProof, webProof), true);
+  assert.equal(verifyWebReadinessProof(token, challenge, apiProof, challenge), false);
+
+  const route = read("apps/web/src/app/api/[...path]/route.ts");
+  const health = read("apps/api/src/health.controller.ts");
+  assert.match(route, /verifyApiReadinessProof\(internalSecret, desktopSessionProof, apiProof\)/);
+  assert.match(route, /createWebReadinessProof\(internalSecret, desktopSessionProof, apiProof\)/);
+  assert.match(health, /createApiReadinessProof\(appConfig\.internalApiToken, readinessChallenge\)/);
+  assert.doesNotMatch(route, /\[INTERNAL_API_TOKEN_HEADER\]\s*:/);
 });
 
 test("callback proxy ingress and path-normalization variants are rejected before upstream construction", () => {

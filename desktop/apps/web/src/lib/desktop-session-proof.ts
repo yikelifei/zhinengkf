@@ -1,7 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
 
+const packagedReadinessProof = require("../../../../packages/runtime/packaged-readiness-proof");
+
 export const DESKTOP_SESSION_COOKIE = "smart_kefu_desktop_session";
 export const DESKTOP_SESSION_PROOF_PATTERN = /^[a-f0-9]{64}$/i;
+export const API_READINESS_PROOF_FIELD: string = packagedReadinessProof.API_READINESS_PROOF_FIELD;
+export const READINESS_CHALLENGE_HEADER: string = packagedReadinessProof.READINESS_CHALLENGE_HEADER;
+export const WEB_READINESS_PROOF_FIELD: string = packagedReadinessProof.WEB_READINESS_PROOF_FIELD;
+export const createWebReadinessProof: (token: unknown, challenge: unknown, apiProof: unknown) => string =
+  packagedReadinessProof.createWebReadinessProof;
+export const verifyApiReadinessProof: (token: unknown, challenge: unknown, proof: unknown) => boolean =
+  packagedReadinessProof.verifyApiReadinessProof;
 
 const REQUEST_HEADERS_TO_REMOVE = [
   "connection",
@@ -73,6 +82,7 @@ export function buildDesktopApiUpstreamHeaders(
   // The API has no browser cookie authentication. Never forward the Electron-only proof or any ambient cookie.
   headers.delete("cookie");
   headers.delete(internalApiTokenHeader);
+  headers.delete(READINESS_CHALLENGE_HEADER);
   headers.set(internalApiTokenHeader, internalApiToken);
   return headers;
 }

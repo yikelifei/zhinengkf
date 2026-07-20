@@ -30,6 +30,7 @@ function main() {
   runNpm(["run", "build:web"], {
     WEB_PORT: process.env.PACKAGE_BUILD_WEB_PORT || "31901",
     ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "1",
+    FORCE_WEB_CLEAN_BUILD: "1",
   });
   assertBuildInputs();
   const packageRepositoryState = requireCleanRepository();
