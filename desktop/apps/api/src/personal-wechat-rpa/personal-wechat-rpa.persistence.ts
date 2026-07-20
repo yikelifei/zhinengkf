@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { deterministicOperationId, isUniqueConstraintError } from "../shared/operation-idempotency";
 
 export type PersonalWechatRpaBindingInput = {
   wechatAccountId: string;
@@ -37,6 +38,14 @@ export type PersonalWechatRpaPage = {
   cursor?: string;
 };
 
+export type PersonalWechatRpaInboundClaimInput = PersonalWechatRpaBindingInput & {
+  externalId: string;
+  requestFingerprint: string;
+  normalizedPayload: Record<string, unknown>;
+  claimToken: string;
+  leaseExpiresAt: string;
+};
+
 /**
  * Business records are durable in PostgreSQL when USE_LOCAL_STORE=false.
  * Host registry credentials and Windows process/session bindings never enter this adapter.
@@ -62,7 +71,10 @@ export class PersonalWechatRpaPersistence {
     }
 
     const prisma = this.prisma as any;
-    return prisma.$transaction(async (tx: any) => {
+    return prisma.$transaction((tx: any) => this.upsertPrismaBinding(tx, input));
+  }
+
+  private async upsertPrismaBinding(tx: any, input: ReturnType<typeof normalizeBindingInput>) {
       const accountByOwner = await tx.wechatAccount.findUnique({
         where: { personalWechatOwnerWxId: input.ownerWxId },
       });
@@ -208,7 +220,146 @@ export class PersonalWechatRpaPersistence {
       });
       if (!binding) throw identityConflict("personal WeChat binding disappeared during timestamp advance");
       return hydrateBinding(binding);
+  }
+
+  async claimInboundAndBind(payload: PersonalWechatRpaInboundClaimInput) {
+    const input = normalizeBindingInput(payload);
+    const externalId = requiredText(payload.externalId, "externalId");
+    const requestFingerprint = requiredText(payload.requestFingerprint, "requestFingerprint");
+    const claimToken = requiredText(payload.claimToken, "claimToken");
+    const leaseExpiresAt = new Date(requiredText(payload.leaseExpiresAt, "leaseExpiresAt"));
+    if (!Number.isFinite(leaseExpiresAt.getTime())) throw new BadRequestException("leaseExpiresAt must be an ISO date");
+    const operationId = deterministicOperationId("inbound", `${input.wechatAccountId}:${externalId}`);
+    const operationInput = {
+      id: operationId,
+      source: "personal_wechat_rpa",
+      wechatAccountId: input.wechatAccountId,
+      externalId,
+      requestFingerprint,
+      normalizedPayload: payload.normalizedPayload,
+      bindingKey: input.bindingKey,
+      claimToken,
+      leaseExpiresAt,
+    };
+
+    if (this.isLocal) {
+      const claimed = this.localStore.claimInboundMessageOperation({
+        ...operationInput,
+        leaseExpiresAt: leaseExpiresAt.toISOString(),
+      });
+      if (!claimed.claimed) {
+        return { ...claimed, binding: this.bindingForOperationLocal(claimed.operation) };
+      }
+      if (claimed.operation?.stage && claimed.operation.stage !== "reserved") {
+        const binding = this.bindingForOperationLocal(claimed.operation);
+        if (!binding) throw new BadRequestException("resumable inbound operation is missing its durable binding");
+        return { ...claimed, binding };
+      }
+      try {
+        const binding = await this.upsertBinding(payload);
+        const operation = this.localStore.updateInboundMessageOperation(operationId, claimToken, {
+          stage: "binding_ready",
+          bindingKey: input.bindingKey,
+          customerId: binding.customerId,
+          conversationId: binding.conversationId,
+        });
+        return { operation, binding, claimed: true, completed: false };
+      } catch (error) {
+        this.localStore.updateInboundMessageOperation(operationId, claimToken, {
+          status: "retryable",
+          claimToken: null,
+          leaseExpiresAt: null,
+          lastError: error instanceof Error ? error.message : "binding reservation failed",
+        });
+        throw error;
+      }
+    }
+
+    const prisma = this.prisma as any;
+    try {
+      return await prisma.$transaction(async (tx: any) => {
+        const operation = await tx.inboundMessageOperation.create({ data: operationInput });
+        const binding = await this.upsertPrismaBinding(tx, input);
+        const advanced = await tx.inboundMessageOperation.update({
+          where: { id: operation.id },
+          data: {
+            stage: "binding_ready",
+            customerId: binding.customerId,
+            conversationId: binding.conversationId,
+          },
+        });
+        return { operation: advanced, binding, claimed: true, completed: false };
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const existing = await prisma.inboundMessageOperation.findUnique({
+        where: { wechatAccountId_externalId: { wechatAccountId: input.wechatAccountId, externalId } },
+      });
+      if (!existing) throw error;
+      this.assertInboundOperationReplay(existing, operationInput);
+      const binding = await this.bindingForOperationPrisma(existing);
+      if (existing.status === "completed") return { operation: existing, binding, claimed: false, completed: true };
+      const activeLease = existing.status === "processing" && new Date(existing.leaseExpiresAt || 0).getTime() > Date.now();
+      if (activeLease) return { operation: existing, binding, claimed: false, completed: false, inProgress: true };
+      const claimed = await prisma.inboundMessageOperation.updateMany({
+        where: {
+          id: existing.id,
+          requestFingerprint,
+          status: { not: "completed" },
+          OR: [
+            { status: { in: ["retryable", "failed"] } },
+            { leaseExpiresAt: null },
+            { leaseExpiresAt: { lt: new Date() } },
+          ],
+        },
+        data: {
+          status: "processing",
+          claimToken,
+          leaseExpiresAt,
+          attemptCount: { increment: 1 },
+          lastError: null,
+        },
+      });
+      if (claimed.count !== 1) {
+        const current = await prisma.inboundMessageOperation.findUnique({ where: { id: existing.id } });
+        if (current?.status === "completed") {
+          return { operation: current, binding, claimed: false, completed: true };
+        }
+        return { operation: current || existing, binding, claimed: false, completed: false, inProgress: true };
+      }
+      const operation = await prisma.inboundMessageOperation.findUnique({ where: { id: existing.id } });
+      return { operation, binding, claimed: true, completed: false };
+    }
+  }
+
+  private bindingForOperationLocal(operation: any) {
+    if (!operation?.conversationId || !operation?.customerId) return null;
+    return this.localStore.findPersonalWechatRpaBindingByIdentity({
+      wechatAccountId: operation.wechatAccountId,
+      conversationId: operation.conversationId,
+      customerId: operation.customerId,
     });
+  }
+
+  private async bindingForOperationPrisma(operation: any) {
+    if (!operation?.conversationId || !operation?.customerId) return null;
+    return this.findBindingByIdentity({
+      wechatAccountId: operation.wechatAccountId,
+      conversationId: operation.conversationId,
+      customerId: operation.customerId,
+    });
+  }
+
+  private assertInboundOperationReplay(existing: any, requested: any) {
+    if (
+      existing.source !== requested.source ||
+      existing.wechatAccountId !== requested.wechatAccountId ||
+      existing.externalId !== requested.externalId ||
+      existing.requestFingerprint !== requested.requestFingerprint ||
+      String(existing.bindingKey || "") !== String(requested.bindingKey || "")
+    ) {
+      throw new BadRequestException("duplicate inbound externalId conflict: account, chat identity or payload changed");
+    }
   }
 
   async listBindings(page: PersonalWechatRpaPage) {
@@ -250,6 +401,15 @@ export class PersonalWechatRpaPersistence {
       wechatAccountId: message.conversation?.wechatAccountId || null,
       metadata: message.metadata || {},
     };
+  }
+
+  async findInboundOperation(wechatAccountId: string, externalId: string) {
+    const accountId = requiredText(wechatAccountId, "wechatAccountId");
+    const messageExternalId = requiredText(externalId, "externalId");
+    if (this.isLocal) return this.localStore.getInboundMessageOperation(accountId, messageExternalId);
+    return (this.prisma as any).inboundMessageOperation.findUnique({
+      where: { wechatAccountId_externalId: { wechatAccountId: accountId, externalId: messageExternalId } },
+    });
   }
 
   async findBindingByIdentity(identity: { wechatAccountId: string; conversationId: string; customerId: string }) {

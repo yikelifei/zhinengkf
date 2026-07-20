@@ -86,6 +86,26 @@ test("RPA inbound creates an exact account/chat binding and deduplicates externa
   assert.equal(localStore.findMessageByExternalId(first.binding.conversationId, "rpa-message-1").text, "我想做一套礼盒");
 });
 
+test("RPA reservation stores only allowlisted attachment business fields", async () => {
+  const { localStore, service } = setup();
+  await service.processInbound(inbound({
+    externalId: "rpa-safe-operation-snapshot",
+    attachments: [{
+      role: "image",
+      mimeType: "image/png",
+      token: "rpa-attachment-secret",
+      endpoint: "http://127.0.0.1:4888",
+      localPath: "C:\\private\\rpa.png",
+    }],
+  }), "test-rpa-token");
+  const operation = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"))
+    .inboundMessageOperations.find((item) => item.externalId === "rpa-safe-operation-snapshot");
+  const snapshot = JSON.stringify(operation.normalizedPayload);
+  assert.match(snapshot, /image\/png/);
+  assert.doesNotMatch(snapshot, /rpa-attachment-secret|127\.0\.0\.1|private\\\\rpa/i);
+  assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
+});
+
 test("RPA inbound rejects any account other than the dedicated nickname", async () => {
   const { service } = setup();
   await assert.rejects(

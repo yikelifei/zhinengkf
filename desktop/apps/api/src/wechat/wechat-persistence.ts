@@ -10,6 +10,7 @@ import {
   createSendTaskOperationFingerprint,
   deterministicOperationId,
   isUniqueConstraintError,
+  monotonicInboundOperationStage,
   normalizeOperationKey,
   readRequestOperationMetadata,
   requestOperationMetadata,
@@ -198,6 +199,130 @@ export class WechatPersistence {
       }
       throw error;
     }
+  }
+
+  async claimInboundOperation(payload: {
+    operationId?: string;
+    claimToken: string;
+    source?: string;
+    wechatAccountId: string;
+    externalId: string;
+    requestFingerprint: string;
+    normalizedPayload?: Record<string, unknown>;
+    leaseExpiresAt: string;
+  }) {
+    const id = payload.operationId || deterministicOperationId("inbound", `${payload.wechatAccountId}:${payload.externalId}`);
+    if (this.isLocal) {
+      const claimed = this.localStore.claimInboundMessageOperation({ ...payload, id });
+      if (payload.operationId && claimed.operation?.id !== payload.operationId) {
+        throw new BadRequestException("inbound operation id does not match account-scoped reservation");
+      }
+      return claimed;
+    }
+    const prisma = this.prisma as any;
+    if (payload.operationId) {
+      const existing = await prisma.inboundMessageOperation.findUnique({ where: { id: payload.operationId } });
+      this.assertInboundOperationReplay(existing, { ...payload, id });
+      if (existing.status !== "processing" || existing.claimToken !== payload.claimToken) {
+        throw new BadRequestException("inbound operation is not owned by the supplied claim");
+      }
+      return { operation: existing, claimed: true, completed: false };
+    }
+    const leaseExpiresAt = new Date(payload.leaseExpiresAt);
+    try {
+      const operation = await prisma.inboundMessageOperation.create({
+        data: {
+          id,
+          source: payload.source || "wechat",
+          wechatAccountId: payload.wechatAccountId,
+          externalId: payload.externalId,
+          requestFingerprint: payload.requestFingerprint,
+          normalizedPayload: this.jsonOrNull(payload.normalizedPayload || {}),
+          claimToken: payload.claimToken,
+          leaseExpiresAt,
+        },
+      });
+      return { operation, claimed: true, completed: false };
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const existing = await prisma.inboundMessageOperation.findUnique({
+        where: { wechatAccountId_externalId: { wechatAccountId: payload.wechatAccountId, externalId: payload.externalId } },
+      });
+      this.assertInboundOperationReplay(existing, { ...payload, id });
+      if (existing.status === "completed") return { operation: existing, claimed: false, completed: true };
+      const activeLease = existing.status === "processing" && new Date(existing.leaseExpiresAt || 0).getTime() > Date.now();
+      if (activeLease) return { operation: existing, claimed: false, completed: false, inProgress: true };
+      const claimed = await prisma.inboundMessageOperation.updateMany({
+        where: {
+          id: existing.id,
+          requestFingerprint: payload.requestFingerprint,
+          status: { not: "completed" },
+          OR: [
+            { status: { in: ["retryable", "failed"] } },
+            { leaseExpiresAt: null },
+            { leaseExpiresAt: { lt: new Date() } },
+          ],
+        },
+        data: {
+          status: "processing",
+          claimToken: payload.claimToken,
+          leaseExpiresAt,
+          attemptCount: { increment: 1 },
+          lastError: null,
+        },
+      });
+      if (claimed.count !== 1) {
+        const current = await prisma.inboundMessageOperation.findUnique({ where: { id: existing.id } });
+        if (current?.status === "completed") return { operation: current, claimed: false, completed: true };
+        return { operation: current || existing, claimed: false, completed: false, inProgress: true };
+      }
+      return {
+        operation: await prisma.inboundMessageOperation.findUnique({ where: { id: existing.id } }),
+        claimed: true,
+        completed: false,
+      };
+    }
+  }
+
+  async advanceInboundOperation(id: string, claimToken: string, patch: Record<string, unknown>) {
+    if (this.isLocal) return this.localStore.updateInboundMessageOperation(id, claimToken, patch);
+    const prisma = this.prisma as any;
+    const current = await prisma.inboundMessageOperation.findUnique({ where: { id } });
+    if (!current || current.status !== "processing" || current.claimToken !== claimToken) {
+      throw new BadRequestException("inbound operation claim changed before stage commit");
+    }
+    const nextPatch = { ...patch };
+    if ("stage" in nextPatch) {
+      nextPatch.stage = monotonicInboundOperationStage(current.stage, nextPatch.stage);
+    }
+    const updated = await prisma.inboundMessageOperation.updateMany({
+      where: { id, status: "processing", claimToken, stage: current.stage },
+      data: this.jsonOperationPatch(nextPatch),
+    });
+    if (updated.count !== 1) throw new BadRequestException("inbound operation claim changed before stage commit");
+    return prisma.inboundMessageOperation.findUnique({ where: { id } });
+  }
+
+  failInboundOperation(id: string, claimToken: string, error: unknown) {
+    return this.advanceInboundOperation(id, claimToken, {
+      status: "retryable",
+      claimToken: null,
+      leaseExpiresAt: null,
+      lastError: error instanceof Error ? error.message.slice(0, 500) : "inbound processing failed",
+    });
+  }
+
+  completeInboundOperation(id: string, claimToken: string, result: Record<string, unknown>) {
+    const completedAt = new Date().toISOString();
+    return this.advanceInboundOperation(id, claimToken, {
+      status: "completed",
+      stage: "completed",
+      result,
+      claimToken: null,
+      leaseExpiresAt: null,
+      lastError: null,
+      completedAt,
+    });
   }
 
   async getRecentMessage(conversationId: string) {
@@ -1131,6 +1256,43 @@ export class WechatPersistence {
       wechatAccountId: conversation?.wechatAccountId || null,
       metadata: message?.metadata || {},
     };
+  }
+
+  async findInboundMessageByExternalId(wechatAccountId: string, externalId: string) {
+    if (this.isLocal) return this.localStore.findInboundMessageByExternalId(wechatAccountId, externalId);
+    const message = await (this.prisma as any).message.findFirst({
+      where: {
+        direction: "inbound",
+        externalId,
+        conversation: { wechatAccountId },
+      },
+      include: { conversation: true },
+    });
+    return message ? this.hydrateMessage(message, message.conversation) : null;
+  }
+
+  private assertInboundOperationReplay(existing: any, requested: any) {
+    if (
+      !existing ||
+      existing.id !== requested.id ||
+      existing.wechatAccountId !== requested.wechatAccountId ||
+      existing.externalId !== requested.externalId ||
+      existing.requestFingerprint !== requested.requestFingerprint ||
+      existing.source !== (requested.source || "wechat")
+    ) {
+      throw new BadRequestException("duplicate inbound externalId conflict: operation identity or payload changed");
+    }
+  }
+
+  private jsonOperationPatch(patch: Record<string, unknown>) {
+    const data: Record<string, unknown> = { ...patch };
+    for (const key of ["normalizedPayload", "result"]) {
+      if (key in data) data[key] = this.jsonOrNull(data[key]);
+    }
+    for (const key of ["leaseExpiresAt", "completedAt"]) {
+      if (typeof data[key] === "string") data[key] = new Date(String(data[key]));
+    }
+    return data;
   }
 
   private assertInboundMessageReplay(

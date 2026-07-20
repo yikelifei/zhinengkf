@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AiProviderService } from "../ai/ai-provider.service";
@@ -14,12 +14,15 @@ import { buildWindowObserverChildEnvironment } from "../shared/runtime-child-env
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import {
   assertExactOperationReplay,
+  createInboundMessageOperationFingerprint,
   createOperationFingerprint,
   deterministicOperationId,
+  inboundOperationStageAtLeast,
   isUniqueConstraintError,
   normalizeOperationKey,
   readRequestOperationMetadata,
   requestOperationMetadata,
+  sanitizeInboundOperationAttachments,
   stableOperationKey,
 } from "../shared/operation-idempotency";
 import { rules } from "../shared/rules";
@@ -1014,11 +1017,37 @@ export class WechatDispatchService {
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
     createdAt?: string;
+    inboundOperationId?: string;
+    inboundClaimToken?: string;
+    inboundRequestFingerprint?: string;
   }) {
     const externalId = String(payload.externalId || "").trim();
     if (!externalId) throw new BadRequestException("externalId is required");
     if (!appConfig.useLocalStore) return this.processPrismaInboundMessage(payload);
     const conversation = this.resolveInboundConversation(payload);
+    const claimToken = payload.inboundClaimToken || randomUUID();
+    const requestFingerprint = payload.inboundRequestFingerprint || createInboundMessageOperationFingerprint(payload as any, {
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      wechatAccountId: conversation.wechatAccountId,
+    });
+    const claim = await this.persistence.claimInboundOperation({
+      operationId: payload.inboundOperationId,
+      claimToken,
+      source: payload.inboundOperationId ? "personal_wechat_rpa" : "wechat",
+      wechatAccountId: conversation.wechatAccountId,
+      externalId,
+      requestFingerprint,
+      normalizedPayload: this.safeInboundOperationPayload(payload),
+      leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    });
+    if (claim.completed) return this.completedInboundReplay(conversation.wechatAccountId, externalId, claim.operation);
+    if (!claim.claimed) return this.inProgressInboundReplay(claim.operation);
+    const inboundOperation = claim.operation;
+    if (inboundOperationStageAtLeast(inboundOperation.stage, "effects_committed")) {
+      return this.resumeLocalCommittedInbound(inboundOperation, claimToken);
+    }
+    try {
     const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
     const messagePayload = {
       conversationId: conversation.id,
@@ -1032,28 +1061,14 @@ export class WechatDispatchService {
       assetIds,
       metadata: { assetIds },
     };
-    const duplicate = this.localStore.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
-    if (duplicate) {
-      const replay = this.localStore.createMessage(messagePayload);
-      return {
-        duplicate: true,
-        message: replay,
-        route: null,
-        plan: {
-          type: "duplicate_ignored",
-          reason: "inbound_external_id_already_processed",
-          shouldQueueReply: false,
-          shouldCreateDesignJob: false,
-          shouldNotifyHuman: false,
-        },
-        sendTask: null,
-        designJob: null,
-        notification: null,
-        bundleRecommendation: null,
-      };
-    }
     this.validateInboundAssetBinding(conversation, assetIds);
     const message = this.localStore.createMessage(messagePayload);
+    await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
+      stage: "message_persisted",
+      messageId: message.id,
+      customerId: conversation.customerId,
+      conversationId: conversation.id,
+    });
     const clarificationContext = this.findLatestSceneClarification(conversation.id);
     const sceneMemory = this.listSceneMemorySamples({
       wechatAccountId: conversation.wechatAccountId,
@@ -1103,6 +1118,7 @@ export class WechatDispatchService {
     });
     const route = this.localStore.createRouteEvaluation(
       {
+        operationKey: inboundOperation.id,
         channel: conversation.channel || "wechat",
         text: payload.text || "",
         customerId: conversation.customerId,
@@ -1121,6 +1137,10 @@ export class WechatDispatchService {
         },
       },
     );
+    await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
+      stage: "routed",
+      routeEvaluationId: route.id,
+    });
     if (conversation.manualLocked) {
       const plan = planInboundAutomation({
         route: { ...route, conversationManualLocked: true },
@@ -1144,26 +1164,29 @@ export class WechatDispatchService {
           customerId: conversation.customerId,
           routeId: route.id,
           reason: plan.reason,
+          effectKey: `${inboundOperation.id}:manual-lock-notification`,
         },
       );
-      return result;
+      return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
     }
 
     const imageSelectionResult = await this.handleInboundImageSelection({
+      operationId: inboundOperation.id,
       conversation,
       message,
       route,
       payload,
     });
-    if (imageSelectionResult) return imageSelectionResult;
+    if (imageSelectionResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, imageSelectionResult);
 
     const quoteAcceptanceResult = await this.handleInboundQuoteAcceptance({
+      operationId: inboundOperation.id,
       conversation,
       message,
       route,
       payload,
     });
-    if (quoteAcceptanceResult) return quoteAcceptanceResult;
+    if (quoteAcceptanceResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, quoteAcceptanceResult);
 
     const bundleRecommendation =
       route.action === "auto_agent" && route.agentKey === "gift_design"
@@ -1184,6 +1207,7 @@ export class WechatDispatchService {
       result.manualLock = await this.lockConversationForManualReview(conversation, {
         reviewer: "system",
         reason: plan.reason,
+        effectKey: `${inboundOperation.id}:manual-review-lock`,
       });
       result.notification = await this.notifications.create(
         "warning",
@@ -1198,9 +1222,10 @@ export class WechatDispatchService {
           reason: plan.reason,
           blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
           inFlightSendTaskIds: result.manualLock.inFlightSendTasks.map((task: any) => task.id),
+          effectKey: `${inboundOperation.id}:manual-review-notification`,
         },
       );
-      return result;
+      return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
     }
 
     if (plan.shouldCreateDesignJob) {
@@ -1237,7 +1262,88 @@ export class WechatDispatchService {
       });
     }
 
+    return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
+    } catch (error) {
+      await this.persistence.failInboundOperation(inboundOperation.id, claimToken, error).catch(() => null);
+      throw error;
+    }
+  }
+
+  private safeInboundOperationPayload(payload: any) {
+    return {
+      conversationId: String(payload?.conversationId || ""),
+      customerId: String(payload?.customerId || ""),
+      wechatAccountId: String(payload?.wechatAccountId || ""),
+      text: String(payload?.text || ""),
+      externalId: String(payload?.externalId || ""),
+      attachments: sanitizeInboundOperationAttachments(payload?.attachments),
+      assetIds: Array.isArray(payload?.assetIds) ? payload.assetIds : [],
+      createdAt: payload?.createdAt || null,
+    };
+  }
+
+  private async completeInboundProcessing(operationId: string, claimToken: string, result: any) {
+    const durableResult = {
+      messageId: result?.message?.id || null,
+      routeEvaluationId: result?.route?.id || null,
+      sendTaskId: result?.sendTask?.id || null,
+      designJobId: result?.designJob?.id || null,
+      notificationId: result?.notification?.id || null,
+      outcome: result?.plan?.type || (result?.duplicate ? "duplicate" : "processed"),
+    };
+    await this.persistence.advanceInboundOperation(operationId, claimToken, {
+      stage: "effects_committed",
+      messageId: durableResult.messageId,
+      routeEvaluationId: durableResult.routeEvaluationId,
+      sendTaskId: durableResult.sendTaskId,
+      result: durableResult,
+    });
+    await this.persistence.completeInboundOperation(operationId, claimToken, durableResult);
     return result;
+  }
+
+  private async resumeLocalCommittedInbound(operation: any, claimToken: string) {
+    const message = this.localStore.findInboundMessageByExternalId(operation.wechatAccountId, operation.externalId);
+    if (!message) throw new BadRequestException("effects-committed inbound operation is missing its durable message");
+    await this.persistence.completeInboundOperation(operation.id, claimToken, operation.result || {});
+    return { ...this.completedInboundReplay(operation.wechatAccountId, operation.externalId, operation), recovered: true };
+  }
+
+  private completedInboundReplay(wechatAccountId: string, externalId: string, operation: any) {
+    const message = this.localStore.findInboundMessageByExternalId(wechatAccountId, externalId);
+    if (!message) throw new BadRequestException("completed inbound operation is missing its durable message");
+    return {
+      duplicate: true,
+      message,
+      route: null,
+      plan: {
+        type: "duplicate_ignored",
+        reason: "inbound_operation_completed",
+        shouldQueueReply: false,
+        shouldCreateDesignJob: false,
+        shouldNotifyHuman: false,
+      },
+      sendTask: null,
+      designJob: null,
+      notification: null,
+      bundleRecommendation: null,
+      operationId: operation?.id || null,
+    };
+  }
+
+  private inProgressInboundReplay(operation: any) {
+    return {
+      duplicate: true,
+      processing: true,
+      message: null,
+      route: null,
+      plan: null,
+      sendTask: null,
+      designJob: null,
+      notification: null,
+      bundleRecommendation: null,
+      operationId: operation?.id || null,
+    };
   }
 
   private async buildAiAssistedInboundDraft(input: { conversation: any; route: any; draft: any; customerText: string }) {
@@ -1280,6 +1386,9 @@ export class WechatDispatchService {
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
     createdAt?: string;
+    inboundOperationId?: string;
+    inboundClaimToken?: string;
+    inboundRequestFingerprint?: string;
   }) {
     if (!payload.conversationId) throw new BadRequestException("conversationId is required in prisma mode");
     const conversation = await this.persistence.getConversation(payload.conversationId);
@@ -1304,6 +1413,38 @@ export class WechatDispatchService {
       }
     }
 
+    const claimToken = payload.inboundClaimToken || randomUUID();
+    const externalId = String(payload.externalId || "").trim();
+    const requestFingerprint = payload.inboundRequestFingerprint || createInboundMessageOperationFingerprint(payload as any, {
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      wechatAccountId: conversation.wechatAccountId,
+    });
+    const claim = await this.persistence.claimInboundOperation({
+      operationId: payload.inboundOperationId,
+      claimToken,
+      source: payload.inboundOperationId ? "personal_wechat_rpa" : "wechat",
+      wechatAccountId: conversation.wechatAccountId,
+      externalId,
+      requestFingerprint,
+      normalizedPayload: this.safeInboundOperationPayload(payload),
+      leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    });
+    if (claim.completed) {
+      const message = await this.persistence.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
+      if (!message) throw new BadRequestException("completed inbound operation is missing its durable message");
+      return { ...this.inProgressInboundReplay(claim.operation), processing: false, message };
+    }
+    if (!claim.claimed) return this.inProgressInboundReplay(claim.operation);
+    const inboundOperation = claim.operation;
+    if (inboundOperationStageAtLeast(inboundOperation.stage, "effects_committed")) {
+      const message = await this.persistence.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
+      if (!message) throw new BadRequestException("effects-committed inbound operation is missing its durable message");
+      await this.persistence.completeInboundOperation(inboundOperation.id, claimToken, inboundOperation.result || {});
+      return { ...this.inProgressInboundReplay(inboundOperation), processing: false, recovered: true, message };
+    }
+
+    try {
     const message = await this.persistence.createMessage({
       conversationId: conversation.id,
       customerId: conversation.customerId,
@@ -1315,18 +1456,12 @@ export class WechatDispatchService {
       createdAt: payload.createdAt,
       metadata: { assetIds },
     });
-    if (message.deduplicated) {
-      return {
-        message,
-        deduplicated: true,
-        route: null,
-        plan: null,
-        sendTask: null,
-        designJob: null,
-        notification: null,
-        bundleRecommendation: null,
-      };
-    }
+    await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
+      stage: "message_persisted",
+      messageId: message.id,
+      customerId: conversation.customerId,
+      conversationId: conversation.id,
+    });
     const routeBase = evaluateAgentRoute(
       {
         text: payload.text || "",
@@ -1352,8 +1487,7 @@ export class WechatDispatchService {
       skills,
       knowledgeEntries,
     });
-    const route = await (this.prisma as any).routeEvaluation.create({
-      data: {
+    const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, {
         channel: conversation.channel || "wechat",
         text: payload.text || "",
         customerId: conversation.customerId,
@@ -1371,15 +1505,19 @@ export class WechatDispatchService {
         appliedSkills: draft.appliedSkills || [],
         knowledgeMatches: draft.knowledgeMatches || [],
         replyDraft: draft.replyDraft || Prisma.JsonNull,
-      },
+    });
+    await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
+      stage: "routed",
+      routeEvaluationId: route.id,
     });
     const selectionResult = await this.handlePrismaInboundImageSelection({
+      operationId: inboundOperation.id,
       conversation,
       message,
       route,
       payload,
     });
-    if (selectionResult) return selectionResult;
+    if (selectionResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, selectionResult);
     const plan = planInboundAutomation({
       route: conversation.manualLocked ? { ...route, conversationManualLocked: true } : route,
       conversationManualLocked: Boolean(conversation.manualLocked),
@@ -1419,10 +1557,16 @@ export class WechatDispatchService {
         "warning",
         conversation.manualLocked ? "人工接管会话收到新消息" : "客户消息需要人工处理",
         `${conversation.title || conversation.id}：${plan.reason}`,
-        { conversationId: conversation.id, customerId: conversation.customerId, routeId: route.id, reason: plan.reason },
+        {
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+          routeId: route.id,
+          reason: plan.reason,
+          effectKey: `${inboundOperation.id}:human-review-notification`,
+        },
       );
     }
-    return {
+    const result = {
       message,
       route,
       plan,
@@ -1431,9 +1575,40 @@ export class WechatDispatchService {
       notification: null,
       bundleRecommendation: null,
     };
+    return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
+    } catch (error) {
+      await this.persistence.failInboundOperation(inboundOperation.id, claimToken, error).catch(() => null);
+      throw error;
+    }
+  }
+
+  private async createPrismaInboundRouteEvaluationOnce(operationId: string, data: Record<string, unknown>) {
+    const model = (this.prisma as any).routeEvaluation;
+    const id = deterministicOperationId("route", operationId);
+    const assertReplay = (existing: any) => {
+      if (
+        String(existing?.conversationId || "") !== String(data.conversationId || "") ||
+        String(existing?.customerId || "") !== String(data.customerId || "") ||
+        String(existing?.text || "") !== String(data.text || "")
+      ) {
+        throw new BadRequestException("inbound route operation replay changed identity or text");
+      }
+      return existing;
+    };
+    const existing = await model.findUnique({ where: { id } });
+    if (existing) return assertReplay(existing);
+    try {
+      return await model.create({ data: { id, ...data } });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const winner = await model.findUnique({ where: { id } });
+      if (!winner) throw error;
+      return assertReplay(winner);
+    }
   }
 
   private async handlePrismaInboundImageSelection(params: {
+    operationId: string;
     conversation: any;
     message: any;
     route: any;
@@ -1576,6 +1751,7 @@ export class WechatDispatchService {
       const manualLock = await this.lockConversationForManualReview(params.conversation, {
         reviewer: "system",
         reason: "high_value_customer_selected_image",
+        effectKey: `${params.operationId}:high-value-selection-lock`,
       });
       await this.createReviewLog({
         targetType: "design_job",
@@ -1586,6 +1762,7 @@ export class WechatDispatchService {
         beforeStatus: job.status || "",
         afterStatus: "manual_review",
         metadata: {
+          effectKey: `${params.operationId}:high-value-selection-review`,
           source: "inbound_image_selection",
           selectedImageId,
           routeId: params.route.id,
@@ -1596,7 +1773,7 @@ export class WechatDispatchService {
         "warning",
         "高价值客户已选图，转人工报价",
         "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
-        { designJobId: job.id, selectedImageId, routeId: params.route.id, ...identity },
+        { effectKey: `${params.operationId}:high-value-selection-notification`, designJobId: job.id, selectedImageId, routeId: params.route.id, ...identity },
       );
       return {
         message: params.message,
@@ -1623,7 +1800,7 @@ export class WechatDispatchService {
       "info",
       "低价值客户已选图，已生成报价草稿",
       "客户选图置信度高，系统已绑定候选图并生成报价草稿，后台低价值自动化会继续处理报价发送队列。",
-      { designJobId: job.id, quoteDraftId: quote?.id, selectedImageId, ...identity },
+      { effectKey: `${params.operationId}:low-value-selection-notification`, designJobId: job.id, quoteDraftId: quote?.id, selectedImageId, ...identity },
     );
     return {
       message: params.message,
@@ -1686,17 +1863,22 @@ export class WechatDispatchService {
   }
 
   private async createPrismaInboundSelectionReview(
-    params: { conversation: any; message: any; route: any },
+    params: { operationId: string; conversation: any; message: any; route: any },
     job: any,
     reason: string,
     selection: any = null,
   ) {
-    const manualLock = await this.lockConversationForManualReview(params.conversation, { reviewer: "system", reason });
+    const manualLock = await this.lockConversationForManualReview(params.conversation, {
+      reviewer: "system",
+      reason,
+      effectKey: `${params.operationId}:selection-review-lock:${reason}`,
+    });
     const notification = await this.notifications.create(
       "warning",
       "客户选图需要人工确认",
       "客户消息包含选图意图，但当前生产持久化数据无法在同一身份和最新修订范围内唯一判定候选图。",
       {
+        effectKey: `${params.operationId}:selection-review-notification:${reason}`,
         reason,
         designJobId: job?.id || null,
         wechatAccountId: params.conversation.wechatAccountId,
@@ -5621,6 +5803,7 @@ export class WechatDispatchService {
   }
 
   private async handleInboundImageSelection(params: {
+    operationId: string;
     conversation: any;
     message: any;
     route: any;
@@ -5660,6 +5843,7 @@ export class WechatDispatchService {
 
     if (!job) {
       result.notification = await this.createInboundSelectionReview(params.conversation, params.route, {
+        operationId: params.operationId,
         reason: "selection_without_active_design_job",
         title: "客户疑似选图但没有可匹配设计任务",
         body: "客户消息像是在选择效果图，但当前会话没有已发送的候选图，需要人工确认。",
@@ -5669,6 +5853,7 @@ export class WechatDispatchService {
 
     if (!selectionPlan.ok || selectionPlan.reviewRequired || !selectionPlan.result?.candidate) {
       result.notification = await this.createInboundSelectionReview(params.conversation, params.route, {
+        operationId: params.operationId,
         reason: selectionPlan.reason || "selection_uncertain",
         title: "客户选图需要人工确认",
         body: "客户表达了选图意图，但系统没有高置信匹配到具体候选图。",
@@ -5689,6 +5874,7 @@ export class WechatDispatchService {
       result.manualLock = await this.lockConversationForManualReview(params.conversation, {
         reviewer: "system",
         reason: "high_value_customer_selected_image",
+        effectKey: `${params.operationId}:high-value-selection-lock`,
       });
       this.localStore.createReviewLog({
         targetType: "design_job",
@@ -5699,6 +5885,7 @@ export class WechatDispatchService {
         beforeStatus: job.status || "",
         afterStatus: "manual_review",
         metadata: {
+          effectKey: `${params.operationId}:high-value-selection-review`,
           source: "inbound_image_selection",
           selectedImageId,
           routeId: params.route.id,
@@ -5715,6 +5902,7 @@ export class WechatDispatchService {
         "高价值客户已选图，转人工报价",
         "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
         {
+          effectKey: `${params.operationId}:high-value-selection-notification`,
           designJobId: job.id,
           selectedImageId,
           wechatAccountId: params.conversation.wechatAccountId,
@@ -5734,6 +5922,7 @@ export class WechatDispatchService {
       .find((quote: any) => quote.designJobId === job.id);
     if (existingQuote?.sendTaskId || existingQuote?.status === "sent") {
       result.notification = await this.createInboundSelectionReview(params.conversation, params.route, {
+        operationId: params.operationId,
         reason: "quote_already_queued_or_sent",
         title: "客户在报价后再次选图",
         body: "该设计任务已有报价发送记录，客户再次选图需要人工确认是否改报价。",
@@ -5775,6 +5964,7 @@ export class WechatDispatchService {
       "低价值客户已选图，已生成报价草稿",
       "客户选图置信度高，系统已绑定候选图并生成报价草稿，后台低价值自动化会继续处理报价发送队列。",
       {
+        effectKey: `${params.operationId}:low-value-selection-notification`,
         designJobId: job.id,
         quoteDraftId: quote.id,
         selectedImageId,
@@ -5786,6 +5976,7 @@ export class WechatDispatchService {
   }
 
   private async handleInboundQuoteAcceptance(params: {
+    operationId: string;
     conversation: any;
     message: any;
     route: any;
@@ -5834,6 +6025,7 @@ export class WechatDispatchService {
         },
       };
       result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
+        operationId: params.operationId,
         reason: "payment_proof_needs_manual_verification",
         title: "客户发送付款凭证，需要人工核验",
         body: "客户消息里带有付款截图、转账凭证或收款相关附件，但文字没有明确说明已付金额。系统未自动改付款状态，请人工核对后再标记定金或全款。",
@@ -5880,6 +6072,7 @@ export class WechatDispatchService {
         },
       };
       result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
+        operationId: params.operationId,
         reason: "payment_proof_needs_manual_verification",
         title: "客户发送付款凭证，需要人工核验",
         body: "客户文字说明已付款，且消息里带有付款截图、转账凭证或收款相关附件。系统未自动改付款状态，请人工核对金额和收款账户后再标记定金或全款。",
@@ -5909,6 +6102,7 @@ export class WechatDispatchService {
     if (!acceptancePlan.ok) {
       if (acceptancePlan.reason === "order_payment_already_recorded") return null;
       result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
+        operationId: params.operationId,
         reason: acceptancePlan.reason,
         title: "客户疑似确认报价，需要人工核查",
         body: "客户消息像是在确认报价或付款，但当前报价状态不适合自动成单，需要人工确认。",
@@ -5950,6 +6144,7 @@ export class WechatDispatchService {
           ? "系统已更新订单付款状态，并把订单确认回复放入微信安全发送队列。"
           : "系统已更新订单付款状态，现有订单确认发送状态保持不变。",
         {
+          effectKey: `${params.operationId}:payment-update-notification`,
           quoteDraftId: result.quote?.id || quote?.id,
           orderDraftId: result.orderDraft?.id,
           sendTaskId: result.sendTask?.id,
@@ -5997,6 +6192,7 @@ export class WechatDispatchService {
         ? "系统已根据客户确认付款消息更新报价、生成订单草稿，并把确认回复放入微信安全发送队列。"
         : "系统已根据客户确认消息更新报价并生成待付款订单草稿，收到付款凭证并核验后再发送订单确认。",
       {
+        effectKey: `${params.operationId}:quote-accepted-notification`,
         quoteDraftId: updatedQuote.id,
         orderDraftId: result.orderDraft.id,
         sendTaskId: result.sendTask?.id,
@@ -6064,6 +6260,7 @@ export class WechatDispatchService {
     route: any,
     quote: any,
     options: {
+      operationId: string;
       reason: string;
       title: string;
       body: string;
@@ -6072,6 +6269,7 @@ export class WechatDispatchService {
     const manualLock = await this.lockConversationForManualReview(conversation, {
       reviewer: "system",
       reason: options.reason,
+      effectKey: `${options.operationId}:quote-review-lock:${options.reason}`,
     });
     this.localStore.createReviewLog({
       targetType: quote?.id ? "quote_draft" : "conversation",
@@ -6082,6 +6280,7 @@ export class WechatDispatchService {
       beforeStatus: quote?.status || "quote_unknown",
       afterStatus: "manual_review",
       metadata: {
+        effectKey: `${options.operationId}:quote-review-log:${options.reason}`,
         source: "inbound_quote_acceptance",
         routeId: route.id,
         wechatAccountId: conversation.wechatAccountId,
@@ -6099,6 +6298,7 @@ export class WechatDispatchService {
         ? `${options.body} 已暂停 ${manualLock.blockedSendTasks.length} 个待发送任务。`
         : options.body,
       {
+      effectKey: `${options.operationId}:quote-review-notification:${options.reason}`,
       quoteDraftId: quote?.id,
       designJobId: quote?.designJobId,
       wechatAccountId: conversation.wechatAccountId,
@@ -6199,6 +6399,7 @@ export class WechatDispatchService {
     conversation: any,
     route: any,
     options: {
+      operationId: string;
       reason: string;
       title: string;
       body: string;
@@ -6209,6 +6410,7 @@ export class WechatDispatchService {
     const manualLock = await this.lockConversationForManualReview(conversation, {
       reviewer: "system",
       reason: options.reason,
+      effectKey: `${options.operationId}:selection-review-lock:${options.reason}`,
     });
     this.localStore.createReviewLog({
       targetType: options.designJobId ? "design_job" : "conversation",
@@ -6219,6 +6421,7 @@ export class WechatDispatchService {
       beforeStatus: options.designJobId ? "selection_pending" : "auto_allowed",
       afterStatus: "manual_review",
       metadata: {
+        effectKey: `${options.operationId}:selection-review-log:${options.reason}`,
         source: "inbound_image_selection",
         routeId: route.id,
         wechatAccountId: conversation.wechatAccountId,
@@ -6236,6 +6439,7 @@ export class WechatDispatchService {
         ? `${options.body} 已暂停 ${manualLock.blockedSendTasks.length} 个待发送任务。`
         : options.body,
       {
+      effectKey: `${options.operationId}:selection-review-notification:${options.reason}`,
       designJobId: options.designJobId,
       selectedImageId: options.selectedImageId,
       wechatAccountId: conversation.wechatAccountId,
@@ -6251,7 +6455,7 @@ export class WechatDispatchService {
 
   private async lockConversationForManualReview(
     conversation: any,
-    options: { reviewer?: string; reason?: string } = {},
+    options: { reviewer?: string; reason?: string; effectKey?: string } = {},
   ) {
     const manualLock = await this.setConversationManualLock(conversation.id, {
       expectedWechatAccountId: conversation.wechatAccountId,
@@ -6261,6 +6465,7 @@ export class WechatDispatchService {
       reviewer: options.reviewer || "system",
       reason: options.reason || "manual_review",
       note: buildManualReviewLockNote(options.reason),
+      effectKey: options.effectKey,
     });
     return {
       conversation: manualLock.conversation,

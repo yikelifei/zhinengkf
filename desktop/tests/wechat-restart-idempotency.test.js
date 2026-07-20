@@ -45,7 +45,7 @@ test("duplicate inbound msgid is idempotent and conflicting content fails closed
   assert.equal(second.sendTasks.length, first.sendTasks.length);
   await assert.rejects(
     () => service.processInboundMessage({ ...payload, text: "同一 msgid 被替换成另一段内容" }),
-    /inbound message create operationKey was already used with different identity or payload/,
+    /inbound message create operationKey was already used with different identity or payload|duplicate inbound externalId conflict/,
   );
 });
 

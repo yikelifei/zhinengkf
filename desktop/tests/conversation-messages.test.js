@@ -111,16 +111,138 @@ test("out-of-order LocalStore inbound messages never move conversation lastMessa
     ...primaryIdentity,
     text: "较新消息",
     externalId: "conversation-newer-event",
-    createdAt: "2026-07-20T12:00:00.000Z",
+    createdAt: "2030-07-20T12:00:00.000Z",
   });
   localStore.createMessage({
     ...primaryIdentity,
     text: "延迟到达的旧消息",
     externalId: "conversation-stale-event",
-    createdAt: "2026-07-20T10:00:00.000Z",
+    createdAt: "2030-07-20T10:00:00.000Z",
   });
   const conversation = localStore.listConversations().find((item) => item.id === primaryIdentity.conversationId);
-  assert.equal(conversation.lastMessageAt, "2026-07-20T12:00:00.000Z");
+  assert.equal(conversation.lastMessageAt, "2030-07-20T12:00:00.000Z");
+});
+
+test("LocalStore compares valid ISO offsets by epoch and persists canonical UTC activity", () => {
+  const { localStore } = setup();
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "基准时间",
+    externalId: "offset-base",
+    createdAt: "2030-07-20T10:00:00.000Z",
+  });
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "字典序更小但实际更晚",
+    externalId: "offset-newer",
+    createdAt: "2030-07-20T09:30:00-01:00",
+  });
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "字典序更大但实际更早",
+    externalId: "offset-stale",
+    createdAt: "2030-07-20T20:00:00+10:00",
+  });
+  const conversation = localStore.listConversations().find((item) => item.id === primaryIdentity.conversationId);
+  assert.equal(conversation.lastMessageAt, "2030-07-20T10:30:00.000Z");
+});
+
+test("inbound replay resumes after route commit failure without duplicate route or message", async () => {
+  const { localStore, service } = setup();
+  const originalCreateRoute = localStore.createRouteEvaluation.bind(localStore);
+  let injectFailure = true;
+  localStore.createRouteEvaluation = (...args) => {
+    const route = originalCreateRoute(...args);
+    if (injectFailure) {
+      injectFailure = false;
+      throw new Error("injected failure after durable route create");
+    }
+    return route;
+  };
+  const payload = {
+    ...primaryIdentity,
+    text: "你好，请介绍一下礼盒",
+    externalId: "recover-after-route-commit",
+    createdAt: "2030-07-20T11:00:00.000Z",
+  };
+  await assert.rejects(service.processInboundMessage(payload), /injected failure/);
+  const afterFailure = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  assert.equal(afterFailure.messages.filter((item) => item.externalId === payload.externalId).length, 1);
+  assert.equal(afterFailure.routeEvaluations.length, 1);
+  assert.equal(afterFailure.inboundMessageOperations[0].status, "retryable");
+  assert.equal(afterFailure.inboundMessageOperations[0].stage, "message_persisted");
+
+  const recovered = await service.processInboundMessage(payload);
+  const afterRecovery = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  assert.equal(recovered.message.externalId, payload.externalId);
+  assert.equal(afterRecovery.messages.filter((item) => item.externalId === payload.externalId).length, 1);
+  assert.equal(afterRecovery.routeEvaluations.length, 1);
+  assert.equal(afterRecovery.inboundMessageOperations[0].status, "completed");
+  assert.equal(afterRecovery.inboundMessageOperations[0].stage, "completed");
+
+  const completedReplay = await service.processInboundMessage(payload);
+  assert.equal(completedReplay.duplicate, true);
+  assert.equal(JSON.parse(fs.readFileSync(localStore.filePath, "utf8")).routeEvaluations.length, 1);
+});
+
+test("effects-committed replay completes without repeating downstream effects", async () => {
+  const { localStore, service } = setup();
+  let notificationCalls = 0;
+  service.notifications.create = async (...args) => ({ id: `notice-${++notificationCalls}`, target: args[3] });
+  const originalComplete = service.persistence.completeInboundOperation.bind(service.persistence);
+  let injectFailure = true;
+  service.persistence.completeInboundOperation = async (...args) => {
+    if (injectFailure) {
+      injectFailure = false;
+      throw new Error("injected failure after durable effects stage");
+    }
+    return originalComplete(...args);
+  };
+  const payload = {
+    ...primaryIdentity,
+    text: "预算两万元，需要人工确认礼盒方案",
+    externalId: "recover-after-effects-commit",
+    createdAt: "2030-07-20T12:00:00.000Z",
+  };
+  await assert.rejects(service.processInboundMessage(payload), /injected failure/);
+  const failed = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  const operation = failed.inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+  const routesAfterFailure = failed.routeEvaluations.length;
+  assert.equal(operation.status, "retryable");
+  assert.equal(operation.stage, "effects_committed");
+  assert.equal(routesAfterFailure > 0, true);
+
+  const recovered = await service.processInboundMessage(payload);
+  const completed = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"))
+    .inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+  assert.equal(recovered.recovered, true);
+  assert.equal(notificationCalls, 0);
+  assert.equal(JSON.parse(fs.readFileSync(localStore.filePath, "utf8")).routeEvaluations.length, routesAfterFailure);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.stage, "completed");
+});
+
+test("inbound operation snapshot strips host secrets and local paths from attachments", async () => {
+  const { localStore, service } = setup();
+  await service.processInboundMessage({
+    ...primaryIdentity,
+    text: "带附件引用的消息",
+    externalId: "safe-operation-attachment",
+    attachments: [{
+      role: "image",
+      mimeType: "image/png",
+      token: "operation-secret-token",
+      endpoint: "http://127.0.0.1:3999",
+      localPath: "C:\\secret\\attachment.png",
+    }],
+    createdAt: "2030-07-20T13:00:00.000Z",
+  });
+  const operation = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"))
+    .inboundMessageOperations.find((item) => item.externalId === "safe-operation-attachment");
+  const snapshot = JSON.stringify(operation.normalizedPayload);
+  assert.match(snapshot, /image\/png/);
+  assert.doesNotMatch(snapshot, /operation-secret-token|127\.0\.0\.1|secret\\\\attachment/i);
+  assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
 });
 
 test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {
