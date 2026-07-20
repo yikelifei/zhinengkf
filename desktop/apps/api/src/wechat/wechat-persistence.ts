@@ -9,6 +9,7 @@ import {
   createInboundMessageOperationFingerprint,
   createSendTaskOperationFingerprint,
   deterministicOperationId,
+  InboundLeaseLostError,
   isUniqueConstraintError,
   monotonicInboundOperationStage,
   normalizeOperationKey,
@@ -101,6 +102,7 @@ export class WechatPersistence {
     const prisma = this.prisma as any;
     try {
       return await prisma.$transaction(async (tx: any) => {
+        await this.fenceInboundTransaction(tx, payload.inboundFence, "inbound message commit");
         const conversation = await tx.conversation.findUnique({
           where: { id: payload.conversationId },
           include: { customer: true, wechatAccount: true },
@@ -307,7 +309,7 @@ export class WechatPersistence {
       current.claimToken !== claimToken ||
       new Date(current.leaseExpiresAt || 0).getTime() <= Date.now()
     ) {
-      throw new BadRequestException("inbound operation claim changed before stage commit");
+      throw new InboundLeaseLostError("inbound operation claim changed before stage commit");
     }
     const nextPatch = { ...patch };
     if ("stage" in nextPatch) {
@@ -317,7 +319,7 @@ export class WechatPersistence {
       where: { id, status: "processing", claimToken, stage: current.stage, leaseExpiresAt: { gt: new Date() } },
       data: this.jsonOperationPatch(nextPatch),
     });
-    if (updated.count !== 1) throw new BadRequestException("inbound operation claim changed before stage commit");
+    if (updated.count !== 1) throw new InboundLeaseLostError("inbound operation claim changed before stage commit");
     return prisma.inboundMessageOperation.findUnique({ where: { id } });
   }
 
@@ -338,7 +340,7 @@ export class WechatPersistence {
       data: { leaseExpiresAt: nextLease },
     });
     if (renewed.count !== 1) {
-      throw new BadRequestException("inbound operation lease is no longer owned by this claim");
+      throw new InboundLeaseLostError("inbound operation lease is no longer owned by this claim");
     }
     return prisma.inboundMessageOperation.findUnique({ where: { id } });
   }
@@ -547,6 +549,19 @@ export class WechatPersistence {
   async getNotification(id: string) {
     if (this.isLocal) return this.localStore.getNotification(id);
     return (this.prisma as any).notification.findUnique({ where: { id } });
+  }
+
+  async getQuoteDraft(id: string) {
+    if (this.isLocal) return this.localStore.getQuoteDraft(id);
+    return (this.prisma as any).quoteDraft.findUnique({
+      where: { id },
+      include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+    });
+  }
+
+  async getReviewLog(id: string) {
+    if (this.isLocal) return this.localStore.listReviewLogs(500).find((item: any) => item.id === id) || null;
+    return (this.prisma as any).reviewLog.findUnique({ where: { id } });
   }
 
   async createSendTask(payload: any) {
@@ -1343,6 +1358,30 @@ export class WechatPersistence {
       if (typeof data[key] === "string") data[key] = new Date(String(data[key]));
     }
     return data;
+  }
+
+  private async fenceInboundTransaction(
+    tx: any,
+    fence: { operationId?: string; claimToken?: string; leaseExpiresAt?: string } | undefined,
+    label: string,
+  ) {
+    if (!fence) return;
+    const operationId = String(fence.operationId || "").trim();
+    const claimToken = String(fence.claimToken || "").trim();
+    const leaseExpiresAt = new Date(String(fence.leaseExpiresAt || ""));
+    if (!operationId || !claimToken || !Number.isFinite(leaseExpiresAt.getTime()) || leaseExpiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException(`${label} requires a complete future inbound operation fence`);
+    }
+    const fenced = await tx.inboundMessageOperation.updateMany({
+      where: {
+        id: operationId,
+        status: "processing",
+        claimToken,
+        leaseExpiresAt: { gt: new Date() },
+      },
+      data: { leaseExpiresAt },
+    });
+    if (fenced.count !== 1) throw new InboundLeaseLostError(`inbound operation lease changed before ${label}`);
   }
 
   private assertInboundMessageReplay(

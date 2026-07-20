@@ -86,8 +86,8 @@ test("RPA inbound creates an exact account/chat binding and deduplicates externa
   assert.equal(localStore.findMessageByExternalId(first.binding.conversationId, "rpa-message-1").text, "我想做一套礼盒");
 });
 
-test("RPA reservation stores only allowlisted attachment business fields", async () => {
-  const { localStore, service } = setup();
+test("RPA reservation and dispatch use only syntax-validated attachment business fields", async () => {
+  const { localStore, dispatch, service } = setup();
   await service.processInbound(inbound({
     externalId: "rpa-safe-operation-snapshot",
     attachments: [{
@@ -96,14 +96,28 @@ test("RPA reservation stores only allowlisted attachment business fields", async
       token: "rpa-attachment-secret",
       endpoint: "http://127.0.0.1:4888",
       localPath: "C:\\private\\rpa.png",
+      imageId: "opaque|C:\\Users\\agent\\secret.png",
+      remoteImageId: "opaque|https://internal.example/private",
+      fingerprint: "opaque-token=credential-value",
     }],
   }), "test-rpa-token");
   const operation = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"))
     .inboundMessageOperations.find((item) => item.externalId === "rpa-safe-operation-snapshot");
   const snapshot = JSON.stringify(operation.normalizedPayload);
   assert.match(snapshot, /image\/png/);
-  assert.doesNotMatch(snapshot, /rpa-attachment-secret|127\.0\.0\.1|private\\\\rpa/i);
+  assert.doesNotMatch(snapshot, /rpa-attachment-secret|credential-value|127\.0\.0\.1|internal\.example|Users\\\\agent|private\\\\rpa/i);
   assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
+  assert.deepEqual(dispatch.calls[0].attachments, [{ role: "image", mimeType: "image/png" }]);
+});
+
+test("RPA inbound rejects malformed attachment containers before reservation", async () => {
+  const { localStore, dispatch, service } = setup();
+  await assert.rejects(
+    () => service.processInbound(inbound({ externalId: "rpa-invalid-attachments", attachments: { imageId: "asset-1" } }), "test-rpa-token"),
+    /attachments must be an array/,
+  );
+  assert.equal(dispatch.calls.length, 0);
+  assert.equal(localStore.listPersonalWechatRpaBindings().length, 0);
 });
 
 test("RPA inbound rejects any account other than the dedicated nickname", async () => {
