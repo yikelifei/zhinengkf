@@ -29,3 +29,15 @@ export async function runLatestNotificationOperation<T>({
     if (isCurrent(sequence)) onFinally();
   }
 }
+
+export function notificationScopeKey(
+  unreadOnly: boolean,
+  filters?: { wechatAccountId?: string; conversationId?: string; customerId?: string },
+) {
+  return JSON.stringify([
+    unreadOnly,
+    String(filters?.wechatAccountId || "").trim(),
+    String(filters?.conversationId || "").trim(),
+    String(filters?.customerId || "").trim(),
+  ]);
+}
