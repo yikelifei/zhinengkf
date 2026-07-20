@@ -45,7 +45,7 @@ test("duplicate inbound msgid is idempotent and conflicting content fails closed
   assert.equal(second.sendTasks.length, first.sendTasks.length);
   await assert.rejects(
     () => service.processInboundMessage({ ...payload, text: "同一 msgid 被替换成另一段内容" }),
-    /duplicate inbound externalId conflict/,
+    /inbound message create operationKey was already used with different identity or payload/,
   );
 });
 
@@ -168,7 +168,11 @@ test("personal bridge rechecks exact pending identity through the existing outbo
     });
   });
   const apiBase = await listen(server);
-  const fixture = createPersonalFixture({ apiBase, verifyPendingDispatch: undefined });
+  const fixture = createPersonalFixture({
+    apiBase,
+    verifyPendingDispatch: undefined,
+    bridgeServiceToken: "b".repeat(64),
+  });
   try {
     const result = await personalBridge.runOnce(fixture.config);
     const requested = new URL(requestUrl, apiBase);
@@ -318,6 +322,116 @@ test("lost ack timeout becomes protected delivery-unknown instead of requeueable
   await assert.rejects(() => service.requeueSendTask(task.id), /不能直接重新排队|waiting for Windows bridge ack/i);
 });
 
+test("sending bridge cancel protection converges to sent when a late trusted ack arrives", async () => {
+  const { localStore, service } = setupService();
+  const execution = createPendingBridgeSend(localStore, service, "late trusted ack after stop request");
+  const { pending, outbox } = createDispatchForPending(service);
+  const protectedTask = service.cancelSendTask(execution.task.id, {
+    ...demoExpectedSendIdentity(),
+    reason: "operator requested stop while bridge delivery was in flight",
+  });
+
+  assert.equal(protectedTask.status, "sending");
+  assert.equal(protectedTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(protectedTask.guardSnapshot.manualReviewRequired, true);
+  assert.equal(localStore.getLatestSendAttempt(execution.task.id).status, "started");
+
+  const ack = bridgeWorker.buildAckPayload(pending, "simulate_sent", outbox.payload);
+  const settled = service.acknowledgeBridgeSend(execution.task.id, ack);
+  assert.equal(settled.task.status, "sent");
+  assert.equal(settled.task.guardSnapshot.deliveryState, "sent");
+  assert.equal(settled.task.guardSnapshot.manualReviewRequired, false);
+  assert.equal(settled.task.guardSnapshot.automaticRetryBlocked, false);
+  assert.equal(settled.attempt.status, "sent");
+});
+
+test("audited manual sent resolution outranks late bridge and official failure events", async () => {
+  const { localStore, service } = setupService();
+  const execution = createPendingBridgeSend(localStore, service, "manual confirmed sent terminal");
+  const { pending, outbox } = createDispatchForPending(service);
+  service.cancelSendTask(execution.task.id, {
+    ...demoExpectedSendIdentity(),
+    reason: "stop requested before manual verification",
+  });
+  const operationKey = "send-resolution:confirmed-sent:0001";
+  const resolved = await service.resolveUnknownSendDelivery(execution.task.id, {
+    ...demoExpectedSendIdentity(),
+    operationKey,
+    resolution: "confirmed_sent",
+    reason: "operator verified the message in the customer chat",
+  }, "operator-confirmed-sent");
+
+  assert.equal(resolved.status, "sent");
+  assert.equal(resolved.guardSnapshot.deliveryResolutionPriority, "manual_audited_terminal");
+  assert.equal(resolved.guardSnapshot.manualDeliveryResolution.resolution, "confirmed_sent");
+  const lateAck = bridgeWorker.buildAckPayload(pending, "simulate_sent", outbox.payload);
+  assert.throws(
+    () => service.acknowledgeBridgeSend(execution.task.id, lateAck),
+    /no longer waiting for bridge ack/,
+  );
+  const lateFailure = await service.settleWechatWorkAsyncFailure(
+    localStore.getLatestSendAttempt(execution.task.id),
+    "late provider failure event",
+    { failureEventMsgId: "late-failure-after-manual-sent" },
+  );
+  assert.equal(lateFailure.changed, false);
+  assert.equal(lateFailure.reason, "manual_resolution_confirmed_sent_is_terminal");
+  assert.equal(localStore.getSendTask(execution.task.id).status, "sent");
+
+  const audits = readStore(localStore).wechatWorkAuditLogs
+    .filter((entry) => entry.action === "send_delivery_manual_resolution");
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].operationKey, operationKey);
+  assert.equal(audits[0].wechatAccountId, "wechat_demo_1");
+  assert.equal(audits[0].conversationId, "conversation_demo_1");
+  assert.equal(audits[0].customerId, "customer_demo_1");
+});
+
+test("confirmed not sent stays terminal until an explicit requeue starts a new lifecycle", async () => {
+  const { localStore, service } = setupService();
+  const execution = createPendingBridgeSend(localStore, service, "manual confirmed not sent terminal");
+  const { pending, outbox } = createDispatchForPending(service);
+  service.cancelSendTask(execution.task.id, {
+    ...demoExpectedSendIdentity(),
+    reason: "stop requested before confirming no delivery",
+  });
+  const operationKey = "send-resolution:confirmed-not-sent:0001";
+  const payload = {
+    ...demoExpectedSendIdentity(),
+    operationKey,
+    resolution: "confirmed_not_sent",
+    reason: "operator verified that no message appeared in the customer chat",
+  };
+  const first = await service.resolveUnknownSendDelivery(execution.task.id, payload, "operator-confirmed-not-sent");
+  const replay = await service.resolveUnknownSendDelivery(execution.task.id, payload, "operator-confirmed-not-sent");
+
+  assert.equal(first.status, "failed");
+  assert.equal(replay.status, "failed");
+  assert.equal(first.guardSnapshot.deliveryResolutionPriority, "manual_audited_terminal");
+  assert.equal(first.guardSnapshot.manualDeliveryResolution.resolution, "confirmed_not_sent");
+  assert.equal(service.listBridgeOutbox().pending.length, 0);
+  const lateAck = bridgeWorker.buildAckPayload(pending, "simulate_sent", outbox.payload);
+  assert.throws(
+    () => service.acknowledgeBridgeSend(execution.task.id, lateAck),
+    /no longer waiting for bridge ack/,
+  );
+  const scanBeforeExplicitRequeue = await service.scanSendOperations();
+  assert.equal(scanBeforeExplicitRequeue.autoRetriedLowValue, 0);
+  assert.equal(localStore.getSendTask(execution.task.id).status, "failed");
+
+  const auditsBeforeRequeue = readStore(localStore).wechatWorkAuditLogs
+    .filter((entry) => entry.action === "send_delivery_manual_resolution");
+  assert.equal(auditsBeforeRequeue.length, 1);
+  const requeued = await service.requeueSendTask(execution.task.id, {
+    ...demoExpectedSendIdentity(),
+    reason: "operator explicitly approved a new delivery attempt",
+  });
+  assert.equal(requeued.status, "queued");
+  assert.equal(requeued.guardSnapshot.deliveryState, "not_started");
+  assert.equal(requeued.guardSnapshot.manualDeliveryResolution, null);
+  assert.equal(requeued.guardSnapshot.previousManualDeliveryResolution.resolution, "confirmed_not_sent");
+});
+
 test("duplicate trusted ack is accepted idempotently after first response is lost", () => {
   const { localStore, service } = setupService();
   const execution = createPendingBridgeSend(localStore, service, "idempotent ack");
@@ -438,6 +552,14 @@ function createDispatchForPending(service) {
   return { pending, outbox };
 }
 
+function demoExpectedSendIdentity() {
+  return {
+    expectedWechatAccountId: "wechat_demo_1",
+    expectedConversationId: "conversation_demo_1",
+    expectedCustomerId: "customer_demo_1",
+  };
+}
+
 function createPersonalFixture(overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "personal-bridge-restart-"));
   const dispatchDir = path.join(root, "dispatch");
@@ -555,6 +677,7 @@ function workerConfig(fixture, apiBase, overrides = {}) {
   return {
     apiBase, outboxDir: fixture.outboxDir, inboxDir: fixture.inboxDir, dispatchDir: fixture.dispatchDir,
     lockDir: fixture.lockDir, statusFile: fixture.statusFile, mode: "simulate_sent", ackTransport: "api",
+    bridgeServiceToken: "c".repeat(64),
     limit: 20, intervalMs: 10, lockStaleMs: 1000, dispatchTtlMs: 1000, watch: false, ...overrides,
   };
 }

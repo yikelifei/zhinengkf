@@ -11,8 +11,22 @@ export function isManualLocked(task: SendTask) {
 
 export function hasUnknownDelivery(task: SendTask) {
   if (task.status === "uncertain") return true;
+  if (
+    task.guardSnapshot?.deliveryState === "unknown" ||
+    task.guardSnapshot?.wechatWorkDeliveryState === "unknown" ||
+    (task.guardSnapshot?.manualReviewRequired === true && task.guardSnapshot?.automaticRetryBlocked === true)
+  ) return true;
   const attemptStatus = String(task.latestAttempt?.status || task.attempts?.[0]?.status || "").toLowerCase();
-  return attemptStatus === "unknown" || attemptStatus === "uncertain";
+  const attemptMetadata = task.latestAttempt?.metadata || task.attempts?.[0]?.metadata || {};
+  const attemptDeliveryState = String(attemptMetadata.deliveryState || "").toLowerCase();
+  return attemptStatus === "unknown" || attemptStatus === "uncertain" || ["unknown", "partial", "unknown_after_cancel"].includes(attemptDeliveryState);
+}
+
+export function canResolveUnknownDelivery(task: SendTask) {
+  const hasExactIdentity = Boolean(
+    task.wechatAccountId && task.conversationId && task.conversation?.customerId,
+  );
+  return hasExactIdentity && hasUnknownDelivery(task) && !task.guardSnapshot?.manualDeliveryResolution?.resolution;
 }
 
 export function canExecuteSendTask(task: SendTask, adapter: SendAdapterInfo | null) {
@@ -35,7 +49,7 @@ export function canCancelSendTask(task: SendTask) {
 }
 
 export function isQueueSendTask(task: SendTask) {
-  return task.status === "queued" || task.status === "sending";
+  return task.status === "queued" || (task.status === "sending" && !hasUnknownDelivery(task));
 }
 
 export function isBlockedSendTask(task: SendTask) {
@@ -66,7 +80,7 @@ export function sendStatusLabel(status: string) {
 }
 
 export function operationBlockReason(task: SendTask, adapter?: SendAdapterInfo | null) {
-  if (hasUnknownDelivery(task)) return "投递状态不确定，禁止自动重试、取消或再次执行；请先核对桥接回执。";
+  if (hasUnknownDelivery(task)) return "投递状态不确定，禁止自动重试、取消或再次执行；请先核对官方记录或客户会话。";
   if (task.status === "sending") return "任务正在等待发送回执，禁止重复执行。";
   if (isManualLocked(task)) return "会话已被人工接管，必须先在会话页完成人工处理。";
   if (task.guardSnapshot?.blockedByRoutingPolicy) return "路由策略要求人工处理，不能从发送页绕过。";

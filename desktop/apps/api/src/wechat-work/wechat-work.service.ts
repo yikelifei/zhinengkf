@@ -589,26 +589,9 @@ export class WechatWorkService {
       const attempt = await this.persistence.findWechatWorkSendAttemptByMsgId(failMsgid);
       if (attempt) {
         const errorMessage = `wechat work reported send failure type ${String(event.fail_type ?? "unknown")}`;
-        await this.persistence.updateSendAttempt(attempt.id, {
-          status: "failed",
-          errorMessage,
-          completedAt: new Date().toISOString(),
-          metadata: {
-            bridgeState: "async_delivery_failed",
-            finalDeliveryPendingFailureEvent: false,
-            failureEventMsgId: msgid,
-            failType: event.fail_type ?? null,
-          },
-        });
-        await this.persistence.updateSendTask(attempt.sendTaskId, {
-          status: "failed",
-          errorMessage,
-          guardSnapshot: {
-            ...(attempt.sendTask?.guardSnapshot || {}),
-            wechatWorkAsyncFailureMsgId: msgid,
-            wechatWorkAsyncFailType: event.fail_type ?? null,
-            wechatWorkAsyncFailedAt: new Date().toISOString(),
-          },
+        await this.wechat.settleWechatWorkAsyncFailure(attempt, errorMessage, {
+          failureEventMsgId: msgid,
+          failType: event.fail_type ?? null,
         });
       }
       await this.persistence.recordWechatWorkAudit({

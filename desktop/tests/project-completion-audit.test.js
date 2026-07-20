@@ -59,7 +59,7 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/packages/rules/index.js", "module.exports={...require('./skuImport')};\n");
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\nupsertCanonicalWechatWorkBinding(); deterministicOperationId("wwacct", key); deterministicOperationId("wwcust", key); singleWechatWorkHistoryId(); for (let attempt = 0; attempt < 4; attempt += 1) {} wechat work canonical binding conflict;\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
-  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\n');
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\nprotectLocalInflightSendFromCancellation(); protectPrismaInflightSendFromCancellation(); protectInFlightSendTasksForManualLock(); deliveryUnknownReason: "manual_cancel_requested_inflight"; manualReviewRequired: true; automaticRetryBlocked: true; resolveUnknownSendDelivery(); "confirmed_sent"; "confirmed_not_sent"; requireExactSendTaskIdentity(); assertExactOperationReplay(); settleWechatWorkAsyncFailure(); deterministicOperationId("wechat_work_audit", operationKey, "manual-send-delivery-resolution"); deliveryResolutionPriority: "manual_audited_terminal"; previousManualDeliveryResolution; manualDeliveryResolution: null; protectedUnknownInFlightSendTaskIds; cancelledInFlightSendTaskIds: [];\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", `
 @Get("accounts")
@@ -126,8 +126,13 @@ scanWindowSnapshotInbox() {}
 @RequireOperatorCapability("approve_send")
 @UseGuards(OperatorAccessGuard)
 processInboundMessage(@Body() payload, @TrustedOperator() _principal) {}
-@Post("send-tasks/:id/bridge-ack")
-acknowledgeBridgeSend() {}
+  @Post("send-tasks/:id/bridge-ack")
+  acknowledgeBridgeSend() {}
+  @Post("send-tasks/:id/resolve-delivery")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  @TrustedOperator() principal
+  resolveSendDelivery() { return this.wechat.resolveUnknownSendDelivery(id, payload, principal.id); }
 validateSendTask(
   @Param("id") id: string,
   @Body() payload: ExpectedIdentityPayload,
@@ -758,6 +763,51 @@ test("completion audit requires design external operation and callback claim CAS
     const report = buildAudit(root, { includeExternal: false });
     assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
   }
+});
+
+test("completion audit protects in-flight unknown resolution priority and approval boundary", () => {
+  const baselineRoot = createPassingFixture();
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(
+    baseline.results.find((item) => item.id === "contract.wechat_inflight_send_resolution").status,
+    STATUS.PASS,
+  );
+  assert.equal(
+    baseline.results.find((item) => item.id === "contract.wechat_manual_delivery_resolution_guard").status,
+    STATUS.PASS,
+  );
+
+  const priorityRoot = createPassingFixture();
+  const servicePath = path.join(priorityRoot, "desktop", "apps", "api", "src", "wechat", "wechat-dispatch.service.ts");
+  fs.writeFileSync(
+    servicePath,
+    fs.readFileSync(servicePath, "utf8").replace(
+      'deliveryResolutionPriority: "manual_audited_terminal"',
+      'deliveryResolutionPriority: "provider_event_can_override"',
+    ),
+    "utf8",
+  );
+  const priorityReport = buildAudit(priorityRoot, { includeExternal: false });
+  assert.equal(
+    priorityReport.results.find((item) => item.id === "contract.wechat_inflight_send_resolution").status,
+    STATUS.FAIL,
+  );
+
+  const guardRoot = createPassingFixture();
+  const controllerPath = path.join(guardRoot, "desktop", "apps", "api", "src", "wechat", "wechat.controller.ts");
+  fs.writeFileSync(
+    controllerPath,
+    fs.readFileSync(controllerPath, "utf8").replace(
+      '@Post("send-tasks/:id/resolve-delivery")\n  @RequireOperatorCapability("approve_send")',
+      '@Post("send-tasks/:id/resolve-delivery")\n  @RequireOperatorCapability("view_console")',
+    ),
+    "utf8",
+  );
+  const guardReport = buildAudit(guardRoot, { includeExternal: false });
+  assert.equal(
+    guardReport.results.find((item) => item.id === "contract.wechat_manual_delivery_resolution_guard").status,
+    STATUS.FAIL,
+  );
 });
 
 test("asset ingestion audit contract fails when bounded input markers drift", () => {

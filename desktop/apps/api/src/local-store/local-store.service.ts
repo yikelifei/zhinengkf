@@ -3102,6 +3102,7 @@ export class LocalStoreService {
         || item.metadata?.apiMsgId === msgid
         || (Array.isArray(item.metadata?.wechatWorkMsgIds) && item.metadata.wechatWorkMsgIds.includes(msgid))
         || (Array.isArray(item.metadata?.apiMsgIds) && item.metadata.apiMsgIds.includes(msgid))
+        || (Array.isArray(item.metadata?.acceptedMessageIds) && item.metadata.acceptedMessageIds.includes(msgid))
       );
     return attempt ? this.hydrateSendAttempt(data, attempt) : null;
   }

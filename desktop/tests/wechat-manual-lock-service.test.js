@@ -439,7 +439,7 @@ function acknowledgeStartedBridgeSend(service, localStore, taskId) {
   });
 }
 
-test("manual lock cancels in-flight bridge send tasks and archives outbox", async () => {
+test("manual lock protects in-flight bridge sends as unknown without archiving unsent evidence", async () => {
   const { localStore, service } = setupService();
 
   const task = localStore.createSendTask({
@@ -491,13 +491,17 @@ test("manual lock cancels in-flight bridge send tasks and archives outbox", asyn
   assert.equal(result.log.metadata.conversationTitle, result.conversation.title);
   assert.equal(result.log.metadata.customerName, result.conversation.customer.name);
   assert.equal(result.log.metadata.wechatAccountName, result.conversation.wechatAccount.displayName);
-  assert.deepEqual(result.log.metadata.cancelledInFlightSendTaskIds, [task.id]);
-  assert.equal(updatedTask.status, "cancelled");
+  assert.deepEqual(result.log.metadata.protectedUnknownInFlightSendTaskIds, [task.id]);
+  assert.deepEqual(result.log.metadata.cancelledInFlightSendTaskIds, []);
+  assert.equal(updatedTask.status, "sending");
+  assert.equal(updatedTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(updatedTask.guardSnapshot.manualReviewRequired, true);
+  assert.equal(updatedTask.guardSnapshot.automaticRetryBlocked, true);
   assert.match(result.log.note, /人工.*接管/);
   assert.equal(updatedAttempt.id, attempt.id);
-  assert.equal(updatedAttempt.status, "failed");
-  assert.equal(fs.existsSync(outboxFile), false);
-  assert.equal(fs.readdirSync(cancelledDir).some((fileName) => fileName.endsWith("manual-lock-send.json")), true);
+  assert.equal(updatedAttempt.status, "started");
+  assert.equal(fs.existsSync(outboxFile), true);
+  assert.equal(fs.existsSync(cancelledDir), false);
 });
 
 test("manual release does not requeue tasks paused by manual lock", async () => {
@@ -552,7 +556,10 @@ test("manual release does not requeue tasks paused by manual lock", async () => 
   assert.equal(release.inFlightSendTasks.length, 0);
   assert.equal(updatedQueuedTask.status, "blocked");
   assert.equal(updatedQueuedTask.guardSnapshot.blockedByManualLock, true);
-  assert.equal(updatedSendingTask.status, "cancelled");
+  assert.equal(updatedSendingTask.status, "sending");
+  assert.equal(updatedSendingTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(updatedSendingTask.guardSnapshot.manualReviewRequired, true);
+  assert.equal(updatedSendingTask.guardSnapshot.automaticRetryBlocked, true);
   assert.equal(localStore.listSendTasks().filter((task) => task.conversationId === "conversation_demo_1" && task.status === "queued").length, 0);
 });
 
@@ -1154,6 +1161,7 @@ test("manual order queues ignore forged automation provenance and never auto ret
 
   const confirmation = await service.queueOrderConfirmation(order.id, {
     ...demoExpectedIdentity(),
+    operationKey: "manual-order-confirmation-provenance",
     owner: "local_admin",
     reason: "manual_confirmation",
     automation: forgedAutomation,
@@ -1164,6 +1172,7 @@ test("manual order queues ignore forged automation provenance and never auto ret
   });
   const followup = await service.queueOrderFollowup(order.id, {
     ...demoExpectedIdentity(),
+    operationKey: "manual-order-followup-provenance",
     owner: "local_admin",
     type: "production",
     reason: "manual_followup",
@@ -3879,6 +3888,7 @@ test("inbound message rejects customer assets from another conversation", async 
   await assert.rejects(
     () =>
       service.processInboundMessage({
+        externalId: "manual-lock-inbound-asset-mismatch",
         wechatAccountId: "wechat_demo_1",
         conversationId: "conversation_demo_1",
         text: "端午员工福利礼盒，每盒180元，想看效果图，logo已发",
@@ -4348,6 +4358,7 @@ test("inbound customer image selection queues low-value quote safely", async () 
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-numeric",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "我选第2张，按这个报价",
@@ -4403,6 +4414,7 @@ test("inbound numbered image shorthand queues low-value quote safely", async () 
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-number-shorthand",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "NO.2",
@@ -4462,6 +4474,7 @@ test("inbound lettered image shorthand queues low-value quote safely", async () 
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-letter-shorthand",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "B款",
@@ -4564,6 +4577,7 @@ test("inbound customer image reselection after quote queueing goes to manual rev
   ]);
 
   const firstSelection = await service.processInboundMessage({
+    externalId: "manual-lock-selection-first",
     text: "我选第2张，按这个报价",
     conversationId: "conversation_demo_1",
   });
@@ -4573,6 +4587,7 @@ test("inbound customer image reselection after quote queueing goes to manual rev
   assert.equal(localStore.getDesignJob(job.id).status, "quote_created");
 
   const reselection = await service.processInboundMessage({
+    externalId: "manual-lock-selection-reselect",
     text: "我又看了一下，换第1张",
     conversationId: "conversation_demo_1",
   });
@@ -4643,6 +4658,7 @@ test("inbound text image selection binds the latest revision round", async () =>
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-latest-revision",
     text: "就第1张，按这个报价",
     conversationId: "conversation_demo_1",
   });
@@ -4692,6 +4708,7 @@ test("inbound screenshot fingerprint selection queues low-value quote safely", a
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-screenshot",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "就这个图，麻烦按这个报价",
@@ -4749,6 +4766,7 @@ test("uncertain inbound screenshot selection goes to manual review without quoti
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-uncertain-screenshot",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "就按这个截图里的来",
@@ -4807,6 +4825,7 @@ test("inbound high value image selection locks conversation and leaves human rev
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-high-value",
     text: "我选第2张，按这个继续报价",
     conversationId: "conversation_demo_1",
   });
@@ -4870,6 +4889,7 @@ test("inbound high value budget image selection locks conversation even when fla
   ]);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-high-budget",
     text: "我选第2张，按这个报价",
     conversationId: "conversation_demo_1",
   });
@@ -4919,6 +4939,7 @@ test("inbound image selection ignores design jobs with mismatched account identi
   assert.equal(service.findLatestSelectableDesignJob(conversation), null);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-selection-account-mismatch",
     text: "我选第1张",
     conversationId: "conversation_demo_1",
   });
@@ -4962,6 +4983,7 @@ test("inbound quote acceptance ignores quotes whose design job identity no longe
   assert.equal(service.findLatestQuoteForConversation(conversation), undefined);
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-quote-identity-mismatch",
     text: "可以，就按这个方案下单",
     conversationId: "conversation_demo_1",
   });
@@ -5006,6 +5028,7 @@ test("sent low-value quote becomes unpaid order draft after customer accepts wit
   ]);
 
   const selection = await service.processInboundMessage({
+    externalId: "manual-lock-quote-accept-selection",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "我选第2张，就按这个报价",
@@ -5029,6 +5052,7 @@ test("sent low-value quote becomes unpaid order draft after customer accepts wit
   assert.equal(sentQuote.sendTask.status, "sent");
 
   const acceptance = await service.processInboundMessage({
+    externalId: "manual-lock-quote-accept-unpaid",
     text: "可以，就按这个方案下单",
     conversationId: "conversation_demo_1",
   });
@@ -5080,6 +5104,7 @@ test("sent low-value quote does not mark paid when customer asks how to pay depo
   localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
 
   const acceptance = await service.processInboundMessage({
+    externalId: "manual-lock-quote-payment-question",
     text: "可以，就这套，定金怎么付",
     conversationId: "conversation_demo_1",
   });
@@ -5125,6 +5150,7 @@ test("sent low-value quote queues order confirmation after customer confirms dep
   localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
 
   const acceptance = await service.processInboundMessage({
+    externalId: "manual-lock-quote-payment-confirmed",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "定金已经转账了，麻烦安排制作",
@@ -5177,6 +5203,7 @@ test("inbound payment proof attachment with paid wording still requires manual v
   localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-payment-proof-paid-wording",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "定金已经转账了，截图发你",
@@ -5248,6 +5275,7 @@ test("manual payment proof verification rejects quote without selected image bef
     () =>
       quotes.verifyPaymentProofAndQueueConfirmation(quote.id, {
         ...demoExpectedIdentity(),
+        operationKey: "manual-lock-payment-proof-without-selected-image",
         paymentStatus: "deposit_paid",
         owner: "人工客服",
         note: "人工核验付款前必须先绑定客户选图。",
@@ -5294,6 +5322,7 @@ test("payment proof screenshot fingerprint is not treated as design image select
   const originalSelectedImageId = quote.selectedImageId;
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-payment-proof-fingerprint",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     text: "定金已经转账了，付款截图发你",
@@ -5354,6 +5383,7 @@ test("inbound payment proof attachment goes to manual verification without marki
   localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
 
   const result = await service.processInboundMessage({
+    externalId: "manual-lock-payment-proof-attachment",
     text: "付款截图发你了",
     conversationId: "conversation_demo_1",
     attachments: [{ role: "payment_proof", fileName: "付款截图.png" }],

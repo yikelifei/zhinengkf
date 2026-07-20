@@ -100,8 +100,8 @@ test("official API accepted plus DB guard drift is unknown and never automatical
   assert.match(official, /deliveryState: "unknown"/);
   assert.match(official, /retrySafe: false/);
   assert.match(official, /acceptedMessageIds: apiMsgIds/);
-  assert.match(official, /automaticRetryBlocked: !deliveryFailure\.retrySafe/);
-  assert.match(official, /deliveryFailure\.deliveryState === "failed"[\s\S]*buildPrismaLinkedTransition/);
+  assert.match(official, /automaticRetryBlocked: deliveryUnknown \|\| !deliveryFailure\.retrySafe/);
+  assert.match(official, /!retryScheduled && !deliveryUnknown[\s\S]*buildPrismaLinkedTransition/);
 });
 
 test("production requeue revalidates order, quote and routing policy then commits atomically", () => {
@@ -223,6 +223,7 @@ test("Prisma bridge ack DB failure never archives files and never reads LocalSto
   const service = new WechatDispatchService({}, throwingLocalStore(), sendAdapter, {}, {});
   service.persistence = {
     async getSendTask() { return task; },
+    async getLatestSendAttempt() { return attempt; },
     async listSendAttempts() { return [attempt]; },
     async completeAttemptAndTask() { throw new Error("simulated database failure"); },
   };
@@ -297,6 +298,7 @@ test("official API acceptance plus atomic DB rejection becomes non-retryable unk
       return { id: "binding-a", openKfid: "wk-a", externalUserId: "wm-a" };
     },
     async listSendAttempts() { return [attempt]; },
+    async getLatestSendAttempt() { return attempt; },
     async recordWechatWorkAudit() {},
     async completeAttemptAndTask(params) {
       completionCalls.push(params);
@@ -311,7 +313,8 @@ test("official API acceptance plus atomic DB rejection becomes non-retryable unk
   const result = await service.completePrismaWechatWorkKfSend({ task, attempt });
   assert.equal(completionCalls.length, 2);
   const recovery = completionCalls[1];
-  assert.equal(recovery.taskPatch.status, "failed");
+  assert.equal(recovery.taskPatch.status, "sending");
+  assert.equal(recovery.attemptPatch.status, "started");
   assert.equal(recovery.taskPatch.guardSnapshot.wechatWorkDeliveryState, "unknown");
   assert.equal(recovery.taskPatch.guardSnapshot.automaticRetryBlocked, true);
   assert.deepEqual(recovery.attemptPatch.metadata.acceptedMessageIds, ["accepted-1"]);
@@ -319,7 +322,7 @@ test("official API acceptance plus atomic DB rejection becomes non-retryable unk
   assert.equal(result.retryScheduled, false);
 });
 
-test("stale official started attempt becomes delivery-unknown while a fresh attempt stays active and its queue is released", async (t) => {
+test("stale official started attempt stays delivery-unknown and continues blocking its account queue", async (t) => {
   t.after(() => { appConfig.useLocalStore = true; });
   appConfig.useLocalStore = false;
   const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
@@ -367,7 +370,7 @@ test("stale official started attempt becomes delivery-unknown while a fresh atte
     async getLatestSendAttempt(taskId) { return attempts[taskId] || null; },
     async completeAttemptAndTask(params) {
       assert.equal(params.taskId, stale.id);
-      assert.equal(params.linkedTransition, null);
+      assert.equal(params.linkedTransition, undefined);
       Object.assign(stale, params.taskPatch);
       Object.assign(attempts[stale.id], params.attemptPatch);
       return { task: stale, attempt: attempts[stale.id] };
@@ -389,7 +392,7 @@ test("stale official started attempt becomes delivery-unknown while a fresh atte
 
   const scan = await service.scanPrismaSendOperations({});
   assert.equal(scan.wechatWorkDeliveryUnknown, 1);
-  assert.equal(stale.status, "failed");
+  assert.equal(stale.status, "sending");
   assert.equal(stale.guardSnapshot.wechatWorkDeliveryState, "unknown");
   assert.equal(stale.guardSnapshot.automaticRetryBlocked, true);
   assert.equal(attempts[stale.id].metadata.deliveryState, "unknown");
@@ -398,15 +401,206 @@ test("stale official started attempt becomes delivery-unknown while a fresh atte
   assert.equal(attempts[fresh.id].status, "started");
   assert.equal(audits.length, 1);
   assert.equal(notifications.length, 1);
+  const replayScan = await service.scanPrismaSendOperations({});
+  assert.equal(replayScan.wechatWorkDeliveryUnknown, 1);
+  assert.equal(audits.length, 1);
+  assert.equal(notifications.length, 1);
   await assert.rejects(
     () => service.requeueSendTask(stale.id, { reason: "operator retry without resolving unknown delivery" }),
     /发送结果未知.*不能直接重新排队/,
   );
 
   const queueResult = await service.processPrismaSafeSendQueue({});
-  assert.equal(queuedExecutions, 1);
-  assert.equal(queueResult.processed[0].task.id, queued.id);
-  assert.equal(attempts[stale.id].status, "failed");
+  assert.equal(queuedExecutions, 0);
+  assert.equal(queueResult.processed.length, 0);
+  assert.equal(queueResult.skipped[0].sendTaskId, queued.id);
+  assert.equal(queueResult.skipped[0].queueHeadId, stale.id);
+  assert.equal(attempts[stale.id].status, "started");
+});
+
+test("Prisma in-flight cancel and manual resolution use CAS, exact identity and stable audit", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  let task = {
+    id: "task-prisma-manual-resolution",
+    status: "sending",
+    wechatAccountId: "account-prisma",
+    conversationId: "conversation-prisma",
+    customerId: "customer-prisma",
+    payload: { text: "in-flight prisma send" },
+    guardSnapshot: {
+      binding: {
+        wechatAccountId: "account-prisma",
+        conversationId: "conversation-prisma",
+        customerId: "customer-prisma",
+      },
+    },
+    conversation: {
+      id: "conversation-prisma",
+      wechatAccountId: "account-prisma",
+      customerId: "customer-prisma",
+      manualLocked: false,
+    },
+    updatedAt: "2026-07-20T01:00:00.000Z",
+  };
+  let attempt = {
+    id: "attempt-prisma-manual-resolution",
+    sendTaskId: task.id,
+    adapter: "wechat_work_kf",
+    status: "started",
+    metadata: {},
+  };
+  const commits = [];
+  const audits = new Map();
+  const service = new WechatDispatchService({}, throwingLocalStore(), {}, {}, {});
+  service.persistence = {
+    async getSendTask() { return task; },
+    async getLatestSendAttempt() { return attempt; },
+    async listSendAttempts() { return [attempt]; },
+    async completeAttemptAndTask(params) {
+      commits.push(params);
+      assert.equal(params.expectedTaskStatus, task.status);
+      assert.equal(params.expectedAttemptStatus, attempt.status);
+      task = {
+        ...task,
+        ...params.taskPatch,
+        guardSnapshot: params.taskPatch.guardSnapshot,
+        updatedAt: new Date(Date.parse(task.updatedAt) + 1000).toISOString(),
+      };
+      attempt = {
+        ...attempt,
+        ...params.attemptPatch,
+        metadata: params.attemptPatch.metadata,
+      };
+      return { task, attempt };
+    },
+    async recordWechatWorkAudit(entry) {
+      if (!audits.has(entry.id)) audits.set(entry.id, entry);
+      return audits.get(entry.id);
+    },
+  };
+
+  const protectedTask = await service.cancelSendTask(task.id, {
+    expectedWechatAccountId: "account-prisma",
+    expectedConversationId: "conversation-prisma",
+    expectedCustomerId: "customer-prisma",
+    reason: "operator requested stop during prisma delivery",
+  });
+  assert.equal(protectedTask.status, "sending");
+  assert.equal(protectedTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(attempt.status, "started");
+  assert.equal(commits[0].linkedTransition, undefined);
+
+  await assert.rejects(
+    () => service.resolveUnknownSendDelivery(task.id, {
+      operationKey: "send-resolution:prisma-mismatch:0001",
+      resolution: "confirmed_not_sent",
+      expectedWechatAccountId: "account-prisma",
+      expectedConversationId: "conversation-prisma",
+      expectedCustomerId: "wrong-customer",
+    }, "operator-prisma"),
+    /identity mismatch/,
+  );
+
+  const resolutionPayload = {
+    operationKey: "send-resolution:prisma-not-sent:0001",
+    resolution: "confirmed_not_sent",
+    reason: "operator verified no official message was delivered",
+    expectedWechatAccountId: "account-prisma",
+    expectedConversationId: "conversation-prisma",
+    expectedCustomerId: "customer-prisma",
+  };
+  const resolved = await service.resolveUnknownSendDelivery(task.id, resolutionPayload, "operator-prisma");
+  const replay = await service.resolveUnknownSendDelivery(task.id, resolutionPayload, "operator-prisma");
+  assert.equal(resolved.status, "failed");
+  assert.equal(replay.status, "failed");
+  assert.equal(resolved.guardSnapshot.deliveryResolutionPriority, "manual_audited_terminal");
+  assert.equal(attempt.status, "failed");
+  assert.equal(audits.size, 1);
+  assert.equal([...audits.values()][0].wechatAccountId, "account-prisma");
+  assert.equal([...audits.values()][0].conversationId, "conversation-prisma");
+  assert.equal([...audits.values()][0].customerId, "customer-prisma");
+
+  const lateFailure = await service.settleWechatWorkAsyncFailure(attempt, "late async failure");
+  assert.equal(lateFailure.changed, false);
+  assert.equal(lateFailure.reason, "manual_resolution_confirmed_not_sent_is_terminal");
+  assert.equal(task.status, "failed");
+});
+
+test("Prisma audited manual terminal outranks a deferred late official success", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  let task = {
+    id: "task-prisma-late-official",
+    status: "sending",
+    wechatAccountId: "account-prisma-late",
+    conversationId: "conversation-prisma-late",
+    customerId: "customer-prisma-late",
+    payload: { text: "deferred official response" },
+    guardSnapshot: {},
+    conversation: {
+      id: "conversation-prisma-late",
+      wechatAccountId: "account-prisma-late",
+      customerId: "customer-prisma-late",
+      manualLocked: false,
+    },
+    updatedAt: "2026-07-20T02:00:00.000Z",
+  };
+  let attempt = {
+    id: "attempt-prisma-late-official",
+    sendTaskId: task.id,
+    adapter: "wechat_work_kf",
+    status: "started",
+    metadata: {},
+  };
+  let releaseDelivery;
+  let markStarted;
+  const deliveryStarted = new Promise((resolve) => { markStarted = resolve; });
+  const deliveryRelease = new Promise((resolve) => { releaseDelivery = resolve; });
+  const completionCalls = [];
+  const audits = [];
+  const service = new WechatDispatchService({}, throwingLocalStore(), {
+    async deliverWechatWorkKf() {
+      markStarted();
+      await deliveryRelease;
+      return { msgid: "late-prisma-success", apiMsgIds: ["late-prisma-success"] };
+    },
+  }, {}, {});
+  service.persistence = {
+    async getSendTask() { return task; },
+    async getLatestSendAttempt() { return attempt; },
+    async listSendAttempts() { return [attempt]; },
+    async findWechatWorkBindingByIdentity() {
+      return { id: "binding-prisma-late", openKfid: "wk-prisma-late", externalUserId: "wm-prisma-late" };
+    },
+    async completeAttemptAndTask(params) { completionCalls.push(params); return null; },
+    async recordWechatWorkAudit(entry) { audits.push(entry); },
+  };
+
+  const inFlight = service.completePrismaWechatWorkKfSend({ task, attempt });
+  await deliveryStarted;
+  task = {
+    ...task,
+    status: "failed",
+    guardSnapshot: {
+      manualDeliveryResolution: { resolution: "confirmed_not_sent" },
+      deliveryResolutionPriority: "manual_audited_terminal",
+    },
+    updatedAt: "2026-07-20T02:00:01.000Z",
+  };
+  attempt = {
+    ...attempt,
+    status: "failed",
+    metadata: { manualDeliveryResolution: { resolution: "confirmed_not_sent" } },
+  };
+  releaseDelivery();
+  const result = await inFlight;
+
+  assert.equal(result.stateChanged, true);
+  assert.equal(result.task.status, "failed");
+  assert.equal(result.task.guardSnapshot.deliveryResolutionPriority, "manual_audited_terminal");
+  assert.equal(completionCalls.length, 0);
+  assert.equal(audits.length, 0);
 });
 
 test("Prisma operations protect every uncertain Windows bridge recovery without marking failed", async (t) => {

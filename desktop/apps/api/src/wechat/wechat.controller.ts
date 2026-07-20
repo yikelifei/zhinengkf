@@ -407,6 +407,21 @@ export class WechatController {
     return this.wechat.cancelSendTask(id, payload || {});
   }
 
+  @Post("send-tasks/:id/resolve-delivery")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  resolveSendDelivery(
+    @Param("id") id: string,
+    @Body() payload: {
+      resolution: "confirmed_sent" | "confirmed_not_sent";
+      operationKey: string;
+      reason?: string;
+    } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    return this.wechat.resolveUnknownSendDelivery(id, payload, principal.id);
+  }
+
   @Post("send-tasks/:id/bridge-ack")
   acknowledgeBridgeSend(
     @Param("id") id: string,

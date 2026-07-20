@@ -1106,6 +1106,7 @@ export class WechatPersistence {
           { metadata: { path: ["wechatWorkMsgId"], equals: msgid } },
           { metadata: { path: ["apiMsgIds"], array_contains: [msgid] } },
           { metadata: { path: ["wechatWorkMsgIds"], array_contains: [msgid] } },
+          { metadata: { path: ["acceptedMessageIds"], array_contains: [msgid] } },
         ],
       },
       include: attemptInclude,

@@ -8,7 +8,8 @@ export type ClientOperationScope =
   | "quote-send"
   | "payment-proof"
   | "order-send"
-  | "review-action";
+  | "review-action"
+  | "send-resolution";
 
 export type PendingClientOperation = {
   scope: ClientOperationScope;

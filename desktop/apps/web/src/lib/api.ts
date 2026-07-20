@@ -924,6 +924,18 @@ export type SendTask = {
       requeuedAt?: string;
       cancelReason?: string;
       cancelledAt?: string;
+      deliveryState?: string;
+      wechatWorkDeliveryState?: string;
+      deliveryUnknownReason?: string;
+      deliveryUnknownAt?: string;
+      automaticRetryBlocked?: boolean;
+      manualReviewRequired?: boolean;
+      manualDeliveryResolution?: {
+        resolution?: "confirmed_sent" | "confirmed_not_sent";
+        reason?: string;
+        reviewer?: string;
+        resolvedAt?: string;
+      };
       queueBlockedAlertedBy?: string;
       queueBlockedAlertedAt?: string;
       queueBlockedAdvice?: {
@@ -2475,6 +2487,17 @@ export async function cancelSendTask(id: string, payload: { reason?: string } & 
     reason: "客服取消发送任务",
     ...payload,
   });
+}
+
+export async function resolveSendTaskDelivery(
+  id: string,
+  payload: {
+    resolution: "confirmed_sent" | "confirmed_not_sent";
+    operationKey: string;
+    reason?: string;
+  } & IdentityExpectation,
+): Promise<SendTask> {
+  return postJson<SendTask>(`/wechat/send-tasks/${id}/resolve-delivery`, payload);
 }
 
 export type SendOperationsScanResult = {

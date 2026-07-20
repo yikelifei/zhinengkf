@@ -428,6 +428,149 @@ test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt 
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_accepted"));
 });
 
+test("sending official delivery cancel protection still converges to a late API success", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-late-success", externalUserId: "wm-late-success" });
+  const queued = await service.queueCustomerServiceText({
+    requestId: "wechat-work:late-success-after-cancel",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    text: "late official success",
+  });
+  let releaseSend;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const release = new Promise((resolve) => { releaseSend = resolve; });
+  api.sendText = async (payload) => {
+    api.sendCalls.push(payload);
+    markStarted();
+    await release;
+    return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
+  };
+
+  const inFlight = service.dispatchCustomerServiceText(queued.task.id);
+  await started;
+  const protectedTask = dispatch.cancelSendTask(queued.task.id, expectedIdentity(binding, {
+    reason: "operator requested stop while official delivery was in flight",
+  }));
+  assert.equal(protectedTask.status, "sending");
+  assert.equal(protectedTask.guardSnapshot.deliveryState, "unknown");
+  releaseSend();
+  const completed = await inFlight;
+
+  assert.equal(completed.task.status, "sent");
+  assert.equal(completed.task.guardSnapshot.deliveryState, "sent");
+  assert.equal(completed.task.guardSnapshot.manualReviewRequired, false);
+  assert.equal(localStore.getLatestSendAttempt(queued.task.id).status, "sent");
+});
+
+test("audited confirmed not sent outranks a later official API success", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-manual-outranks", externalUserId: "wm-manual-outranks" });
+  const queued = await service.queueCustomerServiceText({
+    requestId: "wechat-work:manual-outranks-late-success",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    text: "manual conclusion must remain terminal",
+  });
+  let releaseSend;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const release = new Promise((resolve) => { releaseSend = resolve; });
+  api.sendText = async (payload) => {
+    api.sendCalls.push(payload);
+    markStarted();
+    await release;
+    return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
+  };
+
+  const inFlight = service.dispatchCustomerServiceText(queued.task.id);
+  await started;
+  dispatch.cancelSendTask(queued.task.id, expectedIdentity(binding, {
+    reason: "stop requested before manual verification",
+  }));
+  const resolutionPayload = expectedIdentity(binding, {
+    operationKey: "send-resolution:official-not-sent:0001",
+    resolution: "confirmed_not_sent",
+    reason: "operator verified that the official message did not appear",
+  });
+  const resolved = await dispatch.resolveUnknownSendDelivery(
+    queued.task.id,
+    resolutionPayload,
+    "operator-official-review",
+  );
+  assert.equal(resolved.status, "failed");
+  assert.equal(resolved.guardSnapshot.deliveryResolutionPriority, "manual_audited_terminal");
+
+  releaseSend();
+  const lateCompletion = await inFlight;
+  assert.equal(lateCompletion.task.status, "failed");
+  assert.equal(lateCompletion.stateChanged, true);
+  const finalTask = localStore.getSendTask(queued.task.id);
+  assert.equal(finalTask.status, "failed");
+  assert.equal(finalTask.guardSnapshot.manualDeliveryResolution.resolution, "confirmed_not_sent");
+  assert.equal(
+    localStore.listWechatWorkAuditLogs().filter((entry) => entry.action === "send_delivery_manual_resolution").length,
+    1,
+  );
+});
+
+test("local restart recovery keeps stale official delivery unknown and blocks automatic replay idempotently", async () => {
+  const { api, localStore, dispatch, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-restart-unknown", externalUserId: "wm-restart-unknown" });
+  const stale = await service.queueCustomerServiceText({
+    requestId: "wechat-work:restart-unknown-stale",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    text: "stale official attempt",
+  });
+  const queued = await service.queueCustomerServiceText({
+    requestId: "wechat-work:restart-unknown-next",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    text: "must not replay while predecessor is unknown",
+  });
+  localStore.updateSendTask(stale.task.id, { status: "sending" });
+  const attempt = localStore.createSendAttempt({
+    sendTaskId: stale.task.id,
+    adapter: "wechat_work_kf",
+    status: "started",
+    metadata: {
+      wechatAccountId: binding.wechatAccountId,
+      conversationId: binding.conversationId,
+      customerId: binding.customerId,
+    },
+  });
+  localStore.updateSendAttempt(attempt.id, {
+    startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+  });
+
+  const first = await dispatch.scanSendOperations({ conversationId: binding.conversationId });
+  const replay = await dispatch.scanSendOperations({ conversationId: binding.conversationId });
+  const protectedTask = localStore.getSendTask(stale.task.id);
+  const protectedAttempt = localStore.getLatestSendAttempt(stale.task.id, { adapter: "wechat_work_kf" });
+  assert.equal(first.wechatWorkDeliveryUnknown, 1);
+  assert.equal(replay.wechatWorkDeliveryUnknown, 1);
+  assert.equal(protectedTask.status, "sending");
+  assert.equal(protectedTask.guardSnapshot.deliveryState, "unknown");
+  assert.equal(protectedTask.guardSnapshot.manualReviewRequired, true);
+  assert.equal(protectedAttempt.status, "started");
+  assert.equal(
+    localStore.listWechatWorkAuditLogs().filter((entry) =>
+      entry.sendTaskId === stale.task.id && entry.action === "send_delivery_unknown").length,
+    1,
+  );
+
+  const queue = await dispatch.processSafeSendQueue({
+    adapter: "wechat_work_kf",
+    conversationId: binding.conversationId,
+  });
+  assert.equal(api.sendCalls.length, 0);
+  assert.equal(queue.processed.length, 0);
+  assert.equal(queue.skipped[0].sendTaskId, queued.task.id);
+  assert.equal(queue.skipped[0].reason, "not_account_queue_head");
+});
+
 test("WeChat Work image send uploads and dispatches text plus multiple images in order", async () => {
   const { api, localStore, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-images", externalUserId: "wm-images" });
@@ -491,10 +634,12 @@ test("uncertain WeChat Work image send fails closed without automatic retry", as
   });
 
   const result = await service.dispatchCustomerServiceText(queued.task.id);
-  assert.equal(result.task.status, "failed");
+  assert.equal(result.task.status, "sending");
   assert.equal(result.retryScheduled, false);
+  assert.equal(result.attempt.status, "started");
   assert.equal(result.attempt.metadata.deliveryState, "unknown");
   assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
+  assert.equal(result.task.guardSnapshot.manualReviewRequired, true);
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_delivery_unknown"));
 });
 
@@ -514,12 +659,22 @@ test("partial multi-image send never retries already accepted images", async () 
   });
 
   const result = await service.dispatchCustomerServiceText(queued.task.id);
-  assert.equal(result.task.status, "failed");
+  assert.equal(result.task.status, "sending");
   assert.equal(result.retryScheduled, false);
+  assert.equal(result.attempt.status, "started");
   assert.equal(result.attempt.metadata.deliveryState, "partial");
   assert.equal(result.attempt.metadata.acceptedMessageIds.length, 1);
   assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
 });
+
+function expectedIdentity(binding, extra = {}) {
+  return {
+    expectedWechatAccountId: binding.wechatAccountId,
+    expectedConversationId: binding.conversationId,
+    expectedCustomerId: binding.customerId,
+    ...extra,
+  };
+}
 
 test("WeChat Work image queue rejects paths outside LOCAL_STORAGE_ROOT", async () => {
   const { service, tempDir } = setup();

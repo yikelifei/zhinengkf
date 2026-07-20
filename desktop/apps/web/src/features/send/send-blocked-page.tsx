@@ -2,19 +2,26 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Ban, RefreshCw, ShieldAlert } from "lucide-react";
+import { Ban, CheckCircle2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import {
   cancelSendTask,
   getSendTasks,
   identityExpectation,
   requeueSendTask,
+  resolveSendTaskDelivery,
   type IdentityFilters,
   type SendTask,
 } from "../../lib/api";
+import {
+  completeClientOperation,
+  reserveClientOperation,
+  type PendingClientOperation,
+} from "../../lib/client-operation-key";
 import { SendEmpty, SendLoading, SendNotice, SendPageFrame, errorMessage } from "./send-page-frame";
 import {
   canCancelSendTask,
   canRequeueSendTask,
+  canResolveUnknownDelivery,
   isBlockedSendTask,
   operationBlockReason,
 } from "./send-policy";
@@ -22,7 +29,10 @@ import { SendConfirmation, SendTaskCard } from "./send-task-card";
 import { SendTaskListItem } from "./send-task-list-item";
 import styles from "./send-pages.module.css";
 
-type BlockedConfirmation = { kind: "requeue" | "cancel"; taskId: string } | null;
+type BlockedConfirmation = {
+  kind: "requeue" | "cancel" | "confirmed_sent" | "confirmed_not_sent";
+  taskId: string;
+} | null;
 
 export type SendBlockedPageProps = {
   filters?: IdentityFilters;
@@ -37,6 +47,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
   const [feedback, setFeedback] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<BlockedConfirmation>(null);
   const requestSequence = useRef(0);
+  const pendingResolutionOperation = useRef<PendingClientOperation | null>(null);
   const accountFilter = filters.wechatAccountId;
   const conversationFilter = filters.conversationId;
   const customerFilter = filters.customerId;
@@ -77,7 +88,11 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       setError("发送任务已不存在，请刷新拦截列表。");
       return;
     }
-    const actionAllowed = pendingConfirmation.kind === "requeue" ? canRequeueSendTask(task) : canCancelSendTask(task);
+    const actionAllowed = pendingConfirmation.kind === "requeue"
+      ? canRequeueSendTask(task)
+      : pendingConfirmation.kind === "cancel"
+        ? canCancelSendTask(task)
+        : canResolveUnknownDelivery(task);
     if (!actionAllowed) {
       setPendingConfirmation(null);
       setError(operationBlockReason(task));
@@ -95,16 +110,43 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
           reason: "manual_operator_requeue_from_modular_blocked_page",
         });
         setFeedback("任务已重新排队；发送前仍会重新校验当前真实窗口。 ");
-      } else {
+      } else if (kind === "cancel") {
         await cancelSendTask(task.id, {
           ...identityExpectation(task),
           reason: "manual_operator_cancel_from_modular_blocked_page",
         });
         setFeedback("任务已取消并由服务端留痕，不会自动恢复或重新排队。");
+      } else {
+        const expected = identityExpectation(task);
+        const reservation = reserveClientOperation(
+          "send-resolution",
+          { taskId: task.id, resolution: kind, ...expected },
+          pendingResolutionOperation.current,
+        );
+        pendingResolutionOperation.current = reservation;
+        await resolveSendTaskDelivery(task.id, {
+          ...expected,
+          resolution: kind,
+          operationKey: reservation.key,
+          reason: kind === "confirmed_sent"
+            ? "manual_operator_confirmed_customer_received_message"
+            : "manual_operator_confirmed_message_was_not_sent",
+        });
+        pendingResolutionOperation.current = completeClientOperation(
+          pendingResolutionOperation.current,
+          reservation.key,
+        );
+        setFeedback(kind === "confirmed_sent"
+          ? "已人工确认发送成功，关联业务状态已按确定结果收敛。"
+          : "已人工确认未发送；任务保持失败，只有再次明确操作才会重新排队。");
       }
       await refreshBlocked();
     } catch (operationError) {
-      setError(errorMessage(operationError, kind === "requeue" ? "任务重新排队失败" : "任务取消失败"));
+      setError(errorMessage(operationError, kind === "requeue"
+        ? "任务重新排队失败"
+        : kind === "cancel"
+          ? "任务取消失败"
+          : "人工确认投递结果失败"));
     } finally {
       setOperationId("");
     }
@@ -143,18 +185,34 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       {error ? <SendNotice tone="error" title="拦截任务操作未完成">{error}</SendNotice> : null}
       {feedback ? <SendNotice tone="success" title="任务状态已更新">{feedback}</SendNotice> : null}
       <SendNotice tone="warning" title="未知投递保持隔离">
-        发送中或投递状态不确定的任务不提供重排和取消按钮；必须先从诊断页核对桥接回执，避免重复发给客户。
+        投递状态不确定的任务禁止重排和取消；只有完成账号、会话、客户三元身份核对后，才能人工确认已发送或未发送。
       </SendNotice>
       {pendingConfirmation && confirmationTask ? (
         <SendConfirmation
           actionIdPrefix={`send.blocked.${pendingConfirmation.kind}.${confirmationTask.id}`}
-          title={pendingConfirmation.kind === "requeue" ? "确认重新排队" : "确认取消发送任务"}
+          title={pendingConfirmation.kind === "requeue"
+            ? "确认重新排队"
+            : pendingConfirmation.kind === "cancel"
+              ? "确认取消发送任务"
+              : pendingConfirmation.kind === "confirmed_sent"
+                ? "确认客户已收到消息"
+                : "确认消息没有发出"}
           detail={pendingConfirmation.kind === "requeue"
             ? "重新排队不会沿用旧窗口结果；服务端仍会重新校验账号、会话、客户和队列头。"
-            : "取消后任务不会自动恢复；如业务仍需发送，必须从对应业务流程重新生成。"}
+            : pendingConfirmation.kind === "cancel"
+              ? "取消后任务不会自动恢复；如业务仍需发送，必须从对应业务流程重新生成。"
+              : pendingConfirmation.kind === "confirmed_sent"
+                ? "仅在已从客户会话或官方记录确认消息送达时使用；关联报价或订单会按发送成功收敛。"
+                : "仅在已确认消息没有发出时使用；任务会变为失败，但不会自动重新排队。"}
           task={confirmationTask}
-          confirmLabel={pendingConfirmation.kind === "requeue" ? "确认重新排队" : "确认取消任务"}
-          danger={pendingConfirmation.kind === "cancel"}
+          confirmLabel={pendingConfirmation.kind === "requeue"
+            ? "确认重新排队"
+            : pendingConfirmation.kind === "cancel"
+              ? "确认取消任务"
+              : pendingConfirmation.kind === "confirmed_sent"
+                ? "确认已发送"
+                : "确认未发送"}
+          danger={["cancel", "confirmed_not_sent"].includes(pendingConfirmation.kind)}
           busy={operationBusy}
           onConfirm={() => void confirmBlockedAction()}
           onCancel={() => setPendingConfirmation(null)}
@@ -174,9 +232,12 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
               }
               const canRequeue = canRequeueSendTask(task);
               const canCancel = canCancelSendTask(task);
-              const hint = canRequeue || canCancel
-                ? "选择操作后还需核对身份与消息内容并二次确认。"
-                : operationBlockReason(task);
+              const canResolve = canResolveUnknownDelivery(task);
+              const hint = canResolve
+                ? "投递结果未知：请先核对官方记录或客户会话，再选择唯一的人工处置结果。"
+                : canRequeue || canCancel
+                  ? "选择操作后还需核对身份与消息内容并二次确认。"
+                  : operationBlockReason(task);
               return (
                 <SendTaskCard
                   task={task}
@@ -206,6 +267,30 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
                         >
                           <Ban size={15} aria-hidden="true" /> 取消任务
                         </button>
+                      ) : null}
+                      {canResolve ? (
+                        <>
+                          <button
+                            type="button"
+                            className={styles.primaryButton}
+                            data-action-id={`send.blocked.request-confirmed-sent.${task.id}`}
+                            aria-label={`确认发送任务 ${task.id} 已发送`}
+                            onClick={() => setPendingConfirmation({ kind: "confirmed_sent", taskId: task.id })}
+                            disabled={busy || operationBusy}
+                          >
+                            <CheckCircle2 size={15} aria-hidden="true" /> 确认已发送
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.dangerButton}
+                            data-action-id={`send.blocked.request-confirmed-not-sent.${task.id}`}
+                            aria-label={`确认发送任务 ${task.id} 未发送`}
+                            onClick={() => setPendingConfirmation({ kind: "confirmed_not_sent", taskId: task.id })}
+                            disabled={busy || operationBusy}
+                          >
+                            <XCircle size={15} aria-hidden="true" /> 确认未发送
+                          </button>
+                        </>
                       ) : null}
                     </>
                   )}
