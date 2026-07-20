@@ -581,7 +581,11 @@ test("manual review logs persist complete account conversation and customer iden
 
   const revisionPolicySection = sliceBetween(designJobsService, /source: "design_revision_policy"/, /await this\.assertDesignPlatformPreflight/);
   const handoffMetadataSection = sliceBetween(designJobsService, /private buildManualHandoffMetadata/, /private async queueDesignTextMessage/);
-  const inboundSelectionSection = sliceBetween(wechatService, /this\.localStore\.selectDesignImage/, /const existingQuote = this\.localStore/);
+  const inboundSelectionSection = sliceBetween(
+    wechatService,
+    /private async finishLocalHighValueSelection/,
+    /private async handleInboundQuoteAcceptance/,
+  );
   const inboundQuoteReviewSection = sliceBetween(wechatService, /private async createInboundQuoteReview/, /private hasInboundPaymentProof/);
   const inboundSelectionReviewSection = sliceBetween(wechatService, /private async createInboundSelectionReview/, /private async lockConversationForManualReview/);
   const quoteRevisionSection = sliceBetween(quotesService, /decision: "manual_quote_revision"/, /\n  async preview/);
