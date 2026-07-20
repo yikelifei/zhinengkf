@@ -528,13 +528,21 @@ test("notifications and review center are scoped by selected conversation identi
   const reviewsController = readProjectFile("apps/api/src/reviews/reviews.controller.ts");
   const reviewsService = readProjectFile("apps/api/src/reviews/reviews.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const reviewRead = sliceBetween(api, /\nexport async function getReviewCenter\(/, /\nexport async function reviewDesignJob\(/);
+  const notificationsRead = sliceBetween(api, /\nexport async function getNotifications\(/, /\nexport async function markNotificationRead\(/);
 
   assert.match(api, /export async function getNotifications\(unreadOnly = false, filters: IdentityFilters = \{\}\)/);
   assert.match(api, /params\.set\("unreadOnly", unreadOnly \? "true" : "false"\)/);
   assert.match(api, /export async function getReviewCenter\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /export type ReviewCenter = \{[\s\S]*orderDrafts: OrderDraft\[\]/);
-  assert.match(api, /return \{ designJobs: \[\], quoteDrafts: \[\], orderDrafts: \[\], logs: \[\] \}/);
-  assert.match(api, /\/reviews\$\{identityQuery\(filters\)\}/);
+  assert.match(reviewRead, /\/reviews\$\{identityQuery\(filters\)\}/);
+  assert.match(reviewRead, /if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\)/);
+  assert.match(reviewRead, /return response\.json\(\)/);
+  assert.doesNotMatch(reviewRead, /catch\s*\(|designJobs:\s*\[\]/);
+  assert.match(notificationsRead, /identityQuery\(filters\)/);
+  assert.match(notificationsRead, /if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\)/);
+  assert.match(notificationsRead, /return response\.json\(\)/);
+  assert.doesNotMatch(notificationsRead, /catch\s*\(|return\s*\[\]/);
   assert.match(notificationsController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
   assert.match(notificationsController, /conversationId/);
   assert.match(notificationsController, /customerId/);
