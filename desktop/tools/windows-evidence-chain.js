@@ -18,6 +18,16 @@ const DEFAULT_TREE_LIMITS = Object.freeze({
   maxFileBytes: 2 * 1024 * 1024 * 1024,
   maxTotalBytes: 8 * 1024 * 1024 * 1024,
 });
+const DEFAULT_EXTRACTION_LIMITS = Object.freeze({
+  maxDepth: 48,
+  maxEntries: 50_000,
+  maxFiles: 45_000,
+  maxFileBytes: 512 * 1024 * 1024,
+  maxTotalBytes: 2 * 1024 * 1024 * 1024,
+  maxCompressionRatio: 200,
+  minFreeBytes: 512 * 1024 * 1024,
+});
+const MAX_ARCHIVE_LIST_OUTPUT_BYTES = 32 * 1024 * 1024;
 const root = path.resolve(__dirname, "..");
 const DEFAULT_POLICY_FILE = path.join(root, "config", "windows-release-signing-policy.json");
 const DEFAULT_EXTRACTOR_POLICY_FILE = path.join(root, "config", "windows-release-extractor-policy.json");
@@ -212,11 +222,27 @@ function sameIdentity(left, right) {
 
 function createPrivateTemp(prefix = TEMP_PREFIX) {
   if (![TEMP_PREFIX, SMOKE_TEMP_PREFIX].includes(prefix)) throw new Error("unsupported private temp prefix");
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const nonce = crypto.randomBytes(32).toString("hex");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const identity = privateTempIdentity(tempRoot);
   const markerFile = path.join(tempRoot, TEMP_MARKER_FILE);
-  fs.writeFileSync(markerFile, `${JSON.stringify({ nonce, prefix })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  return { tempRoot, nonce, prefix, identity: privateTempIdentity(tempRoot) };
+  try {
+    fs.writeFileSync(markerFile, `${JSON.stringify({ nonce, prefix })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    return { tempRoot, nonce, prefix, identity };
+  } catch (error) {
+    let failure = error;
+    const quarantine = path.join(os.tmpdir(), `${prefix}failed-create-${crypto.randomBytes(16).toString("hex")}`);
+    try {
+      if (!sameIdentity(privateTempIdentity(tempRoot), identity)) throw new Error("private temp identity changed during failed creation cleanup");
+      fs.renameSync(tempRoot, quarantine);
+      if (!sameIdentity(privateTempIdentity(quarantine), identity)) throw new Error("private temp identity changed after failed creation quarantine");
+      fs.rmSync(quarantine, { recursive: true, force: true });
+    } catch (cleanupError) {
+      failure = cleanupError;
+    }
+    if (failure && typeof failure === "object") failure.temporaryFilesWritten = true;
+    throw failure;
+  }
 }
 
 function createPrivateSnapshot(sourceDirectory, options = {}) {
@@ -234,8 +260,14 @@ function createPrivateSnapshot(sourceDirectory, options = {}) {
     }
     return { tempRoot, snapshotDirectory, sourceManifest: sourceBefore, snapshotManifest: snapshot, cleanupHandle, treeOptions };
   } catch (error) {
-    cleanupPrivateTemp(cleanupHandle);
-    throw error;
+    let failure = error;
+    try {
+      cleanupPrivateTemp(cleanupHandle);
+    } catch (cleanupError) {
+      failure = cleanupError;
+    }
+    if (failure && typeof failure === "object") failure.temporaryFilesWritten = true;
+    throw failure;
   }
 }
 
@@ -529,7 +561,7 @@ function findSevenZipExecutable() {
   return { status: "PASS", executable: candidates.find((item) => comparablePath(item) === uniqueCandidates[0]), policy };
 }
 
-function runSevenZip(resolution, args, cwd) {
+function runSevenZip(resolution, args, cwd, options = {}) {
   const executable = resolution?.executable;
   try {
     const stat = fs.lstatSync(executable, { bigint: true });
@@ -545,51 +577,184 @@ function runSevenZip(resolution, args, cwd) {
     encoding: "utf8",
     windowsHide: true,
     shell: false,
-    timeout: 120_000,
+    timeout: options.timeoutMs || 120_000,
+    maxBuffer: options.maxBuffer || 1024 * 1024,
   });
 }
 
-function findNamedFile(directory, expectedName) {
-  const matches = [];
-  const visit = (current) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const target = path.join(current, entry.name);
-      const stat = fs.lstatSync(target);
-      if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw new Error("extractor output contains a reparse point");
-      if (entry.isDirectory() && stat.isDirectory()) visit(target);
-      else if (entry.isFile() && stat.isFile() && entry.name.toLowerCase() === expectedName.toLowerCase()) matches.push(target);
-      else if (!entry.isFile()) throw new Error("extractor output contains an unsupported node");
-    }
+function normalizeExtractionLimits(overrides = {}) {
+  const limits = { ...DEFAULT_EXTRACTION_LIMITS, ...overrides };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`invalid extraction budget: ${name}`);
+  }
+  return limits;
+}
+
+function parseSevenZipTechnicalListing(output) {
+  const records = [];
+  let current = {};
+  const flush = () => {
+    if (Object.keys(current).length) records.push(current);
+    current = {};
   };
-  visit(directory);
-  return matches;
+  for (const line of String(output || "").split(/\r?\n/)) {
+    if (!line.trim() || /^-+$/.test(line.trim())) {
+      flush();
+      continue;
+    }
+    const separator = line.indexOf(" = ");
+    if (separator <= 0) continue;
+    current[line.slice(0, separator)] = line.slice(separator + 3);
+  }
+  flush();
+  return records.filter((record) => record.Path && !record.Type && record["Physical Size"] === undefined);
+}
+
+function archiveEntryPath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  if (!normalized || normalized.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    throw new Error("archive contains an absolute or empty entry path");
+  }
+  const segments = normalized.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("archive contains an unsafe entry path");
+  }
+  if (segments.some((segment) => /[\u0000-\u001f:*?"<>|]/.test(segment)
+    || /[. ]$/.test(segment)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment))) {
+    throw new Error("archive contains a Windows-unsafe entry path");
+  }
+  return { normalized, segments };
+}
+
+function archiveInteger(value, label) {
+  if (!/^\d+$/.test(String(value ?? ""))) throw new Error(`archive ${label} is missing or invalid`);
+  const parsed = BigInt(String(value));
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`archive ${label} exceeds the numeric safety limit`);
+  return Number(parsed);
+}
+
+function validateSevenZipListing(output, options = {}) {
+  const limits = normalizeExtractionLimits(options.limits);
+  const archiveBytes = archiveInteger(options.archiveBytes, "physical size");
+  const records = parseSevenZipTechnicalListing(output);
+  if (!records.length) throw new Error("archive technical listing is empty");
+  const entries = [];
+  const names = new Set();
+  const totals = { files: 0, directories: 0, totalBytes: 0, maxDepth: 0 };
+  for (const record of records) {
+    const entryPath = archiveEntryPath(record.Path);
+    const key = process.platform === "win32" ? entryPath.normalized.toLowerCase() : entryPath.normalized;
+    if (names.has(key)) throw new Error("archive contains duplicate entry paths");
+    names.add(key);
+    const directory = record.Folder === "+" || /^D/i.test(String(record.Attributes || ""));
+    const bytes = directory ? 0 : archiveInteger(record.Size, "entry size");
+    totals.maxDepth = Math.max(totals.maxDepth, entryPath.segments.length);
+    if (totals.maxDepth > limits.maxDepth) throw new Error("archive exceeds maximum path depth");
+    if (directory) totals.directories += 1;
+    else {
+      totals.files += 1;
+      totals.totalBytes += bytes;
+      if (bytes > limits.maxFileBytes) throw new Error(`archive file exceeds maximum size: ${entryPath.normalized}`);
+      if (totals.files > limits.maxFiles) throw new Error("archive exceeds maximum file count");
+      if (totals.totalBytes > limits.maxTotalBytes) throw new Error("archive exceeds maximum total bytes");
+    }
+    if (totals.files + totals.directories > limits.maxEntries) throw new Error("archive exceeds maximum entry count");
+    entries.push({ path: entryPath.normalized, directory, bytes });
+  }
+  if (!totals.files) throw new Error("archive does not contain any files");
+  if (totals.totalBytes > archiveBytes * limits.maxCompressionRatio) {
+    throw new Error("archive exceeds maximum compression ratio");
+  }
+  return { entries, totals, archiveBytes, limits };
+}
+
+function checkExtractionCapacity(directory, requiredBytes, limits) {
+  try {
+    const stat = fs.statfsSync(directory, { bigint: true });
+    const available = stat.bavail * stat.bsize;
+    const required = BigInt(requiredBytes) + BigInt(limits.minFreeBytes);
+    return available >= required
+      ? { status: "PASS" }
+      : { status: "BLOCKED", summary: "insufficient free disk space for bounded archive extraction" };
+  } catch {
+    return { status: "BLOCKED", summary: "free disk space could not be established before archive extraction" };
+  }
+}
+
+function inspectArchiveBudget(resolution, archive, cwd, overrides = {}) {
+  const limits = normalizeExtractionLimits(overrides);
+  let archiveBytes;
+  try {
+    const stat = fs.lstatSync(archive, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw new Error("archive is not a unique regular file");
+    archiveBytes = Number(stat.size);
+    if (archiveBytes <= 0 || archiveBytes > limits.maxFileBytes) throw new Error("archive input exceeds the file budget");
+  } catch (error) {
+    return { status: "FAIL", summary: `archive input validation failed: ${error.message}` };
+  }
+  const listing = runSevenZip(resolution, ["l", "-slt", "-ba", archive], cwd, {
+    timeoutMs: 30_000,
+    maxBuffer: MAX_ARCHIVE_LIST_OUTPUT_BYTES,
+  });
+  if (listing.error?.code === "ETIMEDOUT") return { status: "FAIL", summary: "archive technical listing timed out" };
+  if (listing.error?.code === "ENOBUFS") return { status: "FAIL", summary: "archive technical listing exceeded its output budget" };
+  if (listing.error || listing.status !== 0) return { status: "FAIL", summary: "archive technical listing could not be verified" };
+  try {
+    const inspected = validateSevenZipListing(listing.stdout, { archiveBytes, limits });
+    const capacity = checkExtractionCapacity(cwd, inspected.totals.totalBytes, inspected.limits);
+    return capacity.status === "PASS" ? { status: "PASS", ...inspected } : capacity;
+  } catch (error) {
+    return { status: "FAIL", summary: `archive budget validation failed: ${error.message}` };
+  }
+}
+
+function findNamedFile(directory, expectedName, limits = DEFAULT_EXTRACTION_LIMITS) {
+  const safeRoot = assertSafeRoot(directory);
+  const manifest = createTreeManifest(safeRoot.requested, { limits });
+  return manifest.entries
+    .filter((entry) => entry.type === "file" && path.posix.basename(entry.path).toLowerCase() === expectedName.toLowerCase())
+    .map((entry) => assertSafePath(safeRoot, path.join(safeRoot.requested, ...entry.path.split("/")), "file"));
 }
 
 function verifyNativeInstallerBinding({ installer, unpackedDirectory, tempRoot }) {
   const sevenZip = findSevenZipExecutable();
   if (sevenZip.status !== "PASS") return { ...sevenZip, mode: "native" };
+  const extractionLimits = normalizeExtractionLimits();
   const outer = path.join(tempRoot, "installer-outer");
   const payload = path.join(tempRoot, "installer-payload");
   fs.mkdirSync(outer, { mode: 0o700 });
   fs.mkdirSync(payload, { mode: 0o700 });
-  const outerResult = runSevenZip(sevenZip, ["x", "-y", `-o${outer}`, installer], tempRoot);
+  const outerBudget = inspectArchiveBudget(sevenZip, installer, tempRoot, extractionLimits);
+  if (outerBudget.status !== "PASS") return { ...outerBudget, mode: "native" };
+  const archiveEntries = outerBudget.entries.filter(
+    (entry) => !entry.directory && path.posix.basename(entry.path).toLowerCase() === "app-64.7z",
+  );
+  if (archiveEntries.length !== 1) return { status: "FAIL", summary: "electron-builder NSIS app-64.7z payload is missing or ambiguous", mode: "native" };
+  const outerResult = runSevenZip(
+    sevenZip,
+    ["x", "-y", "-bb0", "-bd", `-o${outer}`, installer, archiveEntries[0].path],
+    tempRoot,
+  );
   if (outerResult.error?.code === "ETIMEDOUT") return { status: "FAIL", summary: "signed NSIS installer extraction timed out", mode: "native" };
   if (outerResult.error) return { status: "FAIL", summary: "pinned NSIS extractor could not run safely", mode: "native" };
   if (outerResult.status !== 0) return { status: "FAIL", summary: "installer is not a readable electron-builder NSIS artifact", mode: "native" };
   let archives;
   try {
-    archives = findNamedFile(outer, "app-64.7z");
+    archives = findNamedFile(outer, "app-64.7z", extractionLimits);
   } catch (error) {
     return { status: "FAIL", summary: error.message, mode: "native" };
   }
   if (archives.length !== 1) return { status: "FAIL", summary: "electron-builder NSIS app-64.7z payload is missing or ambiguous", mode: "native" };
-  const payloadResult = runSevenZip(sevenZip, ["x", "-y", `-o${payload}`, archives[0]], tempRoot);
+  const payloadBudget = inspectArchiveBudget(sevenZip, archives[0], tempRoot, extractionLimits);
+  if (payloadBudget.status !== "PASS") return { ...payloadBudget, mode: "native" };
+  const payloadResult = runSevenZip(sevenZip, ["x", "-y", "-bb0", "-bd", `-o${payload}`, archives[0]], tempRoot);
   if (payloadResult.error?.code === "ETIMEDOUT") return { status: "FAIL", summary: "signed NSIS payload extraction timed out", mode: "native" };
   if (payloadResult.error) return { status: "FAIL", summary: "pinned NSIS payload extractor could not run safely", mode: "native" };
   if (payloadResult.status !== 0) return { status: "FAIL", summary: "electron-builder NSIS payload could not be extracted", mode: "native" };
   try {
-    const expected = createTreeManifest(unpackedDirectory);
-    const actual = createTreeManifest(payload);
+    const actual = createTreeManifest(payload, { limits: extractionLimits });
+    const expected = createTreeManifest(unpackedDirectory, { limits: extractionLimits });
     if (!manifestsEqual(expected, actual)) return { status: "FAIL", summary: "signed installer payload does not match the inspected win-unpacked tree", mode: "native" };
     return { status: "PASS", summary: "signed NSIS payload exactly matches the inspected win-unpacked tree", mode: "native", manifestSha256: actual.sha256 };
   } catch (error) {
@@ -643,6 +808,7 @@ function classifyNativeSmokeFailure(execution, report) {
 }
 
 module.exports = {
+  DEFAULT_EXTRACTION_LIMITS,
   DEFAULT_POLICY_FILE,
   POLICY_SCHEMA_VERSION,
   absoluteWindowsPowerShell,
@@ -655,6 +821,7 @@ module.exports = {
   createTreeManifest,
   evaluateArtifactPolicy,
   findSevenZipExecutable,
+  inspectArchiveBudget,
   hashFile,
   inspectNativeAuthenticode,
   inspectPeArchitecture,
@@ -662,6 +829,7 @@ module.exports = {
   loadExtractorPolicy,
   manifestsEqual,
   pathInside,
+  validateSevenZipListing,
   runNativePackagedSmoke,
   selectEvidenceProcessEnvironment,
   terminateProcessTree,
