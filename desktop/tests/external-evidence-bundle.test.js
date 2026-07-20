@@ -265,15 +265,92 @@ test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly 
   assert.equal(windows.evidence.nativeEvidenceEligible, false);
   assert.match(renderMarkdown(report), /SmartScreen/);
   assert.deepEqual(report.safety, {
-    localFilesReadOnly: true,
-    networkAttempted: false,
+    evidenceInputFilesModified: false,
+    temporaryFilesWritten: true,
+    localToolExecutionAttempted: true,
+    packagedRuntimeExecutionAttempted: true,
+    localhostHttpAttempted: true,
     packagingAttempted: false,
     databaseCommandAttempted: false,
     recoveryAttempted: false,
     realMessageSendAttempted: false,
-    externalMutationCount: 0,
+    externalMutationIsolation: "minimal environment and temporary roots; not an OS sandbox",
     secretsIncluded: false,
   });
+});
+
+test("runtime smoke is never called before content, publisher policy and installer binding trust", (t) => {
+  const scenarios = [
+    {
+      name: "signature",
+      overrides: { verifySignature: () => ({ status: "NotSigned" }) },
+      expectedBindingCalls: 0,
+    },
+    {
+      name: "policy",
+      overrides: { releasePolicy: { ...TEST_POLICY, identityStatus: "UNCONFIGURED", configured: false } },
+      expectedBindingCalls: 0,
+    },
+    {
+      name: "binding",
+      overrides: { verifyInstallerBinding: () => ({ status: "FAIL", summary: "binding mismatch", mode: "test-only" }) },
+      expectedBindingCalls: 1,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const root = temporaryDirectory(t);
+    writeReports(root);
+    let bindingCalls = 0;
+    let smokeCalls = 0;
+    const report = validate(root, {
+      ...scenario.overrides,
+      verifyInstallerBinding: scenario.overrides.verifyInstallerBinding
+        ? (...args) => { bindingCalls += 1; return scenario.overrides.verifyInstallerBinding(...args); }
+        : () => { bindingCalls += 1; return { status: "PASS", mode: "test-only" }; },
+      runPackagedSmoke: () => { smokeCalls += 1; return { status: "PASS", mode: "test-only" }; },
+    });
+    assert.notEqual(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.PASS, scenario.name);
+    assert.equal(bindingCalls, scenario.expectedBindingCalls, scenario.name);
+    assert.equal(smokeCalls, 0, scenario.name);
+  }
+});
+
+test("trusted Windows checks run in content-signature-binding-smoke order", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  const calls = [];
+  const report = validate(root, {
+    verifySignature: (file, label) => {
+      calls.push(`signature:${label}`);
+      return {
+        status: "Valid", subject: "CN=Smart Kefu Test Publisher", thumbprint: "A".repeat(40),
+        productName: "Smart Kefu", originalFilename: label === "installer" ? "SmartKefu-Setup-0.1.0-x64.exe" : "Smart Kefu.exe",
+        productVersion: "0.1.0",
+      };
+    },
+    verifyInstallerBinding: () => { calls.push("binding"); return { status: "PASS", mode: "test-only" }; },
+    runPackagedSmoke: () => { calls.push("smoke"); return { status: "PASS", mode: "test-only" }; },
+  });
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.PASS);
+  assert.deepEqual(calls, ["signature:installer", "signature:executable", "binding", "smoke"]);
+});
+
+test("content failure prevents signature, installer parsing and runtime execution", (t) => {
+  const root = temporaryDirectory(t);
+  writeReports(root);
+  fs.rmSync(path.join(root, "win-unpacked", "resources", "services", "api", "main.js"));
+  let signatureCalls = 0;
+  let bindingCalls = 0;
+  let smokeCalls = 0;
+  const report = validate(root, {
+    verifySignature: () => { signatureCalls += 1; return { status: "Valid" }; },
+    verifyInstallerBinding: () => { bindingCalls += 1; return { status: "PASS", mode: "test-only" }; },
+    runPackagedSmoke: () => { smokeCalls += 1; return { status: "PASS", mode: "test-only" }; },
+  });
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+  assert.equal(signatureCalls, 0);
+  assert.equal(bindingCalls, 0);
+  assert.equal(smokeCalls, 0);
 });
 
 test("old revision, expired evidence and v1 schema remain BLOCKED", (t) => {

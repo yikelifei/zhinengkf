@@ -13,7 +13,12 @@ const {
   desktopReadinessChallengeHeaders,
   desktopSessionCookieHeader,
 } = require("../apps/electron/packaged-runtime");
-const { selectEvidenceProcessEnvironment } = require("./windows-evidence-chain");
+const {
+  cleanupPrivateTemp,
+  createPrivateTemp,
+  selectEvidenceProcessEnvironment,
+  terminateProcessTree,
+} = require("./windows-evidence-chain");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.resolve(process.env.PACKAGED_SMOKE_OUTPUT_DIR || path.join(root, "release", "windows"));
@@ -23,13 +28,16 @@ const executable = path.join(unpackedDir, "Smart Kefu.exe");
 const apiEntry = path.join(resourcesDir, "services", "api", "main.js");
 const webEntry = path.join(resourcesDir, "services", "web", "apps", "web", "server.js");
 const readOnlyRoot = path.join(resourcesDir, "services", "runtime-root");
-const smokeRoot = path.resolve(process.env.PACKAGED_SMOKE_RUNTIME_DIR || path.join(outputDir, ".packaged-full-stack-smoke"));
+let smokeRoot = "";
 const reportFile = path.resolve(process.env.PACKAGED_SMOKE_REPORT_FILE || path.join(outputDir, "verification", "packaged-api-smoke.json"));
 const apiPort = Number(process.env.PACKAGED_API_SMOKE_PORT || 32191);
 const webPort = Number(process.env.PACKAGED_WEB_SMOKE_PORT || 32190);
 const apiHealthUrl = `http://127.0.0.1:${apiPort}/api/health`;
 const overviewUrl = `http://127.0.0.1:${webPort}/overview`;
 const proxyHealthUrl = `http://127.0.0.1:${webPort}/api/health`;
+const MAX_CAPTURE_BYTES = 256 * 1024;
+const MAX_HTTP_BODY_BYTES = 16 * 1024 * 1024;
+const HTTP_REQUEST_DEADLINE_MS = 10_000;
 
 if (require.main === module) {
   main().catch((error) => {
@@ -55,8 +63,8 @@ async function main() {
     if (!fs.existsSync(required)) throw new Error(`packaged full-stack smoke input missing: ${required}`);
   }
 
-  fs.rmSync(smokeRoot, { recursive: true, force: true });
-  fs.mkdirSync(smokeRoot, { recursive: true });
+  const smokeTemp = createSmokeWorkspace();
+  smokeRoot = smokeTemp.tempRoot;
   const token = crypto.randomBytes(32).toString("hex");
   const desktopWebSessionProof = crypto.randomBytes(32).toString("hex");
   const commonEnv = selectEvidenceProcessEnvironment({
@@ -149,7 +157,7 @@ async function main() {
     throw new Error(`${error.message}; ${evidence}`);
   } finally {
     await Promise.all(processes.reverse().map(stopChild));
-    fs.rmSync(smokeRoot, { recursive: true, force: true });
+    cleanupPrivateTemp(smokeTemp);
   }
 }
 
@@ -181,33 +189,48 @@ async function verifyPackagedSharp(env) {
   return fingerprint;
 }
 
-function spawnCapture(command, args, env, cwd) {
+function spawnCapture(command, args, env, cwd, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", reject);
-    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+    let capturedBytes = 0;
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      callback(value);
+    };
+    const timeout = setTimeout(() => {
+      terminateProcessTree(child)
+        .then(() => finish(reject, new Error(`packaged child timed out after ${timeoutMs}ms`)))
+        .catch((error) => finish(reject, error));
+    }, timeoutMs);
+    const capture = (target, chunk) => {
+      capturedBytes += chunk.length;
+      if (capturedBytes > MAX_CAPTURE_BYTES) {
+        terminateProcessTree(child)
+          .then(() => finish(reject, new Error("packaged child output exceeded the capture budget")))
+          .catch((error) => finish(reject, error));
+        return target;
+      }
+      return `${target}${chunk}`;
+    };
+    child.stdout.on("data", (chunk) => { stdout = capture(stdout, chunk); });
+    child.stderr.on("data", (chunk) => { stderr = capture(stderr, chunk); });
+    child.once("error", (error) => finish(reject, error));
+    child.once("exit", (code) => finish(resolve, { code, stdout, stderr }));
   });
 }
 
-function stopChild(child) {
-  if (child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, 5000);
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    try {
-      child.kill();
-    } catch {
-      clearTimeout(timeout);
-      resolve();
-    }
-  });
+function createSmokeWorkspace() {
+  return createPrivateTemp("smart-kefu-packaged-smoke-");
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  await terminateProcessTree(child);
 }
 
 function spawnService(name, entry, cwd, env) {
@@ -243,17 +266,34 @@ function waitForUrl(child, url, timeoutMs, validateResponse = validateExactHttp2
 
 function requestUrl(url, options = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      callback(value);
+    };
     const request = http.get(url, { timeout: 1500, ...options }, (response) => {
       const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve({
+      let totalBytes = 0;
+      response.on("data", (chunk) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_HTTP_BODY_BYTES) {
+          response.destroy(new Error("packaged HTTP response exceeded the body budget"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("error", (error) => finish(reject, error));
+      response.on("end", () => finish(resolve, {
         statusCode: response.statusCode || 0,
         headers: response.headers,
         body: Buffer.concat(chunks),
       }));
     });
+    const deadline = setTimeout(() => request.destroy(new Error(`deadline requesting ${url}`)), HTTP_REQUEST_DEADLINE_MS);
     request.on("timeout", () => request.destroy(new Error(`timeout requesting ${url}`)));
-    request.on("error", reject);
+    request.on("error", (error) => finish(reject, error));
   });
 }
 
@@ -273,6 +313,7 @@ function redact(value) {
 }
 
 module.exports = {
+  createSmokeWorkspace,
   main,
   requestUrl,
   waitForUrl,
