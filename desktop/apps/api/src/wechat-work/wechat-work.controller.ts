@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Header, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Header, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 import { WechatWorkService } from "./wechat-work.service";
 
 @Controller("wechat-work")
@@ -28,11 +29,15 @@ export class WechatWorkController {
   }
 
   @Post("kf/sync")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
   syncCustomerServiceMessages(@Body() payload: { token?: string; cursor?: string; limit?: number; openKfid?: string }) {
     return this.wechatWork.syncCustomerServiceMessages(payload || {});
   }
 
   @Post("kf/send-text")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   sendCustomerServiceText(
     @Body() payload: { externalUserId?: string; openKfid?: string; text?: string; requestId?: string },
   ) {
@@ -40,6 +45,8 @@ export class WechatWorkController {
   }
 
   @Post("kf/send-images")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   sendCustomerServiceImages(
     @Body() payload: { externalUserId?: string; openKfid?: string; text?: string; imagePaths?: string[]; designJobId?: string },
   ) {
@@ -47,11 +54,15 @@ export class WechatWorkController {
   }
 
   @Post("kf/send-tasks/:id/dispatch")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
   dispatchCustomerServiceText(@Param("id") id: string) {
     return this.wechatWork.dispatchCustomerServiceText(id);
   }
 
   @Get("kf/audit")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
   listAuditLogs(@Query("limit") limit?: string) {
     return this.wechatWork.listAuditLogs(limit ? Number(limit) : undefined);
   }

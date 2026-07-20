@@ -1,8 +1,16 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { ApplySkillSuggestionsPayload, TrainingService } from "./training.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  OperatorAccessGuard,
+  RequireOperatorCapability,
+  TrustedOperator,
+} from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("training")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class TrainingController {
   constructor(private readonly training: TrainingService) {}
 
@@ -16,6 +24,7 @@ export class TrainingController {
   }
 
   @Post("chat-imports")
+  @RequireOperatorCapability("manage_training")
   importChat(
     @Body()
     payload: {
@@ -75,6 +84,7 @@ export class TrainingController {
   }
 
   @Post("samples/:id/review")
+  @RequireOperatorCapability("manage_training")
   reviewSample(
     @Param("id") id: string,
     @Body()
@@ -90,11 +100,14 @@ export class TrainingController {
       score?: number;
       skillHints?: string[] | string;
     } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.training.reviewSample(id, payload);
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload;
+    return this.training.reviewSample(id, { ...trustedPayload, reviewer: principal.id });
   }
 
   @Post("samples/batch-review")
+  @RequireOperatorCapability("manage_training")
   batchReviewSamples(
     @Body()
     payload: {
@@ -104,8 +117,10 @@ export class TrainingController {
       note?: string;
       expectedBySampleId?: Record<string, ExpectedIdentityPayload>;
     },
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.training.batchReviewSamples(payload || {});
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || {};
+    return this.training.batchReviewSamples({ ...trustedPayload, reviewer: principal.id });
   }
 
   @Get("skill-suggestions")
@@ -126,6 +141,7 @@ export class TrainingController {
   }
 
   @Post("skill-suggestions/apply")
+  @RequireOperatorCapability("manage_training")
   applySkillSuggestions(
     @Body()
     payload: ApplySkillSuggestionsPayload,
