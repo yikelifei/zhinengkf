@@ -141,16 +141,54 @@ export function sanitizeInboundOperationAttachments(value: unknown) {
     "kind",
     "mimeType",
   ];
-  return value.slice(0, 50).map((item) => {
-    if (typeof item === "string") return { assetId: item.trim().slice(0, 256) };
-    if (!item || typeof item !== "object" || Array.isArray(item)) return {};
+  return value.slice(0, 50).flatMap((item) => {
+    if (typeof item === "string") {
+      const assetId = sanitizeInboundBusinessIdentifier(item, 256);
+      return assetId ? [{ assetId }] : [];
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const source = item as Record<string, unknown>;
-    return Object.fromEntries(
+    const sanitized = Object.fromEntries(
       allowedKeys
         .filter((key) => typeof source[key] === "string" && String(source[key]).trim())
-        .map((key) => [key, String(source[key]).trim().slice(0, 512)]),
+        .map((key) => [key, sanitizeInboundBusinessIdentifier(source[key], 512)])
+        .filter((entry): entry is [string, string] => Boolean(entry[1])),
     );
+    return Object.keys(sanitized).length ? [sanitized] : [];
   });
+}
+
+export function sanitizeInboundOperationAssetIds(value: unknown, options: { rejectInvalid?: boolean } = {}) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    if (options.rejectInvalid) throw new BadRequestException("assetIds must be an array of safe business identifiers");
+    return [];
+  }
+  const sanitized: string[] = [];
+  for (const item of value.slice(0, 100)) {
+    if (typeof item !== "string") {
+      if (options.rejectInvalid) throw new BadRequestException("assetIds must contain only strings");
+      continue;
+    }
+    const assetId = sanitizeInboundBusinessIdentifier(item, 256);
+    if (!assetId) {
+      if (options.rejectInvalid) {
+        throw new BadRequestException("assetIds must not contain credentials, endpoints, file URIs, absolute paths or control characters");
+      }
+      continue;
+    }
+    sanitized.push(assetId);
+  }
+  return [...new Set(sanitized)];
+}
+
+function sanitizeInboundBusinessIdentifier(value: unknown, maxLength: number) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > maxLength) return "";
+  if (/[\u0000-\u001f\u007f]/.test(text)) return "";
+  if (/^(?:[a-z]:[\\/]|\\\\|\/\/|\/|file:|https?:\/\/|wss?:\/\/|tcp:\/\/)/i.test(text)) return "";
+  if (/(?:^|[?&;\s])(?:token|access_token|password|passwd|secret)\s*[:=]/i.test(text)) return "";
+  return text;
 }
 
 export function inboundOperationStageAtLeast(current: unknown, expected: unknown) {

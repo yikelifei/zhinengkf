@@ -23,6 +23,7 @@ import {
   readRequestOperationMetadata,
   requestOperationMetadata,
   sanitizeInboundOperationAttachments,
+  sanitizeInboundOperationAssetIds,
   stableOperationKey,
 } from "../shared/operation-idempotency";
 import { rules } from "../shared/rules";
@@ -72,6 +73,8 @@ const {
 
 const BRIDGE_OUTBOX_VERSION = "wechat_bridge_outbox_v1";
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
+const INBOUND_OPERATION_LEASE_MS = 5 * 60 * 1000;
+const INBOUND_OPERATION_HEARTBEAT_MS = 30 * 1000;
 
 type IdentityFilter = {
   wechatAccountId?: string;
@@ -1023,6 +1026,7 @@ export class WechatDispatchService {
   }) {
     const externalId = String(payload.externalId || "").trim();
     if (!externalId) throw new BadRequestException("externalId is required");
+    const safeAssetIds = sanitizeInboundOperationAssetIds(payload.assetIds, { rejectInvalid: true });
     if (!appConfig.useLocalStore) return this.processPrismaInboundMessage(payload);
     const conversation = this.resolveInboundConversation(payload);
     const claimToken = payload.inboundClaimToken || randomUUID();
@@ -1039,16 +1043,16 @@ export class WechatDispatchService {
       externalId,
       requestFingerprint,
       normalizedPayload: this.safeInboundOperationPayload(payload),
-      leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      leaseExpiresAt: this.nextInboundLeaseExpiry(),
     });
-    if (claim.completed) return this.completedInboundReplay(conversation.wechatAccountId, externalId, claim.operation);
+    if (claim.completed) return this.hydrateCompletedInboundReplay(claim.operation);
     if (!claim.claimed) return this.inProgressInboundReplay(claim.operation);
     const inboundOperation = claim.operation;
     if (inboundOperationStageAtLeast(inboundOperation.stage, "effects_committed")) {
       return this.resumeLocalCommittedInbound(inboundOperation, claimToken);
     }
     try {
-    const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
+    const assetIds = normalizeAssetIds([...safeAssetIds, ...(payload.attachments || [])]);
     const messagePayload = {
       conversationId: conversation.id,
       customerId: payload.customerId || conversation.customerId,
@@ -1155,7 +1159,7 @@ export class WechatDispatchService {
         notification: null,
         bundleRecommendation: null,
       };
-      result.notification = await this.notifications.create(
+      result.notification = await this.withInboundEffectLease(inboundOperation.id, claimToken, () => this.notifications.create(
         "warning",
         "人工接管会话收到新消息",
         `${conversation.title}：客户有新消息，请人工继续处理。`,
@@ -1166,26 +1170,30 @@ export class WechatDispatchService {
           reason: plan.reason,
           effectKey: `${inboundOperation.id}:manual-lock-notification`,
         },
-      );
+      ));
       return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
     }
 
-    const imageSelectionResult = await this.handleInboundImageSelection({
-      operationId: inboundOperation.id,
-      conversation,
-      message,
-      route,
-      payload,
-    });
+    const imageSelectionResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
+      this.handleInboundImageSelection({
+        operationId: inboundOperation.id,
+        claimToken,
+        operationResult: inboundOperation.result,
+        conversation,
+        message,
+        route,
+        payload,
+      }));
     if (imageSelectionResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, imageSelectionResult);
 
-    const quoteAcceptanceResult = await this.handleInboundQuoteAcceptance({
-      operationId: inboundOperation.id,
-      conversation,
-      message,
-      route,
-      payload,
-    });
+    const quoteAcceptanceResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
+      this.handleInboundQuoteAcceptance({
+        operationId: inboundOperation.id,
+        conversation,
+        message,
+        route,
+        payload,
+      }));
     if (quoteAcceptanceResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, quoteAcceptanceResult);
 
     const bundleRecommendation =
@@ -1204,63 +1212,70 @@ export class WechatDispatchService {
     };
 
     if (plan.shouldNotifyHuman) {
-      result.manualLock = await this.lockConversationForManualReview(conversation, {
-        reviewer: "system",
-        reason: plan.reason,
-        effectKey: `${inboundOperation.id}:manual-review-lock`,
-      });
-      result.notification = await this.notifications.create(
-        "warning",
-        "客户消息需要人工处理",
-        result.manualLock.blockedSendTasks.length
-          ? `${conversation.title}：${plan.reason}。已暂停 ${result.manualLock.blockedSendTasks.length} 个待发送任务。`
-          : `${conversation.title}：${plan.reason}`,
-        {
-          conversationId: conversation.id,
-          customerId: conversation.customerId,
-          routeId: route.id,
+      const effects = await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
+        const manualLock = await this.lockConversationForManualReview(conversation, {
+          reviewer: "system",
           reason: plan.reason,
-          blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
-          inFlightSendTaskIds: result.manualLock.inFlightSendTasks.map((task: any) => task.id),
-          effectKey: `${inboundOperation.id}:manual-review-notification`,
-        },
-      );
+          effectKey: `${inboundOperation.id}:manual-review-lock`,
+        });
+        const notification = await this.notifications.create(
+          "warning",
+          "客户消息需要人工处理",
+          manualLock.blockedSendTasks.length
+            ? `${conversation.title}：${plan.reason}。已暂停 ${manualLock.blockedSendTasks.length} 个待发送任务。`
+            : `${conversation.title}：${plan.reason}`,
+          {
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            routeId: route.id,
+            reason: plan.reason,
+            blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
+            inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
+            effectKey: `${inboundOperation.id}:manual-review-notification`,
+          },
+        );
+        return { manualLock, notification };
+      });
+      result.manualLock = effects.manualLock;
+      result.notification = effects.notification;
       return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
     }
 
-    if (plan.shouldCreateDesignJob) {
-      result.designJob = this.createDesignDraftFromInbound({
-        messageId: message.id,
-        conversation,
-        route,
-        assetIds,
-        bundleRecommendation,
-        customerText: payload.text || "",
-      });
-    }
+    await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
+      if (plan.shouldCreateDesignJob) {
+        result.designJob = this.createDesignDraftFromInbound({
+          messageId: message.id,
+          conversation,
+          route,
+          assetIds,
+          bundleRecommendation,
+          customerText: payload.text || "",
+        });
+      }
 
-    if (plan.shouldQueueReply) {
-      result.sendTask = this.createLocalSendTask({
-        operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
-        wechatAccountId: conversation.wechatAccountId,
-        conversationId: conversation.id,
-        customerId: conversation.customerId,
-        designJobId: result.designJob?.id,
-        payload: {
-          kind: "text",
-          text: buildInboundReplyText(route, plan),
-          routeId: route.id,
-          inboundMessageId: message.id,
-          automationPlan: plan.type,
-          routingPolicy: plan.routingPolicy || route.routingPolicy || null,
-        },
-        guardSnapshot: {
-          requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
-          policy: "single-account-serial-queue",
-          reason: `inbound-${plan.reason}`,
-        },
-      });
-    }
+      if (plan.shouldQueueReply) {
+        result.sendTask = this.createLocalSendTask({
+          operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+          designJobId: result.designJob?.id,
+          payload: {
+            kind: "text",
+            text: buildInboundReplyText(route, plan),
+            routeId: route.id,
+            inboundMessageId: message.id,
+            automationPlan: plan.type,
+            routingPolicy: plan.routingPolicy || route.routingPolicy || null,
+          },
+          guardSnapshot: {
+            requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+            policy: "single-account-serial-queue",
+            reason: `inbound-${plan.reason}`,
+          },
+        });
+      }
+    });
 
     return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
     } catch (error) {
@@ -1277,9 +1292,41 @@ export class WechatDispatchService {
       text: String(payload?.text || ""),
       externalId: String(payload?.externalId || ""),
       attachments: sanitizeInboundOperationAttachments(payload?.attachments),
-      assetIds: Array.isArray(payload?.assetIds) ? payload.assetIds : [],
+      assetIds: sanitizeInboundOperationAssetIds(payload?.assetIds),
       createdAt: payload?.createdAt || null,
     };
+  }
+
+  private nextInboundLeaseExpiry() {
+    return new Date(Date.now() + INBOUND_OPERATION_LEASE_MS).toISOString();
+  }
+
+  private async withInboundEffectLease<T>(operationId: string, claimToken: string, effect: () => Promise<T> | T) {
+    const renew = () => this.persistence.renewInboundOperationLease(
+      operationId,
+      claimToken,
+      this.nextInboundLeaseExpiry(),
+    );
+    await renew();
+    let heartbeatError: unknown = null;
+    let pendingHeartbeat: Promise<unknown> = Promise.resolve();
+    const heartbeat = setInterval(() => {
+      pendingHeartbeat = pendingHeartbeat
+        .then(() => renew())
+        .catch((error) => {
+          heartbeatError ||= error;
+        });
+    }, INBOUND_OPERATION_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    try {
+      const result = await effect();
+      await pendingHeartbeat;
+      if (heartbeatError) throw heartbeatError;
+      await renew();
+      return result;
+    } finally {
+      clearInterval(heartbeat);
+    }
   }
 
   private async completeInboundProcessing(operationId: string, claimToken: string, result: any) {
@@ -1290,6 +1337,8 @@ export class WechatDispatchService {
       designJobId: result?.designJob?.id || null,
       notificationId: result?.notification?.id || null,
       outcome: result?.plan?.type || (result?.duplicate ? "duplicate" : "processed"),
+      plan: result?.plan || null,
+      bundleRecommendation: result?.bundleRecommendation || null,
     };
     await this.persistence.advanceInboundOperation(operationId, claimToken, {
       stage: "effects_committed",
@@ -1306,27 +1355,56 @@ export class WechatDispatchService {
     const message = this.localStore.findInboundMessageByExternalId(operation.wechatAccountId, operation.externalId);
     if (!message) throw new BadRequestException("effects-committed inbound operation is missing its durable message");
     await this.persistence.completeInboundOperation(operation.id, claimToken, operation.result || {});
-    return { ...this.completedInboundReplay(operation.wechatAccountId, operation.externalId, operation), recovered: true };
+    return this.hydrateCompletedInboundReplay(operation, true);
   }
 
-  private completedInboundReplay(wechatAccountId: string, externalId: string, operation: any) {
-    const message = this.localStore.findInboundMessageByExternalId(wechatAccountId, externalId);
-    if (!message) throw new BadRequestException("completed inbound operation is missing its durable message");
+  private async hydrateCompletedInboundReplay(operation: any, recovered = false) {
+    const durable = isPlainObject(operation?.result) ? operation.result : {};
+    const messageId = String(durable.messageId || operation?.messageId || "").trim();
+    const routeEvaluationId = String(durable.routeEvaluationId || operation?.routeEvaluationId || "").trim();
+    const sendTaskId = String(durable.sendTaskId || operation?.sendTaskId || "").trim();
+    const designJobId = String(durable.designJobId || "").trim();
+    const notificationId = String(durable.notificationId || "").trim();
+    const [message, route, sendTask, designJob, notification] = await Promise.all([
+      this.persistence.findInboundMessageByExternalId(operation.wechatAccountId, operation.externalId),
+      routeEvaluationId ? this.persistence.getRouteEvaluation(routeEvaluationId) : null,
+      sendTaskId ? this.persistence.getSendTask(sendTaskId) : null,
+      designJobId ? this.persistence.getDesignJob(designJobId) : null,
+      notificationId ? this.persistence.getNotification(notificationId) : null,
+    ]);
+    if (!message || (messageId && String(message.id || "") !== messageId)) {
+      throw new BadRequestException("completed inbound operation is missing its durable message");
+    }
+    for (const [label, id, value] of [
+      ["route evaluation", routeEvaluationId, route],
+      ["send task", sendTaskId, sendTask],
+      ["design job", designJobId, designJob],
+      ["notification", notificationId, notification],
+    ] as const) {
+      if (id && !value) throw new BadRequestException(`completed inbound operation is missing its durable ${label}`);
+    }
+    const outcome = String(durable.outcome || "processed");
+    const plan = isPlainObject(durable.plan)
+      ? durable.plan
+      : {
+          type: outcome,
+          reason: "inbound_operation_completed",
+          shouldQueueReply: Boolean(sendTaskId),
+          shouldCreateDesignJob: Boolean(designJobId),
+          shouldNotifyHuman: Boolean(notificationId),
+        };
     return {
       duplicate: true,
+      processing: false,
+      recovered,
       message,
-      route: null,
-      plan: {
-        type: "duplicate_ignored",
-        reason: "inbound_operation_completed",
-        shouldQueueReply: false,
-        shouldCreateDesignJob: false,
-        shouldNotifyHuman: false,
-      },
-      sendTask: null,
-      designJob: null,
-      notification: null,
-      bundleRecommendation: null,
+      route,
+      plan,
+      outcome,
+      sendTask,
+      designJob,
+      notification,
+      bundleRecommendation: durable.bundleRecommendation || null,
       operationId: operation?.id || null,
     };
   }
@@ -1403,7 +1481,8 @@ export class WechatDispatchService {
       throw new BadRequestException("message customer binding invalid: customer does not match conversation");
     }
 
-    const assetIds = normalizeAssetIds([...(payload.assetIds || []), ...(payload.attachments || [])]);
+    const safeAssetIds = sanitizeInboundOperationAssetIds(payload.assetIds, { rejectInvalid: true });
+    const assetIds = normalizeAssetIds([...safeAssetIds, ...(payload.attachments || [])]);
     if (assetIds.length) {
       const assets = await (this.prisma as any).designAsset.findMany({ where: { id: { in: assetIds } } });
       for (const assetId of assetIds) {
@@ -1428,12 +1507,10 @@ export class WechatDispatchService {
       externalId,
       requestFingerprint,
       normalizedPayload: this.safeInboundOperationPayload(payload),
-      leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      leaseExpiresAt: this.nextInboundLeaseExpiry(),
     });
     if (claim.completed) {
-      const message = await this.persistence.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
-      if (!message) throw new BadRequestException("completed inbound operation is missing its durable message");
-      return { ...this.inProgressInboundReplay(claim.operation), processing: false, message };
+      return this.hydrateCompletedInboundReplay(claim.operation);
     }
     if (!claim.claimed) return this.inProgressInboundReplay(claim.operation);
     const inboundOperation = claim.operation;
@@ -1441,7 +1518,7 @@ export class WechatDispatchService {
       const message = await this.persistence.findInboundMessageByExternalId(conversation.wechatAccountId, externalId);
       if (!message) throw new BadRequestException("effects-committed inbound operation is missing its durable message");
       await this.persistence.completeInboundOperation(inboundOperation.id, claimToken, inboundOperation.result || {});
-      return { ...this.inProgressInboundReplay(inboundOperation), processing: false, recovered: true, message };
+      return this.hydrateCompletedInboundReplay(inboundOperation, true);
     }
 
     try {
@@ -1510,13 +1587,16 @@ export class WechatDispatchService {
       stage: "routed",
       routeEvaluationId: route.id,
     });
-    const selectionResult = await this.handlePrismaInboundImageSelection({
-      operationId: inboundOperation.id,
-      conversation,
-      message,
-      route,
-      payload,
-    });
+    const selectionResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
+      this.handlePrismaInboundImageSelection({
+        operationId: inboundOperation.id,
+        claimToken,
+        operationResult: inboundOperation.result,
+        conversation,
+        message,
+        route,
+        payload,
+      }));
     if (selectionResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, selectionResult);
     const plan = planInboundAutomation({
       route: conversation.manualLocked ? { ...route, conversationManualLocked: true } : route,
@@ -1524,55 +1604,58 @@ export class WechatDispatchService {
       assetIds,
     });
     let sendTask: any = null;
-    if (!conversation.manualLocked && plan.shouldQueueReply) {
-      const sendBinding = await this.assertSendTaskBinding({
-        wechatAccountId: conversation.wechatAccountId,
-        conversationId: conversation.id,
-      });
-      sendTask = await this.persistence.createSendTask({
-        operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
-        wechatAccountId: conversation.wechatAccountId,
-        conversationId: conversation.id,
-        customerId: conversation.customerId,
-        payload: {
-          kind: "text",
-          text: buildInboundReplyText(route, plan),
-          routeId: route.id,
-          inboundMessageId: message.id,
-          automationPlan: plan.type,
-          routingPolicy: plan.routingPolicy || route.routingPolicy || null,
-        },
-        guardSnapshot: {
-          status: "pending",
-          checks: [],
-          requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
-          policy: "single-account-serial-queue",
-          reason: `inbound-${plan.reason}`,
-          binding: sendBinding,
-        },
-      });
-    }
-    if (plan.shouldNotifyHuman || conversation.manualLocked) {
-      await this.notifications.create(
-        "warning",
-        conversation.manualLocked ? "人工接管会话收到新消息" : "客户消息需要人工处理",
-        `${conversation.title || conversation.id}：${plan.reason}`,
-        {
+    let notification: any = null;
+    await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
+      if (!conversation.manualLocked && plan.shouldQueueReply) {
+        const sendBinding = await this.assertSendTaskBinding({
+          wechatAccountId: conversation.wechatAccountId,
+          conversationId: conversation.id,
+        });
+        sendTask = await this.persistence.createSendTask({
+          operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
+          wechatAccountId: conversation.wechatAccountId,
           conversationId: conversation.id,
           customerId: conversation.customerId,
-          routeId: route.id,
-          reason: plan.reason,
-          effectKey: `${inboundOperation.id}:human-review-notification`,
-        },
-      );
-    }
+          payload: {
+            kind: "text",
+            text: buildInboundReplyText(route, plan),
+            routeId: route.id,
+            inboundMessageId: message.id,
+            automationPlan: plan.type,
+            routingPolicy: plan.routingPolicy || route.routingPolicy || null,
+          },
+          guardSnapshot: {
+            status: "pending",
+            checks: [],
+            requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+            policy: "single-account-serial-queue",
+            reason: `inbound-${plan.reason}`,
+            binding: sendBinding,
+          },
+        });
+      }
+      if (plan.shouldNotifyHuman || conversation.manualLocked) {
+        notification = await this.notifications.create(
+          "warning",
+          conversation.manualLocked ? "人工接管会话收到新消息" : "客户消息需要人工处理",
+          `${conversation.title || conversation.id}：${plan.reason}`,
+          {
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            routeId: route.id,
+            reason: plan.reason,
+            effectKey: `${inboundOperation.id}:human-review-notification`,
+          },
+        );
+      }
+    });
     const result = {
       message,
       route,
       plan,
       sendTask,
       designJob: null,
-      notification: null,
+      notification,
       bundleRecommendation: null,
     };
     return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
@@ -1609,11 +1692,41 @@ export class WechatDispatchService {
 
   private async handlePrismaInboundImageSelection(params: {
     operationId: string;
+    claimToken: string;
+    operationResult?: unknown;
     conversation: any;
     message: any;
     route: any;
     payload: { text?: string; attachments?: Array<Record<string, unknown>> };
   }) {
+    const recovery = inboundHighValueSelectionRecovery(params.operationResult);
+    if (recovery) {
+      const recoveryJob = await (this.prisma as any).designJob.findUnique({
+        where: { id: recovery.designJobId },
+        include: { images: true, revisions: true, customer: true, conversation: true },
+      });
+      if (
+        !recoveryJob ||
+        String(recoveryJob.wechatAccountId || "") !== String(params.conversation.wechatAccountId || "") ||
+        String(recoveryJob.conversationId || "") !== String(params.conversation.id || "") ||
+        String(recoveryJob.customerId || "") !== String(params.conversation.customerId || "")
+      ) {
+        throw new BadRequestException("high-value inbound selection recovery lost its durable design job binding");
+      }
+      const recoveryCandidate = (recoveryJob.images || []).find(
+        (image: any) => String(image.id || "") === recovery.selectedImageId,
+      );
+      if (!recoveryCandidate) {
+        throw new BadRequestException("high-value inbound selection recovery lost its durable image binding");
+      }
+      return this.finishPrismaHighValueSelection(params, recoveryJob, recovery.selectedImageId, {
+        action: "select_image",
+        ok: true,
+        reviewRequired: false,
+        reason: "high_value_customer_selected_image",
+        result: { candidate: recoveryCandidate, imageId: recovery.selectedImageId, source: "durable_recovery" },
+      });
+    }
     if (this.hasInboundPaymentProof(params.payload)) return null;
     const identity = {
       wechatAccountId: String(params.conversation?.wechatAccountId || "").trim(),
@@ -1707,7 +1820,36 @@ export class WechatDispatchService {
             : { status: "quote_created" },
           include: { images: true, revisions: true, customer: true, conversation: true },
         });
-        if (highValueReview) return { job: nextJob, quote: null };
+        if (highValueReview) {
+          const recoveryEffect = {
+            kind: "high_value_image_selection",
+            phase: "selection_committed",
+            designJobId: current.id,
+            selectedImageId,
+            routeEvaluationId: params.route.id,
+          };
+          if (params.claimToken) {
+            const fenced = await tx.inboundMessageOperation.updateMany({
+              where: {
+                id: params.operationId,
+                status: "processing",
+                claimToken: params.claimToken,
+                leaseExpiresAt: { gt: new Date() },
+              },
+              data: {
+                result: {
+                  ...(isPlainObject(params.operationResult) ? params.operationResult : {}),
+                  recoveryEffect,
+                },
+                leaseExpiresAt: new Date(this.nextInboundLeaseExpiry()),
+              },
+            });
+            if (fenced.count !== 1) {
+              throw new BadRequestException("inbound operation lease changed before high-value selection commit");
+            }
+          }
+          return { job: nextJob, quote: null };
+        }
         const pricing = prismaQuotePricing(job);
         const quoteStatus = pricing.highValue || !inspectBundleAutomationReadiness(job.bundle || {}).ok
           ? "manual_review"
@@ -1748,51 +1890,7 @@ export class WechatDispatchService {
       throw error;
     }
     if (highValueReview) {
-      const manualLock = await this.lockConversationForManualReview(params.conversation, {
-        reviewer: "system",
-        reason: "high_value_customer_selected_image",
-        effectKey: `${params.operationId}:high-value-selection-lock`,
-      });
-      await this.createReviewLog({
-        targetType: "design_job",
-        targetId: job.id,
-        decision: "high_value_customer_selected_image",
-        reviewer: "system",
-        note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
-        beforeStatus: job.status || "",
-        afterStatus: "manual_review",
-        metadata: {
-          effectKey: `${params.operationId}:high-value-selection-review`,
-          source: "inbound_image_selection",
-          selectedImageId,
-          routeId: params.route.id,
-          ...identity,
-        },
-      });
-      const notification = await this.notifications.create(
-        "warning",
-        "高价值客户已选图，转人工报价",
-        "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
-        { effectKey: `${params.operationId}:high-value-selection-notification`, designJobId: job.id, selectedImageId, routeId: params.route.id, ...identity },
-      );
-      return {
-        message: params.message,
-        route: params.route,
-        plan: {
-          type: "select_design_image",
-          reason: "high_value_customer_selected_image",
-          shouldNotifyHuman: true,
-          shouldCreateDesignJob: false,
-          shouldQueueReply: false,
-        },
-        sendTask: null,
-        designJob: updatedJob,
-        notification,
-        bundleRecommendation: null,
-        selection: selectionPlan,
-        quote: null,
-        manualLock,
-      };
+      return this.finishPrismaHighValueSelection(params, updatedJob, selectedImageId, selectionPlan);
     }
     const quoteSend = await this.tryQueuePrismaLowValueQuoteAfterSelection(quote, updatedJob);
     quote = quoteSend.quote;
@@ -1818,6 +1916,70 @@ export class WechatDispatchService {
       bundleRecommendation: null,
       selection: selectionPlan,
       quote,
+    };
+  }
+
+  private async finishPrismaHighValueSelection(
+    params: { operationId: string; conversation: any; message: any; route: any },
+    job: any,
+    selectedImageId: string,
+    selectionPlan: any,
+  ) {
+    const identity = {
+      wechatAccountId: String(params.conversation?.wechatAccountId || "").trim(),
+      conversationId: String(params.conversation?.id || "").trim(),
+      customerId: String(params.conversation?.customerId || "").trim(),
+    };
+    const manualLock = await this.lockConversationForManualReview(params.conversation, {
+      reviewer: "system",
+      reason: "high_value_customer_selected_image",
+      effectKey: `${params.operationId}:high-value-selection-lock`,
+    });
+    await this.createReviewLog({
+      targetType: "design_job",
+      targetId: job.id,
+      decision: "high_value_customer_selected_image",
+      reviewer: "system",
+      note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
+      beforeStatus: job.status || "",
+      afterStatus: "manual_review",
+      metadata: {
+        effectKey: `${params.operationId}:high-value-selection-review`,
+        source: "inbound_image_selection",
+        selectedImageId,
+        routeId: params.route.id,
+        ...identity,
+      },
+    });
+    const notification = await this.notifications.create(
+      "warning",
+      "高价值客户已选图，转人工报价",
+      "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
+      {
+        effectKey: `${params.operationId}:high-value-selection-notification`,
+        designJobId: job.id,
+        selectedImageId,
+        routeId: params.route.id,
+        ...identity,
+      },
+    );
+    return {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: "select_design_image",
+        reason: "high_value_customer_selected_image",
+        shouldNotifyHuman: true,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: false,
+      },
+      sendTask: null,
+      designJob: job,
+      notification,
+      bundleRecommendation: null,
+      selection: selectionPlan,
+      quote: null,
+      manualLock,
     };
   }
 
@@ -5804,6 +5966,8 @@ export class WechatDispatchService {
 
   private async handleInboundImageSelection(params: {
     operationId: string;
+    claimToken: string;
+    operationResult?: unknown;
     conversation: any;
     message: any;
     route: any;
@@ -5812,6 +5976,26 @@ export class WechatDispatchService {
       attachments?: Array<Record<string, unknown>>;
     };
   }) {
+    const recovery = inboundHighValueSelectionRecovery(params.operationResult);
+    if (recovery) {
+      const recoveryJob = this.localStore.getDesignJob(recovery.designJobId);
+      if (!recoveryJob || !this.jobMatchesConversationIdentity(recoveryJob, params.conversation)) {
+        throw new BadRequestException("high-value inbound selection recovery lost its durable design job binding");
+      }
+      const recoveryCandidate = (recoveryJob.images || []).find(
+        (image: any) => String(image.id || image.imageId || "") === recovery.selectedImageId,
+      );
+      if (!recoveryCandidate) {
+        throw new BadRequestException("high-value inbound selection recovery lost its durable image binding");
+      }
+      return this.finishLocalHighValueSelection(params, recoveryJob, recovery.selectedImageId, {
+        action: "select_image",
+        ok: true,
+        reviewRequired: false,
+        reason: "high_value_customer_selected_image",
+        result: { candidate: recoveryCandidate, imageId: recovery.selectedImageId, source: "durable_recovery" },
+      });
+    }
     const job = this.findLatestSelectableDesignJob(params.conversation);
     const candidates = job ? [...(job.images || [])].sort((a: any, b: any) => Number(a.position || 0) - Number(b.position || 0)) : [];
     if (this.hasInboundPaymentProof(params.payload)) return null;
@@ -5864,58 +6048,28 @@ export class WechatDispatchService {
 
     const selectedImageId = selectionPlan.result.candidate.id || selectionPlan.result.candidate.imageId;
     const feedback = this.inboundSelectionFeedback(params.payload, selectionPlan.result);
-    this.localStore.selectDesignImage(job.id, selectedImageId, feedback);
 
     if (this.shouldManualReviewSelectedJob(job)) {
-      const updated = this.localStore.updateDesignJob(job.id, {
-        status: "manual_review",
-        manualQcRequired: true,
+      const recoveryEffect = {
+        kind: "high_value_image_selection",
+        phase: "selection_committed",
+        designJobId: job.id,
+        selectedImageId: String(selectedImageId),
+        routeEvaluationId: params.route.id,
+      };
+      const updated = this.localStore.commitInboundHighValueSelection({
+        operationId: params.operationId,
+        claimToken: params.claimToken,
+        leaseExpiresAt: this.nextInboundLeaseExpiry(),
+        designJobId: job.id,
+        selectedImageId: String(selectedImageId),
+        feedback,
+        recoveryEffect,
       });
-      result.manualLock = await this.lockConversationForManualReview(params.conversation, {
-        reviewer: "system",
-        reason: "high_value_customer_selected_image",
-        effectKey: `${params.operationId}:high-value-selection-lock`,
-      });
-      this.localStore.createReviewLog({
-        targetType: "design_job",
-        targetId: job.id,
-        decision: "high_value_customer_selected_image",
-        reviewer: "system",
-        note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
-        beforeStatus: job.status || "",
-        afterStatus: "manual_review",
-        metadata: {
-          effectKey: `${params.operationId}:high-value-selection-review`,
-          source: "inbound_image_selection",
-          selectedImageId,
-          routeId: params.route.id,
-          wechatAccountId: params.conversation.wechatAccountId,
-          conversationId: params.conversation.id,
-          customerId: params.conversation.customerId,
-          blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
-          inFlightSendTaskIds: result.manualLock.inFlightSendTasks.map((task: any) => task.id),
-        },
-      });
-      result.designJob = updated;
-      result.notification = await this.notifications.create(
-        "warning",
-        "高价值客户已选图，转人工报价",
-        "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
-        {
-          effectKey: `${params.operationId}:high-value-selection-notification`,
-          designJobId: job.id,
-          selectedImageId,
-          wechatAccountId: params.conversation.wechatAccountId,
-          conversationId: params.conversation.id,
-          customerId: params.conversation.customerId,
-          blockedSendTaskIds: result.manualLock.blockedSendTasks.map((task: any) => task.id),
-          inFlightSendTaskIds: result.manualLock.inFlightSendTasks.map((task: any) => task.id),
-        },
-      );
-      result.plan.shouldNotifyHuman = true;
-      result.plan.reason = "high_value_customer_selected_image";
-      return result;
+      return this.finishLocalHighValueSelection(params, updated, String(selectedImageId), selectionPlan);
     }
+
+    this.localStore.selectDesignImage(job.id, selectedImageId, feedback);
 
     const existingQuote = this.localStore
       .listQuoteDrafts()
@@ -5973,6 +6127,72 @@ export class WechatDispatchService {
       },
     );
     return result;
+  }
+
+  private async finishLocalHighValueSelection(
+    params: { operationId: string; conversation: any; message: any; route: any },
+    job: any,
+    selectedImageId: string,
+    selectionPlan: any,
+  ) {
+    const manualLock = await this.lockConversationForManualReview(params.conversation, {
+      reviewer: "system",
+      reason: "high_value_customer_selected_image",
+      effectKey: `${params.operationId}:high-value-selection-lock`,
+    });
+    this.localStore.createReviewLog({
+      targetType: "design_job",
+      targetId: job.id,
+      decision: "high_value_customer_selected_image",
+      reviewer: "system",
+      note: "高价值客户已选定效果图，需要人工复核报价、利润和跟进话术后再发送。",
+      beforeStatus: job.status || "",
+      afterStatus: "manual_review",
+      metadata: {
+        effectKey: `${params.operationId}:high-value-selection-review`,
+        source: "inbound_image_selection",
+        selectedImageId,
+        routeId: params.route.id,
+        wechatAccountId: params.conversation.wechatAccountId,
+        conversationId: params.conversation.id,
+        customerId: params.conversation.customerId,
+        blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
+        inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
+      },
+    });
+    const notification = await this.notifications.create(
+      "warning",
+      "高价值客户已选图，转人工报价",
+      "客户已明确选择效果图，请人工确认报价、交期和后续跟进。",
+      {
+        effectKey: `${params.operationId}:high-value-selection-notification`,
+        designJobId: job.id,
+        selectedImageId,
+        wechatAccountId: params.conversation.wechatAccountId,
+        conversationId: params.conversation.id,
+        customerId: params.conversation.customerId,
+        blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
+        inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
+      },
+    );
+    return {
+      message: params.message,
+      route: params.route,
+      plan: {
+        type: selectionPlan?.action || "select_image",
+        reason: "high_value_customer_selected_image",
+        shouldNotifyHuman: true,
+        shouldCreateDesignJob: false,
+        shouldQueueReply: false,
+      },
+      sendTask: null,
+      designJob: job,
+      notification,
+      bundleRecommendation: null,
+      selection: selectionPlan,
+      quote: null,
+      manualLock,
+    };
   }
 
   private async handleInboundQuoteAcceptance(params: {
@@ -7559,6 +7779,18 @@ export class WechatDispatchService {
       return winner;
     }
   }
+}
+
+function inboundHighValueSelectionRecovery(value: unknown) {
+  const result = isPlainObject(value) ? value : {};
+  const effect = isPlainObject(result.recoveryEffect) ? result.recoveryEffect : {};
+  if (effect.kind !== "high_value_image_selection" || effect.phase !== "selection_committed") return null;
+  const designJobId = String(effect.designJobId || "").trim();
+  const selectedImageId = String(effect.selectedImageId || "").trim();
+  if (!designJobId || !selectedImageId) {
+    throw new BadRequestException("high-value inbound selection recovery marker is incomplete");
+  }
+  return { designJobId, selectedImageId };
 }
 
 function isOlderThan(value: unknown, now: Date, minutes: number) {

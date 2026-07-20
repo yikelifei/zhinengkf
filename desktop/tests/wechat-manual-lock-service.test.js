@@ -4856,6 +4856,80 @@ test("inbound high value image selection locks conversation and leaves human rev
   assert.match(lockLog.note, /高价值客户已选图/);
 });
 
+test("inbound high value image selection resumes durable lock review and notification after a post-commit crash", async () => {
+  const { localStore, service } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "selection_high_value_crash_recovery_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "total", amount: 15000, quantity: 50 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 35, salePrice: 80 }] },
+    isHighValue: true,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    { imageId: "crash_candidate_1", position: 1, localPath: "C:\\storage\\crash_candidate_1.png" },
+    { imageId: "crash_candidate_2", position: 2, localPath: "C:\\storage\\crash_candidate_2.png" },
+  ]);
+  const payload = {
+    externalId: "manual-lock-selection-high-value-crash-recovery",
+    text: "我选第2张，按这个继续报价",
+    conversationId: "conversation_demo_1",
+  };
+  const originalLock = service.lockConversationForManualReview.bind(service);
+  let injectCrash = true;
+  service.lockConversationForManualReview = async (...args) => {
+    if (injectCrash) {
+      injectCrash = false;
+      throw new Error("injected crash after durable high-value selection commit");
+    }
+    return originalLock(...args);
+  };
+
+  await assert.rejects(
+    () => service.processInboundMessage(payload),
+    /injected crash after durable high-value selection commit/,
+  );
+  const failedDocument = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  const failedOperation = failedDocument.inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+  const committedJob = localStore.getDesignJob(job.id);
+  const conversationBeforeRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(failedOperation.status, "retryable");
+  assert.equal(failedOperation.stage, "routed");
+  assert.equal(failedOperation.result.recoveryEffect.kind, "high_value_image_selection");
+  assert.equal(failedOperation.result.recoveryEffect.designJobId, job.id);
+  assert.equal(failedOperation.result.recoveryEffect.selectedImageId, images[1].id);
+  assert.equal(committedJob.status, "manual_review");
+  assert.equal(committedJob.images.find((image) => image.selected).id, images[1].id);
+  assert.equal(conversationBeforeRecovery.manualLocked, false);
+  assert.equal(localStore.listReviewLogs().filter((log) => log.targetId === job.id && log.decision === "high_value_customer_selected_image").length, 0);
+  assert.equal(localStore.listNotifications().filter((notice) => notice.target?.designJobId === job.id).length, 0);
+
+  service.lockConversationForManualReview = originalLock;
+  const recovered = await service.processInboundMessage(payload);
+  const completedOperation = localStore.getInboundMessageOperation("wechat_demo_1", payload.externalId);
+  const reviewLogs = localStore.listReviewLogs().filter(
+    (log) => log.targetId === job.id && log.decision === "high_value_customer_selected_image",
+  );
+  const notifications = localStore.listNotifications().filter(
+    (notice) => notice.target?.effectKey?.endsWith(":high-value-selection-notification"),
+  );
+  const conversationAfterRecovery = localStore.listConversations().find((item) => item.id === "conversation_demo_1");
+  assert.equal(recovered.plan.reason, "high_value_customer_selected_image");
+  assert.equal(recovered.selection.result.source, "durable_recovery");
+  assert.equal(recovered.designJob.id, job.id);
+  assert.equal(recovered.quote, null);
+  assert.equal(recovered.sendTask, null);
+  assert.equal(conversationAfterRecovery.manualLocked, true);
+  assert.equal(reviewLogs.length, 1);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].target.designJobId, job.id);
+  assert.equal(completedOperation.status, "completed");
+  assert.equal(completedOperation.stage, "completed");
+});
+
 test("inbound high value budget image selection locks conversation even when flag is stale", async () => {
   const { localStore, service } = setupService();
 

@@ -213,17 +213,30 @@ export class WechatPersistence {
   }) {
     const id = payload.operationId || deterministicOperationId("inbound", `${payload.wechatAccountId}:${payload.externalId}`);
     if (this.isLocal) {
-      const claimed = this.localStore.claimInboundMessageOperation({ ...payload, id });
-      if (payload.operationId && claimed.operation?.id !== payload.operationId) {
-        throw new BadRequestException("inbound operation id does not match account-scoped reservation");
+      if (payload.operationId) {
+        const existing = this.localStore.getInboundMessageOperation(payload.wechatAccountId, payload.externalId);
+        this.assertInboundOperationReplay(existing, { ...payload, id });
+        if (
+          existing.status !== "processing" ||
+          existing.claimToken !== payload.claimToken ||
+          new Date(existing.leaseExpiresAt || 0).getTime() <= Date.now()
+        ) {
+          throw new BadRequestException("inbound operation is not owned by the supplied claim");
+        }
+        return { operation: existing, claimed: true, completed: false };
       }
+      const claimed = this.localStore.claimInboundMessageOperation({ ...payload, id });
       return claimed;
     }
     const prisma = this.prisma as any;
     if (payload.operationId) {
       const existing = await prisma.inboundMessageOperation.findUnique({ where: { id: payload.operationId } });
       this.assertInboundOperationReplay(existing, { ...payload, id });
-      if (existing.status !== "processing" || existing.claimToken !== payload.claimToken) {
+      if (
+        existing.status !== "processing" ||
+        existing.claimToken !== payload.claimToken ||
+        new Date(existing.leaseExpiresAt || 0).getTime() <= Date.now()
+      ) {
         throw new BadRequestException("inbound operation is not owned by the supplied claim");
       }
       return { operation: existing, claimed: true, completed: false };
@@ -288,7 +301,12 @@ export class WechatPersistence {
     if (this.isLocal) return this.localStore.updateInboundMessageOperation(id, claimToken, patch);
     const prisma = this.prisma as any;
     const current = await prisma.inboundMessageOperation.findUnique({ where: { id } });
-    if (!current || current.status !== "processing" || current.claimToken !== claimToken) {
+    if (
+      !current ||
+      current.status !== "processing" ||
+      current.claimToken !== claimToken ||
+      new Date(current.leaseExpiresAt || 0).getTime() <= Date.now()
+    ) {
       throw new BadRequestException("inbound operation claim changed before stage commit");
     }
     const nextPatch = { ...patch };
@@ -296,10 +314,32 @@ export class WechatPersistence {
       nextPatch.stage = monotonicInboundOperationStage(current.stage, nextPatch.stage);
     }
     const updated = await prisma.inboundMessageOperation.updateMany({
-      where: { id, status: "processing", claimToken, stage: current.stage },
+      where: { id, status: "processing", claimToken, stage: current.stage, leaseExpiresAt: { gt: new Date() } },
       data: this.jsonOperationPatch(nextPatch),
     });
     if (updated.count !== 1) throw new BadRequestException("inbound operation claim changed before stage commit");
+    return prisma.inboundMessageOperation.findUnique({ where: { id } });
+  }
+
+  async renewInboundOperationLease(id: string, claimToken: string, leaseExpiresAt: string) {
+    const nextLease = new Date(leaseExpiresAt);
+    if (!Number.isFinite(nextLease.getTime()) || nextLease.getTime() <= Date.now()) {
+      throw new BadRequestException("inbound operation lease renewal must expire in the future");
+    }
+    if (this.isLocal) return this.localStore.renewInboundMessageOperationLease(id, claimToken, nextLease.toISOString());
+    const prisma = this.prisma as any;
+    const renewed = await prisma.inboundMessageOperation.updateMany({
+      where: {
+        id,
+        status: "processing",
+        claimToken,
+        leaseExpiresAt: { gt: new Date() },
+      },
+      data: { leaseExpiresAt: nextLease },
+    });
+    if (renewed.count !== 1) {
+      throw new BadRequestException("inbound operation lease is no longer owned by this claim");
+    }
     return prisma.inboundMessageOperation.findUnique({ where: { id } });
   }
 
@@ -497,6 +537,16 @@ export class WechatPersistence {
       where: { id },
       include: { images: { orderBy: [{ position: "asc" }, { id: "asc" }] } },
     });
+  }
+
+  async getRouteEvaluation(id: string) {
+    if (this.isLocal) return this.localStore.getRouteEvaluation(id);
+    return (this.prisma as any).routeEvaluation.findUnique({ where: { id } });
+  }
+
+  async getNotification(id: string) {
+    if (this.isLocal) return this.localStore.getNotification(id);
+    return (this.prisma as any).notification.findUnique({ where: { id } });
   }
 
   async createSendTask(payload: any) {
