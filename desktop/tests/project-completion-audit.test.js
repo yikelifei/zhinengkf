@@ -76,7 +76,14 @@ class DesignPlatformExecutionService {
   async resolveUnknownPublic(executionId, resolution, reviewer) {
     return toPublicExecutionView(await this.resolveUnknown(executionId, resolution, reviewer));
   }
-  async resolveUnsafeRefund() { return row; }
+  async resolveUnsafeRefund() {
+    const resumableCompleted = isResumableCompletedExecution(execution);
+    if (!isUnsafeRefundResolutionEligible(execution)) throw new Error("unsafe refund only");
+    return {
+      ...(resumableCompleted ? { acceptanceStatus: "pending" } : {}),
+      resolvedAt: resumableCompleted ? null : new Date(),
+    };
+  }
   async resolveUnsafeRefundPublic(executionId, resolution, reviewer) {
     return toPublicExecutionView(await this.resolveUnsafeRefund(executionId, resolution, reviewer));
   }
@@ -87,7 +94,9 @@ class DesignPlatformExecutionService {
 function toPublicExecutionView(execution) {
   const availableResolution = execution.status === "outcome_unknown"
     ? "confirmed_not_generated_refunded"
-    : execution.refundStatus === "unknown" ? "confirmed_refunded" : null;
+    : isUnsafeRefundResolutionEligible(execution)
+      ? "confirmed_refunded"
+      : null;
   return {
     id: execution.id, attemptNo: execution.attemptNo, status: execution.status,
     acceptanceStatus: execution.acceptanceStatus, refundStatus: execution.refundStatus,
@@ -96,6 +105,16 @@ function toPublicExecutionView(execution) {
     updatedAt: execution.updatedAt, completedAt: execution.completedAt,
     resolvedAt: execution.resolvedAt, availableResolution,
   };
+}
+function isUnsafeRefundResolutionEligible(execution) {
+  return Boolean(
+    execution
+    && (execution.status === "explicit_failed" || isResumableCompletedExecution(execution))
+    && ["failed", "unknown"].includes(execution.refundStatus),
+  );
+}
+function isResumableCompletedExecution(execution) {
+  return execution?.status === "completed" && execution?.acceptanceStatus === "manual_review";
 }
 "explicit confirmed_not_generated_refunded resolution and reviewer are required";
 "design platform execution outcome requires explicit manual resolution before retry";
@@ -230,7 +249,7 @@ test("completion audit fixture reaches local PASS without network, commands or s
   const root = createPassingFixture();
   write(root, ".env", "INTERNAL_API_TOKEN=never-include-this-secret\n");
   const report = buildAudit(root, { includeExternal: false });
-  assert.equal(report.status, STATUS.PASS);
+  assert.equal(report.status, STATUS.PASS, JSON.stringify(report.results.filter((item) => item.status === STATUS.FAIL)));
   assert.deepEqual(report.safety, {
     networkCalls: false,
     commandsExecuted: false,
@@ -325,6 +344,62 @@ test("design execution public view rejects unexpected DTO fields and unsafe proj
   assert.equal(contract.status, STATUS.FAIL);
   assert.deepEqual(contract.evidence.unexpectedFields, ["requestId"]);
   assert.ok(contract.evidence.forbidden.length > 0);
+});
+
+test("refund reconciliation eligibility stays exact for resumable partial success and unsafe refund states", () => {
+  const baselineRoot = createPassingFixture();
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(baseline.results.find((item) => item.id === "contract.design_execution_public_view").status, STATUS.PASS);
+
+  const mutations = [
+    {
+      name: "completed manual_review with failed refund remains eligible",
+      from: '["failed", "unknown"].includes(execution.refundStatus)',
+      to: '["unknown"].includes(execution.refundStatus)',
+    },
+    {
+      name: "completed manual_review with unknown refund remains eligible",
+      from: '["failed", "unknown"].includes(execution.refundStatus)',
+      to: '["failed"].includes(execution.refundStatus)',
+    },
+    {
+      name: "completed accepted remains ineligible",
+      from: 'execution?.acceptanceStatus === "manual_review"',
+      to: 'execution?.acceptanceStatus === "accepted"',
+    },
+    {
+      name: "safe refunded state remains ineligible",
+      from: '["failed", "unknown"].includes(execution.refundStatus)',
+      to: '["failed", "unknown", "refunded"].includes(execution.refundStatus)',
+    },
+    {
+      name: "refund write path reuses the same eligibility helper",
+      from: "if (!isUnsafeRefundResolutionEligible(execution))",
+      to: "if (!execution)",
+    },
+    {
+      name: "resumable partial success returns to pending local acceptance",
+      from: 'resumableCompleted ? { acceptanceStatus: "pending" } : {}',
+      to: 'resumableCompleted ? { acceptanceStatus: "accepted" } : {}',
+    },
+    {
+      name: "resumable partial success clears resolvedAt for local acceptance",
+      from: "resolvedAt: resumableCompleted ? null : new Date()",
+      to: "resolvedAt: new Date()",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const executionPath = path.join(root, "desktop", "apps", "api", "src", "design-jobs", "design-platform-execution.service.ts");
+    const source = fs.readFileSync(executionPath, "utf8");
+    assert.match(source, new RegExp(mutation.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), mutation.name);
+    fs.writeFileSync(executionPath, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.design_execution_public_view");
+    assert.equal(contract.status, STATUS.FAIL, mutation.name);
+    assert.ok(contract.evidence.missingContracts.length > 0, mutation.name);
+  }
 });
 
 test("design execution GET client must use exact expected identity query keys", () => {
@@ -501,6 +576,8 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   assert.doesNotMatch(status, /个人微信 RPA 账号绑定与业务审计固定走 LocalStore/);
   assert.match(auditGuide, /dhash64:v1.*legacyIdentityHash.*不承诺任意裁剪/s);
   assert.match(designGuide, /DesignExecutionReconciliationPanel.*availableResolution.*不接受 reviewer/s);
+  assert.match(designGuide, /completed \+ acceptanceStatus=manual_review.*acceptanceStatus=pending.*不会再次调用生成接口/s);
+  assert.match(designGuide, /completed \+ accepted.*refunded\/not_required\/credit_bypass.*不会开放该核销动作/s);
   assert.doesNotMatch(designGuide, /客服 UI 入口仍列入下一轮/);
   assert.doesNotMatch(readme, /Excel 文件解析导入。\s*$/m);
 });

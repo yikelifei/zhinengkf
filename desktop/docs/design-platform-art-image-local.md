@@ -61,6 +61,8 @@ run_desktop_real_design.bat
 
 远端明确失败但退款状态为 `failed/unknown` 时，必须先核对退款实际到账，再调用 `POST /api/design-jobs/:id/executions/:executionId/resolve-refund`，携带相同的期望身份和 `resolution=confirmed_refunded`。该接口把退款事实更新为 `refunded` 并用可信操作员身份写审计；仅写 `resolvedAt` 不能解除阻塞。两类核销都不得通过普通“重试”按钮绕过。
 
+若远端只返回部分成功图片，执行会先落为 `completed + acceptanceStatus=manual_review`；当其退款状态仍为 `failed/unknown` 时，同样只允许人工确认退款到账。核销成功后该执行恢复为 `acceptanceStatus=pending`、清除已解决标记，继续对已经持久化的结果做本地验收，不会再次调用生成接口、不会再次扣费。`completed + accepted` 或退款已是 `refunded/not_required/credit_bypass` 的安全状态不会开放该核销动作。
+
 客服工作台的 `DesignExecutionReconciliationPanel` 先用账号/客户/会话期望身份读取服务端白名单执行视图。读取结果不暴露 operation key、远端 request/job id、图片数组、退款原始摘要或远端错误正文；服务端只为当前可核销状态返回精确的 `availableResolution`。UI 只接受 `confirmed_not_generated_refunded` 和 `confirmed_refunded` 两个固定值，无可用动作或未知值时不渲染核销按钮；提交体只含期望身份和固定 resolution，不接受 reviewer。操作需要二次确认、防重复提交，成功后重新读取服务端事实，失败时保持原阻塞状态并显示错误，不会自动重试或自动解除阻塞。
 
 所有可能发起、恢复、取消真实生成或解除重试阻塞的 HTTP 路由都要求内部会话 token 和 `manage_design_executions` 能力；该能力仅授予 admin/supervisor。核销 reviewer 只取服务端 `TrustedOperator.id`，请求体中的同名字段会被丢弃。后台生命周期直接调用 service，不依赖 HTTP guard。
