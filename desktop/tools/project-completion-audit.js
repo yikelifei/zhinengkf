@@ -147,6 +147,16 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/wechat-direct-send-safety.test.js",
   },
   {
+    id: "web.api_failure_truth_tests",
+    title: "Web API failure truth regression tests",
+    file: "desktop/tests/web-api-failure-truth.test.js",
+  },
+  {
+    id: "web.build_freshness_tests",
+    title: "Web build freshness state-machine tests",
+    file: "desktop/tests/web-build-freshness.test.js",
+  },
+  {
     id: "security.desktop_session_proof",
     title: "Electron 桌面会话证明与代理安全测试",
     file: "desktop/tests/internal-api-security.test.js",
@@ -872,6 +882,42 @@ const CONTRACTS = Object.freeze([
       /isUniqueConstraintError\(error\)/,
       /replayChatImport/,
       /async createChatImport\(payload: any, parsed: any\)[\s\S]*?chatImport\.findUnique[\s\S]*?assertStoredOperationIdentityReplay[\s\S]*?return this\.replayChatImport\(existing, operation\);[\s\S]*?const identity = await this\.resolveIdentity/,
+    ],
+  },
+  {
+    id: "contract.web_api_failure_truth",
+    title: "Web design, SKU and asset reads surface API failures instead of sample or empty success",
+    file: "desktop/apps/web/src/lib/api.ts",
+    patterns: [
+      /export async function getDesignJobs[\s\S]{0,900}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
+      /export async function getSkus[\s\S]{0,900}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
+      /export async function getAssets[\s\S]{0,1800}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
+    ],
+    forbidden: [
+      /return sampleDesignJobs/,
+      /return sampleSkus/,
+      /const sampleDesignJobs/,
+      /const sampleSkus/,
+      /export async function getAssets[\s\S]{0,1800}?catch\s*\{[\s\S]{0,120}?return \[\]/,
+    ],
+  },
+  {
+    id: "contract.web_build_freshness",
+    title: "Every reused Next build is fresh and nonzero builds cannot fall back to old output",
+    file: "desktop/tools/build-web.js",
+    patterns: [
+      /standaloneServerExists\(\) && productionBuildReady\(\) && !webBuildIsStale\(\)/,
+      /!standaloneServerExists\(\) && productionBuildReady\(\) && !webBuildIsStale\(\)/,
+      /result\.status === 0 && !hasNextBuildErrorOutput\(result\) && !webBuildIsStale\(\) && standaloneServerExists\(\)/,
+      /result\.status === 0 && !hasNextBuildErrorOutput\(result\) && productionBuildReady\(\) && !webBuildIsStale\(\)/,
+      /retry\.status === 0 && !hasNextBuildErrorOutput\(retry\) && !webBuildIsStale\(\) && standaloneServerExists\(\)/,
+      /retry\.status === 0 && !hasNextBuildErrorOutput\(retry\) && productionBuildReady\(\) && !webBuildIsStale\(\)/,
+      /if \(result\.status === 0\) waitForBuildOutputReady\(60\)/,
+      /if \(retry\.status === 0\) waitForBuildOutputReady\(60\)/,
+    ],
+    forbidden: [
+      /if \(!standaloneServerExists\(\) && productionBuildReady\(\)\) \{/,
+      /if \(productionBuildReady\(\) && !hasNextBuildErrorOutput\((?:result|retry)\)\) \{/,
     ],
   },
   {

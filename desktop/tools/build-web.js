@@ -86,7 +86,7 @@ function main() {
     buildDiagnostic("after existing standalone sync");
     return;
   }
-  if (!standaloneServerExists() && productionBuildReady()) {
+  if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) {
     writeStableStandaloneServer();
     run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
     buildDiagnostic("after stable standalone sync");
@@ -171,10 +171,10 @@ function runNextBuild() {
   buildDiagnostic("before next build");
   const result = runWithCapturedOutput(process.execPath, args);
   waitForProjectNextBuildPidsToExit(90);
-  waitForBuildOutputReady(60);
+  if (result.status === 0) waitForBuildOutputReady(60);
   buildDiagnostic("after next build command");
-  if (result.status === 0 && !hasNextBuildErrorOutput(result) && standaloneServerExists()) return;
-  if (productionBuildReady() && !hasNextBuildErrorOutput(result)) {
+  if (result.status === 0 && !hasNextBuildErrorOutput(result) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale()) {
     writeStableStandaloneServer();
     return;
   }
@@ -187,10 +187,10 @@ function runNextBuild() {
   buildDiagnostic("before next build retry");
   const retry = runWithCapturedOutput(process.execPath, args);
   waitForProjectNextBuildPidsToExit(90);
-  waitForBuildOutputReady(60);
+  if (retry.status === 0) waitForBuildOutputReady(60);
   buildDiagnostic("after next build retry command");
-  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && standaloneServerExists()) return;
-  if (productionBuildReady() && !hasNextBuildErrorOutput(retry)) {
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) {
     writeStableStandaloneServer();
     return;
   }

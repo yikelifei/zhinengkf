@@ -1934,40 +1934,28 @@ async function patchJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function getDesignJobs(filters: IdentityFilters = {}): Promise<DesignJob[]> {
-  try {
-    const response = await fetch(`${API_BASE}/design-jobs${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return sampleDesignJobs;
-  }
+  const response = await fetch(`${API_BASE}/design-jobs${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getSkus(includeInactive = false): Promise<Sku[]> {
-  try {
-    const response = await fetch(`${API_BASE}/catalog/skus${includeInactive ? "?includeInactive=true" : ""}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return sampleSkus;
-  }
+  const response = await fetch(`${API_BASE}/catalog/skus${includeInactive ? "?includeInactive=true" : ""}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getAssets(ownerType?: string, ownerId?: string, filters: IdentityFilters = {}): Promise<DesignAsset[]> {
-  try {
-    const params = new URLSearchParams();
-    if (ownerType) params.set("ownerType", ownerType);
-    if (ownerId) params.set("ownerId", ownerId);
-    if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
-    if (filters.conversationId) params.set("conversationId", filters.conversationId);
-    if (filters.customerId) params.set("customerId", filters.customerId);
-    const query = params.toString();
-    const response = await fetch(`${API_BASE}/assets${query ? `?${query}` : ""}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const params = new URLSearchParams();
+  if (ownerType) params.set("ownerType", ownerType);
+  if (ownerId) params.set("ownerId", ownerId);
+  if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
+  if (filters.conversationId) params.set("conversationId", filters.conversationId);
+  if (filters.customerId) params.set("customerId", filters.customerId);
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/assets${query ? `?${query}` : ""}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function uploadAsset(payload: UploadAssetPayload): Promise<DesignAsset> {
@@ -3386,42 +3374,3 @@ export async function markNotificationRead(id: string, expected: IdentityExpecta
 export async function markAllNotificationsRead(filters: IdentityFilters = {}): Promise<{ count: number }> {
   return postJson<{ count: number }>("/notifications/read-all", filters);
 }
-
-const sampleDesignJobs: DesignJob[] = [
-  {
-    id: "demo-design-1",
-    requestId: "demo-request-1",
-    status: "quick_confirm",
-    scene: "员工福利",
-    isHighValue: false,
-    outputCount: 6,
-    budget: { mode: "per_box", perUnitAmount: 200, quantity: 100, totalAmount: 20000 },
-    customer: { name: "王总" },
-    conversation: { title: "王总-端午礼盒" },
-    updatedAt: new Date().toISOString(),
-    images: [
-      { id: "img-1", imageId: "1", position: 1 },
-      { id: "img-2", imageId: "2", position: 2 },
-      { id: "img-3", imageId: "3", position: 3 },
-    ],
-  },
-  {
-    id: "demo-design-2",
-    requestId: "demo-request-2",
-    status: "manual_review",
-    scene: "客户拜访",
-    isHighValue: true,
-    outputCount: 6,
-    budget: { mode: "total", perUnitAmount: 180, quantity: 80, totalAmount: 14400 },
-    customer: { name: "李经理" },
-    conversation: { title: "李经理-企业伴手礼" },
-    updatedAt: new Date().toISOString(),
-    images: [],
-  },
-];
-
-const sampleSkus: Sku[] = [
-  { id: "sku-1", skuCode: "BOX-A", name: "红金礼盒A", type: "gift_box", category: "礼盒", salePrice: 60, costPrice: 30, stock: 120 },
-  { id: "sku-2", skuCode: "CARD-A", name: "定制贺卡A", type: "accessory", category: "贺卡", salePrice: 20, costPrice: 5, stock: 500 },
-  { id: "sku-3", skuCode: "TEA-A", name: "茶叶礼品A", type: "item", category: "内搭", salePrice: 110, costPrice: 65, stock: 42 },
-];
