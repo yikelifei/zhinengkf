@@ -59,7 +59,7 @@ npm.cmd run package:win:signed
 
 报告写入 `release/windows/verification/latest.{json,md}`。
 
-报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及全部构建成功、调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。只有二次 HEAD/clean 检查通过后，构建工具才生成临时 `.package-provenance.json` 并收入 asar；验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，并重开报告指定的安装器/主程序，重新计算实际字节数与 SHA-256、重新验证 Authenticode；缺失、变化或不可验证都不会通过。
+报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及全部构建成功、调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。只有二次 HEAD/clean 检查通过后，构建工具才生成临时 `.package-provenance.json` 并收入 asar；验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`。它要求安装器和主程序是证据根内两个不同、非符号链接、非硬链接且内容不等价的普通 PE 文件，并对实际目录重新运行同一套只读包验证器，复核固定命名、资源树、asar 条目、包内 provenance、revision/version、实际字节数、SHA-256 与 Authenticode；报告中的 `checks[].status` 不能替代现场复核，任何缺失、变化或本机不可可靠验证的结果都不会通过。
 
 即使 `signed-release` 报告通过，SmartScreen reputation、目标机安装/卸载和人工启动仍不在该报告结构内，必须继续作为人工 `BLOCKED` 补证；未签名报告绝不能满足正式签名项。
 

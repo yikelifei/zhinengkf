@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -30,14 +31,15 @@ const RECOVERY_PREFIX_RESULTS = [
 ];
 const WINDOWS_CHECKS = [
   "repository worktree clean",
-  "unpacked application", "Windows executable entry", "application asar", "packaged API entry",
+  "unpacked application", "Windows executable entry", "Windows executable PE format", "application asar", "packaged API entry",
   "packaged API storage code", "packaged Web entry", "packaged rules entry", "packaged window observer",
   "packaged placeholder-only AI settings", "packaged Prisma client", "packaged generated Prisma client",
-  "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "packaged API smoke",
+  "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "NSIS installer PE format", "packaged API smoke",
   "asar entry /apps/electron/main.js", "asar entry /apps/electron/preload.js",
   "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json", "asar entry /.package-provenance.json",
   "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ];
+let cachedAsarFixture = null;
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-evidence-bundle-"));
@@ -46,8 +48,7 @@ function temporaryDirectory(t) {
 }
 
 function reports(root) {
-  const installer = writeArtifact(root, "SmartKefu-Setup-0.1.0-x64.exe", "signed installer fixture\n");
-  const executable = writeArtifact(root, "win-unpacked/Smart Kefu.exe", "signed executable fixture\n");
+  const { installer, executable } = createWindowsPackageFixture(root);
   return {
     staging: {
       schemaVersion: "smart_kefu_staging_readiness_v2",
@@ -142,6 +143,67 @@ function writeArtifact(root, relative, content) {
   return { file, bytes, sha256 };
 }
 
+function writePeArtifact(root, relative, marker = 0) {
+  const file = path.join(root, ...relative.split("/"));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const content = Buffer.alloc(256);
+  content.write("MZ", 0, "ascii");
+  content.writeUInt32LE(128, 0x3c);
+  content.write("PE\0\0", 128, "binary");
+  content[200] = marker;
+  fs.writeFileSync(file, content);
+  const bytes = fs.statSync(file).size;
+  const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+  return { file, bytes, sha256 };
+}
+
+function createWindowsPackageFixture(root) {
+  const installer = writePeArtifact(root, "SmartKefu-Setup-0.1.0-x64.exe", 1);
+  const executable = writePeArtifact(root, "win-unpacked/Smart Kefu.exe", 2);
+  const resources = path.join(root, "win-unpacked", "resources");
+  const requiredResources = [
+    "services/api/main.js",
+    "services/api/storage/storage.service.js",
+    "services/web/apps/web/server.js",
+    "services/runtime-root/packages/rules/index.js",
+    "services/runtime-root/tools/wechat-window-observer.js",
+    "services/runtime-root/config/settings.yaml",
+    "services/runtime-root/node_modules/@prisma/client/default.js",
+    "services/runtime-root/node_modules/.prisma/client/default.js",
+    "services/runtime-root/node_modules/sharp/lib/index.js",
+    "services/runtime-root/node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64.node",
+  ];
+  for (const relative of requiredResources) writeArtifact(resources, relative, "fixture\n");
+  writeArtifact(root, "verification/packaged-api-smoke.json", `${JSON.stringify({ status: "PASS" })}\n`);
+
+  const asarSource = path.join(root, "asar-source");
+  writeArtifact(asarSource, "apps/electron/main.js", "module.exports = {};\n");
+  writeArtifact(asarSource, "apps/electron/preload.js", "module.exports = {};\n");
+  writeArtifact(asarSource, "apps/electron/packaged-runtime.js", "module.exports = {};\n");
+  writeArtifact(asarSource, "package.json", `${JSON.stringify({ version: "0.1.0", main: "apps/electron/main.js" })}\n`);
+  writeArtifact(asarSource, ".package-provenance.json", `${JSON.stringify({
+    schemaVersion: "smart_kefu_package_provenance_v1",
+    repositoryRevision: REVISION,
+    repositoryClean: true,
+    packageVersion: "0.1.0",
+    generatedAt: new Date().toISOString(),
+  })}\n`);
+  const asarPath = path.join(resources, "app.asar");
+  fs.mkdirSync(resources, { recursive: true });
+  if (cachedAsarFixture) {
+    fs.writeFileSync(asarPath, cachedAsarFixture);
+  } else {
+    const createAsar = spawnSync(
+      process.execPath,
+      ["-e", "require('@electron/asar').createPackage(process.argv[1], process.argv[2]).catch((error) => { console.error(error); process.exit(1); })", asarSource, asarPath],
+      { cwd: path.resolve(__dirname, ".."), encoding: "utf8", windowsHide: true, shell: false },
+    );
+    assert.equal(createAsar.status, 0, createAsar.stderr || createAsar.stdout);
+    cachedAsarFixture = fs.readFileSync(asarPath);
+  }
+  return { installer, executable };
+}
+
 test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly BLOCKED", (t) => {
   const root = temporaryDirectory(t);
   writeReports(root);
@@ -158,6 +220,10 @@ test("matching fresh PASS evidence is accepted but SmartScreen stays explicitly 
     ],
   );
   assert.equal(report.results.find((item) => item.id === "manual.windows_smartscreen").status, STATUS.BLOCKED);
+  const windows = report.results.find((item) => item.id === "evidence.windows_package");
+  assert.equal(windows.evidence.packageContentReverified, true);
+  assert.equal(windows.evidence.distinctRegularArtifacts, true);
+  assert.equal(windows.evidence.packageVerificationStatus, STATUS.PASS);
   assert.match(renderMarkdown(report), /SmartScreen/);
   assert.deepEqual(report.safety, {
     localFilesReadOnly: true,
@@ -244,6 +310,45 @@ test("signed release evidence binds each valid signature to an exact artifact", 
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 
+test("forged PASS checks and injected Valid signature cannot turn one arbitrary exe into two artifacts", (t) => {
+  const root = temporaryDirectory(t);
+  const values = reports(root);
+  const arbitrary = writePeArtifact(root, "arbitrary.exe");
+  values.windows.installer = arbitrary;
+  values.windows.executable = arbitrary;
+  values.windows.signatures = [
+    { file: arbitrary.file, status: "Valid" },
+    { file: arbitrary.file, status: "Valid" },
+  ];
+  values.windows.checks = WINDOWS_CHECKS.map((name) => ({ name, status: "PASS" }));
+  writeReports(root, values);
+  const report = validate(root, { verifySignature: () => ({ status: "Valid" }) });
+  const windows = report.results.find((item) => item.id === "evidence.windows_package");
+  assert.equal(windows.status, STATUS.FAIL);
+  assert.equal(windows.evidence.signedArtifactContractValid, false);
+  assert.match(windows.summary, /distinct|signature/i);
+});
+
+test("Windows evidence rejects hard-linked artifact aliases", (t) => {
+  const root = temporaryDirectory(t);
+  const values = reports(root);
+  const installerPath = values.windows.installer.file;
+  fs.rmSync(installerPath);
+  try {
+    fs.linkSync(values.windows.executable.file, installerPath);
+  } catch (error) {
+    if (["EPERM", "ENOTSUP"].includes(error?.code)) return t.skip("hard links are unavailable on this host");
+    throw error;
+  }
+  const bytes = fs.statSync(installerPath).size;
+  const sha256 = crypto.createHash("sha256").update(fs.readFileSync(installerPath)).digest("hex");
+  values.windows.installer = { file: installerPath, bytes, sha256 };
+  values.windows.signatures[1].file = installerPath;
+  writeReports(root, values);
+  const report = validate(root);
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
 test("Windows evidence reopens artifacts and rejects missing or changed bytes", (t) => {
   const root = temporaryDirectory(t);
   const changed = reports(root);
@@ -317,7 +422,11 @@ test("source contract is local read-only and package script is explicit", () => 
   assert.match(packageJson.scripts["external:evidence:bundle"], /external-evidence-bundle\.js$/);
   assert.match(source, /Get-AuthenticodeSignature/);
   assert.match(source, /sha256File\(file\)/);
-  assert.match(source, /stat\.size !== reported\.bytes/);
+  assert.match(source, /stat\.size !== BigInt\(reported\.bytes\)/);
+  assert.match(source, /stat\.nlink !== 1n/);
+  assert.match(source, /inspectDistinctArtifacts/);
+  assert.match(source, /verifyWindowsPackage\(\{/);
+  assert.match(source, /liveChecksPass/);
   assert.doesNotMatch(source, /\bfetch\s*\(/);
   assert.doesNotMatch(source, /writeFile|appendFile|rmSync|unlink/);
   assert.doesNotMatch(source, /prisma|pg_dump|pg_restore|electron-builder|send_msg|method:\s*["']POST/);

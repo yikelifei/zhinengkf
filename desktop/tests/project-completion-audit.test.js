@@ -127,11 +127,15 @@ if (packageRepositoryState.revision !== initialRepositoryState.revision) throw n
 writePackageProvenance(packageRepositoryState);
 `);
   write(root, "desktop/tools/external-evidence-bundle.js", `
-const stat = fs.lstatSync(requested); if (fs.lstatSync(requested).isSymbolicLink()) throw new Error();
-const actualSize = stat.size; if (actualSize !== artifact.reportedSize) throw new Error();
+const requestedStat = fs.lstatSync(requested); if (requestedStat.isSymbolicLink() || !requestedStat.isFile()) throw new Error();
+const stat = fs.statSync(file, { bigint: true }); if (stat.nlink !== 1n) throw new Error();
+if (stat.size !== BigInt(reported.bytes)) throw new Error();
 const digest = sha256File(file);
+const distinct = inspectDistinctArtifacts(installer, executable, state); if (installer.sha256 !== executable.sha256) {}
+const verification = verifyWindowsPackage({ outputDir });
+const liveChecksPass = verification.checks.every((item) => item.status === "PASS");
+const bound = verification.repositoryRevision === currentRevision && verification.version === version;
 const actualSignature = verifySignature(artifact.file);
-const requiredChecksValid = true;
 const script = "Get-AuthenticodeSignature";
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
