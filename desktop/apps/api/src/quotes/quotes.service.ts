@@ -879,6 +879,7 @@ function manualQuoteQueueRequest(payload: QuoteQueueRequest | Record<string, unk
     ? payload as Record<string, unknown>
     : {};
   return {
+    operationKey: quoteStringOrUndefined(value.operationKey),
     expectedWechatAccountId: quoteStringOrUndefined(value.expectedWechatAccountId),
     expectedConversationId: quoteStringOrUndefined(value.expectedConversationId),
     expectedCustomerId: quoteStringOrUndefined(value.expectedCustomerId),

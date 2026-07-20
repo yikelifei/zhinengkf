@@ -512,6 +512,7 @@ test("manual-approved design image send relocks conversation when queueing fails
   await assert.rejects(
     () =>
       service.quickConfirmAndQueueSend("design_1", {
+        operationKey: "test-manual-design-relock-queue-failure-1",
         releaseManualLock: true,
         reviewer: "Alice",
         releaseReason: "manual_approve_send",
@@ -585,6 +586,7 @@ test("manual-approved quote send relocks conversation when queueing fails", asyn
   await assert.rejects(
     () =>
       service.queueSend("quote_1", {
+        operationKey: "test-manual-quote-relock-queue-failure-1",
         releaseManualLock: true,
         owner: "Alice",
         releaseReason: "manual_approve_quote",
@@ -635,7 +637,11 @@ test("design image send refuses to release manual lock without explicit manual r
   );
 
   await assert.rejects(
-    () => service.quickConfirmAndQueueSend("design_1", { releaseManualLock: true, reviewer: "Alice" }),
+    () => service.quickConfirmAndQueueSend("design_1", {
+      operationKey: "test-manual-design-release-reason-required-1",
+      releaseManualLock: true,
+      reviewer: "Alice",
+    }),
     /需要填写明确的人工处理原因/,
   );
 
@@ -731,6 +737,7 @@ test("manual-approved design image send writes review log with send task id", as
   );
 
   await service.quickConfirmAndQueueSend("design_1", {
+    operationKey: "test-manual-design-review-log-1",
     releaseManualLock: true,
     reviewer: "Alice",
     releaseReason: "manual_approve_send",
@@ -1047,6 +1054,7 @@ test("manual-approved quote send writes review log with send task id", async () 
   );
 
   await service.queueSend("quote_1", {
+    operationKey: "test-manual-quote-review-log-1",
     releaseManualLock: true,
     owner: "Alice",
     releaseReason: "manual_approve_quote",
@@ -1063,6 +1071,7 @@ test("manual-approved quote send writes review log with send task id", async () 
   });
 
   assert.ok(enqueuedPayload);
+  assert.equal(enqueuedPayload.operationKey, "test-manual-quote-review-log-1");
   assert.equal(enqueuedPayload.automation, undefined);
   assert.equal(reviewLogs.length, 1);
   assert.equal(reviewLogs[0].targetType, "quote");
@@ -1218,6 +1227,7 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   const service = new QuotesService({}, localStore, orders, wechat);
 
   const result = await service.verifyPaymentProofAndQueueConfirmation("quote_1", {
+    operationKey: "test-manual-payment-proof-confirmation-1",
     paymentStatus: "deposit_paid",
     owner: "Alice",
     expectedWechatAccountId: "wechat_1",
@@ -1327,6 +1337,7 @@ test("verified high-value payment proof keeps manual handoff instead of queueing
   const service = new QuotesService({}, localStore, orders, wechat);
 
   const result = await service.verifyPaymentProofAndQueueConfirmation("quote_high_1", {
+    operationKey: "test-manual-high-value-payment-proof-1",
     paymentStatus: "paid",
     owner: "Alice",
     expectedWechatAccountId: "wechat_1",
