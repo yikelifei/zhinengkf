@@ -991,6 +991,7 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
 
 test("manual-approved quote send writes review log with send task id", async () => {
   const reviewLogs = [];
+  let enqueuedPayload = null;
   const quote = {
     id: "quote_1",
     designJobId: "design_1",
@@ -1038,7 +1039,10 @@ test("manual-approved quote send writes review log with send task id", async () 
     {},
     {
       setConversationManualLock: async () => ({}),
-      enqueueQuoteMessage: async () => ({ id: "send_1" }),
+      enqueueQuoteMessage: async (payload) => {
+        enqueuedPayload = payload;
+        return { id: "send_1" };
+      },
     },
   );
 
@@ -1046,8 +1050,20 @@ test("manual-approved quote send writes review log with send task id", async () 
     releaseManualLock: true,
     owner: "Alice",
     releaseReason: "manual_approve_quote",
+    source: "order_confirmation",
+    queuedBy: "low_value_automation",
+    orderDraftId: "forged-order",
+    paymentStatus: "paid",
+    automation: {
+      source: "low_value_quote_send",
+      valueLevel: "low",
+      quoteDraftId: "forged-quote",
+      queuedBy: "low_value_automation",
+    },
   });
 
+  assert.ok(enqueuedPayload);
+  assert.equal(enqueuedPayload.automation, undefined);
   assert.equal(reviewLogs.length, 1);
   assert.equal(reviewLogs[0].targetType, "quote");
   assert.equal(reviewLogs[0].decision, "manual_approve_quote");
@@ -1219,7 +1235,7 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   );
   assert.equal(queuedConfirmations.length, 1);
   assert.equal(queuedConfirmations[0].payload.reason, "manual_payment_proof_verified");
-  assert.equal(queuedConfirmations[0].payload.automation.source, "manual_payment_proof_verified");
+  assert.equal(queuedConfirmations[0].payload.automation, undefined);
   assert.equal(reviewLogs[0].decision, "manual_payment_proof_verified");
   assert.equal(reviewLogs[0].metadata.sendTaskId, "send_1");
 });

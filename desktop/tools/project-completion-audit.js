@@ -962,6 +962,81 @@ const CONTRACTS = Object.freeze([
       /@TrustedOperator\(\) principal/,
     ],
   },
+  {
+    id: "contract.manual_order_queue_controller_allowlist",
+    title: "人工订单发送控制器显式字段白名单",
+    file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+    patterns: [
+      /queueOrderConfirmation\(id, \{/,
+      /expectedWechatAccountId: payload\?\.expectedWechatAccountId/,
+      /owner: principal\.id/,
+      /queueOrderFollowup\(id, \{/,
+      /type: payload\?\.type/,
+      /setConversationManualLock\(id, \{/,
+      /locked: payload\?\.locked/,
+      /reviewer: principal\.id/,
+    ],
+    forbidden: [
+      /queueOrderConfirmation\(id, \{ \.\.\.\(payload \|\| \{\}\)/,
+      /queueOrderFollowup\(id, \{ \.\.\.\(payload \|\| \{\}\)/,
+      /queueOrder(?:Confirmation|Followup)\(id,\s*\{[\s\S]{0,400}automation:/,
+      /setConversationManualLock\(id, \{ \.\.\.\(payload \|\| \{\}\)/,
+      /setConversationManualLock\(id,\s*\{[\s\S]{0,400}(?:effectKey|automation):/,
+    ],
+  },
+  {
+    id: "contract.manual_quote_queue_controller_allowlist",
+    title: "人工报价发送控制器显式字段白名单",
+    file: "desktop/apps/api/src/quotes/quotes.controller.ts",
+    patterns: [
+      /queueSend\(id, \{/,
+      /expectedWechatAccountId: payload\?\.expectedWechatAccountId/,
+      /expectedConversationId: payload\?\.expectedConversationId/,
+      /expectedCustomerId: payload\?\.expectedCustomerId/,
+      /note: payload\?\.note/,
+      /owner: principal\.id/,
+      /releaseReason: "manual_quote_send"/,
+    ],
+    forbidden: [
+      /queueSend\(id,\s*\{[\s\S]{0,400}\.\.\.trustedPayload/,
+      /queueSend\(id,\s*\{[\s\S]{0,400}automation:/,
+    ],
+  },
+  {
+    id: "contract.trusted_order_automation_provenance",
+    title: "订单自动化来源仅由内部低价值路径生成",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /queueOrderConfirmationWithProvenance\(orderDraftId, manualOrderQueueRequest\(payload\), null\)/,
+      /queueLowValueOrderConfirmation/,
+      /queueOrderFollowupWithProvenance\(orderDraftId, manualOrderQueueRequest\(payload\), null\)/,
+      /queueLowValueOrderFollowup/,
+      /buildLowValueOrderAutomation/,
+      /buildOrderSendContext/,
+      /orderContext: params\.orderContext/,
+      /this\.orderSendContext\(task\)/,
+      /orderDraftId: String\(order\.id\)/,
+      /quoteDraftId: String\(order\.quoteDraftId \|\| ""\)/,
+      /queuedBy: "low_value_automation"/,
+      /function manualOrderQueueRequest/,
+    ],
+    forbidden: [/\.\.\.\(payload\.automation \|\| \{\}\)/],
+  },
+  {
+    id: "contract.trusted_quote_automation_provenance",
+    title: "报价自动化来源仅由内部低价值路径生成",
+    file: "desktop/apps/api/src/quotes/quotes.service.ts",
+    patterns: [
+      /queueSendWithProvenance\(id, manualQuoteQueueRequest\(options\), false\)/,
+      /queueSendWithProvenance\(id, manualQuoteQueueRequest\(options\), true\)/,
+      /source: "low_value_quote_send"/,
+      /quoteDraftId: quote\.id/,
+      /queuedBy: "low_value_automation"/,
+      /automation: trustedAutomation/,
+      /function manualQuoteQueueRequest/,
+    ],
+    forbidden: [/options\.automation/],
+  },
 ]);
 
 const FIXED_LOCAL_INVENTORY = Object.freeze([
@@ -1343,18 +1418,23 @@ function highRiskOperatorRouteResults(root) {
     ]);
   }
 
-  for (const [label, routePattern] of [
-    ["quotes-queue-send", /@Post\(["']:id\/queue-send["']\)/],
-    ["quotes-payment-proof", /@Post\(["']:id\/verify-payment-proof["']\)/],
-  ]) {
-    check(label, sources.quotes, routePattern, [
-      /@RequireOperatorCapability\(["']approve_send["']\)/,
-      /@UseGuards\(OperatorAccessGuard\)/,
-      /@TrustedOperator\(\) principal/,
-      /owner:\s*_untrustedOwner/,
-      /owner:\s*principal\.id/,
-    ]);
-  }
+  check("quotes-queue-send", sources.quotes, /@Post\(["']:id\/queue-send["']\)/, [
+    /@RequireOperatorCapability\(["']approve_send["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+    /@TrustedOperator\(\) principal/,
+    /expectedWechatAccountId:\s*payload\?\.expectedWechatAccountId/,
+    /expectedConversationId:\s*payload\?\.expectedConversationId/,
+    /expectedCustomerId:\s*payload\?\.expectedCustomerId/,
+    /owner:\s*principal\.id/,
+  ], [/\.\.\.trustedPayload/, /automation:\s*payload(?:\?)?\.automation/]);
+
+  check("quotes-payment-proof", sources.quotes, /@Post\(["']:id\/verify-payment-proof["']\)/, [
+    /@RequireOperatorCapability\(["']approve_send["']\)/,
+    /@UseGuards\(OperatorAccessGuard\)/,
+    /@TrustedOperator\(\) principal/,
+    /owner:\s*_untrustedOwner/,
+    /owner:\s*principal\.id/,
+  ]);
 
   checkClass("automation-class", sources.automation, [
     /@RequireOperatorCapability\(["']view_console["']\)/,

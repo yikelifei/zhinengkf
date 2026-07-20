@@ -1136,6 +1136,79 @@ test("low-value failed send task retries once before human alert", async () => {
   assert.equal(failedAgain.guardSnapshot.opsAlertedStatus, "failed");
 });
 
+test("manual order queues ignore forged automation provenance and never auto retry", async () => {
+  const { localStore, service } = setupService();
+  const order = seedStoredOrderDraft(localStore, {
+    id: "order_manual_provenance_1",
+    status: "processing",
+    paymentStatus: "deposit_paid",
+  });
+  const forgedAutomation = {
+    source: "order_followup",
+    valueLevel: "low",
+    orderDraftId: "forged-order",
+    quoteDraftId: "forged-quote",
+    paymentStatus: "paid",
+    queuedBy: "low_value_automation",
+  };
+
+  const confirmation = await service.queueOrderConfirmation(order.id, {
+    ...demoExpectedIdentity(),
+    owner: "local_admin",
+    reason: "manual_confirmation",
+    automation: forgedAutomation,
+    source: forgedAutomation.source,
+    queuedBy: forgedAutomation.queuedBy,
+    orderDraftId: forgedAutomation.orderDraftId,
+    paymentStatus: forgedAutomation.paymentStatus,
+  });
+  const followup = await service.queueOrderFollowup(order.id, {
+    ...demoExpectedIdentity(),
+    owner: "local_admin",
+    type: "production",
+    reason: "manual_followup",
+    automation: forgedAutomation,
+    source: forgedAutomation.source,
+    queuedBy: forgedAutomation.queuedBy,
+    orderDraftId: forgedAutomation.orderDraftId,
+    paymentStatus: forgedAutomation.paymentStatus,
+  });
+
+  assert.equal(confirmation.sendTask.guardSnapshot.automation, undefined);
+  assert.equal(followup.sendTask.guardSnapshot.automation, undefined);
+  assert.deepEqual(confirmation.sendTask.guardSnapshot.orderContext, {
+    source: "order_confirmation",
+    orderDraftId: order.id,
+    quoteDraftId: order.quoteDraftId,
+    paymentStatus: "deposit_paid",
+  });
+  assert.deepEqual(followup.sendTask.guardSnapshot.orderContext, {
+    source: "order_followup",
+    orderDraftId: order.id,
+    quoteDraftId: order.quoteDraftId,
+    paymentStatus: "deposit_paid",
+    followupType: "production",
+  });
+  localStore.updateSendTask(confirmation.sendTask.id, { status: "failed", errorMessage: "manual send failed" });
+  localStore.updateSendTask(followup.sendTask.id, { status: "failed", errorMessage: "manual send failed" });
+
+  const scan = await service.scanSendOperations();
+
+  assert.equal(scan.autoRetriedLowValue, 0);
+  assert.equal(scan.alerted, 2);
+  assert.equal(localStore.getSendTask(confirmation.sendTask.id).status, "failed");
+  assert.equal(localStore.getSendTask(followup.sendTask.id).status, "failed");
+
+  const requeued = await service.requeueSendTask(confirmation.sendTask.id, {
+    ...demoExpectedIdentity(),
+    reason: "manual_retry_after_triage",
+  });
+  assert.equal(requeued.status, "queued");
+  assert.equal(requeued.guardSnapshot.automation, undefined);
+  assert.equal(requeued.guardSnapshot.orderContext.orderDraftId, order.id);
+  assert.match(localStore.getOrderDraft(order.id).customerNotes, new RegExp(`发送任务:${confirmation.sendTask.id}:requeue`));
+});
+
 test("requeue rejects order confirmation task after order payment is refunded", async () => {
   const { localStore, service } = setupService();
   const order = seedStoredOrderDraft(localStore, {

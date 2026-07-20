@@ -25,6 +25,7 @@ const { OrdersController } = require("../apps/api/src/orders/orders.controller")
 const { ReviewsController } = require("../apps/api/src/reviews/reviews.controller");
 const { RoutingController } = require("../apps/api/src/routing/routing.controller");
 const { TrainingController } = require("../apps/api/src/training/training.controller");
+const { WechatController } = require("../apps/api/src/wechat/wechat.controller");
 const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
 const {
@@ -405,12 +406,75 @@ test("high-risk controllers discard browser-owned reviewer and owner fields", as
   });
   await quotes.queueSend(
     "quote-2",
-    { owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker", note: "safe" },
+    {
+      owner: "attacker",
+      actor: "attacker",
+      operator: "attacker",
+      reviewer: "attacker",
+      note: "safe",
+      source: "browser",
+      queuedBy: "low_value_automation",
+      quoteDraftId: "forged-quote",
+      orderDraftId: "forged-order",
+      paymentStatus: "paid",
+      automation: { source: "order_confirmation", valueLevel: "low" },
+    },
     LOCAL_ADMIN_PRINCIPAL,
   );
   await quotes.verifyPaymentProof(
     "quote-3",
     { paymentStatus: "paid", owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker" },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+
+  const wechat = new WechatController({
+    setConversationManualLock: async (...args) => calls.push(["setConversationManualLock", ...args]),
+    queueOrderConfirmation: async (...args) => calls.push(["queueOrderConfirmation", ...args]),
+    queueOrderFollowup: async (...args) => calls.push(["queueOrderFollowup", ...args]),
+  });
+  const forgedAutomation = {
+    source: "order_followup",
+    valueLevel: "low",
+    orderDraftId: "forged-order",
+    quoteDraftId: "forged-quote",
+    paymentStatus: "paid",
+    queuedBy: "low_value_automation",
+  };
+  await wechat.queueOrderConfirmation(
+    "order-2",
+    {
+      ...forgedAutomation,
+      automation: forgedAutomation,
+      owner: "attacker",
+      note: "safe",
+      reason: "manual-confirmation",
+    },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  await wechat.setConversationManualLock(
+    "conversation-2",
+    {
+      expectedWechatAccountId: "wechat-2",
+      expectedConversationId: "conversation-2",
+      expectedCustomerId: "customer-2",
+      locked: true,
+      reviewer: "attacker",
+      reason: "manual_takeover",
+      note: "safe",
+      effectKey: "design-job-owned-effect-key",
+      automation: forgedAutomation,
+    },
+    LOCAL_ADMIN_PRINCIPAL,
+  );
+  await wechat.queueOrderFollowup(
+    "order-3",
+    {
+      ...forgedAutomation,
+      automation: forgedAutomation,
+      owner: "attacker",
+      type: "production",
+      reason: "manual-followup",
+    },
     LOCAL_ADMIN_PRINCIPAL,
   );
 
@@ -421,14 +485,29 @@ test("high-risk controllers discard browser-owned reviewer and owner fields", as
   await training.reviewSample("sample-1", { status: "ready", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
   await training.batchReviewSamples({ sampleIds: ["sample-1"], status: "ready", reviewer: "attacker" }, LOCAL_ADMIN_PRINCIPAL);
 
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 10);
   for (const [name, _id, payload] of calls) {
     const actualPayload = name === "batchReviewSamples" ? _id : payload;
     assert.equal(actualPayload.reviewer === "attacker" || actualPayload.owner === "attacker", false, name);
     assert.equal(actualPayload.actor, undefined, name);
     assert.equal(actualPayload.operator, undefined, name);
     if (name.startsWith("review") || name === "batchReviewSamples") assert.equal(actualPayload.reviewer, "local_admin", name);
-    if (name === "queueSend" || name === "verifyPaymentProof") assert.equal(actualPayload.owner, "local_admin", name);
+    if (["queueSend", "verifyPaymentProof", "queueOrderConfirmation", "queueOrderFollowup"].includes(name)) {
+      assert.equal(actualPayload.owner, "local_admin", name);
+    }
+    if (["queueSend", "queueOrderConfirmation", "queueOrderFollowup"].includes(name)) {
+      assert.equal(actualPayload.automation, undefined, name);
+      assert.equal(actualPayload.source, undefined, name);
+      assert.equal(actualPayload.queuedBy, undefined, name);
+      assert.equal(actualPayload.quoteDraftId, undefined, name);
+      assert.equal(actualPayload.orderDraftId, undefined, name);
+      assert.equal(actualPayload.paymentStatus, undefined, name);
+    }
+    if (name === "setConversationManualLock") {
+      assert.equal(actualPayload.reviewer, "local_admin");
+      assert.equal(actualPayload.effectKey, undefined);
+      assert.equal(actualPayload.automation, undefined);
+    }
   }
 });
 

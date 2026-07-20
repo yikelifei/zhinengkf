@@ -77,7 +77,15 @@ export class WechatController {
     @Body() payload: { locked?: boolean; reviewer?: string; reason?: string; note?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.setConversationManualLock(id, { ...(payload || {}), reviewer: principal.id });
+    return this.wechat.setConversationManualLock(id, {
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      locked: payload?.locked,
+      reviewer: principal.id,
+      reason: payload?.reason,
+      note: payload?.note,
+    });
   }
 
   @Post("inbound/messages")
@@ -243,7 +251,16 @@ export class WechatController {
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.queueOrderConfirmation(id, { ...(payload || {}), owner: principal.id });
+    return this.wechat.queueOrderConfirmation(id, {
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      owner: principal.id,
+      note: payload?.note,
+      reason: payload?.reason,
+      releaseManualLock: payload?.releaseManualLock,
+      releaseReason: payload?.releaseReason,
+    });
   }
 
   @Post("orders/:id/queue-followup")
@@ -261,7 +278,16 @@ export class WechatController {
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    return this.wechat.queueOrderFollowup(id, { ...(payload || {}), owner: principal.id });
+    return this.wechat.queueOrderFollowup(id, {
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      type: payload?.type,
+      owner: principal.id,
+      reason: payload?.reason,
+      releaseManualLock: payload?.releaseManualLock,
+      releaseReason: payload?.releaseReason,
+    });
   }
 
   @Post("send-tasks/scan-ops")

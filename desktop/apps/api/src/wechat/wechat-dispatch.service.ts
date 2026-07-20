@@ -68,6 +68,24 @@ type IdentityFilter = {
   customerId?: string;
 };
 
+type OrderQueueRequest = {
+  type?: "production" | "delivery";
+  owner?: string;
+  note?: string;
+  reason?: string;
+  releaseManualLock?: boolean;
+  releaseReason?: string;
+} & ExpectedIdentityPayload;
+
+type LowValueOrderAutomationProvenance = {
+  source:
+    | "order_confirmation"
+    | "order_followup"
+    | "low_value_quote_payment_update"
+    | "low_value_quote_acceptance";
+  reason?: string;
+};
+
 type WechatChannelKey = "personal_wechat" | "work_wechat" | "mini_program";
 
 function isManualReplySendTask(task: any) {
@@ -201,6 +219,7 @@ export class WechatDispatchService {
     quoteDraftId?: string;
     text: string;
     reason?: string;
+    orderContext?: Prisma.InputJsonObject;
     automation?: Prisma.InputJsonObject;
     manualReply?: boolean;
     queuedBy?: string;
@@ -219,6 +238,7 @@ export class WechatDispatchService {
       policy: "single-account-serial-queue",
       binding,
       ...(params.reason ? { reason: params.reason } : {}),
+      ...(params.orderContext ? { orderContext: params.orderContext } : {}),
       ...(params.automation ? { automation: params.automation } : {}),
       ...(params.manualReply ? { manualReply: true, queuedBy: params.queuedBy || "manual_operator" } : {}),
     };
@@ -262,14 +282,27 @@ export class WechatDispatchService {
 
   async queueOrderConfirmation(
     orderDraftId: string,
-    payload: {
-      owner?: string;
-      note?: string;
-      reason?: string;
-      automation?: Prisma.InputJsonObject;
-      releaseManualLock?: boolean;
-      releaseReason?: string;
-    } & ExpectedIdentityPayload = {},
+    payload: OrderQueueRequest = {},
+  ) {
+    return this.queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);
+  }
+
+  private queueLowValueOrderConfirmation(
+    orderDraftId: string,
+    payload: OrderQueueRequest,
+    provenance: LowValueOrderAutomationProvenance,
+  ) {
+    return this.queueOrderConfirmationWithProvenance(
+      orderDraftId,
+      manualOrderQueueRequest(payload),
+      provenance,
+    );
+  }
+
+  private async queueOrderConfirmationWithProvenance(
+    orderDraftId: string,
+    payload: OrderQueueRequest,
+    provenance: LowValueOrderAutomationProvenance | null,
   ) {
     const order = await this.orders.getById(orderDraftId);
     if (!order) throw new BadRequestException(`order draft not found: ${orderDraftId}`);
@@ -303,6 +336,10 @@ export class WechatDispatchService {
         ? (bundleSnapshot as any).items
         : [];
     const paymentStatus = this.orderPaymentStatus(order);
+    const trustedAutomation = provenance
+      ? this.buildLowValueOrderAutomation(order, paymentStatus, provenance)
+      : undefined;
+    const orderContext = this.buildOrderSendContext(order, paymentStatus, "order_confirmation");
     const message = buildOrderConfirmationCustomerMessage({
       customerName: order.customer?.name || order.quoteDraft?.customer?.name,
       scene: designJob?.scene,
@@ -320,14 +357,8 @@ export class WechatDispatchService {
       quoteDraftId: order.quoteDraftId,
       text: message,
       reason: payload.reason || "order-confirmation",
-      automation: {
-        source: "order_confirmation",
-        orderDraftId: order.id,
-        quoteDraftId: order.quoteDraftId,
-        paymentStatus,
-        queuedBy: payload.owner || "manual_operator",
-        ...(payload.automation || {}),
-      },
+      orderContext,
+      automation: trustedAutomation,
     });
     const updatedOrder = await this.orders.update(order.id, {
       expectedWechatAccountId: payload.expectedWechatAccountId,
@@ -356,14 +387,27 @@ export class WechatDispatchService {
 
   async queueOrderFollowup(
     orderDraftId: string,
-    payload: {
-      type?: "production" | "delivery";
-      owner?: string;
-      reason?: string;
-      automation?: Prisma.InputJsonObject;
-      releaseManualLock?: boolean;
-      releaseReason?: string;
-    } & ExpectedIdentityPayload = {},
+    payload: OrderQueueRequest = {},
+  ) {
+    return this.queueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);
+  }
+
+  private queueLowValueOrderFollowup(
+    orderDraftId: string,
+    payload: OrderQueueRequest,
+    provenance: LowValueOrderAutomationProvenance,
+  ) {
+    return this.queueOrderFollowupWithProvenance(
+      orderDraftId,
+      manualOrderQueueRequest(payload),
+      provenance,
+    );
+  }
+
+  private async queueOrderFollowupWithProvenance(
+    orderDraftId: string,
+    payload: OrderQueueRequest,
+    provenance: LowValueOrderAutomationProvenance | null,
   ) {
     const order = await this.orders.getById(orderDraftId);
     if (!order) throw new BadRequestException(`order draft not found: ${orderDraftId}`);
@@ -393,6 +437,10 @@ export class WechatDispatchService {
     const context = this.buildOrderMessageContext(order);
     const followupType = payload.type || (order.status === "fulfilled" ? "delivery" : "production");
     const paymentStatus = this.orderPaymentStatus(order);
+    const trustedAutomation = provenance
+      ? this.buildLowValueOrderAutomation(order, paymentStatus, provenance, followupType)
+      : undefined;
+    const orderContext = this.buildOrderSendContext(order, paymentStatus, "order_followup", followupType);
     const message = buildOrderFollowupCustomerMessage({
       type: followupType,
       customerName: context.customerName,
@@ -410,15 +458,8 @@ export class WechatDispatchService {
       quoteDraftId: order.quoteDraftId,
       text: message,
       reason: payload.reason || "order-followup",
-      automation: {
-        source: "order_followup",
-        followupType,
-        orderDraftId: order.id,
-        quoteDraftId: order.quoteDraftId,
-        paymentStatus,
-        queuedBy: payload.owner || "manual_operator",
-        ...(payload.automation || {}),
-      },
+      orderContext,
+      automation: trustedAutomation,
     });
     const notification = await this.notifications.create(
       "info",
@@ -437,6 +478,39 @@ export class WechatDispatchService {
     );
 
     return { orderDraft: await this.orders.getById(order.id), sendTask, message, notification };
+  }
+
+  private buildLowValueOrderAutomation(
+    order: any,
+    paymentStatus: string,
+    provenance: LowValueOrderAutomationProvenance,
+    followupType?: "production" | "delivery",
+  ): Prisma.InputJsonObject {
+    return {
+      source: provenance.source,
+      valueLevel: "low",
+      orderDraftId: String(order.id),
+      quoteDraftId: String(order.quoteDraftId || ""),
+      paymentStatus,
+      queuedBy: "low_value_automation",
+      ...(followupType ? { followupType } : {}),
+      ...(provenance.reason ? { reason: provenance.reason } : {}),
+    };
+  }
+
+  private buildOrderSendContext(
+    order: any,
+    paymentStatus: string,
+    source: "order_confirmation" | "order_followup",
+    followupType?: "production" | "delivery",
+  ): Prisma.InputJsonObject {
+    return {
+      source,
+      orderDraftId: String(order.id),
+      quoteDraftId: String(order.quoteDraftId || ""),
+      paymentStatus,
+      ...(followupType ? { followupType } : {}),
+    };
   }
 
   private buildOrderMessageContext(order: any) {
@@ -510,9 +584,9 @@ export class WechatDispatchService {
   }
 
   private assertOrderSendTaskStillQueueable(task: any) {
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const source = String(automation.source || "");
-    const orderDraftId = String(automation.orderDraftId || "");
+    const orderContext = this.orderSendContext(task);
+    const source = String(orderContext.source || "");
+    const orderDraftId = String(orderContext.orderDraftId || "");
     if (!orderDraftId) return;
 
     const order = this.localStore.getOrderDraft(orderDraftId);
@@ -521,7 +595,7 @@ export class WechatDispatchService {
     }
 
     const context =
-      source === "order_followup" || automation.followupType
+      source === "order_followup" || orderContext.followupType
         ? "order follow-up requeue"
         : "order confirmation requeue";
     assertExpectedIdentity(
@@ -612,7 +686,7 @@ export class WechatDispatchService {
         tasks
           .filter((task: any) => this.isOrderFollowupTask(task, order))
           .filter((task: any) => this.sendTaskCountsAsHandledForAutomation(task))
-          .map((task: any) => task?.guardSnapshot?.automation?.followupType || "any")
+          .map((task: any) => this.orderSendContext(task).followupType || "any")
           .filter(Boolean)
           .map(String),
       ),
@@ -626,7 +700,7 @@ export class WechatDispatchService {
         tasks
           .filter((task: any) => this.isOrderFollowupTask(task, order))
           .filter((task: any) => this.sendTaskNeedsManualAttentionForAutomation(task))
-          .map((task: any) => task?.guardSnapshot?.automation?.followupType || "any")
+          .map((task: any) => this.orderSendContext(task).followupType || "any")
           .filter(Boolean)
           .map(String),
       ),
@@ -659,15 +733,15 @@ export class WechatDispatchService {
   }
 
   private isOrderRelatedSendTask(task: any, order: any) {
-    const automation = task?.guardSnapshot?.automation || {};
-    if (order.id && automation.orderDraftId === order.id) return true;
+    const orderContext = this.orderSendContext(task);
+    if (order.id && orderContext.orderDraftId === order.id) return true;
     return Boolean(order.quoteDraftId && task?.quoteDraftId === order.quoteDraftId);
   }
 
   private isOrderFollowupTask(task: any, order: any) {
     if (!this.isOrderRelatedSendTask(task, order)) return false;
-    const automation = task?.guardSnapshot?.automation || {};
-    return automation.source === "order_followup" || task?.guardSnapshot?.reason === "order-followup";
+    const orderContext = this.orderSendContext(task);
+    return orderContext.source === "order_followup" || task?.guardSnapshot?.reason === "order-followup";
   }
 
   async scanLowValueOrderConfirmations(params: { orderDrafts?: any[] } & IdentityFilter = {}) {
@@ -695,16 +769,12 @@ export class WechatDispatchService {
 
       try {
         result.queued.push(
-          await this.queueOrderConfirmation(order.id, {
+          await this.queueLowValueOrderConfirmation(order.id, {
             ...this.expectedIdentityFromOrder(order),
             owner: "low_value_automation",
             note: "低价值订单确认已自动进入微信安全发送队列。",
             reason: "low_value_order_confirmation",
-            automation: {
-              valueLevel: "low",
-              queuedBy: "low_value_automation",
-            },
-          }),
+          }, { source: "order_confirmation" }),
         );
       } catch (error) {
         result.failed.push({
@@ -759,16 +829,12 @@ export class WechatDispatchService {
 
       try {
         result.queued.push(
-          await this.queueOrderFollowup(order.id, {
+          await this.queueLowValueOrderFollowup(order.id, {
             ...this.expectedIdentityFromOrder(order),
             type: decision.followupType,
             owner: "low_value_automation",
             reason: "low_value_order_followup",
-            automation: {
-              valueLevel: "low",
-              queuedBy: "low_value_automation",
-            },
-          }),
+          }, { source: "order_followup" }),
         );
       } catch (error) {
         result.failed.push({
@@ -4230,8 +4296,8 @@ export class WechatDispatchService {
   }
 
   private validateQueuedOrderSendState(task: any) {
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const orderDraftId = String(automation.orderDraftId || "");
+    const orderContext = this.orderSendContext(task);
+    const orderDraftId = String(orderContext.orderDraftId || "");
     if (!orderDraftId) return { ok: true as const };
     const order = this.localStore.getOrderDraft(orderDraftId);
     if (!order) {
@@ -4358,8 +4424,8 @@ export class WechatDispatchService {
     }
 
     const prisma = this.prisma as any;
-    const automation = isPlainObject(task.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const orderDraftId = String(automation.orderDraftId || task.payload?.orderDraftId || "").trim();
+    const orderContext = this.orderSendContext(task);
+    const orderDraftId = String(orderContext.orderDraftId || task.payload?.orderDraftId || "").trim();
     if (orderDraftId) {
       const order = await prisma.orderDraft.findUnique({ where: { id: orderDraftId }, include: { quoteDraft: true } });
       if (!order) return { ok: false as const, reason: "orderDraftMissing", message: `order draft not found: ${orderDraftId}` };
@@ -4398,8 +4464,8 @@ export class WechatDispatchService {
     reason = "",
   ) {
     const prisma = this.prisma as any;
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    const orderContext = this.orderSendContext(task);
+    const orderDraftId = String(orderContext.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (orderDraftId) {
       const order = await prisma.orderDraft.findUnique({ where: { id: orderDraftId } });
       if (!order) throw new BadRequestException(`linked order draft not found: ${orderDraftId}`);
@@ -4417,8 +4483,8 @@ export class WechatDispatchService {
           required: true,
         };
       }
-      const source = String(automation.source || task?.payload?.source || "");
-      const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
+      const source = String(orderContext.source || task?.payload?.source || "");
+      const stage = source === "order_followup" || orderContext.followupType ? "订单跟进发送" : "订单确认发送";
       const marker = outcome === "requeued" ? `[发送任务:${task.id}:requeue]` : `[发送任务:${task.id}]`;
       if (String(order.customerNotes || "").includes(marker)) return null;
       const note = outcome === "requeued"
@@ -5371,19 +5437,14 @@ export class WechatDispatchService {
         highValueAmountCny: appConfig.highValueAmountCny,
       });
       if (confirmationDecision.ok) {
-        const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
+        const confirmation = await this.queueLowValueOrderConfirmation(result.orderDraft.id, {
           ...this.expectedIdentityFromOrder(result.orderDraft),
           owner: "low_value_automation",
           note: "客户补充付款信息后，订单确认已自动进入微信安全发送队列。",
           reason: "low_value_order_confirmation",
-          automation: {
-            source: "low_value_quote_payment_update",
-            valueLevel: "low",
-            reason: acceptancePlan.reason,
-            quoteDraftId: result.quote?.id || quote?.id,
-            orderDraftId: result.orderDraft.id,
-            queuedBy: "low_value_automation",
-          },
+        }, {
+          source: "low_value_quote_payment_update",
+          reason: acceptancePlan.reason,
         });
         result.orderDraft = confirmation.orderDraft;
         result.sendTask = confirmation.sendTask;
@@ -5421,19 +5482,14 @@ export class WechatDispatchService {
       highValueAmountCny: appConfig.highValueAmountCny,
     });
     if (confirmationDecision.ok) {
-      const confirmation = await this.queueOrderConfirmation(result.orderDraft.id, {
+      const confirmation = await this.queueLowValueOrderConfirmation(result.orderDraft.id, {
         ...this.expectedIdentityFromOrder(result.orderDraft),
         owner: "low_value_automation",
         note: "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。",
         reason: "low_value_order_confirmation",
-        automation: {
-          source: "low_value_quote_acceptance",
-          valueLevel: "low",
-          reason: acceptancePlan.reason,
-          quoteDraftId: updatedQuote.id,
-          orderDraftId: result.orderDraft.id,
-          queuedBy: "low_value_automation",
-        },
+      }, {
+        source: "low_value_quote_acceptance",
+        reason: acceptancePlan.reason,
       });
       result.orderDraft = confirmation.orderDraft;
       result.sendTask = confirmation.sendTask;
@@ -5883,15 +5939,15 @@ export class WechatDispatchService {
   }
 
   private async markLinkedOrderSendFailed(task: any, reason: string) {
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const source = String(automation.source || task?.payload?.source || "");
-    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    const orderContext = this.orderSendContext(task);
+    const source = String(orderContext.source || task?.payload?.source || "");
+    const orderDraftId = String(orderContext.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (!orderDraftId) return;
     const order = appConfig.useLocalStore
       ? this.localStore.getOrderDraft(orderDraftId)
       : await (this.prisma as any).orderDraft.findUnique({ where: { id: orderDraftId } });
     if (!order) return;
-    const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
+    const stage = source === "order_followup" || orderContext.followupType ? "订单跟进发送" : "订单确认发送";
     const marker = `[发送任务:${task.id}]`;
     const currentNotes = String(order.customerNotes || "");
     if (currentNotes.includes(marker)) return;
@@ -5915,15 +5971,15 @@ export class WechatDispatchService {
   }
 
   private async markLinkedOrderSendRequeued(task: any, reason: string) {
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    const source = String(automation.source || task?.payload?.source || "");
-    const orderDraftId = String(automation.orderDraftId || task?.payload?.orderDraftId || "").trim();
+    const orderContext = this.orderSendContext(task);
+    const source = String(orderContext.source || task?.payload?.source || "");
+    const orderDraftId = String(orderContext.orderDraftId || task?.payload?.orderDraftId || "").trim();
     if (!orderDraftId) return;
     const order = appConfig.useLocalStore
       ? this.localStore.getOrderDraft(orderDraftId)
       : await (this.prisma as any).orderDraft.findUnique({ where: { id: orderDraftId } });
     if (!order) return;
-    const stage = source === "order_followup" || automation.followupType ? "订单跟进发送" : "订单确认发送";
+    const stage = source === "order_followup" || orderContext.followupType ? "订单跟进发送" : "订单确认发送";
     const marker = `[发送任务:${task.id}:requeue]`;
     const currentNotes = String(order.customerNotes || "");
     if (currentNotes.includes(marker)) return;
@@ -6074,8 +6130,13 @@ export class WechatDispatchService {
   }
 
   private hasOrderDraftBinding(task: any) {
-    const automation = isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
-    return Boolean(String(automation.orderDraftId || ""));
+    return Boolean(String(this.orderSendContext(task).orderDraftId || ""));
+  }
+
+  private orderSendContext(task: any): Record<string, unknown> {
+    const context = isPlainObject(task?.guardSnapshot?.orderContext) ? task.guardSnapshot.orderContext : {};
+    if (String(context.orderDraftId || "").trim()) return context;
+    return isPlainObject(task?.guardSnapshot?.automation) ? task.guardSnapshot.automation : {};
   }
 
   private inspectPendingBridgeOutbox(task: any, suppliedAttempt?: any) {
@@ -6708,6 +6769,26 @@ function normalizeAssetIds(value: any[]): string[] {
         .map(String),
     ),
   ];
+}
+
+function manualOrderQueueRequest(payload: OrderQueueRequest | Record<string, unknown> | null | undefined): OrderQueueRequest {
+  const value = isPlainObject(payload) ? payload : {};
+  const type = value.type === "production" || value.type === "delivery" ? value.type : undefined;
+  return {
+    expectedWechatAccountId: stringOrUndefined(value.expectedWechatAccountId),
+    expectedConversationId: stringOrUndefined(value.expectedConversationId),
+    expectedCustomerId: stringOrUndefined(value.expectedCustomerId),
+    type,
+    owner: stringOrUndefined(value.owner),
+    note: stringOrUndefined(value.note),
+    reason: stringOrUndefined(value.reason),
+    releaseManualLock: value.releaseManualLock === true,
+    releaseReason: stringOrUndefined(value.releaseReason),
+  };
+}
+
+function stringOrUndefined(value: unknown) {
+  return typeof value === "string" ? value : undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

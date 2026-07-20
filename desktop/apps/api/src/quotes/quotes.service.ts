@@ -18,6 +18,13 @@ const {
   validateQuoteDraftIdentity,
 } = rules;
 
+type QuoteQueueRequest = {
+  owner?: string;
+  note?: string;
+  releaseManualLock?: boolean;
+  releaseReason?: string;
+} & ExpectedIdentityPayload;
+
 @Injectable()
 export class QuotesService {
   constructor(
@@ -254,13 +261,19 @@ export class QuotesService {
 
   async queueSend(
     id: string,
-    options: {
-      owner?: string;
-      note?: string;
-      automation?: Record<string, unknown>;
-      releaseManualLock?: boolean;
-      releaseReason?: string;
-    } & ExpectedIdentityPayload = {},
+    options: QuoteQueueRequest = {},
+  ) {
+    return this.queueSendWithProvenance(id, manualQuoteQueueRequest(options), false);
+  }
+
+  private queueLowValueSend(id: string, options: QuoteQueueRequest) {
+    return this.queueSendWithProvenance(id, manualQuoteQueueRequest(options), true);
+  }
+
+  private async queueSendWithProvenance(
+    id: string,
+    options: QuoteQueueRequest,
+    lowValueAutomation: boolean,
   ) {
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new Error(`quote draft not found: ${id}`);
@@ -288,13 +301,21 @@ export class QuotesService {
 
     let sendTask: any;
     try {
+      const trustedAutomation = lowValueAutomation
+        ? {
+            source: "low_value_quote_send",
+            valueLevel: "low",
+            quoteDraftId: quote.id,
+            queuedBy: "low_value_automation",
+          }
+        : undefined;
       sendTask = await this.wechatDispatch.enqueueQuoteMessage({
         wechatAccountId: designJob.wechatAccountId,
         conversationId: designJob.conversationId,
         designJobId: designJob.id,
         quoteDraftId: quote.id,
         text,
-        automation: options.automation as any,
+        automation: trustedAutomation,
       });
     } catch (error) {
       if (options.releaseManualLock && designJob.conversationId) {
@@ -452,11 +473,6 @@ export class QuotesService {
         owner: reviewer,
         note: "订单确认已进入微信安全发送队列。",
         reason: "manual_payment_proof_verified",
-        automation: {
-          source: "manual_payment_proof_verified",
-          quoteDraftId: id,
-          paymentStatus,
-        },
       });
       await this.createReviewLog({
         targetType: "quote",
@@ -518,14 +534,9 @@ export class QuotesService {
 
       try {
         result.queued.push(
-          await this.queueSend(quote.id, {
+          await this.queueLowValueSend(quote.id, {
             owner: "低价值自动化",
             note: "客户已选图，低价值报价已自动进入微信安全发送队列。",
-            automation: {
-              source: "low_value_quote_send",
-              valueLevel: "low",
-              queuedBy: "low_value_automation",
-            },
           }),
         );
       } catch (error) {
@@ -826,6 +837,25 @@ type QuoteUpdatePatch = {
   unitPrice?: number | string;
   totalCost?: number | string;
 };
+
+function manualQuoteQueueRequest(payload: QuoteQueueRequest | Record<string, unknown> | null | undefined): QuoteQueueRequest {
+  const value = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {};
+  return {
+    expectedWechatAccountId: quoteStringOrUndefined(value.expectedWechatAccountId),
+    expectedConversationId: quoteStringOrUndefined(value.expectedConversationId),
+    expectedCustomerId: quoteStringOrUndefined(value.expectedCustomerId),
+    owner: quoteStringOrUndefined(value.owner),
+    note: quoteStringOrUndefined(value.note),
+    releaseManualLock: value.releaseManualLock === true,
+    releaseReason: quoteStringOrUndefined(value.releaseReason),
+  };
+}
+
+function quoteStringOrUndefined(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
 
 function cleanQuotePatch(patch: QuoteUpdatePatch, current: any, allowVerifiedPayment = false) {
   const data: Record<string, string | number | null> = {};

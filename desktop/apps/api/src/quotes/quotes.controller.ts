@@ -92,15 +92,11 @@ export class QuotesController {
     @Body() payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    const {
-      owner: _untrustedOwner,
-      actor: _untrustedActor,
-      operator: _untrustedOperator,
-      reviewer: _untrustedReviewer,
-      ...trustedPayload
-    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
     return this.quotes.queueSend(id, {
-      ...trustedPayload,
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      note: payload?.note,
       owner: principal.id,
       releaseManualLock: true,
       releaseReason: "manual_quote_send",

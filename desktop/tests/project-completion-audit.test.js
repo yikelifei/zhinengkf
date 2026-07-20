@@ -62,6 +62,10 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", '@Post("inbound/messages")\n@RequireOperatorCapability("approve_send")\n@UseGuards(OperatorAccessGuard)\nprocessInboundMessage(@Body() payload, @TrustedOperator() _principal) {}\nvalidateSendTask(\n  @Param("id") id: string,\n  @Body() payload: ExpectedIdentityPayload,\n) {}\n');
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest() {}\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'buildOrderSendContext();\norderContext: params.orderContext;\nthis.orderSendContext(task);\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id });\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'setConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n', true);
   write(root, "desktop/packages/rules/wechatWindowEvidence.js", 'WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION; createWechatWindowObserverAttestation(); createHmac("sha256", token); timingSafeEqual(supplied, expected); canonicalObserverAttestation(); canonicalJsonObject();\n');
   write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
@@ -74,6 +78,7 @@ module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
   write(root, "desktop/apps/api/src/agents/agents.service.ts", "PrismaOperationsService; appConfig.useLocalStore; this.requirePrisma().listAgents(); this.requirePrisma().listAgentSkills();\n");
   write(root, "desktop/apps/api/src/routing/routing.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) this.evaluatePrisma(); correctRouteEvaluation(); notifyCorrectionBestEffort(); notification delivery is non-authoritative; NotFoundException;\n");
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
+  write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'queueSendWithProvenance(id, manualQuoteQueueRequest(options), false);\nqueueSendWithProvenance(id, manualQuoteQueueRequest(options), true);\nsource: "low_value_quote_send"; quoteDraftId: quote.id; queuedBy: "low_value_automation"; automation: trustedAutomation;\nfunction manualQuoteQueueRequest() {}\n', true);
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\n');
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
@@ -366,9 +371,16 @@ export class QuotesController {
   @Post(":id/queue-send")
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
-  queue(@Body() body, @TrustedOperator() principal) {
-    const { owner: _untrustedOwner, ...trusted } = body;
-    return service({ ...trusted, owner: principal.id });
+  queueSend(id, @Body() payload, @TrustedOperator() principal) {
+    return this.quotes.queueSend(id, {
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      note: payload?.note,
+      owner: principal.id,
+      releaseManualLock: true,
+      releaseReason: "manual_quote_send",
+    });
   }
   @Post(":id/verify-payment-proof")
   @RequireOperatorCapability("approve_send")
@@ -866,6 +878,56 @@ test("completion audit rejects browser window self-report and observer attestati
     fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
     const report = buildAudit(root, { includeExternal: false });
     assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
+});
+
+test("completion audit rejects forged HTTP and spread automation provenance", () => {
+  const contractIds = [
+    "contract.manual_order_queue_controller_allowlist",
+    "contract.manual_quote_queue_controller_allowlist",
+    "contract.trusted_order_automation_provenance",
+    "contract.trusted_quote_automation_provenance",
+  ];
+  const baseline = buildAudit(createPassingFixture(), { includeExternal: false });
+  for (const id of contractIds) {
+    assert.equal(baseline.results.find((item) => item.id === id).status, STATUS.PASS, id);
+  }
+
+  const mutations = [
+    {
+      id: "contract.manual_order_queue_controller_allowlist",
+      file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+      content: "\nqueueOrderConfirmation(id, { ...(payload || {}), automation: payload.automation });\n",
+    },
+    {
+      id: "contract.manual_order_queue_controller_allowlist",
+      file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+      content: "\nsetConversationManualLock(id, { ...(payload || {}), effectKey: payload.effectKey });\n",
+    },
+    {
+      id: "contract.manual_quote_queue_controller_allowlist",
+      file: "desktop/apps/api/src/quotes/quotes.controller.ts",
+      content: "\nqueueSend(id, { ...trustedPayload, automation: payload.automation });\n",
+    },
+    {
+      id: "contract.trusted_order_automation_provenance",
+      file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+      content: "\nconst forgedAutomation = { ...(payload.automation || {}) };\n",
+    },
+    {
+      id: "contract.trusted_quote_automation_provenance",
+      file: "desktop/apps/api/src/quotes/quotes.service.ts",
+      content: "\nautomation: options.automation;\n",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    write(root, mutation.file, mutation.content, true);
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === mutation.id);
+    assert.equal(contract.status, STATUS.FAIL, mutation.id);
+    assert.ok(contract.evidence.forbidden.length > 0, mutation.id);
   }
 });
 

@@ -299,7 +299,6 @@ export class ReviewsService {
         note: payload.note || "高价值订单已人工审核，订单确认已进入微信安全发送队列。",
         releaseManualLock: true,
         releaseReason: "manual_approve_order_confirmation",
-        automation: { source: "manual_order_review", valueLevel: "high" },
       });
       result.orderDraft = await this.updateReviewedOrder(id, {
         owner: reviewer,
@@ -319,7 +318,6 @@ export class ReviewsService {
         reason: "manual_approve_order_followup",
         releaseManualLock: true,
         releaseReason: "manual_approve_order_followup",
-        automation: { source: "manual_order_review", valueLevel: "high", followupType },
       });
       result.orderDraft = await this.updateReviewedOrder(id, {
         owner: reviewer,

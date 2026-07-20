@@ -328,6 +328,10 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(quoteSendTask.designJobId, "design_1");
     assert.equal(quoteSendTask.payload.kind, "quote");
     assert.equal(quoteSendTask.guardSnapshot.binding.ok, true);
+    assert.equal(quoteSendTask.guardSnapshot.automation.source, "low_value_quote_send");
+    assert.equal(quoteSendTask.guardSnapshot.automation.valueLevel, "low");
+    assert.equal(quoteSendTask.guardSnapshot.automation.quoteDraftId, queuedQuote.id);
+    assert.equal(quoteSendTask.guardSnapshot.automation.queuedBy, "low_value_automation");
 
     store.updateQuoteDraft(queuedQuote.id, {
       status: "sent",
@@ -425,7 +429,17 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(confirmationSendTask.guardSnapshot.binding.ok, true);
     assert.equal(confirmationSendTask.guardSnapshot.reason, "low_value_order_confirmation");
     assert.equal(confirmationSendTask.guardSnapshot.automation.source, "order_confirmation");
+    assert.equal(confirmationSendTask.guardSnapshot.automation.valueLevel, "low");
     assert.equal(confirmationSendTask.guardSnapshot.automation.orderDraftId, order.id);
+    assert.equal(confirmationSendTask.guardSnapshot.automation.quoteDraftId, queuedQuote.id);
+    assert.equal(confirmationSendTask.guardSnapshot.automation.paymentStatus, "deposit_paid");
+    assert.equal(confirmationSendTask.guardSnapshot.automation.queuedBy, "low_value_automation");
+    assert.deepEqual(confirmationSendTask.guardSnapshot.orderContext, {
+      source: "order_confirmation",
+      orderDraftId: order.id,
+      quoteDraftId: queuedQuote.id,
+      paymentStatus: "deposit_paid",
+    });
     assert.match(confirmationSendTask.payload.text, /第2张效果图/);
     assert.match(confirmationSendTask.payload.text, /员工福利/);
     assert.match(confirmationSendTask.payload.text, /数量 20 份/);
@@ -478,8 +492,19 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(productionSendTask.guardSnapshot.binding.ok, true);
     assert.equal(productionSendTask.guardSnapshot.reason, "low_value_order_followup");
     assert.equal(productionSendTask.guardSnapshot.automation.source, "order_followup");
+    assert.equal(productionSendTask.guardSnapshot.automation.valueLevel, "low");
     assert.equal(productionSendTask.guardSnapshot.automation.followupType, "production");
     assert.equal(productionSendTask.guardSnapshot.automation.orderDraftId, order.id);
+    assert.equal(productionSendTask.guardSnapshot.automation.quoteDraftId, queuedQuote.id);
+    assert.equal(productionSendTask.guardSnapshot.automation.paymentStatus, "deposit_paid");
+    assert.equal(productionSendTask.guardSnapshot.automation.queuedBy, "low_value_automation");
+    assert.deepEqual(productionSendTask.guardSnapshot.orderContext, {
+      source: "order_followup",
+      orderDraftId: order.id,
+      quoteDraftId: queuedQuote.id,
+      paymentStatus: "deposit_paid",
+      followupType: "production",
+    });
     assert.match(productionSendTask.payload.text, /订单进度/);
     assert.match(productionSendTask.payload.text, /员工福利/);
     assert.match(productionSendTask.payload.text, /礼盒、茶叶/);
@@ -542,8 +567,19 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(deliverySendTask.guardSnapshot.binding.ok, true);
     assert.equal(deliverySendTask.guardSnapshot.reason, "low_value_order_followup");
     assert.equal(deliverySendTask.guardSnapshot.automation.source, "order_followup");
+    assert.equal(deliverySendTask.guardSnapshot.automation.valueLevel, "low");
     assert.equal(deliverySendTask.guardSnapshot.automation.followupType, "delivery");
     assert.equal(deliverySendTask.guardSnapshot.automation.orderDraftId, order.id);
+    assert.equal(deliverySendTask.guardSnapshot.automation.quoteDraftId, queuedQuote.id);
+    assert.equal(deliverySendTask.guardSnapshot.automation.paymentStatus, "paid");
+    assert.equal(deliverySendTask.guardSnapshot.automation.queuedBy, "low_value_automation");
+    assert.deepEqual(deliverySendTask.guardSnapshot.orderContext, {
+      source: "order_followup",
+      orderDraftId: order.id,
+      quoteDraftId: queuedQuote.id,
+      paymentStatus: "paid",
+      followupType: "delivery",
+    });
     assert.match(deliverySendTask.payload.text, /订单进度/);
     assert.match(deliverySendTask.payload.text, /员工福利/);
     assert.match(deliverySendTask.payload.text, /金额 2800 元/);
