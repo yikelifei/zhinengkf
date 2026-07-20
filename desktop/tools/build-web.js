@@ -530,7 +530,7 @@ function commandLineForPid(pid) {
   return normalizePathText(result.stdout || "");
 }
 
-function classifyPortOwners(ownerPids, commandLinesByPid, currentRoot) {
+function classifyPortOwners(ownerPids, commandLinesByPid, currentRoot, options = {}) {
   const ownerIds = [...new Set((ownerPids || []).map((pid) => String(pid)))];
   const classified = {
     status: "free",
@@ -539,17 +539,118 @@ function classifyPortOwners(ownerPids, commandLinesByPid, currentRoot) {
     sameRootPids: [],
     unknownPids: [],
   };
-  const normalizedRoot = normalizePathText(currentRoot);
+  if (!ownerIds.length) return classified;
+  const canonicalRoot = canonicalizeProjectRoot(currentRoot, options);
   for (const pid of ownerIds) {
-    const commandLine = normalizePathText(commandLinesByPid?.get?.(pid) || "").trim();
-    if (!commandLine) classified.unknownPids.push(pid);
-    else if (normalizedRoot && commandLine.includes(normalizedRoot)) classified.sameRootPids.push(pid);
-    else classified.foreignPids.push(pid);
+    const ownerStatus = classifyOwnerProject(commandLinesByPid?.get?.(pid) || "", canonicalRoot, options);
+    if (ownerStatus === "same-root") classified.sameRootPids.push(pid);
+    else if (ownerStatus === "foreign") classified.foreignPids.push(pid);
+    else classified.unknownPids.push(pid);
   }
   if (classified.unknownPids.length) classified.status = "unknown";
   else if (classified.sameRootPids.length) classified.status = "same-root";
   else if (classified.foreignPids.length) classified.status = "foreign";
   return classified;
+}
+
+function classifyOwnerProject(commandLine, canonicalRoot, options = {}) {
+  if (!String(commandLine || "").trim() || !canonicalRoot) return "unknown";
+  const evidence = inspectOwnerProjectPaths(commandLine);
+  if (evidence.uncertain || !evidence.projectPaths.length) return "unknown";
+  const canonicalCandidates = [];
+  for (const projectPath of evidence.projectPaths) {
+    const canonicalCandidate = projectRootCandidates(projectPath)
+      .map((candidate) => canonicalizeProjectRoot(candidate, options))
+      .find(Boolean);
+    if (!canonicalCandidate) return "unknown";
+    if (!canonicalCandidates.includes(canonicalCandidate)) canonicalCandidates.push(canonicalCandidate);
+  }
+  if (!canonicalCandidates.length) return "unknown";
+  return canonicalCandidates.includes(canonicalRoot) ? "same-root" : "foreign";
+}
+
+function extractAbsoluteProjectPaths(commandLine) {
+  return inspectOwnerProjectPaths(commandLine).projectPaths;
+}
+
+function inspectOwnerProjectPaths(commandLine) {
+  const projectPaths = [];
+  let uncertain = false;
+  const tokens = String(commandLine || "").match(/"[^"]+"|'[^']+'|\S+/g) || [];
+  for (const rawToken of tokens) {
+    let token = rawToken.replace(/^["']+|["',;)\]]+$/g, "");
+    if (/^--?[^=]+=/.test(token)) token = token.slice(token.indexOf("=") + 1);
+    token = token.replace(/^["']+|["',;)\]]+$/g, "");
+    const normalized = token.replace(/\\/g, "/");
+    const absolute = path.win32.isAbsolute(token) || path.posix.isAbsolute(token);
+    const hasProjectMarker = projectRootMarkerIndexes(normalized).length > 0;
+    if (!absolute) {
+      if (hasProjectMarker || /^(?:\.\.?(?:\/|$))?(?:apps|tools|node_modules|prisma|\.runtime(?:-|\/))\//i.test(normalized)) {
+        uncertain = true;
+      }
+      continue;
+    }
+    if (hasProjectMarker) {
+      if (!projectPaths.includes(token)) projectPaths.push(token);
+    } else if (!isKnownRuntimeExecutable(token)) {
+      uncertain = true;
+    }
+  }
+  return { projectPaths, uncertain };
+}
+
+function isKnownRuntimeExecutable(value) {
+  const name = path.win32.basename(String(value || "")).toLowerCase();
+  return ["cmd.exe", "node", "node.exe", "npm", "npm.cmd", "npx", "npx.cmd", "powershell.exe", "pwsh.exe"].includes(name);
+}
+
+function projectRootCandidates(projectPath) {
+  const normalized = String(projectPath || "").replace(/\\/g, "/");
+  return projectRootMarkerIndexes(normalized)
+    .sort((left, right) => right - left)
+    .map((index) => projectPath.slice(0, index).replace(/[\\/]+$/, ""))
+    .filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index);
+}
+
+function projectRootMarkerIndexes(normalizedPath) {
+  const normalized = String(normalizedPath || "").toLowerCase();
+  const indexes = [];
+  for (const marker of ["/apps/", "/tools/", "/node_modules/", "/prisma/", "/.runtime/", "/.runtime-"]) {
+    let offset = 0;
+    while (offset < normalized.length) {
+      const index = normalized.indexOf(marker, offset);
+      if (index < 0) break;
+      if (index > 0 && !indexes.includes(index)) indexes.push(index);
+      offset = index + marker.length;
+    }
+  }
+  return indexes;
+}
+
+function canonicalizeProjectRoot(projectRoot, options = {}) {
+  if (!String(projectRoot || "").trim()) return "";
+  const realpath = options.realpath || ((value) => fs.realpathSync.native(value));
+  const isProjectRoot = options.isProjectRoot || defaultProjectRootCheck;
+  try {
+    const resolved = realpath(projectRoot);
+    if (!resolved || !isProjectRoot(resolved)) return "";
+    return normalizeCanonicalPath(resolved);
+  } catch {
+    return "";
+  }
+}
+
+function defaultProjectRootCheck(projectRoot) {
+  return (
+    fs.existsSync(path.join(projectRoot, "package.json"))
+    && fs.existsSync(path.join(projectRoot, "apps", "web"))
+    && fs.existsSync(path.join(projectRoot, "tools", "build-web.js"))
+  );
+}
+
+function normalizeCanonicalPath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function getPortOwnerPids(port) {
@@ -662,4 +763,11 @@ function numberEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-module.exports = { classifyPortOwners };
+module.exports = {
+  canonicalizeProjectRoot,
+  classifyOwnerProject,
+  classifyPortOwners,
+  extractAbsoluteProjectPaths,
+  inspectOwnerProjectPaths,
+  projectRootCandidates,
+};

@@ -20,7 +20,14 @@ const {
   renderMarkdownReport,
   scanSecretEntries,
 } = require("../tools/production-release-gate");
-const { classifyPortOwners } = require("../tools/build-web");
+const {
+  canonicalizeProjectRoot,
+  classifyOwnerProject,
+  classifyPortOwners,
+  extractAbsoluteProjectPaths,
+  inspectOwnerProjectPaths,
+  projectRootCandidates,
+} = require("../tools/build-web");
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-release-gate-"));
@@ -88,8 +95,22 @@ test("isolated release gate accepts only linked worktree git layouts", () => {
 
 test("web build foreign-owner override fails closed for same-root and unknown owners", () => {
   const currentRoot = "D:/repo/.runtime/wave9/desktop";
+  const realPaths = new Map([
+    ["d:/repo/.runtime/wave9/desktop", "D:/repo/.runtime/wave9/desktop"],
+    ["c:/repo-alias/.runtime/wave9/desktop", "D:/repo/.runtime/wave9/desktop"],
+    ["d:/repo~1/runtime~1/wave9~1/desktop", "D:/repo/.runtime/wave9/desktop"],
+    ["d:/repo/desktop", "D:/repo/desktop"],
+  ]);
+  const options = {
+    realpath: (value) => {
+      const resolved = realPaths.get(String(value).replace(/\\/g, "/").toLowerCase());
+      if (!resolved) throw new Error("unresolved fixture path");
+      return resolved;
+    },
+    isProjectRoot: () => true,
+  };
   assert.deepEqual(
-    classifyPortOwners([], new Map(), currentRoot),
+    classifyPortOwners([], new Map(), currentRoot, options),
     { status: "free", ownerPids: [], foreignPids: [], sameRootPids: [], unknownPids: [] },
   );
   assert.deepEqual(
@@ -97,6 +118,7 @@ test("web build foreign-owner override fails closed for same-root and unknown ow
       ["101"],
       new Map([["101", 'node "D:/repo/desktop/.runtime-stable/web-standalone-server.js"']]),
       currentRoot,
+      options,
     ),
     { status: "foreign", ownerPids: ["101"], foreignPids: ["101"], sameRootPids: [], unknownPids: [] },
   );
@@ -105,13 +127,114 @@ test("web build foreign-owner override fails closed for same-root and unknown ow
       ["202"],
       new Map([["202", 'node "D:/repo/.runtime/wave9/desktop/.runtime/web-standalone-server.js"']]),
       currentRoot,
+      options,
     ),
     { status: "same-root", ownerPids: ["202"], foreignPids: [], sameRootPids: ["202"], unknownPids: [] },
   );
   assert.deepEqual(
-    classifyPortOwners(["303"], new Map([["303", ""]]), currentRoot),
+    classifyPortOwners(["303"], new Map([["303", ""]]), currentRoot, options),
     { status: "unknown", ownerPids: ["303"], foreignPids: [], sameRootPids: [], unknownPids: ["303"] },
   );
+  assert.deepEqual(
+    classifyPortOwners(
+      ["404"],
+      new Map([["404", 'node "C:/repo-alias/.runtime/wave9/desktop/apps/web/server.js"']]),
+      currentRoot,
+      options,
+    ),
+    { status: "same-root", ownerPids: ["404"], foreignPids: [], sameRootPids: ["404"], unknownPids: [] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(
+      ["405"],
+      new Map([["405", 'node "D:/REPO~1/RUNTIME~1/WAVE9~1/desktop/apps/web/server.js"']]),
+      currentRoot,
+      options,
+    ),
+    { status: "same-root", ownerPids: ["405"], foreignPids: [], sameRootPids: ["405"], unknownPids: [] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(
+      ["505"],
+      new Map([["505", 'node "D:/missing/desktop/apps/web/server.js"']]),
+      currentRoot,
+      options,
+    ),
+    { status: "unknown", ownerPids: ["505"], foreignPids: [], sameRootPids: [], unknownPids: ["505"] },
+  );
+  assert.deepEqual(
+    classifyPortOwners(["606"], new Map([["606", "node tools/web-standalone-server.js"]]), currentRoot, options),
+    { status: "unknown", ownerPids: ["606"], foreignPids: [], sameRootPids: [], unknownPids: ["606"] },
+  );
+});
+
+test("owner project helpers require an absolute resolvable verified project root", () => {
+  assert.deepEqual(
+    extractAbsoluteProjectPaths('node "D:/repo/desktop/apps/web/server.js" --cwd="D:/repo/desktop/.runtime/run"'),
+    ["D:/repo/desktop/apps/web/server.js", "D:/repo/desktop/.runtime/run"],
+  );
+  assert.deepEqual(extractAbsoluteProjectPaths("node tools/web-standalone-server.js"), []);
+  assert.deepEqual(inspectOwnerProjectPaths("node tools/web-standalone-server.js"), {
+    projectPaths: [],
+    uncertain: true,
+  });
+  assert.deepEqual(
+    projectRootCandidates("D:/repo/.runtime/wave9/desktop/apps/web/node_modules/next/server.js"),
+    [
+      "D:/repo/.runtime/wave9/desktop/apps/web",
+      "D:/repo/.runtime/wave9/desktop",
+      "D:/repo",
+    ],
+  );
+
+  const realpath = (value) => {
+    if (value === "D:/repo/desktop") return "D:/canonical/desktop";
+    throw new Error("unresolved fixture path");
+  };
+  assert.equal(
+    canonicalizeProjectRoot("D:/repo/desktop", { realpath, isProjectRoot: () => true }),
+    process.platform === "win32" ? "d:/canonical/desktop" : "D:/canonical/desktop",
+  );
+  assert.equal(canonicalizeProjectRoot("D:/missing/desktop", { realpath, isProjectRoot: () => true }), "");
+  assert.equal(canonicalizeProjectRoot("D:/repo/desktop", { realpath, isProjectRoot: () => false }), "");
+  assert.equal(
+    classifyOwnerProject('node "D:/missing/desktop/apps/web/server.js"', "d:/canonical/desktop", {
+      realpath,
+      isProjectRoot: () => true,
+    }),
+    "unknown",
+  );
+  assert.equal(
+    classifyOwnerProject(
+      'node tools/web-standalone-server.js "D:/repo/desktop/apps/web/foreign-argument.js"',
+      process.platform === "win32" ? "d:/canonical/desktop" : "D:/canonical/desktop",
+      { realpath, isProjectRoot: () => true },
+    ),
+    "unknown",
+  );
+});
+
+test("current Windows workspace junction resolves to the same owner project", { skip: process.platform !== "win32" }, (t) => {
+  const directRepository = "D:\\zhinengkefu";
+  const junctionRepository = path.join(process.env.USERPROFILE || "", "Desktop", "zhinengkefu");
+  const currentDesktop = path.resolve(__dirname, "..");
+  const relativeCheckout = path.relative(directRepository, currentDesktop);
+  if (!process.env.USERPROFILE || relativeCheckout.startsWith("..") || !fs.existsSync(junctionRepository)) {
+    t.skip("current D: repository junction is unavailable");
+    return;
+  }
+  const junctionDesktop = path.join(junctionRepository, relativeCheckout);
+  if (fs.realpathSync.native(junctionDesktop) !== fs.realpathSync.native(currentDesktop)) {
+    t.skip("workspace alias does not point to this checkout");
+    return;
+  }
+  const classified = classifyPortOwners(
+    ["707"],
+    new Map([["707", `node "${path.join(junctionDesktop, "apps", "web", "server.js")}"`]]),
+    currentDesktop,
+  );
+  assert.equal(classified.status, "same-root");
+  assert.deepEqual(classified.sameRootPids, ["707"]);
 });
 
 test("isolated owner safety exit is BLOCKED while compile failures remain FAIL", () => {
