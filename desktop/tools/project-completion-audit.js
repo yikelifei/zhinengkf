@@ -602,7 +602,8 @@ const CONTRACTS = Object.freeze([
     patterns: [
       /monotonicWechatWorkInboundAt/,
       /normalizeWechatWorkInboundAt/,
-      /currentValue >= incoming/,
+      /normalizeInstant|currentValue >= incoming/,
+      /Date\.parse\(currentValue\) >= Date\.parse\(incomingValue\)|currentValue >= incoming/,
     ],
   },
   {
@@ -1250,7 +1251,7 @@ const CONTRACTS = Object.freeze([
       /PersonalWechatRpaPersistence/,
       /this\.persistence\.listBindings/,
       /this\.persistence\.listAudit/,
-      /this\.persistence\.upsertBinding/,
+      /this\.persistence\.(?:upsertBinding|claimInboundAndBind)/,
       /this\.persistence\.recordAudit/,
       /assertProductionIdentity/,
     ],

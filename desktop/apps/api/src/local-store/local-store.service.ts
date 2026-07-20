@@ -10,6 +10,7 @@ import {
   createInboundMessageOperationFingerprint,
   createSendTaskOperationFingerprint,
   deterministicOperationId,
+  monotonicInboundOperationStage,
   normalizeOperationKey,
   readRequestOperationMetadata,
   requestOperationMetadata,
@@ -38,6 +39,7 @@ type StoreData = {
   customers: any[];
   conversations: any[];
   messages: any[];
+  inboundMessageOperations: any[];
   wechatWindowSnapshots: any[];
   skus: any[];
   skuChangeLogs: any[];
@@ -620,9 +622,11 @@ export class LocalStoreService {
   }
 
   private monotonicWechatWorkInboundAt(current: unknown, incoming: string | null) {
-    const currentValue = String(current || "").trim() || null;
-    if (!incoming || (currentValue && currentValue >= incoming)) return currentValue;
-    return incoming;
+    const currentValue = normalizeInstant(current);
+    const incomingValue = normalizeInstant(incoming);
+    if (!incomingValue) return currentValue;
+    if (!currentValue) return incomingValue;
+    return Date.parse(currentValue) >= Date.parse(incomingValue) ? currentValue : incomingValue;
   }
 
   getWechatWorkBinding(openKfid: string, externalUserId: string) {
@@ -1189,6 +1193,97 @@ export class LocalStoreService {
       ...record,
       conversation: this.hydrateConversation(data, data.conversations[conversationIndex]),
     };
+  }
+
+  claimInboundMessageOperation(payload: any) {
+    const data = this.read();
+    const wechatAccountId = String(payload?.wechatAccountId || "").trim();
+    const externalId = String(payload?.externalId || "").trim();
+    const requestFingerprint = String(payload?.requestFingerprint || "").trim();
+    const source = String(payload?.source || "wechat").trim();
+    const claimToken = String(payload?.claimToken || "").trim();
+    const leaseExpiresAt = normalizeInstant(payload?.leaseExpiresAt);
+    if (!wechatAccountId || !externalId || !requestFingerprint || !claimToken || !leaseExpiresAt) {
+      throw new BadRequestException("inbound operation identity, fingerprint, claim token and lease are required");
+    }
+    const index = data.inboundMessageOperations.findIndex(
+      (item) => item.wechatAccountId === wechatAccountId && item.externalId === externalId,
+    );
+    const now = new Date().toISOString();
+    if (index >= 0) {
+      const existing = data.inboundMessageOperations[index];
+      if (existing.requestFingerprint !== requestFingerprint || existing.source !== source) {
+        throw new BadRequestException("duplicate inbound externalId conflict: request fingerprint changed");
+      }
+      if (existing.status === "completed") return { operation: existing, claimed: false, completed: true };
+      const leaseActive = existing.status === "processing" && Date.parse(String(existing.leaseExpiresAt || "")) > Date.now();
+      if (leaseActive && existing.claimToken !== claimToken) {
+        return { operation: existing, claimed: false, completed: false, inProgress: true };
+      }
+      const operation = {
+        ...existing,
+        status: "processing",
+        claimToken,
+        leaseExpiresAt,
+        attemptCount: Number(existing.attemptCount || 0) + 1,
+        lastError: null,
+        updatedAt: now,
+      };
+      data.inboundMessageOperations[index] = operation;
+      this.write(data);
+      return { operation, claimed: true, completed: false };
+    }
+    const operation = {
+      id: String(payload.id || deterministicOperationId("inbound", `${wechatAccountId}:${externalId}`)),
+      source,
+      wechatAccountId,
+      externalId,
+      requestFingerprint,
+      normalizedPayload: payload.normalizedPayload || null,
+      status: "processing",
+      stage: "reserved",
+      bindingKey: payload.bindingKey || null,
+      customerId: null,
+      conversationId: null,
+      messageId: null,
+      routeEvaluationId: null,
+      sendTaskId: null,
+      result: null,
+      claimToken,
+      leaseExpiresAt,
+      attemptCount: 1,
+      lastError: null,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    data.inboundMessageOperations.push(operation);
+    this.write(data);
+    return { operation, claimed: true, completed: false };
+  }
+
+  getInboundMessageOperation(wechatAccountId: string, externalId: string) {
+    return this.read().inboundMessageOperations.find(
+      (item) => item.wechatAccountId === String(wechatAccountId || "").trim() && item.externalId === String(externalId || "").trim(),
+    ) || null;
+  }
+
+  updateInboundMessageOperation(id: string, claimToken: string, patch: any) {
+    const data = this.read();
+    const index = data.inboundMessageOperations.findIndex((item) => item.id === id);
+    if (index < 0) throw new NotFoundException(`inbound operation not found: ${id}`);
+    const current = data.inboundMessageOperations[index];
+    if (current.status !== "processing" || current.claimToken !== claimToken) {
+      throw new BadRequestException("inbound operation claim changed before stage commit");
+    }
+    const nextPatch = { ...patch };
+    if ("stage" in nextPatch) {
+      nextPatch.stage = monotonicInboundOperationStage(current.stage, nextPatch.stage);
+    }
+    const operation = { ...current, ...nextPatch, updatedAt: new Date().toISOString() };
+    data.inboundMessageOperations[index] = operation;
+    this.write(data);
+    return operation;
   }
 
   listConversationTimeline(filter: IdentityListFilter & { limit?: number }) {
@@ -2438,6 +2533,19 @@ export class LocalStoreService {
   createRouteEvaluation(payload: any, result: any) {
     const data = this.read();
     const now = new Date().toISOString();
+    const operationKey = String(payload?.operationKey || "").trim();
+    const routeId = operationKey ? deterministicOperationId("route", operationKey) : id("route");
+    const existing = operationKey ? data.routeEvaluations.find((route) => route.id === routeId) : null;
+    if (existing) {
+      if (
+        String(existing.conversationId || "") !== String(payload.conversationId || "") ||
+        String(existing.customerId || "") !== String(payload.customerId || "") ||
+        String(existing.text || "") !== String(payload.text || "")
+      ) {
+        throw new BadRequestException("inbound route operation replay changed identity or text");
+      }
+      return { ...existing, agent: data.agents.find((item) => item.id === existing.agentId) || null };
+    }
     const agent = data.agents.find((item) => item.key === result.agentKey) || data.agents.find((item) => item.key === "general");
     const identity = this.validateOptionalConversationBinding(
       data,
@@ -2449,7 +2557,8 @@ export class LocalStoreService {
       "route evaluation",
     );
     const record = {
-      id: id("route"),
+      id: routeId,
+      operationKey: operationKey || null,
       channel: payload.channel || "wechat",
       text: payload.text || "",
       customerId: identity.customerId || payload.customerId || null,
@@ -4223,6 +4332,7 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "customers",
     "conversations",
     "messages",
+    "inboundMessageOperations",
     "wechatWindowSnapshots",
     "skus",
     "skuChangeLogs",
@@ -4398,6 +4508,7 @@ function seedData(): StoreData {
       { id: "msg_demo_1", conversationId: conversation.id, direction: "inbound", text: "我想看端午礼盒效果图", createdAt: now },
       { id: "msg_demo_2", conversationId: conversation2.id, direction: "inbound", text: "我们要做一批企业伴手礼，预算比较高", createdAt: now },
     ],
+    inboundMessageOperations: [],
     wechatWindowSnapshots: [],
     skus,
     skuChangeLogs: [],
@@ -4431,6 +4542,14 @@ function personalWechatRpaBindingKey(ownerWxId: string, chatTitle: string) {
   return createHash("sha256")
     .update(`${String(ownerWxId || "").trim()}\n${String(chatTitle || "").trim()}`, "utf8")
     .digest("hex");
+}
+
+function normalizeInstant(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) throw new BadRequestException("timestamp must be a valid ISO date");
+  return new Date(timestamp).toISOString();
 }
 
 function shortExternalId(value: string) {

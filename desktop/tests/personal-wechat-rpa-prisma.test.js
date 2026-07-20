@@ -16,6 +16,7 @@ const { appConfig } = require("../apps/api/src/shared/app-config");
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { PersonalWechatRpaPersistence } = require("../apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence");
 const { PersonalWechatRpaService } = require("../apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service");
+const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
 
 function bindingInput(overrides = {}) {
   return {
@@ -38,6 +39,7 @@ function buildFakePrisma(seed = {}) {
     conversations: new Map(),
     bindings: new Map(),
     messages: new Map((seed.messages || []).map((row) => [row.id, { ...row }])),
+    inboundOperations: new Map(),
     audits: new Map(),
     writes: [],
   };
@@ -188,6 +190,58 @@ function buildFakePrisma(seed = {}) {
         }) || null;
         if (!row) return null;
         return { ...row, conversation: state.conversations.get(row.conversationId) || null };
+      },
+    },
+    inboundMessageOperation: {
+      async create({ data }) {
+        const duplicate = [...state.inboundOperations.values()].find((row) =>
+          row.id === data.id ||
+          (row.wechatAccountId === data.wechatAccountId && row.externalId === data.externalId)
+        );
+        if (duplicate) throw Object.assign(new Error("duplicate inbound operation"), { code: "P2002" });
+        const row = { status: "processing", stage: "reserved", attemptCount: 1, ...data, createdAt: now, updatedAt: now };
+        state.inboundOperations.set(row.id, row);
+        return row;
+      },
+      async findUnique({ where }) {
+        if (where.id) return state.inboundOperations.get(where.id) || null;
+        const key = where.wechatAccountId_externalId;
+        return [...state.inboundOperations.values()].find((row) =>
+          row.wechatAccountId === key.wechatAccountId && row.externalId === key.externalId
+        ) || null;
+      },
+      async update({ where, data }) {
+        const row = state.inboundOperations.get(where.id);
+        if (!row) throw new Error("inbound operation missing");
+        Object.assign(row, data, { updatedAt: now });
+        return row;
+      },
+      async updateMany({ where, data }) {
+        const row = state.inboundOperations.get(where.id);
+        if (!row) return { count: 0 };
+        if (where.requestFingerprint && row.requestFingerprint !== where.requestFingerprint) return { count: 0 };
+        if (where.status && typeof where.status === "string" && row.status !== where.status) return { count: 0 };
+        if (where.status?.not && row.status === where.status.not) return { count: 0 };
+        if (where.claimToken && row.claimToken !== where.claimToken) return { count: 0 };
+        if (where.stage && row.stage !== where.stage) return { count: 0 };
+        if (where.OR) {
+          const matches = where.OR.some((condition) => {
+            let match = true;
+            if (condition.status?.in) match = match && condition.status.in.includes(row.status);
+            if (typeof condition.status === "string") match = match && row.status === condition.status;
+            if (Object.prototype.hasOwnProperty.call(condition, "leaseExpiresAt")) {
+              match = match && (condition.leaseExpiresAt === null
+                ? row.leaseExpiresAt == null
+                : new Date(row.leaseExpiresAt || 0) < condition.leaseExpiresAt.lt);
+            }
+            return match;
+          });
+          if (!matches) return { count: 0 };
+        }
+        const next = { ...data };
+        if (data.attemptCount?.increment) next.attemptCount = Number(row.attemptCount || 0) + data.attemptCount.increment;
+        Object.assign(row, next, { updatedAt: now });
+        return { count: 1 };
       },
     },
   };
@@ -449,6 +503,136 @@ test("account-scoped RPA replay conflict is rejected before creating a new bindi
   }
 });
 
+test("concurrent account-scoped reservation loser creates zero binding side effects", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = false;
+  try {
+    const { prisma, state } = buildFakePrisma();
+    const persistence = new PersonalWechatRpaPersistence(prisma, forbiddenLocalStore());
+    const common = {
+      wechatAccountId: "account_1",
+      accountNickname: "客服一号",
+      ownerWxId: "wxid_owner_1",
+      conversationType: "direct",
+      receivedAt: "2026-07-20T10:00:00.000Z",
+      externalId: "concurrent-account-event",
+      leaseExpiresAt: "2026-07-20T10:05:00.000Z",
+    };
+    const first = persistence.claimInboundAndBind({
+      ...common,
+      chatTitle: "客户甲",
+      senderName: "客户甲",
+      requestFingerprint: "fingerprint-a",
+      normalizedPayload: { chatTitle: "客户甲", message: "甲消息" },
+      claimToken: "claim-a",
+    });
+    const second = persistence.claimInboundAndBind({
+      ...common,
+      chatTitle: "客户乙",
+      senderName: "客户乙",
+      requestFingerprint: "fingerprint-b",
+      normalizedPayload: { chatTitle: "客户乙", message: "乙消息" },
+      claimToken: "claim-b",
+    });
+    const settled = await Promise.allSettled([first, second]);
+    assert.equal(settled.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(settled.filter((item) => item.status === "rejected").length, 1);
+    assert.match(String(settled.find((item) => item.status === "rejected").reason), /duplicate inbound externalId conflict/);
+    assert.equal(state.inboundOperations.size, 1);
+    assert.equal(state.customers.size, 1);
+    assert.equal(state.conversations.size, 1);
+    assert.equal(state.bindings.size, 1);
+    assert.equal([...state.bindings.values()][0].chatTitle, "客户甲");
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
+test("Prisma inbound reservation resumes a failed claim from its durable binding stage", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = false;
+  try {
+    const { prisma, state } = buildFakePrisma();
+    const persistence = new PersonalWechatRpaPersistence(prisma, forbiddenLocalStore());
+    const claim = {
+      ...bindingInput(),
+      externalId: "resume-prisma-inbound",
+      requestFingerprint: "resume-fingerprint",
+      normalizedPayload: { chatTitle: "客户甲", message: "恢复消息" },
+      claimToken: "resume-claim-1",
+      leaseExpiresAt: "2099-07-20T10:05:00.000Z",
+    };
+    const first = await persistence.claimInboundAndBind(claim);
+    assert.equal(first.operation.stage, "binding_ready");
+    const wechatPersistence = new WechatPersistence(prisma, forbiddenLocalStore());
+    await wechatPersistence.failInboundOperation(first.operation.id, claim.claimToken, new Error("injected post-binding crash"));
+    const failed = state.inboundOperations.get(first.operation.id);
+    assert.equal(failed.status, "retryable");
+    assert.equal(failed.stage, "binding_ready");
+
+    const resumed = await persistence.claimInboundAndBind({
+      ...claim,
+      claimToken: "resume-claim-2",
+      leaseExpiresAt: "2099-07-20T10:10:00.000Z",
+    });
+    assert.equal(resumed.claimed, true);
+    assert.equal(resumed.operation.status, "processing");
+    assert.equal(resumed.operation.stage, "binding_ready");
+    assert.equal(resumed.operation.attemptCount, 2);
+    assert.equal(state.customers.size, 1);
+    assert.equal(state.conversations.size, 1);
+    assert.equal(state.bindings.size, 1);
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
+test("Prisma reservation CAS never reopens an operation completed by a concurrent owner", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = false;
+  try {
+    const { prisma, state } = buildFakePrisma();
+    const persistence = new PersonalWechatRpaPersistence(prisma, forbiddenLocalStore());
+    const claim = {
+      ...bindingInput(),
+      externalId: "completed-during-reclaim",
+      requestFingerprint: "completed-race-fingerprint",
+      normalizedPayload: { message: "竞态消息" },
+      claimToken: "race-owner-1",
+      leaseExpiresAt: "2026-07-20T10:05:00.000Z",
+    };
+    const first = await persistence.claimInboundAndBind(claim);
+    const operation = state.inboundOperations.get(first.operation.id);
+    operation.status = "retryable";
+    operation.claimToken = null;
+    operation.leaseExpiresAt = null;
+    const originalUpdateMany = prisma.inboundMessageOperation.updateMany;
+    let raced = false;
+    prisma.inboundMessageOperation.updateMany = async (args) => {
+      if (!raced) {
+        raced = true;
+        operation.status = "completed";
+        operation.stage = "completed";
+        operation.claimToken = null;
+        operation.leaseExpiresAt = null;
+      }
+      return originalUpdateMany(args);
+    };
+    const replay = await persistence.claimInboundAndBind({
+      ...claim,
+      claimToken: "race-owner-2",
+      leaseExpiresAt: "2099-07-20T10:10:00.000Z",
+    });
+    assert.equal(replay.completed, true);
+    assert.equal(replay.claimed, false);
+    assert.equal(operation.status, "completed");
+    assert.equal(operation.stage, "completed");
+    assert.equal(operation.claimToken, null);
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
 test("personal WeChat binding timestamps advance monotonically in Prisma and LocalStore", async () => {
   const previous = appConfig.useLocalStore;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "personal-rpa-monotonic-"));
@@ -512,10 +696,17 @@ test("schema and migration persist only personal WeChat business fields", () => 
   const migration = fs.readFileSync(path.join(
     __dirname, "..", "prisma", "migrations", "20260719210000_personal_wechat_rpa_persistence", "migration.sql",
   ), "utf8");
+  const recoveryMigration = fs.readFileSync(path.join(
+    __dirname, "..", "prisma", "migrations", "20260720160000_inbound_message_recovery", "migration.sql",
+  ), "utf8");
   assert.match(schema, /model PersonalWechatRpaBinding/);
   assert.match(schema, /model PersonalWechatRpaAuditLog/);
+  assert.match(schema, /model InboundMessageOperation/);
   assert.match(schema, /enum ConversationChannel\s*\{[^}]*personal_wechat/s);
   assert.match(migration, /ADD VALUE IF NOT EXISTS 'personal_wechat'/);
-  const personalModels = schema.match(/model PersonalWechatRpaBinding[\s\S]*?\n\}|model PersonalWechatRpaAuditLog[\s\S]*?\n\}/g).join("\n");
-  assert.doesNotMatch(personalModels, /token|endpoint|windowHandle|processId|sessionId|localPath/i);
+  assert.match(recoveryMigration, /UNIQUE INDEX "InboundMessageOperation_wechatAccountId_externalId_key"/);
+  assert.match(recoveryMigration, /"requestFingerprint" TEXT NOT NULL/);
+  const personalModels = schema.match(/model (?:PersonalWechatRpaBinding|PersonalWechatRpaAuditLog|InboundMessageOperation)[\s\S]*?\n\}/g).join("\n");
+  assert.doesNotMatch(personalModels, /\btoken\s+String|endpoint|windowHandle|processId|sessionId|localPath/i);
+  assert.doesNotMatch(recoveryMigration, /"(?:token|endpoint|windowHandle|processId|sessionId|localPath)"/i);
 });

@@ -11,6 +11,15 @@ export type RequestOperationMetadata = {
   fingerprint: string;
 };
 
+const INBOUND_OPERATION_STAGE_ORDER = [
+  "reserved",
+  "binding_ready",
+  "message_persisted",
+  "routed",
+  "effects_committed",
+  "completed",
+] as const;
+
 export function normalizeOperationKey(value: unknown, label = "operationKey") {
   if (typeof value !== "string") {
     throw new BadRequestException(`${label} is required`);
@@ -110,6 +119,61 @@ export function createInboundMessageOperationFingerprint(
           : [],
     },
   );
+}
+
+export function sanitizeInboundOperationAttachments(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const allowedKeys = [
+    "assetId",
+    "imageId",
+    "referencedImageId",
+    "referenceImageId",
+    "quotedImageId",
+    "quoteImageId",
+    "attachmentImageId",
+    "remoteImageId",
+    "screenshotFingerprint",
+    "imageFingerprint",
+    "attachmentFingerprint",
+    "fingerprint",
+    "role",
+    "type",
+    "kind",
+    "mimeType",
+  ];
+  return value.slice(0, 50).map((item) => {
+    if (typeof item === "string") return { assetId: item.trim().slice(0, 256) };
+    if (!item || typeof item !== "object" || Array.isArray(item)) return {};
+    const source = item as Record<string, unknown>;
+    return Object.fromEntries(
+      allowedKeys
+        .filter((key) => typeof source[key] === "string" && String(source[key]).trim())
+        .map((key) => [key, String(source[key]).trim().slice(0, 512)]),
+    );
+  });
+}
+
+export function inboundOperationStageAtLeast(current: unknown, expected: unknown) {
+  return inboundOperationStageRank(current) >= inboundOperationStageRank(expected);
+}
+
+export function monotonicInboundOperationStage(current: unknown, incoming: unknown) {
+  const currentStage = normalizeInboundOperationStage(current);
+  const incomingStage = normalizeInboundOperationStage(incoming);
+  return inboundOperationStageRank(currentStage) >= inboundOperationStageRank(incomingStage)
+    ? currentStage
+    : incomingStage;
+}
+
+function inboundOperationStageRank(value: unknown) {
+  const normalized = normalizeInboundOperationStage(value);
+  return INBOUND_OPERATION_STAGE_ORDER.indexOf(normalized as (typeof INBOUND_OPERATION_STAGE_ORDER)[number]);
+}
+
+function normalizeInboundOperationStage(value: unknown) {
+  const normalized = String(value || "reserved").trim();
+  if ((INBOUND_OPERATION_STAGE_ORDER as readonly string[]).includes(normalized)) return normalized;
+  throw new BadRequestException(`unsupported inbound operation stage: ${normalized}`);
 }
 
 export function deterministicOperationId(prefix: string, operationKey: string, suffix?: string | number) {

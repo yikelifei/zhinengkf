@@ -5,6 +5,7 @@ import path from "node:path";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { sanitizeInboundOperationAttachments } from "../shared/operation-idempotency";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { PersonalWechatRpaPersistence } from "./personal-wechat-rpa.persistence";
 
@@ -192,15 +193,29 @@ export class PersonalWechatRpaService {
       return { ok: true, ignored: true, reason: normalized.reason, audit };
     }
 
-    const existingMessage = await this.persistence.findInboundMessageByExternalId(
-      identity.wechatAccountId,
-      normalized.externalId,
-    );
-    if (existingMessage) {
-      return this.completeExistingInboundReplay(existingMessage, normalized, sensitiveValues);
+    const [legacyMessage, existingOperation] = await Promise.all([
+      this.persistence.findInboundMessageByExternalId(identity.wechatAccountId, normalized.externalId),
+      this.persistence.findInboundOperation(identity.wechatAccountId, normalized.externalId),
+    ]);
+    if (legacyMessage && !existingOperation) {
+      return this.completeExistingInboundReplay(legacyMessage, normalized, sensitiveValues);
     }
 
-    const binding = await this.persistence.upsertBinding({
+    const claimToken = randomUUID();
+    const requestFingerprint = createHash("sha256").update(stableJson({
+      version: EVENT_VERSION,
+      wechatAccountId: identity.wechatAccountId,
+      accountNickname: normalized.accountNickname,
+      ownerWxId: normalized.ownerWxId,
+      chatTitle: normalized.chatTitle,
+      conversationType: normalized.conversationType,
+      senderName: normalized.senderName,
+      message: normalized.message,
+      messageType: normalized.messageType,
+      attachments: normalized.attachments,
+      createdAt: normalized.createdAt,
+    }), "utf8").digest("hex");
+    const reservation = await this.persistence.claimInboundAndBind({
       wechatAccountId: identity.wechatAccountId,
       accountNickname: normalized.accountNickname,
       ownerWxId: normalized.ownerWxId,
@@ -208,7 +223,42 @@ export class PersonalWechatRpaService {
       conversationType: normalized.conversationType,
       senderName: normalized.senderName,
       receivedAt: normalized.createdAt,
+      externalId: normalized.externalId,
+      requestFingerprint,
+      normalizedPayload: {
+        accountNickname: normalized.accountNickname,
+        ownerWxId: normalized.ownerWxId,
+        chatTitle: normalized.chatTitle,
+        conversationType: normalized.conversationType,
+        senderName: normalized.senderName,
+        message: normalized.message,
+        messageType: normalized.messageType,
+        externalId: normalized.externalId,
+        createdAt: normalized.createdAt,
+        attachments: sanitizeInboundOperationAttachments(normalized.attachments),
+      },
+      claimToken,
+      leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
     });
+    if (reservation.completed) {
+      const existingMessage = await this.persistence.findInboundMessageByExternalId(
+        identity.wechatAccountId,
+        normalized.externalId,
+      );
+      if (!existingMessage) throw new BadRequestException("completed inbound operation is missing its durable message");
+      return this.completeExistingInboundReplay(existingMessage, normalized, sensitiveValues);
+    }
+    if (!reservation.claimed) {
+      return {
+        ok: true,
+        duplicate: true,
+        processing: true,
+        binding: reservation.binding || null,
+        operationId: reservation.operation?.id || null,
+      };
+    }
+    const binding = reservation.binding;
+    if (!binding) throw new BadRequestException("claimed inbound operation is missing its durable binding");
 
     try {
       const result = await this.wechatDispatch.processInboundMessage({
@@ -219,6 +269,9 @@ export class PersonalWechatRpaService {
         externalId: normalized.externalId,
         attachments: normalized.attachments,
         createdAt: normalized.createdAt,
+        inboundOperationId: reservation.operation.id,
+        inboundClaimToken: claimToken,
+        inboundRequestFingerprint: requestFingerprint,
       });
       if (result?.duplicate || result?.deduplicated) {
         this.assertDuplicateMatches(result?.message, binding, normalized);
@@ -282,7 +335,7 @@ export class PersonalWechatRpaService {
     const externalId = String(payload.externalId || "").trim();
     const conversationType = String(payload.conversationType || "direct").trim().toLowerCase();
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-    const createdAt = String(payload.createdAt || "").trim() || new Date().toISOString();
+    const createdAtText = String(payload.createdAt || "").trim() || new Date().toISOString();
 
     if (!identity.accountNickname) throw new BadRequestException("personal WeChat RPA account nickname is not configured");
     if (accountNickname !== identity.accountNickname) {
@@ -295,7 +348,8 @@ export class PersonalWechatRpaService {
       throw new BadRequestException("ownerWxId, chatTitle, senderName and externalId are required");
     }
     if (!message && attachments.length === 0) throw new BadRequestException("message or attachments are required");
-    if (!Number.isFinite(Date.parse(createdAt))) throw new BadRequestException("createdAt must be an ISO date");
+    if (!Number.isFinite(Date.parse(createdAtText))) throw new BadRequestException("createdAt must be an ISO date");
+    const createdAt = new Date(createdAtText).toISOString();
     if (!new Set(["direct", "group", "enterprise", "unknown"]).has(conversationType)) {
       throw new BadRequestException("unsupported conversationType");
     }
