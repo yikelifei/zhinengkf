@@ -85,6 +85,7 @@ test("wechat inbound scene memory stays scoped to current account conversation",
   });
 
   const result = await service.processInboundMessage({
+    externalId: "scene-memory-current-conversation",
     wechatAccountId: "wechat_demo_1",
     conversationId: "conversation_demo_1",
     customerId: "customer_demo_1",
