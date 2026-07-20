@@ -239,6 +239,123 @@ export async function resolveDesignExecutionRefund(designJobId, executionId, exp
     { ...expected, resolution: "confirmed_refunded" });
 }
 `);
+  write(root, "desktop/apps/api/src/wechat-work/wechat-work.controller.ts", `
+@Controller("wechat-work")
+export class WechatWorkController {
+  @Get("status") status() {}
+  @Get("preflight") preflight() {}
+  @Get("callback") verifyCallback() {}
+  @Post("callback") handleCallback() {}
+  @Post("kf/sync")
+  @RequireOperatorCapability("manage_channels")
+  @UseGuards(OperatorAccessGuard)
+  sync() {}
+  @Post("kf/send-text")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  sendText() {}
+  @Post("kf/send-images")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  sendImages() {}
+  @Post("kf/send-tasks/:id/dispatch")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  dispatch() {}
+  @Get("kf/audit")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  audit() {}
+}
+`);
+  write(root, "desktop/apps/api/src/reviews/reviews.controller.ts", `
+@Controller("reviews")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class ReviewsController {
+  @Get() list() {}
+  @Post("design-jobs/:id")
+  @RequireOperatorCapability("approve_send")
+  reviewDesign(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
+  }
+  @Post("quotes/:id")
+  @RequireOperatorCapability("approve_send")
+  reviewQuote(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
+  }
+  @Post("orders/:id")
+  @RequireOperatorCapability("approve_send")
+  reviewOrder(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
+  }
+}
+`);
+  write(root, "desktop/apps/api/src/quotes/quotes.controller.ts", `
+@Controller("quotes")
+export class QuotesController {
+  @Post(":id/queue-send")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  queue(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
+  @Post(":id/verify-payment-proof")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  verify(@Body() body, @TrustedOperator() principal) {
+    const { owner: _untrustedOwner, ...trusted } = body;
+    return service({ ...trusted, owner: principal.id });
+  }
+}
+`);
+  write(root, "desktop/apps/api/src/automation/automation.controller.ts", `
+@Controller("automation")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class AutomationController {
+  @Get("status") status() {}
+  @Post("run-once")
+  @RequireOperatorCapability("approve_send")
+  runOnce() {}
+  @Post("start")
+  @RequireOperatorCapability("approve_send")
+  start() {}
+  @Post("stop")
+  @RequireOperatorCapability("approve_send")
+  stop() {}
+}
+`);
+  write(root, "desktop/apps/api/src/training/training.controller.ts", `
+@Controller("training")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class TrainingController {
+  @Get("samples") list() {}
+  @Post("chat-imports")
+  @RequireOperatorCapability("manage_training")
+  importChat() {}
+  @Post("samples/:id/review")
+  @RequireOperatorCapability("manage_training")
+  review(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
+  }
+  @Post("samples/batch-review")
+  @RequireOperatorCapability("manage_training")
+  batch(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
+  }
+  @Post("skill-suggestions/apply")
+  @RequireOperatorCapability("manage_training")
+  apply() {}
+}
+`);
   write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\nmodel DesignPlatformExecution { operationKey String @unique requestId String @unique scopeKey String processRunId String acceptanceStatus DesignPlatformAcceptanceStatus refundStatus DesignPlatformRefundStatus }\nenum DesignPlatformExecutionStatus { outcome_unknown explicit_failed cancel_requested }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
@@ -264,6 +381,41 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.equal(JSON.stringify(report).includes(path.resolve(root)), false);
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/project-completion-audit.js"), "utf8");
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
+});
+
+test("completion audit fails when high-risk route guards, trusted actors or public callback boundaries drift", () => {
+  const baselineRoot = createPassingFixture();
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(baseline.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS);
+
+  const mutations = [
+    {
+      file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
+      from: '@RequireOperatorCapability("manage_channels")',
+      to: '@RequireOperatorCapability("view_console")',
+    },
+    {
+      file: "desktop/apps/api/src/reviews/reviews.controller.ts",
+      from: "reviewer: principal.id",
+      to: 'reviewer: "browser_operator"',
+    },
+    {
+      file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
+      from: '@Post("callback")',
+      to: '@Post("callback")\n  @RequireOperatorCapability("approve_send")\n  @UseGuards(OperatorAccessGuard)',
+    },
+  ];
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from));
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.high_risk_operator_routes");
+    assert.equal(contract.status, STATUS.FAIL, mutation.file);
+    assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0);
+  }
 });
 
 test("external signing, staging, channel, recovery and hardware evidence aggregate to BLOCKED", () => {
