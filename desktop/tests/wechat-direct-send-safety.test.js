@@ -863,7 +863,7 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(wechatService, /payload\.locked === false && before\.manualLocked[\s\S]*this\.assertManualLockTransitionHasExpectedIdentity\(payload, "解除人工接管"\)/);
   assert.match(wechatService, /private assertManualLockTransitionHasExpectedIdentity\(payload: ExpectedIdentityPayload, action: string\)/);
   assert.match(wechatService, /throw new BadRequestException\(`\$\{action\}必须带完整会话身份：\$\{missing\.join\(", "\)\}`\)/);
-  assert.match(wechatService, /cancelInFlightSendTasksForManualLock\(conversationId: string, reviewer: string\)[\s\S]*this\.cancelSendTask\(task\.id, \{[\s\S]*expectedWechatAccountId: task\.wechatAccountId,[\s\S]*expectedConversationId: task\.conversationId,[\s\S]*expectedCustomerId: task\.customerId \|\| task\.conversation\?\.customerId,[\s\S]*reason,/);
+  assert.match(wechatService, /protectInFlightSendTasksForManualLock\(conversationId: string, reviewer: string\)[\s\S]*this\.cancelSendTask\(task\.id, \{[\s\S]*expectedWechatAccountId: task\.wechatAccountId,[\s\S]*expectedConversationId: task\.conversationId,[\s\S]*expectedCustomerId: task\.customerId \|\| task\.conversation\?\.customerId,[\s\S]*reason,/);
   const validateSendTaskService = wechatService.slice(
     wechatService.indexOf("  validateSendTask(id: string"),
     wechatService.indexOf("  validateSendTaskWithCurrentWindow("),
@@ -1236,7 +1236,7 @@ test("quote and order APIs filter records by next-step actionability", () => {
   assert.match(wechatDispatchService, /source === "order_followup" \|\| orderContext\.followupType/);
   assert.match(wechatDispatchService, /private hasOrderDraftBinding\(task: any\)/);
   assert.match(wechatDispatchService, /markLinkedQuoteSent\(task: any\)[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) return/);
-  assert.match(wechatDispatchService, /markLinkedQuoteFailed\(task: any, reason: string\)[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) \{[\s\S]*this\.markLinkedOrderSendFailed\(task, reason\);[\s\S]*return;[\s\S]*\}/);
+  assert.match(wechatDispatchService, /markLinkedQuoteFailed\(task: any, reason: string,[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) \{[\s\S]*await this\.markLinkedOrderSendFailed\(task, reason\);[\s\S]*return;[\s\S]*\}/);
   assert.match(wechatDispatchService, /markLinkedQuoteRequeued\(task: any, reason: string\)[\s\S]*if \(this\.hasOrderDraftBinding\(task\)\) return/);
   assert.match(wechatDispatchService, /customerNotes: appendCustomerNote\(order\.customerNotes, note\)/);
   assert.match(wechatDispatchService, /this\.markLinkedOrderSendFailed\(updated, reason\)/);

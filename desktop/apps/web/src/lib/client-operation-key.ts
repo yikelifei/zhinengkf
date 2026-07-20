@@ -9,6 +9,7 @@ export type ClientOperationScope =
   | "payment-proof"
   | "order-send"
   | "review-action"
+  | "send-demo"
   | "send-resolution";
 
 export type PendingClientOperation = {

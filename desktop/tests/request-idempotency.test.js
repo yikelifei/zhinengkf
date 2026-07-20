@@ -17,6 +17,7 @@ const { LocalStoreService } = require("../apps/api/src/local-store/local-store.s
 const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
 const { PrismaOperationsService } = require("../apps/api/src/prisma/prisma-operations.service");
 const { TrainingService } = require("../apps/api/src/training/training.service");
+const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const {
@@ -32,6 +33,7 @@ const {
 
 const DESIGN_KEY = "design-job:11111111-1111-4111-8111-111111111111";
 const TRAINING_KEY = "training-import:22222222-2222-4222-8222-222222222222";
+const DEMO_SEND_KEY = "send-demo:55555555-5555-4555-8555-555555555555";
 
 function emptyStoreData(overrides = {}) {
   return {
@@ -559,6 +561,8 @@ test("Web create callers retain one operation key until the exact action succeed
   assert.match(api, /operationKey: string,/);
   assert.doesNotMatch(api, /operationKey = createClientOperationKey\("design-job"\)/);
   assert.match(api, /postJsonWithNetworkRetry<ChatImport>\("\/training\/chat-imports", payload\)/);
+  assert.match(api, /createDemoSendTask\([\s\S]*?operationKey: string/);
+  assert.match(api, /postJsonWithNetworkRetry<SendTask>\("\/wechat\/send-tasks\/demo"/);
   assert.match(page, /pendingImportOperation = useRef<PendingClientOperation \| null>\(null\)/);
   assert.match(page, /reserveClientOperation\("training-import", requestPayload, pendingImportOperation\.current\)/);
   assert.match(page, /operationKey: operation\.key/);
@@ -651,6 +655,18 @@ test("client operation reservation reuses an unconfirmed form key and rotates on
   assert.equal(afterDataRefresh.key, submit.key);
   const changedSubmitIntent = reserveClientOperation("design-submit", { ...submitIntent, outputCount: 4 }, submit);
   assert.notEqual(changedSubmitIntent.key, submit.key);
+
+  const demoIntent = {
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    wechatAccountId: "wechat-1",
+    text: "demo response-lost retry",
+  };
+  const demo = reserveClientOperation("send-demo", demoIntent, null);
+  const failedDemoRetry = reserveClientOperation("send-demo", { ...demoIntent }, demo);
+  assert.equal(failedDemoRetry.key, demo.key);
+  assert.equal(completeClientOperation(demo, "unconfirmed-key"), demo);
+  assert.equal(completeClientOperation(demo, demo.key), null);
 });
 
 test("LocalStore send task replay survives conversation deletion and rejects guard context drift", () => {
@@ -685,6 +701,114 @@ test("LocalStore send task replay survives conversation deletion and rejects gua
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("LocalStore demo send retries a response-lost request as one exact task and rejects key reuse drift", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const { store, tempDir } = createStore();
+  const service = new WechatDispatchService({}, store, {}, {}, {});
+  const payload = {
+    operationKey: DEMO_SEND_KEY,
+    wechatAccountId: "wechat-1",
+    conversationId: "conversation-1",
+    expectedWechatAccountId: "wechat-1",
+    expectedConversationId: "conversation-1",
+    expectedCustomerId: "customer-1",
+    text: "demo response-lost retry",
+  };
+  try {
+    appConfig.useLocalStore = true;
+    const committedButResponseLost = await service.createDemoSendTask(payload);
+    const replay = await service.createDemoSendTask(payload);
+
+    assert.equal(replay.id, committedButResponseLost.id);
+    assert.equal(store.listSendTasks().length, 1);
+    assert.throws(
+      () => service.createDemoSendTask({ ...payload, text: "changed demo text" }),
+      /already used with different identity or payload/,
+    );
+    assert.throws(
+      () => service.createDemoSendTask({
+        ...payload,
+        conversationId: "conversation-2",
+        expectedConversationId: "conversation-2",
+        expectedCustomerId: "customer-2",
+      }),
+      /already used with different identity or payload/,
+    );
+    assert.throws(
+      () => service.createDemoSendTask({ ...payload, operationKey: "too-short" }),
+      /length must be between 16 and 128/,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Prisma demo send retries a response-lost request as one exact task and rejects text or identity drift", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const conversations = {
+    "conversation-1": { id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" },
+    "conversation-2": { id: "conversation-2", customerId: "customer-2", wechatAccountId: "wechat-1" },
+  };
+  let stored = null;
+  let createCalls = 0;
+  const prisma = {
+    conversation: { findUnique: async ({ where }) => conversations[where.id] || null },
+    designJob: { findUnique: async () => null },
+    quoteDraft: {
+      findUnique: async () => null,
+      findMany: async () => [],
+    },
+    wechatSendTask: {
+      findUnique: async ({ where }) => stored?.id === where.id ? stored : null,
+      create: async ({ data }) => {
+        createCalls += 1;
+        stored = {
+          ...data,
+          conversation: conversations[data.conversationId],
+          attempts: [],
+          wechatAccount: {},
+          designJob: null,
+        };
+        return stored;
+      },
+    },
+  };
+  const service = new WechatDispatchService(prisma, {}, {}, {}, {});
+  const payload = {
+    operationKey: DEMO_SEND_KEY,
+    wechatAccountId: "wechat-1",
+    conversationId: "conversation-1",
+    expectedWechatAccountId: "wechat-1",
+    expectedConversationId: "conversation-1",
+    expectedCustomerId: "customer-1",
+    text: "prisma demo response-lost retry",
+  };
+  try {
+    appConfig.useLocalStore = false;
+    const committedButResponseLost = await service.createDemoSendTask(payload);
+    const replay = await service.createDemoSendTask(payload);
+
+    assert.equal(replay.id, committedButResponseLost.id);
+    assert.equal(createCalls, 1);
+    await assert.rejects(
+      service.createDemoSendTask({ ...payload, text: "changed prisma demo text" }),
+      /already used with different identity or payload/,
+    );
+    await assert.rejects(
+      service.createDemoSendTask({
+        ...payload,
+        conversationId: "conversation-2",
+        expectedConversationId: "conversation-2",
+        expectedCustomerId: "customer-2",
+      }),
+      /already used with different identity or payload/,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
   }
 });
 

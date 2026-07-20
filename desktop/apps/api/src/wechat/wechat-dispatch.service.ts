@@ -3300,18 +3300,29 @@ export class WechatDispatchService {
     return { scanned: queued.length, processed, blocked, skipped, failed };
   }
 
-  createDemoSendTask(payload: { wechatAccountId?: string; conversationId?: string; text?: string } & ExpectedIdentityPayload) {
-    if (!appConfig.useLocalStore) return this.createPrismaDemoSendTask(payload);
-    if (!payload.conversationId) {
+  createDemoSendTask(
+    payload: {
+      operationKey: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      text?: string;
+    } & ExpectedIdentityPayload,
+  ) {
+    const operationKey = normalizeOperationKey(payload?.operationKey, "operationKey");
+    const request = { ...(payload || {}), operationKey };
+    if (!appConfig.useLocalStore) return this.createPrismaDemoSendTask(request);
+    if (!request.conversationId) {
       throw new BadRequestException("conversationId is required for demo send task");
     }
-    const conversations = this.localStore.listConversations(payload.wechatAccountId);
-    const conversation = conversations.find((item) => item.id === payload.conversationId);
+    const conversations = this.localStore.listConversations(request.wechatAccountId);
+    const conversation = conversations.find((item) => item.id === request.conversationId);
     if (!conversation) throw new BadRequestException("no local conversation available");
-    this.assertDemoConversationIdentity(conversation, payload, "demo send task");
+    this.assertDemoConversationIdentity(conversation, request, "demo send task");
     return this.createLocalSendTask({
+      operationKey,
       wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
+      customerId: conversation.customerId,
       payload: {
         kind: "text",
         text: payload.text || "这是发送队列安全校验演示消息，不会真的发送到微信。",
@@ -4197,7 +4208,12 @@ export class WechatDispatchService {
   }
 
   private async createPrismaDemoSendTask(
-    payload: { wechatAccountId?: string; conversationId?: string; text?: string } & ExpectedIdentityPayload,
+    payload: {
+      operationKey: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      text?: string;
+    } & ExpectedIdentityPayload,
   ) {
     if (!payload.conversationId) throw new BadRequestException("conversationId is required for demo send task");
     const conversation = await this.persistence.getConversation(payload.conversationId);
@@ -4210,8 +4226,10 @@ export class WechatDispatchService {
       conversationId: conversation.id,
     });
     return this.persistence.createSendTask({
+      operationKey: payload.operationKey,
       wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
+      customerId: conversation.customerId,
       payload: { kind: "text", text: payload.text || "Prisma 安全发送演示消息" },
       guardSnapshot: {
         status: "pending",

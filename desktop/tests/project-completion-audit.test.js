@@ -92,6 +92,8 @@ function assertPrivateRegularFileOrMissing(filePath) { const stat = fs.lstatSync
 function readPrivateJsonFile(filePath) { return JSON.parse(fs.readFileSync(filePath, "utf8")); }
 function atomicWritePrivateJson(filePath, value) { const temporaryPath = filePath + ".tmp"; const fd = fs.openSync(temporaryPath, "wx", 0o600); fs.fsyncSync(fd); assertPrivateRegularFileOrMissing(filePath); fs.renameSync(temporaryPath, filePath); }
 `);
+  write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\nupsertCanonicalWechatWorkBinding(); deterministicOperationId("wwacct", key); deterministicOperationId("wwcust", key); singleWechatWorkHistoryId(); for (let attempt = 0; attempt < 4; attempt += 1) {} wechat work canonical binding conflict;\nasync createSendTask(payload: any) { const operationKey = normalizeOperationKey(payload.operationKey); const taskId = deterministicOperationId("send", operationKey); createSendTaskOperationFingerprint(); this.assertSendTaskReplay(existing, payload, operationKey); if (isUniqueConstraintError(error)) this.assertSendTaskReplay(winner, payload, operationKey); }\n');
+  write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'tx.wechatWorkBinding.updateMany(); lastInboundAt: { lt: lastInboundAt }; normalizeWechatWorkInboundAt();\n', true);
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\nprotectLocalInflightSendFromCancellation(); protectPrismaInflightSendFromCancellation(); protectInFlightSendTasksForManualLock(); deliveryUnknownReason: "manual_cancel_requested_inflight"; manualReviewRequired: true; automaticRetryBlocked: true; resolveUnknownSendDelivery(); "confirmed_sent"; "confirmed_not_sent"; requireExactSendTaskIdentity(); assertExactOperationReplay(); settleWechatWorkAsyncFailure(); deterministicOperationId("wechat_work_audit", operationKey, "manual-send-delivery-resolution"); deliveryResolutionPriority: "manual_audited_terminal"; previousManualDeliveryResolution; manualDeliveryResolution: null; protectedUnknownInFlightSendTaskIds; cancelledInFlightSendTaskIds: [];\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
@@ -172,9 +174,9 @@ validateSendTask(
   @Body() payload: ExpectedIdentityPayload,
 ) {}
 `);
-  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null);\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest() {}\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest(value) { return { operationKey: stringOrUndefined(value.operationKey) }; }\nenqueueManualReply(payload) { normalizeOperationKey(payload.operationKey, "operationKey"); }\ncreateDemoSendTask(payload: { operationKey: string }) { normalizeOperationKey(payload?.operationKey, "operationKey"); return this.createLocalSendTask({ operationKey, customerId: conversation.customerId }); }\ncreatePrismaDemoSendTask(payload) { return this.persistence.createSendTask({ operationKey: payload.operationKey, customerId: conversation.customerId }); }\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'buildOrderSendContext();\norderContext: params.orderContext;\nthis.orderSendContext(task);\n', true);
-  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id });\nsetConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id, operationKey: payload?.operationKey });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id, operationKey: payload?.operationKey });\nsetConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n@Post("send-tasks/demo")\ncreateDemoSendTask(payload: { operationKey: string }) { return this.wechat.createDemoSendTask(payload); }\n', true);
   write(root, "desktop/packages/rules/wechatWindowEvidence.js", 'WECHAT_WINDOW_OBSERVER_ATTESTATION_VERSION; createWechatWindowObserverAttestation(); createHmac("sha256", token); timingSafeEqual(supplied, expected); canonicalObserverAttestation(); canonicalJsonObject();\n');
   write(root, "desktop/apps/api/src/orders/orders.service.ts", 'updatePrismaOrderAndQuoteWithSendInvalidation();\nreturn prisma.$transaction(async (tx: any) => {\ntx.quoteDraft.update();\nstatus: { in: ["queued", "blocked", "failed"] };\ntx.wechatSendTask.updateMany();\ninvalidationStateChanged || cancelledSendTasks.length > 0;\ndecision: "invalidate_pending_order_send_tasks";\nreviewer: "system_order_invalidation";\n});\nasync update(id, patch) { assertGenericOrderUpdatePatch(patch || {}); }\nasync recordVerifiedPayment() { return ["deposit_paid", "paid"]; }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("订单付款状态只能通过报价付款凭证核验入口更新"); }\n');
   write(root, "desktop/README.md", "npm run project:completion:audit\ndhash64:v1\nlegacyIdentityHash\n稳定 SHA-256 身份哈希\n");
@@ -189,6 +191,10 @@ validateSendTask(
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'async update(id, patch) { assertGenericQuoteUpdatePatch(patch || {}); }\nfunction guard(patch) { if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) throw new Error("报价付款状态只能通过付款凭证核验入口更新"); }\nupdateQuoteDraft(id, { ...payload, ...quotePatch }, true); orders.recordVerifiedPayment();\n');
   write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'queueSendWithProvenance(id, manualQuoteQueueRequest(options), false);\nqueueSendWithProvenance(id, manualQuoteQueueRequest(options), true);\nsource: "low_value_quote_send"; quoteDraftId: quote.id; queuedBy: "low_value_automation"; automation: trustedAutomation;\nfunction manualQuoteQueueRequest() {}\n', true);
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\nmonotonicWechatWorkInboundAt(); normalizeWechatWorkInboundAt(); currentValue >= incoming;\n');
+  write(root, "desktop/apps/api/src/quotes/quotes.service.ts", 'queueSendWithProvenance(id, manualQuoteQueueRequest(options), false) { normalizeOperationKey(options.operationKey, "operationKey"); this.wechatDispatch.enqueueQuoteMessage({ operationKey }); }\nqueueSendWithProvenance(id, manualQuoteQueueRequest(options), true);\nverifyPaymentProofAndQueueConfirmation(payload) { normalizeOperationKey(payload.operationKey, "operationKey"); this.wechatDispatch.queueOrderConfirmation(id, { operationKey }); }\nsource: "low_value_quote_send"; quoteDraftId: quote.id; queuedBy: "low_value_automation"; automation: trustedAutomation;\nfunction manualQuoteQueueRequest() {}\n', true);
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\ncreateSendTask(payload: any) { const operationKey = normalizeOperationKey(payload.operationKey); const taskId = deterministicOperationId("send", operationKey); createSendTaskOperationFingerprint(); assertExactOperationReplay(); assertStoredOperationIdentityReplay(); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\n');
+  write(root, "desktop/apps/api/src/reviews/reviews.service.ts", 'quickConfirmAndQueueSend(id, { operationKey: payload.operationKey });\nthis.quotes.queueSend(id, { operationKey: payload.operationKey });\nthis.wechat.queueOrderConfirmation(id, { operationKey: payload.operationKey });\nthis.wechat.queueOrderFollowup(id, { operationKey: payload.operationKey });\n');
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'monotonicWechatWorkInboundAt(); normalizeWechatWorkInboundAt(); currentValue >= incoming;\n', true);
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
@@ -391,6 +397,19 @@ function postJsonWithNetworkRetry(path, body) { const serializedBody = JSON.stri
 function createClientOperationKey() {}
 const requestPayload: { operationKey: string } = {};
 export async function createDemoDesignJob(identity, assetIds, operationKey: string) {}
+export async function createDemoSendTask(conversationId, operationKey: string, wechatAccountId, expected, text) {
+  return postJsonWithNetworkRetry<SendTask>("/wechat/send-tasks/demo", {
+    operationKey, conversationId, wechatAccountId, text,
+  });
+}
+function queueManualConversationReply(identity, text, operationKey) {}
+function queueQuoteSend(id, operationKey) {}
+function verifyQuotePaymentProofAndQueueConfirmation(id, status, operationKey) {}
+function queueOrderConfirmation(id, operationKey) {}
+function queueOrderFollowup(id, type, operationKey) {}
+function reviewDesignJob(id, payload: { operationKey: string }) {}
+function reviewQuote(id, payload: { operationKey: string }) {}
+function reviewOrder(id, payload: { operationKey: string }) {}
 function designExecutionExpectedIdentityQuery(expected) {
   const params = new URLSearchParams();
   params.set("expectedWechatAccountId", expected.expectedWechatAccountId);
@@ -423,6 +442,42 @@ const pendingImportOperation = useRef<PendingClientOperation | null>(null);
 const operation = reserveClientOperation("training-import", requestPayload, pendingImportOperation.current);
 await importChatTranscript({ operationKey: operation.key });
 pendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/conversations/use-conversations-controller.ts", `
+const operation = reserveClientOperation("manual-reply", payload, pendingReplyOperationRef.current);
+pendingReplyOperationRef.current = operation;
+await queueManualConversationReply(identity, text, operation.key);
+pendingReplyOperationRef.current = completeClientOperation(pendingReplyOperationRef.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/sales/sales-quote-action-page.tsx", `
+const operation = reserveClientOperation("quote-send", payload, pendingOperationRef.current);
+pendingOperationRef.current = operation;
+await queueQuoteSend(id, operation.key);
+pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/sales/sales-order-message-page.tsx", `
+const operation = reserveClientOperation("order-send", payload, pendingOperationRef.current);
+pendingOperationRef.current = operation;
+await queueOrderConfirmation(id, operation.key);
+pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/reviews/review-design-page.tsx", `
+const operation = reserveClientOperation("review-action", payload, pendingOperationRef.current);
+pendingOperationRef.current = operation;
+await reviewDesignJob(id, { operationKey: operation.key });
+pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/reviews/review-quotes-page.tsx", `
+const operation = reserveClientOperation("review-action", payload, pendingOperationRef.current);
+pendingOperationRef.current = operation;
+await reviewQuote(id, { operationKey: operation.key });
+pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
+`);
+  write(root, "desktop/apps/web/src/features/reviews/review-orders-page.tsx", `
+const operation = reserveClientOperation("review-action", payload, pendingOperationRef.current);
+pendingOperationRef.current = operation;
+await reviewOrder(id, { operationKey: operation.key });
+pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
 `);
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.controller.ts", `
 @Controller("wechat-work")
@@ -535,6 +590,7 @@ export class QuotesController {
       owner: principal.id,
       releaseManualLock: true,
       releaseReason: "manual_quote_send",
+      operationKey: payload?.operationKey,
     });
   }
   @Post(":id/verify-payment-proof")
@@ -835,6 +891,67 @@ test("idempotency audit rejects mutable-identity-first replay and browser operat
       from: "await importChatTranscript({ operationKey: operation.key });\npendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);",
       to: "pendingImportOperation.current = completeClientOperation(pendingImportOperation.current, operation.key);\nawait importChatTranscript({ operationKey: operation.key });",
     },
+    {
+      id: "contract.send_demo_controller_operation",
+      file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+      from: "payload: { operationKey: string }",
+      to: "payload: { operationKey?: string }",
+    },
+    {
+      id: "contract.send_demo_service_operation",
+      file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+      from: 'normalizeOperationKey(payload?.operationKey, "operationKey")',
+      to: "payload.operationKey",
+    },
+    {
+      id: "contract.send_demo_web_operation",
+      file: "desktop/apps/web/src/lib/api.ts",
+      from: 'postJsonWithNetworkRetry<SendTask>("/wechat/send-tasks/demo"',
+      to: 'postJson<SendTask>("/wechat/send-tasks/demo"',
+    },
+    {
+      id: "contract.local_send_operation_replay",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: 'deterministicOperationId("send", operationKey)',
+      to: 'randomOperationId("send")',
+    },
+    {
+      id: "contract.prisma_send_operation_replay",
+      file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+      from: "if (isUniqueConstraintError(error)) this.assertSendTaskReplay(winner, payload, operationKey);",
+      to: "throw error;",
+    },
+    {
+      id: "contract.wechat_send_operation_passthrough",
+      file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+      from: "operationKey: stringOrUndefined(value.operationKey)",
+      to: "operationKey: undefined",
+    },
+    {
+      id: "contract.quote_send_operation_passthrough",
+      file: "desktop/apps/api/src/quotes/quotes.service.ts",
+      from: 'normalizeOperationKey(options.operationKey, "operationKey")',
+      to: 'normalizeOperationKey(undefined, "operationKey")',
+    },
+    {
+      id: "contract.review_send_operation_passthrough",
+      file: "desktop/apps/api/src/reviews/reviews.service.ts",
+      from: "this.wechat.queueOrderFollowup(id, { operationKey: payload.operationKey });",
+      to: "this.wechat.queueOrderFollowup(id, {});",
+    },
+    ...[
+      ["contract.browser_manual_reply_sticky_operation", "desktop/apps/web/src/features/conversations/use-conversations-controller.ts"],
+      ["contract.browser_quote_send_sticky_operation", "desktop/apps/web/src/features/sales/sales-quote-action-page.tsx"],
+      ["contract.browser_order_send_sticky_operation", "desktop/apps/web/src/features/sales/sales-order-message-page.tsx"],
+      ["contract.browser_review_design_sticky_operation", "desktop/apps/web/src/features/reviews/review-design-page.tsx"],
+      ["contract.browser_review_quote_sticky_operation", "desktop/apps/web/src/features/reviews/review-quotes-page.tsx"],
+      ["contract.browser_review_order_sticky_operation", "desktop/apps/web/src/features/reviews/review-orders-page.tsx"],
+    ].map(([id, file]) => ({
+      id,
+      file,
+      from: "completeClientOperation",
+      to: "keepClientOperation",
+    })),
   ];
 
   for (const mutation of mutations) {

@@ -2453,10 +2453,18 @@ export async function scanWindowSnapshotInbox(): Promise<WindowSnapshotInboxScan
 
 export async function createDemoSendTask(
   conversationId: string,
+  operationKey: string,
   wechatAccountId?: string,
   expected: IdentityExpectation = {},
+  text?: string,
 ): Promise<SendTask> {
-  return postJson<SendTask>("/wechat/send-tasks/demo", { ...expected, conversationId, wechatAccountId });
+  return postJsonWithNetworkRetry<SendTask>("/wechat/send-tasks/demo", {
+    ...expected,
+    operationKey,
+    conversationId,
+    wechatAccountId,
+    text,
+  });
 }
 
 export async function validateSendTask(id: string, expected: IdentityExpectation = {}): Promise<SendTask> {

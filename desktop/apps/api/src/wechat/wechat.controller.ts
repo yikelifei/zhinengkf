@@ -267,8 +267,16 @@ export class WechatController {
   @Post("send-tasks/demo")
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
-  createDemoSendTask(@Body() payload: { wechatAccountId?: string; conversationId?: string; text?: string } & ExpectedIdentityPayload) {
-    return this.wechat.createDemoSendTask(payload || {});
+  createDemoSendTask(
+    @Body()
+    payload: {
+      operationKey: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      text?: string;
+    } & ExpectedIdentityPayload,
+  ) {
+    return this.wechat.createDemoSendTask(payload);
   }
 
   @Post("orders/:id/queue-confirmation")
