@@ -15,7 +15,12 @@ const READ_ONLY_ROUTES = Object.freeze([
   "/integrations/design-platform/readiness",
   "/wechat/channels/status",
   "/wechat/bridge/status",
+  "/automation/status",
+  "/automation/readiness",
 ]);
+const AUTOMATION_QUEUE_NAME = "low-value-automation";
+const AUTOMATION_SCHEDULER_ID = "low-value-automation-schedule-v1";
+const AUTOMATION_COUNT_KEYS = Object.freeze(["waiting", "active", "delayed", "completed", "failed"]);
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repositoryRoot = path.resolve(desktopRoot, "..");
@@ -236,6 +241,35 @@ function staticResults(env, doctorReport, options = {}) {
     }),
   );
 
+  const automation = doctorComponent(doctorReport, "automation_scheduler");
+  const automationDetails = automation?.details && typeof automation.details === "object" ? automation.details : {};
+  const automationBlockers = [];
+  if (!automation) automationBlockers.push("config doctor automation_scheduler result");
+  if (automation?.status !== "ready") automationBlockers.push("config doctor automation_scheduler status=ready");
+  if (automationDetails.enabled !== true) automationBlockers.push("LOW_VALUE_AUTOMATION_ENABLED=1");
+  if (automationDetails.mode !== "durable" || automationDetails.durable !== true) {
+    automationBlockers.push("LOW_VALUE_AUTOMATION_MODE=durable");
+  }
+  if (automationDetails.redisUrlConfigured !== true) automationBlockers.push("LOW_VALUE_AUTOMATION_REDIS_URL");
+  results.push(
+    result(
+      "config.automation_queue",
+      "BullMQ/Redis 持久调度配置",
+      automationBlockers.length ? STATUS.BLOCKED : STATUS.PASS,
+      automationBlockers.length ? "自动化持久调度配置尚未满足预发布要求。" : "已请求 durable 模式并配置 Redis；实时连接由只读 API 证据确认。",
+      {
+        blockers: [...new Set(automationBlockers)],
+        evidence: {
+          enabled: automationDetails.enabled === true,
+          mode: automationDetails.mode === "durable" ? "durable" : "other",
+          durable: automationDetails.durable === true,
+          redisUrlConfigured: automationDetails.redisUrlConfigured === true,
+          liveConnectionChecked: false,
+        },
+      },
+    ),
+  );
+
   const apiBase = String(options.apiBase || env.STAGING_API_BASE || env.ACCEPTANCE_API_BASE || "http://127.0.0.1:3200/api");
   const apiUrl = inspectUrl(apiBase, { httpsUnlessLoopback: true });
   const internalTokenConfigured = configured(env.INTERNAL_API_TOKEN);
@@ -345,6 +379,7 @@ function notExecutedResults() {
     ["evidence.wechat_work", "企业微信回调与审计证据"],
     ["evidence.design_platform", "设计平台实时就绪证据"],
     ["evidence.personal_wechat", "个人微信桥就绪证据"],
+    ["evidence.automation_queue", "BullMQ/Redis 持久调度证据"],
   ];
   return entries.map(([id, title]) => result(id, title, STATUS.BLOCKED, "尚未执行；请在受控预发布环境显式加入 --execute 重跑。", { blockers: ["explicit --execute approval"] }));
 }
@@ -423,6 +458,86 @@ function joinApiRoute(base, route) {
 
 function blockedExternal(id, title, summary, blockers = []) {
   return result(id, title, STATUS.BLOCKED, summary, { blockers });
+}
+
+function safeCount(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function safeQueueCounts(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(AUTOMATION_COUNT_KEYS.map((key) => [key, safeCount(source[key])]));
+}
+
+function evaluateAutomationEvidence(status, readiness) {
+  const scheduler = status?.scheduler && typeof status.scheduler === "object" ? status.scheduler : {};
+  const durable = scheduler.durableEvidence && typeof scheduler.durableEvidence === "object" ? scheduler.durableEvidence : {};
+  const schedulerEvidence = durable.scheduler && typeof durable.scheduler === "object" ? durable.scheduler : {};
+  const readinessCheck = Array.isArray(readiness?.checks)
+    ? readiness.checks.find((check) => check?.key === "automation_scheduler")
+    : null;
+  const counts = safeQueueCounts(durable.counts);
+  const blockers = [];
+  if (status?.mode !== "durable" || scheduler.mode !== "durable") blockers.push("automation mode=durable");
+  if (status?.evidenceSource !== "bullmq_redis" || status?.durableEvidenceSource !== "bullmq_redis" || scheduler.evidenceSource !== "bullmq_redis") {
+    blockers.push("evidence source=bullmq_redis");
+  }
+  if (scheduler.enabled !== true) blockers.push("automation enabled=true");
+  if (scheduler.active !== true) blockers.push("scheduler active=true");
+  if (scheduler.configured !== true) blockers.push("Redis configured=true");
+  if (scheduler.connected !== true) blockers.push("Redis connected=true");
+  if (scheduler.scheduled !== true) blockers.push("scheduler scheduled=true");
+  if (scheduler.workerReady !== true) blockers.push("worker ready=true");
+  if (scheduler.queueName !== AUTOMATION_QUEUE_NAME) blockers.push(`queue name=${AUTOMATION_QUEUE_NAME}`);
+  if (scheduler.schedulerId !== AUTOMATION_SCHEDULER_ID) blockers.push(`scheduler id=${AUTOMATION_SCHEDULER_ID}`);
+  if (scheduler.attempts !== 1) blockers.push("job template attempts=1");
+  if (scheduler.maxStalledCount !== 0) blockers.push("max stalled count=0");
+  if (scheduler.localConcurrency !== 1) blockers.push("local concurrency=1");
+  if (scheduler.globalConcurrency !== 1 || durable.globalConcurrency !== 1) blockers.push("global concurrency=1");
+  if (durable.available !== true) blockers.push("durable evidence available=true");
+  if (schedulerEvidence.present !== true) blockers.push("fixed scheduler present=true");
+  if (!(safeCount(durable.workerCount) >= 1)) blockers.push("worker count>=1");
+  if (Object.values(counts).some((value) => value === null)) blockers.push("queue counts available");
+  if (readiness?.ready !== true) blockers.push("automation readiness ready=true");
+  if (readinessCheck?.ok !== true || readinessCheck?.severity === "error") blockers.push("automation scheduler readiness check ok=true");
+
+  return result(
+    "evidence.automation_queue",
+    "BullMQ/Redis 持久调度证据",
+    blockers.length ? STATUS.BLOCKED : STATUS.PASS,
+    blockers.length ? "自动化 durable runtime 的只读证据尚未完整就绪。" : "Redis、固定 scheduler、Worker、并发和失败关闭参数的只读证据齐全。",
+    {
+      blockers,
+      evidence: {
+        mode: status?.mode === "durable" && scheduler.mode === "durable" ? "durable" : "other",
+        evidenceSource:
+          status?.evidenceSource === "bullmq_redis"
+          && status?.durableEvidenceSource === "bullmq_redis"
+          && scheduler.evidenceSource === "bullmq_redis"
+            ? "bullmq_redis"
+            : "other",
+        enabled: scheduler.enabled === true,
+        active: scheduler.active === true,
+        configured: scheduler.configured === true,
+        connected: scheduler.connected === true,
+        scheduled: scheduler.scheduled === true,
+        workerReady: scheduler.workerReady === true,
+        queueName: scheduler.queueName === AUTOMATION_QUEUE_NAME ? AUTOMATION_QUEUE_NAME : "unexpected",
+        schedulerId: scheduler.schedulerId === AUTOMATION_SCHEDULER_ID ? AUTOMATION_SCHEDULER_ID : "unexpected",
+        templateAttempts: scheduler.attempts === 1 ? 1 : null,
+        maxStalledCount: scheduler.maxStalledCount === 0 ? 0 : null,
+        localConcurrency: scheduler.localConcurrency === 1 ? 1 : null,
+        globalConcurrency:
+          scheduler.globalConcurrency === 1 && durable.globalConcurrency === 1 ? 1 : null,
+        durableEvidenceAvailable: durable.available === true,
+        schedulerPresent: schedulerEvidence.present === true,
+        workerCount: safeCount(durable.workerCount),
+        counts,
+        readinessReady: readiness?.ready === true,
+        readinessCheckOk: readinessCheck?.ok === true && readinessCheck?.severity !== "error",
+      },
+    },
+  );
 }
 
 async function executeReadOnlyEvidence({ env, apiBase, apiUrl, runCommand = defaultRunCommand, fetchJson = defaultFetchJson, desktop = desktopRoot }) {
@@ -527,12 +642,25 @@ async function executeReadOnlyEvidence({ env, apiBase, apiUrl, runCommand = defa
     }));
   }
 
+  const automationStatus = responses["/automation/status"];
+  const automationReadiness = responses["/automation/readiness"];
+  if (!automationStatus || !automationReadiness) {
+    results.push(blockedExternal(
+      "evidence.automation_queue",
+      "BullMQ/Redis 持久调度证据",
+      "无法读取自动化状态或就绪接口。",
+      ["/api/automation/status", "/api/automation/readiness"],
+    ));
+  } else {
+    results.push(evaluateAutomationEvidence(automationStatus, automationReadiness));
+  }
+
   return results;
 }
 
 function secretValues(env) {
   return Object.entries(env || {})
-    .filter(([name, value]) => /SECRET|TOKEN|PASSWORD|COOKIE|API_KEY|DATABASE_URL/i.test(name) && String(value || "").length >= 6)
+    .filter(([name, value]) => /SECRET|TOKEN|PASSWORD|COOKIE|API_KEY|DATABASE_URL|REDIS_URL/i.test(name) && String(value || "").length >= 6)
     .map(([, value]) => String(value));
 }
 

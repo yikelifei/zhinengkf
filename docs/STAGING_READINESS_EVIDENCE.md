@@ -27,7 +27,7 @@ npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-d
 `--execute` 固定只允许以下操作：
 
 - `prisma migrate status --schema prisma/schema.prisma`，只读迁移状态，不执行 `migrate deploy`。
-- 对现有 API 发出固定的 `GET` 请求：`/health`、`/wechat-work/status`、`/wechat-work/kf/audit`、`/integrations/design-platform/readiness`、`/wechat/channels/status` 和 `/wechat/bridge/status`。
+- 对现有 API 发出固定的 `GET` 请求：`/health`、`/wechat-work/status`、`/wechat-work/kf/audit`、`/integrations/design-platform/readiness`、`/wechat/channels/status`、`/wechat/bridge/status`、`/automation/status` 和 `/automation/readiness`。
 - 汇总布尔值、数量和状态，不保存响应正文，不输出 Token、Cookie、数据库口令或 API Key。
 
 它不会调用 `sync_msg`、`send_msg`、发送队列处理、设计任务提交、付款确认、数据库迁移部署或任何 `POST` 请求。读取受保护 API 时复用 `INTERNAL_API_TOKEN`，报告只记录“是否配置”。
@@ -43,6 +43,7 @@ npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-d
 - 真实设计平台使用 `art_image_local`，配置登录凭据、设备 ID；非回环 Base URL 必须使用 HTTPS。
 - 个人微信账号绑定文件存在；RPA 端点只能是本机回环地址。检查本身不要求打开真实发送开关。
 - AI provider 继续由现有 `config-readiness-doctor` 和 `core.api_config` 规则校验。
+- 低价值自动化显式启用 `LOW_VALUE_AUTOMATION_ENABLED=1` 和 `LOW_VALUE_AUTOMATION_MODE=durable`，Redis URL 由密钥管理能力注入；报告只记录“是否配置”，不会记录 URL、账号或密码。
 
 ## 证据判定
 
@@ -53,6 +54,8 @@ npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-d
 企业微信 `PASS` 需要只读确认：API 配置就绪、Prisma 持久化、至少一个正式身份映射，以及历史的回调、入站和受控发送队列审计。检查不会为补证据而主动触发同步或发送。
 
 个人微信 `PASS` 需要账号绑定、桥接 worker 就绪，且没有未审阅的 ignored/uncertain outbox、过期 dispatch 或过期锁。设计平台 `PASS` 需要现有 readiness 接口报告 `art_image_local` 且可正式生成，但不会提交设计任务。
+
+BullMQ/Redis `PASS` 同时要求：配置 doctor 确认自动化已启用并请求 durable 模式；只读接口报告 `evidenceSource=bullmq_redis`；固定 queue 与 scheduler ID 正确；Redis 已配置且连接；scheduler 与 Worker 在线；本地及全局并发为 `1`；job template 为 `attempts=1`、`maxStalledCount=0`；持久 scheduler 存在且 Worker 数至少为 `1`。报告只保留这些固定标识、布尔值以及 waiting/active/delayed/completed/failed 五类计数，不保留 Redis URL、错误原文、最近任务 ID/result 或业务 payload。
 
 ## 报告与审计
 

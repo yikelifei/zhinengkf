@@ -41,7 +41,7 @@ npm.cmd run staging:readiness
 npm.cmd run staging:readiness -- --execute --api-base https://staging-api.your-domain.cn/api
 ```
 
-第一条命令只做本地脱敏配置盘点；第二条必须显式加入 `--execute`，且只运行 `prisma migrate status` 和现有 API 的固定 `GET` 就绪接口，不部署迁移、不真实发送、不提交设计任务。报告写入 `desktop/.runtime/staging-readiness-evidence/`。完整口径见 `docs/STAGING_READINESS_EVIDENCE.md`。
+第一条命令只做本地脱敏配置盘点；第二条必须显式加入 `--execute`，且只运行 `prisma migrate status` 和现有 API 的固定 `GET` 就绪接口，不部署迁移、不真实发送、不提交设计任务。固定 GET 包括自动化的 `/api/automation/status` 与 `/api/automation/readiness`，用来收集脱敏的 BullMQ/Redis scheduler、Worker、并发和队列计数证据。报告写入 `desktop/.runtime/staging-readiness-evidence/`。完整口径见 `docs/STAGING_READINESS_EVIDENCE.md`。
 
 数据库备份/恢复证据使用独立的安全演练入口：
 
@@ -99,8 +99,9 @@ CI 不注入真实密钥，也不加 `staging:readiness --execute`，因此真�
 - [ ] 已在隔离的预发布数据库执行并留存 `prisma migrate deploy --schema prisma/schema.prisma` 输出。
 - [ ] 已运行安全备份/恢复演练，脱敏报告为 `PASS`，SHA-256、命令版本、源/恢复库迁移状态以及最小结构一致性证据已附到变更单。
 - [ ] 已配置 `LOW_VALUE_AUTOMATION_MODE=durable`，且 `LOW_VALUE_AUTOMATION_REDIS_URL` 仅由密钥管理服务注入。
-- [ ] 已验证目标 Redis 的连接、ACL、持久化和故障提示；`/api/automation/status` 不包含 URL 或密码。
-- [ ] BullMQ 只有一个固定 scheduler，全局并发为 1，Worker 在线；任务固定 `attempts=1`、`maxStalledCount=0`，未知投递不会自动重放。
+- [ ] `staging:readiness -- --execute` 的 `evidence.automation_queue` 为 `PASS`，确认 Redis 连接、固定 scheduler、全局并发 1、Worker 在线以及脱敏队列计数；报告不包含 Redis URL、错误原文或 job payload。
+- [ ] 目标 Redis 的 ACL、持久化策略和故障告警已由基础设施负责人验收；只读 API 证据不替代该平台侧配置证明。
+- [ ] BullMQ 任务固定 `attempts=1`、`maxStalledCount=0`，未知投递不会自动重放。
 
 不要在本地门禁中传入生产 `DATABASE_URL`。数据库迁移必须在受控预发布环境执行：
 
