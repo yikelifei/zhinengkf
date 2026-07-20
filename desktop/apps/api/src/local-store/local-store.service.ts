@@ -1273,7 +1273,11 @@ export class LocalStoreService {
     const index = data.inboundMessageOperations.findIndex((item) => item.id === id);
     if (index < 0) throw new NotFoundException(`inbound operation not found: ${id}`);
     const current = data.inboundMessageOperations[index];
-    if (current.status !== "processing" || current.claimToken !== claimToken) {
+    if (
+      current.status !== "processing" ||
+      current.claimToken !== claimToken ||
+      Date.parse(String(current.leaseExpiresAt || "")) <= Date.now()
+    ) {
       throw new BadRequestException("inbound operation claim changed before stage commit");
     }
     const nextPatch = { ...patch };
@@ -1284,6 +1288,79 @@ export class LocalStoreService {
     data.inboundMessageOperations[index] = operation;
     this.write(data);
     return operation;
+  }
+
+  renewInboundMessageOperationLease(id: string, claimToken: string, leaseExpiresAt: string) {
+    const data = this.read();
+    const index = data.inboundMessageOperations.findIndex((item) => item.id === id);
+    if (index < 0) throw new NotFoundException(`inbound operation not found: ${id}`);
+    const current = data.inboundMessageOperations[index];
+    const now = Date.now();
+    if (
+      current.status !== "processing" ||
+      current.claimToken !== claimToken ||
+      !Number.isFinite(Date.parse(String(current.leaseExpiresAt || ""))) ||
+      Date.parse(String(current.leaseExpiresAt)) <= now
+    ) {
+      throw new BadRequestException("inbound operation lease is no longer owned by this claim");
+    }
+    const nextLease = normalizeInstant(leaseExpiresAt);
+    if (!nextLease || Date.parse(nextLease) <= now) {
+      throw new BadRequestException("inbound operation lease renewal must expire in the future");
+    }
+    const operation = { ...current, leaseExpiresAt: nextLease, updatedAt: new Date(now).toISOString() };
+    data.inboundMessageOperations[index] = operation;
+    this.write(data);
+    return operation;
+  }
+
+  commitInboundHighValueSelection(payload: {
+    operationId: string;
+    claimToken: string;
+    leaseExpiresAt: string;
+    designJobId: string;
+    selectedImageId: string;
+    feedback: string;
+    recoveryEffect: Record<string, unknown>;
+  }) {
+    const data = this.read();
+    const operationIndex = data.inboundMessageOperations.findIndex((item) => item.id === payload.operationId);
+    if (operationIndex < 0) throw new NotFoundException(`inbound operation not found: ${payload.operationId}`);
+    const operation = data.inboundMessageOperations[operationIndex];
+    if (
+      operation.status !== "processing" ||
+      operation.claimToken !== payload.claimToken ||
+      Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now()
+    ) {
+      throw new BadRequestException("inbound operation lease changed before high-value selection commit");
+    }
+    const jobIndex = data.designJobs.findIndex((item) => item.id === payload.designJobId);
+    if (jobIndex < 0) throw new NotFoundException(`local design job not found: ${payload.designJobId}`);
+    const selected = data.designImages.find(
+      (image) => image.designJobId === payload.designJobId &&
+        (image.id === payload.selectedImageId || image.imageId === payload.selectedImageId),
+    );
+    if (!selected) throw new NotFoundException(`design image not found in design job: ${payload.selectedImageId}`);
+    for (const image of data.designImages) {
+      if (image.designJobId !== payload.designJobId) continue;
+      image.selected = image.id === payload.selectedImageId || image.imageId === payload.selectedImageId;
+      if (image.selected) image.customerFeedback = payload.feedback;
+    }
+    const now = new Date().toISOString();
+    data.designJobs[jobIndex] = {
+      ...data.designJobs[jobIndex],
+      status: "manual_review",
+      manualQcRequired: true,
+      updatedAt: now,
+    };
+    data.inboundMessageOperations[operationIndex] = {
+      ...operation,
+      result: { ...(operation.result || {}), recoveryEffect: payload.recoveryEffect },
+      leaseExpiresAt: normalizeInstant(payload.leaseExpiresAt),
+      updatedAt: now,
+    };
+    this.write(data);
+    return this.hydrateDesignJob(data, data.designJobs[jobIndex]);
   }
 
   listConversationTimeline(filter: IdentityListFilter & { limit?: number }) {
@@ -2379,6 +2456,10 @@ export class LocalStoreService {
     return record;
   }
 
+  getNotification(id: string) {
+    return this.read().notifications.find((notification) => notification.id === id) || null;
+  }
+
   listNotifications(options: { unreadOnly?: boolean; limit?: number } & IdentityListFilter = {}) {
     const limit = Math.max(1, Math.min(Number(options.limit || 100), 300));
     return this.read()
@@ -2593,6 +2674,12 @@ export class LocalStoreService {
     data.routeEvaluations.push(record);
     this.write(data);
     return { ...record, agent: agent || null };
+  }
+
+  getRouteEvaluation(id: string) {
+    const data = this.read();
+    const route = data.routeEvaluations.find((item) => item.id === id);
+    return route ? { ...route, agent: data.agents.find((item) => item.id === route.agentId) || null } : null;
   }
 
   correctRouteEvaluation(routeEvaluationId: string, payload: any = {}) {

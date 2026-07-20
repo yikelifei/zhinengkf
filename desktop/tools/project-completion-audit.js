@@ -148,6 +148,21 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/wechat-direct-send-safety.test.js",
   },
   {
+    id: "safety.inbound_recovery_tests",
+    title: "Inbound lease, payload and replay recovery tests",
+    file: "desktop/tests/conversation-messages.test.js",
+  },
+  {
+    id: "safety.inbound_high_value_recovery_tests",
+    title: "Local high-value inbound crash recovery tests",
+    file: "desktop/tests/wechat-manual-lock-service.test.js",
+  },
+  {
+    id: "safety.inbound_prisma_recovery_tests",
+    title: "Prisma high-value inbound crash recovery tests",
+    file: "desktop/tests/wechat-work-prisma-selection.test.js",
+  },
+  {
     id: "web.api_failure_truth_tests",
     title: "Web API failure truth regression tests",
     file: "desktop/tests/web-api-failure-truth.test.js",
@@ -245,6 +260,47 @@ const REQUIRED_ARTIFACTS = Object.freeze([
 ]);
 
 const CONTRACTS = Object.freeze([
+  {
+    id: "contract.inbound_effect_recovery",
+    title: "Inbound effects are lease fenced, durably recoverable and fully hydrated",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /withInboundEffectLease/,
+      /hydrateCompletedInboundReplay/,
+      /inboundHighValueSelectionRecovery/,
+      /commitInboundHighValueSelection/,
+    ],
+  },
+  {
+    id: "contract.inbound_operation_lease_fencing",
+    title: "Inbound persistence renews leases and rejects expired stage owners",
+    file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
+    patterns: [
+      /renewInboundOperationLease/,
+      /leaseExpiresAt:\s*\{\s*gt:\s*new Date\(\)\s*\}/,
+      /assertInboundOperationReplay/,
+    ],
+  },
+  {
+    id: "contract.local_inbound_recovery_atomicity",
+    title: "Local inbound high-value selection and recovery marker commit atomically",
+    file: "desktop/apps/api/src/local-store/local-store.service.ts",
+    patterns: [
+      /renewInboundMessageOperationLease/,
+      /commitInboundHighValueSelection/,
+      /recoveryEffect/,
+    ],
+  },
+  {
+    id: "contract.inbound_operation_payload_safety",
+    title: "Inbound durable payloads whitelist attachments and validate asset identifiers",
+    file: "desktop/apps/api/src/shared/operation-idempotency.ts",
+    patterns: [
+      /sanitizeInboundOperationAttachments/,
+      /sanitizeInboundOperationAssetIds/,
+      /sanitizeInboundBusinessIdentifier/,
+    ],
+  },
   {
     id: "contract.package_scripts",
     title: "生产 npm 入口",

@@ -182,6 +182,10 @@ test("inbound replay resumes after route commit failure without duplicate route 
 
   const completedReplay = await service.processInboundMessage(payload);
   assert.equal(completedReplay.duplicate, true);
+  assert.equal(completedReplay.processing, false);
+  assert.equal(completedReplay.message.id, recovered.message.id);
+  assert.equal(completedReplay.route.id, recovered.route.id);
+  assert.equal(completedReplay.outcome, recovered.plan.type);
   assert.equal(JSON.parse(fs.readFileSync(localStore.filePath, "utf8")).routeEvaluations.length, 1);
 });
 
@@ -216,6 +220,10 @@ test("effects-committed replay completes without repeating downstream effects", 
   const completed = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"))
     .inboundMessageOperations.find((item) => item.externalId === payload.externalId);
   assert.equal(recovered.recovered, true);
+  assert.equal(recovered.processing, false);
+  assert.equal(recovered.message.externalId, payload.externalId);
+  assert.equal(recovered.route.id, operation.result.routeEvaluationId);
+  assert.equal(recovered.outcome, recovered.plan.type);
   assert.equal(notificationCalls, 0);
   assert.equal(JSON.parse(fs.readFileSync(localStore.filePath, "utf8")).routeEvaluations.length, routesAfterFailure);
   assert.equal(completed.status, "completed");
@@ -231,6 +239,9 @@ test("inbound operation snapshot strips host secrets and local paths from attach
     attachments: [{
       role: "image",
       mimeType: "image/png",
+      imageId: "safe-remote-image-id",
+      referencedImageId: "C:\\secret\\reference.png",
+      remoteImageId: "file:///private/remote.png",
       token: "operation-secret-token",
       endpoint: "http://127.0.0.1:3999",
       localPath: "C:\\secret\\attachment.png",
@@ -241,8 +252,119 @@ test("inbound operation snapshot strips host secrets and local paths from attach
     .inboundMessageOperations.find((item) => item.externalId === "safe-operation-attachment");
   const snapshot = JSON.stringify(operation.normalizedPayload);
   assert.match(snapshot, /image\/png/);
-  assert.doesNotMatch(snapshot, /operation-secret-token|127\.0\.0\.1|secret\\\\attachment/i);
+  assert.match(snapshot, /safe-remote-image-id/);
+  assert.doesNotMatch(snapshot, /operation-secret-token|127\.0\.0\.1|secret\\\\(?:attachment|reference)|file:\/\/\/private/i);
   assert.doesNotMatch(snapshot, /"(?:token|endpoint|localPath)"/i);
+});
+
+test("inbound assetIds reject non-strings, credentials, endpoints, absolute paths and control characters", async () => {
+  const unsafeValues = [
+    [{ token: "nested-secret", endpoint: "https://private.example", localPath: "C:\\private\\asset.png" }],
+    ["token=secret-value"],
+    ["https://private.example/asset"],
+    ["file:///private/asset.png"],
+    ["C:\\private\\asset.png"],
+    ["\\\\server\\share\\asset.png"],
+    ["asset-id\u0000hidden"],
+  ];
+  for (const [index, assetIds] of unsafeValues.entries()) {
+    const { service } = setup();
+    await assert.rejects(
+      () => service.processInboundMessage({
+        ...primaryIdentity,
+        text: "unsafe asset id",
+        externalId: `unsafe-operation-asset-${index}`,
+        assetIds,
+      }),
+      /assetIds must/,
+    );
+  }
+});
+
+test("inbound lease reclaim fences the stale owner before effects and supplied operationId validation is write-free", async () => {
+  const { localStore, service } = setup();
+  const original = localStore.claimInboundMessageOperation({
+    id: "inbound-lease-fence-operation",
+    source: "wechat",
+    wechatAccountId: primaryIdentity.wechatAccountId,
+    externalId: "inbound-lease-fence-event",
+    requestFingerprint: "inbound-lease-fence-fingerprint",
+    normalizedPayload: { text: "lease fence" },
+    claimToken: "lease-owner-a",
+    leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }).operation;
+  const beforeInvalidReplay = localStore.getInboundMessageOperation(
+    primaryIdentity.wechatAccountId,
+    "inbound-lease-fence-event",
+  );
+  await assert.rejects(
+    () => service.persistence.claimInboundOperation({
+      operationId: "wrong-operation-id",
+      source: "wechat",
+      wechatAccountId: primaryIdentity.wechatAccountId,
+      externalId: "inbound-lease-fence-event",
+      requestFingerprint: "inbound-lease-fence-fingerprint",
+      normalizedPayload: { text: "lease fence" },
+      claimToken: "lease-owner-a",
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }),
+    /operation identity or payload changed/,
+  );
+  const afterInvalidReplay = localStore.getInboundMessageOperation(
+    primaryIdentity.wechatAccountId,
+    "inbound-lease-fence-event",
+  );
+  assert.equal(afterInvalidReplay.claimToken, beforeInvalidReplay.claimToken);
+  assert.equal(afterInvalidReplay.attemptCount, beforeInvalidReplay.attemptCount);
+
+  const expiredDocument = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  expiredDocument.inboundMessageOperations.find((item) => item.id === original.id).leaseExpiresAt =
+    new Date(Date.now() - 1_000).toISOString();
+  fs.writeFileSync(localStore.filePath, JSON.stringify(expiredDocument, null, 2));
+  const reclaimed = localStore.claimInboundMessageOperation({
+    source: "wechat",
+    wechatAccountId: primaryIdentity.wechatAccountId,
+    externalId: "inbound-lease-fence-event",
+    requestFingerprint: "inbound-lease-fence-fingerprint",
+    claimToken: "lease-owner-b",
+    leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  assert.equal(reclaimed.claimed, true);
+  assert.equal(reclaimed.operation.claimToken, "lease-owner-b");
+  assert.equal(reclaimed.operation.attemptCount, original.attemptCount + 1);
+
+  let staleEffectCalls = 0;
+  await assert.rejects(
+    () => service.withInboundEffectLease(original.id, "lease-owner-a", () => {
+      staleEffectCalls += 1;
+    }),
+    /lease is no longer owned by this claim/,
+  );
+  assert.equal(staleEffectCalls, 0);
+  assert.throws(
+    () => localStore.updateInboundMessageOperation(original.id, "lease-owner-a", { stage: "routed" }),
+    /claim changed before stage commit/,
+  );
+  const advanced = localStore.updateInboundMessageOperation(original.id, "lease-owner-b", { stage: "routed" });
+  assert.equal(advanced.stage, "routed");
+});
+
+test("completed inbound replay fails closed when a promised durable reference is missing", async () => {
+  const { localStore, service } = setup();
+  const payload = {
+    ...primaryIdentity,
+    text: "durable hydration reference",
+    externalId: "completed-replay-missing-route",
+  };
+  await service.processInboundMessage(payload);
+  const document = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+  const operation = document.inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+  operation.result.routeEvaluationId = "missing-route-evaluation";
+  fs.writeFileSync(localStore.filePath, JSON.stringify(document, null, 2));
+  await assert.rejects(
+    () => service.processInboundMessage(payload),
+    /missing its durable route evaluation/,
+  );
 });
 
 test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {

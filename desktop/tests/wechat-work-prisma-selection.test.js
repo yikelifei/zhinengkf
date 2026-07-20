@@ -41,7 +41,7 @@ function setup(options = {}) {
   localStore.filePath = path.join(tempDir, "local-store.json");
   const initialJob = options.initialJob === undefined ? designJob() : options.initialJob;
   const currentJob = options.currentJob === undefined ? initialJob : options.currentJob;
-  const calls = { jobQueries: [], jobUpdates: [], imageUpdates: [], quotes: [], reviews: [], notifications: [] };
+  const calls = { jobQueries: [], jobUpdates: [], imageUpdates: [], operationUpdates: [], quotes: [], reviews: [], notifications: [] };
   const tx = {
     designJob: {
       async findFirst(query) {
@@ -63,6 +63,12 @@ function setup(options = {}) {
         return query;
       },
     },
+    inboundMessageOperation: {
+      async updateMany(query) {
+        calls.operationUpdates.push(query);
+        return { count: 1 };
+      },
+    },
     quoteDraft: {
       async create(query) {
         const record = { id: "quote-created", ...query.data, customer: { name: "客户" }, selectedImage: { position: 101 }, designJob: currentJob };
@@ -81,6 +87,10 @@ function setup(options = {}) {
       async findFirst(query) {
         calls.jobQueries.push({ phase: "initial", query });
         return initialJob;
+      },
+      async findUnique(query) {
+        calls.jobQueries.push({ phase: "recovery", query });
+        return options.recoveryJob || currentJob;
       },
     },
     quoteDraft: {
@@ -154,6 +164,54 @@ test("Prisma high-value image selection enters manual review and never auto-prog
   assert.equal(calls.jobUpdates[0].data.manualQcRequired, true);
   assert.ok(calls.reviews.some((item) => item.targetType === "design_job"));
   assert.ok(calls.notifications.some((item) => /高价值客户已选图/.test(item.title)));
+});
+
+test("Prisma high-value selection records a fenced recovery marker before post-commit effects and resumes it", async () => {
+  const highValue = designJob({ isHighValue: true, budget: { total: 20000 } });
+  const recoveryJob = designJob({ ...highValue, status: "manual_review", manualQcRequired: true });
+  const { service, calls } = setup({ initialJob: highValue, currentJob: highValue, recoveryJob });
+  const operationId = "inbound-prisma-high-value-recovery";
+  const claimToken = "prisma-high-value-owner";
+  const firstParams = {
+    ...params(),
+    operationId,
+    claimToken,
+    operationResult: { messageId: "message-a", routeEvaluationId: "route-a" },
+  };
+  const originalLock = service.lockConversationForManualReview.bind(service);
+  service.lockConversationForManualReview = async () => {
+    throw new Error("injected Prisma post-commit effect crash");
+  };
+  await assert.rejects(
+    () => service.handlePrismaInboundImageSelection(firstParams),
+    /injected Prisma post-commit effect crash/,
+  );
+  assert.equal(calls.jobUpdates[0].data.status, "manual_review");
+  assert.equal(calls.operationUpdates.length, 1);
+  assert.equal(calls.operationUpdates[0].where.id, operationId);
+  assert.equal(calls.operationUpdates[0].where.claimToken, claimToken);
+  assert.equal(calls.operationUpdates[0].where.status, "processing");
+  assert.ok(calls.operationUpdates[0].where.leaseExpiresAt.gt instanceof Date);
+  const recoveryEffect = calls.operationUpdates[0].data.result.recoveryEffect;
+  assert.equal(recoveryEffect.kind, "high_value_image_selection");
+  assert.equal(recoveryEffect.designJobId, highValue.id);
+  assert.equal(recoveryEffect.selectedImageId, "new-1");
+  assert.equal(calls.reviews.length, 0);
+  assert.equal(calls.notifications.length, 0);
+
+  service.lockConversationForManualReview = originalLock;
+  const recovered = await service.handlePrismaInboundImageSelection({
+    ...firstParams,
+    operationResult: { recoveryEffect },
+  });
+  assert.equal(recovered.plan.reason, "high_value_customer_selected_image");
+  assert.equal(recovered.selection.result.source, "durable_recovery");
+  assert.equal(recovered.designJob.id, highValue.id);
+  assert.equal(recovered.quote, null);
+  assert.equal(recovered.sendTask, null);
+  assert.equal(calls.reviews.length, 2);
+  assert.equal(calls.reviews.filter((item) => item.targetType === "design_job").length, 1);
+  assert.equal(calls.notifications.filter((item) => item.metadata?.effectKey?.endsWith(":high-value-selection-notification")).length, 1);
 });
 
 test("Prisma selection defers quote-acceptance text to the quote acceptance policy", async () => {
