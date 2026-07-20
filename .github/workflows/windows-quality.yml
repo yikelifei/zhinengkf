@@ -70,3 +70,44 @@ jobs:
             desktop/.runtime/production-release-gate/latest.md
             desktop/.runtime/staging-readiness-evidence/latest.json
             desktop/.runtime/staging-readiness-evidence/latest.md
+
+  unsigned-package:
+    name: Unsigned Windows package and packaged-runtime smoke
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: desktop
+        run: npm.cmd ci --no-audit --no-fund
+
+      - name: Build and verify unsigned Windows package
+        working-directory: desktop
+        run: npm.cmd run package:win:test
+
+      - name: Upload sanitized package verification only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned-package-verification
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            desktop/release/windows/verification/latest.json
+            desktop/release/windows/verification/latest.md
+            desktop/release/windows/verification/packaged-api-smoke.json

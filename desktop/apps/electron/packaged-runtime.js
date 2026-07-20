@@ -66,34 +66,86 @@ function buildWebServiceEnvironment({ resourcesPath, appPath, userDataPath, base
 
 const buildServiceEnvironment = buildApiServiceEnvironment;
 
-function waitForHttp(url, child, timeoutMs = 45_000) {
+function waitForHttp(url, child, timeoutMs = 45_000, validateResponse = validateExactHttp200) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
-    const attempt = () => {
+    const attempt = async () => {
       if (child.exitCode !== null || child.killed) {
         reject(new Error(`${child.serviceName || "service"} exited before ${url} became ready`));
         return;
       }
-      const request = http.get(url, { timeout: 1500 }, (response) => {
-        response.resume();
-        if ((response.statusCode || 500) < 500) {
-          resolve();
+      try {
+        const response = await requestHttp(url);
+        if (response.statusCode === 200 && validateResponse(response)) {
+          if (child.exitCode !== null || child.killed) {
+            reject(new Error(`${child.serviceName || "service"} exited while ${url} reported ready`));
+            return;
+          }
+          resolve(response);
           return;
         }
-        retry();
-      });
-      request.on("timeout", () => request.destroy());
-      request.on("error", retry);
+      } catch {}
+      retry();
     };
     const retry = () => {
       if (Date.now() >= deadline) {
         reject(new Error(`Timed out waiting for ${url}`));
         return;
       }
-      setTimeout(attempt, 250);
+      setTimeout(attempt, Math.min(250, Math.max(1, deadline - Date.now())));
     };
     attempt();
   });
+}
+
+function requestHttp(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, { timeout: 1500 }, (response) => {
+      const chunks = [];
+      let bytes = 0;
+      response.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 1024 * 1024) {
+          request.destroy(new Error(`Readiness response exceeded 1 MiB: ${url}`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolve({
+        statusCode: response.statusCode || 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks),
+      }));
+    });
+    request.on("timeout", () => request.destroy(new Error(`Timed out requesting ${url}`)));
+    request.on("error", reject);
+  });
+}
+
+function validateExactHttp200(response) {
+  return response?.statusCode === 200;
+}
+
+function validateApiHealthResponse(response) {
+  if (!validateExactHttp200(response)) return false;
+  const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+  if (!contentType.includes("application/json")) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(response.body || "").toString("utf8"));
+    return payload?.ok === true && payload?.service === "smart-kefu-desktop-api";
+  } catch {
+    return false;
+  }
+}
+
+function validateWebOverviewResponse(response) {
+  if (!validateExactHttp200(response)) return false;
+  const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+  const html = Buffer.from(response.body || "").toString("utf8");
+  return contentType.includes("text/html") &&
+    /<html\b[^>]*\blang=["']zh-CN["']/i.test(html) &&
+    /\bid=["']overview-center["']/i.test(html) &&
+    /\/_next\/static\//i.test(html);
 }
 
 class PackagedServiceManager {
@@ -122,7 +174,7 @@ class PackagedServiceManager {
     });
     try {
       const api = this.spawnService("api", this.paths.apiEntry, apiEnv, this.paths.readOnlyRoot);
-      await waitForHttp(API_URL, api);
+      await waitForHttp(API_URL, api, 45_000, validateApiHealthResponse);
       const web = this.spawnService(
         "web",
         this.paths.webEntry,
@@ -136,7 +188,7 @@ class PackagedServiceManager {
         }),
         this.paths.runtimeDir,
       );
-      await waitForHttp(WEB_URL, web);
+      await waitForHttp(WEB_URL, web, 45_000, validateWebOverviewResponse);
     } catch (error) {
       this.stop();
       throw error;
@@ -184,5 +236,8 @@ module.exports = {
   buildServiceEnvironment,
   buildWebServiceEnvironment,
   resolvePackagedPaths,
+  validateApiHealthResponse,
+  validateExactHttp200,
+  validateWebOverviewResponse,
   waitForHttp,
 };

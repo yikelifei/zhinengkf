@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -11,7 +12,11 @@ const {
   buildApiServiceEnvironment,
   buildWebServiceEnvironment,
   resolvePackagedPaths,
+  validateApiHealthResponse,
+  validateWebOverviewResponse,
+  waitForHttp,
 } = require("../apps/electron/packaged-runtime");
+const { waitForUrl } = require("../tools/smoke-packaged-api");
 const {
   SCHEMA_VERSION,
   isForbiddenArchivePath,
@@ -142,7 +147,72 @@ test("packaged smoke waits for child shutdown before another build can replace r
   assert.match(smoke, /child\.once\("exit"/);
   assert.match(smoke, /require\(\"sharp\"\)/);
   assert.match(smoke, /dhash64:v1:0000000000000000/);
+  assert.match(smoke, /apiHealth\.statusCode !== 200/);
+  assert.match(smoke, /overview\.statusCode !== 200/);
+  assert.match(smoke, /smart_kefu_desktop_session=\$\{desktopWebSessionProof\}/);
+  assert.match(smoke, /authenticatedProxyHealth\.statusCode !== 200/);
+  assert.match(smoke, /external_no_cookie_fail_closed/);
+  assert.match(smoke, /verified_electron_cookie/);
 });
+
+test("packaged readiness rejects preoccupied 3xx, auth, not-found and unrelated HTTP listeners", async (t) => {
+  let response = {
+    statusCode: 404,
+    contentType: "application/json",
+    body: JSON.stringify({ ok: false, service: "unrelated-listener" }),
+  };
+  const server = http.createServer((_request, outgoing) => {
+    outgoing.writeHead(response.statusCode, { "content-type": response.contentType });
+    outgoing.end(response.body);
+  });
+  await listenOnLoopback(server);
+  t.after(() => closeServer(server));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/api/health`;
+  const child = { exitCode: null, killed: false, serviceName: "api" };
+
+  for (const statusCode of [302, 401, 403, 404]) {
+    response = { ...response, statusCode };
+    await assert.rejects(waitForHttp(url, child, 35, validateApiHealthResponse), /Timed out waiting/);
+    await assert.rejects(waitForUrl(child, url, 35, validateApiHealthResponse), /timed out waiting/);
+  }
+
+  response = { statusCode: 200, contentType: "application/json", body: JSON.stringify({ ok: true, service: "other-api" }) };
+  await assert.rejects(waitForHttp(url, child, 35, validateApiHealthResponse), /Timed out waiting/);
+  await assert.rejects(waitForUrl(child, url, 35, validateApiHealthResponse), /timed out waiting/);
+});
+
+test("packaged readiness accepts exact API health and Web overview truth", async (t) => {
+  const server = http.createServer((request, response) => {
+    if (request.url === "/api/health") {
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ ok: true, service: "smart-kefu-desktop-api" }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end('<!doctype html><html lang="zh-CN"><body><main id="overview-center"></main><script src="/_next/static/app.js"></script></body></html>');
+  });
+  await listenOnLoopback(server);
+  t.after(() => closeServer(server));
+  const address = server.address();
+  const child = { exitCode: null, killed: false, serviceName: "fixture" };
+
+  const api = await waitForHttp(`http://127.0.0.1:${address.port}/api/health`, child, 500, validateApiHealthResponse);
+  assert.equal(api.statusCode, 200);
+  const overview = await waitForUrl(child, `http://127.0.0.1:${address.port}/overview`, 500, validateWebOverviewResponse);
+  assert.equal(overview.statusCode, 200);
+});
+
+function listenOnLoopback(server) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
 
 test("packaged service startup preserves the Electron window activation lifecycle", () => {
   const main = fs.readFileSync(path.join(root, "apps", "electron", "main.js"), "utf8");

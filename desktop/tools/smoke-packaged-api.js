@@ -5,6 +5,11 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const {
+  validateApiHealthResponse,
+  validateExactHttp200,
+  validateWebOverviewResponse,
+} = require("../apps/electron/packaged-runtime");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
@@ -22,11 +27,13 @@ const apiHealthUrl = `http://127.0.0.1:${apiPort}/api/health`;
 const overviewUrl = `http://127.0.0.1:${webPort}/overview`;
 const proxyHealthUrl = `http://127.0.0.1:${webPort}/api/health`;
 
-main().catch((error) => {
-  writeReport({ status: "FAIL", apiHealthUrl, overviewUrl, proxyHealthUrl, error: String(error?.message || error) });
-  console.error(error?.stack || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    writeReport({ status: "FAIL", apiHealthUrl, overviewUrl, proxyHealthUrl, error: String(error?.message || error) });
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
 
 async function main() {
   const requiredFiles = [
@@ -75,7 +82,10 @@ async function main() {
     });
     const api = spawnService("api", apiEntry, readOnlyRoot, commonEnv);
     processes.push(api);
-    const apiHealth = await waitForUrl(api, apiHealthUrl, 45_000);
+    const apiHealth = await waitForUrl(api, apiHealthUrl, 45_000, validateApiHealthResponse);
+    if (apiHealth.statusCode !== 200) {
+      throw new Error(`packaged API health returned ${apiHealth.statusCode}, expected 200`);
+    }
 
     const web = spawnService("web", webEntry, path.dirname(webEntry), {
       ...commonEnv,
@@ -83,11 +93,20 @@ async function main() {
       DESKTOP_WEB_SESSION_PROOF: desktopWebSessionProof,
     });
     processes.push(web);
-    const overview = await waitForUrl(web, overviewUrl, 45_000);
+    const overview = await waitForUrl(web, overviewUrl, 45_000, validateWebOverviewResponse);
+    if (overview.statusCode !== 200) {
+      throw new Error(`packaged overview returned ${overview.statusCode}, expected 200`);
+    }
     const proxyHealth = await requestUrl(proxyHealthUrl);
     const proxyHealthBody = parseJsonBuffer(proxyHealth.body);
     if (proxyHealth.statusCode !== 403 || proxyHealthBody?.code !== "desktop_session_proof_missing") {
       throw new Error(`packaged Web API proxy did not fail closed without Electron proof (${proxyHealth.statusCode})`);
+    }
+    const authenticatedProxyHealth = await requestUrl(proxyHealthUrl, {
+      headers: { Cookie: `smart_kefu_desktop_session=${desktopWebSessionProof}` },
+    });
+    if (authenticatedProxyHealth.statusCode !== 200 || !validateApiHealthResponse(authenticatedProxyHealth)) {
+      throw new Error(`packaged Web API proxy did not reach the API with valid Electron proof (${authenticatedProxyHealth.statusCode})`);
     }
 
     const assetPath = firstStaticAssetPath(overview.body);
@@ -103,6 +122,7 @@ async function main() {
       apiHealth: { statusCode: apiHealth.statusCode },
       overview: { statusCode: overview.statusCode },
       proxyHealth: { statusCode: proxyHealth.statusCode, mode: "external_no_cookie_fail_closed" },
+      authenticatedProxyHealth: { statusCode: authenticatedProxyHealth.statusCode, mode: "verified_electron_cookie" },
       staticAsset: { statusCode: staticAsset.statusCode, bytes: staticAsset.body.length },
       ports: { api: apiPort, web: webPort },
       cwd: "resources/services/runtime-root",
@@ -192,28 +212,32 @@ function spawnService(name, entry, cwd, env) {
   return child;
 }
 
-function waitForUrl(child, url, timeoutMs) {
+function waitForUrl(child, url, timeoutMs, validateResponse = validateExactHttp200) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) return reject(new Error(`${child.serviceName} exited with ${child.exitCode}`));
       try {
         const response = await requestUrl(url);
-        if (response.statusCode < 500) return resolve(response);
+        if (response.statusCode === 200 && validateResponse(response)) return resolve(response);
       } catch {}
       if (Date.now() >= deadline) return reject(new Error(`timed out waiting for ${url}`));
-      setTimeout(attempt, 250);
+      setTimeout(attempt, Math.min(250, Math.max(1, deadline - Date.now())));
     };
     attempt();
   });
 }
 
-function requestUrl(url) {
+function requestUrl(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.get(url, { timeout: 1500 }, (response) => {
+    const request = http.get(url, { timeout: 1500, ...options }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve({ statusCode: response.statusCode || 0, body: Buffer.concat(chunks) }));
+      response.on("end", () => resolve({
+        statusCode: response.statusCode || 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks),
+      }));
     });
     request.on("timeout", () => request.destroy(new Error(`timeout requesting ${url}`)));
     request.on("error", reject);
@@ -234,3 +258,9 @@ function writeReport(report) {
 function redact(value) {
   return String(value || "").replace(/[a-f0-9]{64}/gi, "[redacted-token]").replace(/\s+/g, " ").slice(-4000);
 }
+
+module.exports = {
+  main,
+  requestUrl,
+  waitForUrl,
+};

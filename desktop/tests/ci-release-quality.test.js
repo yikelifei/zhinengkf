@@ -83,6 +83,13 @@ test("Windows workflow is least privilege, deterministic and always uploads sani
   assert.match(workflow, /npm\.cmd ci/);
   assert.match(workflow, /requirements-dev\.txt/);
   assert.match(workflow, /npm\.cmd run ci:release-quality/);
+  assert.match(workflow, /unsigned-package:/);
+  assert.match(workflow, /timeout-minutes: 35/);
+  assert.match(workflow, /npm\.cmd run package:win:test/);
+  assert.match(workflow, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
+  assert.match(workflow, /windows-unsigned-package-verification/);
+  assert.match(workflow, /desktop\/release\/windows\/verification\/packaged-api-smoke\.json/);
+  assert.doesNotMatch(workflow, /desktop\/release\/windows\/[^\r\n]*\.(?:exe|pfx|p12)/i);
   assert.match(workflow, /if: always\(\)/);
   assert.match(workflow, /desktop\/\.runtime\/production-release-gate\/latest\.json/);
   assert.match(workflow, /desktop\/\.runtime\/staging-readiness-evidence\/latest\.json/);

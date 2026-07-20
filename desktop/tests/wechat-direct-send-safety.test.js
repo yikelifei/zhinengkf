@@ -1471,6 +1471,52 @@ test("send operations scan protects unknown bridge delivery without fabricating 
   assert.doesNotMatch(controller, /internal:\s*true/);
 });
 
+test("in-flight cancellation stays unknown until an audited manual terminal resolution", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const rules = readProjectFile("packages/rules/sendGuard.js");
+  const cancelSection = service.slice(
+    service.indexOf("  cancelSendTask("),
+    service.indexOf("  async resolveUnknownSendDelivery("),
+  );
+  const resolutionSection = service.slice(
+    service.indexOf("  async resolveUnknownSendDelivery("),
+    service.indexOf("  async settleWechatWorkAsyncFailure("),
+  );
+  const settlementSection = service.slice(
+    service.indexOf("  async settleWechatWorkAsyncFailure("),
+    service.indexOf("  private async recordManualSendDeliveryResolutionAudit("),
+  );
+  const localProtection = service.slice(
+    service.indexOf("  private protectLocalInflightSendFromCancellation("),
+    service.indexOf("  private async protectPrismaInflightSendFromCancellation("),
+  );
+  const prismaProtection = service.slice(
+    service.indexOf("  private async protectPrismaInflightSendFromCancellation("),
+    service.indexOf("  private markBridgeDeliveryUnknown("),
+  );
+
+  assert.match(cancelSection, /task\.status === "sending"[\s\S]*protectLocalInflightSendFromCancellation/);
+  assert.match(cancelSection, /task\.status === "sending"[\s\S]*protectPrismaInflightSendFromCancellation/);
+  for (const protection of [localProtection, prismaProtection]) {
+    assert.match(protection, /status: "sending"/);
+    assert.match(protection, /deliveryState: "unknown"/);
+    assert.match(protection, /deliveryUnknownReason: "manual_cancel_requested_inflight"/);
+    assert.match(protection, /automaticRetryBlocked: true/);
+    assert.match(protection, /manualReviewRequired: true/);
+  }
+  assert.match(localProtection, /status: "started"/);
+  assert.match(prismaProtection, /expectedAttemptStatus: "started"/);
+  assert.match(resolutionSection, /normalizeOperationKey\(payload\?\.operationKey, "operationKey"\)/);
+  assert.match(resolutionSection, /requireExactSendTaskIdentity\(task, payload\)/);
+  assert.match(resolutionSection, /"confirmed_sent", "confirmed_not_sent"/);
+  assert.match(resolutionSection, /deliveryResolutionPriority: "manual_audited_terminal"/);
+  assert.match(resolutionSection, /assertExactOperationReplay/);
+  assert.match(resolutionSection, /recordManualSendDeliveryResolutionAudit/);
+  assert.match(settlementSection, /manual_resolution_\$\{String\(manualResolution\.resolution \|\| "unknown"\)\}_is_terminal/);
+  assert.match(rules, /delivery_unknown_manual_review/);
+  assert.match(rules, /automaticRetryBlocked === true/);
+});
+
 test("backend bridge send action validation requires local image files", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const actionValidationSection = service.slice(
