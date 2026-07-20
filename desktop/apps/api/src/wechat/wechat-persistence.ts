@@ -544,20 +544,7 @@ export class WechatPersistence {
     } | null;
   }) {
     if (this.isLocal) {
-      const currentTask = this.localStore.getSendTask(params.taskId);
-      if (!currentTask) return null;
-      if (params.expectedTaskStatus && currentTask.status !== params.expectedTaskStatus) return null;
-      if (params.expectedTaskUpdatedAt &&
-        new Date(currentTask.updatedAt || 0).getTime() !== new Date(params.expectedTaskUpdatedAt).getTime()) return null;
-      if (params.expectedAttemptStatus) {
-        const currentAttempt = this.localStore
-          .listSendAttempts({ sendTaskId: params.taskId, limit: 300 })
-          .find((attempt: any) => attempt.id === params.attemptId);
-        if (!currentAttempt || currentAttempt.status !== params.expectedAttemptStatus) return null;
-      }
-      const attempt = this.localStore.updateSendAttempt(params.attemptId, params.attemptPatch);
-      const task = this.localStore.updateSendTask(params.taskId, params.taskPatch);
-      return { task, attempt };
+      return this.localStore.completeSendAttemptAndTask(params);
     }
     const prisma = this.prisma as any;
     const completed = await prisma.$transaction(async (tx: any) => {
@@ -660,11 +647,7 @@ export class WechatPersistence {
     attempt: any;
   }) {
     if (this.isLocal) {
-      const task = this.localStore.getSendTask(params.taskId);
-      if (!task || task.status !== "queued") return null;
-      const updatedTask = this.localStore.updateSendTask(params.taskId, params.taskPatch);
-      const attempt = this.localStore.createSendAttempt(params.attempt);
-      return { task: updatedTask, attempt };
+      return this.localStore.claimQueuedSendTaskAndCreateAttempt(params);
     }
     const prisma = this.prisma as any;
     const result = await prisma.$transaction(async (tx: any) => {

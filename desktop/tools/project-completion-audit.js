@@ -107,6 +107,11 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/wechat-prisma-send-parity.test.js",
   },
   {
+    id: "safety.local_wechat_send_claim_recovery_tests",
+    title: "LocalStore bridge 发送 claim 与故障恢复动态测试",
+    file: "desktop/tests/wechat-local-send-claim-recovery.test.js",
+  },
+  {
     id: "prisma.design_platform_execution_migration",
     title: "设计平台逐尝试持久化迁移",
     file: "desktop/prisma/migrations/20260719233000_design_platform_execution_durability/migration.sql",
@@ -521,6 +526,42 @@ const CONTRACTS = Object.freeze([
       /tx\.wechatSendAttempt\.update/,
       /linked\.count !== 1/,
       /updateSendTaskWithLinkedTransition/,
+    ],
+  },
+  {
+    id: "contract.local_wechat_send_claim_atomicity",
+    title: "LocalStore 发送任务与 attempt 单文件原子迁移",
+    file: "desktop/apps/api/src/local-store/local-store.service.ts",
+    patterns: [
+      /claimQueuedSendTaskAndCreateAttempt/,
+      /completeSendAttemptAndTask/,
+      /data\.sendTasks\[taskIndex\] = nextTask/,
+      /data\.sendAttempts\.push\(attempt\)/,
+      /expectedAttemptStatus/,
+    ],
+  },
+  {
+    id: "contract.local_wechat_adapter_failure_fail_closed",
+    title: "Local bridge adapter 故障按可证明边界失败关闭",
+    file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    patterns: [
+      /claimQueuedSendTaskAndCreateAttempt/,
+      /error instanceof WechatBridgeOutboxError && error\.deliveryState === "failed"/,
+      /failureStage = error instanceof WechatBridgeOutboxError/,
+      /deliveryUnknownReason = knownNotSent \? null : "adapter_execution_exception"/,
+      /automaticRetryBlocked: !knownNotSent/,
+      /expectedAttemptStatus: "started"/,
+    ],
+  },
+  {
+    id: "contract.local_wechat_outbox_failure_provenance",
+    title: "Windows bridge outbox 写入故障来源不可由错误文本伪造",
+    file: "desktop/apps/api/src/wechat/wechat-send-adapter.service.ts",
+    patterns: [
+      /class WechatBridgeOutboxError extends Error/,
+      /stage: "outbox_mkdir"/,
+      /deliveryState: published \? "unknown" : "failed"/,
+      /attemptId: context\.attemptId/,
     ],
   },
   {

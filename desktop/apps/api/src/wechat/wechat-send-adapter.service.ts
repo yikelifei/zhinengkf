@@ -12,6 +12,7 @@ type AdapterContext = {
   guardStatus: string;
   windowSnapshotId?: string | null;
   payloadSummary: Record<string, unknown>;
+  attemptId?: string;
 };
 
 type AdapterResult = {
@@ -45,6 +46,30 @@ export class WechatWorkKfDeliveryError extends Error {
     this.stage = details.stage;
     this.acceptedMessageIds = [...details.acceptedMessageIds];
     this.uploadedMediaIds = [...details.uploadedMediaIds];
+  }
+}
+
+export class WechatBridgeOutboxError extends Error {
+  readonly deliveryState: "failed" | "unknown";
+  readonly retrySafe: boolean;
+  readonly stage: string;
+  readonly outboxFile: string;
+
+  constructor(
+    message: string,
+    details: {
+      deliveryState: "failed" | "unknown";
+      retrySafe: boolean;
+      stage: string;
+      outboxFile?: string;
+    },
+  ) {
+    super(message);
+    this.name = "WechatBridgeOutboxError";
+    this.deliveryState = details.deliveryState;
+    this.retrySafe = details.retrySafe;
+    this.stage = details.stage;
+    this.outboxFile = details.outboxFile || "";
   }
 }
 
@@ -329,17 +354,26 @@ export class WechatSendAdapterService {
   }
 
   private writeBridgeOutbox(task: any, context: AdapterContext) {
-    fs.mkdirSync(appConfig.wechatBridgeOutboxDir, { recursive: true });
+    try {
+      fs.mkdirSync(appConfig.wechatBridgeOutboxDir, { recursive: true });
+    } catch (error) {
+      throw bridgeOutboxError(error, {
+        deliveryState: "failed",
+        retrySafe: true,
+        stage: "outbox_mkdir",
+      });
+    }
     const safeId = String(task?.id || "send").replace(/[^a-zA-Z0-9_-]/g, "_");
     const filePath = path.join(appConfig.wechatBridgeOutboxDir, `${Date.now()}-${safeId}.json`);
-    const target = this.buildBridgeTarget(task, context);
-    writeFileAtomic(
-      filePath,
-      `${JSON.stringify(
+    let contents: string;
+    try {
+      const target = this.buildBridgeTarget(task, context);
+      contents = `${JSON.stringify(
         {
           version: "wechat_bridge_outbox_v1",
           ackToken: randomBytes(32).toString("hex"),
           taskId: task?.id,
+          attemptId: context.attemptId,
           wechatAccountId: task?.wechatAccountId,
           conversationId: task?.conversationId,
           target,
@@ -351,8 +385,16 @@ export class WechatSendAdapterService {
         },
         null,
         2,
-      )}\n`,
-    );
+      )}\n`;
+    } catch (error) {
+      throw bridgeOutboxError(error, {
+        deliveryState: "failed",
+        retrySafe: true,
+        stage: "outbox_prepare",
+        outboxFile: filePath,
+      });
+    }
+    writeFileAtomic(filePath, contents);
     return filePath;
   }
 
@@ -519,19 +561,41 @@ function resolveBridgeChildFile(filePath: string, rootDir: string, label: string
 function writeFileAtomic(filePath: string, contents: string) {
   const resolved = path.resolve(filePath);
   const tempPath = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${randomUUID()}.tmp`);
+  let stage = "outbox_temp_write";
   try {
     fs.writeFileSync(tempPath, contents, "utf8");
+    stage = "outbox_temp_fsync";
     const fd = fs.openSync(tempPath, "r");
     try {
       bestEffortFsync(fd);
     } finally {
       fs.closeSync(fd);
     }
+    stage = "outbox_publish_rename";
     fs.renameSync(tempPath, resolved);
   } catch (error) {
     fs.rmSync(tempPath, { force: true });
-    throw error;
+    const published = fs.existsSync(resolved);
+    throw bridgeOutboxError(error, {
+      deliveryState: published ? "unknown" : "failed",
+      retrySafe: !published,
+      stage,
+      outboxFile: resolved,
+    });
   }
+}
+
+function bridgeOutboxError(
+  error: unknown,
+  details: {
+    deliveryState: "failed" | "unknown";
+    retrySafe: boolean;
+    stage: string;
+    outboxFile?: string;
+  },
+) {
+  const message = error instanceof Error ? error.message : String(error || "bridge outbox write failed");
+  return new WechatBridgeOutboxError(message, details);
 }
 
 function bestEffortFsync(fd: number) {

@@ -24,7 +24,11 @@ import {
 } from "../shared/operation-idempotency";
 import { rules } from "../shared/rules";
 import { resolveWechatWorkImageFile } from "../wechat-work/wechat-work-media";
-import { WechatSendAdapterService, WechatWorkKfDeliveryError } from "./wechat-send-adapter.service";
+import {
+  WechatBridgeOutboxError,
+  WechatSendAdapterService,
+  WechatWorkKfDeliveryError,
+} from "./wechat-send-adapter.service";
 import { WechatPersistence } from "./wechat-persistence";
 
 const {
@@ -3661,31 +3665,88 @@ export class WechatDispatchService {
       return { task: validated, attempt, adapter };
     }
 
-    this.localStore.updateSendTask(id, {
-      status: "sending",
-      errorMessage: "",
-    });
-    const adapterResult = this.sendAdapter.execute(
-      validated,
-      { guardStatus, windowSnapshotId, payloadSummary },
-      params.adapter,
-    );
-    const attempt = this.localStore.createSendAttempt({
-      sendTaskId: id,
-      adapter: adapterResult.adapter,
-      status: adapterResult.status,
-      guardStatus,
-      windowSnapshotId,
-      payloadSummary,
-      errorMessage: adapterResult.errorMessage || "",
-      metadata: {
-        adapter,
-        ...(adapterResult.metadata || {}),
-        guardSnapshot: validated.guardSnapshot || null,
+    const claimed = this.localStore.claimQueuedSendTaskAndCreateAttempt({
+      taskId: id,
+      taskPatch: { status: "sending", errorMessage: "" },
+      attempt: {
+        sendTaskId: id,
+        adapter: adapter.name,
+        status: "started",
+        guardStatus,
+        windowSnapshotId,
+        payloadSummary,
+        errorMessage: "",
+        metadata: {
+          adapter,
+          guardSnapshot: validated.guardSnapshot || null,
+          bridgeState: "adapter_starting",
+          deliveryState: "in_flight",
+        },
+        startedAt,
       },
-      startedAt,
-      completedAt: adapterResult.status === "started" ? null : new Date().toISOString(),
     });
+    if (!claimed) throw new BadRequestException("send task was claimed by another worker");
+
+    let adapterResult: any;
+    try {
+      adapterResult = this.sendAdapter.execute(
+        claimed.task,
+        { guardStatus, windowSnapshotId, payloadSummary, attemptId: claimed.attempt.id },
+        params.adapter,
+      );
+    } catch (error) {
+      const completedAt = new Date().toISOString();
+      const knownNotSent = error instanceof WechatBridgeOutboxError && error.deliveryState === "failed";
+      const failureStage = error instanceof WechatBridgeOutboxError ? error.stage : "adapter_execution";
+      const errorMessage = error instanceof Error ? error.message : "send adapter failed";
+      const deliveryUnknownReason = knownNotSent ? null : "adapter_execution_exception";
+      const taskPatch = knownNotSent
+        ? {
+            status: "failed",
+            sentAt: null,
+            errorMessage,
+            guardSnapshot: this.settledDeliveryGuard(claimed.task, "failed", completedAt, failureStage),
+          }
+        : {
+            status: "sending",
+            sentAt: null,
+            errorMessage: `${errorMessage}; delivery is unknown and automatic retry is blocked pending manual review`,
+            guardSnapshot: {
+              ...(isPlainObject(claimed.task.guardSnapshot) ? claimed.task.guardSnapshot : {}),
+              status: "sending",
+              deliveryState: "unknown",
+              deliveryUnknownReason,
+              deliveryUnknownAt: completedAt,
+              automaticRetryBlocked: true,
+              manualReviewRequired: true,
+            },
+          };
+      const completed = this.localStore.completeSendAttemptAndTask({
+        taskId: id,
+        attemptId: claimed.attempt.id,
+        expectedTaskStatus: "sending",
+        expectedAttemptStatus: "started",
+        attemptPatch: {
+          status: knownNotSent ? "failed" : "started",
+          errorMessage,
+          completedAt: knownNotSent ? completedAt : null,
+          metadata: {
+            bridgeState: knownNotSent ? "adapter_failed_before_delivery" : "delivery_unknown",
+            deliveryState: knownNotSent ? "failed" : "unknown",
+            failureStage,
+            retrySafe: knownNotSent,
+            automaticRetryBlocked: !knownNotSent,
+            manualReviewRequired: !knownNotSent,
+            ...(error instanceof WechatBridgeOutboxError && error.outboxFile
+              ? { outboxFile: error.outboxFile }
+              : {}),
+          },
+        },
+        taskPatch,
+      });
+      if (!completed) throw new BadRequestException("send task state changed before adapter failure was recorded");
+      return { task: completed.task, attempt: completed.attempt, adapter };
+    }
     const taskStatus = adapterResult.status === "failed"
       ? "failed"
       : adapterResult.status === "started"
@@ -3693,11 +3754,25 @@ export class WechatDispatchService {
         : adapterResult.status === "dry_run"
           ? "dry_run"
           : "sent";
-    const task = this.localStore.updateSendTask(id, {
-      status: taskStatus,
-      sentAt: taskStatus === "sent" ? new Date().toISOString() : null,
-      errorMessage: adapterResult.errorMessage || (taskStatus === "sending" ? "等待 Windows 桥接回执" : ""),
+    const completed = this.localStore.completeSendAttemptAndTask({
+      taskId: id,
+      attemptId: claimed.attempt.id,
+      expectedTaskStatus: "sending",
+      expectedAttemptStatus: "started",
+      attemptPatch: {
+        status: adapterResult.status,
+        errorMessage: adapterResult.errorMessage || "",
+        metadata: adapterResult.metadata || {},
+        completedAt: adapterResult.status === "started" ? null : new Date().toISOString(),
+      },
+      taskPatch: {
+        status: taskStatus,
+        sentAt: taskStatus === "sent" ? new Date().toISOString() : null,
+        errorMessage: adapterResult.errorMessage || (taskStatus === "sending" ? "等待 Windows 桥接回执" : ""),
+      },
     });
+    if (!completed) throw new BadRequestException("send task state changed before adapter completion");
+    const { task, attempt } = completed;
     if (taskStatus === "sent") this.markLinkedQuoteSent(task);
     return { task, attempt, adapter };
   }

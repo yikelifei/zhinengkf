@@ -2908,6 +2908,84 @@ export class LocalStoreService {
     return this.hydrateSendTask(data, data.sendTasks[index]);
   }
 
+  claimQueuedSendTaskAndCreateAttempt(params: {
+    taskId: string;
+    taskPatch: any;
+    attempt: any;
+  }) {
+    const data = this.read();
+    const taskIndex = data.sendTasks.findIndex((item) => item.id === params.taskId);
+    if (taskIndex < 0 || data.sendTasks[taskIndex].status !== "queued") return null;
+
+    const now = new Date().toISOString();
+    const nextTask = {
+      ...data.sendTasks[taskIndex],
+      ...params.taskPatch,
+      updatedAt: now,
+    };
+    const attempt = this.buildSendAttemptRecord({
+      ...params.attempt,
+      sendTaskId: params.taskId,
+    }, now);
+    this.validateSendAttemptBinding(data, attempt);
+
+    data.sendTasks[taskIndex] = nextTask;
+    data.sendAttempts.push(attempt);
+    this.write(data);
+    return {
+      task: this.hydrateSendTask(data, nextTask),
+      attempt: this.hydrateSendAttempt(data, attempt),
+    };
+  }
+
+  completeSendAttemptAndTask(params: {
+    taskId: string;
+    attemptId: string;
+    taskPatch: any;
+    attemptPatch: any;
+    expectedTaskStatus?: string;
+    expectedTaskUpdatedAt?: string | Date;
+    expectedAttemptStatus?: string;
+  }) {
+    const data = this.read();
+    const taskIndex = data.sendTasks.findIndex((item) => item.id === params.taskId);
+    const attemptIndex = data.sendAttempts.findIndex((item) => item.id === params.attemptId);
+    if (taskIndex < 0 || attemptIndex < 0) return null;
+
+    const currentTask = data.sendTasks[taskIndex];
+    const currentAttempt = data.sendAttempts[attemptIndex];
+    if (currentAttempt.sendTaskId !== params.taskId) return null;
+    if (params.expectedTaskStatus && currentTask.status !== params.expectedTaskStatus) return null;
+    if (
+      params.expectedTaskUpdatedAt &&
+      new Date(currentTask.updatedAt || 0).getTime() !== new Date(params.expectedTaskUpdatedAt).getTime()
+    ) return null;
+    if (params.expectedAttemptStatus && currentAttempt.status !== params.expectedAttemptStatus) return null;
+
+    const nextAttempt = {
+      ...currentAttempt,
+      ...params.attemptPatch,
+      metadata: {
+        ...(currentAttempt.metadata || {}),
+        ...(params.attemptPatch?.metadata || {}),
+      },
+    };
+    const nextTask = {
+      ...currentTask,
+      ...params.taskPatch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.validateSendAttemptBinding(data, nextAttempt);
+
+    data.sendAttempts[attemptIndex] = nextAttempt;
+    data.sendTasks[taskIndex] = nextTask;
+    this.write(data);
+    return {
+      task: this.hydrateSendTask(data, nextTask),
+      attempt: this.hydrateSendAttempt(data, nextAttempt),
+    };
+  }
+
   private recordSkuChangeLog(
     data: StoreData,
     before: Record<string, unknown> | null,
@@ -3017,7 +3095,15 @@ export class LocalStoreService {
   createSendAttempt(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
-    const record = {
+    const record = this.buildSendAttemptRecord(payload, now);
+    this.validateSendAttemptBinding(data, record);
+    data.sendAttempts.push(record);
+    this.write(data);
+    return this.hydrateSendAttempt(data, record);
+  }
+
+  private buildSendAttemptRecord(payload: any, now = new Date().toISOString()) {
+    return {
       id: id("attempt"),
       sendTaskId: payload.sendTaskId,
       adapter: payload.adapter || "dry_run",
@@ -3031,10 +3117,6 @@ export class LocalStoreService {
       completedAt: payload.completedAt || null,
       createdAt: now,
     };
-    this.validateSendAttemptBinding(data, record);
-    data.sendAttempts.push(record);
-    this.write(data);
-    return this.hydrateSendAttempt(data, record);
   }
 
   updateSendAttempt(id: string, patch: any) {
