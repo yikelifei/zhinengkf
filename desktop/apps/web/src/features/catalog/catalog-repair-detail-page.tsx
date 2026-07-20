@@ -2,7 +2,7 @@
 
 import { Wrench } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { batchUpdateSkus } from "./api";
 import styles from "./catalog-pages.module.css";
 import { CatalogConfirmation, CatalogEmpty, CatalogHeader, CatalogNotice, catalogError } from "./catalog-ui";
@@ -17,6 +17,11 @@ export function CatalogRepairDetailPage({ skuCode }: { skuCode: string }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const repairSequence = useRef(0);
+  const skuCodeRef = useRef(skuCode);
+  skuCodeRef.current = skuCode;
+
+  useEffect(() => () => { repairSequence.current += 1; }, [skuCode]);
 
   function patchValues() {
     const patch: { stock?: number; supplier?: string; leadTimeDays?: number } = {};
@@ -37,12 +42,16 @@ export function CatalogRepairDetailPage({ skuCode }: { skuCode: string }) {
     if (!selected) return;
     const validation = validate();
     if (validation) { setConfirming(false); setError(validation); return; }
+    const sequence = ++repairSequence.current;
+    const requestSkuCode = selected.skuCode;
+    const patch = patchValues();
     setConfirming(false); setBusy(true); setError(""); setNotice("");
     try {
-      const result = await batchUpdateSkus({ skuCodes: [selected.skuCode], patch: patchValues() });
+      const result = await batchUpdateSkus({ skuCodes: [requestSkuCode], patch });
+      if (sequence !== repairSequence.current || skuCodeRef.current !== requestSkuCode) return;
       setNotice(`已更新 ${result.count} 个商品；跳过 ${result.skipped.length} 个。`);
-    } catch (cause) { setError(catalogError(cause, "商品修复失败")); }
-    finally { setBusy(false); }
+    } catch (cause) { if (sequence === repairSequence.current && skuCodeRef.current === requestSkuCode) setError(catalogError(cause, "商品修复失败")); }
+    finally { if (sequence === repairSequence.current && skuCodeRef.current === requestSkuCode) setBusy(false); }
   }
 
   return (
@@ -55,9 +64,9 @@ export function CatalogRepairDetailPage({ skuCode }: { skuCode: string }) {
           <div className={styles.cardHeader}><div><h2>{selected.skuCode}</h2><p>{selected.recommendedAction}</p></div><span className={styles.statusPill}>{selected.blocking ? "阻断" : selected.severity}</span></div>
           <ul className={styles.issueList}>{selected.missingFields.map((field) => <li key={field.field}><strong>{field.label}</strong><span>{field.action}</span></li>)}</ul>
           <div className={styles.formGrid}>
-            <label><span>库存</span><input type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} placeholder="不修改则留空" /></label>
-            <label><span>供应商</span><input value={supplier} onChange={(event) => setSupplier(event.target.value)} placeholder="不修改则留空" /></label>
-            <label><span>交期（天）</span><input type="number" min="0" value={leadTimeDays} onChange={(event) => setLeadTimeDays(event.target.value)} placeholder="不修改则留空" /></label>
+            <label><span>库存</span><input type="number" min="0" value={stock} disabled={busy} onChange={(event) => setStock(event.target.value)} placeholder="不修改则留空" /></label>
+            <label><span>供应商</span><input value={supplier} disabled={busy} onChange={(event) => setSupplier(event.target.value)} placeholder="不修改则留空" /></label>
+            <label><span>交期（天）</span><input type="number" min="0" value={leadTimeDays} disabled={busy} onChange={(event) => setLeadTimeDays(event.target.value)} placeholder="不修改则留空" /></label>
           </div>
           <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="catalog-repair-detail-save-request" disabled={busy}><Wrench size={16} aria-hidden="true" />准备提交修复</button></div>
           <Link className={styles.backLink} href="/catalog/repair" data-action-id="catalog-repair-detail-back">返回修复队列</Link>
