@@ -186,6 +186,22 @@ const CONTRACTS = Object.freeze([
     patterns: [/\.\.\.require\(["']\.\/skuImport["']\)/],
   },
   {
+    id: "contract.asset_ingestion_limits",
+    title: "资产摄取格式、字节与下载边界",
+    file: "desktop/apps/api/src/storage/storage.service.ts",
+    patterns: [
+      /MAX_IMAGE_FINGERPRINT_BYTES/,
+      /assertAssetSize\(decodeBase64\(params\.base64\)\)/,
+      /Buffer\.byteLength\(params\.text, "utf8"\)/,
+      /normalizeAssetUrl\(params\.url\)/,
+      /timeout: appConfig\.designPlatformTimeoutMs/,
+      /maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES/,
+      /maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES/,
+      /isCanonicalBase64Text/,
+      /asset URL must use http\(s\)/,
+    ],
+  },
+  {
     id: "contract.wechat_prisma",
     title: "微信与企业微信 Prisma 持久化",
     file: "desktop/apps/api/src/wechat/wechat-persistence.ts",
