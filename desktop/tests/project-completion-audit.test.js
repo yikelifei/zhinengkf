@@ -97,6 +97,8 @@ function atomicWritePrivateJson(filePath, value) { const temporaryPath = filePat
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'handlePrismaInboundImageSelection(); wechatAccountId: identity.wechatAccountId; conversationId: identity.conversationId; customerId: identity.customerId; latestCandidateRound(); shouldLetQuoteAcceptanceHandleSelectionText(); high_value_customer_selected_image; designSelectionRevisionSignature();\nawait this.executeQueuedSend(freshTask.id); pendingAttempt.adapter !== "windows_bridge"; await this.resolveBridgeAckAttempt(task, payload); validatePrismaLinkedSendState(); deliveryState: "unknown"; acceptedMessageIds: apiMsgIds; bridgeAckTokenHash: hashBridgeAckToken(payload); Files remain in place until the task + attempt transition is durably committed;\nprotectLocalInflightSendFromCancellation(); protectPrismaInflightSendFromCancellation(); protectInFlightSendTasksForManualLock(); deliveryUnknownReason: "manual_cancel_requested_inflight"; manualReviewRequired: true; automaticRetryBlocked: true; resolveUnknownSendDelivery(); "confirmed_sent"; "confirmed_not_sent"; requireExactSendTaskIdentity(); assertExactOperationReplay(); settleWechatWorkAsyncFailure(); deterministicOperationId("wechat_work_audit", operationKey, "manual-send-delivery-resolution"); deliveryResolutionPriority: "manual_audited_terminal"; previousManualDeliveryResolution; manualDeliveryResolution: null; protectedUnknownInFlightSendTaskIds; cancelledInFlightSendTaskIds: [];\n');
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) { return this.validateSendTaskWithCurrentWindow(id, expected); }\nconst activeWindow = await this.persistence.getLatestWindowSnapshot(task.wechatAccountId);\nobserverProofToken: currentWechatWindowObserverProofToken();\ncreateWechatWindowObserverAttestation();\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'claimQueuedSendTaskAndCreateAttempt(); error instanceof WechatBridgeOutboxError && error.deliveryState === "failed"; failureStage = error instanceof WechatBridgeOutboxError; deliveryUnknownReason = knownNotSent ? null : "adapter_execution_exception"; automaticRetryBlocked: !knownNotSent; expectedAttemptStatus: "started";\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-send-adapter.service.ts", 'class WechatBridgeOutboxError extends Error {}\nstage: "outbox_mkdir"; deliveryState: published ? "unknown" : "failed"; attemptId: context.attemptId;\n');
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", `
 @Get("accounts")
 @RequireOperatorCapability("view_console")
@@ -195,6 +197,7 @@ validateSendTask(
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'routingCorrectionRequestKey(); before.correction?.requestKey === requestKey; correctionRequestKey: requestKey; throw new NotFoundException(`route evaluation not found: ${id}`); throw new BadRequestException(`agent not found: ${key}`);\ncreateChatImport(payload: any, parsed: any) { const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, "chat import"); }\ncreateSendTask(payload: any) { const operationKey = normalizeOperationKey(payload.operationKey); const taskId = deterministicOperationId("send", operationKey); createSendTaskOperationFingerprint(); assertExactOperationReplay(); assertStoredOperationIdentityReplay(); }\nfunction localDesignCallbackClaimIsFresh() {}\nclaimDesignJobCallback() { return localDesignCallbackClaimIsFresh(job.callbackClaimedAt) ? "in_progress" : "outcome_unknown"; }\nsettleDesignJobCallbackFailure() {}\nbeginDesignJobCallbackRetry() {}\nmarkDesignJobCallbackOutcomeUnknown() {}\ncommitDesignJobCallbackCompletion() { return { callbackStatus: "settled" }; }\n');
   write(root, "desktop/apps/api/src/reviews/reviews.service.ts", 'quickConfirmAndQueueSend(id, { operationKey: payload.operationKey });\nthis.quotes.queueSend(id, { operationKey: payload.operationKey });\nthis.wechat.queueOrderConfirmation(id, { operationKey: payload.operationKey });\nthis.wechat.queueOrderFollowup(id, { operationKey: payload.operationKey });\n');
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'monotonicWechatWorkInboundAt(); normalizeWechatWorkInboundAt(); currentValue >= incoming;\n', true);
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", 'claimQueuedSendTaskAndCreateAttempt() { data.sendTasks[taskIndex] = nextTask; data.sendAttempts.push(attempt); expectedAttemptStatus; }\ncompleteSendAttemptAndTask() {}\n', true);
   write(root, "desktop/apps/web/src/features/sales/sales-order-edit-page.tsx", '付款状态（只读）; 负责人（可信会话记录）; 需从报价页核验付款凭证;\n');
   write(root, "desktop/apps/api/src/training/training.service.ts", "PrismaOperationsService; listSamplesPrisma(); getOverviewPrisma(); reviewSamplePrisma(); listSkillSuggestionsPrisma(); applySkillSuggestionsPrisma();\n");
   write(root, "desktop/apps/api/src/conversation-ops/conversation-operations.service.ts", "PrismaOperationsService; if (!appConfig.useLocalStore) return this.listQueuePrisma(); if (!appConfig.useLocalStore) return this.listAuditPrisma(); if (!appConfig.useLocalStore) return this.updateConversationPrisma(); this.requirePrisma().updateConversationOperations();\n");
@@ -780,6 +783,47 @@ test("completion audit rejects removal of Enterprise WeChat inbound timestamp mo
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
       from: "monotonicWechatWorkInboundAt()",
       to: "overwriteWechatWorkInboundAt()",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === mutation.id).status, STATUS.FAIL, mutation.id);
+  }
+});
+
+test("completion audit requires LocalStore send claim recovery and rejects failure-provenance drift", () => {
+  const missingTestRoot = createPassingFixture();
+  fs.rmSync(path.join(missingTestRoot, "desktop", "tests", "wechat-local-send-claim-recovery.test.js"));
+  const missingReport = buildAudit(missingTestRoot, { includeExternal: false });
+  assert.equal(
+    missingReport.results.find((item) => item.id === "safety.local_wechat_send_claim_recovery_tests").status,
+    STATUS.FAIL,
+  );
+
+  const mutations = [
+    {
+      id: "contract.local_wechat_send_claim_atomicity",
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      from: "claimQueuedSendTaskAndCreateAttempt()",
+      to: "updateTaskThenCreateAttempt()",
+    },
+    {
+      id: "contract.local_wechat_adapter_failure_fail_closed",
+      file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+      from: 'error instanceof WechatBridgeOutboxError && error.deliveryState === "failed"',
+      to: '/not sent/.test(errorMessage)',
+    },
+    {
+      id: "contract.local_wechat_outbox_failure_provenance",
+      file: "desktop/apps/api/src/wechat/wechat-send-adapter.service.ts",
+      from: 'deliveryState: published ? "unknown" : "failed"',
+      to: 'deliveryState: "failed"',
     },
   ];
 
