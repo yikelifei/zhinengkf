@@ -48,7 +48,7 @@ export class WechatWorkController {
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
   sendCustomerServiceImages(
-    @Body() payload: { externalUserId?: string; openKfid?: string; text?: string; imagePaths?: string[]; designJobId?: string },
+    @Body() payload: { externalUserId?: string; openKfid?: string; text?: string; imagePaths?: string[]; designJobId?: string; requestId?: string },
   ) {
     return this.wechatWork.queueCustomerServiceImages(payload || {});
   }

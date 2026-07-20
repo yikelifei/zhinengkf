@@ -89,7 +89,7 @@ export class QuotesController {
   @UseGuards(OperatorAccessGuard)
   queueSend(
     @Param("id") id: string,
-    @Body() payload: { owner?: string; note?: string } & ExpectedIdentityPayload,
+    @Body() payload: { owner?: string; note?: string; operationKey?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     return this.quotes.queueSend(id, {
@@ -100,6 +100,7 @@ export class QuotesController {
       owner: principal.id,
       releaseManualLock: true,
       releaseReason: "manual_quote_send",
+      operationKey: payload?.operationKey,
     });
   }
 
@@ -113,6 +114,7 @@ export class QuotesController {
       paymentStatus?: "deposit_paid" | "paid";
       owner?: string;
       note?: string;
+      operationKey?: string;
     } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {

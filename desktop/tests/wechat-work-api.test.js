@@ -412,7 +412,7 @@ test("cross-open_kfid item fails closed without advancing or leaking the foreign
 test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt audit", async () => {
   const { api, localStore, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-send", externalUserId: "wm-send" });
-  const queued = await service.queueCustomerServiceText({ openKfid: "wk-send", externalUserId: "wm-send", text: "您好，方案已确认" });
+  const queued = await service.queueCustomerServiceText({ requestId: "wechat-work:test-send-text", openKfid: "wk-send", externalUserId: "wm-send", text: "您好，方案已确认" });
 
   const result = await service.dispatchCustomerServiceText(queued.task.id);
   assert.equal(result.task.status, "sent");
@@ -435,6 +435,7 @@ test("WeChat Work image send uploads and dispatches text plus multiple images in
   const second = writePng(path.join(appConfig.localStorageRoot, "designs", "second.png"));
   const designJob = createBoundDesignJob(localStore, binding, [first, second]);
   const queued = await service.queueCustomerServiceImages({
+    requestId: "wechat-work:test-images",
     openKfid: "wk-images",
     externalUserId: "wm-images",
     text: "方案如下",
@@ -461,6 +462,7 @@ test("WeChat Work image upload failure stays unsent and uses bounded retry", asy
   const designJob = createBoundDesignJob(localStore, binding, [image]);
   api.uploadFailures.push(new WechatWorkApiError("media_upload", "explicit upload failure", { errcode: 40007 }));
   const queued = await service.queueCustomerServiceImages({
+    requestId: "wechat-work:test-upload-fail",
     openKfid: "wk-upload-fail",
     externalUserId: "wm-upload-fail",
     imagePaths: [image],
@@ -481,6 +483,7 @@ test("uncertain WeChat Work image send fails closed without automatic retry", as
   const designJob = createBoundDesignJob(localStore, binding, [image]);
   api.imageSendFailures.push(new Error("socket closed after request write"));
   const queued = await service.queueCustomerServiceImages({
+    requestId: "wechat-work:test-send-unknown",
     openKfid: "wk-send-unknown",
     externalUserId: "wm-send-unknown",
     imagePaths: [image],
@@ -503,6 +506,7 @@ test("partial multi-image send never retries already accepted images", async () 
   const designJob = createBoundDesignJob(localStore, binding, [first, second]);
   api.imageSendFailures.push(null, new WechatWorkApiError("send_msg", "explicit send rejection", { errcode: 95004 }));
   const queued = await service.queueCustomerServiceImages({
+    requestId: "wechat-work:test-partial",
     openKfid: "wk-partial",
     externalUserId: "wm-partial",
     imagePaths: [first, second],
@@ -521,7 +525,7 @@ test("WeChat Work image queue rejects paths outside LOCAL_STORAGE_ROOT", async (
   const { service, tempDir } = setup();
   const outside = writePng(path.join(tempDir, "outside.png"));
   await assert.rejects(
-    () => service.queueCustomerServiceImages({ openKfid: "wk-outside", externalUserId: "wm-outside", imagePaths: [outside] }),
+    () => service.queueCustomerServiceImages({ requestId: "wechat-work:test-outside", openKfid: "wk-outside", externalUserId: "wm-outside", imagePaths: [outside] }),
     /inside LOCAL_STORAGE_ROOT/,
   );
 });
@@ -535,6 +539,7 @@ test("WeChat Work image queue rejects a design job bound to another customer", a
 
   await assert.rejects(
     () => service.queueCustomerServiceImages({
+      requestId: "wechat-work:test-wrong-customer",
       openKfid: "wk-design-owner",
       externalUserId: "wm-other",
       designJobId: designJob.id,
@@ -561,7 +566,7 @@ test("callback validation failures are audited without recording secrets or resp
 test("kf/send_msg explicit API failures are bounded and create a new attempt on retry", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-retry", externalUserId: "wm-retry" });
-  const queued = await service.queueCustomerServiceText({ openKfid: "wk-retry", externalUserId: "wm-retry", text: "重试测试" });
+  const queued = await service.queueCustomerServiceText({ requestId: "wechat-work:test-retry", openKfid: "wk-retry", externalUserId: "wm-retry", text: "重试测试" });
   api.sendFailures.push(new WechatWorkApiError("send_msg", "temporary explicit API failure", { errcode: 45009 }));
 
   const first = await dispatch.processSafeSendQueue({ adapter: "wechat_work_kf", conversationId: binding.conversationId });
@@ -577,7 +582,7 @@ test("kf/send_msg explicit API failures are bounded and create a new attempt on 
 test("sync_msg msg_send_fail event reverses API-accepted send to failed", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-fail-event", externalUserId: "wm-fail-event" });
-  const queued = await service.queueCustomerServiceText({ openKfid: "wk-fail-event", externalUserId: "wm-fail-event", text: "异步失败测试" });
+  const queued = await service.queueCustomerServiceText({ requestId: "wechat-work:test-fail-event", openKfid: "wk-fail-event", externalUserId: "wm-fail-event", text: "异步失败测试" });
   await dispatch.executeQueuedSend(queued.task.id, { adapter: "wechat_work_kf" });
   const acceptedAttempt = localStore.getLatestSendAttempt(queued.task.id, { adapter: "wechat_work_kf" });
   api.syncResponse = {

@@ -2286,11 +2286,13 @@ export async function markConversationMessagesRead(identity: ConversationIdentit
 export async function queueManualConversationReply(
   identity: ConversationIdentity,
   text: string,
+  operationKey: string,
   operator = "人工客服",
 ): Promise<{ queued: true; task: SendTask }> {
   return postJson(`/wechat/conversations/${encodeURIComponent(identity.conversationId)}/manual-replies`, {
     ...identityExpectation(identity),
     text,
+    operationKey,
     operator,
   });
 }
@@ -3114,8 +3116,8 @@ export async function cancelDesignJob(id: string, expected: IdentityExpectation 
   return postJson<{ job: DesignJob; remoteResult?: Record<string, unknown> | null }>(`/design-jobs/${id}/cancel`, expected);
 }
 
-export async function quickConfirmSend(id: string, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quick-confirm-send`, expected);
+export async function quickConfirmSend(id: string, operationKey: string, expected: IdentityExpectation = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(`/design-jobs/${id}/quick-confirm-send`, { ...expected, operationKey });
 }
 
 export type SelectImagePayload =
@@ -3189,9 +3191,10 @@ export async function reviseQuoteSelection(id: string, patch: {
   return postJson<QuoteDraft>(`/quotes/${id}/revise-selection`, patch);
 }
 
-export async function queueQuoteSend(id: string, expected: IdentityExpectation = {}): Promise<{ quote: QuoteDraft; sendTask: SendTask }> {
+export async function queueQuoteSend(id: string, operationKey: string, expected: IdentityExpectation = {}): Promise<{ quote: QuoteDraft; sendTask: SendTask }> {
   return postJson<{ quote: QuoteDraft; sendTask: SendTask }>(`/quotes/${id}/queue-send`, {
     ...expected,
+    operationKey,
     note: "报价已进入微信安全发送队列。",
   });
 }
@@ -3199,6 +3202,7 @@ export async function queueQuoteSend(id: string, expected: IdentityExpectation =
 export async function verifyQuotePaymentProofAndQueueConfirmation(
   id: string,
   paymentStatus: "deposit_paid" | "paid",
+  operationKey: string,
   expected: IdentityExpectation = {},
 ): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask?: SendTask | null; message: string }> {
   const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
@@ -3206,6 +3210,7 @@ export async function verifyQuotePaymentProofAndQueueConfirmation(
     `/quotes/${id}/verify-payment-proof`,
     {
       ...expected,
+      operationKey,
       paymentStatus,
       note: `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`,
     },
@@ -3248,12 +3253,14 @@ export async function reviseOrderSelection(id: string, patch: {
 
 export async function queueOrderConfirmation(
   id: string,
+  operationKey: string,
   expected: IdentityExpectation = {},
   manualRelease: ManualReleaseOptions = {},
 ): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-confirmation`, {
     ...expected,
     ...manualRelease,
+    operationKey,
     owner: "人工客服",
     note: manualRelease.note || "订单确认已进入微信安全发送队列。",
   });
@@ -3262,12 +3269,14 @@ export async function queueOrderConfirmation(
 export async function queueOrderFollowup(
   id: string,
   type: "production" | "delivery",
+  operationKey: string,
   expected: IdentityExpectation = {},
   manualRelease: ManualReleaseOptions = {},
 ): Promise<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }> {
   return postJson<{ orderDraft: OrderDraft; sendTask: SendTask; message: string }>(`/wechat/orders/${id}/queue-followup`, {
     ...expected,
     ...manualRelease,
+    operationKey,
     owner: "人工客服",
     type,
   });
@@ -3291,6 +3300,7 @@ export async function reviewDesignJob(id: string, payload: {
   decision: "approve_images" | "approve_send" | "request_revision" | "reject";
   reviewer?: string;
   note?: string;
+  operationKey?: string;
 } & IdentityExpectation): Promise<ReviewDesignJobResult> {
   return postJson<ReviewDesignJobResult>(`/reviews/design-jobs/${id}`, payload);
 }
@@ -3299,6 +3309,7 @@ export async function reviewQuote(id: string, payload: {
   decision: "approve_quote" | "request_followup" | "reject_quote";
   reviewer?: string;
   note?: string;
+  operationKey?: string;
 } & IdentityExpectation): Promise<ReviewQuoteResult> {
   return postJson<ReviewQuoteResult>(`/reviews/quotes/${id}`, payload);
 }
@@ -3308,6 +3319,7 @@ export async function reviewOrder(id: string, payload: {
   reviewer?: string;
   note?: string;
   followupType?: "production" | "delivery";
+  operationKey?: string;
 } & IdentityExpectation): Promise<ReviewOrderResult> {
   return postJson<ReviewOrderResult>(`/reviews/orders/${id}`, payload);
 }

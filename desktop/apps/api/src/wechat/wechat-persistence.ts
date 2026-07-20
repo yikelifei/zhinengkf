@@ -3,6 +3,17 @@ import { BadRequestException } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import {
+  assertExactOperationReplay,
+  assertStoredOperationIdentityReplay,
+  createInboundMessageOperationFingerprint,
+  createSendTaskOperationFingerprint,
+  deterministicOperationId,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+} from "../shared/operation-idempotency";
 
 type IdentityFilter = {
   wechatAccountId?: string;
@@ -100,28 +111,51 @@ export class WechatPersistence {
         if (payload.customerId && payload.customerId !== conversation.customerId) {
           throw new BadRequestException("message customer binding invalid: customer does not match conversation");
         }
+        const requestOperation = payload.externalId
+          ? requestOperationMetadata(
+              String(payload.externalId),
+              createInboundMessageOperationFingerprint(payload || {}, {
+                conversationId: conversation.id,
+                customerId: conversation.customerId,
+                wechatAccountId: conversation.wechatAccountId,
+              }),
+            )
+          : null;
 
         if (payload.externalId) {
-          const existing = await tx.message.findUnique({
+          const existing = await tx.message.findFirst({
             where: {
-              conversationId_externalId: {
-                conversationId: conversation.id,
-                externalId: payload.externalId,
-              },
+              externalId: payload.externalId,
+              conversation: { wechatAccountId: conversation.wechatAccountId },
             },
+            include: { conversation: true },
           });
-          if (existing) return { ...this.hydrateMessage(existing, conversation), deduplicated: true };
+          if (existing) {
+            this.assertInboundMessageReplay(existing, existing.conversation, requestOperation!, {
+              conversationId: conversation.id,
+              customerId: conversation.customerId,
+              wechatAccountId: conversation.wechatAccountId,
+            });
+            return { ...this.hydrateMessage(existing, existing.conversation), deduplicated: true };
+          }
         }
 
         const now = payload.createdAt ? new Date(payload.createdAt) : new Date();
         const message = await tx.message.create({
           data: {
-            ...(payload.id ? { id: payload.id } : {}),
+            ...(payload.id
+              ? { id: payload.id }
+              : payload.externalId
+                ? { id: deterministicOperationId("msg", `${conversation.wechatAccountId}:${payload.externalId}`) }
+                : {}),
             conversationId: conversation.id,
             direction: payload.direction || "inbound",
             text: payload.text || "",
             attachments: this.jsonOrNull(payload.attachments || []),
-            metadata: this.jsonOrNull(payload.metadata || {}),
+            metadata: this.jsonOrNull({
+              ...(payload.metadata || {}),
+              ...(requestOperation ? { requestOperation } : {}),
+            }),
             externalId: payload.externalId || null,
             createdAt: now,
           },
@@ -133,17 +167,28 @@ export class WechatPersistence {
         return this.hydrateMessage(message, conversation);
       });
     } catch (error: any) {
-      if (payload.externalId && error?.code === "P2002") {
-        const existing = await prisma.message.findUnique({
-          where: {
-            conversationId_externalId: {
-              conversationId: payload.conversationId,
-              externalId: payload.externalId,
-            },
-          },
-        });
+      if (payload.externalId && isUniqueConstraintError(error)) {
         const conversation = await this.getConversation(payload.conversationId);
-        if (existing && conversation) return { ...this.hydrateMessage(existing, conversation), deduplicated: true };
+        const existing = conversation ? await prisma.message.findUnique({
+          where: { id: deterministicOperationId("msg", `${conversation.wechatAccountId}:${payload.externalId}`) },
+          include: { conversation: true },
+        }) : null;
+        if (existing && conversation) {
+          const requestOperation = requestOperationMetadata(
+            String(payload.externalId),
+            createInboundMessageOperationFingerprint(payload || {}, {
+              conversationId: conversation.id,
+              customerId: conversation.customerId,
+              wechatAccountId: conversation.wechatAccountId,
+            }),
+          );
+          this.assertInboundMessageReplay(existing, existing.conversation, requestOperation, {
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            wechatAccountId: conversation.wechatAccountId,
+          });
+          return { ...this.hydrateMessage(existing, existing.conversation), deduplicated: true };
+        }
       }
       throw error;
     }
@@ -325,24 +370,76 @@ export class WechatPersistence {
 
   async createSendTask(payload: any) {
     if (this.isLocal) return this.localStore.createSendTask(payload);
-    const task = await (this.prisma as any).wechatSendTask.create({
-      data: {
-        ...(payload.id ? { id: payload.id } : {}),
-        status: payload.status || "queued",
-        wechatAccountId: payload.wechatAccountId,
-        conversationId: payload.conversationId,
-        designJobId: payload.designJobId || null,
-        quoteDraftId: payload.quoteDraftId || null,
-        payload: payload.payload || {},
-        guardSnapshot: payload.guardSnapshot || { status: "pending", checks: [] },
-        errorMessage: payload.errorMessage || null,
-        queuedAt: payload.queuedAt ? new Date(payload.queuedAt) : new Date(),
-        sentAt: payload.sentAt ? new Date(payload.sentAt) : null,
-        ...(payload.createdAt ? { createdAt: new Date(payload.createdAt) } : {}),
-      },
-      include: taskInclude,
-    });
-    return (await this.attachQuotes([task]))[0];
+    const prisma = this.prisma as any;
+    const operationKey = payload.operationKey ? normalizeOperationKey(payload.operationKey) : null;
+    const taskId = operationKey ? deterministicOperationId("send", operationKey) : payload.id;
+    if (taskId && operationKey) {
+      const existing = await prisma.wechatSendTask.findUnique({ where: { id: taskId }, include: taskInclude });
+      if (existing) {
+        this.assertSendTaskReplay(existing, payload, operationKey);
+        return (await this.attachQuotes([existing]))[0];
+      }
+    }
+    const conversation = operationKey
+      ? await prisma.conversation.findUnique({ where: { id: payload.conversationId } })
+      : null;
+    if (operationKey && !conversation) {
+      throw new BadRequestException(`conversation not found: ${payload.conversationId}`);
+    }
+    if (operationKey && conversation.wechatAccountId !== payload.wechatAccountId) {
+      throw new BadRequestException("send task conversation binding invalid: wechat account does not match conversation");
+    }
+    if (operationKey && payload.customerId && conversation.customerId !== payload.customerId) {
+      throw new BadRequestException("send task customer binding invalid: customer does not match conversation");
+    }
+    const requestOperation = operationKey
+      ? requestOperationMetadata(
+          operationKey,
+          createSendTaskOperationFingerprint(payload || {}, {
+            conversationId: payload.conversationId,
+            customerId: payload.customerId || conversation.customerId,
+            wechatAccountId: payload.wechatAccountId,
+          }),
+        )
+      : null;
+    try {
+      const task = await prisma.wechatSendTask.create({
+        data: {
+          ...(taskId ? { id: taskId } : {}),
+          status: payload.status || "queued",
+          wechatAccountId: payload.wechatAccountId,
+          conversationId: payload.conversationId,
+          designJobId: payload.designJobId || null,
+          quoteDraftId: payload.quoteDraftId || null,
+          payload: payload.payload || {},
+          guardSnapshot: {
+            ...(payload.guardSnapshot || { status: "pending", checks: [] }),
+            binding: {
+              conversationId: payload.conversationId,
+              customerId: payload.customerId || conversation?.customerId || null,
+              wechatAccountId: payload.wechatAccountId,
+              ...((payload.guardSnapshot as any)?.binding || {}),
+            },
+            ...(requestOperation ? { requestOperation } : {}),
+          },
+          errorMessage: payload.errorMessage || null,
+          queuedAt: payload.queuedAt ? new Date(payload.queuedAt) : new Date(),
+          sentAt: payload.sentAt ? new Date(payload.sentAt) : null,
+          ...(payload.createdAt ? { createdAt: new Date(payload.createdAt) } : {}),
+        },
+        include: taskInclude,
+      });
+      return (await this.attachQuotes([task]))[0];
+    } catch (error) {
+      if (operationKey && taskId && isUniqueConstraintError(error)) {
+        const winner = await prisma.wechatSendTask.findUnique({ where: { id: taskId }, include: taskInclude });
+        if (winner) {
+          this.assertSendTaskReplay(winner, payload, operationKey);
+          return (await this.attachQuotes([winner]))[0];
+        }
+      }
+      throw error;
+    }
   }
 
   async updateSendTask(id: string, patch: any) {
@@ -785,16 +882,24 @@ export class WechatPersistence {
       "errorMessage", "createdAt",
     ]);
     const metadata = Object.fromEntries(Object.entries(payload).filter(([key]) => !knownKeys.has(key)));
-    return (this.prisma as any).wechatWorkAuditLog.create({
-      data: {
+    const prisma = this.prisma as any;
+    const data = {
         ...(payload.id ? { id: String(payload.id) } : {}),
         action: String(payload.action || "unknown"),
         status: String(payload.status || "unknown"),
         ...this.auditScalarFields(payload),
         metadata: Object.keys(metadata).length ? this.jsonOrNull(metadata) : undefined,
         ...(payload.createdAt ? { createdAt: new Date(String(payload.createdAt)) } : {}),
-      },
-    });
+      };
+    try {
+      return await prisma.wechatWorkAuditLog.create({ data });
+    } catch (error) {
+      if (payload.id && isUniqueConstraintError(error)) {
+        const winner = await prisma.wechatWorkAuditLog.findUnique({ where: { id: String(payload.id) } });
+        if (winner) return winner;
+      }
+      throw error;
+    }
   }
 
   async listWechatWorkAuditLogs(limit = 100) {
@@ -921,6 +1026,51 @@ export class WechatPersistence {
       wechatAccountId: conversation?.wechatAccountId || null,
       metadata: message?.metadata || {},
     };
+  }
+
+  private assertInboundMessageReplay(
+    existing: any,
+    conversation: any,
+    requestOperation: any,
+    requestedIdentity: Record<string, unknown>,
+  ) {
+    assertExactOperationReplay(
+      readRequestOperationMetadata(existing.metadata),
+      requestOperation,
+      "inbound message create",
+    );
+    assertStoredOperationIdentityReplay(
+      {
+        conversationId: existing.conversationId,
+        customerId: conversation?.customerId,
+        wechatAccountId: conversation?.wechatAccountId,
+      },
+      requestedIdentity,
+      "inbound message create",
+    );
+  }
+
+  private assertSendTaskReplay(existing: any, payload: any, operationKey: string) {
+    const storedBinding = existing.guardSnapshot?.binding || {};
+    const storedIdentity = {
+      conversationId: storedBinding.conversationId || existing.conversationId,
+      customerId: storedBinding.customerId || null,
+      wechatAccountId: storedBinding.wechatAccountId || existing.wechatAccountId,
+    };
+    const requestedIdentity = {
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+      wechatAccountId: payload.wechatAccountId,
+    };
+    assertStoredOperationIdentityReplay(storedIdentity, requestedIdentity, "send task create");
+    assertExactOperationReplay(
+      readRequestOperationMetadata(existing.guardSnapshot),
+      requestOperationMetadata(
+        operationKey,
+        createSendTaskOperationFingerprint(payload || {}, storedIdentity),
+      ),
+      "send task create",
+    );
   }
 
   private normalizeSnapshot(snapshot: any) {

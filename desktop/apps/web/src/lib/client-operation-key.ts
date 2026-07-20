@@ -1,4 +1,12 @@
-export type ClientOperationScope = "design-job" | "training-import";
+export type ClientOperationScope =
+  | "design-job"
+  | "training-import"
+  | "manual-reply"
+  | "design-send"
+  | "quote-send"
+  | "payment-proof"
+  | "order-send"
+  | "review-action";
 
 export type PendingClientOperation = {
   scope: ClientOperationScope;

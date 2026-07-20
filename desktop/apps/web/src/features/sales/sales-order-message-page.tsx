@@ -2,8 +2,9 @@
 
 import { BellRing, Truck } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { identityExpectation, queueOrderConfirmation, queueOrderFollowup } from "../../lib/api";
+import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import {
   hasCompleteIdentity,
   identityLabel,
@@ -30,6 +31,7 @@ export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const pendingOperationRef = useRef<PendingClientOperation | null>(null);
   const copy = COPY[kind];
   const expected = selected ? identityExpectation(selected) : {};
   const identityReady = hasCompleteIdentity(expected);
@@ -37,10 +39,13 @@ export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind
   async function queueMessage() {
     if (!selected || !identityReady) return;
     setConfirming(false); setBusy(true); setError(""); setNotice("");
+    const operation = reserveClientOperation("order-send", { id: selected.id, kind, expected }, pendingOperationRef.current);
+    pendingOperationRef.current = operation;
     try {
       const updated = kind === "confirmation"
-        ? (await queueOrderConfirmation(selected.id, expected)).orderDraft
-        : (await queueOrderFollowup(selected.id, kind, expected)).orderDraft;
+        ? (await queueOrderConfirmation(selected.id, operation.key, expected)).orderDraft
+        : (await queueOrderFollowup(selected.id, kind, operation.key, expected)).orderDraft;
+      pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
       replace(updated);
       setNotice(`${copy.label}已入队；入队成功不等于客户已收到。`);
     } catch (cause) { setError(salesError(cause, `${copy.label}入队失败`)); }

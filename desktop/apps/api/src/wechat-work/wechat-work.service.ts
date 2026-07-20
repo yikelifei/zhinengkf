@@ -9,6 +9,7 @@ import { WechatWorkApiClient, WechatWorkApiError, WechatWorkKfMessage } from "./
 import { storeWechatWorkInboundImage } from "./wechat-work-inbound-media";
 import { resolveWechatWorkImageFile } from "./wechat-work-media";
 import { buildWechatWorkProductionReadiness } from "./wechat-work-readiness";
+import { deterministicOperationId, normalizeOperationKey } from "../shared/operation-idempotency";
 
 type CallbackQuery = {
   msg_signature?: string;
@@ -309,13 +310,15 @@ export class WechatWorkService {
     };
   }
 
-  async queueCustomerServiceText(payload: { externalUserId?: string; openKfid?: string; text?: string }) {
+  async queueCustomerServiceText(payload: { externalUserId?: string; openKfid?: string; text?: string; requestId?: string }) {
+    const operationKey = normalizeOperationKey(payload.requestId, "requestId");
     const openKfid = requiredText(payload.openKfid || appConfig.wechatWorkOpenKfid, "openKfid");
     const externalUserId = requiredText(payload.externalUserId, "externalUserId");
     const text = requiredText(payload.text, "text");
     const binding = await this.persistence.getWechatWorkBinding(openKfid, externalUserId);
     if (!binding) throw new BadRequestException("wechat work customer is not mapped yet; sync an inbound message first");
     const task = await this.persistence.createSendTask({
+      operationKey,
       wechatAccountId: binding.wechatAccountId,
       conversationId: binding.conversationId,
       customerId: binding.customerId,
@@ -327,6 +330,7 @@ export class WechatWorkService {
       },
     });
     await this.persistence.recordWechatWorkAudit({
+      id: deterministicOperationId("wwaudit", `${operationKey}:queued`),
       action: "send_queued",
       status: "queued",
       sendTaskId: task.id,
@@ -345,7 +349,9 @@ export class WechatWorkService {
     text?: string;
     imagePaths?: string[];
     designJobId?: string;
+    requestId?: string;
   }) {
+    const operationKey = normalizeOperationKey(payload.requestId, "requestId");
     const openKfid = requiredText(payload.openKfid || appConfig.wechatWorkOpenKfid, "openKfid");
     const externalUserId = requiredText(payload.externalUserId, "externalUserId");
     const text = String(payload.text || "").trim();
@@ -386,6 +392,7 @@ export class WechatWorkService {
       throw new BadRequestException("image paths do not belong to the selected design job");
     }
     const task = await this.persistence.createSendTask({
+      operationKey,
       wechatAccountId: binding.wechatAccountId,
       conversationId: binding.conversationId,
       customerId: binding.customerId,
@@ -402,6 +409,7 @@ export class WechatWorkService {
       },
     });
     await this.persistence.recordWechatWorkAudit({
+      id: deterministicOperationId("wwaudit", `${operationKey}:queued`),
       action: "send_images_queued",
       status: "queued",
       sendTaskId: task.id,

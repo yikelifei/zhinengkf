@@ -7,6 +7,8 @@ import {
   assertExactOperationReplay,
   assertStoredOperationIdentityReplay,
   createChatImportOperationFingerprint,
+  createInboundMessageOperationFingerprint,
+  createSendTaskOperationFingerprint,
   deterministicOperationId,
   normalizeOperationKey,
   readRequestOperationMetadata,
@@ -629,6 +631,10 @@ export class LocalStoreService {
 
   recordWechatWorkAudit(payload: Record<string, unknown>) {
     const data = this.read();
+    if (payload.id) {
+      const existing = data.wechatWorkAuditLogs.find((item) => item.id === payload.id);
+      if (existing) return existing;
+    }
     const record = {
       id: id("wechat_work_audit"),
       ...payload,
@@ -1079,14 +1085,47 @@ export class LocalStoreService {
     if (requestedCustomerId && requestedCustomerId !== conversation.customerId) {
       throw new Error("message customer binding invalid: requested customer does not match conversation");
     }
+    const requestOperation = payload.externalId
+      ? requestOperationMetadata(
+          String(payload.externalId),
+          createInboundMessageOperationFingerprint(payload || {}, {
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            wechatAccountId: conversation.wechatAccountId,
+          }),
+        )
+      : null;
     const existing = payload.externalId
       ? data.messages.find(
-          (message) => message.conversationId === conversation.id && message.externalId === payload.externalId,
+          (message) => {
+            if (message.externalId !== payload.externalId) return false;
+            const storedConversation = data.conversations.find((item) => item.id === message.conversationId);
+            return storedConversation?.wechatAccountId === conversation.wechatAccountId;
+          },
         ) || null
       : null;
     if (existing) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existing.metadata),
+        requestOperation!,
+        "inbound message create",
+      );
+      assertStoredOperationIdentityReplay(
+        {
+          conversationId: existing.conversationId,
+          customerId: existing.customerId,
+          wechatAccountId: existing.wechatAccountId,
+        },
+        {
+          conversationId: conversation.id,
+          customerId: conversation.customerId,
+          wechatAccountId: conversation.wechatAccountId,
+        },
+        "inbound message create",
+      );
       return {
         ...existing,
+        deduplicated: true,
         customerId: conversation.customerId || null,
         wechatAccountId: conversation.wechatAccountId || null,
         conversation: this.hydrateConversation(data, conversation),
@@ -1101,7 +1140,10 @@ export class LocalStoreService {
       text: payload.text || "",
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       externalId: payload.externalId || null,
-      metadata: payload.metadata || {},
+      metadata: {
+        ...(payload.metadata || {}),
+        ...(requestOperation ? { requestOperation } : {}),
+      },
       readAt: payload.direction === "outbound" ? payload.readAt || now : payload.readAt || null,
       identityBinding: {
         status: "passed",
@@ -2449,6 +2491,39 @@ export class LocalStoreService {
   createSendTask(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
+    const operationKey = payload.operationKey ? normalizeOperationKey(payload.operationKey) : null;
+    const taskId = operationKey ? deterministicOperationId("send", operationKey) : payload.id || id("send");
+    const conversationBeforeValidation = data.conversations.find((item) => item.id === payload.conversationId) || null;
+    const existing = data.sendTasks.find((item) => item.id === taskId) || null;
+    if (existing && operationKey) {
+      const storedBinding = existing.guardSnapshot?.binding || {};
+      const storedIdentity = {
+        conversationId: storedBinding.conversationId || existing.conversationId,
+        customerId: storedBinding.customerId || existing.customerId,
+        wechatAccountId: storedBinding.wechatAccountId || existing.wechatAccountId,
+      };
+      const requestOperation = requestOperationMetadata(
+        operationKey,
+        createSendTaskOperationFingerprint(payload || {}, storedIdentity),
+      );
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existing.guardSnapshot),
+        requestOperation,
+        "send task create",
+      );
+      assertStoredOperationIdentityReplay(
+        {
+          ...storedIdentity,
+        },
+        {
+          conversationId: payload.conversationId,
+          customerId: payload.customerId,
+          wechatAccountId: payload.wechatAccountId,
+        },
+        "send task create",
+      );
+      return this.hydrateSendTask(data, existing);
+    }
     const binding = this.validateSendTaskBinding(data, payload);
     const conversation = data.conversations.find((item) => item.id === payload.conversationId) || null;
     const normalizedPayload = {
@@ -2456,8 +2531,18 @@ export class LocalStoreService {
       customerId: payload.customerId || conversation?.customerId || null,
       designJobId: payload.designJobId || binding.designJobId,
     };
+    const requestOperation = operationKey
+      ? requestOperationMetadata(
+          operationKey,
+          createSendTaskOperationFingerprint(payload || {}, {
+            conversationId: payload.conversationId,
+            customerId: normalizedPayload.customerId,
+            wechatAccountId: payload.wechatAccountId,
+          }),
+        )
+      : null;
     const record = {
-      id: id("send"),
+      id: taskId,
       status: "queued",
       queuedAt: now,
       createdAt: now,
@@ -2468,6 +2553,7 @@ export class LocalStoreService {
         checks: [],
         binding,
         ...(normalizedPayload.guardSnapshot || {}),
+        ...(requestOperation ? { requestOperation } : {}),
       },
     };
     data.sendTasks.push(record);

@@ -17,6 +17,7 @@ const { LocalStoreService } = require("../apps/api/src/local-store/local-store.s
 const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
 const { PrismaOperationsService } = require("../apps/api/src/prisma/prisma-operations.service");
 const { TrainingService } = require("../apps/api/src/training/training.service");
+const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const {
   createChatImportOperationFingerprint,
@@ -636,4 +637,203 @@ test("client operation reservation reuses an unconfirmed form key and rotates on
   assert.equal(completeClientOperation(first, first.key), null);
   const afterSuccess = reserveClientOperation("training-import", payload, null);
   assert.notEqual(afterSuccess.key, first.key);
+});
+
+test("LocalStore send task replay survives conversation deletion and rejects guard context drift", () => {
+  const { store, tempDir } = createStore();
+  const operationKey = "manual-reply:33333333-3333-4333-8333-333333333333";
+  const payload = {
+    operationKey,
+    wechatAccountId: "wechat-1",
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    payload: { kind: "text", text: "hello" },
+    guardSnapshot: {
+      policy: "safe-send-queue",
+      reason: "manual-agent-reply",
+      manualReply: true,
+      queuedBy: "operator-1",
+      requiredChecks: ["identityBinding"],
+    },
+  };
+  try {
+    const first = store.createSendTask(payload);
+    mutateStore(store, (data) => {
+      data.conversations = data.conversations.filter((item) => item.id !== "conversation-1");
+    });
+    assert.equal(store.createSendTask(payload).id, first.id);
+    assert.throws(
+      () => store.createSendTask({
+        ...payload,
+        guardSnapshot: { ...payload.guardSnapshot, reason: "changed-reason" },
+      }),
+      /already used with different identity or payload/,
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("LocalStore inbound externalId is account-scoped and rejects content, attachment and conversation drift", () => {
+  const { store, tempDir } = createStore();
+  const payload = {
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    wechatAccountId: "wechat-1",
+    direction: "inbound",
+    text: "same inbound",
+    externalId: "external-message-1",
+    attachments: [{ type: "image", mediaId: "media-1" }],
+    metadata: { assetIds: ["asset-1"] },
+  };
+  try {
+    const first = store.createMessage(payload);
+    const replay = store.createMessage(payload);
+    assert.equal(replay.id, first.id);
+    assert.equal(replay.deduplicated, true);
+    assert.throws(
+      () => store.createMessage({ ...payload, text: "changed inbound" }),
+      /already used with different identity or payload/,
+    );
+    assert.throws(
+      () => store.createMessage({ ...payload, attachments: [{ type: "image", mediaId: "media-2" }] }),
+      /already used with different identity or payload/,
+    );
+    assert.throws(
+      () => store.createMessage({
+        ...payload,
+        conversationId: "conversation-2",
+        customerId: "customer-2",
+      }),
+      /already used with different identity or payload/,
+    );
+    const data = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
+    assert.equal(data.messages.filter((item) => item.externalId === payload.externalId).length, 1);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Prisma send task concurrent create returns the P2002 winner", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  let stored = null;
+  let initialReads = 0;
+  const conversation = { id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" };
+  const prisma = {
+    conversation: { findUnique: async () => conversation },
+    quoteDraft: { findMany: async () => [] },
+    wechatSendTask: {
+      findUnique: async () => {
+        initialReads += 1;
+        return initialReads <= 2 ? null : stored;
+      },
+      create: async ({ data }) => {
+        await Promise.resolve();
+        if (stored) throw Object.assign(new Error("unique"), { code: "P2002" });
+        stored = { ...data, conversation, attempts: [], wechatAccount: {}, designJob: null };
+        return stored;
+      },
+    },
+  };
+  const persistence = new WechatPersistence(prisma, {});
+  const payload = {
+    operationKey: "order-send:44444444-4444-4444-8444-444444444444",
+    wechatAccountId: "wechat-1",
+    conversationId: "conversation-1",
+    customerId: "customer-1",
+    payload: { kind: "text", text: "confirmation" },
+    guardSnapshot: { reason: "order-confirmation", orderContext: { orderDraftId: "order-1" } },
+  };
+  try {
+    appConfig.useLocalStore = false;
+    const [first, replay] = await Promise.all([
+      persistence.createSendTask(payload),
+      persistence.createSendTask(payload),
+    ]);
+    assert.equal(first.id, replay.id);
+    await assert.rejects(
+      persistence.createSendTask({
+        ...payload,
+        guardSnapshot: { ...payload.guardSnapshot, orderContext: { orderDraftId: "order-2" } },
+      }),
+      /already used with different identity or payload/,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("Prisma inbound concurrent cross-conversation externalId creates one account-scoped message", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const conversations = {
+    "conversation-1": { id: "conversation-1", customerId: "customer-1", wechatAccountId: "wechat-1" },
+    "conversation-2": { id: "conversation-2", customerId: "customer-2", wechatAccountId: "wechat-1" },
+  };
+  let stored = null;
+  let findCount = 0;
+  let releaseFind;
+  const bothLookups = new Promise((resolve) => { releaseFind = resolve; });
+  const tx = {
+    conversation: {
+      findUnique: async ({ where }) => conversations[where.id] || null,
+      update: async () => ({}),
+    },
+    message: {
+      findFirst: async () => {
+        findCount += 1;
+        if (findCount === 2) releaseFind();
+        await bothLookups;
+        return null;
+      },
+      create: async ({ data }) => {
+        await Promise.resolve();
+        if (stored) throw Object.assign(new Error("unique"), { code: "P2002" });
+        stored = { ...data, conversation: conversations[data.conversationId] };
+        return stored;
+      },
+    },
+  };
+  const prisma = {
+    $transaction: async (callback) => callback(tx),
+    conversation: { findUnique: async ({ where }) => conversations[where.id] || null },
+    message: { findUnique: async () => stored },
+  };
+  const persistence = new WechatPersistence(prisma, {});
+  const base = {
+    wechatAccountId: "wechat-1",
+    direction: "inbound",
+    text: "same body",
+    externalId: "account-global-external-1",
+    attachments: [{ type: "image", mediaId: "media-1" }],
+    metadata: { assetIds: ["asset-1"] },
+  };
+  try {
+    appConfig.useLocalStore = false;
+    const outcomes = await Promise.allSettled([
+      persistence.createMessage({ ...base, conversationId: "conversation-1", customerId: "customer-1" }),
+      persistence.createMessage({ ...base, conversationId: "conversation-2", customerId: "customer-2" }),
+    ]);
+    assert.equal(outcomes.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(outcomes.filter((item) => item.status === "rejected").length, 1);
+    assert.match(String(outcomes.find((item) => item.status === "rejected").reason), /already used with different identity or payload/);
+    assert.equal(stored.externalId, base.externalId);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("browser send callers reserve sticky keys and clear them only after success", () => {
+  const files = [
+    "../apps/web/src/features/conversations/use-conversations-controller.ts",
+    "../apps/web/src/features/sales/sales-quote-action-page.tsx",
+    "../apps/web/src/features/sales/sales-order-message-page.tsx",
+    "../apps/web/src/features/reviews/review-design-page.tsx",
+    "../apps/web/src/features/reviews/review-quotes-page.tsx",
+    "../apps/web/src/features/reviews/review-orders-page.tsx",
+  ].map((file) => fs.readFileSync(path.resolve(__dirname, file), "utf8"));
+  for (const source of files) {
+    assert.match(source, /reserveClientOperation\(/);
+    assert.match(source, /completeClientOperation\(/);
+    assert.match(source, /operation\.key/);
+  }
 });

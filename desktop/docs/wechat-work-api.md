@@ -125,3 +125,8 @@ GET /api/wechat-work/kf/audit?limit=100
 - 读取消息：<https://open.work.weixin.qq.com/api/doc/90000/90135/94670>
 - 发送消息：<https://open.work.weixin.qq.com/api/doc/90000/90135/94677>
 - 上传临时素材：<https://open.work.weixin.qq.com/api/doc/90000/90135/90253>
+# Send request idempotency
+
+`POST /api/wechat-work/kf/send-text` and `POST /api/wechat-work/kf/send-images` both require a `requestId` in the JSON body. It must be a portable 16-128 character key and remain unchanged while retrying the exact same recipient and content. A successful action, or any recipient/text/image change, must use a new key. Reusing a key with changed identity or content returns `409 OPERATION_KEY_REUSED`.
+
+Example request IDs: `wechat-work-send:550e8400-e29b-41d4-a716-446655440000` and `wechat-work-images:550e8400-e29b-41d4-a716-446655440001`.
