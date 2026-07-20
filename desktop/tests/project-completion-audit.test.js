@@ -30,6 +30,7 @@ function createPassingFixture() {
   for (const artifact of REQUIRED_ARTIFACTS) write(root, artifact.file);
   write(root, ".gitignore", "desktop/.runtime/\n");
   write(root, "desktop/package.json", JSON.stringify({ dependencies: { sharp: "0.34.5" }, scripts: {
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "release:gate": "x", "staging:readiness": "x", "database:recovery:plan": "x",
     "database:recovery:execute": "x", "package:win:test": "x", "package:win:signed": "x",
     "ci:release-quality": "x", "project:completion:audit": "x",
@@ -1411,6 +1412,27 @@ test("missing repository artifact and production placeholder aggregate to FAIL w
   }]);
 });
 
+test("production placeholder inventory covers the Web app and shared production packages", () => {
+  const root = createPassingFixture();
+  write(root, "desktop/apps/web/src/example-placeholder.tsx", "// TODO replace this production screen\n");
+  write(root, "desktop/packages/runtime/example-placeholder.js", 'throw new Error("not implemented");\n');
+
+  const report = buildAudit(root, { includeExternal: false });
+  const placeholders = report.results.find((item) => item.id === "source.production_placeholders");
+  assert.equal(placeholders.status, STATUS.FAIL);
+  assert.deepEqual(placeholders.evidence.sourceRoots, [
+    "desktop/apps/api/src",
+    "desktop/apps/web/src",
+    "desktop/apps/electron",
+    "desktop/packages",
+    "core",
+  ]);
+  assert.deepEqual(placeholders.evidence.findings, [
+    { component: "desktop/apps/web/src/example-placeholder.tsx", line: 1, marker: "todo" },
+    { component: "desktop/packages/runtime/example-placeholder.js", line: 1, marker: "not implemented" },
+  ]);
+});
+
 test("missing desktop session security artifact prevents a completion PASS", () => {
   const root = createPassingFixture();
   fs.rmSync(path.join(root, "desktop", "tests", "internal-api-security.test.js"));
@@ -1762,6 +1784,22 @@ test("report output is confined to the ignored runtime path and remains sanitize
   assert.equal(report.scope.reportPath, "desktop/.runtime/project-completion-audit/latest.{json,md}");
 });
 
+test("resolved production LocalStore gaps render resolved classification and current truth", () => {
+  const report = buildAudit(createPassingFixture(), { includeExternal: false });
+  const markdown = toMarkdown(report);
+  for (const id of ["local_store.conversation_operations", "local_store.personal_wechat_business_records"]) {
+    const item = report.results.find((entry) => entry.id === id);
+    assert.equal(item.status, STATUS.PASS);
+    assert.equal(item.evidence.active, false);
+    assert.equal(item.evidence.classification, "resolved_production_route");
+    assert.equal(item.evidence.priorClassification, "production_gap");
+    assert.match(item.evidence.reason, /历史缺口已关闭/);
+  }
+  assert.match(markdown, /LocalStore 企业微信入站时间戳单调推进/);
+  assert.doesNotMatch(markdown, /Prisma Conversation 尚无完整运营字段/);
+  assert.doesNotMatch(markdown, /浼佷笟|寰俊|鍏ョ珯/);
+});
+
 test("root path escape is rejected and status aggregation keeps FAIL above BLOCKED", () => {
   const root = createPassingFixture();
   assert.throws(() => absoluteFrom(root, "../outside"), /path escapes audit root/);
@@ -1778,6 +1816,7 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   const auditGuide = read("desktop/docs/PROJECT_COMPLETION_AUDIT.md");
   const designGuide = read("desktop/docs/design-platform-art-image-local.md");
   const designContract = read("desktop/docs/DESIGN_PLATFORM_CONTRACT.md");
+  const releaseChecklist = read("docs/PRODUCTION_RELEASE_CHECKLIST.md");
   assert.match(readme, /\.xlsx.*\.csv.*\.tsv.*\.txt/s);
   assert.match(status, /WechatPersistence.*USE_LOCAL_STORE=false.*Prisma/s);
   assert.match(status, /electron-builder\/NSIS/);
@@ -1796,6 +1835,8 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   assert.match(designContract, /DNS rebinding.*Content-Disposition.*realpath.*不再作为“部署侧未决”项冒充已完成/s);
   assert.doesNotMatch(designContract, /私网地址、DNS 重绑定.*仍需要部署负责人/);
   assert.doesNotMatch(readme, /Excel 文件解析导入。\s*$/m);
+  assert.match(releaseChecklist, /目标 Windows.*安装器 SHA-256.*安装.*卸载/s);
+  assert.match(releaseChecklist, /SmartScreen.*证据.*发布继续保持 `BLOCKED`/s);
 });
 
 test("completion audit requires zero redirects and bounded SKU workbook parsing", () => {

@@ -257,6 +257,7 @@ const CONTRACTS = Object.freeze([
       /"package:win:signed"\s*:/,
       /"ci:release-quality"\s*:/,
       /"project:completion:audit"\s*:/,
+      /"test"\s*:\s*"node --test --test-concurrency=1 tests\/\*\.test\.js"/,
       /"prisma:agents:init"\s*:\s*"node tools\/initialize-prisma-agents\.js"/,
     ],
   },
@@ -552,7 +553,7 @@ const CONTRACTS = Object.freeze([
   },
   {
     id: "contract.local_wechat_work_binding_timestamp_monotonic",
-    title: "LocalStore 浼佷笟寰俊鍏ョ珯鏃堕棿鎴冲崟璋冩帹杩?",
+    title: "LocalStore 企业微信入站时间戳单调推进",
     file: "desktop/apps/api/src/local-store/local-store.service.ts",
     patterns: [
       /monotonicWechatWorkInboundAt/,
@@ -1568,7 +1569,9 @@ const FIXED_LOCAL_INVENTORY = Object.freeze([
 
 const SOURCE_ROOTS = Object.freeze([
   "desktop/apps/api/src",
+  "desktop/apps/web/src",
   "desktop/apps/electron",
+  "desktop/packages",
   "core",
 ]);
 
@@ -2295,7 +2298,17 @@ function localStoreInventoryResults(root) {
       item.title,
       active ? STATUS.FAIL : STATUS.PASS,
       active ? "生产模式仍固定依赖 LocalStore。" : "未检测到清单记录的固定 LocalStore 路径。",
-      { path: normalizeRelative(item.file), classification: item.classification, active, localPathPresent, productionRoutePresent, reason: item.reason },
+      {
+        path: normalizeRelative(item.file),
+        classification: active ? item.classification : "resolved_production_route",
+        ...(active ? {} : { priorClassification: item.classification }),
+        active,
+        localPathPresent,
+        productionRoutePresent,
+        reason: active
+          ? item.reason
+          : "生产持久化路由已满足清单中的 resolutionPatterns；该历史缺口已关闭。",
+      },
     );
   });
 }

@@ -139,6 +139,8 @@ npm.cmd exec -- prisma migrate deploy --schema prisma/schema.prisma
 
 - [ ] 已生成 `package:win:test` 未签名测试安装包并通过包内容/敏感文件/打包运行时验证；未签名状态保持 `BLOCKED`，未冒充正式发布包。
 - [ ] 已在受控签名机运行 `package:win:signed`，安装器与主程序 Authenticode 均为 Valid；证书和密码未进入仓库、报告或安装包资源。
+- [ ] 已在目标 Windows 机器记录操作系统版本、安装器 SHA-256、签名发布者、测试时间与操作员，并通过安装器完成全新安装；开始菜单/桌面快捷方式、首次启动、API 健康检查、Web 工作台和 Electron 窗口均有截图或脱敏日志证据。随后从 Windows“已安装的应用”执行卸载，确认程序文件和快捷方式移除、`%APPDATA%/Smart Kefu` 客户数据按设计保留，并记录卸载结果。
+- [ ] 已记录同一 SHA-256 签名安装器的 SmartScreen 检查结果、发布者、Windows 版本、时间与截图证据；若仍出现未知发布者、信誉警告或无法验证，发布继续保持 `BLOCKED`，不得用 Authenticode `Valid` 代替该证据。
 - [ ] 三份 JSON 报告均绑定当前 `repositoryRevision`，并已通过 `external:evidence:bundle` 的 schema、revision、时效和失败关闭字段校验。
 - [ ] 在目标 Windows 机器完成 `run_desktop.bat` 启动、API 健康检查、Web 工作台加载和 Electron 窗口打开。
 - [ ] 预发布证据报告中的企业微信、个人微信桥和设计平台只读检查均为 `PASS`。
