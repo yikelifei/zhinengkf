@@ -54,6 +54,7 @@ function verifyWindowsPackage(options) {
 
   checkExists(checks, "unpacked application", unpackedDir);
   checkExists(checks, "Windows executable entry", executable);
+  checkPortableExecutable(checks, "Windows executable PE format", executable);
   checkExists(checks, "application asar", asarPath);
   checkExists(checks, "packaged API entry", path.join(resourcesDir, "services", "api", "main.js"));
   checkExists(checks, "packaged API storage code", path.join(resourcesDir, "services", "api", "storage", "storage.service.js"));
@@ -65,7 +66,10 @@ function verifyWindowsPackage(options) {
   checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"));
   checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "lib", "index.js"));
   checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"));
-  if (!options.directoryOnly) checkExists(checks, "NSIS installer", installer);
+  if (!options.directoryOnly) {
+    checkExists(checks, "NSIS installer", installer);
+    checkPortableExecutable(checks, "NSIS installer PE format", installer);
+  }
 
   const smokeReport = readJson(path.join(options.outputDir, "verification", "packaged-api-smoke.json"));
   checks.push({
@@ -215,6 +219,33 @@ function findInstaller(directory, version) {
 
 function checkExists(checks, name, target) {
   checks.push({ name, status: target && fs.existsSync(target) ? "PASS" : "FAIL", detail: target || "not found" });
+}
+
+function checkPortableExecutable(checks, name, target) {
+  let valid = false;
+  try {
+    const descriptor = fs.openSync(target, "r");
+    try {
+      const dosHeader = Buffer.alloc(64);
+      if (fs.readSync(descriptor, dosHeader, 0, dosHeader.length, 0) === dosHeader.length
+        && dosHeader[0] === 0x4d && dosHeader[1] === 0x5a) {
+        const peOffset = dosHeader.readUInt32LE(0x3c);
+        const peSignature = Buffer.alloc(4);
+        valid = peOffset >= dosHeader.length
+          && fs.readSync(descriptor, peSignature, 0, peSignature.length, peOffset) === peSignature.length
+          && peSignature.equals(Buffer.from([0x50, 0x45, 0x00, 0x00]));
+      }
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    valid = false;
+  }
+  checks.push({
+    name,
+    status: valid ? "PASS" : "FAIL",
+    detail: valid ? `${path.basename(target)} has DOS and PE signatures.` : "missing or invalid Windows PE executable",
+  });
 }
 
 function readSignature(file) {
