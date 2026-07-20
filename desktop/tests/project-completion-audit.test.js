@@ -61,7 +61,11 @@ function createPassingFixture() {
   write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
   write(root, "desktop/apps/api/src/catalog/catalog.service.ts", 'this.prisma.$transaction(); tx.skuChangeLog.create(); changedFields; reason: context.reason; reason: "no_change"; skuChangeLog.findMany();\n');
   write(root, "desktop/apps/api/src/assets/assets.service.ts", 'normalizedLocalPath; await fs.realpath(input); local asset path must be absolute; this.prisma.conversation.findFirst(); normalizedLocalPath: normalized; ambiguous persisted identities; no unambiguous persisted identity;\n');
-  write(root, "desktop/apps/api/src/storage/storage.service.ts", 'MAX_IMAGE_FINGERPRINT_BYTES; assertAssetSize(decodeBase64(params.base64)); Buffer.byteLength(params.text, "utf8"); normalizeAssetUrl(params.url); timeout: appConfig.designPlatformTimeoutMs; maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES; maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES; isCanonicalBase64Text; asset URL must use http(s);\n');
+  write(root, "desktop/apps/api/src/storage/storage.service.ts", 'MAX_IMAGE_FINGERPRINT_BYTES; assertAssetSize(decodeBase64(params.base64)); Buffer.byteLength(params.text, "utf8"); normalizeAssetUrl(params.url); timeout: appConfig.designPlatformTimeoutMs; maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES; maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES; isCanonicalBase64Text; asset URL must use http(s); inspectSafeAssetContent(); downloadBoundedBytes(); assertCanonicalStoragePath();\n');
+  write(root, "desktop/apps/api/src/storage/safe-download.ts", 'resolvePublicDownloadTarget(); if (url.username || url.password) throw new Error(); lookup(hostname, { all: true, verbatim: true }); resolved.some((item) => !isPublicAddress(item.address)); createPinnedLookup(); maxRedirects: 0; proxy: false; 169.254.0.0; 2001:db8::;\n');
+  write(root, "desktop/apps/api/src/storage/asset-content-security.ts", 'sharp(buffer); %PDF-; ACTIVE_PDF_PATTERN; new TextDecoder("utf-8", { fatal: true }); ACTIVE_TEXT_PATTERN; asset fileName extension does not match file content; asset mimeType does not match file content; kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: false;\n');
+  write(root, "desktop/apps/api/src/storage/local-file-response.ts", 'X-Content-Type-Options; nosniff; Content-Security-Policy; sandbox; Content-Disposition; "attachment";\n');
+  write(root, "desktop/docs/DESIGN_PLATFORM_CONTRACT.md", "DNS rebinding; Content-Disposition; realpath; 不再作为“部署侧未决”项冒充已完成;\n");
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash;\n');
   write(root, "desktop/apps/api/src/shared/image-fingerprint.ts", 'import sharp from "sharp";\nconst IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";\nsharp().rotate().flatten({}).greyscale().resize(9, 8);\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts", 'fetch(`/cgi-bin/media/get?media_id=${encodeURIComponent(mediaId)}`); errcode === 40007; errcode === 41006; errcode === 45009; retry_exhausted;\n');
@@ -149,6 +153,7 @@ class DesignJobsService {
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
 export class DesignJobsController {
+  localImageFile(reply, file) { applySafeLocalFileHeaders(reply, file); }
   @Get(":id/executions")
   listExecutions(
     @Param("id") id,
@@ -336,6 +341,7 @@ export class QuotesController {
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
 export class AssetsController {
+  localFile(reply, file) { applySafeLocalFileHeaders(reply, file); }
   @Post("upload")
   @RequireOperatorCapability("manage_design_executions")
   upload() {}
@@ -470,6 +476,7 @@ test("completion audit fixture reaches local PASS without network, commands or s
   const root = createPassingFixture();
   write(root, ".env", "INTERNAL_API_TOKEN=never-include-this-secret\n");
   const report = buildAudit(root, { includeExternal: false });
+  assert.equal(report.schemaVersion, "smart_kefu_project_completion_audit_v3");
   assert.equal(report.status, STATUS.PASS, JSON.stringify(report.results.filter((item) => item.status === STATUS.FAIL)));
   assert.deepEqual(report.safety, {
     networkCalls: false,
@@ -532,6 +539,73 @@ test("asset ingestion audit contract fails when bounded input markers drift", ()
     const contract = report.results.find((item) => item.id === "contract.asset_ingestion_limits");
     assert.equal(contract.status, STATUS.FAIL, mutation.name);
     assert.ok(contract.evidence.missing.length > 0, mutation.name);
+  }
+});
+
+test("asset SSRF, content truth and both local-file response contracts fail closed on drift", () => {
+  const baselineRoot = createPassingFixture();
+  const expectedContracts = [
+    "contract.asset_public_network",
+    "contract.asset_content_truth",
+    "contract.asset_local_file_headers",
+    "contract.assets_controller_safe_file_response",
+    "contract.design_controller_safe_file_response",
+    "contract.asset_security_documentation",
+  ];
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  for (const id of expectedContracts) {
+    assert.equal(baseline.results.find((item) => item.id === id).status, STATUS.PASS, id);
+  }
+
+  const mutations = [
+    {
+      id: "contract.asset_public_network",
+      file: "desktop/apps/api/src/storage/safe-download.ts",
+      from: "proxy: false",
+      to: "proxy: true",
+    },
+    {
+      id: "contract.asset_content_truth",
+      file: "desktop/apps/api/src/storage/asset-content-security.ts",
+      from: 'kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: false',
+      to: 'kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: true',
+    },
+    {
+      id: "contract.asset_local_file_headers",
+      file: "desktop/apps/api/src/storage/local-file-response.ts",
+      from: "nosniff",
+      to: "sniff",
+    },
+    {
+      id: "contract.assets_controller_safe_file_response",
+      file: "desktop/apps/api/src/assets/assets.controller.ts",
+      from: "applySafeLocalFileHeaders(reply, file)",
+      to: 'reply.header("Content-Type", file.mimeType)',
+    },
+    {
+      id: "contract.design_controller_safe_file_response",
+      file: "desktop/apps/api/src/design-jobs/design-jobs.controller.ts",
+      from: "applySafeLocalFileHeaders(reply, file)",
+      to: 'reply.header("Content-Type", file.mimeType)',
+    },
+    {
+      id: "contract.asset_security_documentation",
+      file: "desktop/docs/DESIGN_PLATFORM_CONTRACT.md",
+      from: "不再作为“部署侧未决”项冒充已完成",
+      to: "私网地址、DNS 重绑定仍需要部署负责人",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
+    const source = fs.readFileSync(target, "utf8");
+    assert.ok(source.includes(mutation.from), mutation.id);
+    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === mutation.id);
+    assert.equal(contract.status, STATUS.FAIL, mutation.id);
+    assert.ok(contract.evidence.missing.length > 0, mutation.id);
   }
 });
 
@@ -933,6 +1007,7 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   const status = read("desktop/docs/IMPLEMENTATION_STATUS.md");
   const auditGuide = read("desktop/docs/PROJECT_COMPLETION_AUDIT.md");
   const designGuide = read("desktop/docs/design-platform-art-image-local.md");
+  const designContract = read("desktop/docs/DESIGN_PLATFORM_CONTRACT.md");
   assert.match(readme, /\.xlsx.*\.csv.*\.tsv.*\.txt/s);
   assert.match(status, /WechatPersistence.*USE_LOCAL_STORE=false.*Prisma/s);
   assert.match(status, /electron-builder\/NSIS/);
@@ -948,5 +1023,7 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   assert.match(designGuide, /completed \+ acceptanceStatus=manual_review.*acceptanceStatus=pending.*不会再次调用生成接口/s);
   assert.match(designGuide, /completed \+ accepted.*refunded\/not_required\/credit_bypass.*不会开放该核销动作/s);
   assert.doesNotMatch(designGuide, /客服 UI 入口仍列入下一轮/);
+  assert.match(designContract, /DNS rebinding.*Content-Disposition.*realpath.*不再作为“部署侧未决”项冒充已完成/s);
+  assert.doesNotMatch(designContract, /私网地址、DNS 重绑定.*仍需要部署负责人/);
   assert.doesNotMatch(readme, /Excel 文件解析导入。\s*$/m);
 });

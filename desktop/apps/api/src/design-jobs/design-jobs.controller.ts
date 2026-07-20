@@ -15,6 +15,7 @@ import {
   TrustedOperator,
 } from "../operator-access/operator-access.guard";
 import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
+import { applySafeLocalFileHeaders } from "../storage/local-file-response";
 
 @Controller("design-jobs")
 @RequireOperatorCapability("view_console")
@@ -170,9 +171,7 @@ export class DesignJobsController {
       expectedConversationId: conversationId,
       expectedCustomerId: customerId,
     });
-    reply.header("Content-Type", file.mimeType);
-    reply.header("Content-Length", String(file.sizeBytes));
-    reply.header("Cache-Control", "private, max-age=3600");
+    applySafeLocalFileHeaders(reply, file);
     return reply.send(file.stream);
   }
 

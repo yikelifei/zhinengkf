@@ -6,7 +6,7 @@ const path = require("node:path");
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
 const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
-const SCHEMA_VERSION = "smart_kefu_project_completion_audit_v2";
+const SCHEMA_VERSION = "smart_kefu_project_completion_audit_v3";
 
 const REQUIRED_ARTIFACTS = Object.freeze([
   { id: "release.gate", title: "生产发布门禁", file: "desktop/tools/production-release-gate.js" },
@@ -137,6 +137,31 @@ const REQUIRED_ARTIFACTS = Object.freeze([
     file: "desktop/tests/design-platform-controller-security.test.js",
   },
   {
+    id: "security.asset_download",
+    title: "资产公网下载与 DNS 绑定实现",
+    file: "desktop/apps/api/src/storage/safe-download.ts",
+  },
+  {
+    id: "security.asset_content",
+    title: "资产 magic 与解码内容验证实现",
+    file: "desktop/apps/api/src/storage/asset-content-security.ts",
+  },
+  {
+    id: "security.asset_response",
+    title: "本地资产安全响应头实现",
+    file: "desktop/apps/api/src/storage/local-file-response.ts",
+  },
+  {
+    id: "security.asset_tests",
+    title: "资产 SSRF 与内容伪装回归测试",
+    file: "desktop/tests/asset-security.test.js",
+  },
+  {
+    id: "security.asset_contract_guide",
+    title: "设计平台资产安全契约",
+    file: "desktop/docs/DESIGN_PLATFORM_CONTRACT.md",
+  },
+  {
     id: "ui.design_execution_reconciliation",
     title: "设计执行人工核销工作台",
     file: "desktop/apps/web/src/components/design-execution-reconciliation-panel.tsx",
@@ -187,7 +212,7 @@ const CONTRACTS = Object.freeze([
   },
   {
     id: "contract.asset_ingestion_limits",
-    title: "资产摄取格式、字节与下载边界",
+    title: "资产摄取格式、字节、真实内容与下载边界",
     file: "desktop/apps/api/src/storage/storage.service.ts",
     patterns: [
       /MAX_IMAGE_FINGERPRINT_BYTES/,
@@ -199,7 +224,73 @@ const CONTRACTS = Object.freeze([
       /maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES/,
       /isCanonicalBase64Text/,
       /asset URL must use http\(s\)/,
+      /inspectSafeAssetContent/,
+      /downloadBoundedBytes/,
+      /assertCanonicalStoragePath/,
     ],
+  },
+  {
+    id: "contract.asset_public_network",
+    title: "资产公网解析、逐跳重定向与 DNS 绑定",
+    file: "desktop/apps/api/src/storage/safe-download.ts",
+    patterns: [
+      /resolvePublicDownloadTarget/,
+      /url\.username \|\| url\.password/,
+      /all: true, verbatim: true/,
+      /resolved\.some\(\(item\) => !isPublicAddress/,
+      /createPinnedLookup/,
+      /maxRedirects: 0/,
+      /proxy: false/,
+      /169\.254\.0\.0/,
+      /2001:db8::/,
+    ],
+  },
+  {
+    id: "contract.asset_content_truth",
+    title: "资产 magic、解码、PDF 与文本安全类型真值",
+    file: "desktop/apps/api/src/storage/asset-content-security.ts",
+    patterns: [
+      /sharp\(buffer/,
+      /%PDF-/,
+      /ACTIVE_PDF_PATTERN/,
+      /new TextDecoder\("utf-8", \{ fatal: true \}\)/,
+      /ACTIVE_TEXT_PATTERN/,
+      /asset fileName extension does not match file content/,
+      /asset mimeType does not match file content/,
+      /kind: "pdf", mimeType: "application\/pdf", extension: "\.pdf", inlineSafe: false/,
+    ],
+  },
+  {
+    id: "contract.asset_local_file_headers",
+    title: "两处本地资产响应的 nosniff、sandbox 与下载策略",
+    file: "desktop/apps/api/src/storage/local-file-response.ts",
+    patterns: [
+      /X-Content-Type-Options/,
+      /nosniff/,
+      /Content-Security-Policy/,
+      /sandbox;/,
+      /Content-Disposition/,
+      /"attachment"/,
+    ],
+  },
+  {
+    id: "contract.assets_controller_safe_file_response",
+    title: "素材控制器复用安全本地文件响应",
+    file: "desktop/apps/api/src/assets/assets.controller.ts",
+    patterns: [/applySafeLocalFileHeaders\(reply, file\)/],
+  },
+  {
+    id: "contract.design_controller_safe_file_response",
+    title: "设计图控制器复用安全本地文件响应",
+    file: "desktop/apps/api/src/design-jobs/design-jobs.controller.ts",
+    patterns: [/applySafeLocalFileHeaders\(reply, file\)/],
+  },
+  {
+    id: "contract.asset_security_documentation",
+    title: "资产安全契约不再保留部署侧 SSRF 缺口",
+    file: "desktop/docs/DESIGN_PLATFORM_CONTRACT.md",
+    patterns: [/DNS rebinding/, /Content-Disposition/, /realpath/, /不再作为“部署侧未决”项冒充已完成/],
+    forbidden: [/私网地址、DNS 重绑定.*仍需要部署负责人/],
   },
   {
     id: "contract.wechat_prisma",
