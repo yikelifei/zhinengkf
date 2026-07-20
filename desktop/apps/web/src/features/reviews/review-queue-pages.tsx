@@ -40,7 +40,7 @@ export function ReviewOrdersQueuePage(props: ReviewQueuePageProps) {
 }
 
 function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kind: QueueKind }) {
-  const { center, busy, error, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, refresh } = useReviewCenter(identityFilters);
   const items = toQueueItems(kind, center);
   const copy = queueCopy[kind];
   const titleId = "review-" + kind + "-queue-title";
@@ -67,7 +67,7 @@ function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kin
 
       {error ? <div className={styles.notice + " " + styles.noticeError} role="alert">{error}</div> : null}
       <section className={styles.panel} aria-label={copy.title}>
-        <header className={styles.panelHeader}><div><h2>待选择对象</h2><p>共 {items.length} 项；列表不提供审核写操作。</p></div></header>
+        <header className={styles.panelHeader}><div><h2>待选择对象</h2><p>{loaded ? `共 ${items.length} 项；列表不提供审核写操作。` : "队列尚未成功读取。"}</p></div></header>
         <div className={styles.panelBody}>
           {items.length ? (
             <div className={styles.recordList}>
@@ -84,7 +84,7 @@ function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kin
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>{copy.empty}</div>}
+          ) : <div className={styles.empty}>{loaded ? `读取成功，${copy.empty}` : "审核队列尚未成功读取，当前状态未确认。"}</div>}
         </div>
       </section>
     </section>

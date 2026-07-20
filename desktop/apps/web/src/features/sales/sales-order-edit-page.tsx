@@ -23,7 +23,7 @@ function formFromOrder(order: OrderDraft): OrderForm {
 }
 
 export function SalesOrderEditPage({ orderId }: { orderId: string }) {
-  const { selected, loading, error: loadError, ambiguousEmpty, replace } = useSalesOrders(orderId);
+  const { selected, loading, loaded, error: loadError, replace } = useSalesOrders(orderId);
   const [form, setForm] = useState<OrderForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -56,7 +56,6 @@ export function SalesOrderEditPage({ orderId }: { orderId: string }) {
       <SalesHeader eyebrow="销售 · 订单编辑" title="编辑订单字段" detail="本页只保存订单状态和客户备注；付款状态只读，需从报价页核验付款凭证。" />
       {loadError || error ? <SalesNotice tone="danger">{error || loadError}</SalesNotice> : null}
       {notice ? <SalesNotice tone="success">{notice}</SalesNotice> : null}
-      {ambiguousEmpty ? <SalesNotice tone="warning">空结果无法证明订单不存在；已阻止保存。</SalesNotice> : null}
       {loading ? <SalesEmpty title="正在读取订单" detail={`订单 ${orderId}`} busy /> : selected && form ? (
         <form className={styles.card} onSubmit={(event) => { event.preventDefault(); setConfirming(true); }}>
           <div className={styles.cardHeader}><div><h2>{selected.customer?.name || selected.customerId}</h2><p>订单 {selected.id}</p></div></div>
@@ -72,7 +71,7 @@ export function SalesOrderEditPage({ orderId }: { orderId: string }) {
           </div>
           <Link className={styles.backLink} href={`/sales/orders/${encodeURIComponent(selected.id)}`} data-action-id="sales-order-edit-back">返回订单详情</Link>
         </form>
-      ) : <SalesEmpty title="没有找到订单" detail="返回订单列表重新选择。" />}
+      ) : <SalesEmpty title={loaded ? "没有找到订单" : "订单状态未确认"} detail={loaded ? "读取成功，请返回订单列表重新选择。" : "订单列表尚未成功读取，已阻止保存。"} />}
       {confirming && selected ? <SalesConfirmation title="确认保存订单字段？" detail={`${identityLabel(expected)}。只保存订单状态和客户备注，不发送消息。`} confirmLabel="确认保存" confirmActionId="sales-order-edit-save-confirm" cancelActionId="sales-order-edit-save-cancel" busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => void save()} /> : null}
     </section>
   );

@@ -22,7 +22,7 @@ const decisions: Array<{ id: DesignDecision; label: string; danger?: boolean }> 
 ];
 
 export function ReviewDesignPage({ identityFilters, reviewer, reviewId }: ReviewMutationPageProps & { reviewId: string }) {
-  const { center, busy, error, setError, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, setError, refresh } = useReviewCenter(identityFilters);
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState("");
   const [notice, setNotice] = useState("");
@@ -148,7 +148,9 @@ export function ReviewDesignPage({ identityFilters, reviewer, reviewId }: Review
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>未找到该设计审核任务，请返回队列重新选择。</div>}
+          ) : <div className={styles.empty}>{loaded
+            ? "读取成功，未找到该设计审核任务，请返回队列重新选择。"
+            : "设计审核队列尚未成功读取，不能确认该任务不存在。"}</div>}
         </div>
       </section>
 

@@ -8,7 +8,7 @@ import styles from "./sales-pages.module.css";
 import { useSalesQuotes } from "./use-sales-records";
 
 export function SalesQuotesPage() {
-  const { records, loading, error, ambiguousEmpty, refresh } = useSalesQuotes();
+  const { records, loading, loaded, error, refresh } = useSalesQuotes();
   const [query, setQuery] = useState("");
   const visibleQuotes = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("zh-CN");
@@ -43,15 +43,10 @@ export function SalesQuotesPage() {
         )}
       />
       {error ? <SalesNotice tone="danger">{error}</SalesNotice> : null}
-      {ambiguousEmpty ? (
-        <SalesNotice tone="warning">
-          当前客户端把接口失败和真实空列表都返回为空数组；请先检查服务状态再判断是否没有报价。
-        </SalesNotice>
-      ) : null}
       <article className={styles.card} aria-label="报价查询结果">
         <div className={styles.cardHeader}>
           <div><h2>全部报价</h2><p>选择一条记录进入只读详情。</p></div>
-          <span className={styles.countPill}>{visibleQuotes.length}</span>
+          <span className={styles.countPill}>{loaded ? visibleQuotes.length : "—"}</span>
         </div>
         <label className={styles.searchField}>
           <span><Search size={14} aria-hidden="true" />搜索报价</span>
@@ -86,8 +81,8 @@ export function SalesQuotesPage() {
           </ul>
         ) : (
           <SalesEmpty
-            title={query.trim() ? "没有匹配报价" : "没有可信报价结果"}
-            detail={query.trim() ? "清除搜索词后重试。" : "空结果可能是服务失败，请结合上方状态判断。"}
+            title={!loaded ? "报价状态未确认" : query.trim() ? "没有匹配报价" : "当前没有报价"}
+            detail={!loaded ? "报价列表尚未成功读取，请刷新后再试。" : query.trim() ? "读取成功，请清除或更换搜索词。" : "读取成功，当前没有报价记录。"}
           />
         )}
       </article>

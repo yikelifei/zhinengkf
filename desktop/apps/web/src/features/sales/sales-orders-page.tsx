@@ -8,7 +8,7 @@ import styles from "./sales-pages.module.css";
 import { useSalesOrders } from "./use-sales-records";
 
 export function SalesOrdersPage() {
-  const { records, loading, error, ambiguousEmpty, refresh } = useSalesOrders();
+  const { records, loading, loaded, error, refresh } = useSalesOrders();
   const [query, setQuery] = useState("");
   const visibleOrders = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("zh-CN");
@@ -43,15 +43,10 @@ export function SalesOrdersPage() {
         )}
       />
       {error ? <SalesNotice tone="danger">{error}</SalesNotice> : null}
-      {ambiguousEmpty ? (
-        <SalesNotice tone="warning">
-          当前客户端把接口失败和真实空列表都返回为空数组；请先检查服务状态再判断是否没有订单。
-        </SalesNotice>
-      ) : null}
       <article className={styles.card} aria-label="订单查询结果">
         <div className={styles.cardHeader}>
           <div><h2>全部订单</h2><p>选择一条记录进入只读详情。</p></div>
-          <span className={styles.countPill}>{visibleOrders.length}</span>
+          <span className={styles.countPill}>{loaded ? visibleOrders.length : "—"}</span>
         </div>
         <label className={styles.searchField}>
           <span><Search size={14} aria-hidden="true" />搜索订单</span>
@@ -86,8 +81,8 @@ export function SalesOrdersPage() {
           </ul>
         ) : (
           <SalesEmpty
-            title={query.trim() ? "没有匹配订单" : "没有可信订单结果"}
-            detail={query.trim() ? "清除搜索词后重试。" : "空结果可能是服务失败，请结合上方状态判断。"}
+            title={!loaded ? "订单状态未确认" : query.trim() ? "没有匹配订单" : "当前没有订单"}
+            detail={!loaded ? "订单列表尚未成功读取，请刷新后再试。" : query.trim() ? "读取成功，请清除或更换搜索词。" : "读取成功，当前没有订单记录。"}
           />
         )}
       </article>

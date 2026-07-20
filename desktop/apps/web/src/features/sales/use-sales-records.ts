@@ -13,21 +13,19 @@ export function useSalesQuotes(quoteId = "") {
   const [records, setRecords] = useState<QuoteDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [ambiguousEmpty, setAmbiguousEmpty] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
+    setLoaded(false);
     try {
       const rows = await getQuotes();
       setRecords(rows);
-      setAmbiguousEmpty(false);
-      if (quoteId && !rows.some((row) => row.id === quoteId)) {
-        setError(`未找到报价 ${quoteId}，请返回报价列表重新选择。`);
-      }
+      setLoaded(true);
     } catch (cause) {
       setRecords([]);
-      setAmbiguousEmpty(false);
+      setLoaded(false);
       setError(salesError(cause, "报价读取失败"));
     } finally {
       setLoading(false);
@@ -45,28 +43,26 @@ export function useSalesQuotes(quoteId = "") {
     setRecords((rows) => rows.map((row) => (row.id === next.id ? next : row)));
   }
 
-  return { records, selected, loading, error, ambiguousEmpty, refresh, replace };
+  return { records, selected, loading, loaded, error, refresh, replace };
 }
 
 export function useSalesOrders(orderId = "") {
   const [records, setRecords] = useState<OrderDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [ambiguousEmpty, setAmbiguousEmpty] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
+    setLoaded(false);
     try {
       const rows = await getOrderDrafts();
       setRecords(rows);
-      setAmbiguousEmpty(false);
-      if (orderId && !rows.some((row) => row.id === orderId)) {
-        setError(`未找到订单 ${orderId}，请返回订单列表重新选择。`);
-      }
+      setLoaded(true);
     } catch (cause) {
       setRecords([]);
-      setAmbiguousEmpty(false);
+      setLoaded(false);
       setError(salesError(cause, "订单读取失败"));
     } finally {
       setLoading(false);
@@ -84,5 +80,5 @@ export function useSalesOrders(orderId = "") {
     setRecords((rows) => rows.map((row) => (row.id === next.id ? next : row)));
   }
 
-  return { records, selected, loading, error, ambiguousEmpty, refresh, replace };
+  return { records, selected, loading, loaded, error, refresh, replace };
 }

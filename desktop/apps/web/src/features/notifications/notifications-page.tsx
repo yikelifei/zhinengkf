@@ -15,9 +15,9 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
     if (await controller.markAllRead()) setConfirmationOpen(false);
   }
 
-  const statusClass = controller.notifications.length
-    ? controller.unreadCount ? styles.toneWarning : styles.toneOk
-    : styles.toneError;
+  const statusClass = !controller.loaded
+    ? styles.toneError
+    : controller.unreadCount ? styles.toneWarning : styles.toneOk;
 
   return (
     <section className={styles.page} aria-labelledby="notifications-title" aria-busy={controller.busy}>
@@ -37,12 +37,14 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
         <header className={styles.panelHeader}>
           <div>
             <h2 id="notification-list-title">通知列表</h2>
-            <p>{controller.notifications.length
-              ? "当前返回 " + controller.notifications.length + " 条，其中 " + controller.unreadCount + " 条未读。"
+            <p>{controller.loaded
+              ? controller.notifications.length
+                ? "当前返回 " + controller.notifications.length + " 条，其中 " + controller.unreadCount + " 条未读。"
+                : "读取成功，当前身份范围内没有通知。"
               : "当前读取结果未确认。"}</p>
           </div>
           <span className={styles.badge + " " + statusClass}>
-            {controller.notifications.length ? controller.unreadCount ? controller.unreadCount + " 未读" : "已处理" : "未确认"}
+            {controller.loaded ? controller.unreadCount ? controller.unreadCount + " 未读" : controller.notifications.length ? "已处理" : "暂无通知" : "未确认"}
           </span>
         </header>
         <div className={styles.panelBody}>
@@ -67,7 +69,9 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
                 />
               ))}
             </div>
-          ) : <div className={styles.empty}>未取得可确认的通知记录，不能据此认定没有未读通知。</div>}
+          ) : <div className={styles.empty}>{controller.loaded
+            ? "读取成功，当前身份范围内没有通知。"
+            : "通知列表尚未成功读取，不能据此认定没有未读通知。"}</div>}
         </div>
       </section>
 

@@ -31,6 +31,7 @@ export type TrainingReviewPageProps = {
 
 export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReviewPageProps) {
   const [samples, setSamples] = useState<TrainingSample[]>([]);
+  const [samplesLoaded, setSamplesLoaded] = useState(false);
   const [qualityFilter, setQualityFilter] = useState<TrainingSampleQualityApiFilter>("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [note, setNote] = useState("");
@@ -50,17 +51,17 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setSamplesLoaded(false);
     try {
       const nextSamples = await getTrainingSamples({ ...stableIdentityFilters, quality: qualityFilter, limit: 200 });
       if (sequence !== refreshSequence.current) return;
       setSamples(nextSamples);
+      setSamplesLoaded(true);
       setSelectedIds(new Set());
       setPendingConfirmation(null);
-      if (!nextSamples.length) {
-        setError("训练样本接口返回空结果；当前客户端无法区分真实空列表与读取失败，未将其视为无需复核。");
-      }
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
+      setSamples([]);
       setError(caught instanceof Error ? caught.message : "训练样本读取失败。");
     } finally {
       if (sequence === refreshSequence.current) setBusy(false);
@@ -231,7 +232,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       </section>
 
       <section className={styles.panel} aria-labelledby="training-sample-list-title">
-        <header className={styles.panelHeader}><div><h2 id="training-sample-list-title">样本列表</h2><p>当前筛选返回 {samples.length} 条。</p></div></header>
+        <header className={styles.panelHeader}><div><h2 id="training-sample-list-title">样本列表</h2><p>{samplesLoaded ? `当前筛选返回 ${samples.length} 条。` : "当前筛选尚未成功读取。"}</p></div></header>
         <div className={styles.panelBody}>
           {samples.length ? (
             <div className={styles.recordList}>
@@ -269,7 +270,9 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 );
               })}
             </div>
-          ) : <div className={styles.empty}>当前筛选没有返回训练样本。</div>}
+          ) : <div className={styles.empty}>{samplesLoaded
+            ? "读取成功，当前筛选没有训练样本。"
+            : "训练样本尚未成功读取，当前状态未确认。"}</div>}
         </div>
       </section>
 

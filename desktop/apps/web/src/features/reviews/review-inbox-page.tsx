@@ -10,7 +10,7 @@ export type ReviewInboxPageProps = {
 };
 
 export function ReviewInboxPage({ identityFilters }: ReviewInboxPageProps) {
-  const { center, busy, error, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, refresh } = useReviewCenter(identityFilters);
   const total = center ? center.designJobs.length + center.quoteDrafts.length + center.orderDrafts.length : 0;
 
   return (
@@ -34,6 +34,7 @@ export function ReviewInboxPage({ identityFilters }: ReviewInboxPageProps) {
       </header>
 
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
+      {!busy && !loaded ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">审核收件箱尚未成功读取，队列数量保持未确认。</div> : null}
 
       <section className={styles.summaryGrid} aria-label="审核队列摘要">
         <div className={styles.summaryCard}><span>全部待办</span><strong>{center ? total : "—"}</strong></div>

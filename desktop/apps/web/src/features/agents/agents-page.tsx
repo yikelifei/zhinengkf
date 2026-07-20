@@ -9,7 +9,7 @@ import { useAgentsDirectory } from "./use-agents-directory";
 export type AgentsPageProps = { identityFilters?: IdentityFilters };
 
 export function AgentsPage({ identityFilters }: AgentsPageProps) {
-  const { agents, busy, error, refresh } = useAgentsDirectory(identityFilters);
+  const { agents, loaded, busy, error, refresh } = useAgentsDirectory(identityFilters);
   const summary = useMemo(() => ({
     enabled: agents.filter((agent) => agent.enabled).length,
     skills: agents.reduce((sum, agent) => sum + agent.skills.filter((skill) => skill.enabled).length, 0),
@@ -29,10 +29,10 @@ export function AgentsPage({ identityFilters }: AgentsPageProps) {
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
 
       <section className={styles.summaryGrid} aria-label="智能体摘要">
-        <div className={styles.summaryCard}><span>智能体</span><strong>{agents.length}</strong></div>
-        <div className={styles.summaryCard}><span>已启用</span><strong>{summary.enabled}</strong></div>
-        <div className={styles.summaryCard}><span>启用技能</span><strong>{summary.skills}</strong></div>
-        <div className={styles.summaryCard}><span>训练样本</span><strong>{summary.samples}</strong></div>
+        <div className={styles.summaryCard}><span>智能体</span><strong>{loaded ? agents.length : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>已启用</span><strong>{loaded ? summary.enabled : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>启用技能</span><strong>{loaded ? summary.skills : "—"}</strong></div>
+        <div className={styles.summaryCard}><span>训练样本</span><strong>{loaded ? summary.samples : "—"}</strong></div>
       </section>
 
       {agents.length ? (
@@ -48,7 +48,9 @@ export function AgentsPage({ identityFilters }: AgentsPageProps) {
             </Link>
           ))}
         </div>
-      ) : <div className={styles.empty}>服务端没有返回智能体记录。</div>}
+      ) : <div className={styles.empty}>{loaded
+        ? "读取成功，当前没有已配置的智能体。"
+        : "智能体目录尚未成功读取，当前状态未确认。"}</div>}
     </section>
   );
 }

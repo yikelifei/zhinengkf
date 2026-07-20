@@ -15,7 +15,7 @@ import styles from "./sales-pages.module.css";
 import { useSalesOrders } from "./use-sales-records";
 
 export function SalesOrderDetailPage({ orderId }: { orderId: string }) {
-  const { selected, loading, error, ambiguousEmpty, refresh } = useSalesOrders(orderId);
+  const { selected, loading, loaded, error, refresh } = useSalesOrders(orderId);
   const expected = selected ? identityExpectation(selected) : {};
   const identityReady = hasCompleteIdentity(expected);
 
@@ -32,7 +32,6 @@ export function SalesOrderDetailPage({ orderId }: { orderId: string }) {
         )}
       />
       {error ? <SalesNotice tone="danger">{error}</SalesNotice> : null}
-      {ambiguousEmpty ? <SalesNotice tone="warning">空结果无法证明订单不存在；请检查服务状态后重试。</SalesNotice> : null}
       {loading ? <SalesEmpty title="正在读取订单" detail={`订单 ${orderId}`} busy /> : selected ? (
         <article className={styles.card}>
           <div className={styles.cardHeader}>
@@ -69,7 +68,7 @@ export function SalesOrderDetailPage({ orderId }: { orderId: string }) {
           </div>
           <Link className={styles.backLink} href="/sales/orders" data-action-id="sales-order-back-list">返回订单列表</Link>
         </article>
-      ) : <SalesEmpty title="没有找到订单" detail="返回列表重新选择，避免对错误记录执行操作。" />}
+      ) : <SalesEmpty title={loaded ? "没有找到订单" : "订单状态未确认"} detail={loaded ? "读取成功，请返回列表重新选择。" : "订单列表尚未成功读取，已阻止后续操作。"} />}
     </section>
   );
 }

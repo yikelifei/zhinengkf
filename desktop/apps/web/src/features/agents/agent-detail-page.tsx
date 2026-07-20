@@ -6,9 +6,9 @@ import styles from "../governance-pages.module.css";
 import { useAgentsDirectory } from "./use-agents-directory";
 
 export function AgentDetailPage({ agentId, identityFilters }: { agentId: string; identityFilters?: IdentityFilters }) {
-  const { agents, busy, error, refresh } = useAgentsDirectory(identityFilters);
+  const { agents, loaded, busy, error, refresh } = useAgentsDirectory(identityFilters);
   const agent = agents.find((item) => item.id === agentId) || null;
-  const missing = !busy && agents.length > 0 && !agent;
+  const missing = !busy && loaded && !agent;
 
   return (
     <section className={styles.page} aria-labelledby="agent-detail-title" aria-busy={busy}>
@@ -24,7 +24,7 @@ export function AgentDetailPage({ agentId, identityFilters }: { agentId: string;
       </header>
 
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
-      {missing ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">地址中的智能体不存在，未回退展示其他记录。</div> : null}
+      {missing ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">目录读取成功，但地址中的智能体不存在，未回退展示其他记录。</div> : null}
 
       {agent ? (
         <>

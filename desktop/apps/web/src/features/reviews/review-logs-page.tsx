@@ -9,7 +9,7 @@ export type ReviewLogsPageProps = {
 };
 
 export function ReviewLogsPage({ identityFilters }: ReviewLogsPageProps) {
-  const { center, busy, error, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, refresh } = useReviewCenter(identityFilters);
 
   return (
     <section className={styles.page} aria-labelledby="review-logs-title" aria-busy={busy}>
@@ -34,7 +34,7 @@ export function ReviewLogsPage({ identityFilters }: ReviewLogsPageProps) {
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
 
       <section className={styles.panel} aria-labelledby="review-log-list-title">
-        <header className={styles.panelHeader}><div><h2 id="review-log-list-title">服务端审计日志</h2><p>共 {center?.logs.length ?? 0} 条。</p></div></header>
+        <header className={styles.panelHeader}><div><h2 id="review-log-list-title">服务端审计日志</h2><p>{loaded ? `共 ${center?.logs.length ?? 0} 条。` : "审计日志尚未成功读取。"}</p></div></header>
         <div className={styles.panelBody}>
           {center?.logs.length ? (
             <div className={styles.recordList}>
@@ -53,7 +53,9 @@ export function ReviewLogsPage({ identityFilters }: ReviewLogsPageProps) {
                 </article>
               ))}
             </div>
-          ) : <div className={styles.empty}>服务端没有返回审核记录。</div>}
+          ) : <div className={styles.empty}>{loaded
+            ? "读取成功，当前没有审核记录。"
+            : "审核记录尚未成功读取，当前状态未确认。"}</div>}
         </div>
       </section>
     </section>

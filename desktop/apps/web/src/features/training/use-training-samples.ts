@@ -5,6 +5,7 @@ import { getTrainingSamples, type IdentityFilters, type TrainingSample, type Tra
 
 export function useTrainingSamples(identityFilters?: IdentityFilters, quality: TrainingSampleQualityApiFilter = "all") {
   const [samples, setSamples] = useState<TrainingSample[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refreshSequence = useRef(0);
@@ -18,15 +19,15 @@ export function useTrainingSamples(identityFilters?: IdentityFilters, quality: T
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setLoaded(false);
     try {
       const nextSamples = await getTrainingSamples({ ...stableIdentityFilters, quality, limit: 200 });
       if (sequence !== refreshSequence.current) return;
       setSamples(nextSamples);
-      if (!nextSamples.length) {
-        setError("训练样本接口返回空结果；当前客户端无法区分真实空列表与读取失败，未将其视为无需复核。");
-      }
+      setLoaded(true);
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
+      setSamples([]);
       setError(caught instanceof Error ? caught.message : "训练样本读取失败。");
     } finally {
       if (sequence === refreshSequence.current) setBusy(false);
@@ -38,5 +39,5 @@ export function useTrainingSamples(identityFilters?: IdentityFilters, quality: T
     return () => { refreshSequence.current += 1; };
   }, [refresh]);
 
-  return { samples, busy, error, refresh };
+  return { samples, loaded, busy, error, refresh };
 }

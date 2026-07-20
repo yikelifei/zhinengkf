@@ -9,7 +9,7 @@ import { useTrainingSamples } from "./use-training-samples";
 
 export function TrainingReviewQueuePage({ identityFilters }: { identityFilters?: IdentityFilters }) {
   const [quality, setQuality] = useState<TrainingSampleQualityApiFilter>("all");
-  const { samples, busy, error, refresh } = useTrainingSamples(identityFilters, quality);
+  const { samples, loaded, busy, error, refresh } = useTrainingSamples(identityFilters, quality);
 
   return (
     <section className={styles.page} aria-labelledby="training-review-queue-title" aria-busy={busy}>
@@ -50,7 +50,9 @@ export function TrainingReviewQueuePage({ identityFilters }: { identityFilters?:
             );
           })}
         </div>
-      ) : <div className={styles.empty}>当前筛选没有返回训练样本。</div>}
+      ) : <div className={styles.empty}>{loaded
+        ? "读取成功，当前筛选没有训练样本。"
+        : "训练样本队列尚未成功读取，当前状态未确认。"}</div>}
     </section>
   );
 }

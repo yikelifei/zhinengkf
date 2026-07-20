@@ -21,7 +21,7 @@ import { useSalesQuotes } from "./use-sales-records";
 export type QuoteAction = "send" | "create-order";
 
 export function SalesQuoteActionPage({ quoteId, action }: { quoteId: string; action: QuoteAction }) {
-  const { selected, loading, error: loadError, ambiguousEmpty, replace } = useSalesQuotes(quoteId);
+  const { selected, loading, loaded, error: loadError, replace } = useSalesQuotes(quoteId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -60,7 +60,6 @@ export function SalesQuoteActionPage({ quoteId, action }: { quoteId: string; act
       />
       {loadError || error ? <SalesNotice tone="danger">{error || loadError}</SalesNotice> : null}
       {notice ? <SalesNotice tone="success">{notice}</SalesNotice> : null}
-      {ambiguousEmpty ? <SalesNotice tone="warning">空结果无法证明报价不存在；已阻止操作。</SalesNotice> : null}
       {loading ? <SalesEmpty title="正在读取报价" detail={`报价 ${quoteId}`} busy /> : selected ? (
         <article className={styles.card}>
           <div className={styles.cardHeader}>
@@ -86,7 +85,7 @@ export function SalesQuoteActionPage({ quoteId, action }: { quoteId: string; act
           </div>
           <Link className={styles.backLink} href={`/sales/quotes/${encodeURIComponent(selected.id)}`} data-action-id="sales-quote-action-back">返回报价详情</Link>
         </article>
-      ) : <SalesEmpty title="没有找到报价" detail="返回报价列表重新选择。" />}
+      ) : <SalesEmpty title={loaded ? "没有找到报价" : "报价状态未确认"} detail={loaded ? "读取成功，请返回报价列表重新选择。" : "报价列表尚未成功读取，已阻止操作。"} />}
       {confirming && selected ? (
         <SalesConfirmation
           title={isSend ? "确认把报价加入发送队列？" : "确认创建订单草稿？"}

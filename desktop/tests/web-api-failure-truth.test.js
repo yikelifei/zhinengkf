@@ -102,5 +102,8 @@ test("successful empty API payloads remain trusted empty results", async () => {
     "utf8",
   );
   assert.doesNotMatch(assetsPage, /请求失败折叠为空数组|当前空结果不能证明/);
+  assert.match(assetsPage, /assetsLoaded && assets\.length/);
+  assert.match(assetsPage, /assetsLoaded \? <DesignEmpty title="当前客户尚无素材"/);
+  assert.match(assetsPage, /<DesignEmpty title="素材状态未确认"/);
   assert.match(assetsPage, /当前客户尚无素材/);
 });

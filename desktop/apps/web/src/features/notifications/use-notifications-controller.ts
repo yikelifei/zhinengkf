@@ -13,6 +13,7 @@ import {
 
 export function useNotificationsController(identityFilters?: IdentityFilters) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -28,12 +29,15 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
+    setLoaded(false);
     try {
       const next = await getNotifications(unreadOnly, filters);
       if (sequence !== refreshSequence.current) return;
       setNotifications(next);
+      setLoaded(true);
     } catch (caught) {
       if (sequence === refreshSequence.current) {
+        setNotifications([]);
         setError(caught instanceof Error ? caught.message : "通知读取失败。");
       }
     } finally {
@@ -74,8 +78,11 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
       const result = await markAllNotificationsRead(filters);
       setNotice("服务端已标记 " + result.count + " 条通知为已读。");
       setNotifications(await getNotifications(unreadOnly, filters));
+      setLoaded(true);
       return true;
     } catch (caught) {
+      setNotifications([]);
+      setLoaded(false);
       setError(caught instanceof Error ? caught.message : "批量标记失败，服务端未确认结果。");
       return false;
     } finally {
@@ -85,6 +92,7 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
 
   return {
     notifications,
+    loaded,
     unreadOnly,
     setUnreadOnly,
     unreadCount,
