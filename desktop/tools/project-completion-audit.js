@@ -825,9 +825,16 @@ function patternFailures(text, required = [], forbidden = []) {
 
 function highRiskOperatorRouteResults(root) {
   const paths = {
+    agents: "desktop/apps/api/src/agents/agents.controller.ts",
+    aiProviders: "desktop/apps/api/src/ai/ai-provider.controller.ts",
+    assets: "desktop/apps/api/src/assets/assets.controller.ts",
+    catalog: "desktop/apps/api/src/catalog/catalog.controller.ts",
+    notifications: "desktop/apps/api/src/notifications/notifications.controller.ts",
+    orders: "desktop/apps/api/src/orders/orders.controller.ts",
     wechatWork: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
     reviews: "desktop/apps/api/src/reviews/reviews.controller.ts",
     quotes: "desktop/apps/api/src/quotes/quotes.controller.ts",
+    routing: "desktop/apps/api/src/routing/routing.controller.ts",
     automation: "desktop/apps/api/src/automation/automation.controller.ts",
     training: "desktop/apps/api/src/training/training.controller.ts",
   };
@@ -848,6 +855,51 @@ function highRiskOperatorRouteResults(root) {
     const failures = patternFailures(header, requiredPatterns);
     missing.push(...failures.missing.map((item) => `${label}-${item}`));
   };
+
+  for (const [label, sourceKey] of [
+    ["agents-class", "agents"],
+    ["ai-providers-class", "aiProviders"],
+    ["assets-class", "assets"],
+    ["catalog-class", "catalog"],
+    ["notifications-class", "notifications"],
+    ["orders-class", "orders"],
+    ["quotes-class", "quotes"],
+    ["routing-class", "routing"],
+  ]) {
+    checkClass(label, sources[sourceKey], [
+      /@RequireOperatorCapability\(["']view_console["']\)/,
+      /@UseGuards\(OperatorAccessGuard\)/,
+    ]);
+  }
+
+  for (const [label, sourceKey, routePattern, capability] of [
+    ["assets-upload", "assets", /@Post\(["']upload["']\)/, "manage_design_executions"],
+    ["assets-demo-logo", "assets", /@Post\(["']demo-customer-logo["']\)/, "manage_design_executions"],
+    ["catalog-demo-images", "catalog", /@Post\(["']skus\/demo-images["']\)/, "manage_design_executions"],
+    ["catalog-upsert", "catalog", /@Post\(["']skus["']\)/, "manage_design_executions"],
+    ["catalog-batch", "catalog", /@Post\(["']skus\/batch-update["']\)/, "manage_design_executions"],
+    ["catalog-deactivate", "catalog", /@Post\(["']skus\/:skuCode\/deactivate["']\)/, "manage_design_executions"],
+    ["catalog-restore", "catalog", /@Post\(["']skus\/:skuCode\/restore["']\)/, "manage_design_executions"],
+    ["catalog-bulk", "catalog", /@Post\(["']skus\/bulk["']\)/, "manage_design_executions"],
+    ["catalog-import-text", "catalog", /@Post\(["']skus\/import-text["']\)/, "manage_design_executions"],
+    ["catalog-import-file", "catalog", /@Post\(["']skus\/import-file["']\)/, "manage_design_executions"],
+    ["notifications-demo", "notifications", /@Post\(["']demo["']\)/, "manage_training"],
+    ["orders-from-quote", "orders", /@Post\(["']from-quote\/:quoteId["']\)/, "manage_design_executions"],
+    ["orders-update", "orders", /@Post\(["']:id\/update["']\)/, "manage_design_executions"],
+    ["orders-revise", "orders", /@Post\(["']:id\/revise-selection["']\)/, "manage_design_executions"],
+    ["quotes-update", "quotes", /@Post\(["']:id\/update["']\)/, "manage_design_executions"],
+    ["quotes-revise", "quotes", /@Post\(["']:id\/revise-selection["']\)/, "manage_design_executions"],
+  ]) {
+    check(label, sources[sourceKey], routePattern, [
+      new RegExp(`@RequireOperatorCapability\\(["']${capability}["']\\)`),
+    ]);
+  }
+  check("routing-correction", sources.routing, /@Post\(["']evaluations\/:id\/correct["']\)/, [
+    /@RequireOperatorCapability\(["']manage_training["']\)/,
+    /@TrustedOperator\(\) principal/,
+    /reviewer:\s*_untrustedReviewer/,
+    /reviewer:\s*principal\.id/,
+  ]);
 
   check("wechat-work-sync", sources.wechatWork, /@Post\(["']kf\/sync["']\)/, [
     /@RequireOperatorCapability\(["']manage_channels["']\)/,
@@ -950,7 +1002,7 @@ function highRiskOperatorRouteResults(root) {
     "高风险操作路由与可信审计人边界",
     ok ? STATUS.PASS : STATUS.FAIL,
     ok
-      ? "渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力；企业微信 readiness/callback 保持专用公开入口。"
+      ? "操作员写入、渠道同步、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信审计人；企业微信 readiness/callback 保持专用公开入口。"
       : "高风险路由守卫、可信审计人覆盖或企业微信公开入口边界发生漂移。",
     { path: paths.wechatWork, paths: Object.values(paths), missing, forbidden },
   )];

@@ -9,6 +9,8 @@ import {
 import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
 
 @Controller("quotes")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class QuotesController {
   constructor(private readonly quotes: QuotesService) {}
 
@@ -36,6 +38,7 @@ export class QuotesController {
   }
 
   @Post(":id/update")
+  @RequireOperatorCapability("manage_design_executions")
   update(
     @Param("id") id: string,
     @Body()
@@ -53,6 +56,7 @@ export class QuotesController {
   }
 
   @Post(":id/revise-selection")
+  @RequireOperatorCapability("manage_design_executions")
   reviseSelection(
     @Param("id") id: string,
     @Body()

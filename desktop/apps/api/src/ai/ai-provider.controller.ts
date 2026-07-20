@@ -1,7 +1,10 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Controller, Get, Query, UseGuards } from "@nestjs/common";
 import { AiProviderService } from "./ai-provider.service";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 
 @Controller("ai/providers")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class AiProviderController {
   constructor(private readonly providers: AiProviderService) {}
 

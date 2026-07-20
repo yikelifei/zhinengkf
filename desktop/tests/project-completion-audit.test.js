@@ -296,7 +296,15 @@ export class ReviewsController {
 `);
   write(root, "desktop/apps/api/src/quotes/quotes.controller.ts", `
 @Controller("quotes")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class QuotesController {
+  @Post(":id/update")
+  @RequireOperatorCapability("manage_design_executions")
+  update() {}
+  @Post(":id/revise-selection")
+  @RequireOperatorCapability("manage_design_executions")
+  revise() {}
   @Post(":id/queue-send")
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
@@ -310,6 +318,79 @@ export class QuotesController {
   verify(@Body() body, @TrustedOperator() principal) {
     const { owner: _untrustedOwner, ...trusted } = body;
     return service({ ...trusted, owner: principal.id });
+  }
+}
+`);
+  write(root, "desktop/apps/api/src/assets/assets.controller.ts", `
+@Controller("assets")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class AssetsController {
+  @Post("upload")
+  @RequireOperatorCapability("manage_design_executions")
+  upload() {}
+  @Post("demo-customer-logo")
+  @RequireOperatorCapability("manage_design_executions")
+  demo() {}
+}
+`);
+  write(root, "desktop/apps/api/src/agents/agents.controller.ts", `
+@Controller("agents")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class AgentsController { @Get() list() {} }
+`);
+  write(root, "desktop/apps/api/src/ai/ai-provider.controller.ts", `
+@Controller("ai/providers")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class AiProviderController { @Get("status") status() {} }
+`);
+  write(root, "desktop/apps/api/src/catalog/catalog.controller.ts", `
+@Controller("catalog")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class CatalogController {
+  @Post("skus/demo-images") @RequireOperatorCapability("manage_design_executions") demo() {}
+  @Post("skus") @RequireOperatorCapability("manage_design_executions") upsert() {}
+  @Post("skus/batch-update") @RequireOperatorCapability("manage_design_executions") batch() {}
+  @Post("skus/:skuCode/deactivate") @RequireOperatorCapability("manage_design_executions") deactivate() {}
+  @Post("skus/:skuCode/restore") @RequireOperatorCapability("manage_design_executions") restore() {}
+  @Post("skus/bulk") @RequireOperatorCapability("manage_design_executions") bulk() {}
+  @Post("skus/import-text") @RequireOperatorCapability("manage_design_executions") importText() {}
+  @Post("skus/import-file") @RequireOperatorCapability("manage_design_executions") importFile() {}
+}
+`);
+  write(root, "desktop/apps/api/src/notifications/notifications.controller.ts", `
+@Controller("notifications")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class NotificationsController {
+  @Post("demo")
+  @RequireOperatorCapability("manage_training")
+  demo() {}
+}
+`);
+  write(root, "desktop/apps/api/src/orders/orders.controller.ts", `
+@Controller("orders")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class OrdersController {
+  @Post("from-quote/:quoteId") @RequireOperatorCapability("manage_design_executions") create() {}
+  @Post(":id/update") @RequireOperatorCapability("manage_design_executions") update() {}
+  @Post(":id/revise-selection") @RequireOperatorCapability("manage_design_executions") revise() {}
+}
+`);
+  write(root, "desktop/apps/api/src/routing/routing.controller.ts", `
+@Controller("routing")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class RoutingController {
+  @Post("evaluations/:id/correct")
+  @RequireOperatorCapability("manage_training")
+  correct(@Body() body, @TrustedOperator() principal) {
+    const { reviewer: _untrustedReviewer, ...trusted } = body;
+    return service({ ...trusted, reviewer: principal.id });
   }
 }
 `);
@@ -403,6 +484,16 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
       from: '@Post("callback")',
       to: '@Post("callback")\n  @RequireOperatorCapability("approve_send")\n  @UseGuards(OperatorAccessGuard)',
+    },
+    {
+      file: "desktop/apps/api/src/assets/assets.controller.ts",
+      from: '@RequireOperatorCapability("manage_design_executions")',
+      to: '@RequireOperatorCapability("view_console")',
+    },
+    {
+      file: "desktop/apps/api/src/routing/routing.controller.ts",
+      from: "reviewer: principal.id",
+      to: 'reviewer: "browser_operator"',
     },
   ];
   for (const mutation of mutations) {

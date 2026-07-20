@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { CatalogService } from "./catalog.service";
 import { BundleRecommendPayload, SkuBatchUpdatePayload, SkuPayload } from "./catalog.types";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 
 @Controller("catalog")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
 
@@ -35,31 +38,37 @@ export class CatalogController {
   }
 
   @Post("skus/demo-images")
+  @RequireOperatorCapability("manage_design_executions")
   createDemoSkuImages() {
     return this.catalog.createDemoSkuImages();
   }
 
   @Post("skus")
+  @RequireOperatorCapability("manage_design_executions")
   upsertSku(@Body() payload: SkuPayload) {
     return this.catalog.upsertSku(payload);
   }
 
   @Post("skus/batch-update")
+  @RequireOperatorCapability("manage_design_executions")
   batchUpdateSkus(@Body() payload: SkuBatchUpdatePayload) {
     return this.catalog.batchUpdate(payload);
   }
 
   @Post("skus/:skuCode/deactivate")
+  @RequireOperatorCapability("manage_design_executions")
   deactivateSku(@Param("skuCode") skuCode: string) {
     return this.catalog.updateSkuStatus(skuCode, false);
   }
 
   @Post("skus/:skuCode/restore")
+  @RequireOperatorCapability("manage_design_executions")
   restoreSku(@Param("skuCode") skuCode: string) {
     return this.catalog.updateSkuStatus(skuCode, true);
   }
 
   @Post("skus/bulk")
+  @RequireOperatorCapability("manage_design_executions")
   bulkUpsert(@Body() payload: { rows: SkuPayload[] }) {
     return this.catalog.bulkUpsert(payload.rows || []);
   }
@@ -75,11 +84,13 @@ export class CatalogController {
   }
 
   @Post("skus/import-text")
+  @RequireOperatorCapability("manage_design_executions")
   importText(@Body() payload: { text: string }) {
     return this.catalog.importText(payload.text || "");
   }
 
   @Post("skus/import-file")
+  @RequireOperatorCapability("manage_design_executions")
   importFile(@Body() payload: { fileName?: string; dataBase64?: string }) {
     return this.catalog.importFile(payload);
   }

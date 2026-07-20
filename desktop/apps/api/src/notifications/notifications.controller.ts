@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { NotificationsService } from "./notifications.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 
 @Controller("notifications")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
 
@@ -38,6 +41,7 @@ export class NotificationsController {
   }
 
   @Post("demo")
+  @RequireOperatorCapability("manage_training")
   createDemo(@Body() body: { level?: string; title?: string; body?: string }) {
     return this.notifications.create(
       body?.level || "info",
