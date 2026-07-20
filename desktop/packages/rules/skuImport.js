@@ -1,6 +1,29 @@
 "use strict";
 
 const zlib = require("node:zlib");
+const { TextDecoder } = require("node:util");
+
+const MEBIBYTE = 1024 * 1024;
+const SKU_IMPORT_LIMITS = Object.freeze({
+  maxInputBytes: 8 * MEBIBYTE,
+  maxZipEntries: 256,
+  maxZipEntryCompressedBytes: 8 * MEBIBYTE,
+  maxZipEntryUncompressedBytes: 12 * MEBIBYTE,
+  maxZipTotalUncompressedBytes: 24 * MEBIBYTE,
+  maxSharedStrings: 20000,
+  maxWorksheetRows: 5000,
+  maxWorksheetCells: 100000,
+  maxWorksheetColumns: 256,
+  maxFinalTextBytes: 2 * MEBIBYTE,
+});
+
+class SkuImportError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "SkuImportError";
+    this.code = code;
+  }
+}
 
 const HEADER_MAP = {
   skuCode: ["sku", "sku编号", "sku编码", "商品编号", "商品编码", "编码", "货号", "sku缂栧彿", "sku缂栫爜", "鍟嗗搧缂栧彿", "缂栫爜", "璐у彿"],
@@ -46,7 +69,15 @@ const SKU_IMPORT_FIELD_DEFINITIONS = [
 ];
 
 function parseSkuImportText(text) {
-  const lines = String(text || "")
+  const inputText = String(text || "");
+  if (Buffer.byteLength(inputText, "utf8") > SKU_IMPORT_LIMITS.maxFinalTextBytes) {
+    return skuImportFailure("SKU_IMPORT_TEXT_TOO_LARGE", "导入文本超过允许大小");
+  }
+  if (countLinesAboveLimit(inputText, SKU_IMPORT_LIMITS.maxWorksheetRows)) {
+    return skuImportFailure("SKU_IMPORT_ROW_LIMIT", "导入文本行数超过允许上限");
+  }
+
+  const lines = inputText
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
@@ -56,14 +87,25 @@ function parseSkuImportText(text) {
 
   const delimiter = detectDelimiter(lines[0]);
   const rawHeaders = splitLine(lines[0], delimiter).map((header) => String(header || "").trim());
+  if (rawHeaders.length > SKU_IMPORT_LIMITS.maxWorksheetColumns) {
+    return skuImportFailure("SKU_IMPORT_COLUMN_LIMIT", "导入文本列数超过允许上限");
+  }
   const headers = rawHeaders.map(normalizeHeader);
   const indexes = mapHeaders(headers);
   const mapping = describeSkuHeaderMapping(rawHeaders, indexes);
   const rows = [];
   const errors = [];
+  let cellCount = rawHeaders.length;
 
   for (let index = 1; index < lines.length; index += 1) {
     const values = splitLine(lines[index], delimiter);
+    if (values.length > SKU_IMPORT_LIMITS.maxWorksheetColumns) {
+      return skuImportFailure("SKU_IMPORT_COLUMN_LIMIT", "导入文本列数超过允许上限");
+    }
+    cellCount += values.length;
+    if (cellCount > SKU_IMPORT_LIMITS.maxWorksheetCells) {
+      return skuImportFailure("SKU_IMPORT_CELL_LIMIT", "导入文本单元格数量超过允许上限");
+    }
     const row = buildSkuRow(values, indexes);
     const rowErrors = validateSkuRow(row);
     if (rowErrors.length) {
@@ -87,9 +129,12 @@ function parseSkuImportText(text) {
 
 function parseSkuImportFile(input = {}) {
   const fileName = String(input.fileName || "").trim();
-  const buffer = Buffer.isBuffer(input)
-    ? input
-    : Buffer.from(String(input.dataBase64 || ""), "base64");
+  let buffer;
+  try {
+    buffer = decodeSkuImportPayload(input);
+  } catch (error) {
+    return skuImportFailureFromError(error, fileName);
+  }
   if (!buffer.length) {
     return { ok: false, rows: [], errors: [{ line: 0, message: "没有读取到商品文件数据" }], importedCount: 0, skippedCount: 1 };
   }
@@ -104,15 +149,72 @@ function parseSkuImportFile(input = {}) {
       sourceType: /\.xlsx$/i.test(fileName) || isZipBuffer(buffer) ? "xlsx" : "text",
     };
   } catch (error) {
-    return {
-      ok: false,
-      rows: [],
-      errors: [{ line: 0, message: `文件解析失败：${error.message || error}` }],
-      importedCount: 0,
-      skippedCount: 1,
-      sourceFileName: fileName,
-    };
+    return skuImportFailureFromError(error, fileName);
   }
+}
+
+function decodeSkuImportPayload(input) {
+  if (Buffer.isBuffer(input)) {
+    assertInputSize(input.length);
+    return input;
+  }
+
+  const encoded = String(input.dataBase64 || "");
+  if (!encoded) return Buffer.alloc(0);
+  const maxEncodedLength = Math.ceil(SKU_IMPORT_LIMITS.maxInputBytes / 3) * 4;
+  if (encoded.length > maxEncodedLength) {
+    throw new SkuImportError("SKU_IMPORT_INPUT_TOO_LARGE", "导入文件超过允许大小");
+  }
+  if (!isCanonicalBase64(encoded)) {
+    throw new SkuImportError("SKU_IMPORT_INVALID_BASE64", "导入文件必须使用规范 Base64 编码");
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const decodedLength = (encoded.length / 4) * 3 - padding;
+  assertInputSize(decodedLength);
+  const buffer = Buffer.from(encoded, "base64");
+  if (buffer.length !== decodedLength || buffer.toString("base64") !== encoded) {
+    throw new SkuImportError("SKU_IMPORT_INVALID_BASE64", "导入文件必须使用规范 Base64 编码");
+  }
+  return buffer;
+}
+
+function isCanonicalBase64(value) {
+  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+}
+
+function assertInputSize(size) {
+  if (!Number.isSafeInteger(size) || size < 0 || size > SKU_IMPORT_LIMITS.maxInputBytes) {
+    throw new SkuImportError("SKU_IMPORT_INPUT_TOO_LARGE", "导入文件超过允许大小");
+  }
+}
+
+function skuImportFailure(code, message, sourceFileName = "") {
+  return {
+    ok: false,
+    rows: [],
+    errors: [{ line: 0, message: `${code}: ${message}` }],
+    importedCount: 0,
+    skippedCount: 1,
+    fieldMapping: [],
+    unmappedHeaders: [],
+    missingRequiredFields: getSkuImportFieldGuide().filter((field) => field.required),
+    ...(sourceFileName ? { sourceFileName } : {}),
+  };
+}
+
+function skuImportFailureFromError(error, sourceFileName) {
+  if (error instanceof SkuImportError) {
+    return skuImportFailure(error.code, error.message, sourceFileName);
+  }
+  return skuImportFailure("SKU_IMPORT_PARSE_FAILED", "文件格式无效或已损坏", sourceFileName);
+}
+
+function countLinesAboveLimit(text, limit) {
+  let lines = 1;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10 && ++lines > limit) return true;
+  }
+  return false;
 }
 
 function detectDelimiter(headerLine) {
@@ -298,10 +400,14 @@ function cleanObject(value) {
 }
 
 function decodeTextBuffer(buffer) {
-  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
-    return buffer.slice(3).toString("utf8");
+  const content = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf
+    ? buffer.subarray(3)
+    : buffer;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    throw new SkuImportError("SKU_IMPORT_TEXT_ENCODING", "文本文件不是有效 UTF-8 编码");
   }
-  return buffer.toString("utf8");
 }
 
 function isZipBuffer(buffer) {
@@ -310,34 +416,132 @@ function isZipBuffer(buffer) {
 
 function xlsxBufferToDelimitedText(buffer) {
   const entries = readZipEntries(buffer);
-  const sharedStrings = parseSharedStrings(entries.get("xl/sharedStrings.xml")?.toString("utf8") || "");
+  const sharedStrings = parseSharedStrings(decodeXmlEntry(entries.get("xl/sharedStrings.xml")));
   const sheetName = resolveFirstWorksheetName(entries);
-  const sheetXml = entries.get(sheetName)?.toString("utf8");
+  const sheetXml = decodeXmlEntry(entries.get(sheetName));
   if (!sheetXml) throw new Error("没有找到工作表数据");
   const rows = parseWorksheetRows(sheetXml, sharedStrings);
   if (!rows.length) throw new Error("工作表没有可导入的行");
-  return rows.map((row) => row.map((cell) => String(cell || "").replace(/\t/g, " ").trim()).join("\t")).join("\n");
+  const text = rows.map((row) => row.map((cell) => String(cell || "").replace(/\t/g, " ").trim()).join("\t")).join("\n");
+  if (Buffer.byteLength(text, "utf8") > SKU_IMPORT_LIMITS.maxFinalTextBytes) {
+    throw new SkuImportError("SKU_IMPORT_TEXT_TOO_LARGE", "工作表提取文本超过允许大小");
+  }
+  return text;
 }
 
 function readZipEntries(buffer) {
   const eocdOffset = findEndOfCentralDirectory(buffer);
-  if (eocdOffset < 0) throw new Error("不是有效的 xlsx/zip 文件");
+  if (eocdOffset < 0) throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "不是有效的 xlsx/zip 文件");
+  ensureZipRange(buffer, eocdOffset, 22);
+  const diskNumber = buffer.readUInt16LE(eocdOffset + 4);
+  const centralDisk = buffer.readUInt16LE(eocdOffset + 6);
+  const entriesOnDisk = buffer.readUInt16LE(eocdOffset + 8);
   const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+  const centralSize = buffer.readUInt32LE(eocdOffset + 12);
   const centralOffset = buffer.readUInt32LE(eocdOffset + 16);
+  const commentLength = buffer.readUInt16LE(eocdOffset + 20);
+  if (diskNumber !== 0 || centralDisk !== 0 || entriesOnDisk !== totalEntries) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_MULTIDISK", "不支持多磁盘 ZIP 文件");
+  }
+  if (totalEntries === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+    throw new SkuImportError("SKU_IMPORT_ZIP64_UNSUPPORTED", "不支持 ZIP64 工作簿");
+  }
+  if (totalEntries > SKU_IMPORT_LIMITS.maxZipEntries) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_ENTRY_LIMIT", "ZIP 条目数量超过允许上限");
+  }
+  if (eocdOffset + 22 + commentLength !== buffer.length) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 结束目录或注释边界无效");
+  }
+  if (
+    centralOffset > eocdOffset
+    || centralSize > eocdOffset - centralOffset
+    || centralOffset + centralSize !== eocdOffset
+  ) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 中央目录边界无效");
+  }
+
+  const centralEnd = centralOffset + centralSize;
   const entries = new Map();
+  const normalizedNames = new Set();
+  const localOffsets = new Set();
+  const localRanges = [];
+  let declaredTotal = 0;
+  let actualTotal = 0;
   let offset = centralOffset;
 
   for (let index = 0; index < totalEntries; index += 1) {
-    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error("zip 中央目录损坏");
+    ensureZipRange(buffer, offset, 46, centralEnd);
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 中央目录损坏");
+    }
+    const flags = buffer.readUInt16LE(offset + 8);
     const method = buffer.readUInt16LE(offset + 10);
+    const expectedCrc32 = buffer.readUInt32LE(offset + 16);
     const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
     const fileNameLength = buffer.readUInt16LE(offset + 28);
     const extraLength = buffer.readUInt16LE(offset + 30);
     const commentLength = buffer.readUInt16LE(offset + 32);
+    const diskStart = buffer.readUInt16LE(offset + 34);
     const localHeaderOffset = buffer.readUInt32LE(offset + 42);
-    const fileName = buffer.slice(offset + 46, offset + 46 + fileNameLength).toString("utf8").replace(/\\/g, "/");
-    entries.set(fileName, readZipEntryData(buffer, localHeaderOffset, compressedSize, method));
-    offset += 46 + fileNameLength + extraLength + commentLength;
+    if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+      throw new SkuImportError("SKU_IMPORT_ZIP64_UNSUPPORTED", "不支持 ZIP64 条目");
+    }
+    if (diskStart !== 0) throw new SkuImportError("SKU_IMPORT_ZIP_MULTIDISK", "不支持多磁盘 ZIP 条目");
+    if ((flags & 0x0001) !== 0) throw new SkuImportError("SKU_IMPORT_ZIP_ENCRYPTED", "不支持加密 ZIP 条目");
+    if (method !== 0 && method !== 8) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_METHOD", `不支持的 xlsx 压缩方式：${method}`);
+    }
+    if (compressedSize > SKU_IMPORT_LIMITS.maxZipEntryCompressedBytes) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_COMPRESSED_LIMIT", "ZIP 单个条目压缩数据超过允许上限");
+    }
+    if (uncompressedSize > SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_UNCOMPRESSED_LIMIT", "ZIP 单个条目声明解压大小超过允许上限");
+    }
+    declaredTotal += uncompressedSize;
+    if (declaredTotal > SKU_IMPORT_LIMITS.maxZipTotalUncompressedBytes) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_TOTAL_LIMIT", "ZIP 声明累计解压大小超过允许上限");
+    }
+
+    const recordLength = 46 + fileNameLength + extraLength + commentLength;
+    ensureZipRange(buffer, offset, recordLength, centralEnd);
+    const rawName = decodeZipName(buffer.subarray(offset + 46, offset + 46 + fileNameLength));
+    const fileName = normalizeAndValidateZipPath(rawName);
+    const nameKey = fileName.toLowerCase();
+    if (normalizedNames.has(nameKey)) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_DUPLICATE", "ZIP 包含重复或大小写冲突的条目");
+    }
+    normalizedNames.add(nameKey);
+    if (localOffsets.has(localHeaderOffset)) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_DUPLICATE", "ZIP 条目复用了本地文件偏移");
+    }
+    localOffsets.add(localHeaderOffset);
+
+    const localEntry = readZipEntryData(buffer, {
+      localHeaderOffset,
+      compressedSize,
+      uncompressedSize,
+      expectedCrc32,
+      method,
+      flags,
+      fileName,
+      upperBound: centralOffset,
+    });
+    if (localRanges.some((range) => localEntry.start < range.end && range.start < localEntry.end)) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_LOCAL_OVERLAP", "ZIP 本地条目区域发生重叠");
+    }
+    localRanges.push({ start: localEntry.start, end: localEntry.end });
+    const data = localEntry.data;
+    actualTotal += data.length;
+    if (actualTotal > SKU_IMPORT_LIMITS.maxZipTotalUncompressedBytes) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_TOTAL_LIMIT", "ZIP 实际累计解压大小超过允许上限");
+    }
+    if (!fileName.endsWith("/")) entries.set(fileName, data);
+    offset += recordLength;
+  }
+
+  if (offset !== centralEnd) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 中央目录长度与条目不一致");
   }
 
   return entries;
@@ -351,38 +555,173 @@ function findEndOfCentralDirectory(buffer) {
   return -1;
 }
 
-function readZipEntryData(buffer, localHeaderOffset, compressedSize, method) {
-  if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50) throw new Error("zip 本地文件头损坏");
-  const nameLength = buffer.readUInt16LE(localHeaderOffset + 26);
-  const extraLength = buffer.readUInt16LE(localHeaderOffset + 28);
-  const dataStart = localHeaderOffset + 30 + nameLength + extraLength;
-  const compressed = buffer.slice(dataStart, dataStart + compressedSize);
-  if (method === 0) return compressed;
-  if (method === 8) return zlib.inflateRawSync(compressed);
-  throw new Error(`不支持的 xlsx 压缩方式：${method}`);
+function readZipEntryData(buffer, entry) {
+  ensureZipRange(buffer, entry.localHeaderOffset, 30, entry.upperBound);
+  if (buffer.readUInt32LE(entry.localHeaderOffset) !== 0x04034b50) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 本地文件头损坏");
+  }
+  const localFlags = buffer.readUInt16LE(entry.localHeaderOffset + 6);
+  const localMethod = buffer.readUInt16LE(entry.localHeaderOffset + 8);
+  const localCrc32 = buffer.readUInt32LE(entry.localHeaderOffset + 14);
+  const localCompressedSize = buffer.readUInt32LE(entry.localHeaderOffset + 18);
+  const localUncompressedSize = buffer.readUInt32LE(entry.localHeaderOffset + 22);
+  const nameLength = buffer.readUInt16LE(entry.localHeaderOffset + 26);
+  const extraLength = buffer.readUInt16LE(entry.localHeaderOffset + 28);
+  if (localFlags !== entry.flags || localMethod !== entry.method) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_LOCAL_MISMATCH", "ZIP 本地文件头与中央目录不一致");
+  }
+  const usesDataDescriptor = (entry.flags & 0x0008) !== 0;
+  if (!usesDataDescriptor && (
+    localCrc32 !== entry.expectedCrc32
+    || localCompressedSize !== entry.compressedSize
+    || localUncompressedSize !== entry.uncompressedSize
+  )) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_SIZE_MISMATCH", "ZIP 本地文件大小与中央目录不一致");
+  }
+  if (usesDataDescriptor && (
+    ![0, entry.expectedCrc32].includes(localCrc32)
+    || ![0, entry.compressedSize].includes(localCompressedSize)
+    || ![0, entry.uncompressedSize].includes(localUncompressedSize)
+  )) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_DESCRIPTOR", "ZIP data descriptor 本地声明无效");
+  }
+
+  const headerLength = 30 + nameLength + extraLength;
+  ensureZipRange(buffer, entry.localHeaderOffset, headerLength, entry.upperBound);
+  const localName = normalizeAndValidateZipPath(decodeZipName(
+    buffer.subarray(entry.localHeaderOffset + 30, entry.localHeaderOffset + 30 + nameLength),
+  ));
+  if (localName !== entry.fileName) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_LOCAL_MISMATCH", "ZIP 本地文件名与中央目录不一致");
+  }
+  const dataStart = entry.localHeaderOffset + headerLength;
+  ensureZipRange(buffer, dataStart, entry.compressedSize, entry.upperBound);
+  const compressed = buffer.subarray(dataStart, dataStart + entry.compressedSize);
+  let entryEnd = dataStart + entry.compressedSize;
+  if (usesDataDescriptor) {
+    ensureZipRange(buffer, entryEnd, 12, entry.upperBound);
+    const hasSignature = buffer.readUInt32LE(entryEnd) === 0x08074b50;
+    const descriptorOffset = entryEnd + (hasSignature ? 4 : 0);
+    ensureZipRange(buffer, descriptorOffset, 12, entry.upperBound);
+    const descriptorCrc32 = buffer.readUInt32LE(descriptorOffset);
+    const descriptorCompressedSize = buffer.readUInt32LE(descriptorOffset + 4);
+    const descriptorUncompressedSize = buffer.readUInt32LE(descriptorOffset + 8);
+    if (
+      descriptorCrc32 !== entry.expectedCrc32
+      || descriptorCompressedSize !== entry.compressedSize
+      || descriptorUncompressedSize !== entry.uncompressedSize
+    ) {
+      throw new SkuImportError("SKU_IMPORT_ZIP_DESCRIPTOR", "ZIP data descriptor 与中央目录不一致");
+    }
+    entryEnd = descriptorOffset + 12;
+  }
+  let output;
+  if (entry.method === 0) {
+    output = Buffer.from(compressed);
+  } else {
+    try {
+      output = zlib.inflateRawSync(compressed, {
+        maxOutputLength: SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes,
+      });
+    } catch (error) {
+      if (error?.code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|larger than/i.test(String(error?.message || ""))) {
+        throw new SkuImportError("SKU_IMPORT_ZIP_INFLATE_LIMIT", "ZIP 条目实际解压数据超过允许上限");
+      }
+      throw new SkuImportError("SKU_IMPORT_ZIP_DATA", "ZIP 压缩数据无效");
+    }
+  }
+  if (output.length > SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_INFLATE_LIMIT", "ZIP 条目实际解压数据超过允许上限");
+  }
+  if (output.length !== entry.uncompressedSize) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_SIZE_MISMATCH", "ZIP 条目声明大小与实际解压大小不一致");
+  }
+  if (crc32(output) !== entry.expectedCrc32) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_CRC", "ZIP 条目校验和无效");
+  }
+  return { data: output, start: entry.localHeaderOffset, end: entryEnd };
+}
+
+function ensureZipRange(buffer, offset, length, upperBound = buffer.length) {
+  if (
+    !Number.isSafeInteger(offset)
+    || !Number.isSafeInteger(length)
+    || offset < 0
+    || length < 0
+    || upperBound < 0
+    || upperBound > buffer.length
+    || offset > upperBound
+    || length > upperBound - offset
+  ) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_BOUNDS", "ZIP 结构偏移或长度越界");
+  }
+}
+
+function decodeZipName(buffer) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    throw new SkuImportError("SKU_IMPORT_ZIP_PATH", "ZIP 条目名称不是有效 UTF-8");
+  }
+}
+
+function normalizeAndValidateZipPath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const pathWithoutTrailingSlash = normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  const segments = pathWithoutTrailingSlash.split("/");
+  if (
+    !pathWithoutTrailingSlash
+    || normalized.startsWith("/")
+    || /^[A-Za-z]:/.test(normalized)
+    || /[\0-\x1f\x7f]/.test(normalized)
+    || segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new SkuImportError("SKU_IMPORT_ZIP_PATH", "ZIP 包含不安全或含歧义的条目路径");
+  }
+  return normalized;
+}
+
+function decodeXmlEntry(buffer) {
+  if (!buffer) return "";
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    throw new SkuImportError("SKU_IMPORT_XML_ENCODING", "工作簿 XML 不是有效 UTF-8");
+  }
 }
 
 function parseSharedStrings(xml) {
   if (!xml) return [];
   const strings = [];
   const items = xml.match(/<si\b[\s\S]*?<\/si>/g) || [];
+  if (items.length > SKU_IMPORT_LIMITS.maxSharedStrings) {
+    throw new SkuImportError("SKU_IMPORT_SHARED_STRING_LIMIT", "共享字符串数量超过允许上限");
+  }
+  let totalBytes = 0;
   for (const item of items) {
     const textParts = [...item.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1]));
-    strings.push(textParts.join(""));
+    const value = textParts.join("");
+    totalBytes += Buffer.byteLength(value, "utf8");
+    if (totalBytes > SKU_IMPORT_LIMITS.maxFinalTextBytes) {
+      throw new SkuImportError("SKU_IMPORT_TEXT_TOO_LARGE", "共享字符串文本超过允许大小");
+    }
+    strings.push(value);
   }
   return strings;
 }
 
 function resolveFirstWorksheetName(entries) {
   if (entries.has("xl/workbook.xml") && entries.has("xl/_rels/workbook.xml.rels")) {
-    const workbookXml = entries.get("xl/workbook.xml").toString("utf8");
-    const relsXml = entries.get("xl/_rels/workbook.xml.rels").toString("utf8");
+    const workbookXml = decodeXmlEntry(entries.get("xl/workbook.xml"));
+    const relsXml = decodeXmlEntry(entries.get("xl/_rels/workbook.xml.rels"));
     const sheetMatch = workbookXml.match(/<sheet\b[^>]*r:id="([^"]+)"/);
     if (sheetMatch) {
       const relationship = new RegExp(`<Relationship\\b[^>]*Id="${escapeRegExp(sheetMatch[1])}"[^>]*Target="([^"]+)"`).exec(relsXml);
       if (relationship?.[1]) {
-        const target = relationship[1].replace(/\\/g, "/").replace(/^\/+/, "");
-        return target.startsWith("xl/") ? target : `xl/${target}`;
+        const rawTarget = xmlUnescape(relationship[1]).replace(/\\/g, "/");
+        const packageTarget = rawTarget.startsWith("/") ? rawTarget.slice(1) : rawTarget;
+        const target = packageTarget.startsWith("xl/") ? packageTarget : `xl/${packageTarget}`;
+        return normalizeAndValidateZipPath(target);
       }
     }
   }
@@ -392,13 +731,29 @@ function resolveFirstWorksheetName(entries) {
 function parseWorksheetRows(xml, sharedStrings) {
   const rows = [];
   const rowMatches = xml.match(/<row\b[\s\S]*?<\/row>/g) || [];
+  if (rowMatches.length > SKU_IMPORT_LIMITS.maxWorksheetRows) {
+    throw new SkuImportError("SKU_IMPORT_ROW_LIMIT", "工作表行数超过允许上限");
+  }
+  let totalCells = 0;
   for (const rowXml of rowMatches) {
     const row = [];
     const cellMatches = rowXml.match(/<c\b[\s\S]*?<\/c>/g) || [];
+    totalCells += cellMatches.length;
+    if (totalCells > SKU_IMPORT_LIMITS.maxWorksheetCells) {
+      throw new SkuImportError("SKU_IMPORT_CELL_LIMIT", "工作表单元格数量超过允许上限");
+    }
+    const occupiedColumns = new Set();
     for (const cellXml of cellMatches) {
       const ref = (cellXml.match(/\br="([^"]+)"/) || [])[1] || "";
       const type = (cellXml.match(/\bt="([^"]+)"/) || [])[1] || "";
       const index = ref ? columnIndexFromCellRef(ref) : row.length;
+      if (index >= SKU_IMPORT_LIMITS.maxWorksheetColumns) {
+        throw new SkuImportError("SKU_IMPORT_COLUMN_LIMIT", "工作表列数超过允许上限");
+      }
+      if (occupiedColumns.has(index)) {
+        throw new SkuImportError("SKU_IMPORT_CELL_DUPLICATE", "工作表同一行包含重复单元格引用");
+      }
+      occupiedColumns.add(index);
       row[index] = parseCellValue(cellXml, type, sharedStrings);
     }
     const trimmed = trimTrailingEmptyCells(row);
@@ -413,7 +768,16 @@ function parseCellValue(cellXml, type, sharedStrings) {
     return textParts.join("");
   }
   const value = (cellXml.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || "";
-  if (type === "s") return sharedStrings[Number(value)] || "";
+  if (type === "s") {
+    if (!/^\d+$/.test(value)) {
+      throw new SkuImportError("SKU_IMPORT_SHARED_STRING_INDEX", "共享字符串索引无效");
+    }
+    const index = Number(value);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= sharedStrings.length) {
+      throw new SkuImportError("SKU_IMPORT_SHARED_STRING_INDEX", "共享字符串索引越界");
+    }
+    return sharedStrings[index];
+  }
   return xmlUnescape(value);
 }
 
@@ -647,6 +1011,7 @@ function crc32(buffer) {
 }
 
 module.exports = {
+  SKU_IMPORT_LIMITS,
   buildSkuImportTemplateCsv,
   buildSkuImportTemplateXlsx,
   getSkuImportFieldGuide,

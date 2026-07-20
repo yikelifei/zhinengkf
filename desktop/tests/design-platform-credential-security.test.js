@@ -94,6 +94,100 @@ test("first login preserves its explicit same-origin device id while a cross-ori
   }
 });
 
+test("request security invariants cannot be overridden per request", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "standard_v1",
+      designPlatformBaseUrl: "https://design.example",
+      designPlatformTimeoutMs: 12000,
+      designPlatformAccessToken: "access-secret",
+      designPlatformAccessTokenOrigin: "https://design.example",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "",
+      designPlatformCookieOrigin: "",
+      designPlatformDeviceId: "",
+      designPlatformDeviceIdOrigin: "",
+    });
+    const client = new DesignPlatformClient();
+    client.http.defaults.adapter = captureAdapter(seen, { ok: true });
+
+    await client.http.post("/v1/design-jobs", { prompt: "sensitive body" }, {
+      baseURL: "https://untrusted.example",
+      timeout: 1,
+      maxRedirects: 12,
+    });
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].baseURL, "https://design.example");
+    assert.equal(seen[0].timeout, 12000);
+    assert.equal(seen[0].maxRedirects, 0);
+    assert.equal(header(seen[0], "authorization"), "Bearer access-secret");
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("login, activation and ordinary API POST reject 307/308 without following sensitive bodies", async () => {
+  const previous = snapshotConfig();
+  const cases = [
+    {
+      name: "login cross-origin redirect",
+      adapter: "art_image_local",
+      status: 307,
+      location: "https://untrusted.example/collect-login",
+      invoke: (client) => client.loginArtImageLocal({ email: "test@example.com", password: "secret", deviceId: "device-1" }),
+    },
+    {
+      name: "activation protocol downgrade redirect",
+      adapter: "art_image_local",
+      status: 308,
+      location: "http://design.example/collect-activation",
+      invoke: (client) => client.redeemArtImageLocalActivation({ code: "activation-secret", deviceId: "device-1" }),
+    },
+    {
+      name: "ordinary API private-network redirect",
+      adapter: "standard_v1",
+      status: 307,
+      location: "http://127.0.0.1/internal",
+      invoke: (client) => client.createDesignJob({ prompt: "sensitive prompt" }),
+    },
+  ];
+
+  try {
+    for (const item of cases) {
+      const seen = [];
+      Object.assign(appConfig, {
+        designPlatformAdapter: item.adapter,
+        designPlatformBaseUrl: "https://design.example",
+        designPlatformTimeoutMs: 12000,
+        designPlatformAccessToken: "access-secret",
+        designPlatformAccessTokenOrigin: "https://design.example",
+        designPlatformApiKey: "",
+        designPlatformApiKeyOrigin: "",
+        designPlatformCookie: "session=cookie-secret",
+        designPlatformCookieOrigin: "https://design.example",
+        designPlatformDeviceId: "device-secret",
+        designPlatformDeviceIdOrigin: "https://design.example",
+      });
+      const client = new DesignPlatformClient();
+      client.http.defaults.adapter = redirectAdapter(seen, item.status, item.location);
+
+      await assert.rejects(
+        item.invoke(client),
+        (error) => error?.isAxiosError === true && error?.response?.status === item.status,
+        item.name,
+      );
+      assert.equal(seen.length, 1, `${item.name} must make exactly one request`);
+      assert.equal(seen[0].maxRedirects, 0, `${item.name} must disable redirects`);
+    }
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
 test("restart never binds an environment API key to a runtime-only base URL", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "design-platform-restart-security-"));
   const configPath = path.join(tempDir, "design-platform-config.json");
@@ -133,6 +227,20 @@ function captureAdapter(seen, data) {
   return async (config) => {
     seen.push(config);
     return { data, status: 200, statusText: "OK", headers: {}, config, request: {} };
+  };
+}
+
+function redirectAdapter(seen, status, location) {
+  return async (config) => {
+    seen.push(config);
+    return {
+      data: { redirected: true },
+      status,
+      statusText: "Redirect",
+      headers: { location },
+      config,
+      request: {},
+    };
   };
 }
 

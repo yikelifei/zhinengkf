@@ -133,8 +133,13 @@ const REQUIRED_ARTIFACTS = Object.freeze([
   },
   {
     id: "security.design_platform_credentials",
-    title: "设计平台逐凭据 origin 绑定测试",
+    title: "设计平台逐凭据 origin 与零重定向测试",
     file: "desktop/tests/design-platform-credential-security.test.js",
+  },
+  {
+    id: "security.sku_import_limits",
+    title: "SKU 文本与 XLSX 资源边界测试",
+    file: "desktop/tests/sku-import-file.test.js",
   },
   {
     id: "security.design_platform_callback",
@@ -214,6 +219,30 @@ const CONTRACTS = Object.freeze([
     title: "Excel 解析规则统一导出",
     file: "desktop/packages/rules/index.js",
     patterns: [/\.\.\.require\(["']\.\/skuImport["']\)/],
+  },
+  {
+    id: "contract.excel_import_limits",
+    title: "Excel 导入编码、ZIP 与工作表资源边界",
+    file: "desktop/packages/rules/skuImport.js",
+    patterns: [
+      /SKU_IMPORT_LIMITS/,
+      /function isCanonicalBase64/,
+      /SKU_IMPORT_ZIP_BOUNDS/,
+      /SKU_IMPORT_ZIP64_UNSUPPORTED/,
+      /SKU_IMPORT_ZIP_MULTIDISK/,
+      /SKU_IMPORT_ZIP_ENCRYPTED/,
+      /SKU_IMPORT_ZIP_DESCRIPTOR/,
+      /SKU_IMPORT_ZIP_LOCAL_OVERLAP/,
+      /SKU_IMPORT_ZIP_CRC/,
+      /maxZipEntries/,
+      /maxZipEntryUncompressedBytes/,
+      /maxZipTotalUncompressedBytes/,
+      /maxOutputLength: SKU_IMPORT_LIMITS\.maxZipEntryUncompressedBytes/,
+      /maxSharedStrings/,
+      /maxWorksheetRows/,
+      /maxWorksheetCells/,
+      /maxFinalTextBytes/,
+    ],
   },
   {
     id: "contract.asset_ingestion_limits",
@@ -744,6 +773,17 @@ const CONTRACTS = Object.freeze([
       /designPlatformDeviceIdOrigin/,
       /hasIndependentDesignPlatformCallbackApiKey/,
       /timingSafeEqual/,
+    ],
+  },
+  {
+    id: "contract.design_platform_zero_redirect",
+    title: "设计平台请求不可覆盖的零重定向边界",
+    file: "desktop/apps/api/src/integrations/design-platform/design-platform.client.ts",
+    patterns: [
+      /maxRedirects: 0/,
+      /config\.maxRedirects = 0/,
+      /response\.status >= 300 && response\.status < 400/,
+      /DESIGN_PLATFORM_REDIRECT_BLOCKED/,
     ],
   },
   {

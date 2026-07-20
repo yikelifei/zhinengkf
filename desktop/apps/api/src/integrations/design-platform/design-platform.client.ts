@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import axios, { AxiosInstance } from "axios";
+import axios, { AxiosInstance, AxiosResponse } from "axios";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -95,6 +95,23 @@ const imageMimeByExtension: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+function designPlatformRedirectError(response: AxiosResponse) {
+  const error = new Error("design platform redirect response blocked") as Error & {
+    code: string;
+    config: AxiosResponse["config"];
+    isAxiosError: boolean;
+    request: AxiosResponse["request"];
+    response: AxiosResponse;
+  };
+  error.name = "AxiosError";
+  error.code = "DESIGN_PLATFORM_REDIRECT_BLOCKED";
+  error.config = response.config;
+  error.isAxiosError = true;
+  error.request = response.request;
+  error.response = response;
+  return error;
+}
+
 @Injectable()
 export class DesignPlatformClient {
   private readonly http: AxiosInstance;
@@ -103,10 +120,12 @@ export class DesignPlatformClient {
     this.http = axios.create({
       baseURL: appConfig.designPlatformBaseUrl,
       timeout: appConfig.designPlatformTimeoutMs,
+      maxRedirects: 0,
     });
     this.http.interceptors.request.use((config) => {
       config.baseURL = appConfig.designPlatformBaseUrl;
       config.timeout = appConfig.designPlatformTimeoutMs;
+      config.maxRedirects = 0;
       const headers = config.headers as Record<string, string>;
       const explicitDeviceId =
         typeof (config.headers as any)?.get === "function"
@@ -120,6 +139,12 @@ export class DesignPlatformClient {
       if (credentials.deviceId) headers["x-art-device-id"] = credentials.deviceId;
       else delete headers["x-art-device-id"];
       return config;
+    });
+    this.http.interceptors.response.use((response) => {
+      if (response.status >= 300 && response.status < 400) {
+        throw designPlatformRedirectError(response);
+      }
+      return response;
     });
   }
 

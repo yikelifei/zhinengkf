@@ -36,7 +36,16 @@ function createPassingFixture() {
   }}));
   write(root, "desktop/electron-builder.yml", "asar: true\nextraResources:\n  - from: x\nwin:\n  target: nsis\n");
   write(root, ".github/workflows/windows-quality.yml", "permissions:\n  contents: read\nsteps:\n  persist-credentials: false\n  uses: actions/upload-artifact@v4\n");
-  write(root, "desktop/packages/rules/skuImport.js", "function parseSkuImportFile() {}\nfunction buildSkuImportTemplateXlsx() {}\nmodule.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };\n");
+  write(root, "desktop/packages/rules/skuImport.js", `
+const SKU_IMPORT_LIMITS = {
+  maxZipEntries: 256, maxZipEntryUncompressedBytes: 1, maxZipTotalUncompressedBytes: 1,
+  maxSharedStrings: 1, maxWorksheetRows: 1, maxWorksheetCells: 1, maxFinalTextBytes: 1,
+};
+function isCanonicalBase64() {}
+function parseSkuImportFile() { "SKU_IMPORT_ZIP_BOUNDS"; "SKU_IMPORT_ZIP64_UNSUPPORTED"; "SKU_IMPORT_ZIP_MULTIDISK"; "SKU_IMPORT_ZIP_ENCRYPTED"; "SKU_IMPORT_ZIP_DESCRIPTOR"; "SKU_IMPORT_ZIP_LOCAL_OVERLAP"; "SKU_IMPORT_ZIP_CRC"; maxOutputLength: SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes; }
+function buildSkuImportTemplateXlsx() {}
+module.exports={ parseSkuImportFile, buildSkuImportTemplateXlsx, };
+`);
   write(root, "desktop/packages/rules/index.js", "module.exports={...require('./skuImport')};\n");
   write(root, "desktop/apps/api/src/wechat/wechat-persistence.ts", 'if (this.isLocal) {}\nwechatWorkBinding; wechatWorkAuditLog; wechatSendTask;\n{ action: "inbound_processed", status: "processed" };\n{ action: "inbound_failed", status: "permanent_manual_review" };\nwechatWorkSyncCursor.updateMany();\ncompleteAttemptAndTask(); linkedTransition; tx.wechatSendTask.updateMany(); tx.wechatSendAttempt.update(); if (linked.count !== 1) throw new Error(); updateSendTaskWithLinkedTransition();\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work.service.ts", "activeCursorSyncs; getWechatWorkSyncCursor(); expectedCursor: cursor; permanent_manual_review; cursorScopeMismatch;\n");
@@ -127,7 +136,7 @@ function isResumableCompletedExecution(execution) {
 "explicit confirmed_not_generated_refunded resolution and reviewer are required";
 "design platform execution outcome requires explicit manual resolution before retry";
 `);
-  write(root, "desktop/apps/api/src/integrations/design-platform/design-platform.client.ts", 'requestId: externalJobId; MALFORMED_SUCCESS_RESPONSE; ECONNABORTED; ECONNRESET; Number(error.response?.status || 0) >= 500; art_image_local results must be read from durable execution;\n');
+  write(root, "desktop/apps/api/src/integrations/design-platform/design-platform.client.ts", 'requestId: externalJobId; MALFORMED_SUCCESS_RESPONSE; ECONNABORTED; ECONNRESET; Number(error.response?.status || 0) >= 500; art_image_local results must be read from durable execution; maxRedirects: 0; config.maxRedirects = 0; response.status >= 300 && response.status < 400; DESIGN_PLATFORM_REDIRECT_BLOCKED;\n');
   write(root, "desktop/apps/web/src/lib/desktop-session-proof.ts", 'DESKTOP_SESSION_COOKIE; timingSafeEqual(); requiresDesktopSessionProof(); return true; headers.delete("cookie"); headers.set(internalApiTokenHeader, internalApiToken);\n');
   write(root, "desktop/apps/api/src/shared/app-config.ts", 'DESIGN_PLATFORM_ALLOWED_ORIGINS; designPlatformAccessTokenOrigin; designPlatformCookieOrigin; designPlatformApiKeyOrigin; designPlatformDeviceIdOrigin; hasIndependentDesignPlatformCallbackApiKey(); timingSafeEqual();\n');
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", `
@@ -1034,4 +1043,34 @@ test("documentation keeps Excel, Prisma, packaging, CI, recovery and image hash 
   assert.match(designContract, /DNS rebinding.*Content-Disposition.*realpath.*不再作为“部署侧未决”项冒充已完成/s);
   assert.doesNotMatch(designContract, /私网地址、DNS 重绑定.*仍需要部署负责人/);
   assert.doesNotMatch(readme, /Excel 文件解析导入。\s*$/m);
+});
+
+test("completion audit requires zero redirects and bounded SKU workbook parsing", () => {
+  const baselineRoot = createPassingFixture();
+  let report = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.design_platform_zero_redirect").status, STATUS.PASS);
+  assert.equal(report.results.find((item) => item.id === "contract.excel_import_limits").status, STATUS.PASS);
+
+  const redirectRoot = createPassingFixture();
+  const clientPath = path.join(redirectRoot, "desktop", "apps", "api", "src", "integrations", "design-platform", "design-platform.client.ts");
+  fs.writeFileSync(
+    clientPath,
+    fs.readFileSync(clientPath, "utf8").replace("config.maxRedirects = 0", "config.maxRedirects = config.maxRedirects"),
+    "utf8",
+  );
+  report = buildAudit(redirectRoot, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.design_platform_zero_redirect").status, STATUS.FAIL);
+
+  const importRoot = createPassingFixture();
+  const importPath = path.join(importRoot, "desktop", "packages", "rules", "skuImport.js");
+  fs.writeFileSync(
+    importPath,
+    fs.readFileSync(importPath, "utf8").replace(
+      "maxOutputLength: SKU_IMPORT_LIMITS.maxZipEntryUncompressedBytes",
+      "maxOutputLength: Infinity",
+    ),
+    "utf8",
+  );
+  report = buildAudit(importRoot, { includeExternal: false });
+  assert.equal(report.results.find((item) => item.id === "contract.excel_import_limits").status, STATUS.FAIL);
 });

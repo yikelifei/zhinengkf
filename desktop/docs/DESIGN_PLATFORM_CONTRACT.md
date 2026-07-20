@@ -16,6 +16,12 @@ Authorization: Bearer <DESIGN_PLATFORM_API_KEY>
 Authorization: Bearer <DESIGN_PLATFORM_CALLBACK_API_KEY>
 ```
 
+## 请求传输边界
+
+- 客服平台的设计平台 Axios 实例默认固定 `maxRedirects=0`，请求拦截器会在每次发送前再次写回该值；调用方传入的 per-request 配置不能放开重定向，也不能覆盖受信 `baseURL` 和统一超时。
+- 任意 `300-399` 响应都以 `DESIGN_PLATFORM_REDIRECT_BLOCKED` 显式失败。客户端不会自动跟随 `Location`，因此登录密码、激活码、access token、cookie、device id 与普通 POST body 不会跨 origin、跨协议或被转发到私网目标。
+- 合法的普通 API 仍按下文相对路径请求已配置 origin；供应方如需迁移地址，必须先显式更新并重新校验设计平台配置，不能依赖 HTTP 重定向。
+
 ## 设计平台需要提供
 
 ### 健康检查
