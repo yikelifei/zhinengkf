@@ -12,6 +12,7 @@ files:
   - apps/electron/packaged-runtime.js
   - packages/runtime/service-environment.js
   - package.json
+  - .package-provenance.json
   - '!.env'
   - '!.env.*'
   - '!.runtime/**'

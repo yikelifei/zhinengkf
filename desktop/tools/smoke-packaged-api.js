@@ -9,6 +9,7 @@ const {
   validateApiHealthResponse,
   validateExactHttp200,
   validateWebOverviewResponse,
+  desktopSessionCookieHeader,
 } = require("../apps/electron/packaged-runtime");
 
 const root = path.resolve(__dirname, "..");
@@ -103,7 +104,7 @@ async function main() {
       throw new Error(`packaged Web API proxy did not fail closed without Electron proof (${proxyHealth.statusCode})`);
     }
     const authenticatedProxyHealth = await requestUrl(proxyHealthUrl, {
-      headers: { Cookie: `smart_kefu_desktop_session=${desktopWebSessionProof}` },
+      headers: { Cookie: desktopSessionCookieHeader(desktopWebSessionProof) },
     });
     if (authenticatedProxyHealth.statusCode !== 200 || !validateApiHealthResponse(authenticatedProxyHealth)) {
       throw new Error(`packaged Web API proxy did not reach the API with valid Electron proof (${authenticatedProxyHealth.statusCode})`);

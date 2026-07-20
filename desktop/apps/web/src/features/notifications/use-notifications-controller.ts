@@ -32,9 +32,6 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
       const next = await getNotifications(unreadOnly, filters);
       if (sequence !== refreshSequence.current) return;
       setNotifications(next);
-      if (!next.length) {
-        setError("通知接口返回空结果；当前客户端无法区分真实空列表与读取失败，因此未将其视为已全部处理。");
-      }
     } catch (caught) {
       if (sequence === refreshSequence.current) {
         setError(caught instanceof Error ? caught.message : "通知读取失败。");

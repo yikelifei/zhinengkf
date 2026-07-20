@@ -3,9 +3,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  PACKAGE_PROVENANCE_SCHEMA_VERSION,
+  assertCleanRepository,
+} = require("./repository-provenance");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
+const packageProvenanceFile = path.join(root, ".package-provenance.json");
 const args = new Set(process.argv.slice(2));
 const directoryOnly = args.has("--dir");
 const signed = args.has("--signed");
@@ -17,6 +22,7 @@ function main() {
   if (signed && !hasSigningIdentity()) {
     fail("Signed packaging requires CSC_LINK or WIN_CSC_SUBJECT_NAME; refusing to create an unsigned release artifact.");
   }
+  const initialRepositoryState = requireCleanRepository();
 
   cleanOutputDirectory();
   runNpm(["run", "prisma:generate"]);
@@ -26,25 +32,59 @@ function main() {
     ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "1",
   });
   assertBuildInputs();
-
-  const builderArgs = ["exec", "--", "electron-builder", "--win"];
-  if (!directoryOnly) builderArgs.push("nsis");
-  builderArgs.push("--x64", "--publish", "never");
-  if (directoryOnly) builderArgs.push("--dir");
-  if (process.env.WIN_CSC_SUBJECT_NAME) {
-    builderArgs.push(`--config.win.certificateSubjectName=${process.env.WIN_CSC_SUBJECT_NAME}`);
+  const packageRepositoryState = requireCleanRepository();
+  if (packageRepositoryState.revision !== initialRepositoryState.revision) {
+    fail("Repository HEAD changed while preparing the package; restart from a stable clean revision.");
   }
-  runNpm(builderArgs, {
-    ELECTRON_BUILDER_CACHE: path.join(root, ".package-cache", "electron-builder"),
-    ...(signed ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: "false" }),
-  });
+  writePackageProvenance(packageRepositoryState);
+  process.once("exit", removePackageProvenance);
 
-  runNode(["tools/smoke-packaged-api.js"]);
-  runNode([
-    "tools/verify-windows-package.js",
-    ...(signed ? ["--require-signed"] : ["--expect-unsigned"]),
-    ...(directoryOnly ? ["--dir-only"] : []),
-  ]);
+  try {
+    const builderArgs = ["exec", "--", "electron-builder", "--win"];
+    if (!directoryOnly) builderArgs.push("nsis");
+    builderArgs.push("--x64", "--publish", "never");
+    if (directoryOnly) builderArgs.push("--dir");
+    if (process.env.WIN_CSC_SUBJECT_NAME) {
+      builderArgs.push(`--config.win.certificateSubjectName=${process.env.WIN_CSC_SUBJECT_NAME}`);
+    }
+    runNpm(builderArgs, {
+      ELECTRON_BUILDER_CACHE: path.join(root, ".package-cache", "electron-builder"),
+      ...(signed ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: "false" }),
+    });
+
+    runNode(["tools/smoke-packaged-api.js"]);
+    runNode([
+      "tools/verify-windows-package.js",
+      ...(signed ? ["--require-signed"] : ["--expect-unsigned"]),
+      ...(directoryOnly ? ["--dir-only"] : []),
+    ]);
+  } finally {
+    removePackageProvenance();
+  }
+}
+
+function requireCleanRepository() {
+  try {
+    return assertCleanRepository({ repositoryRoot: path.resolve(root, "..") });
+  } catch {
+    fail("Windows packaging requires a clean Git worktree and a readable complete HEAD revision.");
+  }
+}
+
+function writePackageProvenance(repositoryState) {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const manifest = {
+    schemaVersion: PACKAGE_PROVENANCE_SCHEMA_VERSION,
+    repositoryRevision: repositoryState.revision,
+    repositoryClean: repositoryState.clean === true,
+    packageVersion: packageJson.version,
+    generatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(packageProvenanceFile, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+function removePackageProvenance() {
+  fs.rmSync(packageProvenanceFile, { force: true });
 }
 
 function hasSigningIdentity() {

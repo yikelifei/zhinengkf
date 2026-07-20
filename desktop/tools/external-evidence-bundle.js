@@ -11,7 +11,7 @@ const EXIT_CODE = Object.freeze({ PASS: 0, BLOCKED: 2, FAIL: 1 });
 const EXPECTED_SCHEMAS = Object.freeze({
   staging: "smart_kefu_staging_readiness_v2",
   recovery: "smart_kefu_database_recovery_rehearsal_v2",
-  windows: "smart_kefu_windows_package_verification_v2",
+  windows: "smart_kefu_windows_package_verification_v3",
 });
 const MAX_AGE_MS = Object.freeze({
   staging: 24 * 60 * 60 * 1000,
@@ -32,13 +32,14 @@ const RECOVERY_REQUIRED_RESULT_IDS = Object.freeze([
   "evidence.consistency", "rehearsal.execution",
 ]);
 const WINDOWS_REQUIRED_CHECKS = Object.freeze([
+  "repository worktree clean",
   "unpacked application", "Windows executable entry", "application asar", "packaged API entry",
   "packaged API storage code", "packaged Web entry", "packaged rules entry", "packaged window observer",
   "packaged placeholder-only AI settings", "packaged Prisma client", "packaged generated Prisma client",
   "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "packaged API smoke",
   "asar entry /apps/electron/main.js", "asar entry /apps/electron/preload.js",
-  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json",
-  "asar sensitive top-level paths", "packaged metadata", "resource sensitive-file scan", "Authenticode signing",
+  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json", "asar entry /.package-provenance.json",
+  "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ]);
 
 function result(id, title, status, summary, evidence = {}) {
@@ -251,6 +252,7 @@ function inspectWindows(loaded, currentRevision, nowMs) {
   const signatureFiles = new Set(signatures.map((item) => item?.file));
   const valid = validArtifact(state.report.installer)
     && validArtifact(state.report.executable)
+    && state.report.repositoryClean === true
     && signatures.length === artifactFiles.length
     && signatures.every((item) => typeof item?.file === "string" && item.file.trim() && item.status === "Valid")
     && artifactFiles.every((file) => signatureFiles.has(file))

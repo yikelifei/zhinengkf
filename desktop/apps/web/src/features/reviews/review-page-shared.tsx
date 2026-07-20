@@ -26,12 +26,7 @@ export function useReviewCenter(identityFilters?: IdentityFilters) {
     try {
       const nextCenter = await getReviewCenter(stableIdentityFilters);
       if (sequence !== refreshSequence.current) return;
-      if (!nextCenter.designJobs.length && !nextCenter.quoteDrafts.length && !nextCenter.orderDrafts.length && !nextCenter.logs.length) {
-        setCenter(null);
-        setError("审核接口返回空结果；当前客户端无法区分真实空队列与读取失败，未将其视为全部审核完成。");
-      } else {
-        setCenter(nextCenter);
-      }
+      setCenter(nextCenter);
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
       setCenter(null);

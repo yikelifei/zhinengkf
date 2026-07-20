@@ -28,13 +28,14 @@ const RECOVERY_PREFIX_RESULTS = [
   "tools.inventory", "tools.versions",
 ];
 const WINDOWS_CHECKS = [
+  "repository worktree clean",
   "unpacked application", "Windows executable entry", "application asar", "packaged API entry",
   "packaged API storage code", "packaged Web entry", "packaged rules entry", "packaged window observer",
   "packaged placeholder-only AI settings", "packaged Prisma client", "packaged generated Prisma client",
   "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "packaged API smoke",
   "asar entry /apps/electron/main.js", "asar entry /apps/electron/preload.js",
-  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json",
-  "asar sensitive top-level paths", "packaged metadata", "resource sensitive-file scan", "Authenticode signing",
+  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json", "asar entry /.package-provenance.json",
+  "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ];
 
 function temporaryDirectory(t) {
@@ -86,8 +87,9 @@ function reports() {
       ],
     },
     windows: {
-      schemaVersion: "smart_kefu_windows_package_verification_v2",
+      schemaVersion: "smart_kefu_windows_package_verification_v3",
       repositoryRevision: REVISION,
+      repositoryClean: true,
       generatedAt: "2026-07-20T10:00:00.000Z",
       status: "PASS",
       verificationProfile: "signed-release",
@@ -203,6 +205,16 @@ test("forged PASS cannot omit fixed staging results or Windows checks", (t) => {
   const report = validate(root);
   assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.staging").status, STATUS.FAIL);
+  assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
+});
+
+test("signed package evidence requires clean repository provenance", (t) => {
+  const root = temporaryDirectory(t);
+  const values = reports();
+  values.windows.repositoryClean = false;
+  writeReports(root, values);
+  const report = validate(root);
+  assert.equal(report.status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "evidence.windows_package").status, STATUS.FAIL);
 });
 

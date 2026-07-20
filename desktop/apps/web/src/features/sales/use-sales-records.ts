@@ -21,7 +21,7 @@ export function useSalesQuotes(quoteId = "") {
     try {
       const rows = await getQuotes();
       setRecords(rows);
-      setAmbiguousEmpty(rows.length === 0);
+      setAmbiguousEmpty(false);
       if (quoteId && !rows.some((row) => row.id === quoteId)) {
         setError(`未找到报价 ${quoteId}，请返回报价列表重新选择。`);
       }
@@ -60,7 +60,7 @@ export function useSalesOrders(orderId = "") {
     try {
       const rows = await getOrderDrafts();
       setRecords(rows);
-      setAmbiguousEmpty(rows.length === 0);
+      setAmbiguousEmpty(false);
       if (orderId && !rows.some((row) => row.id === orderId)) {
         setError(`未找到订单 ${orderId}，请返回订单列表重新选择。`);
       }

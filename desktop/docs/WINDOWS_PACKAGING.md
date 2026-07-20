@@ -58,7 +58,7 @@ npm.cmd run package:win:signed
 
 报告写入 `release/windows/verification/latest.{json,md}`。
 
-报告 schema 为 `smart_kefu_windows_package_verification_v2`，JSON 和 Markdown 都记录完整 Git `repositoryRevision` 与 `verificationProfile`。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。无法读取合法 Git revision 时失败关闭。外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，且安装器/主程序 SHA-256、包内容检查和 Authenticode 必须齐全。
+报告 schema 为 `smart_kefu_windows_package_verification_v3`，JSON 和 Markdown 都记录完整 Git `repositoryRevision`、`repositoryClean` 与 `verificationProfile`。打包在构建前及调用 electron-builder 前各检查一次 Git worktree；dirty、无 Git 或期间 HEAD 变化都会失败。构建工具生成临时 `.package-provenance.json` 并收入 asar，验证时要求其中的 revision、clean 标记和版本与当前干净 HEAD 完全一致，完成后删除临时文件。`package:win:signed` 使用 `signed-release`；未签名测试包使用 `unsigned-test`；仅检查目录内容时使用 `content-only`。外部证据包只接受当前 `HEAD`、7 天内生成、状态为 `PASS` 的 `signed-release`，且安装器/主程序 SHA-256、包内 provenance、内容检查和 Authenticode 必须齐全。
 
 即使 `signed-release` 报告通过，SmartScreen reputation、目标机安装/卸载和人工启动仍不在该报告结构内，必须继续作为人工 `BLOCKED` 补证；未签名报告绝不能满足正式签名项。
 

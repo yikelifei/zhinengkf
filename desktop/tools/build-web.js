@@ -87,10 +87,8 @@ function main() {
     return;
   }
   if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) {
-    writeStableStandaloneServer();
-    run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
-    buildDiagnostic("after stable standalone sync");
-    return;
+    console.log("[warn] Completed Next output has no standalone server; forcing a clean rebuild.");
+    resetNextBuildState({ force: true });
   }
   if (fs.existsSync(nextDir) && !productionBuildReady()) {
     resetNextBuildState({ force: true });
@@ -174,10 +172,6 @@ function runNextBuild() {
   if (result.status === 0) waitForBuildOutputReady(60);
   buildDiagnostic("after next build command");
   if (result.status === 0 && !hasNextBuildErrorOutput(result) && !webBuildIsStale() && standaloneServerExists()) return;
-  if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale()) {
-    writeStableStandaloneServer();
-    return;
-  }
   if (result.status !== 0 && !isRetryableNextBuildRace(result) && !hasNextBuildErrorOutput(result)) process.exit(result.status || 1);
   console.log("[warn] Next build failed or exited before standalone output was complete; retrying once with a clean build state.");
   terminateProjectNextBuildPids();
@@ -191,8 +185,7 @@ function runNextBuild() {
   buildDiagnostic("after next build retry command");
   if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && !webBuildIsStale() && standaloneServerExists()) return;
   if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) {
-    writeStableStandaloneServer();
-    return;
+    console.error("[build] Next completed without standalone output; refusing to synthesize a source-bound server wrapper.");
   }
   process.exit(retry.status || 1);
 }
@@ -267,36 +260,6 @@ function resetNextBuildState(options = {}) {
   buildDiagnostic(`removing ${path.relative(root, nextDir)}`);
   removeDirectoryWithRetry(nextDir);
   console.log(`[build] Removed previous Next build directory: ${path.relative(root, nextDir)}`);
-}
-
-function writeStableStandaloneServer() {
-  const standaloneWebRoot = path.join(nextDir, "standalone", "apps", "web");
-  const serverPath = path.join(standaloneWebRoot, "server.js");
-  fs.mkdirSync(standaloneWebRoot, { recursive: true });
-  fs.writeFileSync(
-    serverPath,
-    `"use strict";\n` +
-      `const path = require("node:path");\n` +
-      `const root = path.resolve(__dirname, "..", "..", "..", "..", "..", "..");\n` +
-      `const requiredServerFiles = require(path.join(root, "apps", "web", ".next", "required-server-files.json"));\n` +
-      `const dir = __dirname;\n` +
-      `const currentPort = parseInt(process.env.PORT, 10) || 3100;\n` +
-      `const hostname = process.env.HOSTNAME || "127.0.0.1";\n` +
-      `let keepAliveTimeout = parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10);\n` +
-      `const keepAlive = setInterval(() => undefined, 60000);\n` +
-      `keepAlive.ref();\n` +
-      `process.env.NODE_ENV = "production";\n` +
-      `process.chdir(__dirname);\n` +
-      `const nextConfig = { ...requiredServerFiles.config, distDir: "./.next" };\n` +
-      `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(nextConfig);\n` +
-      `require("next");\n` +
-      `const { startServer } = require("next/dist/server/lib/start-server");\n` +
-      `if (Number.isNaN(keepAliveTimeout) || !Number.isFinite(keepAliveTimeout) || keepAliveTimeout < 0) keepAliveTimeout = undefined;\n` +
-      `startServer({ dir, isDev: false, config: nextConfig, hostname, port: currentPort, allowRetry: false, keepAliveTimeout })\n` +
-      `  .catch((error) => { console.error(error); clearInterval(keepAlive); process.exit(1); });\n`,
-    "utf8",
-  );
-  console.log(`[warn] Native Next standalone output was not emitted; wrote stable startServer wrapper: ${path.relative(root, serverPath)}`);
 }
 
 function removeDirectoryWithRetry(target) {

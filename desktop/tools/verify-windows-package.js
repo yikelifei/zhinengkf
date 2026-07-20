@@ -5,11 +5,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const asar = require("@electron/asar");
-const { resolveRepositoryRevision } = require("./repository-provenance");
+const {
+  PACKAGE_PROVENANCE_SCHEMA_VERSION,
+  resolveRepositoryState,
+} = require("./repository-provenance");
 
 const root = path.resolve(__dirname, "..");
 const outputDir = path.join(root, "release", "windows");
-const SCHEMA_VERSION = "smart_kefu_windows_package_verification_v2";
+const SCHEMA_VERSION = "smart_kefu_windows_package_verification_v3";
 
 if (require.main === module) main();
 
@@ -29,17 +32,25 @@ function main() {
 
 function verifyWindowsPackage(options) {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  const repositoryRevision = resolveRepositoryRevision({
+  const repositoryState = resolveRepositoryState({
     repositoryRoot: path.resolve(root, ".."),
     ...(options.repositoryRevision !== undefined ? { repositoryRevision: options.repositoryRevision } : {}),
+    ...(options.repositoryClean !== undefined ? { repositoryClean: options.repositoryClean } : {}),
     ...(options.runGitCommand ? { runCommand: options.runGitCommand } : {}),
   });
+  const repositoryRevision = repositoryState.revision;
   const unpackedDir = path.join(options.outputDir, "win-unpacked");
   const resourcesDir = path.join(unpackedDir, "resources");
   const asarPath = path.join(resourcesDir, "app.asar");
   const executable = path.join(unpackedDir, "Smart Kefu.exe");
   const installer = findInstaller(options.outputDir, packageJson.version);
   const checks = [];
+
+  checks.push({
+    name: "repository worktree clean",
+    status: repositoryState.clean ? "PASS" : "FAIL",
+    detail: repositoryState.clean ? "Git worktree was clean when package verification started." : "Git worktree is dirty; package provenance cannot be bound to HEAD.",
+  });
 
   checkExists(checks, "unpacked application", unpackedDir);
   checkExists(checks, "Windows executable entry", executable);
@@ -64,7 +75,7 @@ function verifyWindowsPackage(options) {
   });
 
   if (fs.existsSync(asarPath)) {
-    verifyAsar(checks, asarPath, packageJson.version);
+    verifyAsar(checks, asarPath, packageJson.version, repositoryState);
   }
   if (fs.existsSync(resourcesDir)) verifySensitiveFiles(checks, resourcesDir);
 
@@ -89,6 +100,7 @@ function verifyWindowsPackage(options) {
   return {
     schemaVersion: SCHEMA_VERSION,
     repositoryRevision,
+    repositoryClean: repositoryState.clean,
     status: failed ? "FAIL" : checks.some((item) => item.status === "BLOCKED") ? "BLOCKED" : "PASS",
     generatedAt: new Date().toISOString(),
     version: packageJson.version,
@@ -101,9 +113,9 @@ function verifyWindowsPackage(options) {
   };
 }
 
-function verifyAsar(checks, asarPath, expectedVersion) {
+function verifyAsar(checks, asarPath, expectedVersion, repositoryState) {
   const entries = asar.listPackage(asarPath).map(normalizeArchivePath);
-  for (const required of ["/apps/electron/main.js", "/apps/electron/preload.js", "/apps/electron/packaged-runtime.js", "/package.json"]) {
+  for (const required of ["/apps/electron/main.js", "/apps/electron/preload.js", "/apps/electron/packaged-runtime.js", "/package.json", "/.package-provenance.json"]) {
     checks.push({
       name: `asar entry ${required}`,
       status: entries.includes(required) ? "PASS" : "FAIL",
@@ -127,6 +139,38 @@ function verifyAsar(checks, asarPath, expectedVersion) {
   } catch (error) {
     checks.push({ name: "packaged metadata", status: "FAIL", detail: error.message });
   }
+  try {
+    const manifest = JSON.parse(asar.extractFile(asarPath, ".package-provenance.json").toString("utf8"));
+    const provenance = validatePackageProvenance(manifest, {
+      repositoryRevision: repositoryState.revision,
+      repositoryClean: repositoryState.clean,
+      packageVersion: expectedVersion,
+    });
+    checks.push({
+      name: "packaged repository provenance",
+      status: provenance.valid ? "PASS" : "FAIL",
+      detail: provenance.detail,
+    });
+  } catch {
+    checks.push({ name: "packaged repository provenance", status: "FAIL", detail: "Package provenance manifest is missing or invalid." });
+  }
+}
+
+function validatePackageProvenance(manifest, expected) {
+  const generatedAtMs = Date.parse(String(manifest?.generatedAt || ""));
+  const valid = manifest?.schemaVersion === PACKAGE_PROVENANCE_SCHEMA_VERSION
+    && manifest?.repositoryRevision === expected.repositoryRevision
+    && manifest?.repositoryClean === true
+    && expected.repositoryClean === true
+    && manifest?.packageVersion === expected.packageVersion
+    && Number.isFinite(generatedAtMs)
+    && generatedAtMs <= Date.now() + 5 * 60 * 1000;
+  return {
+    valid,
+    detail: valid
+      ? `schema=${PACKAGE_PROVENANCE_SCHEMA_VERSION}, revision=${expected.repositoryRevision}, clean=true, version=${expected.packageVersion}`
+      : "Package provenance does not match the verified clean HEAD and package version.",
+  };
 }
 
 function verifySensitiveFiles(checks, resourcesDir) {
@@ -230,6 +274,7 @@ function writeReport(result, directory) {
     `- Version: \`${result.version}\``,
     `- Generated: ${result.generatedAt}`,
     `- Repository revision: \`${result.repositoryRevision}\``,
+    `- Repository clean: \`${result.repositoryClean}\``,
     `- Verification profile: \`${result.verificationProfile}\``,
     ...(result.installer ? [`- Installer: \`${result.installer.file}\``, `- Installer SHA-256: \`${result.installer.sha256}\``] : []),
     "",
@@ -249,5 +294,6 @@ module.exports = {
   isForbiddenArchivePath,
   isForbiddenResourcePath,
   normalizeArchivePath,
+  validatePackageProvenance,
   verifyWindowsPackage,
 };

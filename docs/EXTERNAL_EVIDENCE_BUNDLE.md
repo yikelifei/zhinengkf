@@ -8,7 +8,7 @@
 
 - `smart_kefu_staging_readiness_v2`：必须来自显式 `staging:readiness -- --execute`，最长有效 24 小时。
 - `smart_kefu_database_recovery_rehearsal_v2`：必须来自完成的隔离恢复演练，最长有效 30 天。
-- `smart_kefu_windows_package_verification_v2`：正式包证据最长有效 7 天，且 `verificationProfile=signed-release`、安装器和主程序签名均为 `Valid`。
+- `smart_kefu_windows_package_verification_v3`：正式包证据最长有效 7 天，且 `verificationProfile=signed-release`、`repositoryClean=true`、包内 provenance 与当前 revision/版本一致，安装器和主程序签名均为 `Valid`。
 
 旧 schema、缺失或非法 revision、非当前 `HEAD`、过期或未来时间、非 `PASS` 状态都不会被当作有效证据。声明 `PASS` 却缺少安全字段、恢复一致性、SHA-256、包内容或 Authenticode 检查的报告会记为 `FAIL`。输入包含密钥值时只报告失败，不复制该值。
 

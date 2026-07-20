@@ -2067,23 +2067,15 @@ export async function getSkuChangeLogs(limit = 30, skuCode?: string): Promise<Sk
 }
 
 export async function getAgents(filters: IdentityFilters = {}): Promise<Agent[]> {
-  try {
-    const response = await fetch(`${API_BASE}/agents${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/agents${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getChatImports(filters: IdentityFilters = {}): Promise<ChatImport[]> {
-  try {
-    const response = await fetch(`${API_BASE}/training/chat-imports${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/training/chat-imports${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getTrainingSamples(filters: {
@@ -2094,34 +2086,26 @@ export async function getTrainingSamples(filters: {
   importId?: string;
   limit?: number;
 } & IdentityFilters = {}): Promise<TrainingSample[]> {
-  try {
-    const params = new URLSearchParams();
-    if (filters.agentId) params.set("agentId", filters.agentId);
-    if (filters.quality) params.set("quality", filters.quality);
-    if (filters.status) params.set("status", filters.status);
-    if (filters.sourceType) params.set("sourceType", filters.sourceType);
-    if (filters.importId) params.set("importId", filters.importId);
-    if (filters.limit) params.set("limit", String(filters.limit));
-    if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
-    if (filters.conversationId) params.set("conversationId", filters.conversationId);
-    if (filters.customerId) params.set("customerId", filters.customerId);
-    const query = params.toString();
-    const response = await fetch(`${API_BASE}/training/samples${query ? `?${query}` : ""}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const params = new URLSearchParams();
+  if (filters.agentId) params.set("agentId", filters.agentId);
+  if (filters.quality) params.set("quality", filters.quality);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.sourceType) params.set("sourceType", filters.sourceType);
+  if (filters.importId) params.set("importId", filters.importId);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  if (filters.wechatAccountId) params.set("wechatAccountId", filters.wechatAccountId);
+  if (filters.conversationId) params.set("conversationId", filters.conversationId);
+  if (filters.customerId) params.set("customerId", filters.customerId);
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/training/samples${query ? `?${query}` : ""}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getTrainingOverview(filters: IdentityFilters = {}): Promise<TrainingOverview | null> {
-  try {
-    const response = await fetch(`${API_BASE}/training/overview${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(`${API_BASE}/training/overview${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function reviewTrainingSample(
@@ -2310,37 +2294,25 @@ export async function setConversationManualLock(
 }
 
 export async function getSendTasks(filters: IdentityFilters = {}): Promise<SendTask[]> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/send-tasks${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/wechat/send-tasks${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getSendAttempts(sendTaskId?: string, filters: IdentityFilters = {}): Promise<SendAttempt[]> {
-  try {
-    const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
-    if (sendTaskId) params.set("sendTaskId", sendTaskId);
-    const query = params.toString();
-    const suffix = query ? `?${query}` : "";
-    const response = await fetch(`${API_BASE}/wechat/send-attempts${suffix}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+  if (sendTaskId) params.set("sendTaskId", sendTaskId);
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  const response = await fetch(`${API_BASE}/wechat/send-attempts${suffix}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getSendAdapter(): Promise<SendAdapterInfo | null> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/send-adapter`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(`${API_BASE}/wechat/send-adapter`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getBridgeOutbox(filters: IdentityFilters = {}): Promise<BridgeOutboxResult> {
@@ -2363,19 +2335,22 @@ export async function getBridgeDispatch(filters: IdentityFilters = {}): Promise<
 
 export async function getWechatChannelStatus(filters: IdentityFilters = {}): Promise<WechatChannelStatus | null> {
   const url = `${API_BASE}/wechat/channels/status${identityQuery(filters)}`;
+  let lastError: unknown = new Error("微信渠道状态响应缺少必要字段");
   for (let attempt = 0; attempt <= WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`api ${response.status}`);
       const status = await response.json();
       if (status && Array.isArray(status.channels) && status.summary) return status;
-    } catch {
-      // The web app can render before the API port is ready; retry briefly before surfacing the empty state.
+      lastError = new Error("微信渠道状态响应缺少必要字段");
+    } catch (error) {
+      lastError = error;
+      // The web app can render before the API port is ready; retry briefly before surfacing the real failure.
     }
     const delayMs = WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS[attempt];
     if (delayMs) await sleepApi(delayMs);
   }
-  return null;
+  throw lastError;
 }
 
 export async function testWechatChannelInbound(
@@ -2412,13 +2387,9 @@ export async function scanBridgeInbox(): Promise<BridgeInboxScanResult> {
 }
 
 export async function getWechatWindowSnapshots(filters: IdentityFilters = {}): Promise<WechatWindowSnapshot[]> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/window-snapshots${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/wechat/window-snapshots${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function createDemoWindowSnapshot(
@@ -2540,13 +2511,9 @@ export async function processSafeSendQueue(filters: IdentityFilters = {}): Promi
 }
 
 export async function getRouteEvaluations(filters: IdentityFilters = {}): Promise<RouteEvaluation[]> {
-  try {
-    const response = await fetch(`${API_BASE}/routing/evaluations${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/routing/evaluations${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function evaluateRoute(text: string, filters: IdentityFilters = {}): Promise<RouteEvaluation> {
@@ -2591,21 +2558,17 @@ export async function importChatTranscript(payload: {
 }
 
 export async function getSkillSuggestions(filters: ({ agentId?: string; minScore?: number } & IdentityFilters) | string = {}): Promise<SkillSuggestion[]> {
-  try {
-    const options = typeof filters === "string" ? { agentId: filters } : filters;
-    const params = new URLSearchParams();
-    if (options.agentId) params.set("agentId", options.agentId);
-    if (options.minScore) params.set("minScore", String(options.minScore));
-    if (options.wechatAccountId) params.set("wechatAccountId", options.wechatAccountId);
-    if (options.conversationId) params.set("conversationId", options.conversationId);
-    if (options.customerId) params.set("customerId", options.customerId);
-    const query = params.toString();
-    const response = await fetch(`${API_BASE}/training/skill-suggestions${query ? `?${query}` : ""}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const options = typeof filters === "string" ? { agentId: filters } : filters;
+  const params = new URLSearchParams();
+  if (options.agentId) params.set("agentId", options.agentId);
+  if (options.minScore) params.set("minScore", String(options.minScore));
+  if (options.wechatAccountId) params.set("wechatAccountId", options.wechatAccountId);
+  if (options.conversationId) params.set("conversationId", options.conversationId);
+  if (options.customerId) params.set("customerId", options.customerId);
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/training/skill-suggestions${query ? `?${query}` : ""}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function applySkillSuggestions(
@@ -2935,23 +2898,15 @@ function automationRunIdentity(run: AutomationRun) {
 }
 
 export async function getAutomationStatus(): Promise<AutomationStatus | null> {
-  try {
-    const response = await fetch(`${API_BASE}/automation/status`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(`${API_BASE}/automation/status`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getAutomationReadiness(): Promise<AutomationReadiness | null> {
-  try {
-    const response = await fetch(`${API_BASE}/automation/readiness`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(`${API_BASE}/automation/readiness`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function runAutomationOnce(filters: IdentityFilters = {}): Promise<AutomationRun> {
@@ -3188,13 +3143,9 @@ export async function createQuote(id: string, expected: IdentityExpectation = {}
 }
 
 export async function getQuotes(filters: IdentityFilters = {}): Promise<QuoteDraft[]> {
-  try {
-    const response = await fetch(`${API_BASE}/quotes${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/quotes${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getQuotePreview(id: string, expected: IdentityExpectation = {}): Promise<QuotePreview> {
@@ -3247,13 +3198,9 @@ export async function verifyQuotePaymentProofAndQueueConfirmation(
 }
 
 export async function getOrderDrafts(filters: IdentityFilters = {}): Promise<OrderDraft[]> {
-  try {
-    const response = await fetch(`${API_BASE}/orders${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const response = await fetch(`${API_BASE}/orders${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function createOrderDraftFromQuote(id: string, expected: IdentityExpectation = {}): Promise<OrderDraft> {
@@ -3316,13 +3263,9 @@ export async function markManualReview(id: string, expected: IdentityExpectation
 }
 
 export async function getReviewCenter(filters: IdentityFilters = {}): Promise<ReviewCenter> {
-  try {
-    const response = await fetch(`${API_BASE}/reviews${identityQuery(filters)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return { designJobs: [], quoteDrafts: [], orderDrafts: [], logs: [] };
-  }
+  const response = await fetch(`${API_BASE}/reviews${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function reviewDesignJob(id: string, payload: {
@@ -3354,17 +3297,13 @@ export async function reviewOrder(id: string, payload: {
 }
 
 export async function getNotifications(unreadOnly = false, filters: IdentityFilters = {}): Promise<NotificationItem[]> {
-  try {
-    const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
-    params.set("unreadOnly", unreadOnly ? "true" : "false");
-    const response = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
-  }
+  const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+  params.set("unreadOnly", unreadOnly ? "true" : "false");
+  const response = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function markNotificationRead(id: string, expected: IdentityExpectation = {}): Promise<NotificationItem> {

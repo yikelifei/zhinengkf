@@ -101,7 +101,7 @@ class Manager { start() { const apiEnv = buildApiServiceEnvironment({}); const a
 if (apiHealth.statusCode !== 200) throw new Error("API not ready");
 if (overview.statusCode !== 200) throw new Error("Web not ready");
 if (proxyHealthBody?.code !== "desktop_session_proof_missing") throw new Error("missing proof accepted");
-const cookie = \`smart_kefu_desktop_session=\${desktopWebSessionProof}\`;
+const cookie = desktopSessionCookieHeader(desktopWebSessionProof);
 if (authenticatedProxyHealth.statusCode !== 200 || !validateApiHealthResponse(authenticatedProxyHealth)) throw new Error("proxy failed");
 `);
   write(root, "desktop/apps/api/src/shared/runtime-child-environment.ts", `
@@ -459,15 +459,19 @@ export async function resolveDesignExecutionRefund(designJobId, executionId, exp
   write(root, "desktop/tools/build-web.js", `
 function main() {
   if (standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) reuseExistingBuild();
-  if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
+  if (!standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) {
+    console.log("Completed Next output has no standalone server; forcing a clean rebuild");
+    resetNextBuildState({ force: true });
+  }
 }
 function runNextBuild() {
   if (result.status === 0) waitForBuildOutputReady(60);
   if (result.status === 0 && !hasNextBuildErrorOutput(result) && !webBuildIsStale() && standaloneServerExists()) return;
-  if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
   if (retry.status === 0) waitForBuildOutputReady(60);
   if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && !webBuildIsStale() && standaloneServerExists()) return;
-  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) writeStableStandaloneServer();
+  if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) {
+    console.error("refusing to synthesize a source-bound server wrapper");
+  }
 }
 `);
   write(root, "desktop/apps/web/src/lib/client-operation-key.ts", `
@@ -819,8 +823,8 @@ test("completion audit mutation checks reject fake Web API success and stale bui
     {
       id: "contract.web_build_freshness",
       file: "desktop/tools/build-web.js",
-      from: "if (result.status === 0 && !hasNextBuildErrorOutput(result) && productionBuildReady() && !webBuildIsStale())",
-      to: "if (productionBuildReady() && !hasNextBuildErrorOutput(result))",
+      from: "if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale())",
+      to: "if (productionBuildReady() && !hasNextBuildErrorOutput(retry))",
     },
   ];
 

@@ -72,3 +72,43 @@ test("stale completed .next without standalone cannot hide a nonzero Next build"
     "a stale build must not receive a generated standalone wrapper",
   );
 });
+
+test("fresh completed .next without standalone is rebuilt and never receives a source-bound wrapper", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-build-standalone-truth-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const packagePath = write(root, "package.json", "{}\n");
+  const sourcePath = write(root, "apps/web/src/app/page.tsx", "export default function Page() { return null; }\n");
+  const buildScript = fs.readFileSync(path.join(desktopRoot, "tools", "build-web.js"), "utf8");
+  write(root, "tools/build-web.js", buildScript);
+  write(root, "tools/sync-web-standalone-assets.js", "process.exit(0);\n");
+  write(root, "node_modules/next/dist/bin/next", "process.exit(23);\n");
+
+  const buildIdPath = createCompletedNextFixture(root, "fresh-build-without-standalone");
+  const sourceTime = new Date(Date.now() - 120_000);
+  const buildTime = new Date(Date.now() - 1_000);
+  fs.utimesSync(packagePath, sourceTime, sourceTime);
+  fs.utimesSync(sourcePath, sourceTime, sourceTime);
+  fs.utimesSync(buildIdPath, buildTime, buildTime);
+
+  const result = spawnSync(process.execPath, [path.join(root, "tools", "build-web.js")], {
+    cwd: root,
+    env: {
+      ...process.env,
+      WEB_PORT: "0",
+      DESKTOP_RUNTIME_DIR: path.join(root, ".runtime-test"),
+      ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "1",
+    },
+    encoding: "utf8",
+    timeout: 45_000,
+  });
+
+  assert.equal(result.signal, null, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.status, 23, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /has no standalone server; forcing a clean rebuild/);
+  assert.equal(
+    fs.existsSync(path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js")),
+    false,
+  );
+  assert.doesNotMatch(buildScript, /writeStableStandaloneServer|requiredServerFiles = require\(path\.join\(root/);
+});

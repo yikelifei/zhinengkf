@@ -9,6 +9,9 @@ const { selectServiceEnvironment } = require("../../packages/runtime/service-env
 
 const API_URL = "http://127.0.0.1:3200/api/health";
 const WEB_URL = "http://127.0.0.1:3100/overview";
+const PROXY_HEALTH_URL = "http://127.0.0.1:3100/api/health";
+const DESKTOP_SESSION_COOKIE = "smart_kefu_desktop_session";
+const DESKTOP_SESSION_PROOF_PATTERN = /^[a-f0-9]{64}$/i;
 
 function resolvePackagedPaths({ resourcesPath, appPath, userDataPath }) {
   return {
@@ -66,7 +69,7 @@ function buildWebServiceEnvironment({ resourcesPath, appPath, userDataPath, base
 
 const buildServiceEnvironment = buildApiServiceEnvironment;
 
-function waitForHttp(url, child, timeoutMs = 45_000, validateResponse = validateExactHttp200) {
+function waitForHttp(url, child, timeoutMs = 45_000, validateResponse = validateExactHttp200, requestOptions = {}) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = async () => {
@@ -75,7 +78,7 @@ function waitForHttp(url, child, timeoutMs = 45_000, validateResponse = validate
         return;
       }
       try {
-        const response = await requestHttp(url);
+        const response = await requestHttp(url, requestOptions);
         if (response.statusCode === 200 && validateResponse(response)) {
           if (child.exitCode !== null || child.killed) {
             reject(new Error(`${child.serviceName || "service"} exited while ${url} reported ready`));
@@ -98,9 +101,9 @@ function waitForHttp(url, child, timeoutMs = 45_000, validateResponse = validate
   });
 }
 
-function requestHttp(url) {
+function requestHttp(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const request = http.get(url, { timeout: 1500 }, (response) => {
+    const request = http.get(url, { timeout: 1500, ...options }, (response) => {
       const chunks = [];
       let bytes = 0;
       response.on("data", (chunk) => {
@@ -120,6 +123,12 @@ function requestHttp(url) {
     request.on("timeout", () => request.destroy(new Error(`Timed out requesting ${url}`)));
     request.on("error", reject);
   });
+}
+
+function desktopSessionCookieHeader(proof) {
+  const value = String(proof || "").trim();
+  if (!DESKTOP_SESSION_PROOF_PATTERN.test(value)) throw new Error("Packaged desktop session proof is invalid");
+  return `${DESKTOP_SESSION_COOKIE}=${value}`;
 }
 
 function validateExactHttp200(response) {
@@ -189,6 +198,9 @@ class PackagedServiceManager {
         this.paths.runtimeDir,
       );
       await waitForHttp(WEB_URL, web, 45_000, validateWebOverviewResponse);
+      await waitForHttp(PROXY_HEALTH_URL, web, 45_000, validateApiHealthResponse, {
+        headers: { Cookie: desktopSessionCookieHeader(this.webSessionProof) },
+      });
     } catch (error) {
       this.stop();
       throw error;
@@ -230,11 +242,14 @@ class PackagedServiceManager {
 
 module.exports = {
   API_URL,
+  PROXY_HEALTH_URL,
   WEB_URL,
   PackagedServiceManager,
   buildApiServiceEnvironment,
   buildServiceEnvironment,
   buildWebServiceEnvironment,
+  desktopSessionCookieHeader,
+  requestHttp,
   resolvePackagedPaths,
   validateApiHealthResponse,
   validateExactHttp200,
