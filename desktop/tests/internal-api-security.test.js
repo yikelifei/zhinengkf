@@ -29,7 +29,7 @@ const {
   isForbiddenWebProxyIngress,
   requiresDesktopSessionProof,
 } = require("../apps/web/src/lib/desktop-session-proof");
-const { PackagedServiceManager, buildServiceEnvironment } = require("../apps/electron/packaged-runtime");
+const { PackagedServiceManager, buildApiServiceEnvironment } = require("../apps/electron/packaged-runtime");
 
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -180,7 +180,7 @@ test("callback proxy ingress and path-normalization variants are rejected before
 
 test("packaged runtime keeps desktop proof independent and out of the API environment", () => {
   const token = "a".repeat(64);
-  const env = buildServiceEnvironment({
+  const env = buildApiServiceEnvironment({
     resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
     appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
     userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
@@ -204,17 +204,18 @@ test("packaged runtime keeps desktop proof independent and out of the API enviro
   assert.match(main, /await installDesktopSessionCookie\(webSessionProof\);\s*createMainWindow\(\);/);
 });
 
-test("stable and port-stack launchers share the internal API token without writing it into wrapper files", () => {
+test("stable and port-stack launchers scope tokens and filter wrapper files", () => {
   const stable = read("tools/stable-runtime-launcher.js");
   const starter = read("tools/ports-stack-starter.js");
   const supervisor = read("tools/desktop-service-supervisor.js");
   const dev = read("tools/start-dev-ports.js");
   assert.match(stable, /const internalApiToken = ensureInternalApiToken\(\)/);
-  assert.match(stable, /withoutInternalApiToken\(\{ \.\.\.serviceEnv/);
-  assert.match(stable, /env: \{ \.\.\.serviceEnv\(spec\.port \|\| ports\.api, spec\.name\)/);
+  assert.match(stable, /renderWindowsWrapperEnvironment\(spec\.name, serviceEnv/);
+  assert.match(stable, /env: serviceEnv\(spec\.port \|\| ports\.api, spec\.name, spec\.env\)/);
   assert.match(starter, /INTERNAL_API_TOKEN: internalApiToken/);
   assert.match(supervisor, /process\.env\.INTERNAL_API_TOKEN = ensureInternalApiToken\(\)/);
   assert.match(dev, /internalApiServiceEnv\([\s\S]*?service\?\.name, internalApiToken\)/);
+  assert.match(dev, /selectServiceEnvironment\(/);
   assert.match(dev, /withoutInternalApiToken\(\{[\s\S]*?FORCE_WEB_CLEAN_BUILD/);
 
   const wrapperSection = dev.slice(dev.indexOf("function buildWindowsServiceWrapper"), dev.indexOf("function serviceCwd"));

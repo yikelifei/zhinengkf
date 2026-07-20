@@ -36,7 +36,7 @@ export class DesignPlatformController {
   async health() {
     const startedAt = Date.now();
     try {
-      const data = await this.designPlatform.health();
+      const data = await this.designPlatform.publicHealth();
       return {
         ok: true,
         latencyMs: Date.now() - startedAt,

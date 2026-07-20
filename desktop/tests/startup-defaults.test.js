@@ -330,7 +330,7 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /Log file is locked, keeping existing file/);
   assert.match(startDevPorts, /fs\.writeFileSync\(wrapperPath, buildWindowsServiceWrapper/);
   assert.match(startDevPorts, /function buildWindowsServiceWrapper\(service,/);
-  assert.match(startDevPorts, /Object\.entries\(serviceDefaultEnv\(service\)\)/);
+  assert.match(startDevPorts, /renderWindowsWrapperEnvironment\(service\.name, serviceEnv\(service\)\)/);
   assert.match(startDevPorts, /LOW_VALUE_AUTOMATION_ENABLED: process\.env\.LOW_VALUE_AUTOMATION_ENABLED \|\| "true"/);
   assert.match(startDevPorts, /LOW_VALUE_AUTOMATION_RUN_ON_START: process\.env\.LOW_VALUE_AUTOMATION_RUN_ON_START \|\| "true"/);
   assert.match(startDevPorts, /function cmdSetEnv\(key, value\)/);

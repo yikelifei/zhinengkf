@@ -10,6 +10,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { OrdersService } from "../orders/orders.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { buildWindowObserverChildEnvironment } from "../shared/runtime-child-environment";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
 import {
   createOperationFingerprint,
@@ -1745,12 +1746,11 @@ export class WechatDispatchService {
     if (!fs.existsSync(observerScript)) throw new BadRequestException(`window observer script not found: ${observerScript}`);
     const result = spawnSync(process.execPath, [observerScript, "--once"], {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
+      env: buildWindowObserverChildEnvironment(process.env, {
         WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: appConfig.wechatWindowSnapshotInboxDir,
         WECHAT_WINDOW_OBSERVER_STATUS_FILE: appConfig.wechatWindowObserverStatusFile,
         WECHAT_WINDOW_OBSERVER_PROOF_FILE: appConfig.wechatWindowObserverProofFile,
-      },
+      }),
       encoding: "utf8",
       timeout: 15000,
       windowsHide: true,
@@ -1769,12 +1769,11 @@ export class WechatDispatchService {
 
     const result = spawnSync(process.execPath, [observerScript, "--once"], {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
+      env: buildWindowObserverChildEnvironment(process.env, {
         WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: appConfig.wechatWindowSnapshotInboxDir,
         WECHAT_WINDOW_OBSERVER_STATUS_FILE: appConfig.wechatWindowObserverStatusFile,
         WECHAT_WINDOW_OBSERVER_PROOF_FILE: appConfig.wechatWindowObserverProofFile,
-      },
+      }),
       encoding: "utf8",
       timeout: 15000,
       windowsHide: true,

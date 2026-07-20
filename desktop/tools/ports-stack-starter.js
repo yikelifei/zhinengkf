@@ -7,6 +7,7 @@ const path = require("node:path");
 const { ensureInternalApiToken } = require("./internal-api-session");
 const { createWechatWindowObserverProofSession } = require("./wechat-window-observer-session");
 const { ensureWechatBridgeServiceSession } = require("./wechat-bridge-service-session");
+const { atomicWritePrivateJson, readPrivateJsonFile } = require("./private-runtime-file");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -663,64 +664,38 @@ function mockRuntimeStateIsActive() {
 }
 
 function runtimeConfigDesignMode() {
-  try {
-    const config = JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-    if (config?.designPlatformAdapter === "art_image_local") return "real";
-    if (config?.designPlatformAdapter === "standard_v1") return "mock";
-    return "";
-  } catch {
-    return "";
-  }
+  const config = readPrivateJsonFile(designPlatformConfigFile, {});
+  if (config?.designPlatformAdapter === "art_image_local") return "real";
+  if (config?.designPlatformAdapter === "standard_v1") return "mock";
+  return "";
 }
 
 function writeRealDesignRuntimeConfig() {
   const existing = readRuntimeDesignPlatformConfig();
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(
-    designPlatformConfigFile,
-    `${JSON.stringify(
-      {
-        ...existing,
-        designPlatformAdapter: "art_image_local",
-        designPlatformBaseUrl: realDesignBaseUrl(),
-        launcherPid: process.pid,
-        launcherArgs: process.argv.slice(2),
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  atomicWritePrivateJson(designPlatformConfigFile, {
+    ...existing,
+    designPlatformAdapter: "art_image_local",
+    designPlatformBaseUrl: realDesignBaseUrl(),
+    launcherPid: process.pid,
+    launcherArgs: process.argv.slice(2),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 function writeMockDesignRuntimeConfig() {
   const existing = readRuntimeDesignPlatformConfig();
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(
-    designPlatformConfigFile,
-    `${JSON.stringify(
-      {
-        ...existing,
-        designPlatformAdapter: "standard_v1",
-        designPlatformBaseUrl: "http://127.0.0.1:3700",
-        launcherPid: process.pid,
-        launcherArgs: process.argv.slice(2),
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  atomicWritePrivateJson(designPlatformConfigFile, {
+    ...existing,
+    designPlatformAdapter: "standard_v1",
+    designPlatformBaseUrl: "http://127.0.0.1:3700",
+    launcherPid: process.pid,
+    launcherArgs: process.argv.slice(2),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 function readRuntimeDesignPlatformConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-  } catch {
-    return {};
-  }
+  return readPrivateJsonFile(designPlatformConfigFile, {});
 }
 
 function writePreferredDesignMode(mode) {

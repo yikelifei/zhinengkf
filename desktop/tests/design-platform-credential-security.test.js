@@ -38,10 +38,14 @@ test("Axios boundary sends each credential only to its explicitly bound origin",
     const client = DesignPlatformClient.createForTesting(captureAdapter(seen, { ok: true }));
 
     await client.health();
+    await client.publicHealth();
 
     assert.equal(header(seen[0], "authorization"), "Bearer access-secret");
     assert.equal(header(seen[0], "cookie"), "session=cookie-secret");
     assert.equal(header(seen[0], "x-art-device-id"), "device-secret");
+    assert.equal(header(seen[1], "authorization"), undefined);
+    assert.equal(header(seen[1], "cookie"), undefined);
+    assert.equal(header(seen[1], "x-art-device-id"), undefined);
 
     appConfig.designPlatformAccessToken = "";
     const apiKeyOnly = designPlatformCredentialsForTarget("https://design.example", "/v1/health");

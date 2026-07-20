@@ -18,6 +18,8 @@ const {
   ensureWechatBridgeServiceSession,
   wechatBridgeServiceEnv,
 } = require("./wechat-bridge-service-session");
+const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
+const { atomicWritePrivateJson, readPrivateJsonFile } = require("./private-runtime-file");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -998,7 +1000,7 @@ function buildWindowsServiceWrapper(service, stdoutPath, stderrPath, launcherLog
     "@echo off",
     "setlocal",
     `cd /d ${cmdQuote(serviceCwd(service))}`,
-    ...Object.entries(serviceDefaultEnv(service)).map(([key, value]) => cmdSetEnv(key, value)),
+    ...renderWindowsWrapperEnvironment(service.name, serviceEnv(service)),
     `echo [%date% %time%] launching ${service.name} >> ${cmdQuote(launcherLogPath)}`,
     runLine,
   ];
@@ -1628,7 +1630,10 @@ function serviceEnv(service) {
     ...serviceDefaultEnv(service),
   }, service?.name, internalApiToken);
   const observerEnv = wechatWindowObserverServiceEnv(internalEnv, service?.name, observerProofSession.tokenFile);
-  return wechatBridgeServiceEnv(observerEnv, service?.name, bridgeServiceSession.tokenFile);
+  return selectServiceEnvironment(
+    service?.name,
+    wechatBridgeServiceEnv(observerEnv, service?.name, bridgeServiceSession.tokenFile),
+  );
 }
 
 function windowsSafeEnv(env) {
@@ -1695,23 +1700,14 @@ function designPlatformHealthUrl() {
 function writeRuntimeDesignPlatformConfig() {
   const defaults = designPlatformDefaults();
   const existing = readRuntimeDesignPlatformConfig();
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  fs.writeFileSync(
-    designPlatformConfigFile,
-    `${JSON.stringify(
-      {
-        ...existing,
-        designPlatformAdapter: defaults.DESIGN_PLATFORM_ADAPTER,
-        designPlatformBaseUrl: defaults.DESIGN_PLATFORM_BASE_URL,
-        launcherPid: process.pid,
-        launcherArgs: process.argv.slice(2),
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  atomicWritePrivateJson(designPlatformConfigFile, {
+    ...existing,
+    designPlatformAdapter: defaults.DESIGN_PLATFORM_ADAPTER,
+    designPlatformBaseUrl: defaults.DESIGN_PLATFORM_BASE_URL,
+    launcherPid: process.pid,
+    launcherArgs: process.argv.slice(2),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 function assertRealDesignStartAllowed() {
@@ -1816,11 +1812,7 @@ function sleepSync(ms) {
 }
 
 function readRuntimeDesignPlatformConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(designPlatformConfigFile, "utf8"));
-  } catch {
-    return {};
-  }
+  return readPrivateJsonFile(designPlatformConfigFile, {});
 }
 
 function readPreferredDesignMode() {
