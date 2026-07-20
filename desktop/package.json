@@ -22,7 +22,7 @@
     "package:win:test": "node tools/build-windows-package.js",
     "package:win:signed": "node tools/build-windows-package.js --signed",
     "package:win:verify": "node tools/verify-windows-package.js --expect-unsigned",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "config:doctor": "..\\config-readiness-doctor.cmd",
     "ci:release-quality": "node tools/ci-release-quality.js",
     "project:completion:audit": "node tools/project-completion-audit.js",

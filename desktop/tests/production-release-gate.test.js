@@ -35,6 +35,13 @@ function temporaryDirectory(t) {
   return directory;
 }
 
+test("canonical Node release test runs every test file with deterministic single-file concurrency", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8"));
+  const releaseGate = fs.readFileSync(path.resolve(__dirname, "../tools/production-release-gate.js"), "utf8");
+  assert.equal(packageJson.scripts.test, "node --test --test-concurrency=1 tests/*.test.js");
+  assert.match(releaseGate, /runNpmCheck\("tests\.node", "Node 完整测试", \["test"\]\)/);
+});
+
 test("version comparison accepts supported Node and Python versions", () => {
   assert.deepEqual(parseVersion("Python 3.14.4"), [3, 14, 4]);
   assert.equal(compareVersions("20.0.0", "20.0.0"), 0);
