@@ -37,6 +37,7 @@ function buildFakePrisma(seed = {}) {
     customers: new Map(),
     conversations: new Map(),
     bindings: new Map(),
+    messages: new Map((seed.messages || []).map((row) => [row.id, { ...row }])),
     audits: new Map(),
     writes: [],
   };
@@ -105,13 +106,32 @@ function buildFakePrisma(seed = {}) {
       async update({ where, data }) {
         return Object.assign(state.conversations.get(where.id), data, { updatedAt: now });
       },
+      async updateMany({ where, data }) {
+        const row = state.conversations.get(where.id);
+        if (!row) return { count: 0 };
+        const incoming = data.lastMessageAt instanceof Date ? data.lastMessageAt : new Date(data.lastMessageAt);
+        const current = row.lastMessageAt ? new Date(row.lastMessageAt) : null;
+        if (current && current.getTime() >= incoming.getTime()) return { count: 0 };
+        Object.assign(row, data, { updatedAt: now });
+        return { count: 1 };
+      },
     },
     personalWechatRpaBinding: {
-      async findUnique({ where }) {
-        if (where.id) return state.bindings.get(where.id) || null;
-        return [...state.bindings.values()].find((row) => row.bindingKey === where.bindingKey) || null;
+      async findUnique({ where, include }) {
+        const row = where.id
+          ? state.bindings.get(where.id) || null
+          : [...state.bindings.values()].find((item) => item.bindingKey === where.bindingKey) || null;
+        return row && include ? hydrate(row) : row;
       },
       async findFirst({ where }) {
+        if (where.conversationId || where.customerId) {
+          const row = [...state.bindings.values()].find((item) =>
+            item.wechatAccountId === where.wechatAccountId &&
+            item.conversationId === where.conversationId &&
+            item.customerId === where.customerId
+          ) || null;
+          return row ? hydrate(row) : null;
+        }
         return [...state.bindings.values()].find((row) =>
           row.wechatAccountId === where.wechatAccountId &&
           row.chatTitle === where.chatTitle &&
@@ -127,6 +147,15 @@ function buildFakePrisma(seed = {}) {
           state.bindings.set(row.id, row);
         }
         return hydrate(row);
+      },
+      async updateMany({ where, data }) {
+        const row = [...state.bindings.values()].find((item) => item.bindingKey === where.bindingKey) || null;
+        if (!row) return { count: 0 };
+        const incoming = data.lastInboundAt instanceof Date ? data.lastInboundAt : new Date(data.lastInboundAt);
+        const current = row.lastInboundAt ? new Date(row.lastInboundAt) : null;
+        if (current && current.getTime() >= incoming.getTime()) return { count: 0 };
+        Object.assign(row, data, { updatedAt: now });
+        return { count: 1 };
       },
       async findMany({ where, take }) {
         return [...state.bindings.values()]
@@ -147,6 +176,18 @@ function buildFakePrisma(seed = {}) {
       },
       async findMany({ where, take }) {
         return [...state.audits.values()].filter((row) => row.wechatAccountId === where.wechatAccountId).slice(0, take);
+      },
+    },
+    message: {
+      async findFirst({ where }) {
+        const row = [...state.messages.values()].find((item) => {
+          const conversation = state.conversations.get(item.conversationId);
+          return item.direction === where.direction &&
+            item.externalId === where.externalId &&
+            conversation?.wechatAccountId === where.conversation.wechatAccountId;
+        }) || null;
+        if (!row) return null;
+        return { ...row, conversation: state.conversations.get(row.conversationId) || null };
       },
     },
   };
@@ -335,6 +376,102 @@ test("production service rejects legacy identity and audits duplicate content dr
   } finally {
     appConfig.useLocalStore = previous;
     delete process.env.PERSONAL_WECHAT_RPA_CONFIG_FILE;
+  }
+});
+
+test("account-scoped RPA replay conflict is rejected before creating a new binding", async () => {
+  const previous = appConfig.useLocalStore;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "personal-rpa-preflight-"));
+  const configFile = path.join(tempDir, "personal-wechat-rpa.json");
+  const secret = "preflight-rpa-token-secret";
+  process.env.PERSONAL_WECHAT_RPA_CONFIG_FILE = configFile;
+  appConfig.useLocalStore = false;
+  try {
+    fs.writeFileSync(configFile, JSON.stringify({
+      instances: [{
+        wechatAccountId: "account_1",
+        endpoint: "http://127.0.0.1:3211",
+        token: secret,
+        accountNickname: "客服一号",
+        ownerWxId: "wxid_owner_1",
+        enabled: true,
+      }],
+    }), "utf8");
+    const { prisma, state } = buildFakePrisma();
+    const persistence = new PersonalWechatRpaPersistence(prisma, forbiddenLocalStore());
+    const binding = await persistence.upsertBinding(bindingInput({
+      chatTitle: "客户甲",
+      senderName: "客户甲",
+      receivedAt: "2026-07-20T10:00:00.000Z",
+    }));
+    state.messages.set("message_existing", {
+      id: "message_existing",
+      conversationId: binding.conversationId,
+      direction: "inbound",
+      externalId: "external-account-global",
+      text: "原始消息",
+      attachments: [],
+      metadata: {},
+      createdAt: new Date("2026-07-20T10:00:00.000Z"),
+    });
+    const countsBefore = {
+      customers: state.customers.size,
+      conversations: state.conversations.size,
+      bindings: state.bindings.size,
+    };
+    let dispatchCalls = 0;
+    const service = new PersonalWechatRpaService(forbiddenLocalStore(), {
+      async processInboundMessage() { dispatchCalls += 1; throw new Error("must not dispatch conflicting replay"); },
+    }, prisma);
+
+    await assert.rejects(service.processInbound({
+      version: "personal_wechat_rpa_event_v1",
+      accountNickname: "客服一号",
+      ownerWxId: "wxid_owner_1",
+      chatTitle: "客户乙",
+      conversationType: "direct",
+      senderName: "客户乙",
+      message: "冲突消息",
+      externalId: "external-account-global",
+      createdAt: "2026-07-20T11:00:00.000Z",
+      attachments: [],
+    }, secret), /duplicate inbound externalId conflict/);
+    assert.equal(dispatchCalls, 0);
+    assert.deepEqual({
+      customers: state.customers.size,
+      conversations: state.conversations.size,
+      bindings: state.bindings.size,
+    }, countsBefore);
+    assert.equal([...state.audits.values()].at(-1).status, "failed");
+  } finally {
+    appConfig.useLocalStore = previous;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("personal WeChat binding timestamps advance monotonically in Prisma and LocalStore", async () => {
+  const previous = appConfig.useLocalStore;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "personal-rpa-monotonic-"));
+  try {
+    appConfig.useLocalStore = false;
+    const database = buildFakePrisma();
+    const persistence = new PersonalWechatRpaPersistence(database.prisma, forbiddenLocalStore());
+    await persistence.upsertBinding(bindingInput({ receivedAt: "2026-07-20T10:00:00.000Z" }));
+    const newest = await persistence.upsertBinding(bindingInput({ receivedAt: "2026-07-20T12:00:00.000Z" }));
+    const stale = await persistence.upsertBinding(bindingInput({ receivedAt: "2026-07-20T11:00:00.000Z" }));
+    assert.equal(stale.lastInboundAt.toISOString(), newest.lastInboundAt.toISOString());
+    assert.equal(stale.conversation.lastMessageAt.toISOString(), newest.conversation.lastMessageAt.toISOString());
+
+    appConfig.useLocalStore = true;
+    const localStore = createLocalStore(tempDir);
+    localStore.upsertPersonalWechatRpaBinding(bindingInput({ receivedAt: "2026-07-20T10:00:00.000Z" }));
+    const localNewest = localStore.upsertPersonalWechatRpaBinding(bindingInput({ receivedAt: "2026-07-20T12:00:00.000Z" }));
+    const localStale = localStore.upsertPersonalWechatRpaBinding(bindingInput({ receivedAt: "2026-07-20T11:00:00.000Z" }));
+    assert.equal(localStale.lastInboundAt, localNewest.lastInboundAt);
+    assert.equal(localStale.conversation.lastMessageAt, localNewest.conversation.lastMessageAt);
+  } finally {
+    appConfig.useLocalStore = previous;
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 

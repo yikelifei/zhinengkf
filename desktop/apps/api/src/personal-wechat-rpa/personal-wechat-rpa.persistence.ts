@@ -164,15 +164,20 @@ export class PersonalWechatRpaPersistence {
         throw identityConflict("direct chat sender changed; duplicate chat title requires manual rebind");
       }
 
-      await tx.conversation.update({
-        where: { id: conversation.id },
+      await tx.conversation.updateMany({
+        where: {
+          id: conversation.id,
+          OR: [
+            { lastMessageAt: null },
+            { lastMessageAt: { lt: input.receivedAt } },
+          ],
+        },
         data: { lastMessageAt: input.receivedAt },
       });
-      const binding = await tx.personalWechatRpaBinding.upsert({
+      await tx.personalWechatRpaBinding.upsert({
         where: { bindingKey: input.bindingKey },
         update: {
           senderName: input.senderName,
-          lastInboundAt: input.receivedAt,
         },
         create: {
           bindingKey: input.bindingKey,
@@ -186,8 +191,22 @@ export class PersonalWechatRpaPersistence {
           conversationId: conversation.id,
           lastInboundAt: input.receivedAt,
         },
+      });
+      await tx.personalWechatRpaBinding.updateMany({
+        where: {
+          bindingKey: input.bindingKey,
+          OR: [
+            { lastInboundAt: null },
+            { lastInboundAt: { lt: input.receivedAt } },
+          ],
+        },
+        data: { lastInboundAt: input.receivedAt },
+      });
+      const binding = await tx.personalWechatRpaBinding.findUnique({
+        where: { bindingKey: input.bindingKey },
         include: { wechatAccount: true, customer: true, conversation: true },
       });
+      if (!binding) throw identityConflict("personal WeChat binding disappeared during timestamp advance");
       return hydrateBinding(binding);
     });
   }
@@ -208,6 +227,42 @@ export class PersonalWechatRpaPersistence {
       ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
     });
     return rows.map(hydrateBinding);
+  }
+
+  async findInboundMessageByExternalId(wechatAccountId: string, externalId: string) {
+    const accountId = requiredText(wechatAccountId, "wechatAccountId");
+    const messageExternalId = requiredText(externalId, "externalId");
+    if (this.isLocal) {
+      return this.localStore.findInboundMessageByExternalId(accountId, messageExternalId);
+    }
+    const message = await (this.prisma as any).message.findFirst({
+      where: {
+        direction: "inbound",
+        externalId: messageExternalId,
+        conversation: { wechatAccountId: accountId },
+      },
+      include: { conversation: true },
+    });
+    if (!message) return null;
+    return {
+      ...message,
+      customerId: message.conversation?.customerId || null,
+      wechatAccountId: message.conversation?.wechatAccountId || null,
+      metadata: message.metadata || {},
+    };
+  }
+
+  async findBindingByIdentity(identity: { wechatAccountId: string; conversationId: string; customerId: string }) {
+    if (this.isLocal) return this.localStore.findPersonalWechatRpaBindingByIdentity(identity);
+    const binding = await (this.prisma as any).personalWechatRpaBinding.findFirst({
+      where: {
+        wechatAccountId: identity.wechatAccountId,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+      },
+      include: { wechatAccount: true, customer: true, conversation: true },
+    });
+    return binding ? hydrateBinding(binding) : null;
   }
 
   async recordAudit(payload: PersonalWechatRpaAuditInput, sensitiveValues: unknown[] = []) {

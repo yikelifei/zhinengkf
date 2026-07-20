@@ -864,7 +864,7 @@ export class LocalStoreService {
       if (conversation.title !== chatTitle) {
         throw new Error("personal WeChat RPA conversation title changed; manual rebind is required");
       }
-      conversation.lastMessageAt = receivedAt;
+      conversation.lastMessageAt = this.monotonicWechatWorkInboundAt(conversation.lastMessageAt, receivedAt);
       conversation.updatedAt = now;
       conversation.personalWechatRpa = {
         ...(conversation.personalWechatRpa || {}),
@@ -887,7 +887,7 @@ export class LocalStoreService {
       conversationId: conversation.id,
       createdAt: current?.createdAt || now,
       updatedAt: now,
-      lastInboundAt: receivedAt,
+      lastInboundAt: this.monotonicWechatWorkInboundAt(current?.lastInboundAt, receivedAt),
     };
     if (bindingIndex >= 0) data.personalWechatRpaBindings[bindingIndex] = binding;
     else data.personalWechatRpaBindings.push(binding);
@@ -1178,7 +1178,10 @@ export class LocalStoreService {
     data.messages.push(record);
     data.conversations[conversationIndex] = {
       ...data.conversations[conversationIndex],
-      lastMessageAt: record.createdAt,
+      lastMessageAt: this.monotonicWechatWorkInboundAt(
+        data.conversations[conversationIndex].lastMessageAt,
+        record.createdAt,
+      ),
       updatedAt: now,
     };
     this.write(data);
