@@ -2633,11 +2633,21 @@ function enclosingVariableDeclaration(ts, identifier) {
 
 function assignmentPatternEvents(ts, pattern, expression, node, initialProjection = []) {
   const events = [];
+  const projectionWithDefault = (projection, defaultExpression) => {
+    if (!defaultExpression || !projection.length) return projection;
+    return projection.map((step, index) => index === projection.length - 1
+      ? { ...step, defaultExpression }
+      : step);
+  };
   const visit = (targetNode, valueNode, projection = [], defaultExpression = null) => {
     const target = unwrapExpression(ts, targetNode);
     if (!target) return;
     if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      visit(target.left, valueNode, projection, target.right);
+      if (projection.length) {
+        visit(target.left, valueNode, projectionWithDefault(projection, target.right), defaultExpression);
+      } else {
+        visit(target.left, valueNode, projection, target.right);
+      }
       return;
     }
     if (ts.isIdentifier(target)) {
@@ -2657,8 +2667,11 @@ function assignmentPatternEvents(ts, pattern, expression, node, initialProjectio
         visit(
           elementTarget,
           valueNode,
-          [...projection, { kind: "index", index }],
-          ts.isBindingElement(element) ? element.initializer || null : null,
+          [...projection, {
+            kind: "index",
+            index,
+            defaultExpression: ts.isBindingElement(element) ? element.initializer || null : null,
+          }],
         );
       });
       return;
@@ -2676,7 +2689,10 @@ function assignmentPatternEvents(ts, pattern, expression, node, initialProjectio
           if (propertyName) propertyProjection = { kind: "property", name: propertyName };
         }
         if (propertyProjection) {
-          visit(element.name, valueNode, [...projection, propertyProjection], element.initializer || null);
+          visit(element.name, valueNode, [
+            ...projection,
+            { ...propertyProjection, defaultExpression: element.initializer || null },
+          ]);
         }
       }
       return;
@@ -2696,7 +2712,11 @@ function assignmentPatternEvents(ts, pattern, expression, node, initialProjectio
             }
           }
         } else if (ts.isShorthandPropertyAssignment(property)) {
-          visit(property.name, valueNode, [...projection, { kind: "property", name: property.name.text }]);
+          visit(property.name, valueNode, [...projection, {
+            kind: "property",
+            name: property.name.text,
+            defaultExpression: property.objectAssignmentInitializer || null,
+          }]);
         }
       }
     }
@@ -2766,7 +2786,28 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (bindingReferences.has(binding)) bindingReferences.get(binding).push(identifier);
   }
   const indexedWrites = new Map();
+  const defaultInitializerContexts = new Map();
+  const registerDefaultInitializerContexts = (event) => {
+    for (const [index, step] of (event.projection || []).entries()) {
+      if (!step.defaultExpression || defaultInitializerContexts.has(step.defaultExpression)) continue;
+      const projection = event.projection.slice(0, index + 1).map((item, itemIndex) =>
+        itemIndex === index ? { ...item, defaultExpression: null } : item);
+      defaultInitializerContexts.set(step.defaultExpression, {
+        expression: event.expression,
+        projection,
+        node: event.node,
+      });
+    }
+    if (event.defaultExpression && !defaultInitializerContexts.has(event.defaultExpression)) {
+      defaultInitializerContexts.set(event.defaultExpression, {
+        expression: event.expression,
+        projection: event.projection || [],
+        node: event.node,
+      });
+    }
+  };
   const indexWrite = (binding, event) => {
+    registerDefaultInitializerContexts(event);
     if (!binding) return;
     if (!indexedWrites.has(binding)) indexedWrites.set(binding, []);
     indexedWrites.get(binding).push(event);
@@ -2846,7 +2887,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   const undefinedStaticValue = Object.freeze({ kind: "undefined" });
   const staticValueKey = (value) => {
     if (!value) return "unknown";
-    if (["string", "operation", "global"].includes(value.kind)) return `${value.kind}:${value.value}`;
+    if (["string", "boolean", "number", "operation", "global"].includes(value.kind)) {
+      return `${value.kind}:${value.value}`;
+    }
     if (value.kind === "tuple") return `tuple:[${value.values.map(staticValueKey).join(",")}]`;
     if (value.kind === "object") {
       return `object:{${[...value.properties.entries()]
@@ -2872,7 +2915,29 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   const staticAlternatives = (value) => value?.kind === "union" ? value.values : [value || unknownStaticValue];
   const containsStaticKind = (value, ...kinds) =>
     staticAlternatives(value).some((item) => kinds.includes(item.kind));
-  const conditionalWriteForUse = (event, useNode) => {
+  const staticTruthiness = (value) => {
+    const states = staticAlternatives(value).map((item) => {
+      if (["unknown", "possible-target-prototype"].includes(item.kind)) return null;
+      if (["undefined", "null"].includes(item.kind)) return false;
+      if (item.kind === "string") return item.value.length > 0;
+      if (item.kind === "boolean") return item.value;
+      if (item.kind === "number") return Boolean(item.value);
+      return true;
+    });
+    return states.every((state) => state === true)
+      ? true
+      : states.every((state) => state === false) ? false : null;
+  };
+  const staticNullishness = (value) => {
+    const states = staticAlternatives(value).map((item) => {
+      if (["unknown", "possible-target-prototype"].includes(item.kind)) return null;
+      return ["undefined", "null"].includes(item.kind);
+    });
+    return states.every((state) => state === true)
+      ? true
+      : states.every((state) => state === false) ? false : null;
+  };
+  const conditionalWriteForUse = (event, useNode, ignoreLogicalReachability = false) => {
     const container = executionContainer(ts, event.node);
     const nearestBlock = (node) => {
       for (let current = node.parent; current && current !== container; current = current.parent) {
@@ -2905,11 +2970,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       if (ts.isBinaryExpression(current) &&
         [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
           ts.SyntaxKind.QuestionQuestionToken].includes(current.operatorToken.kind) &&
-        nodeContains(current.right, event.node)) return true;
+        nodeContains(current.right, event.node) && !ignoreLogicalReachability) return true;
     }
     return false;
   };
   const eventIsUnconditionalWithin = (event, branch) => {
+    if (ts.isIfStatement(branch) || ts.isConditionalExpression(branch) || ts.isSwitchStatement(branch) ||
+      ts.isTryStatement(branch) || ts.isWhileStatement(branch) || ts.isDoStatement(branch) ||
+      ts.isForStatement(branch) || ts.isForInStatement(branch) || ts.isForOfStatement(branch)) return false;
     for (let current = event.node.parent; current && current !== branch; current = current.parent) {
       if (ts.isFunctionLike(current) || ts.isConditionalExpression(current) || ts.isSwitchStatement(current) ||
         ts.isCaseBlock(current) || ts.isTryStatement(current) || ts.isIfStatement(current) ||
@@ -2953,13 +3021,17 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         continue;
       }
       if (step.kind === "index") {
-        if (value.kind !== "tuple" || step.index < 0) return unknownStaticValue;
-        value = step.index < value.values.length ? value.values[step.index] : undefinedStaticValue;
+        value = value.kind !== "tuple" || step.index < 0
+          ? unknownStaticValue
+          : step.index < value.values.length ? value.values[step.index] : undefinedStaticValue;
+        value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
         continue;
       }
       if (step.kind === "iteration") {
-        if (value.kind !== "tuple" || !value.values.length) return unknownStaticValue;
-        value = unionStaticValues(...value.values);
+        value = value.kind !== "tuple" || !value.values.length
+          ? unknownStaticValue
+          : unionStaticValues(...value.values);
+        value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
         continue;
       }
       let propertyName = null;
@@ -2969,30 +3041,24 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         if (computed.kind === "string") propertyName = computed.value;
       }
       if (propertyName === null) {
-        return value.kind === "target-class" ? { kind: "possible-target-prototype" } : unknownStaticValue;
-      }
-      if (value.kind === "target-class" && propertyName === "prototype") {
+        value = value.kind === "target-class" ? { kind: "possible-target-prototype" } : unknownStaticValue;
+      } else if (value.kind === "target-class" && propertyName === "prototype") {
         value = { kind: "target-prototype" };
-        continue;
-      }
-      if (value.kind === "object" && value.properties.has(propertyName)) {
+      } else if (value.kind === "object" && value.properties.has(propertyName)) {
         value = value.properties.get(propertyName);
-        continue;
-      }
-      if (value.kind === "object") {
+      } else if (value.kind === "object") {
         value = undefinedStaticValue;
-        continue;
-      }
-      if (value.kind === "global") {
+      } else if (value.kind === "global") {
         const allowed = value.value === "Object"
           ? ["assign", "defineProperty", "defineProperties", "set"]
           : value.value === "Reflect" ? ["defineProperty", "set"] : [];
         value = allowed.includes(propertyName)
           ? { kind: "operation", value: propertyName }
           : unknownStaticValue;
-        continue;
+      } else {
+        value = unknownStaticValue;
       }
-      return unknownStaticValue;
+      value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
     }
     return value;
   };
@@ -3005,12 +3071,57 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return item;
     }));
   };
+  const eventExecutionReachability = (event, useNode, seenBindings) => {
+    let reachability = "always";
+    const mergeReachability = (state) => {
+      if (state === "never") reachability = "never";
+      else if (state === "conditional" && reachability === "always") reachability = "conditional";
+    };
+    for (const [initializer, context] of defaultInitializerContexts) {
+      if (!nodeContains(initializer, event.node)) continue;
+      const projected = context.expression
+        ? applyStaticProjection(
+          staticValueAt(context.expression, context.node, seenBindings),
+          context.projection,
+          context.node,
+          seenBindings,
+        )
+        : unknownStaticValue;
+      const undefinedState = staticAlternatives(projected).map((item) =>
+        item.kind === "undefined" ? true : item.kind === "unknown" ? null : false);
+      mergeReachability(undefinedState.every((state) => state === true)
+        ? "always"
+        : undefinedState.every((state) => state === false) ? "never" : "conditional");
+    }
+    const container = executionContainer(ts, event.node);
+    for (let current = event.node.parent; current && current !== container; current = current.parent) {
+      if (!ts.isBinaryExpression(current) || !nodeContains(current.right, event.node)) continue;
+      const operator = current.operatorToken.kind;
+      if (![ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.QuestionQuestionToken].includes(operator)) continue;
+      const left = staticValueAt(current.left, current, seenBindings);
+      const state = operator === ts.SyntaxKind.QuestionQuestionToken
+        ? staticNullishness(left)
+        : staticTruthiness(left);
+      const rightRuns = operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+        operator === ts.SyntaxKind.QuestionQuestionToken
+        ? state
+        : state === null ? null : !state;
+      mergeReachability(rightRuns === true ? "always" : rightRuns === false ? "never" : "conditional");
+    }
+    return reachability;
+  };
   const staticValueAt = (node, useNode = node, seenBindings = new Set()) => {
     const expression = unwrapExpression(ts, node);
     if (!expression) return unknownStaticValue;
     if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
       return { kind: "string", value: expression.text };
     }
+    if (expression.kind === ts.SyntaxKind.NullKeyword) return { kind: "null" };
+    if (expression.kind === ts.SyntaxKind.TrueKeyword || expression.kind === ts.SyntaxKind.FalseKeyword) {
+      return { kind: "boolean", value: expression.kind === ts.SyntaxKind.TrueKeyword };
+    }
+    if (ts.isNumericLiteral(expression)) return { kind: "number", value: Number(expression.text) };
     if (ts.isTemplateExpression(expression)) {
       let value = expression.head.text;
       for (const span of expression.templateSpans) {
@@ -3035,10 +3146,18 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (ts.isBinaryExpression(expression) &&
       [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
         ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) {
-      return unionStaticValues(
-        staticValueAt(expression.left, useNode, seenBindings),
-        staticValueAt(expression.right, useNode, seenBindings),
-      );
+      const left = staticValueAt(expression.left, useNode, seenBindings);
+      const operator = expression.operatorToken.kind;
+      const state = operator === ts.SyntaxKind.QuestionQuestionToken
+        ? staticNullishness(left)
+        : staticTruthiness(left);
+      const rightRuns = operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+        operator === ts.SyntaxKind.QuestionQuestionToken
+        ? state
+        : state === null ? null : !state;
+      if (rightRuns === false) return left;
+      const right = staticValueAt(expression.right, useNode, seenBindings);
+      return rightRuns === true ? right : unionStaticValues(left, right);
     }
     if (ts.isArrayLiteralExpression(expression)) {
       if (expression.elements.some((element) => ts.isSpreadElement(element) || ts.isOmittedExpression(element))) {
@@ -3099,6 +3218,11 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (!events.length) return unknownStaticValue;
     const nextSeen = new Set(seenBindings);
     nextSeen.add(binding);
+    const eventReachability = new Map(events.map((event) => [
+      event,
+      eventExecutionReachability(event, useNode, nextSeen),
+    ]));
+    const reachableEvents = events.filter((event) => eventReachability.get(event) !== "never");
     let currentValue = unknownStaticValue;
     let hasValue = false;
     const mergedIfStatements = new Set();
@@ -3113,10 +3237,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         : unknownStaticValue;
       return applyStaticDefault(projected, event.defaultExpression, event.node, nextSeen);
     };
-    for (const event of events) {
+    for (const event of reachableEvents) {
       const priorMerge = [...mergedIfStatements].find((statement) => nodeContains(statement, event.node));
       if (priorMerge) continue;
-      const merge = exhaustiveIfMerge(event, events, useNode);
+      const merge = exhaustiveIfMerge(event, reachableEvents, useNode);
       if (merge) {
         mergedIfStatements.add(merge.statement);
         currentValue = unionStaticValues(...merge.events.map(valueForEvent));
@@ -3124,7 +3248,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         continue;
       }
       const eventValue = valueForEvent(event);
-      currentValue = conditionalWriteForUse(event, useNode) && hasValue
+      currentValue = (eventReachability.get(event) === "conditional" ||
+        conditionalWriteForUse(event, useNode, true)) && hasValue
         ? unionStaticValues(currentValue, eventValue)
         : eventValue;
       hasValue = true;

@@ -2246,6 +2246,70 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "nested array defaults preserve each projection level",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst [[nestedDefaultLocalPrototype = {}] = [LocalStoreService.prototype]] = [];\nnestedDefaultLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "object assignment shorthand default can expose a Notifications prototype",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet shorthandDefaultNotificationPrototype: any;\n({ shorthandDefaultNotificationPrototype = NotificationsService.prototype } = {});\nshorthandDefaultNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "non exhaustive else-if overwrite preserves the original LocalStore prototype",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const firstOverwriteCondition: boolean;\ndeclare const secondOverwriteCondition: boolean;\nlet elseIfLocalPrototype: any = LocalStoreService.prototype;\nif (firstOverwriteCondition) elseIfLocalPrototype = {};\nelse if (secondOverwriteCondition) elseIfLocalPrototype = {};\nelseIfLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "known truthy AND reaches a Notifications prototype",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst truthyAndNotificationPrototype = {} && NotificationsService.prototype;\ntruthyAndNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "known falsy OR reaches a LocalStore prototype",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst falsyOrLocalPrototype = "" || LocalStoreService.prototype;\nfalsyOrLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "known undefined nullish fallback reaches a Notifications prototype",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst undefinedNullishNotificationPrototype = undefined ?? NotificationsService.prototype;\nundefinedNullishNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "defined projection does not execute a LocalStore-clearing default initializer",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet definedDefaultWriteLocalPrototype: any = LocalStoreService.prototype;\nconst [definedDefaultWriteValue = (definedDefaultWriteLocalPrototype = {})] = [{}];\nvoid definedDefaultWriteValue;\ndefinedDefaultWriteLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "unknown projection only conditionally executes a Notifications-clearing default initializer",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unknownDefaultWriteProjection: unknown;\nlet unknownDefaultWriteNotificationPrototype: any = NotificationsService.prototype;\nconst [unknownDefaultWriteValue = (unknownDefaultWriteNotificationPrototype = {})] = [unknownDefaultWriteProjection];\nvoid unknownDefaultWriteValue;\nunknownDefaultWriteNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
       name: "function-scoped var redeclaration without initializer keeps the Notifications prototype binding",
       expectedFailure: "critical-symbol-write",
       file: notificationsFile,
@@ -2403,6 +2467,16 @@ function safeStructuredOverwrites(auditCondition: boolean) {
   exhaustivePrototype.create = () => null;
   const [definedDefaultPrototype = NotificationsService.prototype] = [{}];
   definedDefaultPrototype.create = () => null;
+  const safeTruthyOrPrototype = {} || NotificationsService.prototype;
+  safeTruthyOrPrototype.create = () => null;
+  const safeFalsyAndPrototype = "" && NotificationsService.prototype;
+  safeFalsyAndPrototype.create = () => null;
+  const safeNonNullishPrototype = {} ?? NotificationsService.prototype;
+  safeNonNullishPrototype.create = () => null;
+  let executedDefaultWritePrototype: any = NotificationsService.prototype;
+  const [executedDefaultWriteValue = (executedDefaultWritePrototype = {})] = [undefined];
+  void executedDefaultWriteValue;
+  executedDefaultWritePrototype.create = () => null;
 }
 function safeFunctionScopedVarShadow() {
   if (true) {
