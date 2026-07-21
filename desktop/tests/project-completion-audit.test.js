@@ -1038,8 +1038,10 @@ createNotification(level: string, title: string, body?: string, target?: any) {
     ...identity.identityFields,
     identityBinding: identity.binding,
   };
-  const existing = data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey);
-  if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });
+  if (effectKey) {
+    const existing = data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey);
+    if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });
+  }
   return { id: effectKey ? deterministicOperationId("notice", effectKey) : id("notice") };
 }
 
@@ -1062,9 +1064,34 @@ export function acquireLocalStoreLock(filePath: string) {
   localStoreLockIsStale(lockPath);
   return ownedLocalStoreLockHandle(lockPath, ownerFileName);
 }
+
+function ownedLocalStoreLockHandle(lockPath: string, ownerFileName: string) {
+  let released = false;
+  const ownerPath = path.join(lockPath, ownerFileName);
+  return {
+    assertOwned: () => {
+      if (released || !fs.existsSync(ownerPath)) {
+        throw new LocalStoreConcurrentWriteError("local store transaction lock ownership was lost");
+      }
+    },
+    release: () => {
+      if (released) return;
+      released = true;
+      fs.unlinkSync(ownerPath);
+      fs.rmdirSync(lockPath);
+    },
+  };
+}
 `, true);
 
   write(root, "desktop/apps/api/src/notifications/notifications.service.ts", `
+create(level: string, title: string, body?: string, target?: Record<string, unknown>) {
+  if (appConfig.useLocalStore) return this.localStore.createNotification(level, title, body, target);
+  const effectKey = String(target?.effectKey || "").trim();
+  if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);
+  return this.prisma.notification.create({ data: { level, title, body, target } });
+}
+
 private async createPrismaNotificationOnce(
   effectKey: string,
   level: string,
@@ -1230,11 +1257,25 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "if (candidateId && !designJob)",
     },
     {
+      name: "local notification effect replay gate disabled",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: "if (false && effectKey) {",
+    },
+    {
       name: "local notification effect replay identity removed",
       file: localStoreFile,
       anchor: "createNotification(level:",
       from: "if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });",
       to: "if (existing) return existing;",
+    },
+    {
+      name: "Prisma notification effect replay dispatch disabled",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: "if (false && effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
     },
     {
       name: "Prisma existing notification effect replay identity removed",
@@ -1310,6 +1351,13 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       anchor: "commitInboundQuoteAcceptance(payload:",
       from: 'String(currentQuote.customerId || "") !== String(operation.customerId || "")',
       to: "false",
+    },
+    {
+      name: "cross-process lock owner fence disabled",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "if (released || !fs.existsSync(ownerPath)) {",
+      to: "if (false && (released || !fs.existsSync(ownerPath))) {",
     },
     {
       name: "cross-process lock acquisition removed",
@@ -1862,6 +1910,67 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
 
   const mutations = [
     {
+      name: "ordinary extra update field",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "customerNotes: payload?.customerNotes,",
+          "customerNotes: payload?.customerNotes,\n      paymentStatus: payload?.paymentStatus,",
+        );
+      },
+    },
+    {
+      name: "direct principal mutation",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "return this.orders.update(id, {",
+          "Object.assign(principal, { id: payload?.owner });\n    return this.orders.update(id, {",
+        );
+      },
+    },
+    {
+      name: "computed owner override",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "owner: principal.id,",
+          'owner: principal.id,\n      ["owner"]: payload?.owner,',
+        );
+      },
+    },
+    {
+      name: "shorthand extra update field",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "customerNotes: payload?.customerNotes,",
+          "customerNotes: payload?.customerNotes,\n      paymentStatus,",
+        );
+      },
+    },
+    {
+      name: "aliased principal Object.assign mutation",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "return this.orders.update(id, {",
+          "const actor = principal;\n    Object.assign(actor, { id: payload?.owner });\n    return this.orders.update(id, {",
+        );
+      },
+    },
+    {
+      name: "aliased principal id assignment",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "return this.orders.update(id, {",
+          "const actor = principal;\n    actor.id = payload?.owner;\n    return this.orders.update(id, {",
+        );
+      },
+    },
+    {
+      name: "notification effect key projection",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
         return source.replace(
@@ -1871,6 +1980,7 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       },
     },
     {
+      name: "spread update projection",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
         return source.replace(
@@ -1910,13 +2020,13 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
     const mutated = mutation.mutate(source);
-    assert.notEqual(mutated, source, mutation.file);
+    assert.notEqual(mutated, source, mutation.name || mutation.file);
     fs.writeFileSync(target, mutated, "utf8");
     const report = buildAudit(root, { includeExternal: false });
     const contract = report.results.find((item) => item.id === "contract.high_risk_operator_routes");
-    assert.equal(contract.status, STATUS.FAIL, mutation.file);
+    assert.equal(contract.status, STATUS.FAIL, mutation.name || mutation.file);
     assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0);
-    assert.ok(contract.evidence.issues.some((issue) => issue.path === mutation.file), mutation.file);
+    assert.ok(contract.evidence.issues.some((issue) => issue.path === mutation.file), mutation.name || mutation.file);
   }
 });
 

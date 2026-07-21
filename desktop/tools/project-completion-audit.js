@@ -356,12 +356,21 @@ const CONTRACTS = Object.freeze([
         file: "desktop/apps/api/src/local-store/local-store.service.ts",
         startPattern: /createNotification\s*\(level:\s*string,\s*title:\s*string,\s*body\?:\s*string,\s*target\?:\s*any\)/,
         patterns: [
-          /const effectKey = String\(target\?\.effectKey \|\| ""\)\.trim\(\)/,
+          /const (?<localEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);[\s\S]*?if \(\k<localEffectKey>\) \{[\s\S]*?data\.notifications\.find\(\(notification\) => String\(notification\?\.target\?\.effectKey \|\| ""\) === \k<localEffectKey>\)/,
           /const identity = this\.resolveTargetIdentity\(data, target \|\| \{\}, "notification target"\)/,
           /const normalizedTarget = \{[\s\S]*?\.\.\.\(target \|\| \{\}\)[\s\S]*?\.\.\.identity\.identityFields[\s\S]*?identityBinding:\s*identity\.binding/,
-          /data\.notifications\.find\(\(notification\) => String\(notification\?\.target\?\.effectKey \|\| ""\) === effectKey\)/,
           /if \(existing\) return assertNotificationEffectReplay\(existing, \{ level, title, body, target: normalizedTarget \}\)/,
           /id:\s*effectKey \? deterministicOperationId\("notice", effectKey\) : id\("notice"\)/,
+        ],
+      },
+      {
+        id: "notification-effect-dispatch",
+        file: "desktop/apps/api/src/notifications/notifications.service.ts",
+        startPattern: /create\s*\(level:\s*string,\s*title:\s*string,\s*body\?:\s*string,\s*target\?:\s*Record<string, unknown>\)/,
+        patterns: [
+          /if \(appConfig\.useLocalStore\) return this\.localStore\.createNotification\(level, title, body, target\)/,
+          /const (?<prismaEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);[\s\S]*?if \(\k<prismaEffectKey>\) return this\.createPrismaNotificationOnce\(\k<prismaEffectKey>, level, title, body, target\)/,
+          /return this\.prisma\.notification\.create\(\{/,
         ],
       },
       {
@@ -477,6 +486,18 @@ const CONTRACTS = Object.freeze([
           /fs\.renameSync\(pendingPath, lockPath\)/,
           /return ownedLocalStoreLockHandle\(lockPath, ownerFileName\)/,
           /localStoreLockIsStale\(lockPath\)/,
+        ],
+      },
+      {
+        id: "local-store-lock-owner-fence",
+        file: "desktop/apps/api/src/local-store/local-store.service.ts",
+        startPattern: /function ownedLocalStoreLockHandle\s*\(lockPath:\s*string,\s*ownerFileName:\s*string\)/,
+        patterns: [
+          /const ownerPath = path\.join\(lockPath, ownerFileName\)/,
+          /assertOwned:\s*\(\) => \{[\s\S]*?if \(released \|\| !fs\.existsSync\(ownerPath\)\)[\s\S]*?throw new LocalStoreConcurrentWriteError\("local store transaction lock ownership was lost"\)/,
+          /release:\s*\(\) => \{[\s\S]*?if \(released\) return[\s\S]*?released = true/,
+          /fs\.unlinkSync\(ownerPath\)/,
+          /fs\.rmdirSync\(lockPath\)/,
         ],
       },
     ],
@@ -2269,8 +2290,27 @@ function highRiskOperatorRouteResults(root) {
       /owner:\s*principal\.id/,
       ...explicitOrdersUpdateAllowlist,
     ],
-    [/\.\.\./, /\bnotificationEffectKey\b/, /owner:\s*payload(?:\?|\.)/],
+    [
+      /\.\.\./,
+      /\bnotificationEffectKey\b/,
+      /owner:\s*payload(?:\?|\.)/,
+      /Object\.assign\s*\(\s*principal\b/,
+      /\bprincipal(?:\.id)?\s*=/,
+    ],
   );
+  const ordersUpdateMethodBlock = extractBalancedBlock(
+    ordersUpdateSection || "",
+    /@TrustedOperator\(\)\s+principal(?:\s*:\s*TrustedOperatorPrincipal)?\s*,?\s*\)\s*/,
+  );
+  const ordersUpdateMethodBody = ordersUpdateMethodBlock
+    ? ordersUpdateMethodBlock.slice(ordersUpdateMethodBlock.indexOf("{"))
+    : null;
+  const ordersUpdateMethodIsExact = /^\{\s*return\s+this\.orders\.update\(\s*id\s*,\s*\{\s*status:\s*payload\?\.status\s*,\s*customerNotes:\s*payload\?\.customerNotes\s*,\s*expectedWechatAccountId:\s*payload\?\.expectedWechatAccountId\s*,\s*expectedConversationId:\s*payload\?\.expectedConversationId\s*,\s*expectedCustomerId:\s*payload\?\.expectedCustomerId\s*,\s*owner:\s*principal\.id\s*,?\s*\}\s*\)\s*;?\s*\}$/.test(ordersUpdateMethodBody || "");
+  if (!ordersUpdateMethodIsExact) {
+    const failure = "unexpected-method-body";
+    forbidden.push(`orders-update-trusted-${failure}`);
+    issues.push({ label: "orders-update-trusted", path: paths.orders, missing: [], forbidden: [failure] });
+  }
   check("routing-evaluate", sources.routing, /@Post\(["']evaluate["']\)/, [
     /@RequireOperatorCapability\(["']manage_training["']\)/,
   ]);
