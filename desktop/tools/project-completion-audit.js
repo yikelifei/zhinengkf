@@ -2539,13 +2539,6 @@ function compactAstText(sourceFile, node) {
   return tokens.join("");
 }
 
-function nearestClassDeclaration(ts, node) {
-  for (let current = node.parent; current; current = current.parent) {
-    if (ts.isClassDeclaration(current)) return current;
-  }
-  return null;
-}
-
 function unwrapExpression(ts, node) {
   let current = node;
   while (current && (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) ||
@@ -2659,26 +2652,35 @@ function assignmentPatternEvents(ts, pattern, expression, node, initialProjectio
         if (ts.isOmittedExpression(element)) return;
         let elementTarget = element;
         if (ts.isBindingElement(element)) {
-          if (element.dotDotDotToken) return;
           elementTarget = element.name;
         } else if (ts.isSpreadElement(element)) {
-          return;
+          elementTarget = element.expression;
         }
+        const projectionStep = (ts.isBindingElement(element) && element.dotDotDotToken) ||
+          ts.isSpreadElement(element)
+          ? { kind: "array-rest", index }
+          : {
+              kind: "index",
+              index,
+              defaultExpression: ts.isBindingElement(element) ? element.initializer || null : null,
+            };
         visit(
           elementTarget,
           valueNode,
-          [...projection, {
-            kind: "index",
-            index,
-            defaultExpression: ts.isBindingElement(element) ? element.initializer || null : null,
-          }],
+          [...projection, projectionStep],
         );
       });
       return;
     }
     if (ts.isObjectBindingPattern(target)) {
       for (const element of target.elements) {
-        if (element.dotDotDotToken) continue;
+        if (element.dotDotDotToken) {
+          const excluded = target.elements
+            .filter((candidate) => candidate !== element && !candidate.dotDotDotToken)
+            .map((candidate) => candidate.propertyName || candidate.name);
+          visit(element.name, valueNode, [...projection, { kind: "object-rest", excluded }]);
+          continue;
+        }
         let propertyProjection = null;
         if (element.propertyName && ts.isComputedPropertyName(element.propertyName)) {
           propertyProjection = { kind: "computed-property", expression: element.propertyName.expression };
@@ -2717,6 +2719,11 @@ function assignmentPatternEvents(ts, pattern, expression, node, initialProjectio
             name: property.name.text,
             defaultExpression: property.objectAssignmentInitializer || null,
           }]);
+        } else if (ts.isSpreadAssignment(property)) {
+          const excluded = target.properties
+            .filter((candidate) => candidate !== property && !ts.isSpreadAssignment(candidate))
+            .map((candidate) => candidate.name).filter(Boolean);
+          visit(property.expression, valueNode, [...projection, { kind: "object-rest", excluded }]);
         }
       }
     }
@@ -2818,6 +2825,17 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       indexWrite(resolveBinding(event.identifier), event);
     }
   }
+  for (const parameter of sourceNodes.filter(ts.isParameter)) {
+    for (const event of assignmentPatternEvents(
+      ts,
+      parameter.name,
+      null,
+      parameter,
+      [{ kind: "identity", defaultExpression: parameter.initializer }],
+    )) {
+      indexWrite(resolveBinding(event.identifier), event);
+    }
+  }
   for (const binary of sourceNodes.filter(ts.isBinaryExpression)) {
     if (binary.operatorToken.kind < ts.SyntaxKind.FirstAssignment ||
       binary.operatorToken.kind > ts.SyntaxKind.LastAssignment) continue;
@@ -2895,6 +2913,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return `object:{${[...value.properties.entries()]
         .map(([name, item]) => `${name}:${staticValueKey(item)}`).sort().join(",")}}`;
     }
+    if (value.kind === "operation-wrapper") {
+      return `${value.kind}:${value.wrapper}:${value.operation}:[${(value.arguments || []).map(staticValueKey).join(",")}]`;
+    }
+    if (value.kind === "bound-operation") {
+      return `${value.kind}:${value.operation}:[${value.arguments.map(staticValueKey).join(",")}]:${value.unknownArguments}`;
+    }
     if (value.kind === "union") return `union:${value.values.map(staticValueKey).sort().join("|")}`;
     return value.kind;
   };
@@ -2952,10 +2976,20 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           : current.elseStatement && nodeContains(current.elseStatement, event.node)
             ? current.elseStatement
             : null;
+        const conditionState = staticTruthiness(staticValueAt(current.expression, current));
+        const selected = conditionState === null
+          ? null
+          : conditionState ? current.thenStatement : current.elseStatement || null;
+        if (selected && branch === selected) continue;
         if (!branch || !nodeContains(branch, useNode)) return true;
       }
-      if (ts.isConditionalExpression(current) || ts.isSwitchStatement(current) ||
-        ts.isCaseBlock(current)) return true;
+      if (ts.isConditionalExpression(current)) {
+        const conditionState = staticTruthiness(staticValueAt(current.condition, current));
+        const selected = conditionState === null ? null : conditionState ? current.whenTrue : current.whenFalse;
+        if (selected && nodeContains(selected, event.node)) continue;
+        return true;
+      }
+      if (ts.isSwitchStatement(current) || ts.isCaseBlock(current)) return true;
       if (ts.isTryStatement(current)) {
         const eventBlock = nearestBlock(event.node);
         const useBlock = nearestBlock(useNode);
@@ -3020,10 +3054,44 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           applyStaticProjection(item, [step], useNode, seenBindings)));
         continue;
       }
+      if (step.kind === "identity") {
+        value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
+        continue;
+      }
       if (step.kind === "index") {
         value = value.kind !== "tuple" || step.index < 0
           ? unknownStaticValue
           : step.index < value.values.length ? value.values[step.index] : undefinedStaticValue;
+        value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
+        continue;
+      }
+      if (step.kind === "array-rest") {
+        value = value.kind === "tuple"
+          ? { kind: "tuple", values: value.values.slice(step.index) }
+          : unknownStaticValue;
+        value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
+        continue;
+      }
+      if (step.kind === "object-rest") {
+        const excluded = [];
+        let unknownExclusion = false;
+        for (const name of step.excluded || []) {
+          if (ts.isComputedPropertyName(name)) {
+            const computed = staticValueAt(name.expression, useNode, seenBindings);
+            if (computed.kind === "string") excluded.push(computed.value);
+            else unknownExclusion = true;
+          } else {
+            const propertyName = staticPropertyName(ts, { name });
+            if (propertyName === null) unknownExclusion = true;
+            else excluded.push(propertyName);
+          }
+        }
+        value = value.kind === "object" && !unknownExclusion
+          ? {
+              kind: "object",
+              properties: new Map([...value.properties].filter(([name]) => !excluded.includes(name))),
+            }
+          : unknownStaticValue;
         value = applyStaticDefault(value, step.defaultExpression, useNode, seenBindings);
         continue;
       }
@@ -3051,10 +3119,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       } else if (value.kind === "global") {
         const allowed = value.value === "Object"
           ? ["assign", "defineProperty", "defineProperties", "set"]
-          : value.value === "Reflect" ? ["defineProperty", "set"] : [];
+          : value.value === "Reflect" ? ["apply", "defineProperty", "set"] : [];
         value = allowed.includes(propertyName)
           ? { kind: "operation", value: propertyName }
           : unknownStaticValue;
+      } else if (value.kind === "operation" && ["call", "apply", "bind"].includes(propertyName)) {
+        value = { kind: "operation-wrapper", wrapper: propertyName, operation: value.value };
+      } else if (value.kind === "bound-operation" && ["call", "apply", "bind"].includes(propertyName)) {
+        value = { ...value, kind: "operation-wrapper", wrapper: propertyName };
       } else {
         value = unknownStaticValue;
       }
@@ -3095,6 +3167,20 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
     const container = executionContainer(ts, event.node);
     for (let current = event.node.parent; current && current !== container; current = current.parent) {
+      if (ts.isIfStatement(current)) {
+        const state = staticTruthiness(staticValueAt(current.expression, current, seenBindings));
+        const inThen = nodeContains(current.thenStatement, event.node);
+        const inElse = current.elseStatement && nodeContains(current.elseStatement, event.node);
+        if (state !== null && ((state && inElse) || (!state && inThen))) mergeReachability("never");
+        else if (state === null && (inThen || inElse)) mergeReachability("conditional");
+      }
+      if (ts.isConditionalExpression(current)) {
+        const state = staticTruthiness(staticValueAt(current.condition, current, seenBindings));
+        const inTrue = nodeContains(current.whenTrue, event.node);
+        const inFalse = nodeContains(current.whenFalse, event.node);
+        if (state !== null && ((state && inFalse) || (!state && inTrue))) mergeReachability("never");
+        else if (state === null && (inTrue || inFalse)) mergeReachability("conditional");
+      }
       if (!ts.isBinaryExpression(current) || !nodeContains(current.right, event.node)) continue;
       const operator = current.operatorToken.kind;
       if (![ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
@@ -3139,6 +3225,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         : unknownStaticValue;
     }
     if (ts.isConditionalExpression(expression)) {
+      const condition = staticTruthiness(staticValueAt(expression.condition, useNode, seenBindings));
+      if (condition === true) return staticValueAt(expression.whenTrue, useNode, seenBindings);
+      if (condition === false) return staticValueAt(expression.whenFalse, useNode, seenBindings);
       const whenTrue = staticValueAt(expression.whenTrue, useNode, seenBindings);
       const whenFalse = staticValueAt(expression.whenFalse, useNode, seenBindings);
       return unionStaticValues(whenTrue, whenFalse);
@@ -3182,11 +3271,33 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           properties.set(propertyName, staticValueAt(property.initializer, useNode, seenBindings));
         } else if (ts.isShorthandPropertyAssignment(property)) {
           properties.set(propertyName, staticValueAt(property.name, useNode, seenBindings));
+        } else if (ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)) {
+          properties.set(propertyName, unknownStaticValue);
         } else {
           return unknownStaticValue;
         }
       }
       return { kind: "object", properties };
+    }
+    if (ts.isCallExpression(expression)) {
+      const callees = staticAlternatives(staticValueAt(expression.expression, useNode, seenBindings));
+      const argumentsValue = expression.arguments.some(ts.isSpreadElement)
+        ? { values: [], unknown: true }
+        : {
+            values: expression.arguments.map((argument) => staticValueAt(argument, expression, seenBindings)),
+            unknown: false,
+          };
+      const bound = callees.flatMap((callee) => {
+        if (callee.kind !== "operation-wrapper" || callee.wrapper !== "bind") return [];
+        return [{
+          kind: "bound-operation",
+          operation: callee.operation,
+          arguments: [...(callee.arguments || []), ...argumentsValue.values.slice(1)],
+          unknownArguments: Boolean(callee.unknownArguments || argumentsValue.unknown),
+        }];
+      });
+      return bound.length ? unionStaticValues(...bound) : unknownStaticValue;
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const owner = staticValueAt(expression.expression, useNode, seenBindings);
@@ -3195,6 +3306,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
         const computed = staticValueAt(expression.argumentExpression, useNode, seenBindings);
         if (computed.kind === "string") propertyName = computed.value;
+        if (computed.kind === "number" && Number.isInteger(computed.value) && computed.value >= 0) {
+          return applyStaticProjection(owner, [{ kind: "index", index: computed.value }], useNode, seenBindings);
+        }
       }
       if (propertyName === null) {
         if (containsStaticKind(owner, "global")) return { kind: "operation", value: "unknown-operation" };
@@ -3203,6 +3317,20 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           : unknownStaticValue;
       }
       return applyStaticProjection(owner, [{ kind: "property", name: propertyName }], useNode, seenBindings);
+    }
+    if (expression.kind === ts.SyntaxKind.ThisKeyword) {
+      let classElement = null;
+      for (let current = expression.parent; current && current !== targetClass; current = current.parent) {
+        if (ts.isFunctionLike(current) && !ts.isArrowFunction(current) && current.parent !== targetClass) {
+          return unknownStaticValue;
+        }
+        if (current.parent === targetClass) classElement = current;
+      }
+      if (!classElement) return unknownStaticValue;
+      const isStatic = (ts.getModifiers(classElement) || [])
+        .some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ||
+        (ts.isClassStaticBlockDeclaration && ts.isClassStaticBlockDeclaration(classElement));
+      return isStatic ? { kind: "target-class" } : { kind: "target-prototype" };
     }
     if (!ts.isIdentifier(expression)) return unknownStaticValue;
     const binding = resolveBinding(expression);
@@ -3227,14 +3355,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     let hasValue = false;
     const mergedIfStatements = new Set();
     const valueForEvent = (event) => {
-      const projected = event.expression
-        ? applyStaticProjection(
-          staticValueAt(event.expression, event.node, nextSeen),
-          event.projection,
-          event.node,
-          nextSeen,
-        )
-        : unknownStaticValue;
+      const projected = applyStaticProjection(
+        event.expression ? staticValueAt(event.expression, event.node, nextSeen) : unknownStaticValue,
+        event.projection,
+        event.node,
+        nextSeen,
+      );
       return applyStaticDefault(projected, event.defaultExpression, event.node, nextSeen);
     };
     for (const event of reachableEvents) {
@@ -3270,63 +3396,129 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   };
   const isCriticalTarget = (node) => {
     const expression = unwrapExpression(ts, node);
-    const isTargetThis = expression && expression.kind === ts.SyntaxKind.ThisKeyword &&
-      nearestClassDeclaration(ts, expression) === targetClass;
-    return Boolean(isTargetThis || isTargetPrototypeAt(expression));
+    return Boolean(isTargetPrototypeAt(expression));
   };
 
   const unsafeDirectWrite = sourceNodes.some((node) => {
-    if ((!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) ||
-      !isCriticalTarget(node.expression) || !isWriteTarget(ts, node)) return false;
+    if ((!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) || !isWriteTarget(ts, node)) return false;
+    if (!isCriticalTarget(node.expression)) return false;
     if (ts.isPropertyAccessExpression(node)) return criticalNames.has(node.name.text);
     const propertyName = staticStringAt(node.argumentExpression, node);
     return !propertyName.known || criticalNames.has(propertyName.value);
   });
   if (unsafeDirectWrite) failures.push("critical-symbol-write");
 
-  const operationsAt = (node) => [...new Set(staticAlternatives(staticValueAt(node, node))
-    .filter((value) => value.kind === "operation")
-    .map((value) => value.value))];
+  const staticArgumentList = (argumentsList, call) => argumentsList.some(ts.isSpreadElement)
+    ? { values: [], unknown: true }
+    : { values: argumentsList.map((argument) => staticValueAt(argument, call)), unknown: false };
+  const callableOperations = (value) => staticAlternatives(value).flatMap((item) => {
+    if (item.kind === "operation") return [{ operation: item.value, arguments: [], unknownArguments: false }];
+    if (item.kind === "bound-operation") return [{
+      operation: item.operation,
+      arguments: item.arguments,
+      unknownArguments: item.unknownArguments,
+    }];
+    return [];
+  });
+  const invocationSemantics = (call) => {
+    const syntaxArguments = staticArgumentList(call.arguments, call);
+    const invocations = [];
+    for (const callee of staticAlternatives(staticValueAt(call.expression, call))) {
+      if (callee.kind === "bound-operation") {
+        invocations.push({
+          operation: callee.operation,
+          arguments: [...callee.arguments, ...syntaxArguments.values],
+          unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown),
+        });
+        continue;
+      }
+      if (callee.kind === "operation-wrapper") {
+        if (callee.wrapper === "bind") continue;
+        const base = callee.arguments || [];
+        if (callee.wrapper === "call") {
+          invocations.push({
+            operation: callee.operation,
+            arguments: [...base, ...syntaxArguments.values.slice(1)],
+            unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown),
+          });
+        } else if (callee.wrapper === "apply") {
+          const applied = syntaxArguments.values[1];
+          invocations.push({
+            operation: callee.operation,
+            arguments: applied?.kind === "tuple" ? [...base, ...applied.values] : base,
+            unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown || applied?.kind !== "tuple"),
+          });
+        }
+        continue;
+      }
+      if (callee.kind !== "operation") continue;
+      if (callee.value !== "apply") {
+        invocations.push({
+          operation: callee.value,
+          arguments: syntaxArguments.values,
+          unknownArguments: syntaxArguments.unknown,
+        });
+        continue;
+      }
+      const appliedCallable = syntaxArguments.values[0];
+      const appliedArguments = syntaxArguments.values[2];
+      for (const callable of callableOperations(appliedCallable)) {
+        invocations.push({
+          operation: callable.operation,
+          arguments: appliedArguments?.kind === "tuple"
+            ? [...callable.arguments, ...appliedArguments.values]
+            : callable.arguments,
+          unknownArguments: Boolean(callable.unknownArguments || syntaxArguments.unknown ||
+            appliedArguments?.kind !== "tuple"),
+        });
+      }
+    }
+    return invocations;
+  };
+  const isCriticalStaticTarget = (value) => containsStaticKind(
+    value,
+    "target-prototype",
+    "possible-target-prototype",
+  );
+  const isUnsafeAssignSource = (value) => value?.kind !== "object" ||
+    [...value.properties.keys()].some((name) => criticalNames.has(name));
   const calls = sourceNodes.filter(ts.isCallExpression);
   for (const call of calls) {
-    const operations = operationsAt(call.expression);
-    if (!operations.length) continue;
-    const target = call.arguments[0];
-    if (!target || !isCriticalTarget(target)) continue;
-    if (operations.includes("unknown-operation")) {
-      failures.push("critical-symbol-write");
-      break;
-    }
-    if (operations.includes("assign")) {
-      failures.push("critical-symbol-write");
-      break;
-    }
-    if (operations.some((operation) => operation === "defineProperty" || operation === "set")) {
-      const propertyName = staticStringAt(call.arguments[1], call);
-      if (!propertyName.known || criticalNames.has(propertyName.value)) {
+    for (const invocation of invocationSemantics(call)) {
+      if (invocation.unknownArguments) {
         failures.push("critical-symbol-write");
         break;
       }
-    }
-    if (operations.includes("defineProperties")) {
-      const descriptors = unwrapExpression(ts, call.arguments[1]);
-      const unsafeDescriptor = !descriptors || !ts.isObjectLiteralExpression(descriptors) ||
-        descriptors.properties.some((property) => {
-          if (ts.isSpreadAssignment(property)) return true;
-          const name = property.name;
-          if (!name) return true;
-          if (ts.isComputedPropertyName(name)) {
-            const propertyName = staticStringAt(name.expression, property);
-            return !propertyName.known || criticalNames.has(propertyName.value);
-          }
-          const propertyName = staticPropertyName(ts, property);
-          return propertyName === null || criticalNames.has(propertyName);
-        });
-      if (unsafeDescriptor) {
+      const target = invocation.arguments[0];
+      if (!target || !isCriticalStaticTarget(target)) continue;
+      if (invocation.operation === "unknown-operation") {
         failures.push("critical-symbol-write");
         break;
       }
+      if (invocation.operation === "assign") {
+        if (invocation.arguments.slice(1).some(isUnsafeAssignSource)) {
+          failures.push("critical-symbol-write");
+          break;
+        }
+        continue;
+      }
+      if (["defineProperty", "set"].includes(invocation.operation)) {
+        const propertyName = invocation.arguments[1];
+        if (propertyName?.kind !== "string" || criticalNames.has(propertyName.value)) {
+          failures.push("critical-symbol-write");
+          break;
+        }
+      }
+      if (invocation.operation === "defineProperties") {
+        const descriptors = invocation.arguments[1];
+        if (descriptors?.kind !== "object" || [...descriptors.properties.keys()]
+          .some((name) => criticalNames.has(name))) {
+          failures.push("critical-symbol-write");
+          break;
+        }
+      }
     }
+    if (failures.includes("critical-symbol-write")) break;
   }
 
   const shadowed = astNodes(ts, targetClass, (node) => ts.isIdentifier(node) &&
