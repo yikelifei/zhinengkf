@@ -2792,6 +2792,93 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     ...[
+      ["static sibling delegate", `let staticDelegatePrototype: any = {};
+class StaticDelegateRunner { static target() { staticDelegatePrototype.create = (() => null) as any; } static entry() { this.target(); } }
+staticDelegatePrototype = NotificationsService.prototype;
+StaticDelegateRunner.entry();`],
+      ["instance string sibling delegate", `let instanceDelegatePrototype: any = {};
+class InstanceDelegateRunner { target() { instanceDelegatePrototype.create = (() => null) as any; } entry() { this[\"target\"](); } }
+const instanceDelegateRunner = new InstanceDelegateRunner();
+instanceDelegatePrototype = NotificationsService.prototype;
+instanceDelegateRunner.entry();`],
+      ["constructor sibling delegate", `let constructorDelegatePrototype: any = {};
+class ConstructorDelegateRunner { target() { constructorDelegatePrototype.create = (() => null) as any; } constructor() { this.target(); } }
+constructorDelegatePrototype = NotificationsService.prototype;
+new ConstructorDelegateRunner();`],
+      ["two hop sibling delegate", `let twoHopDelegatePrototype: any = {};
+class TwoHopDelegateRunner { target() { twoHopDelegatePrototype.create = (() => null) as any; } middle() { this.target(); } entry() { this.middle(); } }
+twoHopDelegatePrototype = NotificationsService.prototype;
+new TwoHopDelegateRunner().entry();`],
+      ["static getter read", `let staticGetterPrototype: any = {};
+class StaticGetterRunner { static get value() { staticGetterPrototype.create = (() => null) as any; return 1; } }
+staticGetterPrototype = NotificationsService.prototype;
+void StaticGetterRunner.value;`],
+      ["static setter write", `let staticSetterPrototype: any = {};
+class StaticSetterRunner { static set value(_next: number) { staticSetterPrototype.create = (() => null) as any; } }
+staticSetterPrototype = NotificationsService.prototype;
+StaticSetterRunner.value = 1;`],
+      ["direct new instance getter", `let directGetterPrototype: any = {};
+class DirectGetterRunner { get value() { directGetterPrototype.create = (() => null) as any; return 1; } }
+directGetterPrototype = NotificationsService.prototype;
+void new DirectGetterRunner().value;`],
+      ["const instance setter", `let instanceSetterPrototype: any = {};
+class InstanceSetterRunner { set value(_next: number) { instanceSetterPrototype.create = (() => null) as any; } }
+const instanceSetterRunner = new InstanceSetterRunner();
+instanceSetterPrototype = NotificationsService.prototype;
+instanceSetterRunner.value = 1;`],
+      ["compound accessor read write", `let compoundAccessorPrototype: any = {};
+class CompoundAccessorRunner { static get value() { compoundAccessorPrototype.create = (() => null) as any; return 1; } static set value(_next: number) {} }
+compoundAccessorPrototype = NotificationsService.prototype;
+CompoundAccessorRunner.value += 1;`],
+      ["static class method call wrapper", `let staticCallPrototype: any = {};
+class StaticCallRunner { static run() { staticCallPrototype.create = (() => null) as any; } }
+staticCallPrototype = NotificationsService.prototype;
+StaticCallRunner.run.call(undefined);`],
+      ["static class method apply wrapper", `let staticApplyPrototype: any = {};
+class StaticApplyRunner { static run() { staticApplyPrototype.create = (() => null) as any; } }
+staticApplyPrototype = NotificationsService.prototype;
+StaticApplyRunner.run.apply(undefined, []);`],
+      ["direct new instance method call wrapper", `let directInstanceCallPrototype: any = {};
+class DirectInstanceCallRunner { run() { directInstanceCallPrototype.create = (() => null) as any; } }
+directInstanceCallPrototype = NotificationsService.prototype;
+new DirectInstanceCallRunner().run.call(undefined);`],
+      ["const instance method apply wrapper", `let constInstanceApplyPrototype: any = {};
+class ConstInstanceApplyRunner { run() { constInstanceApplyPrototype.create = (() => null) as any; } }
+const constInstanceApplyRunner = new ConstInstanceApplyRunner();
+constInstanceApplyPrototype = NotificationsService.prototype;
+constInstanceApplyRunner.run.apply(undefined, []);`],
+      ["prototype method call wrapper", `let prototypeCallPrototype: any = {};
+class PrototypeCallRunner { run() { prototypeCallPrototype.create = (() => null) as any; } }
+prototypeCallPrototype = NotificationsService.prototype;
+PrototypeCallRunner.prototype.run.call(undefined);`],
+      ["prototype method apply wrapper", `let prototypeApplyPrototype: any = {};
+class PrototypeApplyRunner { run() { prototypeApplyPrototype.create = (() => null) as any; } }
+prototypeApplyPrototype = NotificationsService.prototype;
+PrototypeApplyRunner.prototype.run.apply(undefined, []);`],
+      ["prototype ordinary method call", `let prototypeOrdinaryPrototype: any = {};
+class PrototypeOrdinaryRunner { run() { prototypeOrdinaryPrototype.create = (() => null) as any; } }
+prototypeOrdinaryPrototype = NotificationsService.prototype;
+PrototypeOrdinaryRunner.prototype.run();`],
+      ["live dynamic sibling delegate", `declare const unresolvedClassDelegateKey: string;
+let dynamicClassDelegatePrototype: any = NotificationsService.prototype;
+class DynamicClassDelegateRunner { target() { dynamicClassDelegatePrototype.create = (() => null) as any; } entry() { this[unresolvedClassDelegateKey](); } }
+new DynamicClassDelegateRunner().entry();`],
+      ["class alias call remains conservative", `let aliasedStaticClassPrototype: any = NotificationsService.prototype;
+class AliasedStaticClassRunner { static run() { aliasedStaticClassPrototype.create = (() => null) as any; } }
+const RetainedStaticClassAlias = AliasedStaticClassRunner;
+RetainedStaticClassAlias.run();`],
+      ["inherited class call remains conservative", `let inheritedClassPrototype: any = NotificationsService.prototype;
+class InheritedClassRunner extends class {} { static run() { inheritedClassPrototype.create = (() => null) as any; } }
+InheritedClassRunner.run();`],
+    ].map(([name, statement]) => ({
+      name: `${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
+    ...[
       ["static class method", "let classStaticPrototype: any = {};\nclass StaticRunner { static run() { classStaticPrototype.create = (() => null) as any; } }\nclassStaticPrototype = NotificationsService.prototype;\nStaticRunner.run();"],
       ["class constructor", "let classConstructorPrototype: any = {};\nclass ConstructorRunner { constructor() { classConstructorPrototype.create = (() => null) as any; } }\nclassConstructorPrototype = NotificationsService.prototype;\nnew ConstructorRunner();"],
       ["direct new instance method", "let classDirectPrototype: any = {};\nclass DirectRunner { run() { classDirectPrototype.create = (() => null) as any; } }\nclassDirectPrototype = NotificationsService.prototype;\nnew DirectRunner().run();"],
@@ -2820,10 +2907,10 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     })),
   ];
 
-  const wave64MutationCount = 82;
+  const wave65MutationCount = 101;
   const orderedMutations = [
-    ...mutations.slice(-wave64MutationCount),
-    ...mutations.slice(0, -wave64MutationCount),
+    ...mutations.slice(-wave65MutationCount),
+    ...mutations.slice(0, -wave65MutationCount),
   ];
   for (const [mutationIndex, mutation] of orderedMutations.entries()) {
     const root = createRealInboundFixture();
@@ -3234,6 +3321,106 @@ safeDirectClassPrototype = NotificationsService.prototype;
 let safeClassFieldPrototype: any = NotificationsService.prototype;
 class SafeClassFieldRunner { run = () => { safeClassFieldPrototype.create = () => null; }; }
 new SafeClassFieldRunner();
+let safeStaticDelegatePrototype: any = {};
+class SafeStaticDelegateRunner {
+  static target() { safeStaticDelegatePrototype.create = () => null; }
+  static entry() { this.target(); }
+}
+SafeStaticDelegateRunner.entry();
+safeStaticDelegatePrototype = NotificationsService.prototype;
+let safeInstanceDelegatePrototype: any = {};
+class SafeInstanceDelegateRunner {
+  target() { safeInstanceDelegatePrototype.create = () => null; }
+  entry() { this["target"](); }
+}
+new SafeInstanceDelegateRunner().entry();
+safeInstanceDelegatePrototype = NotificationsService.prototype;
+let safeConstructorDelegatePrototype: any = {};
+class SafeConstructorDelegateRunner {
+  target() { safeConstructorDelegatePrototype.create = () => null; }
+  constructor() { this.target(); }
+}
+new SafeConstructorDelegateRunner();
+safeConstructorDelegatePrototype = NotificationsService.prototype;
+let safeTwoHopDelegatePrototype: any = {};
+class SafeTwoHopDelegateRunner {
+  target() { safeTwoHopDelegatePrototype.create = () => null; }
+  middle() { this.target(); }
+  entry() { this.middle(); }
+}
+new SafeTwoHopDelegateRunner().entry();
+safeTwoHopDelegatePrototype = NotificationsService.prototype;
+let safeDeadDelegatePrototype: any = NotificationsService.prototype;
+class SafeDeadDelegateRunner {
+  target() { safeDeadDelegatePrototype.create = () => null; }
+  entry() { this.target(); }
+}
+if (false) new SafeDeadDelegateRunner().entry();
+let safeInertDelegatePrototype: any = NotificationsService.prototype;
+class SafeInertDelegateRunner {
+  target() { safeInertDelegatePrototype.create = () => null; }
+  entry() { this.target(); }
+}
+let safeOtherClassMemberPrototype: any = NotificationsService.prototype;
+class SafeOtherClassMemberRunner {
+  target() { safeOtherClassMemberPrototype.create = () => null; }
+  other() {}
+}
+new SafeOtherClassMemberRunner().other();
+let safeNestedArrowDelegatePrototype: any = NotificationsService.prototype;
+class SafeNestedArrowDelegateRunner {
+  target() { safeNestedArrowDelegatePrototype.create = () => null; }
+  entry() { void (() => this.target()); }
+}
+new SafeNestedArrowDelegateRunner().entry();
+let safeStaticGetterPrototype: any = {};
+class SafeStaticGetterRunner {
+  static get value() { safeStaticGetterPrototype.create = () => null; return 1; }
+}
+void SafeStaticGetterRunner.value;
+safeStaticGetterPrototype = NotificationsService.prototype;
+let safeGetterWriteOnlyPrototype: any = NotificationsService.prototype;
+class SafeGetterWriteOnlyRunner {
+  static get value() { safeGetterWriteOnlyPrototype.create = () => null; return 1; }
+}
+SafeGetterWriteOnlyRunner.value = 1;
+let safeSetterReadOnlyPrototype: any = NotificationsService.prototype;
+class SafeSetterReadOnlyRunner {
+  static set value(_next: number) { safeSetterReadOnlyPrototype.create = () => null; }
+}
+void SafeSetterReadOnlyRunner.value;
+let safeSetterBeforePrototype: any = {};
+class SafeSetterBeforeRunner {
+  static set value(_next: number) { safeSetterBeforePrototype.create = () => null; }
+}
+SafeSetterBeforeRunner.value = 1;
+safeSetterBeforePrototype = NotificationsService.prototype;
+let safeDeletedAccessorPrototype: any = NotificationsService.prototype;
+class SafeDeletedAccessorRunner {
+  static get value() { safeDeletedAccessorPrototype.create = () => null; return 1; }
+  static set value(_next: number) { safeDeletedAccessorPrototype.create = () => null; }
+}
+delete SafeDeletedAccessorRunner.value;
+let safeStaticCallMemberPrototype: any = {};
+class SafeStaticCallMemberRunner { static run() { safeStaticCallMemberPrototype.create = () => null; } }
+SafeStaticCallMemberRunner.run.call(undefined);
+safeStaticCallMemberPrototype = NotificationsService.prototype;
+let safePrototypeApplyMemberPrototype: any = {};
+class SafePrototypeApplyMemberRunner { run() { safePrototypeApplyMemberPrototype.create = () => null; } }
+SafePrototypeApplyMemberRunner.prototype.run.apply(undefined, []);
+safePrototypeApplyMemberPrototype = NotificationsService.prototype;
+let safeWrongStaticDomainPrototype: any = NotificationsService.prototype;
+class SafeWrongStaticDomainRunner {
+  static target() { safeWrongStaticDomainPrototype.create = () => null; }
+  entry() { this.target(); }
+}
+new SafeWrongStaticDomainRunner().entry();
+let safeWrongInstanceDomainPrototype: any = NotificationsService.prototype;
+class SafeWrongInstanceDomainRunner {
+  target() { safeWrongInstanceDomainPrototype.create = () => null; }
+  static entry() { this.target(); }
+}
+SafeWrongInstanceDomainRunner.entry();
 let safeLocalClassPrototype: any = NotificationsService.prototype;
 class SafeLocalClassRunner {
   static run() {

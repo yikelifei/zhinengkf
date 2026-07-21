@@ -3564,11 +3564,24 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         if (delegateName !== null) objectFunctionDelegateNames.add(delegateName);
       }
     }
+    const isDirectClassBindingWrite = (reference) => {
+      let identity = reference;
+      while (identity.parent && (ts.isParenthesizedExpression(identity.parent) ||
+        ts.isAsExpression(identity.parent) || ts.isTypeAssertionExpression(identity.parent) ||
+        ts.isNonNullExpression(identity.parent)) && identity.parent.expression === identity) {
+        identity = identity.parent;
+      }
+      const parent = identity.parent;
+      if (parent && (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+        parent.expression === identity) return false;
+      return isWriteTarget(ts, identity);
+    };
     const classFunctionPlan = (() => {
       if (referenceContainer === bindingContainer || useContainer !== referenceContainer) return null;
       if (classFunctionPlanCache.has(referenceContainer)) return classFunctionPlanCache.get(referenceContainer);
       let classElement = null;
-      if ((ts.isMethodDeclaration(referenceContainer) || ts.isConstructorDeclaration(referenceContainer)) &&
+      if ((ts.isMethodDeclaration(referenceContainer) || ts.isConstructorDeclaration(referenceContainer) ||
+        ts.isGetAccessorDeclaration(referenceContainer) || ts.isSetAccessorDeclaration(referenceContainer)) &&
         (ts.isClassDeclaration(referenceContainer.parent) || ts.isClassExpression(referenceContainer.parent))) {
         classElement = referenceContainer;
       } else if (ts.isArrowFunction(referenceContainer) || ts.isFunctionExpression(referenceContainer)) {
@@ -3607,9 +3620,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === classBinding));
       }
       const references = classBindingReferencesCache.get(classBinding);
-      if (references.some((reference) => isWriteTarget(ts, reference))) precise = false;
+
+      if (references.some(isDirectClassBindingWrite)) precise = false;
       const isStatic = (ts.getModifiers(classElement) || [])
         .some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
+      const isGetter = ts.isGetAccessorDeclaration(classElement);
+      const isSetter = ts.isSetAccessorDeclaration(classElement);
       const exported = (ts.getModifiers(classNode) || []).some((modifier) =>
         modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword);
       const plan = {
@@ -3621,10 +3637,87 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           : exactObjectPropertyName(classElement),
         isConstructor: ts.isConstructorDeclaration(classElement),
         isStatic,
+        isGetter,
+        isSetter,
         precise,
         exported,
         references,
       };
+      const callableForClassElement = (element) => {
+        if (ts.isMethodDeclaration(element) || ts.isConstructorDeclaration(element) ||
+          ts.isGetAccessorDeclaration(element) || ts.isSetAccessorDeclaration(element)) return element;
+        if (!ts.isPropertyDeclaration(element) || !element.initializer) return null;
+        const initializer = unwrapExpression(ts, element.initializer);
+        return initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))
+          ? initializer : null;
+      };
+      const classElementDomain = (element) => (ts.getModifiers(element) || [])
+        .some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ? "static" : "instance";
+      const lexicalClassThisContainer = (node) => {
+        for (let current = node; current; current = current.parent) {
+          if (ts.isFunctionLike(current) && !ts.isArrowFunction(current)) return current;
+        }
+        return null;
+      };
+      const delegateNames = new Set();
+      const dynamicDelegateNames = new Set();
+      let constructorDelegates = false;
+      let constructorDynamicDelegate = false;
+      if (!plan.isConstructor && !plan.isGetter && !plan.isSetter && plan.propertyName !== null) {
+        const reachableNames = new Set([plan.propertyName]);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const member of classNode.members) {
+            if (member === classElement) continue;
+            const callable = callableForClassElement(member);
+            if (!callable || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) continue;
+            const memberDomain = ts.isConstructorDeclaration(member) ? "instance" : classElementDomain(member);
+            if (memberDomain !== (plan.isStatic ? "static" : "instance")) continue;
+            let hasDynamicDelegate = false;
+            const delegates = astNodes(ts, callable, (candidate) => {
+              if (!ts.isCallExpression(candidate) || executionContainer(ts, candidate) !== callable) return false;
+              const callee = unwrapExpression(ts, candidate.expression);
+              if (!callee || (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) ||
+                unwrapExpression(ts, callee.expression)?.kind !== ts.SyntaxKind.ThisKeyword ||
+                lexicalClassThisContainer(callee.expression) !== callable ||
+                eventExecutionReachability({ node: candidate }, candidate, seenBindings) === "never") return false;
+              const delegatedName = exactObjectPropertyName(callee);
+              if (delegatedName === null) {
+                hasDynamicDelegate = true;
+                return false;
+              }
+              return reachableNames.has(delegatedName);
+            }).length > 0;
+            if (hasDynamicDelegate) {
+              if (ts.isConstructorDeclaration(member)) constructorDynamicDelegate = true;
+              else {
+                const dynamicMemberName = exactObjectPropertyName(member);
+                if (dynamicMemberName !== null) dynamicDelegateNames.add(dynamicMemberName);
+              }
+            }
+            if (!delegates) continue;
+            if (ts.isConstructorDeclaration(member)) {
+              if (!constructorDelegates) {
+                constructorDelegates = true;
+                changed = true;
+              }
+              continue;
+            }
+            const memberName = exactObjectPropertyName(member);
+            if (memberName !== null && !reachableNames.has(memberName)) {
+              reachableNames.add(memberName);
+              delegateNames.add(memberName);
+              changed = true;
+            }
+          }
+        }
+      }
+      plan.delegateNames = delegateNames;
+      plan.dynamicDelegateNames = dynamicDelegateNames;
+      plan.constructorDelegates = constructorDelegates;
+      plan.constructorDynamicDelegate = constructorDynamicDelegate;
+      plan.inherited = Boolean(classNode.heritageClauses?.length);
       classFunctionPlanCache.set(referenceContainer, plan);
       return plan;
     })();
@@ -3636,7 +3729,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       referenceContainer !== bindingContainer && useContainer === referenceContainer) {
       const directCalls = [];
       let escaped = Boolean(classFunctionPlan && (!classFunctionPlan.precise || classFunctionPlan.exported ||
-        classFunctionPlan.propertyName === null));
+        classFunctionPlan.inherited || classFunctionPlan.propertyName === null));
       const deferredExecution = Boolean(referenceContainer.asteriskToken ||
         (ts.getModifiers(referenceContainer) || [])
           .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
@@ -3743,8 +3836,71 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           const computed = staticValueAt(member.argumentExpression, member, seenBindings);
           return computed.kind === "string" || computed.kind === "number" ? String(computed.value) : null;
         };
-        const callForMember = (member) => sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
-          unwrapExpression(ts, candidate.expression) === member) || null;
+        const callForMember = (member) => {
+          const direct = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+            unwrapExpression(ts, candidate.expression) === member);
+          if (direct) return direct;
+          let identity = member;
+          while (identity?.parent && unwrapExpression(ts, identity.parent) === member) identity = identity.parent;
+          const wrapperMember = identity?.parent;
+          if (!wrapperMember || (!ts.isPropertyAccessExpression(wrapperMember) &&
+            !ts.isElementAccessExpression(wrapperMember)) ||
+            unwrapExpression(ts, wrapperMember.expression) !== identity ||
+            !["call", "apply"].includes(exactMemberName(wrapperMember))) return null;
+          return sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+            unwrapExpression(ts, candidate.expression) === wrapperMember) || null;
+        };
+        const memberAccessTrigger = (member) => {
+          let target = member;
+          while (target.parent && (ts.isParenthesizedExpression(target.parent) ||
+            ts.isAsExpression(target.parent) || ts.isTypeAssertionExpression(target.parent) ||
+            ts.isNonNullExpression(target.parent)) && target.parent.expression === target) target = target.parent;
+          const parent = target.parent;
+          if (parent && ts.isDeleteExpression(parent) && parent.expression === target) {
+            return { read: false, write: false, node: parent };
+          }
+          if (parent && ts.isBinaryExpression(parent) && parent.left === target &&
+            parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+            parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+            return {
+              read: parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken,
+              write: true,
+              node: parent,
+            };
+          }
+          if (parent && (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+            (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)) {
+            return { read: true, write: true, node: parent };
+          }
+          if (isWriteTarget(ts, member)) return { read: true, write: true, node: target };
+          return { read: true, write: false, node: member };
+        };
+        const targetUseForMember = (member) => {
+          const trigger = memberAccessTrigger(member);
+          if (classFunctionPlan.isGetter) return trigger.read ? trigger.node : null;
+          if (classFunctionPlan.isSetter) return trigger.write ? trigger.node : null;
+          return callForMember(member);
+        };
+        const triggerContainsBindingEvent = (trigger) => eventsForBinding(binding).some((event) =>
+          event.node !== trigger && nodeContains(trigger, event.node) &&
+          eventExecutionReachability(event, event.node, seenBindings) !== "never");
+        const registerClassTrigger = (trigger) => {
+          if (!trigger) {
+            escaped = true;
+            return;
+          }
+          if (triggerContainsBindingEvent(trigger)) {
+            escaped = true;
+            return;
+          }
+          registerDirectCall(trigger);
+        };
+        const registerTargetMember = (member) => {
+          const trigger = targetUseForMember(member);
+          if (!trigger && (classFunctionPlan.isGetter || classFunctionPlan.isSetter)) return;
+          registerClassTrigger(trigger);
+        };
+        const registerDelegateMember = (member) => registerClassTrigger(callForMember(member));
         const inspectInstanceBinding = (instanceBinding) => {
           for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
             !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === instanceBinding)) {
@@ -3752,17 +3908,17 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             const member = memberForOwner(reference);
             const memberName = exactMemberName(member);
             if (memberName !== classFunctionPlan.propertyName) {
-              if (!member || memberName === null) escaped = true;
+              if (classFunctionPlan.delegateNames.has(memberName)) registerDelegateMember(member);
+              else if (classFunctionPlan.dynamicDelegateNames.has(memberName) && callForMember(member)) escaped = true;
+              else if (!member || memberName === null) escaped = true;
               continue;
             }
-            const call = callForMember(member);
-            if (call) registerDirectCall(call);
-            else escaped = true;
+            registerTargetMember(member);
           }
         };
         for (const reference of classFunctionPlan.references) {
           if (eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
-          if (isWriteTarget(ts, reference)) {
+          if (isDirectClassBindingWrite(reference)) {
             escaped = true;
             continue;
           }
@@ -3770,9 +3926,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           if (staticMember) {
             const memberName = exactMemberName(staticMember);
             if (classFunctionPlan.isStatic && memberName === classFunctionPlan.propertyName) {
-              const call = callForMember(staticMember);
-              if (call) registerDirectCall(call);
-              else escaped = true;
+              registerTargetMember(staticMember);
+            } else if (classFunctionPlan.isStatic && classFunctionPlan.delegateNames.has(memberName)) {
+              registerDelegateMember(staticMember);
+            } else if (classFunctionPlan.isStatic && classFunctionPlan.dynamicDelegateNames.has(memberName) &&
+              callForMember(staticMember)) {
+              escaped = true;
+            } else if (!classFunctionPlan.isStatic && memberName === "prototype") {
+              const prototypeMember = memberForOwner(staticMember);
+              const prototypeMemberName = exactMemberName(prototypeMember);
+              if (prototypeMemberName === classFunctionPlan.propertyName) {
+                registerTargetMember(prototypeMember);
+              } else if (classFunctionPlan.delegateNames.has(prototypeMemberName)) {
+                registerDelegateMember(prototypeMember);
+              } else if (classFunctionPlan.dynamicDelegateNames.has(prototypeMemberName) &&
+                callForMember(prototypeMember)) {
+                escaped = true;
+              } else if (!prototypeMember || prototypeMemberName === null) {
+                escaped = true;
+              }
             } else if (memberName === null) escaped = true;
             continue;
           }
@@ -3784,18 +3956,21 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             escaped = true;
             continue;
           }
-          if (classFunctionPlan.isConstructor) {
-            registerDirectCall(construct);
-            continue;
+          if (classFunctionPlan.constructorDynamicDelegate) escaped = true;
+          if (classFunctionPlan.isConstructor || classFunctionPlan.constructorDelegates) {
+            registerClassTrigger(construct);
+            if (classFunctionPlan.isConstructor) continue;
           }
           if (classFunctionPlan.isStatic) continue;
           const directMember = memberForOwner(construct);
           if (directMember) {
             const memberName = exactMemberName(directMember);
             if (memberName === classFunctionPlan.propertyName) {
-              const call = callForMember(directMember);
-              if (call) registerDirectCall(call);
-              else escaped = true;
+              registerTargetMember(directMember);
+            } else if (classFunctionPlan.delegateNames.has(memberName)) {
+              registerDelegateMember(directMember);
+            } else if (classFunctionPlan.dynamicDelegateNames.has(memberName) && callForMember(directMember)) {
+              escaped = true;
             } else if (memberName === null) escaped = true;
             continue;
           }
