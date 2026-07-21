@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { resolveWorktreeNodeModules } = require("./resolve-worktree-node-modules");
 
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
@@ -355,22 +356,42 @@ const CONTRACTS = Object.freeze([
         id: "local-notification-effect-replay",
         file: "desktop/apps/api/src/local-store/local-store.service.ts",
         startPattern: /createNotification\s*\(level:\s*string,\s*title:\s*string,\s*body\?:\s*string,\s*target\?:\s*any\)/,
+        maskCommentsAndStrings: true,
         patterns: [
-          /const (?<localEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);[\s\S]*?if \(\k<localEffectKey>\) \{[\s\S]*?data\.notifications\.find\(\(notification\) => String\(notification\?\.target\?\.effectKey \|\| ""\) === \k<localEffectKey>\)/,
-          /const identity = this\.resolveTargetIdentity\(data, target \|\| \{\}, "notification target"\)/,
+          /const (?<localEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);\s*const identity = this\.resolveTargetIdentity\(data, target \|\| \{\},\s*["']\s*["']\);\s*const normalizedTarget = \{\s*\.\.\.\(target \|\| \{\}\),\s*\.\.\.identity\.identityFields,\s*identityBinding:\s*identity\.binding,?\s*\};\s*if \(\k<localEffectKey>\) \{\s*const existing = data\.notifications\.find\(\(notification\) => String\(notification\?\.target\?\.effectKey \|\| ""\) === \k<localEffectKey>\);\s*if \(existing\) return assertNotificationEffectReplay\(existing, \{ level, title, body, target: normalizedTarget \}\);\s*\}/,
+          /const identity = this\.resolveTargetIdentity\(data, target \|\| \{\},\s*["']\s*["']\)/,
           /const normalizedTarget = \{[\s\S]*?\.\.\.\(target \|\| \{\}\)[\s\S]*?\.\.\.identity\.identityFields[\s\S]*?identityBinding:\s*identity\.binding/,
           /if \(existing\) return assertNotificationEffectReplay\(existing, \{ level, title, body, target: normalizedTarget \}\)/,
-          /id:\s*effectKey \? deterministicOperationId\("notice", effectKey\) : id\("notice"\)/,
+          /id:\s*effectKey \? deterministicOperationId\(["']\s*["'], effectKey\) : id\(["']\s*["']\)/,
+        ],
+        occurrences: [
+          { pattern: /if \(effectKey\) \{/g, minimum: 1, maximum: 1 },
+          { pattern: /data\.notifications\.find\(/g, minimum: 1, maximum: 1 },
+          { pattern: /assertNotificationEffectReplay\(/g, minimum: 1, maximum: 1 },
+        ],
+        forbiddenRanges: [
+          { endPattern: /if \(effectKey\) \{/, patterns: [/\breturn\b/] },
         ],
       },
       {
         id: "notification-effect-dispatch",
         file: "desktop/apps/api/src/notifications/notifications.service.ts",
         startPattern: /create\s*\(level:\s*string,\s*title:\s*string,\s*body\?:\s*string,\s*target\?:\s*Record<string, unknown>\)/,
+        maskCommentsAndStrings: true,
         patterns: [
-          /if \(appConfig\.useLocalStore\) return this\.localStore\.createNotification\(level, title, body, target\)/,
-          /const (?<prismaEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);[\s\S]*?if \(\k<prismaEffectKey>\) return this\.createPrismaNotificationOnce\(\k<prismaEffectKey>, level, title, body, target\)/,
+          /if \(appConfig\.useLocalStore\) return this\.localStore\.createNotification\(level, title, body, target\);\s*const (?<prismaEffectKey>[A-Za-z_$][\w$]*) = String\(target\?\.effectKey \|\| ""\)\.trim\(\);\s*if \(\k<prismaEffectKey>\) return this\.createPrismaNotificationOnce\(\k<prismaEffectKey>, level, title, body, target\);\s*return this\.prisma\.notification\.create\(\{/,
           /return this\.prisma\.notification\.create\(\{/,
+        ],
+        occurrences: [
+          { pattern: /this\.createPrismaNotificationOnce\(/g, minimum: 1, maximum: 1 },
+          { pattern: /this\.prisma\.notification\.create\(/g, minimum: 1, maximum: 1 },
+        ],
+        forbiddenRanges: [
+          {
+            startPattern: /const [A-Za-z_$][\w$]* = String\(target\?\.effectKey \|\| ""\)\.trim\(\);/,
+            endPattern: /if \([A-Za-z_$][\w$]*\) return this\.createPrismaNotificationOnce\(/,
+            patterns: [/\breturn\b/],
+          },
         ],
       },
       {
@@ -492,12 +513,36 @@ const CONTRACTS = Object.freeze([
         id: "local-store-lock-owner-fence",
         file: "desktop/apps/api/src/local-store/local-store.service.ts",
         startPattern: /function ownedLocalStoreLockHandle\s*\(lockPath:\s*string,\s*ownerFileName:\s*string\)/,
+        maskCommentsAndStrings: true,
         patterns: [
           /const ownerPath = path\.join\(lockPath, ownerFileName\)/,
-          /assertOwned:\s*\(\) => \{[\s\S]*?if \(released \|\| !fs\.existsSync\(ownerPath\)\)[\s\S]*?throw new LocalStoreConcurrentWriteError\("local store transaction lock ownership was lost"\)/,
-          /release:\s*\(\) => \{[\s\S]*?if \(released\) return[\s\S]*?released = true/,
-          /fs\.unlinkSync\(ownerPath\)/,
-          /fs\.rmdirSync\(lockPath\)/,
+          /assertOwned:\s*\(\) => \{\s*if \(released \|\| !fs\.existsSync\(ownerPath\)\) \{\s*throw new LocalStoreConcurrentWriteError\(["']\s*["']\);\s*\}\s*\}/,
+        ],
+        occurrences: [
+          { pattern: /if \(released \|\| !fs\.existsSync\(ownerPath\)\)/g, minimum: 1, maximum: 1 },
+          { pattern: /assertOwned:\s*\(\) => \{/g, minimum: 1, maximum: 1 },
+        ],
+        forbiddenRanges: [
+          {
+            startPattern: /assertOwned:\s*\(\) => \{/,
+            endPattern: /if \(released \|\| !fs\.existsSync\(ownerPath\)\)/,
+            patterns: [/\breturn\b/],
+          },
+        ],
+      },
+      {
+        id: "local-store-lock-release",
+        file: "desktop/apps/api/src/local-store/local-store.service.ts",
+        startPattern: /release:\s*\(\) =>\s*/,
+        maskCommentsAndStrings: true,
+        patterns: [
+          /release:\s*\(\) => \{\s*if \(released\) return;\s*released = true;[\s\S]*?fs\.unlinkSync\(ownerPath\)[\s\S]*?fs\.rmdirSync\(lockPath\)/,
+        ],
+        occurrences: [
+          { pattern: /release:\s*\(\) => \{/g, minimum: 1, maximum: 1 },
+          { pattern: /released = true/g, minimum: 1, maximum: 1 },
+          { pattern: /fs\.unlinkSync\(ownerPath\)/g, minimum: 1, maximum: 1 },
+          { pattern: /fs\.rmdirSync\(lockPath\)/g, minimum: 1, maximum: 1 },
         ],
       },
     ],
@@ -2070,26 +2115,69 @@ function contractResults(root) {
     const forbidden = (contract.forbidden || [])
       .map((pattern, index) => (pattern.test(text) ? `forbidden-pattern-${index + 1}` : null))
       .filter(Boolean);
+    if (contract.id === "contract.inbound_effect_recovery") {
+      for (const failure of inboundCriticalImportFailures(root)) missing.push(`critical-import:${failure}`);
+    }
     const paths = new Set([normalizeRelative(contract.file)]);
     for (const section of contract.sections || []) {
       paths.add(normalizeRelative(section.file));
       const sectionSource = readText(root, section.file);
-      const block = sectionSource === null ? null : extractBalancedBlock(sectionSource, section.startPattern);
-      if (block === null) {
+      let inspectionSource = sectionSource;
+      if (inspectionSource !== null && section.maskCommentsAndStrings) {
+        try {
+          inspectionSource = maskTypeScriptCommentsAndStrings(inspectionSource);
+        } catch (_error) {
+          missing.push(`${section.id}:invalid-typescript-lexical-structure`);
+          continue;
+        }
+      }
+      const blockRange = inspectionSource === null ? null : extractBalancedBlockRange(inspectionSource, section.startPattern);
+      if (blockRange === null) {
         missing.push(`${section.id}:section-missing`);
         continue;
       }
+      const block = inspectionSource.slice(blockRange.start, blockRange.end);
+      const originalBlock = sectionSource.slice(blockRange.start, blockRange.end);
+      const inspectionBlock = block;
+      for (const failure of criticalSectionAstFailures(section.id, originalBlock)) {
+        missing.push(`${section.id}:ast-${failure}`);
+      }
       for (const [index, pattern] of section.patterns.entries()) {
-        if (!pattern.test(block)) missing.push(`${section.id}:required-pattern-${index + 1}`);
+        if (!pattern.test(inspectionBlock)) missing.push(`${section.id}:required-pattern-${index + 1}`);
       }
       for (const [index, pattern] of (section.forbidden || []).entries()) {
-        if (pattern.test(block)) forbidden.push(`${section.id}:forbidden-pattern-${index + 1}`);
+        if (pattern.test(inspectionBlock)) forbidden.push(`${section.id}:forbidden-pattern-${index + 1}`);
       }
       for (const [index, occurrence] of (section.occurrences || []).entries()) {
         const flags = occurrence.pattern.flags.includes("g") ? occurrence.pattern.flags : `${occurrence.pattern.flags}g`;
-        const matches = block.match(new RegExp(occurrence.pattern.source, flags)) || [];
+        const matches = inspectionBlock.match(new RegExp(occurrence.pattern.source, flags)) || [];
         if (matches.length < occurrence.minimum) {
           missing.push(`${section.id}:occurrence-${index + 1}-${matches.length}-of-${occurrence.minimum}`);
+        }
+        if (Number.isFinite(occurrence.maximum) && matches.length > occurrence.maximum) {
+          forbidden.push(`${section.id}:occurrence-${index + 1}-${matches.length}-max-${occurrence.maximum}`);
+        }
+      }
+      for (const [index, range] of (section.forbiddenRanges || []).entries()) {
+        const startMatch = range.startPattern
+          ? new RegExp(range.startPattern.source, range.startPattern.flags.replace(/g/g, "")).exec(inspectionBlock)
+          : { index: 0, 0: "" };
+        if (!startMatch) {
+          missing.push(`${section.id}:forbidden-range-${index + 1}-start-missing`);
+          continue;
+        }
+        const rangeStart = startMatch.index + startMatch[0].length;
+        const suffix = inspectionBlock.slice(rangeStart);
+        const endMatch = new RegExp(range.endPattern.source, range.endPattern.flags.replace(/g/g, "")).exec(suffix);
+        if (!endMatch) {
+          missing.push(`${section.id}:forbidden-range-${index + 1}-end-missing`);
+          continue;
+        }
+        const rangeText = suffix.slice(0, endMatch.index);
+        for (const [patternIndex, pattern] of range.patterns.entries()) {
+          if (pattern.test(rangeText)) {
+            forbidden.push(`${section.id}:forbidden-range-${index + 1}-pattern-${patternIndex + 1}`);
+          }
         }
       }
     }
@@ -2104,7 +2192,498 @@ function contractResults(root) {
   });
 }
 
-function extractBalancedBlock(text, startPattern) {
+
+let typescriptCompiler = null;
+
+function isStrictlyContainedPath(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return Boolean(relative)
+    && relative !== ".."
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+function loadTypeScriptCompilerFromDependencyRoot(dependencyRoot, options = {}) {
+  if (typeof dependencyRoot !== "string" || !dependencyRoot.trim()) {
+    throw new Error("TypeScript compiler dependencies are unavailable");
+  }
+  const realpathSync = options.realpathSync || fs.realpathSync;
+  const requireModule = options.requireModule || require;
+  const resolvedDependencyRoot = path.resolve(dependencyRoot);
+  if (!fs.existsSync(resolvedDependencyRoot) || !fs.statSync(resolvedDependencyRoot).isDirectory()) {
+    throw new Error("TypeScript compiler dependency root is unavailable");
+  }
+  const packageRoot = path.join(resolvedDependencyRoot, "typescript");
+  const packageFile = path.join(packageRoot, "package.json");
+  const entryFile = path.join(packageRoot, "lib", "typescript.js");
+  for (const file of [packageFile, entryFile]) {
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      throw new Error("TypeScript compiler package is incomplete");
+    }
+  }
+  const realDependencyRoot = realpathSync(resolvedDependencyRoot);
+  const realPackageRoot = realpathSync(packageRoot);
+  const realPackageFile = realpathSync(packageFile);
+  const realEntryFile = realpathSync(entryFile);
+  if (!isStrictlyContainedPath(realDependencyRoot, realPackageRoot)) {
+    throw new Error("TypeScript compiler package escapes its dependency root");
+  }
+  if (!isStrictlyContainedPath(realPackageRoot, realPackageFile)) {
+    throw new Error("TypeScript compiler manifest escapes its package root");
+  }
+  if (!isStrictlyContainedPath(realPackageRoot, realEntryFile)) {
+    throw new Error("TypeScript compiler entry escapes its package root");
+  }
+  const loaded = requireModule(realEntryFile);
+  const requiredFunctions = [
+    "createSourceFile",
+    "forEachChild",
+    "getLeadingCommentRanges",
+    "getTrailingCommentRanges",
+    "canHaveDecorators",
+    "getDecorators",
+    "getModifiers",
+  ];
+  if (requiredFunctions.some((name) => typeof loaded?.[name] !== "function")
+    || !loaded?.ScriptTarget || !loaded?.ScriptKind || !loaded?.SyntaxKind) {
+    throw new Error("TypeScript compiler API is unavailable");
+  }
+  return loaded;
+}
+
+function loadTypeScriptCompiler() {
+  if (typescriptCompiler) return typescriptCompiler;
+  const dependencyRoot = resolveWorktreeNodeModules(path.resolve(__dirname, ".."));
+  typescriptCompiler = loadTypeScriptCompilerFromDependencyRoot(dependencyRoot);
+  return typescriptCompiler;
+}
+
+function parseTypeScriptForAudit(text, fileName = "audit-source.ts", requireCleanParse = false) {
+  const ts = loadTypeScriptCompiler();
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    String(text || ""),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const lexicalDiagnosticCodes = new Set([1002, 1010, 1160, 1161]);
+  const diagnostics = sourceFile.parseDiagnostics || [];
+  const lexicalFailure = diagnostics.some((diagnostic) =>
+    lexicalDiagnosticCodes.has(diagnostic.code) || (diagnostic.code === 1005 && diagnostic.start >= text.length));
+  if (lexicalFailure || (requireCleanParse && diagnostics.length)) {
+    throw new SyntaxError(`invalid TypeScript syntax in ${fileName}`);
+  }
+  return { ts, sourceFile };
+}
+
+function maskTypeScriptCommentsAndStrings(text) {
+  text = String(text || "");
+  const { ts, sourceFile } = parseTypeScriptForAudit(text);
+  const masked = text.split("");
+  const lineTerminator = (character) => ["\n", "\r", "\u2028", "\u2029"].includes(character);
+  const blank = (start, end) => {
+    for (let index = Math.max(0, start); index < Math.min(end, masked.length); index += 1) {
+      if (!lineTerminator(masked[index])) masked[index] = " ";
+    }
+  };
+  const commentRanges = new Map();
+  const collectCommentsAt = (position) => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(text, position) || []),
+      ...(ts.getTrailingCommentRanges(text, position) || []),
+    ]) {
+      commentRanges.set(`${range.pos}:${range.end}`, range);
+    }
+  };
+  const visit = (node) => {
+    collectCommentsAt(node.pos);
+    collectCommentsAt(node.end);
+    for (const child of node.getChildren(sourceFile)) visit(child);
+  };
+  collectCommentsAt(0);
+  collectCommentsAt(text.length);
+  visit(sourceFile);
+  for (const range of commentRanges.values()) blank(range.pos, range.end);
+
+  const maskLiteralNode = (node) => {
+    const start = node.getStart(sourceFile);
+    const end = node.end;
+    if (node.kind === ts.SyntaxKind.StringLiteral || node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
+      blank(start + 1, end - 1);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      const literal = text.slice(start, end);
+      const closingSlash = literal.lastIndexOf("/");
+      if (closingSlash <= 0) throw new SyntaxError("invalid regular expression literal");
+      blank(start + 1, start + closingSlash);
+      blank(start + closingSlash + 1, end);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle) {
+      blank(start + 1, end - 2);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.TemplateTail) blank(start + 1, end - 1);
+  };
+  const visitLiterals = (node) => {
+    maskLiteralNode(node);
+    ts.forEachChild(node, visitLiterals);
+  };
+  visitLiterals(sourceFile);
+  return masked.join("");
+}
+
+function maskTypeScriptForDecoratorAudit(text) {
+  const masked = maskTypeScriptCommentsAndStrings(text);
+  const restored = masked.split("");
+  const decoratorLiteral = /@(?:Controller|Get|Post|Put|Patch|Delete|RequireOperatorCapability)\(\s*(["'])([^\r\n]*?)\1\s*\)/g;
+  for (const match of masked.matchAll(decoratorLiteral)) {
+    const quoteOffset = match[0].indexOf(match[1]);
+    const contentStart = match.index + quoteOffset + 1;
+    for (let offset = 0; offset < match[2].length; offset += 1) {
+      restored[contentStart + offset] = text[contentStart + offset];
+    }
+  }
+  return restored.join("");
+}
+
+function astNodes(ts, root, predicate) {
+  const matches = [];
+  const visit = (node) => {
+    if (predicate(node)) matches.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return matches;
+}
+
+function criticalImportBindingFailures(text, fileName, specifications) {
+  const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName);
+  const failures = [];
+  for (const specification of specifications) {
+    const matchingImports = [];
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
+        statement.moduleSpecifier.text !== specification.source || !statement.importClause) continue;
+      if (specification.kind === "default" && statement.importClause.name?.text === specification.name) {
+        matchingImports.push(statement.importClause.name);
+      }
+      const bindings = statement.importClause.namedBindings;
+      if (specification.kind === "named" && bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          if (!element.propertyName && element.name.text === specification.name) matchingImports.push(element.name);
+        }
+      }
+    }
+    if (matchingImports.length !== 1) {
+      failures.push(`${specification.name}-import`);
+      continue;
+    }
+    const importedIdentifier = matchingImports[0];
+    const identifiers = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) && node.text === specification.name);
+    const usageAllowed = (identifier) => {
+      if (identifier === importedIdentifier) return true;
+      const parent = identifier.parent;
+      if (specification.usage === "any") return true;
+      if (specification.usage === "call") return ts.isCallExpression(parent) && parent.expression === identifier;
+      if (specification.usage === "namespace") return ts.isPropertyAccessExpression(parent) && parent.expression === identifier;
+      if (specification.usage === "decorator") {
+        return ts.isCallExpression(parent) && parent.expression === identifier && ts.isDecorator(parent.parent);
+      }
+      if (specification.usage === "guard") {
+        return ts.isCallExpression(parent) && parent.arguments.includes(identifier) &&
+          ts.isIdentifier(parent.expression) && parent.expression.text === "UseGuards" && ts.isDecorator(parent.parent);
+      }
+      if (specification.usage === "type") return ts.isTypeReferenceNode(parent) && parent.typeName === identifier;
+      return false;
+    };
+    if (identifiers.some((identifier) => !usageAllowed(identifier))) failures.push(`${specification.name}-usage`);
+  }
+  return failures;
+}
+
+function exactNamedImportFailure(text, fileName, source, expectedNames) {
+  const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName, true);
+  const imports = sourceFile.statements.filter((statement) => ts.isImportDeclaration(statement) &&
+    ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === source);
+  if (imports.length !== 1 || imports[0].importClause?.name) return true;
+  const bindings = imports[0].importClause?.namedBindings;
+  return !bindings || !ts.isNamedImports(bindings) || bindings.elements.length !== expectedNames.length ||
+    bindings.elements.some((element, index) => element.propertyName || element.name.text !== expectedNames[index]);
+}
+
+function inboundCriticalImportFailures(root) {
+  const checks = [
+    {
+      file: "desktop/apps/api/src/local-store/local-store.service.ts",
+      specifications: [
+        { name: "fs", source: "node:fs", kind: "default", usage: "any" },
+        { name: "path", source: "node:path", kind: "default", usage: "any" },
+        { name: "randomUUID", source: "node:crypto", kind: "named", usage: "call" },
+        { name: "deterministicOperationId", source: "../shared/operation-idempotency", kind: "named", usage: "call" },
+        { name: "assertNotificationEffectReplay", source: "../shared/notification-idempotency", kind: "named", usage: "call" },
+      ],
+    },
+    {
+      file: "desktop/apps/api/src/notifications/notifications.service.ts",
+      specifications: [
+        { name: "assertNotificationEffectReplay", source: "../shared/notification-idempotency", kind: "named", usage: "call" },
+        { name: "deterministicOperationId", source: "../shared/operation-idempotency", kind: "named", usage: "call" },
+        { name: "isUniqueConstraintError", source: "../shared/operation-idempotency", kind: "named", usage: "call" },
+      ],
+    },
+    {
+      file: "desktop/apps/api/src/shared/notification-idempotency.ts",
+      specifications: [
+        { name: "createOperationFingerprint", source: "./operation-idempotency", kind: "named", usage: "call" },
+      ],
+    },
+  ];
+  const failures = [];
+  for (const check of checks) {
+    const text = readText(root, check.file);
+    if (text === null) {
+      failures.push(`${normalizeRelative(check.file)}:missing`);
+      continue;
+    }
+    try {
+      failures.push(...criticalImportBindingFailures(text, check.file, check.specifications)
+        .map((failure) => `${normalizeRelative(check.file)}:${failure}`));
+    } catch (_error) {
+      failures.push(`${normalizeRelative(check.file)}:parse-failed`);
+    }
+  }
+  return failures;
+}
+
+function compactAstText(sourceFile, node) {
+  return node.getText(sourceFile).replace(/\s+/g, "");
+}
+
+function wrappedMethodAst(block, methodName) {
+  const wrapped = `class __AuditFixture {\n${block}\n}`;
+  const parsed = parseTypeScriptForAudit(wrapped, `${methodName}.audit.ts`, true);
+  const classDeclaration = parsed.sourceFile.statements.find(parsed.ts.isClassDeclaration);
+  const methods = classDeclaration?.members.filter((member) =>
+    parsed.ts.isMethodDeclaration(member) && member.name?.getText(parsed.sourceFile) === methodName) || [];
+  if (methods.length !== 1 || !methods[0].body) throw new SyntaxError(`missing ${methodName} method`);
+  return { ...parsed, method: methods[0] };
+}
+
+function localNotificationAstFailures(block) {
+  const failures = [];
+  const { ts, sourceFile, method } = wrappedMethodAst(block, "createNotification");
+  const statements = [...method.body.statements];
+  const gates = statements.filter((statement) =>
+    ts.isIfStatement(statement) && compactAstText(sourceFile, statement.expression) === "effectKey");
+  if (gates.length !== 1) return ["effect-key-gate-count"];
+  const gate = gates[0];
+  const gateIndex = statements.indexOf(gate);
+  const prelude = statements.slice(0, gateIndex);
+  const expectedPrelude = [
+    "constdata=this.read();",
+    'consteffectKey=String(target?.effectKey||"").trim();',
+    'constidentity=this.resolveTargetIdentity(data,target||{},"notificationtarget");',
+    "constnormalizedTarget={...(target||{}),...identity.identityFields,identityBinding:identity.binding,};",
+  ];
+  if (prelude.length !== expectedPrelude.length ||
+    prelude.some((statement, index) => compactAstText(sourceFile, statement) !== expectedPrelude[index])) {
+    failures.push("pre-effect-key-gate-shape");
+  }
+  if (!ts.isBlock(gate.thenStatement) || gate.thenStatement.statements.length !== 2) {
+    failures.push("effect-key-gate-body-shape");
+  } else {
+    const [existingDeclaration, existingGate] = gate.thenStatement.statements;
+    const declaration = ts.isVariableStatement(existingDeclaration)
+      ? existingDeclaration.declarationList.declarations[0]
+      : null;
+    if (!declaration || declaration.name.getText(sourceFile) !== "existing" ||
+      !declaration.initializer || !ts.isCallExpression(declaration.initializer) ||
+      compactAstText(sourceFile, declaration.initializer.expression) !== "data.notifications.find") {
+      failures.push("existing-notification-lookup-shape");
+    }
+    const returned = ts.isIfStatement(existingGate) && ts.isReturnStatement(existingGate.thenStatement)
+      ? existingGate.thenStatement
+      : null;
+    if (!returned?.expression || !ts.isCallExpression(returned.expression) ||
+      compactAstText(sourceFile, existingGate.expression) !== "existing" ||
+      compactAstText(sourceFile, returned.expression.expression) !== "assertNotificationEffectReplay") {
+      failures.push("existing-notification-replay-shape");
+    }
+  }
+  const calls = astNodes(ts, method.body, ts.isCallExpression);
+  const countCall = (callee) => calls.filter((call) => compactAstText(sourceFile, call.expression) === callee).length;
+  if (countCall("data.notifications.find") !== 1) failures.push("notification-find-call-count");
+  if (countCall("assertNotificationEffectReplay") !== 1) failures.push("notification-replay-call-count");
+  return failures;
+}
+
+function prismaNotificationDispatchAstFailures(block) {
+  const failures = [];
+  const { ts, sourceFile, method } = wrappedMethodAst(block, "create");
+  const statements = [...method.body.statements];
+  if (statements.length !== 4) failures.push("statement-count");
+  const [localDispatch, effectKeyDeclaration, effectKeyDispatch, prismaFallback] = statements;
+  const localReturn = ts.isIfStatement(localDispatch) && ts.isReturnStatement(localDispatch.thenStatement)
+    ? localDispatch.thenStatement
+    : null;
+  if (!localReturn?.expression || !ts.isCallExpression(localReturn.expression) ||
+    compactAstText(sourceFile, localDispatch.expression) !== "appConfig.useLocalStore" ||
+    compactAstText(sourceFile, localReturn.expression.expression) !== "this.localStore.createNotification") {
+    failures.push("local-dispatch-shape");
+  }
+  const effectDeclaration = ts.isVariableStatement(effectKeyDeclaration)
+    ? effectKeyDeclaration.declarationList.declarations[0]
+    : null;
+  if (!effectDeclaration || effectDeclaration.name.getText(sourceFile) !== "effectKey") {
+    failures.push("effect-key-declaration-shape");
+  }
+  const effectReturn = ts.isIfStatement(effectKeyDispatch) && ts.isReturnStatement(effectKeyDispatch.thenStatement)
+    ? effectKeyDispatch.thenStatement
+    : null;
+  if (!effectReturn?.expression || !ts.isCallExpression(effectReturn.expression) ||
+    compactAstText(sourceFile, effectKeyDispatch.expression) !== "effectKey" ||
+    compactAstText(sourceFile, effectReturn.expression.expression) !== "this.createPrismaNotificationOnce" ||
+    compactAstText(sourceFile, effectReturn.expression.arguments[0]) !== "effectKey") {
+    failures.push("effect-key-dispatch-shape");
+  }
+  if (!ts.isReturnStatement(prismaFallback) || !prismaFallback.expression ||
+    !ts.isCallExpression(prismaFallback.expression) ||
+    compactAstText(sourceFile, prismaFallback.expression.expression) !== "this.prisma.notification.create") {
+    failures.push("prisma-fallback-shape");
+  }
+  const calls = astNodes(ts, method.body, ts.isCallExpression);
+  const countCall = (callee) => calls.filter((call) => compactAstText(sourceFile, call.expression) === callee).length;
+  if (countCall("this.createPrismaNotificationOnce") !== 1) failures.push("prisma-helper-call-count");
+  if (countCall("this.prisma.notification.create") !== 1) failures.push("prisma-create-call-count");
+  return failures;
+}
+
+function localStoreLockAstFailures(block) {
+  const failures = [];
+  const { ts, sourceFile } = parseTypeScriptForAudit(block, "owned-local-store-lock.audit.ts", true);
+  const functions = sourceFile.statements.filter((statement) =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === "ownedLocalStoreLockHandle");
+  if (functions.length !== 1 || !functions[0].body) return ["function-shape"];
+  const statement = functions[0];
+  const bodyStatements = [...statement.body.statements];
+  if (bodyStatements.length !== 3 || !ts.isReturnStatement(bodyStatements[2]) ||
+    !bodyStatements[2].expression || !ts.isObjectLiteralExpression(bodyStatements[2].expression)) {
+    return ["function-body-shape"];
+  }
+  if (compactAstText(sourceFile, bodyStatements[0]) !== "letreleased=false;" ||
+    compactAstText(sourceFile, bodyStatements[1]) !== "constownerPath=path.join(lockPath,ownerFileName);") {
+    failures.push("function-prelude-shape");
+  }
+  const returnedHandle = bodyStatements[2].expression;
+  const properties = [...returnedHandle.properties];
+  if (properties.length !== 2 || properties.some((item) => !ts.isPropertyAssignment(item) ||
+    !ts.isIdentifier(item.name)) || properties[0].name.text !== "assertOwned" || properties[1].name.text !== "release") {
+    return ["handle-property-shape"];
+  }
+  const property = (name) => properties.filter((item) => item.name.text === name);
+  const assertOwnedProperties = property("assertOwned");
+  const releaseProperties = property("release");
+  if (assertOwnedProperties.length !== 1 || releaseProperties.length !== 1) return ["handle-property-count"];
+  const assertOwned = assertOwnedProperties[0].initializer;
+  const release = releaseProperties[0].initializer;
+  if (!ts.isArrowFunction(assertOwned) || assertOwned.parameters.length || assertOwned.typeParameters?.length ||
+    assertOwned.type || (ts.getModifiers(assertOwned) || []).length || !ts.isBlock(assertOwned.body) ||
+    assertOwned.body.statements.length !== 1) {
+    failures.push("assert-owned-body-shape");
+  } else {
+    const fence = assertOwned.body.statements[0];
+    const throwStatement = ts.isIfStatement(fence) && ts.isBlock(fence.thenStatement) && fence.thenStatement.statements.length === 1
+      ? fence.thenStatement.statements[0]
+      : null;
+    if (!ts.isIfStatement(fence) || compactAstText(sourceFile, fence.expression) !== "released||!fs.existsSync(ownerPath)" ||
+      !throwStatement || !ts.isThrowStatement(throwStatement) || !throwStatement.expression ||
+      !ts.isNewExpression(throwStatement.expression) ||
+      compactAstText(sourceFile, throwStatement.expression.expression) !== "LocalStoreConcurrentWriteError") {
+      failures.push("assert-owned-fence-shape");
+    }
+  }
+  if (!ts.isArrowFunction(release) || release.parameters.length || release.typeParameters?.length || release.type ||
+    (ts.getModifiers(release) || []).length || !ts.isBlock(release.body) || release.body.statements.length !== 4) {
+    failures.push("release-body-shape");
+    return failures;
+  }
+  const [alreadyReleased, markReleased, unlinkTry, rmdirTry] = release.body.statements;
+  const initialReturn = ts.isIfStatement(alreadyReleased) && ts.isReturnStatement(alreadyReleased.thenStatement)
+    ? alreadyReleased.thenStatement
+    : null;
+  if (!initialReturn || compactAstText(sourceFile, alreadyReleased.expression) !== "released") {
+    failures.push("release-idempotency-shape");
+  }
+  if (!ts.isExpressionStatement(markReleased) || compactAstText(sourceFile, markReleased.expression) !== "released=true") {
+    failures.push("release-mark-shape");
+  }
+  const cleanupTryMatches = (statement, callName, argumentName, catchCondition) => {
+    if (!ts.isTryStatement(statement) || statement.finallyBlock || !statement.catchClause ||
+      statement.tryBlock.statements.length !== 1 || statement.catchClause.block.statements.length !== 2 ||
+      compactAstText(sourceFile, statement.catchClause.variableDeclaration) !== "error:any") return false;
+    const operation = statement.tryBlock.statements[0];
+    const call = ts.isExpressionStatement(operation) && ts.isCallExpression(operation.expression)
+      ? operation.expression
+      : null;
+    const [catchGate, catchThrow] = statement.catchClause.block.statements;
+    return Boolean(call) && compactAstText(sourceFile, call.expression) === callName && call.arguments.length === 1 &&
+      compactAstText(sourceFile, call.arguments[0]) === argumentName && ts.isIfStatement(catchGate) &&
+      ts.isReturnStatement(catchGate.thenStatement) && compactAstText(sourceFile, catchGate.expression) === catchCondition &&
+      ts.isThrowStatement(catchThrow) && compactAstText(sourceFile, catchThrow.expression) === "error";
+  };
+  if (!cleanupTryMatches(unlinkTry, "fs.unlinkSync", "ownerPath", 'error?.code==="ENOENT"')) {
+    failures.push("release-unlink-try-shape");
+  }
+  if (!cleanupTryMatches(
+    rmdirTry,
+    "fs.rmdirSync",
+    "lockPath",
+    '["ENOENT","ENOTEMPTY","EEXIST"].includes(String(error?.code||""))',
+  )) failures.push("release-rmdir-try-shape");
+  const calls = astNodes(ts, release.body, ts.isCallExpression);
+  const unlinkCalls = calls.filter((call) => compactAstText(sourceFile, call.expression) === "fs.unlinkSync" &&
+    call.arguments.length === 1 && compactAstText(sourceFile, call.arguments[0]) === "ownerPath");
+  const rmdirCalls = calls.filter((call) => compactAstText(sourceFile, call.expression) === "fs.rmdirSync" &&
+    call.arguments.length === 1 && compactAstText(sourceFile, call.arguments[0]) === "lockPath");
+  if (unlinkCalls.length !== 1 || rmdirCalls.length !== 1) failures.push("release-call-count");
+  else {
+    const isDirectReleaseOperation = (call) => {
+      const operation = call.parent;
+      if (!ts.isExpressionStatement(operation) || operation.expression !== call) return false;
+      if (operation.parent === release.body) return true;
+      const tryBlock = operation.parent;
+      return ts.isBlock(tryBlock) && ts.isTryStatement(tryBlock.parent) &&
+        tryBlock.parent.tryBlock === tryBlock && tryBlock.parent.parent === release.body;
+    };
+    if (!isDirectReleaseOperation(unlinkCalls[0]) || !isDirectReleaseOperation(rmdirCalls[0])) {
+      failures.push("release-call-placement");
+    }
+    if (unlinkCalls[0].getStart(sourceFile) >= rmdirCalls[0].getStart(sourceFile)) failures.push("release-call-order");
+  }
+  for (const returned of astNodes(ts, release.body, ts.isReturnStatement)) {
+    if (returned === initialReturn) continue;
+    let ancestor = returned.parent;
+    while (ancestor && ancestor !== release.body && !ts.isCatchClause(ancestor)) ancestor = ancestor.parent;
+    if (!ancestor || ancestor === release.body) failures.push("release-untrusted-early-return");
+  }
+  return failures;
+}
+
+function criticalSectionAstFailures(sectionId, block) {
+  try {
+    if (sectionId === "local-notification-effect-replay") return localNotificationAstFailures(block);
+    if (sectionId === "notification-effect-dispatch") return prismaNotificationDispatchAstFailures(block);
+    if (sectionId === "local-store-lock-owner-fence") return localStoreLockAstFailures(block);
+    return [];
+  } catch (_error) {
+    return ["parse-failed"];
+  }
+}
+
+function extractBalancedBlockRange(text, startPattern) {
   const match = startPattern.exec(text);
   if (!match) return null;
   const open = text.indexOf("{", match.index + match[0].length);
@@ -2151,10 +2730,15 @@ function extractBalancedBlock(text, startPattern) {
     if (character === "{") depth += 1;
     if (character === "}") {
       depth -= 1;
-      if (depth === 0) return text.slice(match.index, index + 1);
+      if (depth === 0) return { start: match.index, end: index + 1 };
     }
   }
   return null;
+}
+
+function extractBalancedBlock(text, startPattern) {
+  const range = extractBalancedBlockRange(text, startPattern);
+  return range ? text.slice(range.start, range.end) : null;
 }
 
 function extractRouteSection(text, routePattern) {
@@ -2171,6 +2755,193 @@ function patternFailures(text, required = [], forbidden = []) {
     missing: required.map((pattern, index) => (pattern.test(text) ? null : `required-pattern-${index + 1}`)).filter(Boolean),
     forbidden: forbidden.map((pattern, index) => (pattern.test(text) ? `forbidden-pattern-${index + 1}` : null)).filter(Boolean),
   };
+}
+
+function ordersControllerAstFailures(text) {
+  const failures = [];
+  const { ts, sourceFile } = parseTypeScriptForAudit(text, "orders.controller.audit.ts", true);
+  const decoratorsOf = (node) => ts.canHaveDecorators(node) ? (ts.getDecorators(node) || []) : [];
+  const decoratorMatches = (decorator, calleeName, expectedArguments) => {
+    if (!ts.isCallExpression(decorator.expression) ||
+      !ts.isIdentifier(decorator.expression.expression) ||
+      decorator.expression.expression.text !== calleeName ||
+      decorator.expression.arguments.length !== expectedArguments.length) return false;
+    return expectedArguments.every((expected, index) => {
+      const argument = decorator.expression.arguments[index];
+      return expected.kind === "string"
+        ? ts.isStringLiteral(argument) && argument.text === expected.value
+        : ts.isIdentifier(argument) && argument.text === expected.value;
+    });
+  };
+  const decoratorsMatch = (node, expected) => {
+    const actual = decoratorsOf(node);
+    return actual.length === expected.length && expected.every(([callee, args], index) =>
+      decoratorMatches(actual[index], callee, args));
+  };
+  const stringArgument = (value) => ({ kind: "string", value });
+  const identifierArgument = (value) => ({ kind: "identifier", value });
+  const postDecorator = (decorator) => ts.isCallExpression(decorator.expression) &&
+    ts.isIdentifier(decorator.expression.expression) && decorator.expression.expression.text === "Post";
+  const importSpecifications = [
+    ...["Body", "Controller", "Get", "Param", "Post", "Query", "UseGuards"]
+      .map((name) => ({ name, source: "@nestjs/common", kind: "named", usage: "decorator" })),
+    { name: "OrdersService", source: "./orders.service", kind: "named", usage: "type" },
+    { name: "ExpectedIdentityPayload", source: "../shared/identity-expectation", kind: "named", usage: "type" },
+    ...["OperatorAccessGuard", "RequireOperatorCapability", "TrustedOperator"].map((name) => ({
+      name,
+      source: "../operator-access/operator-access.guard",
+      kind: "named",
+      usage: name === "OperatorAccessGuard" ? "guard" : "decorator",
+    })),
+    { name: "TrustedOperatorPrincipal", source: "../operator-access/operator-access.types", kind: "named", usage: "type" },
+  ];
+  failures.push(...criticalImportBindingFailures(text, "orders.controller.audit.ts", importSpecifications)
+    .map((failure) => `binding-${failure}`));
+  if (exactNamedImportFailure(
+    text,
+    "orders.controller.audit.ts",
+    "@nestjs/common",
+    ["Body", "Controller", "Get", "Param", "Post", "Query", "UseGuards"],
+  )) failures.push("common-import-shape");
+  if (exactNamedImportFailure(
+    text,
+    "orders.controller.audit.ts",
+    "../operator-access/operator-access.guard",
+    ["OperatorAccessGuard", "RequireOperatorCapability", "TrustedOperator"],
+  )) failures.push("operator-access-import-shape");
+  const commonImports = sourceFile.statements.filter((statement) =>
+    ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) &&
+    statement.moduleSpecifier.text === "@nestjs/common");
+  const postImports = commonImports.flatMap((statement) => {
+    const bindings = statement.importClause?.namedBindings;
+    return bindings && ts.isNamedImports(bindings)
+      ? bindings.elements.filter((element) => (element.propertyName || element.name).text === "Post")
+      : [];
+  });
+  if (commonImports.length !== 1 || postImports.length !== 1 || postImports[0].propertyName) {
+    failures.push("post-import-shape");
+  }
+  const classDeclarations = sourceFile.statements.filter(ts.isClassDeclaration);
+  const classes = classDeclarations.filter((statement) => statement.name?.text === "OrdersController");
+  if (classDeclarations.length !== 1 || classes.length !== 1) return [...failures, "orders-controller-count"];
+  const ordersController = classes[0];
+  if (!decoratorsMatch(ordersController, [
+    ["Controller", [stringArgument("orders")]],
+    ["RequireOperatorCapability", [stringArgument("view_console")]],
+    ["UseGuards", [identifierArgument("OperatorAccessGuard")]],
+  ])) failures.push("orders-controller-decorators");
+  const constructors = ordersController.members.filter(ts.isConstructorDeclaration);
+  if (constructors.length !== 1 || constructors[0].parameters.length !== 1 ||
+    compactAstText(sourceFile, constructors[0].parameters[0]) !== "privatereadonlyorders:OrdersService" ||
+    constructors[0].body?.statements.length !== 0 || decoratorsOf(constructors[0]).length) {
+    failures.push("orders-constructor-shape");
+  }
+  const expectedMethods = [
+    ["list", [["Get", []]]],
+    ["confirmationPreview", [["Get", [stringArgument(":id/confirmation-preview")]]]],
+    ["createFromQuote", [
+      ["Post", [stringArgument("from-quote/:quoteId")]],
+      ["RequireOperatorCapability", [stringArgument("manage_design_executions")]],
+    ]],
+    ["update", [
+      ["Post", [stringArgument(":id/update")]],
+      ["RequireOperatorCapability", [stringArgument("manage_design_executions")]],
+    ]],
+    ["reviseSelection", [
+      ["Post", [stringArgument(":id/revise-selection")]],
+      ["RequireOperatorCapability", [stringArgument("manage_design_executions")]],
+    ]],
+  ];
+  const methods = ordersController.members.filter(ts.isMethodDeclaration);
+  if (methods.length !== expectedMethods.length) failures.push("orders-method-set");
+  for (const [index, [expectedName, expectedDecorators]] of expectedMethods.entries()) {
+    const method = methods[index];
+    if (!method || !ts.isIdentifier(method.name) || method.name.text !== expectedName ||
+      !decoratorsMatch(method, expectedDecorators) || method.questionToken || method.exclamationToken ||
+      method.asteriskToken || method.typeParameters?.length || (ts.getModifiers(method) || []).length) {
+      failures.push(`orders-method-${index + 1}-shape`);
+    }
+  }
+  for (const member of ordersController.members) {
+    if (!ts.isMethodDeclaration(member) && !ts.isConstructorDeclaration(member) && decoratorsOf(member).length) {
+      failures.push("unsupported-member-decorator");
+    }
+  }
+  const routes = [];
+  for (const member of ordersController.members) {
+    for (const decorator of decoratorsOf(member).filter(postDecorator)) {
+      const call = decorator.expression;
+      routes.push({ member, call, route: call.arguments.length === 1 && ts.isStringLiteral(call.arguments[0]) ? call.arguments[0].text : null });
+    }
+  }
+  const everyPostDecorator = astNodes(ts, sourceFile, (node) => ts.isDecorator(node) && postDecorator(node));
+  const expectedRoutes = ["from-quote/:quoteId", ":id/update", ":id/revise-selection"];
+  const expectedRouteMethods = new Map([
+    ["from-quote/:quoteId", "createFromQuote"],
+    [":id/update", "update"],
+    [":id/revise-selection", "reviseSelection"],
+  ]);
+  if (routes.length !== 3 || everyPostDecorator.length !== 3 ||
+    expectedRoutes.some((route) => routes.filter((entry) => entry.route === route).length !== 1) ||
+    routes.some((entry) => entry.route === null || !ts.isIdentifier(entry.member.name) ||
+      expectedRouteMethods.get(entry.route) !== entry.member.name.text)) {
+    failures.push("post-route-set");
+  }
+  const postIdentifiers = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) && node.text === "Post");
+  const validPostIdentifier = (identifier) =>
+    ts.isImportSpecifier(identifier.parent) ||
+    (ts.isCallExpression(identifier.parent) && identifier.parent.expression === identifier && ts.isDecorator(identifier.parent.parent));
+  if (postIdentifiers.length !== 4 || postIdentifiers.some((identifier) => !validPostIdentifier(identifier))) {
+    failures.push("post-identifier-usage");
+  }
+  const updateRoutes = routes.filter((entry) => entry.route === ":id/update");
+  if (updateRoutes.length !== 1 || !ts.isMethodDeclaration(updateRoutes[0].member) || !updateRoutes[0].member.body) {
+    return [...failures, "update-method-shape"];
+  }
+  const updateMethod = updateRoutes[0].member;
+  const expectedParameters = [
+    ["id", "string", [["Param", [stringArgument("id")]]]],
+    ["payload", "{status?:string;customerNotes?:string;owner?:string}&ExpectedIdentityPayload", [["Body", []]]],
+    ["principal", "TrustedOperatorPrincipal", [["TrustedOperator", []]]],
+  ];
+  if (updateMethod.parameters.length !== expectedParameters.length) failures.push("update-parameter-count");
+  for (const [index, [name, expectedType, expectedDecorators]] of expectedParameters.entries()) {
+    const parameter = updateMethod.parameters[index];
+    if (!parameter || !ts.isIdentifier(parameter.name) || parameter.name.text !== name ||
+      !parameter.type || compactAstText(sourceFile, parameter.type) !== expectedType ||
+      !decoratorsMatch(parameter, expectedDecorators) || parameter.questionToken || parameter.initializer ||
+      parameter.dotDotDotToken || (ts.getModifiers(parameter) || []).length) {
+      failures.push(`update-parameter-${index + 1}-shape`);
+    }
+  }
+  if (updateMethod.body.statements.length !== 1 || !ts.isReturnStatement(updateMethod.body.statements[0])) {
+    return [...failures, "update-body-statement-count"];
+  }
+  const returned = updateMethod.body.statements[0];
+  if (!returned.expression || !ts.isCallExpression(returned.expression) ||
+    compactAstText(sourceFile, returned.expression.expression) !== "this.orders.update" ||
+    returned.expression.arguments.length !== 2 || compactAstText(sourceFile, returned.expression.arguments[0]) !== "id" ||
+    !ts.isObjectLiteralExpression(returned.expression.arguments[1])) {
+    return [...failures, "update-return-call-shape"];
+  }
+  const projection = returned.expression.arguments[1];
+  const expectedProjection = [
+    ["status", "payload?.status"],
+    ["customerNotes", "payload?.customerNotes"],
+    ["expectedWechatAccountId", "payload?.expectedWechatAccountId"],
+    ["expectedConversationId", "payload?.expectedConversationId"],
+    ["expectedCustomerId", "payload?.expectedCustomerId"],
+    ["owner", "principal.id"],
+  ];
+  if (projection.properties.length !== expectedProjection.length) failures.push("update-projection-count");
+  for (const [index, [name, value]] of expectedProjection.entries()) {
+    const property = projection.properties[index];
+    if (!property || !ts.isPropertyAssignment(property) || property.name.getText(sourceFile) !== name ||
+      compactAstText(sourceFile, property.initializer) !== value) {
+      failures.push(`update-projection-${index + 1}-shape`);
+    }
+  }
+  return failures;
 }
 
 function highRiskOperatorRouteResults(root) {
@@ -2191,12 +2962,38 @@ function highRiskOperatorRouteResults(root) {
     automation: "desktop/apps/api/src/automation/automation.controller.ts",
     training: "desktop/apps/api/src/training/training.controller.ts",
   };
-  const sources = Object.fromEntries(
+  const rawSources = Object.fromEntries(
     Object.entries(paths).map(([key, file]) => [key, readText(root, file) || ""]),
   );
-  const missing = [];
+  const sourceMaskFailures = [];
+  const sources = Object.fromEntries(
+    Object.entries(paths).map(([key, file]) => {
+      try {
+        return [key, maskTypeScriptForDecoratorAudit(rawSources[key])];
+      } catch (_error) {
+        sourceMaskFailures.push({ key, file });
+        return [key, ""];
+      }
+    }),
+  );
+  const missing = sourceMaskFailures.map(({ key }) => `${key}-invalid-typescript-lexical-structure`);
   const forbidden = [];
-  const issues = [];
+  const issues = sourceMaskFailures.map(({ key, file }) => ({
+    label: `${key}-lexical-structure`,
+    path: file,
+    missing: ["invalid-typescript-lexical-structure"],
+    forbidden: [],
+  }));
+  try {
+    const astFailures = ordersControllerAstFailures(rawSources.orders);
+    missing.push(...astFailures.map((failure) => `orders-ast-${failure}`));
+    if (astFailures.length) {
+      issues.push({ label: "orders-ast", path: paths.orders, missing: astFailures, forbidden: [] });
+    }
+  } catch (_error) {
+    missing.push("orders-ast-parse-failed");
+    issues.push({ label: "orders-ast", path: paths.orders, missing: ["parse-failed"], forbidden: [] });
+  }
   const sourcePath = (text) => {
     const key = Object.keys(sources).find((candidate) => sources[candidate] === text);
     return key ? paths[key] : null;
@@ -2273,6 +3070,27 @@ function highRiskOperatorRouteResults(root) {
     ]);
   }
   const ordersUpdateSection = extractRouteSection(sources.orders, /@Post\(["']:id\/update["']\)/);
+  const expectedOrdersPostRoutes = ["from-quote/:quoteId", ":id/update", ":id/revise-selection"];
+  const actualOrdersPostDecoratorCount = [...sources.orders.matchAll(/@Post\s*\(/g)].length;
+  const actualOrdersPostRoutes = [...sources.orders.matchAll(/@Post\(["']([^"']+)["']\)/g)]
+    .map((match) => match[1]);
+  const ordersPostRouteSetIsExact =
+    actualOrdersPostDecoratorCount === expectedOrdersPostRoutes.length &&
+    actualOrdersPostRoutes.length === expectedOrdersPostRoutes.length &&
+    expectedOrdersPostRoutes.every((route) => actualOrdersPostRoutes.filter((candidate) => candidate === route).length === 1);
+  if (!ordersPostRouteSetIsExact) {
+    const failure = "unexpected-post-route-set";
+    forbidden.push(`orders-post-routes-${failure}`);
+    issues.push({
+      label: "orders-post-routes",
+      path: paths.orders,
+      missing: [],
+      forbidden: [failure],
+      expectedRoutes: expectedOrdersPostRoutes,
+      actualRoutes: actualOrdersPostRoutes,
+      actualDecoratorCount: actualOrdersPostDecoratorCount,
+    });
+  }
   const explicitOrdersUpdateAllowlist = [
     /return this\.orders\.update\(id,\s*\{/,
     /status:\s*payload\?\.status/,
@@ -3073,6 +3891,8 @@ module.exports = {
   aggregateStatus,
   absoluteFrom,
   buildAudit,
+  loadTypeScriptCompilerFromDependencyRoot,
+  maskTypeScriptCommentsAndStrings,
   parseArgs,
   toMarkdown,
   writeReport,

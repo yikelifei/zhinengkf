@@ -13,6 +13,8 @@ const {
   absoluteFrom,
   aggregateStatus,
   buildAudit,
+  loadTypeScriptCompilerFromDependencyRoot,
+  maskTypeScriptCommentsAndStrings,
   toMarkdown,
   writeReport,
 } = require("../tools/project-completion-audit");
@@ -24,6 +26,132 @@ function write(root, relative, content = "fixture evidence\n", append = false) {
   else fs.writeFileSync(target, content, "utf8");
   return target;
 }
+
+test("TypeScript audit masking preserves layout and hides escaped strings, templates and comments", () => {
+  const source = [
+    'const doubleQuoted = "fake \\" if (effectKey) return unsafe";',
+    'const evenEscapes = "two slashes \\\\"; const visibleAfterEven = true;',
+    "const singleQuoted = 'fake \\' Object.assign(principal, payload)';",
+    'const templated = `raw fakeToken ${unsafeCall("masked arg")} ${`nested raw ${nestedCall()}`}`;',
+    "const matcher = /fakeRequiredToken[/*]/giu;",
+    "const braceMatcher = /[{}]/;",
+    "const ratio = total / divisor / 2;",
+    "if (ready) /controlRegex/.test(value);",
+    "if (ready) {} /blockRegex/.test(value);",
+    "const nonNullRatio = value! / divisor;",
+    "obj.if(value) / divisor; visibleHelper() / other;",
+    "obj.return / divisor;",
+    "function helper() {} /functionRegex/.test(value);",
+    "class AuditClass {} /classRegex/.test(value);",
+    "/* if (released || !fs.existsSync(ownerPath)) return unsafe; */",
+    "// fakeLf\nconst afterLf = true;",
+    "// fakeCr\rconst afterCr = true;",
+    "// fakeLs\u2028const afterLs = true;",
+    "// fakePs\u2029const afterPs = true;",
+    "const realGate = effectKey;",
+  ].join("\n");
+  const masked = maskTypeScriptCommentsAndStrings(source);
+  const lineOffsets = (value) => {
+    const offsets = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (["\r", "\n", "\u2028", "\u2029"].includes(value[index])) offsets.push(index);
+    }
+    return offsets;
+  };
+
+  assert.equal(masked.length, source.length);
+  assert.deepEqual(lineOffsets(masked), lineOffsets(source));
+  assert.match(masked, /const doubleQuoted = "\s*";/);
+  assert.match(masked, /const evenEscapes = "\s*"; const visibleAfterEven = true;/);
+  assert.match(masked, /const singleQuoted = '\s*';/);
+  assert.match(masked, /const templated = `\s*\$\{unsafeCall\("\s*"\)\}\s*\$\{`\s*\$\{nestedCall\(\)\}`\}`;/);
+  assert.match(masked, /const matcher = \/\s*\/\s*;/);
+  assert.match(masked, /const braceMatcher = \/\s*\//);
+  assert.match(masked, /const ratio = total \/ divisor \/ 2;/);
+  assert.match(masked, /if \(ready\) \/\s*\/\.test\(value\);/);
+  assert.match(masked, /if \(ready\) \{\} \/\s*\/\.test\(value\);/);
+  assert.match(masked, /const nonNullRatio = value! \/ divisor;/);
+  assert.match(masked, /obj\.if\(value\) \/ divisor; visibleHelper\(\) \/ other;/);
+  assert.match(masked, /obj\.return \/ divisor;/);
+  assert.match(masked, /function helper\(\) \{\} \/\s*\/\.test\(value\);/);
+  assert.match(masked, /class AuditClass \{\} \/\s*\/\.test\(value\);/);
+  assert.doesNotMatch(masked, /fakeToken|fakeRequiredToken|Object\.assign|return unsafe|released \|\|/);
+  assert.match(masked, /const realGate = effectKey;/);
+});
+
+test("TypeScript audit masking rejects unterminated strings, templates, regexes and block comments", () => {
+  for (const source of [
+    'const value = "unterminated',
+    "const value = 'unterminated",
+    "const value = `unterminated",
+    "const value = `unterminated ${call()",
+    "const value = /unterminated",
+    "const value = /[unterminated/",
+    "/* unterminated",
+  ]) {
+    assert.throws(() => maskTypeScriptCommentsAndStrings(source), SyntaxError, source);
+  }
+  assert.doesNotThrow(() => maskTypeScriptCommentsAndStrings("// line comment at eof"));
+});
+
+test("TypeScript audit loader fails closed on missing, escaped or incomplete compiler packages", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-typescript-loader-"));
+  const packageRoot = path.join(root, "typescript");
+  const packageFile = write(root, "typescript/package.json", "{}\n");
+  const entryFile = write(root, "typescript/lib/typescript.js", "module.exports = {};\n");
+  const compilerApi = {
+    createSourceFile() {},
+    forEachChild() {},
+    getLeadingCommentRanges() {},
+    getTrailingCommentRanges() {},
+    canHaveDecorators() {},
+    getDecorators() {},
+    getModifiers() {},
+    ScriptTarget: {},
+    ScriptKind: {},
+    SyntaxKind: {},
+  };
+  const loadWithApi = (dependencyRoot, options = {}) => loadTypeScriptCompilerFromDependencyRoot(
+    dependencyRoot,
+    { requireModule: () => compilerApi, ...options },
+  );
+
+  assert.throws(() => loadTypeScriptCompilerFromDependencyRoot(""), /dependencies are unavailable/);
+  assert.throws(() => loadTypeScriptCompilerFromDependencyRoot(path.join(root, "missing")), /root is unavailable/);
+  const missingPackageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-typescript-missing-"));
+  assert.throws(() => loadWithApi(missingPackageRoot), /package is incomplete/);
+  fs.mkdirSync(path.join(missingPackageRoot, "typescript"), { recursive: true });
+  fs.writeFileSync(path.join(missingPackageRoot, "typescript", "package.json"), "{}\n", "utf8");
+  assert.throws(() => loadWithApi(missingPackageRoot), /package is incomplete/);
+  assert.doesNotThrow(() => loadWithApi(root));
+  assert.throws(
+    () => loadTypeScriptCompilerFromDependencyRoot(root, { requireModule: () => ({}) }),
+    /API is unavailable/,
+  );
+
+  const actualRealpathSync = fs.realpathSync;
+  const realpathWith = (escapedPath, escapedTarget) => (value) => (
+    path.resolve(value) === path.resolve(escapedPath) ? escapedTarget : actualRealpathSync(value)
+  );
+  assert.throws(
+    () => loadWithApi(root, {
+      realpathSync: realpathWith(packageRoot, path.join(path.dirname(root), "escaped-typescript")),
+    }),
+    /package escapes its dependency root/,
+  );
+  assert.throws(
+    () => loadWithApi(root, {
+      realpathSync: realpathWith(packageFile, path.join(path.dirname(root), "escaped-package.json")),
+    }),
+    /manifest escapes its package root/,
+  );
+  assert.throws(
+    () => loadWithApi(root, {
+      realpathSync: realpathWith(entryFile, path.join(path.dirname(root), "escaped-typescript.js")),
+    }),
+    /entry escapes its package root/,
+  );
+});
 
 function createPassingFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-fixture-"));
@@ -796,14 +924,29 @@ export class NotificationsController {
 }
 `);
   write(root, "desktop/apps/api/src/orders/orders.controller.ts", `
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { OrdersService } from "./orders.service";
+import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import { OperatorAccessGuard, RequireOperatorCapability, TrustedOperator } from "../operator-access/operator-access.guard";
+import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
+
 @Controller("orders")
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
 export class OrdersController {
-  @Post("from-quote/:quoteId") @RequireOperatorCapability("manage_design_executions") create() {}
+  constructor(private readonly orders: OrdersService) {}
+  @Get() list() {}
+  @Get(":id/confirmation-preview") confirmationPreview() {}
+  @Post("from-quote/:quoteId")
+  @RequireOperatorCapability("manage_design_executions")
+  createFromQuote(@Param("quoteId") quoteId: string, @Body() payload: ExpectedIdentityPayload = {}) {}
   @Post(":id/update")
   @RequireOperatorCapability("manage_design_executions")
-  update(@Param("id") id, @Body() payload, @TrustedOperator() principal) {
+  update(
+    @Param("id") id: string,
+    @Body() payload: { status?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
     return this.orders.update(id, {
       status: payload?.status,
       customerNotes: payload?.customerNotes,
@@ -815,7 +958,11 @@ export class OrdersController {
   }
   @Post(":id/revise-selection")
   @RequireOperatorCapability("manage_design_executions")
-  revise(@Body() body, @TrustedOperator() principal) {
+  reviseSelection(
+    @Param("id") id: string,
+    @Body() body: { selectedImageId?: string; owner?: string; note?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
     const { owner: _untrustedOwner, ...trusted } = body;
     return service({ ...trusted, owner: principal.id });
   }
@@ -983,6 +1130,13 @@ function hydrateDurableSelection(value: unknown, designJob: any) {
 `, true);
 
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", `
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { deterministicOperationId } from "../shared/operation-idempotency";
+import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
+
+class LocalStoreFixture {
 commitInboundLowValueSelection(payload: {
   operationId: string;
   claimToken: string;
@@ -1055,6 +1209,8 @@ private withStoreLock<T>(operation: () => T): T {
   }
 }
 
+}
+
 export function acquireLocalStoreLock(filePath: string) {
   const lockPath = \`\${filePath}.lock\`;
   const ownerToken = randomUUID();
@@ -1077,14 +1233,28 @@ function ownedLocalStoreLockHandle(lockPath: string, ownerFileName: string) {
     release: () => {
       if (released) return;
       released = true;
-      fs.unlinkSync(ownerPath);
-      fs.rmdirSync(lockPath);
+      try {
+        fs.unlinkSync(ownerPath);
+      } catch (error: any) {
+        if (error?.code === "ENOENT") return;
+        throw error;
+      }
+      try {
+        fs.rmdirSync(lockPath);
+      } catch (error: any) {
+        if (["ENOENT", "ENOTEMPTY", "EEXIST"].includes(String(error?.code || ""))) return;
+        throw error;
+      }
     },
   };
 }
 `, true);
 
   write(root, "desktop/apps/api/src/notifications/notifications.service.ts", `
+import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
+import { deterministicOperationId, isUniqueConstraintError } from "../shared/operation-idempotency";
+
+class NotificationsFixture {
 create(level: string, title: string, body?: string, target?: Record<string, unknown>) {
   if (appConfig.useLocalStore) return this.localStore.createNotification(level, title, body, target);
   const effectKey = String(target?.effectKey || "").trim();
@@ -1112,9 +1282,12 @@ private async createPrismaNotificationOnce(
     return assertNotificationEffectReplay(winner, { level, title, body, target });
   }
 }
+}
 `);
 
   write(root, "desktop/apps/api/src/shared/notification-idempotency.ts", `
+import { createOperationFingerprint } from "./operation-idempotency";
+
 export function assertNotificationEffectReplay(
   existing: any,
   expected: { level: string; title: string; body?: string; target?: Record<string, unknown> },
@@ -1271,11 +1444,29 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "if (existing) return existing;",
     },
     {
+      name: "local notification replay helper cannot shadow its trusted import",
+      file: localStoreFile,
+      from: 'import { assertNotificationEffectReplay } from "../shared/notification-idempotency";',
+      to: "function assertNotificationEffectReplay(existing: any) { return existing; }",
+    },
+    {
       name: "Prisma notification effect replay dispatch disabled",
       file: notificationsFile,
       anchor: "create(level:",
       from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
       to: "if (false && effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+    },
+    {
+      name: "Prisma notification replay helper cannot shadow its trusted import",
+      file: notificationsFile,
+      from: 'import { assertNotificationEffectReplay } from "../shared/notification-idempotency";',
+      to: "function assertNotificationEffectReplay(existing: any) { return existing; }",
+    },
+    {
+      name: "notification fingerprint helper cannot shadow its trusted import",
+      file: notificationIdempotencyFile,
+      from: 'import { createOperationFingerprint } from "./operation-idempotency";',
+      to: "function createOperationFingerprint() { return 1; }",
     },
     {
       name: "Prisma existing notification effect replay identity removed",
@@ -1360,6 +1551,178 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "if (false && (released || !fs.existsSync(ownerPath))) {",
     },
     {
+      name: "local replay gate keeps its safe shape after an early-return bypass",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: 'if (target?.skipReplayCheck) return { id: id("notice") };\n    if (effectKey) {',
+    },
+    {
+      name: "local replay gate rejects a side effect before identity validation",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: 'const effectKey = String(target?.effectKey || "").trim();',
+      to: 'data.notifications.push({} as any);\n    const effectKey = String(target?.effectKey || "").trim();',
+    },
+    {
+      name: "Prisma dispatch keeps its safe gate after a direct-create bypass",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: "if (target?.skipReplayCheck) return this.prisma.notification.create({ data: { level, title, body, target: (target || {}) as any } });\n    if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+    },
+    {
+      name: "Prisma dispatch keeps its safe helper after a wrong-key helper",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: 'if (effectKey) return this.createPrismaNotificationOnce("", level, title, body, target);\n    if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);',
+    },
+    {
+      name: "Prisma template interpolation cannot hide a second helper call",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: 'const duplicate = `${this.createPrismaNotificationOnce("", level, title, body, target)}`;\n    if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);',
+    },
+    {
+      name: "property keyword division cannot hide a second Prisma helper call",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: 'obj.if(value) / divisor;\n    this.createPrismaNotificationOnce("", level, title, body, target) / other;\n    if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);',
+    },
+    {
+      name: "lock owner fence keeps its safe shape after an early return",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "if (released || !fs.existsSync(ownerPath)) {",
+      to: "if (!fs.existsSync(lockPath)) return;\n      if (released || !fs.existsSync(ownerPath)) {",
+    },
+    {
+      name: "local false replay gate cannot borrow safe text from a block comment",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: '/* if (effectKey) { data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey) } */\n    if (false && effectKey) {',
+    },
+    {
+      name: "Prisma false dispatch gate cannot borrow safe text from a string",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);",
+      to: '"if (effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target)";\n    if (false && effectKey) return this.createPrismaNotificationOnce(effectKey, level, title, body, target);',
+    },
+    {
+      name: "local false replay gate cannot borrow safe text from a regex literal",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: '/if (effectKey) { data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey)/;\n    if (false && effectKey) {',
+    },
+    ...[
+      ["CR", "\r"],
+      ["Unicode line separator", "\u2028"],
+      ["Unicode paragraph separator", "\u2029"],
+    ].map(([terminatorName, terminator]) => ({
+      name: `local false replay gate cannot borrow safe text from a line comment ending with ${terminatorName}`,
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: `// if (effectKey) { data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey)${terminator}    if (false && effectKey) {`,
+    })),
+    {
+      name: "regex closing brace cannot truncate the masked local function block",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (effectKey) {",
+      to: "const closingBracePattern = /}/;\n    if (false && effectKey) {",
+    },
+    {
+      name: "lock false owner fence cannot borrow safe text from a block comment",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "if (released || !fs.existsSync(ownerPath)) {",
+      to: '/* if (released || !fs.existsSync(ownerPath)) throw new LocalStoreConcurrentWriteError("local store transaction lock ownership was lost") */\n      if (false && (released || !fs.existsSync(ownerPath))) {',
+    },
+    {
+      name: "local replay assertion call must remain unique",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });",
+      to: "if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });\n      if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });",
+    },
+    {
+      name: "lock release cannot duplicate owner-file unlink",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "fs.unlinkSync(ownerPath);",
+      to: "fs.unlinkSync(ownerPath);\n        fs.unlinkSync(ownerPath);",
+    },
+    {
+      name: "lock handle cannot start in the released state",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "let released = false;",
+      to: "let released = true;",
+    },
+    {
+      name: "lock release cannot hide owner-file unlink behind a false branch",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "fs.unlinkSync(ownerPath);",
+      to: "if (false) fs.unlinkSync(ownerPath);",
+    },
+    {
+      name: "lock handle cannot spread an unsafe override after safe properties",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      mutate(section) {
+        return section.replace(
+          /    },\r?\n  };\r?\n}\r?\n\r?\nfunction localStoreLockIsStale/,
+          "    },\n    ...unsafeHandle,\n  };\n}\n\nfunction localStoreLockIsStale",
+        );
+      },
+    },
+    {
+      name: "lock release cannot rebuild the lock directory after cleanup",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "fs.rmdirSync(lockPath);",
+      to: "fs.rmdirSync(lockPath);\n        fs.mkdirSync(lockPath);",
+    },
+    {
+      name: "lock release cannot throw before unlinking its owner file",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      from: "fs.unlinkSync(ownerPath);",
+      to: 'if (true) throw new Error("skip release");\n        fs.unlinkSync(ownerPath);',
+    },
+    {
+      name: "lock release cannot reorder owner-file unlink after lock-directory removal",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      mutate(section) {
+        return section
+          .replace("fs.unlinkSync(ownerPath);", "SWAP_LOCK_OWNER_REMOVAL();")
+          .replace("fs.rmdirSync(lockPath);", "fs.unlinkSync(ownerPath);")
+          .replace("SWAP_LOCK_OWNER_REMOVAL();", "fs.rmdirSync(lockPath);");
+      },
+    },
+    {
+      name: "lock release cannot move directory removal outside the release block",
+      file: localStoreFile,
+      anchor: "function ownedLocalStoreLockHandle",
+      mutate(section) {
+        return section
+          .replace("fs.rmdirSync(lockPath);", "void lockPath;")
+          .replace(
+            "  };\n}\n\nfunction localStoreLockIsStale",
+            "  };\n  fs.rmdirSync(lockPath);\n}\n\nfunction localStoreLockIsStale",
+          );
+      },
+    },
+    {
       name: "cross-process lock acquisition removed",
       file: localStoreFile,
       anchor: "private withStoreLock<T>",
@@ -1374,16 +1737,24 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     const source = fs.readFileSync(target, "utf8");
     const start = mutation.anchor ? source.indexOf(mutation.anchor) : 0;
     assert.ok(start >= 0, mutation.name);
-    const occurrence = source.indexOf(mutation.from, start);
-    assert.ok(occurrence >= 0, mutation.name);
-    const mutated = mutation.all
-      ? source.split(mutation.from).join(mutation.to)
-      : `${source.slice(0, occurrence)}${mutation.to}${source.slice(occurrence + mutation.from.length)}`;
+    let mutated;
+    if (mutation.mutate) {
+      const section = source.slice(start);
+      const mutatedSection = mutation.mutate(section);
+      assert.notEqual(mutatedSection, section, mutation.name);
+      mutated = `${source.slice(0, start)}${mutatedSection}`;
+    } else {
+      const occurrence = source.indexOf(mutation.from, start);
+      assert.ok(occurrence >= 0, mutation.name);
+      mutated = mutation.all
+        ? source.split(mutation.from).join(mutation.to)
+        : `${source.slice(0, occurrence)}${mutation.to}${source.slice(occurrence + mutation.from.length)}`;
+    }
     fs.writeFileSync(target, mutated, "utf8");
     const report = buildAudit(root, { includeExternal: false });
     const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
     assert.equal(contract.status, STATUS.FAIL, mutation.name);
-    assert.ok(contract.evidence.missing.length > 0, mutation.name);
+    assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0, mutation.name);
   }
 });
 
@@ -1908,6 +2279,36 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
   const baseline = buildAudit(baselineRoot, { includeExternal: false });
   assert.equal(baseline.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS);
 
+  for (const decoy of [
+    'private readonly stringRouteDecoy = "@Post(\\\":id/unsafe-update\\\")";',
+    "// @Post(\":id/unsafe-update\")",
+    "/* @Post(\":id/unsafe-update\") */",
+    "private readonly templateRouteDecoy = `@Post(\":id/unsafe-update\")`;",
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-route-decoy-"));
+    fs.cpSync(baselineRoot, root, { recursive: true });
+    const target = path.join(root, "desktop", "apps", "api", "src", "orders", "orders.controller.ts");
+    const source = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(target, source.replace('  @Post(":id/revise-selection")', `  ${decoy}\n  @Post(":id/revise-selection")`), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS, decoy);
+  }
+
+  for (const samePathDecoy of [
+    'private readonly samePathStringDecoy = "@Post(\\\":id/update\\\")";',
+    "// @Post(\":id/update\")",
+    "/* @Post(\":id/update\") */",
+    "private readonly samePathTemplateDecoy = `@Post(\":id/update\")`;",
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-same-route-decoy-"));
+    fs.cpSync(baselineRoot, root, { recursive: true });
+    const target = path.join(root, "desktop", "apps", "api", "src", "orders", "orders.controller.ts");
+    const source = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(target, source.replace('  @Post(":id/update")', `  ${samePathDecoy}\n  @Post(":id/update")`), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(report.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS, samePathDecoy);
+  }
+
   const mutations = [
     {
       name: "ordinary extra update field",
@@ -1987,6 +2388,201 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
           "return this.orders.update(id, {",
           "return this.orders.update(id, { ...payload,",
         );
+      },
+    },
+    {
+      name: "orders controller path changed",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace('@Controller("orders")', '@Controller("unsafe-orders")');
+      },
+    },
+    {
+      name: "TrustedOperator cannot shadow its operator-access import",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "  TrustedOperator,\r\n} from \"../operator-access/operator-access.guard\";",
+          "} from \"../operator-access/operator-access.guard\";\r\nconst TrustedOperator = Body;",
+        );
+      },
+    },
+    {
+      name: "RequireOperatorCapability cannot become a local no-op decorator",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "  RequireOperatorCapability,\r\n",
+          "",
+        ).replace(
+          '@Controller("orders")',
+          'const RequireOperatorCapability = (..._args: any[]) => () => undefined;\r\n\r\n@Controller("orders")',
+        );
+      },
+    },
+    {
+      name: "orders controller gains a duplicate decorator",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace('@Controller("orders")', '@Controller("orders")\n@Controller("orders")');
+      },
+    },
+    {
+      name: "orders update route is attached to a renamed method",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(/\r?\n  update\(\r?\n/, "\n  unsafeUpdate(\n");
+      },
+    },
+    {
+      name: "orders update id parameter decorator argument changed",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          /@Param\("id"\) id: string,\r?\n    @Body\(\) payload: \{ status\?/,
+          '@Param("other") id: string,\n    @Body() payload: { status?',
+        );
+      },
+    },
+    {
+      name: "orders update body decorator gains an argument",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("@Body() payload: { status?", '@Body("payload") payload: { status?');
+      },
+    },
+    {
+      name: "orders update id parameter becomes optional",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          /@Param\("id"\) id: string,\r?\n    @Body\(\) payload: \{ status\?/,
+          '@Param("id") id?: string,\n    @Body() payload: { status?',
+        );
+      },
+    },
+    {
+      name: "orders update payload type is widened",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "@Body() payload: { status?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,",
+          "@Body() payload: any,",
+        );
+      },
+    },
+    {
+      name: "orders controller gains an extra undecorated method",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          '  @Post(":id/revise-selection")',
+          '  unsafeHelper() {}\n\n  @Post(":id/revise-selection")',
+        );
+      },
+    },
+    {
+      name: "orders controller gains an extra GET method",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          '  @Post(":id/revise-selection")',
+          '  @Get("unsafe")\n  unsafeGet() {}\n\n  @Post(":id/revise-selection")',
+        );
+      },
+    },
+    {
+      name: "computed require Post alias adds an unsafe route",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source
+          .replace('@Controller("orders")', 'const UnsafePost = require("@nestjs/common")["Post"];\n\n@Controller("orders")')
+          .replace(
+            '  @Post(":id/revise-selection")',
+            '  @UnsafePost(":id/unsafe-update")\n  unsafeComputedRoute() {}\n\n  @Post(":id/revise-selection")',
+          );
+      },
+    },
+    ...[
+      {
+        name: "duplicate orders update route",
+        decorator: '@Post(":id/update")',
+      },
+      {
+        name: "new unsafe literal orders update route",
+        decorator: '@Post(":id/unsafe-update")',
+      },
+      {
+        name: "new unsafe template-literal orders update route",
+        decorator: '@Post(`:id/unsafe-update`)',
+      },
+      {
+        name: "new unsafe constant orders update route",
+        decorator: "@Post(UNSAFE_ORDER_UPDATE_PATH)",
+      },
+      {
+        name: "new unsafe concatenated orders update route",
+        decorator: '@Post(":id/" + "unsafe-update")',
+      },
+      {
+        name: "new unsafe no-argument orders update route",
+        decorator: "@Post()",
+      },
+      {
+        name: "new unsafe array orders update route",
+        decorator: '@Post([":id/unsafe-update"])',
+      },
+      {
+        name: "new unsafe comment-gap orders update route",
+        decorator: '@Post /* route gap */ (":id/unsafe-update")',
+      },
+    ].map(({ name, decorator }) => ({
+      name,
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          '  @Post(":id/revise-selection")',
+          `  ${decorator}\n  unsafeUpdate(@Param("id") id: string, @Body() payload: any) {\n    return this.orders.update(id, payload);\n  }\n\n  @Post(":id/revise-selection")`,
+        );
+      },
+    })),
+    {
+      name: "aliased Post import and decorator",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source
+          .replace("Param, Post, Query", "Param, Post, Post as UnsafePost, Query")
+          .replace(
+            '  @Post(":id/revise-selection")',
+            '  @UnsafePost(":id/unsafe-update")\n  unsafeAlias() {}\n\n  @Post(":id/revise-selection")',
+          );
+      },
+    },
+    {
+      name: "namespace Post import and decorator",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source
+          .replace(
+            'import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";',
+            'import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";\nimport * as UnsafeNest from "@nestjs/common";',
+          )
+          .replace(
+            '  @Post(":id/revise-selection")',
+            '  @UnsafeNest.Post(":id/unsafe-update")\n  unsafeNamespace() {}\n\n  @Post(":id/revise-selection")',
+          );
+      },
+    },
+    {
+      name: "Post decorator factory alias",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source
+          .replace('@Controller("orders")', 'const UnsafePost = Post;\n\n@Controller("orders")')
+          .replace(
+            '  @Post(":id/revise-selection")',
+            '  @UnsafePost(":id/unsafe-update")\n  unsafeFactoryAlias() {}\n\n  @Post(":id/revise-selection")',
+          );
       },
     },
     {
