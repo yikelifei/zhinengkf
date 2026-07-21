@@ -1608,56 +1608,56 @@ test("asset SSRF, content truth and both local-file response contracts fail clos
 
 test("completion audit fails when high-risk route guards, trusted actors or public callback boundaries drift", () => {
   const baselineRoot = createPassingFixture();
+  const projectRoot = path.resolve(__dirname, "..", "..");
+  for (const relative of [
+    "desktop/apps/api/src/orders/orders.controller.ts",
+    "desktop/apps/api/src/reviews/reviews.controller.ts",
+    "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
+  ]) {
+    write(baselineRoot, relative, fs.readFileSync(path.join(projectRoot, ...relative.split("/")), "utf8"));
+  }
   const baseline = buildAudit(baselineRoot, { includeExternal: false });
   assert.equal(baseline.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS);
 
   const mutations = [
     {
       file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
-      from: '@RequireOperatorCapability("manage_channels")',
-      to: '@RequireOperatorCapability("view_console")',
+      mutate(source) {
+        return source.replace(
+          /(@Post\("kf\/sync"\)[\s\S]*?@RequireOperatorCapability\("manage_channels"\))\r?\n\s*@UseGuards\(OperatorAccessGuard\)/,
+          "$1",
+        );
+      },
     },
     {
       file: "desktop/apps/api/src/reviews/reviews.controller.ts",
-      from: "reviewer: principal.id",
-      to: 'reviewer: "browser_operator"',
+      mutate(source) {
+        return source.replace("reviewer: principal.id", 'reviewer: "browser_operator"');
+      },
     },
     {
       file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
-      from: '@Post("callback")',
-      to: '@Post("callback")\n  @RequireOperatorCapability("approve_send")\n  @UseGuards(OperatorAccessGuard)',
-    },
-    {
-      file: "desktop/apps/api/src/assets/assets.controller.ts",
-      from: '@RequireOperatorCapability("manage_design_executions")',
-      to: '@RequireOperatorCapability("view_console")',
-    },
-    {
-      file: "desktop/apps/api/src/routing/routing.controller.ts",
-      from: "reviewer: principal.id",
-      to: 'reviewer: "browser_operator"',
-    },
-    {
-      file: "desktop/apps/api/src/routing/routing.controller.ts",
-      from: '@Post("evaluate")\n  @RequireOperatorCapability("manage_training")',
-      to: '@Post("evaluate")\n  @RequireOperatorCapability("view_console")',
-    },
-    {
-      file: "desktop/apps/api/src/quotes/quotes.controller.ts",
-      from: "owner: principal.id",
-      to: 'owner: "browser_operator"',
+      mutate(source) {
+        return source.replace(
+          '@Post("callback")',
+          '@Post("callback")\n  @RequireOperatorCapability("approve_send")\n  @UseGuards(OperatorAccessGuard)',
+        );
+      },
     },
   ];
   for (const mutation of mutations) {
-    const root = createPassingFixture();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-integrated-mutation-"));
+    fs.cpSync(baselineRoot, root, { recursive: true });
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
-    assert.ok(source.includes(mutation.from));
-    fs.writeFileSync(target, source.replace(mutation.from, mutation.to), "utf8");
+    const mutated = mutation.mutate(source);
+    assert.notEqual(mutated, source, mutation.file);
+    fs.writeFileSync(target, mutated, "utf8");
     const report = buildAudit(root, { includeExternal: false });
     const contract = report.results.find((item) => item.id === "contract.high_risk_operator_routes");
     assert.equal(contract.status, STATUS.FAIL, mutation.file);
     assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0);
+    assert.ok(contract.evidence.issues.some((issue) => issue.path === mutation.file), mutation.file);
   }
 });
 

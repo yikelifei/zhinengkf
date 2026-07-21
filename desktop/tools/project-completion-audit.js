@@ -2055,17 +2055,30 @@ function highRiskOperatorRouteResults(root) {
   );
   const missing = [];
   const forbidden = [];
+  const issues = [];
+  const sourcePath = (text) => {
+    const key = Object.keys(sources).find((candidate) => sources[candidate] === text);
+    return key ? paths[key] : null;
+  };
 
   const check = (label, text, routePattern, requiredPatterns, forbiddenPatterns = []) => {
-    const failures = patternFailures(extractRouteSection(text, routePattern), requiredPatterns, forbiddenPatterns);
+    const section = extractRouteSection(text, routePattern);
+    const failures = patternFailures(section, requiredPatterns, forbiddenPatterns);
     missing.push(...failures.missing.map((item) => `${label}-${item}`));
     forbidden.push(...failures.forbidden.map((item) => `${label}-${item}`));
+    if (failures.missing.length || failures.forbidden.length) {
+      issues.push({ label, path: sourcePath(text), missing: failures.missing, forbidden: failures.forbidden });
+    }
+    return section;
   };
   const checkClass = (label, text, requiredPatterns) => {
     const classIndex = text.indexOf("export class");
     const header = classIndex >= 0 ? text.slice(0, classIndex) : null;
     const failures = patternFailures(header, requiredPatterns);
     missing.push(...failures.missing.map((item) => `${label}-${item}`));
+    if (failures.missing.length) {
+      issues.push({ label, path: sourcePath(text), missing: failures.missing, forbidden: [] });
+    }
   };
 
   for (const [label, sourceKey] of [
@@ -2108,7 +2121,6 @@ function highRiskOperatorRouteResults(root) {
     ]);
   }
   for (const [label, sourceKey, routePattern] of [
-    ["orders-update-trusted", "orders", /@Post\(["']:id\/update["']\)/],
     ["orders-revise-trusted", "orders", /@Post\(["']:id\/revise-selection["']\)/],
     ["quotes-update-trusted", "quotes", /@Post\(["']:id\/update["']\)/],
     ["quotes-revise-trusted", "quotes", /@Post\(["']:id\/revise-selection["']\)/],
@@ -2119,6 +2131,27 @@ function highRiskOperatorRouteResults(root) {
       /owner:\s*principal\.id/,
     ]);
   }
+  const ordersUpdateSection = extractRouteSection(sources.orders, /@Post\(["']:id\/update["']\)/);
+  const explicitOrdersUpdateAllowlist = [
+    /return this\.orders\.update\(id,\s*\{/,
+    /status:\s*payload\?\.status/,
+    /customerNotes:\s*payload\?\.customerNotes/,
+    /expectedWechatAccountId:\s*payload\?\.expectedWechatAccountId/,
+    /expectedConversationId:\s*payload\?\.expectedConversationId/,
+    /expectedCustomerId:\s*payload\?\.expectedCustomerId/,
+  ];
+  const stripsUntrustedOwner = /owner:\s*_untrustedOwner/.test(ordersUpdateSection || "");
+  check(
+    "orders-update-trusted",
+    sources.orders,
+    /@Post\(["']:id\/update["']\)/,
+    [
+      /@TrustedOperator\(\) principal/,
+      /owner:\s*principal\.id/,
+      ...(stripsUntrustedOwner ? [/owner:\s*_untrustedOwner/] : explicitOrdersUpdateAllowlist),
+    ],
+    stripsUntrustedOwner ? [] : [/\.\.\.(?:payload|trustedPayload)/, /owner:\s*payload(?:\?|\.)/],
+  );
   check("routing-evaluate", sources.routing, /@Post\(["']evaluate["']\)/, [
     /@RequireOperatorCapability\(["']manage_training["']\)/,
   ]);
@@ -2304,7 +2337,7 @@ function highRiskOperatorRouteResults(root) {
     ok
       ? "操作员写入、通用微信入站、渠道状态、个人微信实例、发送、人工审核、付款确认、自动化和训练写入均要求匹配能力与可信主体；企业微信 callback 保持签名认证公开入口。"
       : "高风险路由守卫、可信审计人覆盖或企业微信公开入口边界发生漂移。",
-    { path: paths.wechatWork, paths: Object.values(paths), missing, forbidden },
+    { path: issues[0]?.path || paths.wechatWork, paths: Object.values(paths), missing, forbidden, issues },
   )];
 }
 
