@@ -2905,12 +2905,80 @@ InheritedClassRunner.run();`],
         return `${source}\n${statement}\n`;
       },
     })),
+    ...[
+      ["instance arrow field sibling delegate", `let arrowFieldDelegatePrototype: any = {};
+class ArrowFieldDelegateRunner { target() { arrowFieldDelegatePrototype.create = (() => null) as any; } entry = () => { this.target(); }; }
+const arrowFieldDelegateRunner = new ArrowFieldDelegateRunner();
+arrowFieldDelegatePrototype = NotificationsService.prototype;
+arrowFieldDelegateRunner.entry();`],
+      ["method delegates to getter", `let methodGetterDelegatePrototype: any = {};
+class MethodGetterDelegateRunner { get target() { methodGetterDelegatePrototype.create = (() => null) as any; return 1; } entry() { return this.target; } }
+methodGetterDelegatePrototype = NotificationsService.prototype;
+new MethodGetterDelegateRunner().entry();`],
+      ["method delegates to setter", `let methodSetterDelegatePrototype: any = {};
+class MethodSetterDelegateRunner { set target(_next: number) { methodSetterDelegatePrototype.create = (() => null) as any; } entry() { this.target = 1; } }
+methodSetterDelegatePrototype = NotificationsService.prototype;
+new MethodSetterDelegateRunner().entry();`],
+      ["getter delegates with method apply wrapper", `let getterApplyDelegatePrototype: any = {};
+class GetterApplyDelegateRunner { target() { getterApplyDelegatePrototype.create = (() => null) as any; } get entry() { this.target.apply(this, []); return 1; } }
+getterApplyDelegatePrototype = NotificationsService.prototype;
+void new GetterApplyDelegateRunner().entry;`],
+      ["setter delegates with method call wrapper", `let setterCallDelegatePrototype: any = {};
+class SetterCallDelegateRunner { target() { setterCallDelegatePrototype.create = (() => null) as any; } set entry(_next: number) { this.target.call(this); } }
+setterCallDelegatePrototype = NotificationsService.prototype;
+new SetterCallDelegateRunner().entry = 1;`],
+      ["accessor and method multi-hop delegate", `let accessorMultiHopPrototype: any = {};
+class AccessorMultiHopRunner { get target() { accessorMultiHopPrototype.create = (() => null) as any; return 1; } middle() { return this.target; } set entry(_next: number) { this.middle(); } }
+const accessorMultiHopRunner = new AccessorMultiHopRunner();
+accessorMultiHopPrototype = NotificationsService.prototype;
+accessorMultiHopRunner.entry = 1;`],
+      ["same-name setter delegates to getter", `let pairedGetterPrototype: any = {};
+class PairedGetterRunner { static get value() { pairedGetterPrototype.create = (() => null) as any; return 1; } static set value(_next: number) { void this.value; } }
+pairedGetterPrototype = NotificationsService.prototype;
+PairedGetterRunner.value = 1;`],
+      ["same-name getter delegates to setter", `let pairedSetterPrototype: any = {};
+class PairedSetterRunner { static set value(_next: number) { pairedSetterPrototype.create = (() => null) as any; } static get value() { this.value = 1; return 1; } }
+pairedSetterPrototype = NotificationsService.prototype;
+void PairedSetterRunner.value;`],
+      ["setter for-of left-hand side", `let forOfSetterPrototype: any = {};
+class ForOfSetterRunner { static set value(_next: number) { forOfSetterPrototype.create = (() => null) as any; } }
+forOfSetterPrototype = NotificationsService.prototype;
+for (ForOfSetterRunner.value of [1]) {}`],
+      ["setter for-in left-hand side", `let forInSetterPrototype: any = {};
+class ForInSetterRunner { static set value(_next: string) { forInSetterPrototype.create = (() => null) as any; } }
+forInSetterPrototype = NotificationsService.prototype;
+for (ForInSetterRunner.value in { key: true }) {}`],
+      ["setter destructuring assignment target", `let destructuredSetterPrototype: any = {};
+class DestructuredSetterRunner { static set value(_next: number) { destructuredSetterPrototype.create = (() => null) as any; } }
+destructuredSetterPrototype = NotificationsService.prototype;
+({ value: DestructuredSetterRunner.value } = { value: 1 });`],
+      ["setter defaulted destructuring assignment target", `let defaultedSetterPrototype: any = {};
+class DefaultedSetterRunner { static set value(_next: number) { defaultedSetterPrototype.create = (() => null) as any; } }
+defaultedSetterPrototype = NotificationsService.prototype;
+({ value: DefaultedSetterRunner.value = 1 } = {});`],
+      ["setter compound assignment remains read-write", `let compoundSetterPrototype: any = {};
+class CompoundSetterRunner { static get value() { return 1; } static set value(_next: number) { compoundSetterPrototype.create = (() => null) as any; } }
+compoundSetterPrototype = NotificationsService.prototype;
+CompoundSetterRunner.value += 1;`],
+      ["class plan nested reachability stays fail-closed", `let nestedPlanPrototype: any = {};
+class NestedPlanRunner { target() { nestedPlanPrototype.create = (() => null) as any; } entry() { if (nestedPlanPrototype) this.target(); } }
+nestedPlanPrototype = NotificationsService.prototype;
+new NestedPlanRunner().entry();`],
+    ].map(([name, statement]) => ({
+      name: `${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
   ];
 
   const wave65MutationCount = 101;
+  const wave66MutationCount = 14;
   const orderedMutations = [
-    ...mutations.slice(-wave65MutationCount),
-    ...mutations.slice(0, -wave65MutationCount),
+    ...mutations.slice(-(wave65MutationCount + wave66MutationCount)),
+    ...mutations.slice(0, -(wave65MutationCount + wave66MutationCount)),
   ];
   for (const [mutationIndex, mutation] of orderedMutations.entries()) {
     const root = createRealInboundFixture();
@@ -3467,6 +3535,39 @@ function safeFunctionScopedVarShadow() {
   }
   NotificationsService.prototype.create = () => null;
 }
+let safeArrowFieldDelegatePrototype: any = {};
+class SafeArrowFieldDelegateRunner {
+  target() { safeArrowFieldDelegatePrototype.create = () => null; }
+  entry = () => { this.target(); };
+}
+new SafeArrowFieldDelegateRunner().entry();
+safeArrowFieldDelegatePrototype = NotificationsService.prototype;
+let safeGetterPatternPrototype: any = NotificationsService.prototype;
+class SafeGetterPatternRunner {
+  static get value() { safeGetterPatternPrototype.create = () => null; return 1; }
+}
+for (SafeGetterPatternRunner.value of [1]) {}
+for (SafeGetterPatternRunner.value in { key: true }) {}
+({ value: SafeGetterPatternRunner.value } = { value: 1 });
+({ value: SafeGetterPatternRunner.value = 1 } = {});
+let safeSetterReadDelegatePrototype: any = NotificationsService.prototype;
+class SafeSetterReadDelegateRunner {
+  set target(_next: number) { safeSetterReadDelegatePrototype.create = () => null; }
+  entry() { return this.target; }
+}
+new SafeSetterReadDelegateRunner().entry();
+let safeGetterWriteDelegatePrototype: any = NotificationsService.prototype;
+class SafeGetterWriteDelegateRunner {
+  get target() { safeGetterWriteDelegatePrototype.create = () => null; return 1; }
+  entry() { this.target = 1; }
+}
+new SafeGetterWriteDelegateRunner().entry();
+let safeDeadNestedPlanPrototype: any = NotificationsService.prototype;
+class SafeDeadNestedPlanRunner {
+  target() { safeDeadNestedPlanPrototype.create = () => null; }
+  entry() { if (false) this.target(); }
+}
+new SafeDeadNestedPlanRunner().entry();
 const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
 /* Reflect["set"](NotificationsService.prototype, "create", () => null); */
 ${notifications}`,
