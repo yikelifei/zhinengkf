@@ -264,16 +264,104 @@ const CONTRACTS = Object.freeze([
     id: "contract.inbound_effect_recovery",
     title: "Inbound effects are lease fenced, durably recoverable and fully hydrated",
     file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
-    patterns: [
-      /withInboundEffectLease/,
-      /hydrateCompletedInboundReplay/,
-      /inboundSelectionRecovery/,
-      /high_value_image_selection/,
-      /low_value_image_selection/,
-      /selection_committed/,
-      /high-value inbound selection recovery lost its durable design job binding/,
-      /low-value inbound selection recovery lost its durable quote binding/,
-      /commitInboundHighValueSelection/,
+    patterns: [],
+    sections: [
+      {
+        id: "local-image-selection-dispatch",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /private async handleInboundImageSelection\s*\([\s\S]*?\n\s*\}\)\s*/,
+        patterns: [
+          /const recovery = inboundSelectionRecovery\(params\.operationResult\)/,
+          /this\.jobMatchesConversationIdentity\(recoveryJob, params\.conversation\)/,
+          /recoveredQuote\.designJobId !== recoveryJob\.id/,
+          /recoveredQuote\.selectedImageId !== recovery\.selectedImageId/,
+          /kind:\s*"high_value_image_selection"[\s\S]*?phase:\s*"selection_committed"/,
+          /this\.localStore\.commitInboundHighValueSelection\(\{[\s\S]*?operationId:\s*params\.operationId[\s\S]*?claimToken:\s*params\.claimToken[\s\S]*?leaseExpiresAt:\s*this\.nextInboundLeaseExpiry\(\)[\s\S]*?recoveryEffect/,
+          /kind:\s*"low_value_image_selection"[\s\S]*?phase:\s*"selection_committed"/,
+          /this\.localStore\.commitInboundLowValueSelection\(\{[\s\S]*?operationId:\s*params\.operationId[\s\S]*?claimToken:\s*params\.claimToken[\s\S]*?leaseExpiresAt:\s*this\.nextInboundLeaseExpiry\(\)[\s\S]*?recoveryEffect/,
+        ],
+      },
+      {
+        id: "local-quote-acceptance-dispatch",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /private async handleInboundQuoteAcceptance\s*\([\s\S]*?\n\s*\}\)\s*/,
+        patterns: [
+          /const recovery = inboundQuoteAcceptanceRecovery\(params\.operationResult\)/,
+          /this\.jobMatchesConversationIdentity\(quote\.designJob, params\.conversation\)/,
+          /orderDraft\.quoteDraftId !== quote\.id/,
+          /String\(orderDraft\.wechatAccountId \|\| ""\) !== String\(params\.conversation\.wechatAccountId \|\| ""\)/,
+          /String\(orderDraft\.conversationId \|\| ""\) !== String\(params\.conversation\.id \|\| ""\)/,
+          /String\(orderDraft\.customerId \|\| ""\) !== String\(params\.conversation\.customerId \|\| ""\)/,
+        ],
+        occurrences: [
+          { pattern: /this\.localStore\.commitInboundQuoteAcceptance\(\{/g, minimum: 2 },
+          { pattern: /kind:\s*"low_value_quote_acceptance"/g, minimum: 2 },
+          { pattern: /phase:\s*"quote_and_order_committed"/g, minimum: 2 },
+          { pattern: /claimToken:\s*params\.claimToken/g, minimum: 2 },
+          { pattern: /leaseExpiresAt:\s*this\.nextInboundLeaseExpiry\(\)/g, minimum: 2 },
+        ],
+      },
+      {
+        id: "selection-recovery-parser",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /function inboundSelectionRecovery\s*\(value:\s*unknown\)/,
+        patterns: [
+          /\["high_value_image_selection",\s*"low_value_image_selection"\]\.includes/,
+          /effect\.phase !== "selection_committed"/,
+          /if \(!designJobId \|\| !selectedImageId\)/,
+          /effect\.kind === "low_value_image_selection" && !quoteDraftId/,
+        ],
+      },
+      {
+        id: "quote-acceptance-recovery-parser",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /function inboundQuoteAcceptanceRecovery\s*\(value:\s*unknown\)/,
+        patterns: [
+          /effect\.kind !== "low_value_quote_acceptance" \|\| effect\.phase !== "quote_and_order_committed"/,
+          /if \(!quoteDraftId \|\| !orderDraftId \|\| !acceptancePlan\?\.action \|\| !acceptancePlan\?\.reason\)/,
+          /\["accept_quote_and_create_order",\s*"update_existing_order_payment"\]\.includes/,
+        ],
+      },
+      {
+        id: "local-low-value-atomic-commit",
+        file: "desktop/apps/api/src/local-store/local-store.service.ts",
+        startPattern: /commitInboundLowValueSelection\s*\(payload:\s*\{[\s\S]*?\n\s*\}\)\s*/,
+        patterns: [
+          /operation\.status !== "processing"/,
+          /operation\.claimToken !== payload\.claimToken/,
+          /Date\.parse\(String\(operation\.leaseExpiresAt \|\| ""\)\) <= Date\.now\(\)/,
+          /String\(job\.wechatAccountId \|\| ""\) !== String\(operation\.wechatAccountId \|\| ""\)/,
+          /String\(job\.conversationId \|\| ""\) !== String\(operation\.conversationId \|\| ""\)/,
+          /String\(job\.customerId \|\| ""\) !== String\(operation\.customerId \|\| ""\)/,
+          /image\.designJobId === payload\.designJobId/,
+          /existingQuote\?\.sendTaskId \|\| existingQuote\?\.status === "sent"/,
+          /quote\.identityBinding = this\.validateStoredQuoteDraftIdentity\(data, quote\)/,
+          /quote\.identityBinding = this\.validateQuoteDraftIdentity\(/,
+          /const recoveryEffect = \{ \.\.\.payload\.recoveryEffect, quoteDraftId: quote\.id \}/,
+          /result:\s*\{ \.\.\.\(operation\.result \|\| \{\}\), recoveryEffect \}/,
+          /this\.write\(data\)/,
+        ],
+      },
+      {
+        id: "local-quote-acceptance-atomic-commit",
+        file: "desktop/apps/api/src/local-store/local-store.service.ts",
+        startPattern: /commitInboundQuoteAcceptance\s*\(payload:\s*\{[\s\S]*?\n\s*\}\)\s*/,
+        patterns: [
+          /operation\.status !== "processing"/,
+          /operation\.claimToken !== payload\.claimToken/,
+          /Date\.parse\(String\(operation\.leaseExpiresAt \|\| ""\)\) <= Date\.now\(\)/,
+          /String\(designJob\.wechatAccountId \|\| ""\) !== String\(operation\.wechatAccountId \|\| ""\)/,
+          /String\(designJob\.conversationId \|\| ""\) !== String\(operation\.conversationId \|\| ""\)/,
+          /String\(currentQuote\.customerId \|\| ""\) !== String\(operation\.customerId \|\| ""\)/,
+          /currentOrder\.quoteDraftId !== quote\.id/,
+          /quote\.identityBinding = this\.validateStoredQuoteDraftIdentity\(data, quote\)/,
+          /order\.identityBinding = this\.validateStoredOrderDraftBinding\(data, order\)/,
+          /quoteDraftId:\s*quote\.id/,
+          /orderDraftId:\s*order\.id/,
+          /result:\s*\{ \.\.\.\(operation\.result \|\| \{\}\), recoveryEffect \}/,
+          /this\.write\(data\)/,
+        ],
+      },
     ],
   },
   {
@@ -481,6 +569,10 @@ const CONTRACTS = Object.freeze([
       /validateSevenZipListing/,
       /maxCompressionRatio/,
       /inspectArchiveBudget\(sevenZip, installer/,
+      /archive identity or SHA-256 changed after technical listing/,
+      /runVerifiedArchiveExtraction/,
+      /archive contains a linked or reparse entry/,
+      /archive file is an ancestor of another entry/,
       /findNamedFile\(outer, "app-64\.7z", extractionLimits\)/,
       /app-64\.7z/,
       /signed installer payload does not match/,
@@ -1828,7 +1920,7 @@ function contractResults(root) {
     if (text === null) {
       return result(contract.id, contract.title, STATUS.FAIL, "契约文件缺失。", {
         path: normalizeRelative(contract.file),
-        missingContracts: contract.patterns.length,
+        missingContracts: contract.patterns.length + (contract.sections || []).length,
       });
     }
     const missing = contract.patterns
@@ -1837,13 +1929,36 @@ function contractResults(root) {
     const forbidden = (contract.forbidden || [])
       .map((pattern, index) => (pattern.test(text) ? `forbidden-pattern-${index + 1}` : null))
       .filter(Boolean);
+    const paths = new Set([normalizeRelative(contract.file)]);
+    for (const section of contract.sections || []) {
+      paths.add(normalizeRelative(section.file));
+      const sectionSource = readText(root, section.file);
+      const block = sectionSource === null ? null : extractBalancedBlock(sectionSource, section.startPattern);
+      if (block === null) {
+        missing.push(`${section.id}:section-missing`);
+        continue;
+      }
+      for (const [index, pattern] of section.patterns.entries()) {
+        if (!pattern.test(block)) missing.push(`${section.id}:required-pattern-${index + 1}`);
+      }
+      for (const [index, pattern] of (section.forbidden || []).entries()) {
+        if (pattern.test(block)) forbidden.push(`${section.id}:forbidden-pattern-${index + 1}`);
+      }
+      for (const [index, occurrence] of (section.occurrences || []).entries()) {
+        const flags = occurrence.pattern.flags.includes("g") ? occurrence.pattern.flags : `${occurrence.pattern.flags}g`;
+        const matches = block.match(new RegExp(occurrence.pattern.source, flags)) || [];
+        if (matches.length < occurrence.minimum) {
+          missing.push(`${section.id}:occurrence-${index + 1}-${matches.length}-of-${occurrence.minimum}`);
+        }
+      }
+    }
     const ok = missing.length === 0 && forbidden.length === 0;
     return result(
       contract.id,
       contract.title,
       ok ? STATUS.PASS : STATUS.FAIL,
       ok ? "代码/配置契约与完成度声明一致。" : "代码/配置契约不完整或存在禁止项。",
-      { path: normalizeRelative(contract.file), missing, forbidden },
+      { path: normalizeRelative(contract.file), paths: [...paths], missing, forbidden },
     );
   });
 }
