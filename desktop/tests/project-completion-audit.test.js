@@ -470,7 +470,9 @@ export function getDesignExecutionResolutionBlockedReason({ pending, executions,
   if (!accessLoaded) return "access unknown";
   if (!canManageExecutions) return "access downgraded";
   const currentExecution = executions.find((execution) => execution.id === pending.executionId);
-  if (!currentExecution || currentExecution.availableResolution !== pending.resolution) return "intent changed";
+  if (!currentExecution || currentExecution.availableResolution !== pending.resolution) {
+    return "intent changed";
+  }
   return "";
 }
 
@@ -1951,22 +1953,27 @@ test("design reconciliation UI is a required artifact with a fail-closed action 
     {
       name: "loading must invalidate pending confirmation",
       from: 'if (loading) return "loading";',
-      to: 'if (false) return "loading";',
+      to: 'if (loading) return "";',
+    },
+    {
+      name: "loading reason must remain visible",
+      from: 'if (loading) return "loading";',
+      to: 'if (loading) return " ";',
     },
     {
       name: "unknown access must invalidate pending confirmation",
       from: 'if (!accessLoaded) return "access unknown";',
-      to: 'if (false) return "access unknown";',
+      to: 'if (!accessLoaded) return "";',
     },
     {
       name: "access downgrade must invalidate pending confirmation",
       from: 'if (!canManageExecutions) return "access downgraded";',
-      to: 'if (false) return "access downgraded";',
+      to: 'if (!canManageExecutions) return "";',
     },
     {
       name: "current execution intent and resolution must still match",
-      from: 'if (!currentExecution || currentExecution.availableResolution !== pending.resolution) return "intent changed";',
-      to: 'if (!currentExecution) return "intent changed";',
+      from: 'if (!currentExecution || currentExecution.availableResolution !== pending.resolution) {\n    return "intent changed";\n  }',
+      to: 'if (!currentExecution || currentExecution.availableResolution !== pending.resolution) {\n    return "";\n  }',
     },
   ];
 
@@ -1992,27 +1999,49 @@ test("design reconciliation UI cannot put reviewer in a browser-owned request bo
   const mutations = [
     {
       name: "unknown resolution request",
-      from: '{ ...expected, resolution: "confirmed_not_generated_refunded" }',
-      to: '{ ...expected, resolution: "confirmed_not_generated_refunded", reviewer: "browser_operator" }',
+      changes: [{
+        from: '{ ...expected, resolution: "confirmed_not_generated_refunded" }',
+        to: '{ ...expected, resolution: "confirmed_not_generated_refunded", reviewer: "browser_operator" }',
+      }],
     },
     {
       name: "refund resolution request",
-      from: '{ ...expected, resolution: "confirmed_refunded" }',
-      to: '{ ...expected, resolution: "confirmed_refunded", reviewer: "browser_operator" }',
+      changes: [{
+        from: '{ ...expected, resolution: "confirmed_refunded" }',
+        to: '{ ...expected, resolution: "confirmed_refunded", reviewer: "browser_operator" }',
+      }],
     },
     {
       name: "shared request serializer",
-      from: 'body: JSON.stringify(body)',
-      to: 'body: JSON.stringify({ ...body, reviewer: "browser_operator" })',
+      changes: [{
+        from: 'body: JSON.stringify(body)',
+        to: 'body: JSON.stringify({ ...body, reviewer: "browser_operator" })',
+      }],
+    },
+    {
+      name: "unknown resolution reviewer through an extra spread",
+      changes: [
+        {
+          from: 'export async function resolveUnknownDesignExecution(',
+          to: 'const browserOwnedResolutionFields = { reviewer: "browser_operator" };\nexport async function resolveUnknownDesignExecution(',
+        },
+        {
+          from: '{ ...expected, resolution: "confirmed_not_generated_refunded" }',
+          to: '{ ...expected, ...browserOwnedResolutionFields, resolution: "confirmed_not_generated_refunded" }',
+        },
+      ],
     },
   ];
 
   for (const mutation of mutations) {
     const root = createPassingFixture();
     const apiPath = path.join(root, "desktop", "apps", "web", "src", "lib", "api.ts");
-    const api = fs.readFileSync(apiPath, "utf8");
-    assert.ok(api.includes(mutation.from), mutation.name);
-    fs.writeFileSync(apiPath, api.replace(mutation.from, mutation.to), "utf8");
+    let api = fs.readFileSync(apiPath, "utf8");
+    for (const change of mutation.changes) {
+      assert.ok(api.includes(change.from), mutation.name);
+      api = api.replace(change.from, change.to);
+    }
+    fs.writeFileSync(apiPath, api, "utf8");
     const report = buildAudit(root, { includeExternal: false });
     const contract = report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
     assert.equal(contract.status, STATUS.FAIL, mutation.name);
