@@ -3541,9 +3541,22 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const callableExpressionIsDiscarded = (expression) => {
       let identity = expression;
       while (identity.parent && unwrapExpression(ts, identity.parent) === expression) identity = identity.parent;
-      if (identity.parent && ts.isVoidExpression(identity.parent) && identity.parent.expression === identity) return true;
-      return Boolean(identity.parent && ts.isExpressionStatement(identity.parent) &&
-        identity.parent.expression === identity);
+      const parent = identity.parent;
+      if (!parent) return false;
+      if ((ts.isVoidExpression(parent) || ts.isTypeOfExpression(parent)) && parent.expression === identity) return true;
+      if (ts.isPrefixUnaryExpression(parent) && parent.operator === ts.SyntaxKind.ExclamationToken &&
+        parent.operand === identity) return true;
+      if ((ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) &&
+        parent.expression === identity) return true;
+      if (ts.isForStatement(parent) && parent.condition === identity) return true;
+      if (ts.isConditionalExpression(parent) && parent.condition === identity) return true;
+      if (ts.isBinaryExpression(parent) && (parent.left === identity || parent.right === identity) && [
+        ts.SyntaxKind.EqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsToken,
+        ts.SyntaxKind.EqualsEqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsEqualsToken,
+      ].includes(parent.operatorToken.kind)) return true;
+      return Boolean(ts.isExpressionStatement(parent) && parent.expression === identity);
     };
     const exactCallableMemberName = (member, evaluationSeenBindings = seenBindings) => {
       const direct = member ? staticPropertyName(ts, member) : null;
@@ -3587,7 +3600,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       if (wrapperName !== "bind" || !wrapperCall) {
         return { trigger: null, escaped: !callableExpressionIsDiscarded(wrapperMember) };
       }
-      const boundInvocation = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+      const boundInvocation = sourceNodes.find((candidate) => (ts.isCallExpression(candidate) || ts.isNewExpression(candidate)) &&
         unwrapExpression(ts, candidate.expression) === wrapperCall) || null;
       if (boundInvocation) return { trigger: boundInvocation, escaped: false };
       let boundIdentity = wrapperCall;
@@ -4004,31 +4017,20 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         }
         if (!directCalls.includes(call)) directCalls.push(call);
       };
-      const directCallableReferenceCall = (reference) => {
-        const direct = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
-          unwrapExpression(ts, candidate.expression) === reference);
-        if (direct) return direct;
-        let identity = reference;
-        while (identity.parent && unwrapExpression(ts, identity.parent) === reference) identity = identity.parent;
-        const member = identity.parent;
-        if (!member || (!ts.isPropertyAccessExpression(member) && !ts.isElementAccessExpression(member)) ||
-          unwrapExpression(ts, member.expression) !== reference) return null;
-        const wrapper = staticPropertyName(ts, member);
-        if (!["call", "apply"].includes(wrapper)) return null;
-        return sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
-          unwrapExpression(ts, candidate.expression) === member) || null;
-      };
+      const directCallableReferenceCall = (reference) => callableMemberUse(reference, seenBindings);
+      let reachableCallableReferenceCount = 0;
       if (functionBinding) {
         for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
           !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === functionBinding)) {
           if (reference === assignmentBindingReference ||
             eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
-          const call = directCallableReferenceCall(reference);
-          if (!call) {
-            escaped = true;
+          reachableCallableReferenceCount += 1;
+          const callableUse = directCallableReferenceCall(reference);
+          if (!callableUse.trigger) {
+            if (callableUse.escaped) escaped = true;
             continue;
           }
-          registerDirectCall(call);
+          registerDirectCall(callableUse.trigger);
         }
       } else if (immediateCall) {
         registerDirectCall(immediateCall);
@@ -4209,7 +4211,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           else if (!owner || !ts.isExpressionStatement(owner)) escaped = true;
         }
       }
-      if (!escaped && !directCalls.length && ts.isFunctionDeclaration(referenceContainer)) escaped = true;
+      if (!escaped && !directCalls.length && !reachableCallableReferenceCount &&
+        ts.isFunctionDeclaration(referenceContainer)) escaped = true;
       if (!escaped && directCalls.length) {
         return unionStaticValues(...directCalls.map((call) =>
           staticValueAt(expression, call, seenBindings)));

@@ -3035,14 +3035,49 @@ objectReflectApplyRunner.entry();`],
         return `${source}\n${statement}\n`;
       },
     })),
+    ...[
+      ["class sibling direct constructor invocation", `let directNewPrototype: any = {};
+class DirectNewRunner { target = function () { directNewPrototype.create = (() => null) as any; }; entry() { new this.target(); } }
+directNewPrototype = NotificationsService.prototype;
+new DirectNewRunner().entry();`],
+      ["class sibling bound constructor invocation", `let boundNewPrototype: any = {};
+class BoundNewRunner { target = function () { boundNewPrototype.create = (() => null) as any; }; entry() { new (this.target.bind(this))(); } }
+boundNewPrototype = NotificationsService.prototype;
+new BoundNewRunner().entry();`],
+      ["ordinary function direct constructor invocation", `let ordinaryDirectNewPrototype: any = {};
+function OrdinaryDirectNewRunner() { ordinaryDirectNewPrototype.create = (() => null) as any; }
+ordinaryDirectNewPrototype = NotificationsService.prototype;
+new OrdinaryDirectNewRunner();`],
+      ["ordinary function Reflect.apply invocation", `let ordinaryReflectApplyPrototype: any = {};
+function OrdinaryReflectApplyRunner() { ordinaryReflectApplyPrototype.create = (() => null) as any; }
+ordinaryReflectApplyPrototype = NotificationsService.prototype;
+Reflect.apply(OrdinaryReflectApplyRunner, undefined, []);`],
+      ["ordinary function Reflect.construct invocation", `let ordinaryReflectNewPrototype: any = {};
+function OrdinaryReflectNewRunner() { ordinaryReflectNewPrototype.create = (() => null) as any; }
+ordinaryReflectNewPrototype = NotificationsService.prototype;
+Reflect.construct(OrdinaryReflectNewRunner, []);`],
+      ["shadowed Reflect construct remains fail closed", `let shadowedReflectNewPrototype: any = {};
+function ShadowedReflectNewRunner() { shadowedReflectNewPrototype.create = (() => null) as any; }
+const Reflect = { construct: (..._args: unknown[]) => undefined };
+shadowedReflectNewPrototype = NotificationsService.prototype;
+Reflect.construct(ShadowedReflectNewRunner, []);`],
+    ].map(([name, statement]) => ({
+      name: `${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
   ];
 
   const wave65MutationCount = 101;
   const wave66MutationCount = 14;
   const wave67MutationCount = 4;
   const wave68MutationCount = 9;
+  const wave69AMutationCount = 6;
   const recentMutationCount =
-    wave65MutationCount + wave66MutationCount + wave67MutationCount + wave68MutationCount;
+    wave65MutationCount + wave66MutationCount + wave67MutationCount + wave68MutationCount + wave69AMutationCount;
   const orderedMutations = [
     ...mutations.slice(-recentMutationCount),
     ...mutations.slice(0, -recentMutationCount),
@@ -3681,6 +3716,39 @@ const safeDiscardedObjectDelegateRunner = {
 };
 safeDiscardedObjectDelegateRunner.entry;
 void safeDiscardedObjectDelegateRunner.entry;
+let safePureClassCallablePrototype: any = NotificationsService.prototype;
+class SafePureClassCallableRunner {
+  target() { safePureClassCallablePrototype.create = () => null; }
+  entry() {
+    this.target;
+    void this.target;
+    typeof this.target;
+    !this.target;
+    if (this.target) {}
+    while (this.target) { break; }
+    do {} while (this.target);
+    for (; this.target;) { break; }
+    this.target ? 1 : 0;
+    this.target == null;
+    this.target != null;
+    this.target === this.target;
+    this.target !== this.target;
+  }
+}
+new SafePureClassCallableRunner().entry();
+let safePureFunctionPrototype: any = NotificationsService.prototype;
+function safePureFunctionReference() { safePureFunctionPrototype.create = () => null; }
+safePureFunctionReference;
+void safePureFunctionReference;
+typeof safePureFunctionReference;
+!safePureFunctionReference;
+if (safePureFunctionReference) {}
+while (safePureFunctionReference) { break; }
+do {} while (safePureFunctionReference);
+for (; safePureFunctionReference;) { break; }
+safePureFunctionReference ? 1 : 0;
+safePureFunctionReference == null;
+safePureFunctionReference !== safePureFunctionReference;
 ${notifications}`,
       "utf8",
     );
