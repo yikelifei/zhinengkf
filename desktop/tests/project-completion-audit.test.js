@@ -2325,9 +2325,148 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nfunction mutateRepeatedLocalVar() {\n  var repeatedLocalPrototype: any;\n  var repeatedLocalPrototype: any = LocalStoreService.prototype;\n  repeatedLocalPrototype.createNotification = (() => null) as any;\n}\n`;
       },
     },
+    {
+      name: "binding-element parameter default cannot hide a LocalStore prototype write",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nfunction mutateBindingElementParameterDefault({ localPrototype = LocalStoreService.prototype }) {\n  localPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "ordinary parameter default cannot hide a LocalStore prototype write",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nfunction mutateDefaultLocalParameter(localPrototype = LocalStoreService.prototype) {\n  localPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "destructured parameter default cannot hide a Notifications prototype write",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfunction mutateDefaultNotificationParameter({ prototype: notificationPrototype } = NotificationsService) {\n  notificationPrototype.create = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "parameter default initializer write remains conditionally reachable",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet parameterWriteLocalPrototype: any = LocalStoreService.prototype;\nfunction mutateParameterWrite(_value = (parameterWriteLocalPrototype = {})) {\n  parameterWriteLocalPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
+    ...[
+      ["call", 'Object.defineProperty.call(Object, NotificationsService.prototype, "create", { value: () => null });'],
+      ["apply", 'Object.defineProperty.apply(Object, [NotificationsService.prototype, "create", { value: () => null }]);'],
+      ["Reflect.apply", 'Reflect.apply(Object.defineProperty, Object, [NotificationsService.prototype, "create", { value: () => null }]);'],
+      ["bind", 'const boundNotificationDefinition = Object.defineProperty.bind(Object, NotificationsService.prototype, "create");\nboundNotificationDefinition({ value: () => null });'],
+    ].map(([wrapper, statement]) => ({
+      name: `${wrapper} wrapped defineProperty cannot replace a Notifications critical method`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
+    {
+      name: "apply wrapper with unknown arguments fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const unknownLocalDefinitionArguments: any[];\nObject.defineProperty.apply(Object, unknownLocalDefinitionArguments);\n`;
+      },
+    },
+    {
+      name: "static block this.prototype cannot replace a Notifications critical method",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return source.replace(
+          "export class NotificationsService {",
+          "export class NotificationsService {\n  static { this.prototype.create = (() => null) as any; }",
+        );
+      },
+    },
+    {
+      name: "static method this.prototype cannot replace a LocalStore critical method",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return source.replace(
+          "export class LocalStoreService {",
+          "export class LocalStoreService {\n  static mutateAuditPrototype() { this.prototype.createNotification = (() => null) as any; }",
+        );
+      },
+    },
+    {
+      name: "instance method this retains LocalStore prototype semantics",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return source.replace(
+          "export class LocalStoreService {",
+          "export class LocalStoreService {\n  mutateAuditInstance() { this.createNotification = (() => null) as any; }",
+        );
+      },
+    },
+    {
+      name: "array rest projection cannot hide a Notifications prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst [...notificationRestAliases] = [{}, NotificationsService.prototype];\nnotificationRestAliases[1].create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "object rest projection cannot hide a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { safe: omittedLocalAlias, ...localRestAliases } = { safe: {}, hidden: LocalStoreService.prototype };\nlocalRestAliases.hidden.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "known true if branch reaches a Notifications prototype assignment",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet knownIfNotificationAlias: any = {};\nif (true) knownIfNotificationAlias = NotificationsService.prototype;\nelse knownIfNotificationAlias = {};\nknownIfNotificationAlias.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "unknown ternary remains a fail-closed LocalStore prototype union",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const unknownTernaryAuditCondition: boolean;\nconst unknownTernaryLocalAlias = unknownTernaryAuditCondition ? LocalStoreService.prototype : {};\nunknownTernaryLocalAlias.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Object.assign rejects a critical Notifications source key",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nObject.assign(NotificationsService.prototype, { create: () => null });\n`;
+      },
+    },
+    {
+      name: "Object.assign rejects an unknown LocalStore source",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const unknownLocalAssignSource: object;\nObject.assign(LocalStoreService.prototype, unknownLocalAssignSource);\n`;
+      },
+    },
   ];
 
-  for (const mutation of mutations) {
+  const wave56MutationCount = 18;
+  const orderedMutations = [
+    ...mutations.slice(-wave56MutationCount),
+    ...mutations.slice(0, -wave56MutationCount),
+  ];
+  for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
@@ -2376,7 +2515,11 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     );
     const notifications = fs.readFileSync(notificationsPath, "utf8")
       .replace("if (effectKey) return this.createPrismaNotificationOnce(",
-        "if /* audit-safe Prisma gate comment */ (effectKey) return this.createPrismaNotificationOnce(");
+        "if /* audit-safe Prisma gate comment */ (effectKey) return this.createPrismaNotificationOnce(")
+      .replace(
+        "export class NotificationsService {",
+        "export class NotificationsService {\n  static { this.safeStaticAuditMarker = true; }\n  static safeStaticAuditWrite() { this.create = () => null; }",
+      );
     fs.writeFileSync(
       notificationsPath,
       `class SafePrismaDecoy { create() {} }
@@ -2478,6 +2621,39 @@ function safeStructuredOverwrites(auditCondition: boolean) {
   void executedDefaultWriteValue;
   executedDefaultWritePrototype.create = () => null;
 }
+function safeParameterAndRestDecoys(
+  safeParameterPrototype = {},
+  { prototype: safeDestructuredParameter = {} } = { prototype: {} },
+) {
+  safeParameterPrototype.create = () => null;
+  safeDestructuredParameter.create = () => null;
+  const [...safeRestAliases] = [{}, {}];
+  safeRestAliases[1].create = () => null;
+  const { omitted: safeOmitted, ...safeObjectRest } = { omitted: {}, retained: {} };
+  safeObjectRest.retained.create = () => null;
+}
+function safeBindingElementParameter({ localPrototype = {} }) {
+  localPrototype.create = () => null;
+}
+function safeConstantBranchNarrowing() {
+  let safeIfPrototype: any = {};
+  if (false) safeIfPrototype = NotificationsService.prototype;
+  else safeIfPrototype = {};
+  safeIfPrototype.create = () => null;
+  const safeTernaryPrototype = false ? NotificationsService.prototype : {};
+  safeTernaryPrototype.create = () => null;
+}
+Object.defineProperty.call(Object, NotificationsService.prototype, "safeCallCreate", { value: () => null });
+Object.defineProperty.apply(Object, [NotificationsService.prototype, "safeApplyCreate", { value: () => null }]);
+Reflect.apply(Object.defineProperty, Object, [NotificationsService.prototype, "safeReflectCreate", { value: () => null }]);
+const safeBoundNotificationDefinition = Object.defineProperty.bind(
+  Object,
+  NotificationsService.prototype,
+  "safeBoundCreate",
+);
+safeBoundNotificationDefinition({ value: () => null });
+Object.assign(NotificationsService.prototype, {});
+Object.assign(NotificationsService.prototype, { safeAssignedCreate: () => null });
 function safeFunctionScopedVarShadow() {
   if (true) {
     var NotificationsService = class SafeVarNotificationsService {};
