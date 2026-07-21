@@ -2399,11 +2399,11 @@ function designReconciliationResults(root) {
   ]);
   const pendingGuardChecks = patternFailures(pendingGuard, [
     /if \(!pending\) return ["']["']/,
-    /if \(loading\) return/,
-    /if \(!accessLoaded\) return/,
-    /if \(!canManageExecutions\) return/,
+    /if \(loading\) return ["'][^"'\r\n]*[^\s"'][^"'\r\n]*["'];?/,
+    /if \(!accessLoaded\) return ["'][^"'\r\n]*[^\s"'][^"'\r\n]*["'];?/,
+    /if \(!canManageExecutions\) return ["'][^"'\r\n]*[^\s"'][^"'\r\n]*["'];?/,
     /executions\.find\(\(execution\) => execution\.id === pending\.executionId\)/,
-    /!currentExecution\s*\|\|\s*currentExecution\.availableResolution !== pending\.resolution/,
+    /if \(!currentExecution\s*\|\|\s*currentExecution\.availableResolution !== pending\.resolution\)\s*\{\s*return ["'][^"'\r\n]*[^\s"'][^"'\r\n]*["'];?\s*\}/,
   ]);
   const componentChecks = patternFailures(component, [
     /getDesignExecutionResolutionBlockedReason\(\{\s*pending,\s*executions,\s*loading,\s*accessLoaded,\s*canManageExecutions,\s*\}\)/,
@@ -2430,15 +2430,27 @@ function designReconciliationResults(root) {
   ]);
   const unknownClientChecks = patternFailures(unknownClient, [
     /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-unknown/,
-    /resolution:\s*["']confirmed_not_generated_refunded["']/,
-  ], [/\breviewer\s*:/]);
+    /return postDesignExecutionResolution\([\s\S]*\{\s*\.\.\.expected,\s*resolution:\s*["']confirmed_not_generated_refunded["']\s*\},?\s*\);/,
+  ], [
+    /\breviewer\b/,
+    /\.\.\.(?!expected\b)/,
+  ]);
   const refundClientChecks = patternFailures(refundClient, [
     /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-refund/,
-    /resolution:\s*["']confirmed_refunded["']/,
-  ], [/\breviewer\s*:/]);
+    /return postDesignExecutionResolution\([\s\S]*\{\s*\.\.\.expected,\s*resolution:\s*["']confirmed_refunded["']\s*\},?\s*\);/,
+  ], [
+    /\breviewer\b/,
+    /\.\.\.(?!expected\b)/,
+  ]);
   const resolutionRequestChecks = patternFailures(resolutionRequest, [
     /body:\s*JSON\.stringify\(body\)/,
-  ], [/\breviewer\s*:/]);
+  ], [
+    /\breviewer\b/,
+    /\.\.\./,
+    /\bObject\.(?:assign|defineProperty)\s*\(\s*body\b/,
+    /\bbody(?:\.[A-Za-z_$][\w$]*|\[[^\]]+\])\s*=/,
+    /\bbody\s*=(?!=)/,
+  ]);
   const uiMissing = [
     ...resolutionConstantChecks.missing.map((item) => `resolution-constants-${item}`),
     ...pendingGuardChecks.missing.map((item) => `pending-guard-${item}`),
