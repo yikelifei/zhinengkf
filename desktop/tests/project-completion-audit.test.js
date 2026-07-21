@@ -2527,12 +2527,80 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nconst { [1]: ignoredStringNumericLocalKey, ...retainedStringNumericLocalAliases } = { [0]: LocalStoreService.prototype, [1]: {} };\nretainedStringNumericLocalAliases["0"].createNotification = (() => null) as any;\n`;
       },
     },
+    {
+      name: "Reflect.deleteProperty cannot remove a Notifications critical method",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nReflect.deleteProperty(NotificationsService.prototype, "create");\n`;
+      },
+    },
+    {
+      name: "Reflect.deleteProperty with an unknown LocalStore key fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedDeletedLocalKey: string;\nReflect.deleteProperty(LocalStoreService.prototype, unresolvedDeletedLocalKey);\n`;
+      },
+    },
+    ...[
+      ["call", 'Reflect.deleteProperty.call(Reflect, NotificationsService.prototype, "create");'],
+      ["apply", 'Reflect.deleteProperty.apply(Reflect, [NotificationsService.prototype, "create"]);'],
+      ["bind", 'const boundCriticalDelete = Reflect.deleteProperty.bind(Reflect, NotificationsService.prototype, "create");\nboundCriticalDelete();'],
+    ].map(([wrapper, statement]) => ({
+      name: `${wrapper} wrapped Reflect.deleteProperty cannot remove a Notifications critical method`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
+    {
+      name: "comma expression cannot hide a LocalStore prototype target",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\n(0, LocalStoreService.prototype).createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "directly called closure observes an outer Notifications binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfunction mutateCapturedNotificationPrototype() {\n  capturedNotificationPrototype.create = (() => null) as any;\n}\nlet capturedNotificationPrototype: any = {};\ncapturedNotificationPrototype = NotificationsService.prototype;\nmutateCapturedNotificationPrototype();\n`;
+      },
+    },
+    {
+      name: "unknown spread occupying Object.assign target position fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedNotificationAssignArguments: any[];\nObject.assign(...unresolvedNotificationAssignArguments);\n`;
+      },
+    },
+    {
+      name: "static tuple spread cannot hide an Object.assign critical target",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nObject.assign(...[NotificationsService.prototype, { create: () => null }]);\n`;
+      },
+    },
+    {
+      name: "critical Object.assign target remains blocked with unknown trailing spread",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedCriticalAssignSources: object[];\nObject.assign(NotificationsService.prototype, ...unresolvedCriticalAssignSources);\n`;
+      },
+    },
   ];
 
-  const wave58MutationCount = 28;
+  const wave60MutationCount = 38;
   const orderedMutations = [
-    ...mutations.slice(-wave58MutationCount),
-    ...mutations.slice(0, -wave58MutationCount),
+    ...mutations.slice(-wave60MutationCount),
+    ...mutations.slice(0, -wave60MutationCount),
   ];
   for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
@@ -2741,6 +2809,30 @@ const safeBoundNotificationDefinition = Object.defineProperty.bind(
 safeBoundNotificationDefinition({ value: () => null });
 Object.assign(NotificationsService.prototype, {});
 Object.assign(NotificationsService.prototype, { safeAssignedCreate: () => null });
+Reflect.deleteProperty(NotificationsService.prototype, "safeDeletedNotificationProperty");
+(NotificationsService.prototype, {}).create = () => null;
+function safeCapturedNotificationMutation() {
+  safeCapturedNotificationPrototype.create = () => null;
+}
+let safeCapturedNotificationPrototype: any = {};
+safeCapturedNotificationMutation();
+safeCapturedNotificationPrototype = NotificationsService.prototype;
+function safeEscapedCapturedNotificationMutation() {
+  safeEscapedCapturedNotificationPrototype.create = () => null;
+}
+let safeEscapedCapturedNotificationPrototype: any = {};
+if (false) safeEscapedCapturedNotificationPrototype = NotificationsService.prototype;
+const retainedSafeCapturedNotificationMutation = safeEscapedCapturedNotificationMutation;
+void retainedSafeCapturedNotificationMutation;
+Object.assign({}, ...[]);
+declare const unresolvedSafeAssignSources: object[];
+const unrelatedSafeAssignTarget = {};
+Object.assign(unrelatedSafeAssignTarget, ...unresolvedSafeAssignSources);
+Reflect.deleteProperty.call(
+  Reflect,
+  NotificationsService.prototype,
+  "safeWrappedDeletedNotificationProperty",
+);
 function safeFunctionScopedVarShadow() {
   if (true) {
     var NotificationsService = class SafeVarNotificationsService {};

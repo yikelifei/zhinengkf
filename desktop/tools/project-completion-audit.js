@@ -2940,6 +2940,24 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     return values.length === 1 ? values[0] : { kind: "union", values };
   };
   const staticAlternatives = (value) => value?.kind === "union" ? value.values : [value || unknownStaticValue];
+  const staticArgumentList = (argumentsList, call, seenBindings = new Set()) => {
+    const values = [];
+    let unknown = false;
+    for (const argument of argumentsList) {
+      if (unknown) continue;
+      if (!ts.isSpreadElement(argument)) {
+        values.push(staticValueAt(argument, call, seenBindings));
+        continue;
+      }
+      const spread = staticValueAt(argument.expression, call, seenBindings);
+      if (spread.kind === "tuple") {
+        values.push(...spread.values);
+      } else {
+        unknown = true;
+      }
+    }
+    return { values, unknown };
+  };
   const containsStaticKind = (value, ...kinds) =>
     staticAlternatives(value).some((item) => kinds.includes(item.kind));
   const staticTruthiness = (value) => {
@@ -3133,7 +3151,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       } else if (value.kind === "global") {
         const allowed = value.value === "Object"
           ? ["assign", "defineProperty", "defineProperties", "set"]
-          : value.value === "Reflect" ? ["apply", "defineProperty", "set"] : [];
+          : value.value === "Reflect" ? ["apply", "defineProperty", "deleteProperty", "set"] : [];
         value = allowed.includes(propertyName)
           ? { kind: "operation", value: propertyName }
           : unknownStaticValue;
@@ -3222,6 +3240,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return { kind: "boolean", value: expression.kind === ts.SyntaxKind.TrueKeyword };
     }
     if (ts.isNumericLiteral(expression)) return { kind: "number", value: Number(expression.text) };
+    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return staticValueAt(expression.right, useNode, seenBindings);
+    }
     if (ts.isTemplateExpression(expression)) {
       let value = expression.head.text;
       for (const span of expression.templateSpans) {
@@ -3299,18 +3320,16 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
     if (ts.isCallExpression(expression)) {
       const callees = staticAlternatives(staticValueAt(expression.expression, useNode, seenBindings));
-      const argumentsValue = expression.arguments.some(ts.isSpreadElement)
-        ? { values: [], unknown: true }
-        : {
-            values: expression.arguments.map((argument) => staticValueAt(argument, expression, seenBindings)),
-            unknown: false,
-          };
+      const argumentsValue = staticArgumentList(expression.arguments, expression, seenBindings);
       const bound = callees.flatMap((callee) => {
         if (callee.kind !== "operation-wrapper" || callee.wrapper !== "bind") return [];
+        const existingArguments = callee.arguments || [];
         return [{
           kind: "bound-operation",
           operation: callee.operation,
-          arguments: [...(callee.arguments || []), ...argumentsValue.values.slice(1)],
+          arguments: callee.unknownArguments
+            ? existingArguments
+            : [...existingArguments, ...argumentsValue.values.slice(1)],
           unknownArguments: Boolean(callee.unknownArguments || argumentsValue.unknown),
         }];
       });
@@ -3381,6 +3400,44 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         ? { kind: "global", value: expression.text }
         : unknownStaticValue;
     }
+    const referenceContainer = executionContainer(ts, expression);
+    const bindingContainer = executionContainer(ts, binding);
+    const useContainer = executionContainer(ts, useNode);
+    if (ts.isFunctionDeclaration(referenceContainer) && referenceContainer.name &&
+      referenceContainer !== bindingContainer && useContainer === referenceContainer) {
+      const functionBinding = resolveBinding(referenceContainer.name);
+      const directCalls = [];
+      let escaped = false;
+      for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+        !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === functionBinding)) {
+        const call = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+          unwrapExpression(ts, candidate.expression) === reference);
+        if (!call || executionContainer(ts, call) !== bindingContainer) {
+          escaped = true;
+          continue;
+        }
+        if (!directCalls.includes(call)) directCalls.push(call);
+      }
+      if (!directCalls.length) escaped = true;
+      if (!escaped) {
+        return unionStaticValues(...directCalls.map((call) =>
+          staticValueAt(expression, call, seenBindings)));
+      }
+      const nextSeen = new Set(seenBindings);
+      nextSeen.add(binding);
+      const conservativeValues = eventsForBinding(binding)
+        .filter((event) => eventExecutionReachability(event, event.node, nextSeen) !== "never")
+        .map((event) => {
+        const projected = applyStaticProjection(
+          event.expression ? staticValueAt(event.expression, event.node, nextSeen) : unknownStaticValue,
+          event.projection,
+          event.node,
+          nextSeen,
+        );
+        return applyStaticDefault(projected, event.defaultExpression, event.node, nextSeen);
+      });
+      return unionStaticValues(unknownStaticValue, ...conservativeValues);
+    }
     if (seenBindings.has(binding)) return unknownStaticValue;
     const events = applicableEvents(binding, useNode);
     if (!events.length) return unknownStaticValue;
@@ -3448,9 +3505,6 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   });
   if (unsafeDirectWrite) failures.push("critical-symbol-write");
 
-  const staticArgumentList = (argumentsList, call) => argumentsList.some(ts.isSpreadElement)
-    ? { values: [], unknown: true }
-    : { values: argumentsList.map((argument) => staticValueAt(argument, call)), unknown: false };
   const callableOperations = (value) => staticAlternatives(value).flatMap((item) => {
     if (item.kind === "operation") return [{ operation: item.value, arguments: [], unknownArguments: false }];
     if (item.kind === "bound-operation") return [{
@@ -3462,13 +3516,21 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   });
   const expandApplyInvocation = (invocation, seen = new Set(), depth = 0) => {
     if (invocation.operation !== "apply") return [invocation];
-    if (invocation.unknownArguments) return [invocation];
+    if (invocation.unknownArguments) {
+      return [{
+        operation: "unknown-operation",
+        arguments: invocation.arguments,
+        unknownArguments: true,
+        targetFixed: false,
+      }];
+    }
     const key = `${invocation.operation}:[${invocation.arguments.map(staticValueKey).join(",")}]`;
     if (depth >= 16 || seen.has(key)) {
       return [{
         operation: "unknown-operation",
         arguments: invocation.arguments,
         unknownArguments: true,
+        targetFixed: false,
       }];
     }
     const appliedCallable = invocation.arguments[0];
@@ -3481,6 +3543,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         operation: "unknown-operation",
         arguments: invocation.arguments,
         unknownArguments: true,
+        targetFixed: false,
       }];
     }
     const nextSeen = new Set(seen);
@@ -3489,12 +3552,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       operation: callable.operation,
       arguments: [...callable.arguments, ...appliedArguments.values],
       unknownArguments: Boolean(callable.unknownArguments),
+      targetFixed: callable.arguments.length > 0 || appliedArguments.values.length > 0,
     }, nextSeen, depth + 1));
     if (hasUnresolvedCallable) {
       expanded.push({
         operation: "unknown-operation",
         arguments: invocation.arguments,
         unknownArguments: true,
+        targetFixed: false,
       });
     }
     return expanded;
@@ -3504,28 +3569,39 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const invocations = [];
     for (const callee of staticAlternatives(staticValueAt(call.expression, call))) {
       if (callee.kind === "bound-operation") {
+        const argumentsValue = callee.unknownArguments
+          ? callee.arguments
+          : [...callee.arguments, ...syntaxArguments.values];
         invocations.push({
           operation: callee.operation,
-          arguments: [...callee.arguments, ...syntaxArguments.values],
+          arguments: argumentsValue,
           unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown),
+          targetFixed: argumentsValue.length > 0,
         });
         continue;
       }
       if (callee.kind === "operation-wrapper") {
         if (callee.wrapper === "bind") continue;
         const base = callee.arguments || [];
+        const knownArguments = callee.unknownArguments ? base : syntaxArguments.values;
         if (callee.wrapper === "call") {
+          const callArguments = callee.unknownArguments
+            ? base
+            : [...base, ...knownArguments.slice(1)];
           invocations.push({
             operation: callee.operation,
-            arguments: [...base, ...syntaxArguments.values.slice(1)],
+            arguments: callArguments,
             unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown),
+            targetFixed: callArguments.length > 0,
           });
         } else if (callee.wrapper === "apply") {
-          const applied = syntaxArguments.values[1];
+          const applied = callee.unknownArguments ? null : syntaxArguments.values[1];
+          const applyArguments = applied?.kind === "tuple" ? [...base, ...applied.values] : base;
           invocations.push({
             operation: callee.operation,
-            arguments: applied?.kind === "tuple" ? [...base, ...applied.values] : base,
+            arguments: applyArguments,
             unknownArguments: Boolean(callee.unknownArguments || syntaxArguments.unknown || applied?.kind !== "tuple"),
+            targetFixed: applyArguments.length > 0,
           });
         }
         continue;
@@ -3535,6 +3611,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           operation: callee.value,
           arguments: syntaxArguments.values,
           unknownArguments: syntaxArguments.unknown,
+          targetFixed: syntaxArguments.values.length > 0,
         });
       }
     }
@@ -3550,12 +3627,16 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   const calls = sourceNodes.filter(ts.isCallExpression);
   for (const call of calls) {
     for (const invocation of invocationSemantics(call)) {
-      if (invocation.unknownArguments) {
+      if (invocation.unknownArguments && !invocation.targetFixed) {
         failures.push("critical-symbol-write");
         break;
       }
       const target = invocation.arguments[0];
       if (!target || !isCriticalStaticTarget(target)) continue;
+      if (invocation.unknownArguments) {
+        failures.push("critical-symbol-write");
+        break;
+      }
       if (invocation.operation === "unknown-operation") {
         failures.push("critical-symbol-write");
         break;
@@ -3567,7 +3648,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         }
         continue;
       }
-      if (["defineProperty", "set"].includes(invocation.operation)) {
+      if (["defineProperty", "deleteProperty", "set"].includes(invocation.operation)) {
         const propertyName = invocation.arguments[1];
         if (propertyName?.kind !== "string" || criticalNames.has(propertyName.value)) {
           failures.push("critical-symbol-write");
