@@ -224,7 +224,9 @@ test("panel fails closed on status alone and exposes a guarded second confirmati
   assert.match(resumableRefund, /确认退款已到账/);
 
   const source = read("apps/web/src/components/design-execution-reconciliation-panel.tsx");
-  assert.match(source, /if \(!pending \|\| submitLock\.current \|\| submittingId \|\| !canManageExecutions\) return/);
+  assert.match(source, /if \(!pending \|\| submitLock\.current \|\| submittingId \|\| pendingBlockedReason\) return/);
+  assert.match(source, /!accessLoaded[\s\S]*!canManageExecutions[\s\S]*pendingExecution\.availableResolution !== pending\.resolution/);
+  assert.match(source, /disabled=\{Boolean\(submittingId\) \|\| Boolean\(pendingBlockedReason\)\}/);
   assert.match(source, /submitLock\.current = true/);
   assert.match(source, /submitLock\.current = false/);
   assert.match(source, /role="alertdialog"/);

@@ -78,7 +78,7 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
       operation: () => markNotificationRead(notification.id, notificationIdentityExpectation(notification)),
       onStart: () => { setBusy(true); setError(""); setNotice(""); },
       onSuccess: (updated) => {
-        setNotifications((current) => current.map((item) => item.id === updated.id ? updated : item));
+        setNotifications((current) => reconcileMarkedNotification(current, updated, unreadOnly));
         setNoticeScopeKey(operationScopeKey);
         setNotice("已标记“" + notification.title + "”为已读。");
       },
@@ -88,7 +88,7 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
       },
       onFinally: () => setBusy(false),
     });
-  }, [scopeKey]);
+  }, [scopeKey, unreadOnly]);
 
   const markAllRead = useCallback(async (expectedScopeKey = scopeKey) => {
     if (expectedScopeKey !== scopeKey || scopeKeyRef.current !== expectedScopeKey) return false;
@@ -132,6 +132,16 @@ export function useNotificationsController(identityFilters?: IdentityFilters) {
     markOneRead,
     markAllRead,
   };
+}
+
+export function reconcileMarkedNotification(
+  current: readonly NotificationItem[],
+  updated: NotificationItem,
+  unreadOnly: boolean,
+) {
+  return unreadOnly
+    ? current.filter((item) => item.id !== updated.id)
+    : current.map((item) => item.id === updated.id ? updated : item);
 }
 
 function notificationIdentityExpectation(notification: NotificationItem): IdentityExpectation {

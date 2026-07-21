@@ -10,6 +10,19 @@ import { DesignConfirmation, DesignEmpty, DesignNotice, DesignPageHeader, errorT
 
 const SETTINGS_SCOPE_KEY = "design-settings";
 
+type DesignSettingsSaveIntent = {
+  adapter: string;
+  baseUrl: string;
+  accessToken?: string;
+  cookie?: string;
+  deviceId?: string;
+};
+
+type PendingSettingsConfirmation = {
+  generation: number;
+  intent: DesignSettingsSaveIntent;
+};
+
 export function DesignSettingsPage() {
   const [config, setConfig] = useState<DesignPlatformConfigResponse | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -28,10 +41,11 @@ export function DesignSettingsPage() {
   const [busy, setBusy] = useState<"" | "refresh" | "save" | "smoke">("");
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
-  const [pendingConfirmation, setPendingConfirmation] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingSettingsConfirmation | null>(null);
   const [smoke, setSmoke] = useState<DesignPlatformSmokeTestResult | null>(null);
   const requestGuardRef = useRef<ReturnType<typeof createDesignRequestGuard> | null>(null);
   const actionLockRef = useRef(false);
+  const confirmationGenerationRef = useRef(0);
   if (!requestGuardRef.current) requestGuardRef.current = createDesignRequestGuard(SETTINGS_SCOPE_KEY);
   const requestGuard = requestGuardRef.current;
 
@@ -41,6 +55,8 @@ export function DesignSettingsPage() {
   }, [requestGuard]);
 
   const refresh = useCallback(async () => {
+    confirmationGenerationRef.current += 1;
+    setPendingConfirmation(null);
     await runGuardedDesignRequest({
       guard: requestGuard,
       scopeKey: SETTINGS_SCOPE_KEY,
@@ -88,17 +104,30 @@ export function DesignSettingsPage() {
     return () => requestGuard.invalidate(SETTINGS_SCOPE_KEY);
   }, [refresh, requestGuard]);
 
+  function invalidateSaveConfirmation() {
+    confirmationGenerationRef.current += 1;
+    setPendingConfirmation(null);
+  }
+
+  function requestConfigurationSave() {
+    const intent = settingsSaveIntent(adapter, baseUrl, accessToken, cookie, deviceId);
+    if (!intent) return;
+    const generation = confirmationGenerationRef.current + 1;
+    confirmationGenerationRef.current = generation;
+    setPendingConfirmation({ generation, intent });
+  }
+
   async function saveConfiguration() {
-    if (actionLockRef.current || busy) return;
-    const intent = {
-      adapter: adapter.trim() || undefined,
-      baseUrl: baseUrl.trim() || undefined,
-      accessToken: accessToken.trim() || undefined,
-      cookie: cookie.trim() || undefined,
-      deviceId: deviceId.trim() || undefined,
-    };
+    const confirmation = pendingConfirmation;
+    if (
+      actionLockRef.current || busy
+      || !confirmation
+      || confirmation.generation !== confirmationGenerationRef.current
+    ) return;
+    const intent = confirmation.intent;
     actionLockRef.current = true;
-    setPendingConfirmation(false);
+    confirmationGenerationRef.current += 1;
+    setPendingConfirmation(null);
     try {
       await runGuardedDesignRequest({
         guard: requestGuard,
@@ -128,6 +157,7 @@ export function DesignSettingsPage() {
 
   async function runSmoke() {
     if (actionLockRef.current || busy || !readinessLoaded || !readiness?.ok) return;
+    invalidateSaveConfirmation();
     actionLockRef.current = true;
     try {
       await runGuardedDesignRequest({
@@ -162,14 +192,14 @@ export function DesignSettingsPage() {
       {busy === "refresh" && !configLoaded && !healthLoaded && !readinessLoaded ? <DesignEmpty title="正在读取设计平台配置" detail="健康、就绪与配置状态并行读取。" busy /> : (
         <div className={styles.twoColumn}>
           <div className={styles.stack}>
-            <form className={styles.card} onSubmit={(event) => { event.preventDefault(); setPendingConfirmation(true); }}>
+            <form className={styles.card} onSubmit={(event) => { event.preventDefault(); requestConfigurationSave(); }}>
               <div className={styles.cardHeader}><div><h2>连接参数</h2><p>{configLoaded ? "配置读取成功；令牌、Cookie 和设备号不会从服务端回填。" : "配置读取尚未确认；保存前请核对错误提示。"}</p></div></div>
               <div className={styles.formGrid}>
-                <label><span>适配器</span><input disabled={controlsDisabled} value={adapter} onChange={(event) => setAdapter(event.target.value)} placeholder="design-platform" /></label>
-                <label><span>服务地址</span><input disabled={controlsDisabled} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://..." /></label>
-                <label><span>访问令牌（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} /></label>
-                <label><span>会话 Cookie（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={cookie} onChange={(event) => setCookie(event.target.value)} /></label>
-                <label><span>设备号（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={deviceId} onChange={(event) => setDeviceId(event.target.value)} /></label>
+                <label><span>适配器</span><input disabled={controlsDisabled} value={adapter} onChange={(event) => { invalidateSaveConfirmation(); setAdapter(event.target.value); }} placeholder="design-platform" /></label>
+                <label><span>服务地址</span><input disabled={controlsDisabled} value={baseUrl} onChange={(event) => { invalidateSaveConfirmation(); setBaseUrl(event.target.value); }} placeholder="https://..." /></label>
+                <label><span>访问令牌（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={accessToken} onChange={(event) => { invalidateSaveConfirmation(); setAccessToken(event.target.value); }} /></label>
+                <label><span>会话 Cookie（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={cookie} onChange={(event) => { invalidateSaveConfirmation(); setCookie(event.target.value); }} /></label>
+                <label><span>设备号（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={deviceId} onChange={(event) => { invalidateSaveConfirmation(); setDeviceId(event.target.value); }} /></label>
               </div>
               <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="design-settings-save-request" aria-label="准备保存设计平台配置" disabled={controlsDisabled || !adapter.trim() || !baseUrl.trim()}><Save size={16} aria-hidden="true" />保存配置</button></div>
             </form>
@@ -184,7 +214,26 @@ export function DesignSettingsPage() {
           </div>
         </div>
       )}
-      {pendingConfirmation ? <DesignConfirmation title="确认保存设计平台连接配置？" detail="这会修改运行时集成参数。敏感值不会在页面回显；留空表示不更新对应值。当前 API 不接受操作员身份字段，因此服务端审计能力取决于既有实现。" confirmLabel="确认保存" confirmActionId="design-settings-save-confirm" cancelActionId="design-settings-save-cancel" busy={busy === "save"} onCancel={() => setPendingConfirmation(false)} onConfirm={() => void saveConfiguration()} /> : null}
+      {pendingConfirmation && pendingConfirmation.generation === confirmationGenerationRef.current ? <DesignConfirmation title="确认保存设计平台连接配置？" detail={`将保存适配器 ${pendingConfirmation.intent.adapter} 与服务地址 ${pendingConfirmation.intent.baseUrl}。敏感值不会在页面回显；留空表示不更新对应值。当前 API 不接受操作员身份字段，因此服务端审计能力取决于既有实现。`} confirmLabel="确认保存" confirmActionId="design-settings-save-confirm" cancelActionId="design-settings-save-cancel" busy={Boolean(busy)} onCancel={invalidateSaveConfirmation} onConfirm={() => void saveConfiguration()} /> : null}
     </section>
   );
+}
+
+function settingsSaveIntent(
+  adapter: string,
+  baseUrl: string,
+  accessToken: string,
+  cookie: string,
+  deviceId: string,
+): DesignSettingsSaveIntent | null {
+  const normalizedAdapter = adapter.trim();
+  const normalizedBaseUrl = baseUrl.trim();
+  if (!normalizedAdapter || !normalizedBaseUrl) return null;
+  return {
+    adapter: normalizedAdapter,
+    baseUrl: normalizedBaseUrl,
+    accessToken: accessToken.trim() || undefined,
+    cookie: cookie.trim() || undefined,
+    deviceId: deviceId.trim() || undefined,
+  };
 }

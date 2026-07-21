@@ -1,20 +1,36 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { IdentityFilters, NotificationItem } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import {
+  createNotificationConfirmationGuard,
+  type NotificationConfirmationToken,
+} from "./notification-operation-guard";
 import { useNotificationsController } from "./use-notifications-controller";
 
 export type NotificationsPageProps = { identityFilters?: IdentityFilters };
 
 export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
   const controller = useNotificationsController(identityFilters);
-  const [confirmationScopeKey, setConfirmationScopeKey] = useState<string | null>(null);
-  const confirmationOpen = confirmationScopeKey === controller.scopeKey;
+  const confirmationGuardRef = useRef<ReturnType<typeof createNotificationConfirmationGuard> | null>(null);
+  if (!confirmationGuardRef.current) {
+    confirmationGuardRef.current = createNotificationConfirmationGuard(controller.scopeKey);
+  }
+  const confirmationGuard = confirmationGuardRef.current;
+  confirmationGuard.setScope(controller.scopeKey);
+  const [confirmationToken, setConfirmationToken] = useState<NotificationConfirmationToken | null>(null);
+  const confirmationOpen = Boolean(
+    confirmationToken && confirmationGuard.isCurrent(confirmationToken, controller.scopeKey),
+  );
 
   async function confirmMarkAll() {
-    if (!confirmationScopeKey) return;
-    if (await controller.markAllRead(confirmationScopeKey)) setConfirmationScopeKey(null);
+    if (!confirmationToken || !confirmationGuard.consume(confirmationToken, controller.scopeKey)) {
+      setConfirmationToken(null);
+      return;
+    }
+    setConfirmationToken(null);
+    await controller.markAllRead(confirmationToken.scopeKey);
   }
 
   const statusClass = !controller.loaded
@@ -55,7 +71,7 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
               <input type="checkbox" checked={controller.unreadOnly} disabled={controller.busy} onChange={(event) => controller.setUnreadOnly(event.target.checked)} />
               只看未读
             </label>
-            <button className={styles.button} type="button" data-action-id="notifications-mark-all-request" aria-label="请求将当前身份范围内的通知全部标为已读" onClick={() => setConfirmationScopeKey(controller.scopeKey)} disabled={controller.busy || controller.unreadCount === 0}>
+            <button className={styles.button} type="button" data-action-id="notifications-mark-all-request" aria-label="请求将当前身份范围内的通知全部标为已读" onClick={() => setConfirmationToken(confirmationGuard.begin(controller.scopeKey))} disabled={controller.busy || controller.unreadCount === 0}>
               全部标为已读
             </button>
           </div>
@@ -83,7 +99,7 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
           <p>只作用于当前页面绑定的身份范围，共 {controller.unreadCount} 条未读通知；操作后重新读取服务端结果。</p>
           <div className={styles.buttonRow}>
             <button className={styles.primaryButton} type="button" data-action-id="notifications-mark-all-confirm" aria-label="确认全部标为已读" onClick={() => void confirmMarkAll()} disabled={controller.busy}>确认处理</button>
-            <button className={styles.button} type="button" data-action-id="notifications-mark-all-cancel" aria-label="取消全部标为已读" onClick={() => setConfirmationScopeKey(null)} disabled={controller.busy}>取消</button>
+            <button className={styles.button} type="button" data-action-id="notifications-mark-all-cancel" aria-label="取消全部标为已读" onClick={() => setConfirmationToken(null)} disabled={controller.busy}>取消</button>
           </div>
         </section>
       ) : null}
