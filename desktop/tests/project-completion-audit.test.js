@@ -2459,12 +2459,56 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\ndeclare const unknownLocalAssignSource: object;\nObject.assign(LocalStoreService.prototype, unknownLocalAssignSource);\n`;
       },
     },
+    ...[
+      ["Reflect.apply.call", 'Reflect.apply.call(Reflect, Object.defineProperty, Object, [NotificationsService.prototype, "create", { value: () => null }]);'],
+      ["Reflect.apply.apply", 'Reflect.apply.apply(Reflect, [Object.defineProperty, Object, [NotificationsService.prototype, "create", { value: () => null }]]);'],
+      ["Reflect.apply.bind", 'const boundReflectApply = Reflect.apply.bind(Reflect, Object.defineProperty, Object);\nboundReflectApply([NotificationsService.prototype, "create", { value: () => null }]);'],
+    ].map(([wrapper, statement]) => ({
+      name: `${wrapper} cannot hide a nested Notifications critical write`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
+    {
+      name: "nested Reflect.apply with unknown argument array fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedNestedApplyArguments: any[];\nReflect.apply.call(Reflect, Object.defineProperty, Object, unresolvedNestedApplyArguments);\n`;
+      },
+    },
+    {
+      name: "computed numeric object-rest exclusion retains a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { [0]: ignoredNumericLocalAlias, ...numericLocalRestAliases } = { [0]: {}, hidden: LocalStoreService.prototype };\nnumericLocalRestAliases.hidden.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "unknown object-rest exclusion preserves a possible Notifications prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedNotificationRestKey: string;\nconst { [unresolvedNotificationRestKey]: ignoredUnknownAlias, ...unknownNotificationRestAliases } = { hidden: NotificationsService.prototype, safe: {} };\nunknownNotificationRestAliases.hidden.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "sparse array-rest projection cannot hide a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst [...sparseLocalAliases] = [, LocalStoreService.prototype];\nsparseLocalAliases[1].createNotification = (() => null) as any;\n`;
+      },
+    },
   ];
 
-  const wave56MutationCount = 18;
+  const wave57MutationCount = 25;
   const orderedMutations = [
-    ...mutations.slice(-wave56MutationCount),
-    ...mutations.slice(0, -wave56MutationCount),
+    ...mutations.slice(-wave57MutationCount),
+    ...mutations.slice(0, -wave57MutationCount),
   ];
   for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
@@ -2631,6 +2675,18 @@ function safeParameterAndRestDecoys(
   safeRestAliases[1].create = () => null;
   const { omitted: safeOmitted, ...safeObjectRest } = { omitted: {}, retained: {} };
   safeObjectRest.retained.create = () => null;
+  const { [0]: safeNumericOmitted, ...safeNumericRest } = {
+    [0]: NotificationsService.prototype,
+    retained: {},
+  };
+  safeNumericRest.retained.create = () => null;
+  const { removed: safeKnownOmitted, ...safeKnownRest } = {
+    removed: NotificationsService.prototype,
+    retained: {},
+  };
+  safeKnownRest.retained.create = () => null;
+  const [...safeSparseRest] = [, {}];
+  safeSparseRest[1].create = () => null;
 }
 function safeBindingElementParameter({ localPrototype = {} }) {
   localPrototype.create = () => null;
@@ -2646,6 +2702,9 @@ function safeConstantBranchNarrowing() {
 Object.defineProperty.call(Object, NotificationsService.prototype, "safeCallCreate", { value: () => null });
 Object.defineProperty.apply(Object, [NotificationsService.prototype, "safeApplyCreate", { value: () => null }]);
 Reflect.apply(Object.defineProperty, Object, [NotificationsService.prototype, "safeReflectCreate", { value: () => null }]);
+Reflect.apply.call(Reflect, Object.defineProperty, Object, [NotificationsService.prototype, "safeNestedCallCreate", { value: () => null }]);
+Reflect.apply.apply(Reflect, [Object.defineProperty, Object, [NotificationsService.prototype, "safeNestedApplyCreate", { value: () => null }]]);
+Reflect.apply.bind(Reflect, Object.defineProperty, Object)([NotificationsService.prototype, "safeNestedBindCreate", { value: () => null }]);
 const safeBoundNotificationDefinition = Object.defineProperty.bind(
   Object,
   NotificationsService.prototype,
