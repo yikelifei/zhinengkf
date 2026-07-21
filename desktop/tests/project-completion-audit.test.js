@@ -2988,12 +2988,61 @@ new AliasedBindDelegateRunner().entry();`],    ].map(([name, statement]) => ({
         return `${source}\n${statement}\n`;
       },
     })),
+    ...[
+      ["class sibling method const initializer escape", `declare function retainClassCallable(value: unknown): void;
+let classConstEscapePrototype: any = {};
+class ClassConstEscapeRunner { target() { classConstEscapePrototype.create = (() => null) as any; } entry() { const retained = this.target; retainClassCallable(retained); } }
+classConstEscapePrototype = NotificationsService.prototype;
+new ClassConstEscapeRunner().entry();`],
+      ["class sibling method return escape", `let classReturnEscapePrototype: any = {};
+class ClassReturnEscapeRunner { target() { classReturnEscapePrototype.create = (() => null) as any; } entry() { return this.target; } }
+classReturnEscapePrototype = NotificationsService.prototype;
+void new ClassReturnEscapeRunner().entry();`],
+      ["class sibling method argument escape", `declare function consumeClassCallable(value: unknown): void;
+let classArgumentEscapePrototype: any = {};
+class ClassArgumentEscapeRunner { target() { classArgumentEscapePrototype.create = (() => null) as any; } entry() { consumeClassCallable(this.target); } }
+classArgumentEscapePrototype = NotificationsService.prototype;
+new ClassArgumentEscapeRunner().entry();`],
+      ["class sibling method Reflect.apply invocation", `let classReflectApplyPrototype: any = {};
+class ClassReflectApplyRunner { target() { classReflectApplyPrototype.create = (() => null) as any; } entry() { Reflect.apply(this.target, this, []); } }
+classReflectApplyPrototype = NotificationsService.prototype;
+new ClassReflectApplyRunner().entry();`],
+      ["class sibling method Reflect.construct invocation", `let classReflectConstructPrototype: any = {};
+class ClassReflectConstructRunner { target = function () { classReflectConstructPrototype.create = (() => null) as any; }; entry() { Reflect.construct(this.target, []); } }
+classReflectConstructPrototype = NotificationsService.prototype;
+new ClassReflectConstructRunner().entry();`],
+      ["shadowed Reflect class sibling use remains fail closed", `let shadowedReflectClassPrototype: any = {};
+class ShadowedReflectClassRunner { target() { shadowedReflectClassPrototype.create = (() => null) as any; } entry() { const Reflect = { apply: (..._args: unknown[]) => undefined }; Reflect.apply(this.target, this, []); } }
+shadowedReflectClassPrototype = NotificationsService.prototype;
+new ShadowedReflectClassRunner().entry();`],
+      ["object sibling method const initializer escape", `let objectConstEscapePrototype: any = {};
+const objectConstEscapeRunner = { target() { objectConstEscapePrototype.create = (() => null) as any; }, entry() { const retained = this.target; void retained; } };
+objectConstEscapePrototype = NotificationsService.prototype;
+objectConstEscapeRunner.entry();`],
+      ["object sibling method return escape", `let objectReturnEscapePrototype: any = {};
+const objectReturnEscapeRunner = { target() { objectReturnEscapePrototype.create = (() => null) as any; }, entry() { return this.target; } };
+objectReturnEscapePrototype = NotificationsService.prototype;
+void objectReturnEscapeRunner.entry();`],
+      ["object sibling method Reflect.apply invocation", `let objectReflectApplyPrototype: any = {};
+const objectReflectApplyRunner = { target() { objectReflectApplyPrototype.create = (() => null) as any; }, entry() { Reflect.apply(this.target, this, []); } };
+objectReflectApplyPrototype = NotificationsService.prototype;
+objectReflectApplyRunner.entry();`],
+    ].map(([name, statement]) => ({
+      name: `${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
   ];
 
   const wave65MutationCount = 101;
   const wave66MutationCount = 14;
   const wave67MutationCount = 4;
-  const recentMutationCount = wave65MutationCount + wave66MutationCount + wave67MutationCount;
+  const wave68MutationCount = 9;
+  const recentMutationCount =
+    wave65MutationCount + wave66MutationCount + wave67MutationCount + wave68MutationCount;
   const orderedMutations = [
     ...mutations.slice(-recentMutationCount),
     ...mutations.slice(0, -recentMutationCount),
@@ -3607,6 +3656,31 @@ class SafeDeadNestedPlanRunner {
 new SafeDeadNestedPlanRunner().entry();
 const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
 /* Reflect["set"](NotificationsService.prototype, "create", () => null); */
+let safeDiscardedClassValuePrototype: any = NotificationsService.prototype;
+class SafeDiscardedClassValueRunner {
+  target() { safeDiscardedClassValuePrototype.create = () => null; }
+  entry() { this.target; void (this.target as unknown); }
+}
+new SafeDiscardedClassValueRunner().entry();
+let safeDiscardedClassDelegatePrototype: any = NotificationsService.prototype;
+class SafeDiscardedClassDelegateRunner {
+  target() { safeDiscardedClassDelegatePrototype.create = () => null; }
+  entry() { this.target(); }
+}
+void SafeDiscardedClassDelegateRunner.prototype.entry;
+let safeDiscardedObjectSiblingPrototype: any = NotificationsService.prototype;
+const safeDiscardedObjectSiblingRunner = {
+  target() { safeDiscardedObjectSiblingPrototype.create = () => null; },
+  entry() { this.target; void (this.target as unknown); },
+};
+safeDiscardedObjectSiblingRunner.entry();
+let safeDiscardedObjectDelegatePrototype: any = NotificationsService.prototype;
+const safeDiscardedObjectDelegateRunner = {
+  target() { safeDiscardedObjectDelegatePrototype.create = () => null; },
+  entry() { this.target(); },
+};
+safeDiscardedObjectDelegateRunner.entry;
+void safeDiscardedObjectDelegateRunner.entry;
 ${notifications}`,
       "utf8",
     );
