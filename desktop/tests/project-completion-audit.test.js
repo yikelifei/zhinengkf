@@ -152,7 +152,7 @@ const configured = identityStatus === "CONFIGURED" && allowedPublisherSubjects.l
 const powershell = trustedWindowsSystemTool("WindowsPowerShell", "v1.0", "powershell.exe");
 const script = "Get-AuthenticodeSignature";
 const extractor = "windows-release-extractor-policy.json"; if (hashFile(candidate) !== policy.sha256) throw new Error(); const archive = "app-64.7z";
-  validateSevenZipListing(); const maxCompressionRatio = 200; inspectArchiveBudget(sevenZip, installer); runVerifiedArchiveExtraction(); findNamedFile(outer, "app-64.7z", extractionLimits);
+  validateSevenZipListing(); const maxCompressionRatio = 200; inspectArchiveBudget(sevenZip, installer); createVerifiedArchiveSnapshot(); archiveSnapshot.path; verifiedArchive = assertSafePath(safeSnapshotRoot, budget.archivePath, "file"); runVerifiedArchiveExtraction(); findNamedFile(outer, "app-64.7z", extractionLimits);
   throw new Error("archive identity or SHA-256 changed after technical listing"); throw new Error("archive contains a linked or reparse entry"); throw new Error("archive file is an ancestor of another entry");
 throw new Error("signed installer payload does not match");
 const env = selectEvidenceProcessEnvironment({ PACKAGED_SMOKE_OUTPUT_DIR: outputDirectory });
@@ -922,6 +922,7 @@ commitInboundLowValueSelection(payload: {
   leaseExpiresAt: string;
   recoveryEffect: Record<string, unknown>;
 }) {
+  return this.withStoreLock(() => {
   operation.status !== "processing";
   operation.claimToken !== payload.claimToken;
   Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now();
@@ -935,6 +936,7 @@ commitInboundLowValueSelection(payload: {
   const recoveryEffect = { ...payload.recoveryEffect, quoteDraftId: quote.id };
   result: { ...(operation.result || {}), recoveryEffect };
   this.write(data);
+  });
 }
 
 commitInboundQuoteAcceptance(payload: {
@@ -943,6 +945,7 @@ commitInboundQuoteAcceptance(payload: {
   leaseExpiresAt: string;
   recoveryEffect: Record<string, unknown>;
 }) {
+  return this.withStoreLock(() => {
   operation.status !== "processing";
   operation.claimToken !== payload.claimToken;
   Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now();
@@ -956,6 +959,27 @@ commitInboundQuoteAcceptance(payload: {
   orderDraftId: order.id;
   result: { ...(operation.result || {}), recoveryEffect };
   this.write(data);
+  });
+}
+
+private withStoreLock<T>(operation: () => T): T {
+  if (this.storeLockDepth > 0) return operation();
+  const lock = acquireLocalStoreLock(this.filePath);
+  this.storeLockOwnershipCheck = lock.assertOwned;
+  try { return operation(); } finally {
+    this.storeLockDepth -= 1;
+    lock.release();
+  }
+}
+
+export function acquireLocalStoreLock(filePath: string) {
+  const lockPath = \`\${filePath}.lock\`;
+  const ownerToken = randomUUID();
+  const ownerFileName = \`owner-\${ownerToken}.json\`;
+  const pendingPath = \`\${lockPath}.pending-\${process.pid}-\${ownerToken}\`;
+  fs.renameSync(pendingPath, lockPath);
+  localStoreLockIsStale(lockPath);
+  return ownedLocalStoreLockHandle(lockPath, ownerFileName);
 }
 `, true);
 }
@@ -1058,6 +1082,13 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "false",
     },
     {
+      name: "low-value helper lock wrapper removed",
+      file: localStoreFile,
+      anchor: "commitInboundLowValueSelection(payload:",
+      from: "return this.withStoreLock(() => {",
+      to: "return (() => {",
+    },
+    {
       name: "low-value helper identity removed",
       file: localStoreFile,
       anchor: "commitInboundLowValueSelection(payload:",
@@ -1078,11 +1109,25 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "false",
     },
     {
+      name: "quote helper lock wrapper removed",
+      file: localStoreFile,
+      anchor: "commitInboundQuoteAcceptance(payload:",
+      from: "return this.withStoreLock(() => {",
+      to: "return (() => {",
+    },
+    {
       name: "quote helper identity removed",
       file: localStoreFile,
       anchor: "commitInboundQuoteAcceptance(payload:",
       from: 'String(currentQuote.customerId || "") !== String(operation.customerId || "")',
       to: "false",
+    },
+    {
+      name: "cross-process lock acquisition removed",
+      file: localStoreFile,
+      anchor: "private withStoreLock<T>",
+      from: "const lock = acquireLocalStoreLock(this.filePath)",
+      to: "const lock = acquireInProcessLock(this.filePath)",
     },
   ];
 
@@ -1112,6 +1157,13 @@ test("completion audit rejects removed archive-bomb preflight and whole-file Win
   fs.writeFileSync(chainFile, chainSource.replace("maxCompressionRatio", "removedCompressionRatioBudget"), "utf8");
   const budgetReport = buildAudit(budgetRoot, { includeExternal: false });
   assert.equal(budgetReport.results.find((item) => item.id === "contract.windows_evidence_chain").status, STATUS.FAIL);
+
+  const snapshotRoot = createPassingFixture();
+  const snapshotChainFile = path.join(snapshotRoot, "desktop", "tools", "windows-evidence-chain.js");
+  const snapshotSource = fs.readFileSync(snapshotChainFile, "utf8");
+  fs.writeFileSync(snapshotChainFile, snapshotSource.replace("createVerifiedArchiveSnapshot", "reuseCallerArchivePath"), "utf8");
+  const snapshotReport = buildAudit(snapshotRoot, { includeExternal: false });
+  assert.equal(snapshotReport.results.find((item) => item.id === "contract.windows_evidence_chain").status, STATUS.FAIL);
 
   const hashRoot = createPassingFixture();
   write(hashRoot, "desktop/tools/verify-windows-package.js", "\nhash.update(fs.readFileSync(file));\n", true);

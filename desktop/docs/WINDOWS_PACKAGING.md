@@ -65,11 +65,11 @@ npm.cmd run package:win:signed
 
 正式签名身份由 `config/windows-release-signing-policy.json` 控制，必须在受控发布变更中把 `identityStatus` 改为 `CONFIGURED`，并填写公司证书的精确 publisher subject 与 thumbprint。当前仓库故意保持 `UNCONFIGURED`，所以任何文件即使显示 Authenticode `Valid` 也只能 `BLOCKED`，不能成为正式签名证据。原生验证不信任 `SystemRoot`、`windir` 或 `PATH`，只接受规范 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`；无法取得可信系统目录时保持 `BLOCKED`。同时核对 product name、original filename、版本和 x64 PE，不得把 Microsoft 或其他厂商的已签名 EXE 当作项目证据。
 
-安装器内容绑定使用 electron-builder 自身缓存的 `7zip@1.0.0`，其版本与可执行文件 SHA-256 固定在 `config/windows-release-extractor-policy.json`。验证器不通过 `NODE_PATH` 加载 extractor，且拒绝哈希不符、歧义、junction/reparse point 或硬链接的缓存项。每次解压前先执行技术清单预检，拒绝绝对路径、上级路径、NTFS alternate stream/设备名、重复路径、符号链接/硬链接/reparse 节点和“文件作为其他条目祖先”的冲突，以及超过 48 层、50000 条目、45000 文件、512 MiB 单文件、2 GiB 总展开量或 200 倍压缩比的输入；同时保留至少 512 MiB 空闲磁盘。预检会从已打开的唯一普通文件描述符记录设备、inode、大小、纳秒时间戳和流式 SHA-256，在技术清单结束后以及调用 `7za x` 前立即重新核对；期间替换或改写归档会在解压前 `FAIL`。NSIS 阶段只提取唯一 `app-64.7z`，payload 落盘后立即按同一预算重建清单，并与快照的 `win-unpacked` 完整匹配。安装器和 EXE 的 SHA-256 使用 1 MiB 流式分块计算，不会把最大工件整体读入内存。缺少固定版本 extractor 或无法证明磁盘容量属于 `BLOCKED`；已存在但被替换、清单/解压超时、预算超限或 payload 不一致属于 `FAIL`。
+安装器内容绑定使用 electron-builder 自身缓存的 `7zip@1.0.0`，其版本与可执行文件 SHA-256 固定在 `config/windows-release-extractor-policy.json`。验证器不通过 `NODE_PATH` 加载 extractor，且拒绝哈希不符、歧义、junction/reparse point 或硬链接的缓存项。每次解压前先执行技术清单预检，拒绝绝对路径、上级路径、NTFS alternate stream/设备名、重复路径、符号链接/硬链接/reparse 节点和“文件作为其他条目祖先”的冲突，以及超过 48 层、50000 条目、45000 文件、512 MiB 单文件、2 GiB 总展开量或 200 倍压缩比的输入；复制快照和展开前分别保留至少 512 MiB 空闲磁盘。验证器先从已打开的唯一普通源文件描述符把字节复制到随机私有普通文件，同时核对源文件复制前后设备、inode、大小、纳秒时间戳和流式 SHA-256，再核对快照 SHA-256；`7za l` 与 `7za x` 只读取这一个快照，且在 `x` 前复核其身份和哈希。因此源工件路径在快照完成后被替换不会改变 7za 输入，私有快照自身被提前替换则在解压前 `FAIL`。NSIS 阶段只提取唯一 `app-64.7z`，payload 落盘后立即按同一预算重建清单，并与快照的 `win-unpacked` 完整匹配。安装器和 EXE 的 SHA-256 使用 1 MiB 流式分块计算，不会把最大工件整体读入内存。缺少固定版本 extractor 或无法证明磁盘容量属于 `BLOCKED`；已存在但被替换、清单/解压超时、预算超限或 payload 不一致属于 `FAIL`。
 
 现场复核顺序固定为：白名单哈希与包内容 → 原生 Authenticode/发布者策略 → NSIS payload 绑定 → packaged runtime smoke。前置任一项未通过时绝不执行包内 EXE。Runtime smoke 仅传递最小 OS 环境与内部创建的临时目录，在隔离端口 32191/32190 进行 localhost 探测，并使用可靠的 Windows 进程树终止与退出确认；包自身启动或响应超时是 `FAIL`，只有明确端口占用、平台或工具缺失才是 `BLOCKED`。历史 `packaged-api-smoke.json` 单独不能令该项通过。
 
-外部证据报告会如实记录私有临时写入、系统工具执行、包内 runtime 执行和 localhost 探测。最小环境与临时目录不是 OS 沙箱；高风险或来源未受信的工件仍应在 Windows Sandbox 或一次性虚拟机中复核。
+外部证据报告会如实记录私有临时写入、系统工具执行、包内 runtime 执行和 localhost 探测。最小环境与临时目录不是 OS 沙箱，`chmod` 也不被视为 Windows ACL；能够枚举并写入同一登录用户 `%TEMP%` 的主动进程，理论上仍可能争抢快照最终复核到 7za 打开之间的极窄窗口。固定 7za 不支持从 stdin 解压 7z/ZIP，而在 Windows PowerShell 5.1 中用持有句柄的包装器启动子进程会复制参数转义、输出预算、超时和进程树终止等可信边界，因此当前未把它伪装成更强保证。高风险、同用户不可信进程共存或来源未受信的工件必须在 Windows Sandbox、隔离账号或一次性虚拟机中复核。
 
 即使 `signed-release` 报告通过，SmartScreen reputation、目标机安装/卸载和人工启动仍不在该报告结构内，必须继续作为人工 `BLOCKED` 补证；未签名报告绝不能满足正式签名项。
 

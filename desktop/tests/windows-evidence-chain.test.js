@@ -204,12 +204,13 @@ test("7-Zip technical listings reject bombs, unsafe paths and every extraction b
   const preflight = source.indexOf("inspectArchiveBudget(sevenZip, installer");
   const extraction = source.indexOf("const outerResult = runVerifiedArchiveExtraction");
   assert.ok(preflight >= 0 && extraction > preflight, "installer archive list preflight must precede extraction");
-  assert.match(source, /assertArchiveIdentity\(archive, budget\.archiveIdentity\)[\s\S]*?return runSevenZip/);
+  assert.match(source, /runSevenZip\(resolution, \["l", "-slt", "-ba", archiveSnapshot\.path\]/);
+  assert.match(source, /verifiedArchive = assertSafePath\(safeSnapshotRoot, budget\.archivePath, "file"\)[\s\S]*?assertArchiveIdentity\(verifiedArchive, budget\.archiveIdentity\)[\s\S]*?return runSevenZip/);
   assert.match(source, /findNamedFile\(outer, "app-64\.7z", extractionLimits\)/);
   assert.equal(DEFAULT_EXTRACTION_LIMITS.maxTotalBytes, 2 * 1024 * 1024 * 1024);
 });
 
-test("archive replacement after list preflight fails before the pinned extractor can write", (t) => {
+test("archive replacement after list preflight cannot change the pinned extractor input", (t) => {
   const sevenZip = findSevenZipExecutable();
   if (sevenZip.status !== "PASS") return t.skip("host does not have the pinned electron-builder extractor cache");
   const directory = temporaryDirectory(t);
@@ -231,9 +232,11 @@ test("archive replacement after list preflight fails before the pinned extractor
   };
   createArchive(path.join(directory, "safe-source"), archive, 1);
   createArchive(path.join(directory, "replacement-source"), replacement, 4096);
+  const sourceIdentity = fs.statSync(archive, { bigint: true });
   const budget = inspectArchiveBudget(sevenZip, archive, directory, { maxCompressionRatio: 1000 });
   assert.equal(budget.status, "PASS", budget.summary);
-  const listedIdentity = budget.archiveIdentity;
+  assert.notEqual(budget.archivePath, archive);
+  assert.ok(budget.archivePath.startsWith(directory));
   fs.rmSync(archive);
   fs.renameSync(replacement, archive);
   const outputDirectory = path.join(directory, "output");
@@ -246,10 +249,27 @@ test("archive replacement after list preflight fails before the pinned extractor
     entryPath: "app-64.7z",
     cwd: directory,
   });
-  assert.equal(extraction.status, null);
-  assert.match(extraction.error?.message || "", /identity or SHA-256 changed after technical listing/);
-  assert.notEqual(fs.statSync(archive, { bigint: true }).ino.toString(), listedIdentity.ino);
-  assert.deepEqual(fs.readdirSync(outputDirectory), []);
+  assert.equal(extraction.error, undefined);
+  assert.equal(extraction.status, 0, extraction.stderr || extraction.stdout);
+  assert.notEqual(fs.statSync(archive, { bigint: true }).ino.toString(), sourceIdentity.ino.toString());
+  assert.equal(fs.statSync(path.join(outputDirectory, "app-64.7z")).size, 1);
+
+  fs.chmodSync(budget.archivePath, 0o600);
+  fs.rmSync(budget.archivePath);
+  fs.copyFileSync(archive, budget.archivePath);
+  const rejectedOutput = path.join(directory, "rejected-output");
+  fs.mkdirSync(rejectedOutput);
+  const replacedSnapshot = runVerifiedArchiveExtraction({
+    resolution: sevenZip,
+    archive,
+    budget,
+    outputDirectory: rejectedOutput,
+    entryPath: "app-64.7z",
+    cwd: directory,
+  });
+  assert.equal(replacedSnapshot.status, null);
+  assert.match(replacedSnapshot.error?.message || "", /identity or SHA-256 changed after technical listing/);
+  assert.deepEqual(fs.readdirSync(rejectedOutput), []);
 });
 
 test("runtime hangs are FAIL while explicit port occupation is BLOCKED", () => {
