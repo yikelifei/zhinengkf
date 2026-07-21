@@ -3553,7 +3553,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return computed.kind === "string" || computed.kind === "number" ? String(computed.value) : null;
     };
     const callableMemberUse = (member, evaluationSeenBindings = seenBindings) => {
-      const direct = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+      const direct = sourceNodes.find((candidate) =>
+        (ts.isCallExpression(candidate) || ts.isNewExpression(candidate)) &&
         unwrapExpression(ts, candidate.expression) === member);
       if (direct) return { trigger: direct, escaped: false };
       const reflectInvocation = sourceNodes.find((candidate) => {
@@ -3604,6 +3605,53 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
       return { trigger: null, escaped: !callableExpressionIsDiscarded(wrapperCall) };
     };
+    const destructuredThisCallableUses = (
+      callable,
+      lexicalThisOwner,
+      lexicalThisContainer,
+      evaluationSeenBindings = seenBindings,
+    ) => {
+      const uses = [];
+      for (const declaration of astNodes(ts, callable, (candidate) =>
+        ts.isVariableDeclaration(candidate) && ts.isObjectBindingPattern(candidate.name))) {
+        const initializer = unwrapExpression(ts, declaration.initializer);
+        if (!initializer || initializer.kind !== ts.SyntaxKind.ThisKeyword ||
+          executionContainer(ts, declaration) !== callable ||
+          lexicalThisContainer(initializer) !== lexicalThisOwner ||
+          eventExecutionReachability({ node: declaration }, declaration, evaluationSeenBindings) === "never") {
+          continue;
+        }
+        for (const element of declaration.name.elements) {
+          if (!ts.isIdentifier(element.name)) continue;
+          let memberName = null;
+          let dynamic = Boolean(element.dotDotDotToken);
+          if (!dynamic) {
+            const propertyName = element.propertyName || element.name;
+            if (ts.isComputedPropertyName(propertyName)) {
+              memberName = exactObjectPropertyName({ name: propertyName }, evaluationSeenBindings);
+            } else {
+              memberName = staticPropertyName(ts, { name: propertyName });
+            }
+            dynamic = memberName === null;
+          }
+          const localBinding = resolveBinding(element.name);
+          if (!localBinding) continue;
+          for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+            !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === localBinding)) {
+            if (eventExecutionReachability({ node: reference }, reference, evaluationSeenBindings) === "never") {
+              continue;
+            }
+            if (executionContainer(ts, reference) !== callable) {
+              uses.push({ memberName, dynamic, trigger: null, escaped: true });
+              continue;
+            }
+            const use = callableMemberUse(reference, evaluationSeenBindings);
+            if (use.trigger || use.escaped) uses.push({ memberName, dynamic, ...use });
+          }
+        }
+      }
+      return uses;
+    };
     const objectFunctionDelegateNames = new Set();
     const objectFunctionEscapedDelegateNames = new Set();
     if (objectFunctionPlan && objectFunctionPlan.propertyName !== null && objectFunctionLiteral) {
@@ -3634,6 +3682,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           if (use.escaped) escapesTarget = true;
           return false;
         });
+        for (const use of destructuredThisCallableUses(
+          callable, callable, lexicalThisContainer, seenBindings,
+        )) {
+          if (use.dynamic || use.memberName === objectFunctionPlan.propertyName) {
+            if (use.trigger) delegatesToTarget = true;
+            if (use.escaped || use.dynamic) escapesTarget = true;
+          }
+        }
         if (!delegatesToTarget && !escapesTarget) continue;
         const delegateName = exactObjectPropertyName(property);
         if (delegateName !== null) {
@@ -3848,7 +3904,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             const memberDomain = ts.isConstructorDeclaration(member) ? "instance" : classElementDomain(member);
             if (memberDomain !== (plan.isStatic ? "static" : "instance")) continue;
             let hasDynamicDelegate = false;
-            const delegates = astNodes(ts, callable, (candidate) => {
+            let delegates = astNodes(ts, callable, (candidate) => {
               if ((!ts.isPropertyAccessExpression(candidate) && !ts.isElementAccessExpression(candidate)) ||
                 executionContainer(ts, candidate) !== callable ||
                 unwrapExpression(ts, candidate.expression)?.kind !== ts.SyntaxKind.ThisKeyword ||
@@ -3869,6 +3925,19 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
               }
               return Boolean(trigger);
             }).length > 0;
+            const lexicalThisOwner = ts.isArrowFunction(callable) ? member : callable;
+            for (const use of destructuredThisCallableUses(
+              callable, lexicalThisOwner, lexicalClassThisContainer, planSeenBindings,
+            )) {
+              if (use.dynamic) {
+                hasDynamicDelegate = true;
+                continue;
+              }
+              const invocation = reachableInvocations.get(use.memberName);
+              if (!invocation) continue;
+              if (invocation.read || (invocation.call && use.trigger)) delegates = true;
+              if (invocation.call && use.escaped) hasDynamicDelegate = true;
+            }
             if (hasDynamicDelegate) {
               if (ts.isConstructorDeclaration(member)) constructorDynamicDelegate = true;
               else {
