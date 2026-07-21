@@ -2568,7 +2568,13 @@ function declarationBindingScope(ts, identifier) {
   const declarationList = variableDeclaration?.parent;
   const loop = declarationList?.parent;
   if (declarationList && ts.isVariableDeclarationList(declarationList) &&
-    !(declarationList.flags & ts.NodeFlags.Var) && loop &&
+    !(declarationList.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const))) {
+    for (let current = declaration; current; current = current.parent) {
+      if (ts.isFunctionLike(current) || ts.isSourceFile(current)) return current;
+    }
+  }
+  if (declarationList && ts.isVariableDeclarationList(declarationList) &&
+    (declarationList.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) && loop &&
     (ts.isForOfStatement(loop) || ts.isForInStatement(loop) || ts.isForStatement(loop))) return loop;
   return lexicalBindingScope(ts, declaration, false);
 }
@@ -2617,22 +2623,20 @@ function enclosingVariableDeclaration(ts, identifier) {
   return null;
 }
 
-function assignmentPatternEvents(ts, pattern, expression, node) {
+function assignmentPatternEvents(ts, pattern, expression, node, initialProjection = []) {
   const events = [];
-  const visit = (targetNode, valueNode, destructuredProperty = null) => {
+  const visit = (targetNode, valueNode, projection = []) => {
     const target = unwrapExpression(ts, targetNode);
     if (!target) return;
     if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      visit(target.left, valueNode, destructuredProperty);
+      visit(target.left, valueNode, projection);
       return;
     }
     if (ts.isIdentifier(target)) {
-      events.push({ identifier: target, node, expression: valueNode || null, destructuredProperty });
+      events.push({ identifier: target, node, expression: valueNode || null, projection });
       return;
     }
     if (ts.isArrayBindingPattern(target) || ts.isArrayLiteralExpression(target)) {
-      const value = unwrapExpression(ts, valueNode);
-      const valueElements = value && ts.isArrayLiteralExpression(value) ? value.elements : null;
       target.elements.forEach((element, index) => {
         if (ts.isOmittedExpression(element)) return;
         let elementTarget = element;
@@ -2642,35 +2646,47 @@ function assignmentPatternEvents(ts, pattern, expression, node) {
         } else if (ts.isSpreadElement(element)) {
           return;
         }
-        const valueElement = valueElements?.[index];
-        const projectedValue = valueElement && !ts.isOmittedExpression(valueElement) &&
-          !ts.isSpreadElement(valueElement) ? valueElement : null;
-        visit(elementTarget, projectedValue);
+        visit(elementTarget, valueNode, [...projection, { kind: "index", index }]);
       });
       return;
     }
     if (ts.isObjectBindingPattern(target)) {
       for (const element of target.elements) {
         if (element.dotDotDotToken) continue;
-        const propertyName = element.propertyName
-          ? staticPropertyName(ts, { name: element.propertyName })
-          : ts.isIdentifier(element.name) ? element.name.text : null;
-        if (propertyName) visit(element.name, valueNode, propertyName);
+        let propertyProjection = null;
+        if (element.propertyName && ts.isComputedPropertyName(element.propertyName)) {
+          propertyProjection = { kind: "computed-property", expression: element.propertyName.expression };
+        } else {
+          const propertyName = element.propertyName
+            ? staticPropertyName(ts, { name: element.propertyName })
+            : ts.isIdentifier(element.name) ? element.name.text : null;
+          if (propertyName) propertyProjection = { kind: "property", name: propertyName };
+        }
+        if (propertyProjection) visit(element.name, valueNode, [...projection, propertyProjection]);
       }
       return;
     }
     if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
         if (ts.isPropertyAssignment(property)) {
-          const propertyName = staticPropertyName(ts, property);
-          if (propertyName) visit(property.initializer, valueNode, propertyName);
+          if (ts.isComputedPropertyName(property.name)) {
+            visit(property.initializer, valueNode, [
+              ...projection,
+              { kind: "computed-property", expression: property.name.expression },
+            ]);
+          } else {
+            const propertyName = staticPropertyName(ts, property);
+            if (propertyName) {
+              visit(property.initializer, valueNode, [...projection, { kind: "property", name: propertyName }]);
+            }
+          }
         } else if (ts.isShorthandPropertyAssignment(property)) {
-          visit(property.name, valueNode, property.name.text);
+          visit(property.name, valueNode, [...projection, { kind: "property", name: property.name.text }]);
         }
       }
     }
   };
-  visit(pattern, expression);
+  visit(pattern, expression, initialProjection);
   return events;
 }
 
@@ -2710,6 +2726,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   const sourceNodes = astNodes(ts, sourceFile, () => true);
   const bindingIdentifiers = sourceNodes.filter((node) => ts.isIdentifier(node) &&
     isBindingDeclarationIdentifier(ts, node) && enclosingVariableDeclaration(ts, node));
+  const bindingReferences = new Map(bindingIdentifiers.map((binding) => [binding, []]));
+  for (const identifier of sourceNodes.filter(ts.isIdentifier)) {
+    if (isBindingDeclarationIdentifier(ts, identifier)) continue;
+    const binding = resolveBinding(identifier);
+    if (bindingReferences.has(binding)) bindingReferences.get(binding).push(identifier);
+  }
   const indexedWrites = new Map();
   const indexWrite = (binding, event) => {
     if (!binding) return;
@@ -2738,19 +2760,26 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
   }
   for (const statement of sourceNodes.filter(ts.isForOfStatement)) {
-    const iterable = unwrapExpression(ts, statement.expression);
-    const iterationValue = iterable && ts.isArrayLiteralExpression(iterable) &&
-      iterable.elements.length === 1 && !ts.isSpreadElement(iterable.elements[0])
-      ? iterable.elements[0]
-      : null;
     if (ts.isVariableDeclarationList(statement.initializer)) {
       for (const declaration of statement.initializer.declarations) {
-        for (const event of assignmentPatternEvents(ts, declaration.name, iterationValue, statement)) {
+        for (const event of assignmentPatternEvents(
+          ts,
+          declaration.name,
+          statement.expression,
+          statement,
+          [{ kind: "iteration" }],
+        )) {
           indexWrite(event.identifier, event);
         }
       }
     } else {
-      for (const event of assignmentPatternEvents(ts, statement.initializer, iterationValue, statement)) {
+      for (const event of assignmentPatternEvents(
+        ts,
+        statement.initializer,
+        statement.expression,
+        statement,
+        [{ kind: "iteration" }],
+      )) {
         indexWrite(resolveBinding(event.identifier), event);
       }
     }
@@ -2773,73 +2802,134 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     });
     return events[events.length - 1] || null;
   };
-  const unknownStaticString = Object.freeze({ known: false, value: null });
-  const staticStringAt = (node, useNode = node, seenBindings = new Set()) => {
+  const unknownStaticValue = Object.freeze({ kind: "unknown" });
+  const sameStaticValue = (left, right) => {
+    if (!left || !right || left.kind !== right.kind) return false;
+    if (left.kind === "string") return left.value === right.value;
+    return left.kind === "target-class" || left.kind === "target-prototype" ||
+      left.kind === "possible-target-prototype";
+  };
+  const applyStaticProjection = (initialValue, projection, useNode, seenBindings) => {
+    let value = initialValue;
+    for (const step of projection || []) {
+      if (step.kind === "index") {
+        if (value.kind !== "tuple" || step.index < 0 || step.index >= value.values.length) {
+          return unknownStaticValue;
+        }
+        value = value.values[step.index];
+        continue;
+      }
+      if (step.kind === "iteration") {
+        if (value.kind !== "tuple" || !value.values.length) return unknownStaticValue;
+        if (value.values.length === 1) {
+          value = value.values[0];
+          continue;
+        }
+        if (value.values.some((item) => item.kind === "target-prototype")) {
+          value = { kind: "target-prototype" };
+          continue;
+        }
+        if (value.values.some((item) => item.kind === "possible-target-prototype")) {
+          value = { kind: "possible-target-prototype" };
+          continue;
+        }
+        if (value.values.some((item) => item.kind === "target-class")) {
+          value = { kind: "target-class" };
+          continue;
+        }
+        if (value.values.every((item) => sameStaticValue(item, value.values[0]))) {
+          value = value.values[0];
+          continue;
+        }
+        return unknownStaticValue;
+      }
+      let propertyName = null;
+      if (step.kind === "property") propertyName = step.name;
+      if (step.kind === "computed-property") {
+        const computed = staticValueAt(step.expression, useNode, seenBindings);
+        if (computed.kind === "string") propertyName = computed.value;
+      }
+      if (propertyName === null) {
+        return value.kind === "target-class" ? { kind: "possible-target-prototype" } : unknownStaticValue;
+      }
+      if (value.kind === "target-class" && propertyName === "prototype") {
+        value = { kind: "target-prototype" };
+        continue;
+      }
+      return unknownStaticValue;
+    }
+    return value;
+  };
+  const staticValueAt = (node, useNode = node, seenBindings = new Set()) => {
     const expression = unwrapExpression(ts, node);
-    if (!expression) return unknownStaticString;
+    if (!expression) return unknownStaticValue;
     if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
-      return { known: true, value: expression.text };
+      return { kind: "string", value: expression.text };
     }
     if (ts.isTemplateExpression(expression)) {
       let value = expression.head.text;
       for (const span of expression.templateSpans) {
-        const substitution = staticStringAt(span.expression, useNode, seenBindings);
-        if (!substitution.known) return unknownStaticString;
+        const substitution = staticValueAt(span.expression, useNode, seenBindings);
+        if (substitution.kind !== "string") return unknownStaticValue;
         value += substitution.value + span.literal.text;
       }
-      return { known: true, value };
+      return { kind: "string", value };
     }
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = staticStringAt(expression.left, useNode, seenBindings);
-      const right = staticStringAt(expression.right, useNode, seenBindings);
-      return left.known && right.known
-        ? { known: true, value: left.value + right.value }
-        : unknownStaticString;
+      const left = staticValueAt(expression.left, useNode, seenBindings);
+      const right = staticValueAt(expression.right, useNode, seenBindings);
+      return left.kind === "string" && right.kind === "string"
+        ? { kind: "string", value: left.value + right.value }
+        : unknownStaticValue;
     }
     if (ts.isConditionalExpression(expression)) {
-      const whenTrue = staticStringAt(expression.whenTrue, useNode, seenBindings);
-      const whenFalse = staticStringAt(expression.whenFalse, useNode, seenBindings);
-      return whenTrue.known && whenFalse.known && whenTrue.value === whenFalse.value
+      const whenTrue = staticValueAt(expression.whenTrue, useNode, seenBindings);
+      const whenFalse = staticValueAt(expression.whenFalse, useNode, seenBindings);
+      return sameStaticValue(whenTrue, whenFalse)
         ? whenTrue
-        : unknownStaticString;
+        : unknownStaticValue;
     }
-    if (!ts.isIdentifier(expression)) return unknownStaticString;
+    if (ts.isArrayLiteralExpression(expression)) {
+      if (expression.elements.some((element) => ts.isSpreadElement(element) || ts.isOmittedExpression(element))) {
+        return unknownStaticValue;
+      }
+      return {
+        kind: "tuple",
+        values: expression.elements.map((element) => staticValueAt(element, useNode, seenBindings)),
+      };
+    }
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+      const owner = staticValueAt(expression.expression, useNode, seenBindings);
+      let propertyName = null;
+      if (ts.isPropertyAccessExpression(expression)) propertyName = expression.name.text;
+      if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
+        const computed = staticValueAt(expression.argumentExpression, useNode, seenBindings);
+        if (computed.kind === "string") propertyName = computed.value;
+      }
+      if (owner.kind !== "target-class") return unknownStaticValue;
+      if (propertyName === "prototype") return { kind: "target-prototype" };
+      return propertyName === null ? { kind: "possible-target-prototype" } : unknownStaticValue;
+    }
+    if (!ts.isIdentifier(expression)) return unknownStaticValue;
     const binding = resolveBinding(expression);
-    if (!binding || seenBindings.has(binding)) return unknownStaticString;
-    const declaration = enclosingVariableDeclaration(ts, binding);
-    const declarationList = declaration?.parent;
-    if (!declaration || declaration.name !== binding || !declaration.initializer ||
-      !declarationList || !ts.isVariableDeclarationList(declarationList) ||
-      !(declarationList.flags & ts.NodeFlags.Const)) return unknownStaticString;
+    if (binding === targetClass.name) return { kind: "target-class" };
+    if (!binding || seenBindings.has(binding)) return unknownStaticValue;
     const event = applicableEvent(binding, useNode);
-    if (!event || event.node !== declaration || event.expression !== declaration.initializer ||
-      event.destructuredProperty) return unknownStaticString;
+    if (!event || !event.expression) return unknownStaticValue;
     const nextSeen = new Set(seenBindings);
     nextSeen.add(binding);
-    return staticStringAt(declaration.initializer, declaration, nextSeen);
+    const eventValue = staticValueAt(event.expression, event.node, nextSeen);
+    return applyStaticProjection(eventValue, event.projection, event.node, nextSeen);
   };
-  const isTargetClass = (node) => {
-    const expression = unwrapExpression(ts, node);
-    return Boolean(expression && ts.isIdentifier(expression) && expression.text === className &&
-      resolveBinding(expression) === targetClass.name);
+  const unknownStaticString = Object.freeze({ known: false, value: null });
+  const staticStringAt = (node, useNode = node, seenBindings = new Set()) => {
+    const value = staticValueAt(node, useNode, seenBindings);
+    return value.kind === "string" ? { known: true, value: value.value } : unknownStaticString;
   };
   const prototypeResolution = new Set();
   const isTargetPrototypeAt = (node, seenBindings = new Set()) => {
-    const expression = unwrapExpression(ts, node);
-    if (!expression) return false;
-    if ((ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
-      staticPropertyName(ts, expression) === "prototype" && isTargetClass(expression.expression)) return true;
-    if (!ts.isIdentifier(expression)) return false;
-    const binding = resolveBinding(expression);
-    if (!binding || seenBindings.has(binding)) return false;
-    const event = applicableEvent(binding, expression);
-    if (!event) return false;
-    const nextSeen = new Set(seenBindings);
-    nextSeen.add(binding);
-    if (event.destructuredProperty) {
-      return event.destructuredProperty === "prototype" && isTargetClass(event.expression);
-    }
-    return Boolean(event.expression && isTargetPrototypeAt(event.expression, nextSeen));
+    const kind = staticValueAt(node, node, seenBindings).kind;
+    return kind === "target-prototype" || kind === "possible-target-prototype";
   };
   const isCriticalTarget = (node) => {
     const expression = unwrapExpression(ts, node);
@@ -2849,16 +2939,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
   };
 
   for (const binding of bindingIdentifiers) {
-    for (const event of eventsForBinding(binding)) {
-      if (event.destructuredProperty === "prototype" && isTargetClass(event.expression)) {
-        prototypeResolution.add(binding);
-        break;
-      }
-      if (event.expression && isTargetPrototypeAt(event.expression, new Set([binding]))) {
-        prototypeResolution.add(binding);
-        break;
-      }
-    }
+    const references = bindingReferences.get(binding) || [];
+    if (references.some((reference) => isTargetPrototypeAt(reference))) prototypeResolution.add(binding);
   }
   const unsafeDirectWrite = sourceNodes.some((node) => {
     if ((!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) ||
@@ -2876,8 +2958,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       !(declarationList.flags & ts.NodeFlags.Const)) {
       failures.push("critical-prototype-alias-mutable");
     }
-    const references = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) &&
-      node !== declarationIdentifier && resolveBinding(node) === declarationIdentifier);
+    const references = bindingReferences.get(declarationIdentifier) || [];
     if (references.some((reference) => isWriteTarget(ts, reference))) {
       failures.push("critical-prototype-alias-write");
     }
@@ -2889,11 +2970,19 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       !ts.isElementAccessExpression(expression))) return null;
     const owner = unwrapExpression(ts, expression.expression);
     if (!owner || !ts.isIdentifier(owner) || resolveBinding(owner)) return null;
-    const operation = staticPropertyName(ts, expression);
+    const computedOperation = ts.isElementAccessExpression(expression)
+      ? staticStringAt(expression.argumentExpression, expression)
+      : null;
+    const operation = ts.isPropertyAccessExpression(expression)
+      ? expression.name.text
+      : computedOperation.value;
     if (owner.text === "Object" && ["assign", "defineProperty", "defineProperties", "set"].includes(operation)) {
       return operation;
     }
     if (owner.text === "Reflect" && ["defineProperty", "set"].includes(operation)) return operation;
+    if ((owner.text === "Object" || owner.text === "Reflect") && computedOperation && !computedOperation.known) {
+      return "unknown-operation";
+    }
     return null;
   };
   const operationAt = (node, seenBindings = new Set()) => {
@@ -2905,16 +2994,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (!binding || seenBindings.has(binding)) return null;
     const event = applicableEvent(binding, expression);
     if (!event) return null;
-    if (event.destructuredProperty) {
+    if (event.projection?.length === 1 &&
+      ["property", "computed-property"].includes(event.projection[0].kind)) {
       const owner = unwrapExpression(ts, event.expression);
       if (!owner || !ts.isIdentifier(owner) || resolveBinding(owner)) return null;
+      const step = event.projection[0];
+      const computedOperation = step.kind === "computed-property"
+        ? staticStringAt(step.expression, event.node)
+        : null;
+      const operation = step.kind === "property" ? step.name : computedOperation.value;
       if (owner.text === "Object" && ["assign", "defineProperty", "defineProperties", "set"]
-        .includes(event.destructuredProperty)) return event.destructuredProperty;
-      if (owner.text === "Reflect" && ["defineProperty", "set"].includes(event.destructuredProperty)) {
-        return event.destructuredProperty;
+        .includes(operation)) return operation;
+      if (owner.text === "Reflect" && ["defineProperty", "set"].includes(operation)) {
+        return operation;
       }
+      if ((owner.text === "Object" || owner.text === "Reflect") &&
+        computedOperation && !computedOperation.known) return "unknown-operation";
       return null;
     }
+    if (event.projection?.length) return null;
     if (!event.expression) return null;
     const nextSeen = new Set(seenBindings);
     nextSeen.add(binding);
@@ -2926,6 +3024,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (!operation) continue;
     const target = call.arguments[0];
     if (!target || !isCriticalTarget(target)) continue;
+    if (operation === "unknown-operation") {
+      failures.push("critical-symbol-write");
+      break;
+    }
     if (operation === "assign") {
       failures.push("critical-symbol-write");
       break;
