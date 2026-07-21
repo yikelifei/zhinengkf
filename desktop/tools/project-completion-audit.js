@@ -3430,10 +3430,118 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       ? sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
         unwrapExpression(ts, candidate.expression) === referenceContainer)
       : null;
+    const objectFunctionProperty = (() => {
+      if (ts.isMethodDeclaration(referenceContainer) &&
+        ts.isObjectLiteralExpression(referenceContainer.parent)) {
+        return referenceContainer;
+      }
+      if (!ts.isArrowFunction(referenceContainer) && !ts.isFunctionExpression(referenceContainer)) return null;
+      let current = referenceContainer;
+      while (current.parent && unwrapExpression(ts, current.parent) === referenceContainer) {
+        current = current.parent;
+      }
+      const owner = current.parent;
+      return owner && ts.isPropertyAssignment(owner) &&
+        unwrapExpression(ts, owner.initializer) === referenceContainer &&
+        ts.isObjectLiteralExpression(owner.parent)
+        ? owner
+        : null;
+    })();
+    const objectFunctionLiteral = objectFunctionProperty?.parent || null;
+    const isTransparentObjectIdentityCall = (node, identityExpression) => {
+      if (!node || !identityExpression || !ts.isCallExpression(node) || node.arguments.length !== 1 ||
+        unwrapExpression(ts, node.arguments[0]) !== unwrapExpression(ts, identityExpression)) return false;
+      const callee = unwrapExpression(ts, node.expression);
+      if (!callee || !ts.isPropertyAccessExpression(callee) ||
+        !["freeze", "seal", "preventExtensions"].includes(callee.name.text)) return false;
+      const receiver = unwrapExpression(ts, callee.expression);
+      return Boolean(receiver && ts.isIdentifier(receiver) && receiver.text === "Object" && !resolveBinding(receiver));
+    };
+    let objectFunctionIdentity = objectFunctionLiteral;
+    let objectFunctionOwner = objectFunctionIdentity?.parent || null;
+    while (objectFunctionOwner && !ts.isVariableDeclaration(objectFunctionOwner)) {
+      if (unwrapExpression(ts, objectFunctionOwner) === unwrapExpression(ts, objectFunctionIdentity) ||
+        isTransparentObjectIdentityCall(objectFunctionOwner, objectFunctionIdentity)) {
+        objectFunctionIdentity = objectFunctionOwner;
+        objectFunctionOwner = objectFunctionOwner.parent;
+        continue;
+      }
+      break;
+    }
+    const objectFunctionVariable = objectFunctionOwner && ts.isVariableDeclaration(objectFunctionOwner) &&
+      unwrapExpression(ts, objectFunctionOwner.initializer) === unwrapExpression(ts, objectFunctionIdentity) &&
+      ts.isIdentifier(objectFunctionOwner.name)
+      ? objectFunctionOwner
+      : null;
+    const exactObjectPropertyName = (property) => {
+      const direct = staticPropertyName(ts, property);
+      if (direct !== null) return direct;
+      if (!property?.name || !ts.isComputedPropertyName(property.name)) return null;
+      const computedExpression = unwrapExpression(ts, property.name.expression);
+      let computed = unknownStaticValue;
+      if (computedExpression && ts.isIdentifier(computedExpression)) {
+        const computedBinding = resolveBinding(computedExpression);
+        const computedDeclaration = computedBinding?.parent &&
+          ts.isVariableDeclaration(computedBinding.parent) && computedBinding.parent.name === computedBinding
+          ? computedBinding.parent
+          : null;
+        const declarationList = computedDeclaration?.parent;
+        const isStableConst = computedDeclaration?.initializer && declarationList &&
+          ts.isVariableDeclarationList(declarationList) &&
+          (declarationList.flags & ts.NodeFlags.Const) &&
+          eventsForBinding(computedBinding).length === 1;
+        if (!isStableConst) return null;
+        const computedSeen = new Set(seenBindings);
+        computedSeen.add(computedBinding);
+        computed = staticValueAt(computedDeclaration.initializer, computedDeclaration, computedSeen);
+      } else if (computedExpression) {
+        computed = staticValueAt(computedExpression, property.name, seenBindings);
+      }
+      return computed.kind === "string" || computed.kind === "number"
+        ? String(computed.value)
+        : null;
+    };
+    const objectFunctionBinding = objectFunctionVariable
+      ? resolveBinding(objectFunctionVariable.name)
+      : null;
+    const objectFunctionPlan = objectFunctionBinding ? {
+      binding: objectFunctionBinding,
+      propertyName: exactObjectPropertyName(objectFunctionProperty),
+      precise: Boolean(objectFunctionVariable.parent &&
+        ts.isVariableDeclarationList(objectFunctionVariable.parent) &&
+        (objectFunctionVariable.parent.flags & ts.NodeFlags.Const)),
+    } : null;
+    const objectFunctionDelegateNames = new Set();
+    if (objectFunctionPlan && objectFunctionPlan.propertyName !== null && objectFunctionLiteral) {
+      const lexicalThisContainer = (node) => {
+        for (let current = node; current; current = current.parent) {
+          if (ts.isFunctionLike(current) && !ts.isArrowFunction(current)) return current;
+        }
+        return null;
+      };
+      for (const property of objectFunctionLiteral.properties) {
+        if (property === objectFunctionProperty) continue;
+        const callable = ts.isMethodDeclaration(property)
+          ? property
+          : ts.isPropertyAssignment(property) && ts.isFunctionExpression(unwrapExpression(ts, property.initializer))
+            ? unwrapExpression(ts, property.initializer)
+            : null;
+        if (!callable) continue;
+        const delegatesToTarget = astNodes(ts, callable, (candidate) =>
+          (ts.isPropertyAccessExpression(candidate) || ts.isElementAccessExpression(candidate)) &&
+          unwrapExpression(ts, candidate.expression)?.kind === ts.SyntaxKind.ThisKeyword &&
+          lexicalThisContainer(candidate.expression) === callable &&
+          staticPropertyName(ts, candidate) === objectFunctionPlan.propertyName &&
+          eventExecutionReachability({ node: candidate }, candidate, seenBindings) !== "never").length > 0;
+        if (!delegatesToTarget) continue;
+        const delegateName = exactObjectPropertyName(property);
+        if (delegateName !== null) objectFunctionDelegateNames.add(delegateName);
+      }
+    }
     const localBindingEvents = applicableEvents(binding, useNode)
       .filter((event) => executionContainer(ts, event.node) === referenceContainer &&
         eventExecutionReachability(event, useNode, seenBindings) !== "never");
-    if (!localBindingEvents.length && (functionBinding || immediateCall) &&
+    if (!localBindingEvents.length && (functionBinding || immediateCall || objectFunctionPlan) &&
       referenceContainer !== bindingContainer && useContainer === referenceContainer) {
       const directCalls = [];
       let escaped = false;
@@ -3465,8 +3573,56 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           }
           registerDirectCall(call);
         }
-      } else {
+      } else if (immediateCall) {
         registerDirectCall(immediateCall);
+      } else if (objectFunctionPlan) {
+        const memberAccessForReference = (reference) => {
+          let current = reference;
+          while (current.parent && unwrapExpression(ts, current.parent) === reference) {
+            current = current.parent;
+          }
+          const owner = current.parent;
+          return owner && (ts.isPropertyAccessExpression(owner) || ts.isElementAccessExpression(owner)) &&
+            unwrapExpression(ts, owner.expression) === reference
+            ? owner
+            : null;
+        };
+        const exactMemberAccessName = (member) => {
+          if (!member) return null;
+          const direct = staticPropertyName(ts, member);
+          if (direct !== null) return direct;
+          if (!ts.isElementAccessExpression(member) || !member.argumentExpression) return null;
+          const computed = staticValueAt(member.argumentExpression, member, seenBindings);
+          return computed.kind === "string" || computed.kind === "number"
+            ? String(computed.value)
+            : null;
+        };
+        for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+          !isBindingDeclarationIdentifier(ts, candidate) &&
+          resolveBinding(candidate) === objectFunctionPlan.binding)) {
+          if (eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
+          if (!objectFunctionPlan.precise || objectFunctionPlan.propertyName === null) {
+            escaped = true;
+            continue;
+          }
+          const member = memberAccessForReference(reference);
+          const memberName = exactMemberAccessName(member);
+          if (memberName !== null && memberName !== objectFunctionPlan.propertyName) {
+            if (objectFunctionDelegateNames.has(memberName)) escaped = true;
+            continue;
+          }
+          if (!member || memberName === null) {
+            escaped = true;
+            continue;
+          }
+          const call = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+            unwrapExpression(ts, candidate.expression) === member);
+          if (!call) {
+            escaped = true;
+            continue;
+          }
+          registerDirectCall(call);
+        }
       }
       if (!escaped && !directCalls.length && ts.isFunctionDeclaration(referenceContainer)) escaped = true;
       if (!escaped && directCalls.length) {
