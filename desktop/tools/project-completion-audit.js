@@ -2122,6 +2122,17 @@ function contractResults(root) {
     for (const section of contract.sections || []) {
       paths.add(normalizeRelative(section.file));
       const sectionSource = readText(root, section.file);
+      let criticalInspection = null;
+      if (sectionSource !== null && CRITICAL_AST_SECTION_IDS.has(section.id)) {
+        try {
+          criticalInspection = criticalSectionAstInspection(section.id, sectionSource);
+          for (const failure of criticalInspection.failures) missing.push(`${section.id}:ast-${failure}`);
+          if (criticalInspection.range === null) missing.push(`${section.id}:section-missing`);
+        } catch (_error) {
+          missing.push(`${section.id}:ast-parse-failed`);
+        }
+        continue;
+      }
       let inspectionSource = sectionSource;
       if (inspectionSource !== null && section.maskCommentsAndStrings) {
         try {
@@ -2131,17 +2142,15 @@ function contractResults(root) {
           continue;
         }
       }
-      const blockRange = inspectionSource === null ? null : extractBalancedBlockRange(inspectionSource, section.startPattern);
+      const blockRange = criticalInspection
+        ? criticalInspection.range
+        : inspectionSource === null ? null : extractLegacyBalancedBlockRange(inspectionSource, section.startPattern);
       if (blockRange === null) {
         missing.push(`${section.id}:section-missing`);
         continue;
       }
       const block = inspectionSource.slice(blockRange.start, blockRange.end);
-      const originalBlock = sectionSource.slice(blockRange.start, blockRange.end);
       const inspectionBlock = block;
-      for (const failure of criticalSectionAstFailures(section.id, originalBlock)) {
-        missing.push(`${section.id}:ast-${failure}`);
-      }
       for (const [index, pattern] of section.patterns.entries()) {
         if (!pattern.test(inspectionBlock)) missing.push(`${section.id}:required-pattern-${index + 1}`);
       }
@@ -2359,6 +2368,50 @@ function astNodes(ts, root, predicate) {
   return matches;
 }
 
+function decoratorsOfNode(ts, node) {
+  return ts.canHaveDecorators(node) ? (ts.getDecorators(node) || []) : [];
+}
+
+function staticPropertyName(ts, node) {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isElementAccessExpression(node) && node.argumentExpression &&
+    (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))) {
+    return node.argumentExpression.text;
+  }
+  if (node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ||
+    ts.isNoSubstitutionTemplateLiteral(node.name))) return node.name.text;
+  return null;
+}
+
+function isWriteTarget(ts, node) {
+  let target = node;
+  while (target.parent && (
+    ((ts.isPropertyAccessExpression(target.parent) || ts.isElementAccessExpression(target.parent)) &&
+      target.parent.expression === target) ||
+    ((ts.isParenthesizedExpression(target.parent) || ts.isAsExpression(target.parent) ||
+      ts.isTypeAssertionExpression(target.parent) || ts.isNonNullExpression(target.parent)) &&
+      target.parent.expression === target)
+  )) target = target.parent;
+  const parent = target.parent;
+  if (!parent) return false;
+  if (ts.isBinaryExpression(parent) && parent.left === target &&
+    parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
+  if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+    (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)) return true;
+  return ts.isDeleteExpression(parent) && parent.expression === target;
+}
+
+function isNonBindingPropertyName(ts, identifier) {
+  const parent = identifier.parent;
+  return (ts.isPropertyAccessExpression(parent) && parent.name === identifier) ||
+    ((ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent) ||
+      ts.isPropertySignature(parent) || ts.isMethodSignature(parent) || ts.isGetAccessorDeclaration(parent) ||
+      ts.isSetAccessorDeclaration(parent)) && parent.name === identifier) ||
+    (ts.isBindingElement(parent) && parent.propertyName === identifier) ||
+    (ts.isImportSpecifier(parent) && parent.propertyName === identifier);
+}
+
 function criticalImportBindingFailures(text, fileName, specifications) {
   const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName);
   const failures = [];
@@ -2367,13 +2420,16 @@ function criticalImportBindingFailures(text, fileName, specifications) {
     for (const statement of sourceFile.statements) {
       if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
         statement.moduleSpecifier.text !== specification.source || !statement.importClause) continue;
+      if (statement.importClause.isTypeOnly) continue;
       if (specification.kind === "default" && statement.importClause.name?.text === specification.name) {
         matchingImports.push(statement.importClause.name);
       }
       const bindings = statement.importClause.namedBindings;
       if (specification.kind === "named" && bindings && ts.isNamedImports(bindings)) {
         for (const element of bindings.elements) {
-          if (!element.propertyName && element.name.text === specification.name) matchingImports.push(element.name);
+          if (!element.isTypeOnly && !element.propertyName && element.name.text === specification.name) {
+            matchingImports.push(element.name);
+          }
         }
       }
     }
@@ -2386,9 +2442,12 @@ function criticalImportBindingFailures(text, fileName, specifications) {
     const usageAllowed = (identifier) => {
       if (identifier === importedIdentifier) return true;
       const parent = identifier.parent;
-      if (specification.usage === "any") return true;
+      if (isNonBindingPropertyName(ts, identifier)) return true;
       if (specification.usage === "call") return ts.isCallExpression(parent) && parent.expression === identifier;
-      if (specification.usage === "namespace") return ts.isPropertyAccessExpression(parent) && parent.expression === identifier;
+      if (specification.usage === "namespace") {
+        return (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+          parent.expression === identifier && !isWriteTarget(ts, identifier);
+      }
       if (specification.usage === "decorator") {
         return ts.isCallExpression(parent) && parent.expression === identifier && ts.isDecorator(parent.parent);
       }
@@ -2408,10 +2467,11 @@ function exactNamedImportFailure(text, fileName, source, expectedNames) {
   const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName, true);
   const imports = sourceFile.statements.filter((statement) => ts.isImportDeclaration(statement) &&
     ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === source);
-  if (imports.length !== 1 || imports[0].importClause?.name) return true;
+  if (imports.length !== 1 || imports[0].importClause?.name || imports[0].importClause?.isTypeOnly) return true;
   const bindings = imports[0].importClause?.namedBindings;
   return !bindings || !ts.isNamedImports(bindings) || bindings.elements.length !== expectedNames.length ||
-    bindings.elements.some((element, index) => element.propertyName || element.name.text !== expectedNames[index]);
+    bindings.elements.some((element, index) => element.isTypeOnly || element.propertyName ||
+      element.name.text !== expectedNames[index]);
 }
 
 function inboundCriticalImportFailures(root) {
@@ -2419,8 +2479,8 @@ function inboundCriticalImportFailures(root) {
     {
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
       specifications: [
-        { name: "fs", source: "node:fs", kind: "default", usage: "any" },
-        { name: "path", source: "node:path", kind: "default", usage: "any" },
+        { name: "fs", source: "node:fs", kind: "default", usage: "namespace" },
+        { name: "path", source: "node:path", kind: "default", usage: "namespace" },
         { name: "randomUUID", source: "node:crypto", kind: "named", usage: "call" },
         { name: "deterministicOperationId", source: "../shared/operation-idempotency", kind: "named", usage: "call" },
         { name: "assertNotificationEffectReplay", source: "../shared/notification-idempotency", kind: "named", usage: "call" },
@@ -2459,22 +2519,125 @@ function inboundCriticalImportFailures(root) {
 }
 
 function compactAstText(sourceFile, node) {
-  return node.getText(sourceFile).replace(/\s+/g, "");
+  const ts = loadTypeScriptCompiler();
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.Standard,
+    node.getText(sourceFile),
+  );
+  const tokens = [];
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    tokens.push(scanner.getTokenText());
+  }
+  return tokens.join("");
 }
 
-function wrappedMethodAst(block, methodName) {
-  const wrapped = `class __AuditFixture {\n${block}\n}`;
-  const parsed = parseTypeScriptForAudit(wrapped, `${methodName}.audit.ts`, true);
-  const classDeclaration = parsed.sourceFile.statements.find(parsed.ts.isClassDeclaration);
-  const methods = classDeclaration?.members.filter((member) =>
-    parsed.ts.isMethodDeclaration(member) && member.name?.getText(parsed.sourceFile) === methodName) || [];
-  if (methods.length !== 1 || !methods[0].body) throw new SyntaxError(`missing ${methodName} method`);
-  return { ...parsed, method: methods[0] };
+function nearestClassDeclaration(ts, node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isClassDeclaration(current)) return current;
+  }
+  return null;
 }
 
-function localNotificationAstFailures(block) {
+function unwrapExpression(ts, node) {
+  let current = node;
+  while (current && (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current))) current = current.expression;
+  return current;
+}
+
+function isCriticalReceiver(ts, node, targetClass, className) {
+  const expression = unwrapExpression(ts, node);
+  if (expression && expression.kind === ts.SyntaxKind.ThisKeyword) {
+    return nearestClassDeclaration(ts, expression) === targetClass;
+  }
+  return Boolean(expression && (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
+    staticPropertyName(ts, expression) === "prototype" &&
+    ts.isIdentifier(unwrapExpression(ts, expression.expression)) &&
+    unwrapExpression(ts, expression.expression).text === className);
+}
+
+function isBindingDeclarationIdentifier(ts, identifier) {
+  const parent = identifier.parent;
+  return ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent)) &&
+      parent.name === identifier) ||
+    ((ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent) || ts.isClassDeclaration(parent) ||
+      ts.isClassExpression(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeAliasDeclaration(parent) ||
+      ts.isEnumDeclaration(parent)) && parent.name === identifier);
+}
+
+function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, propertyNames) {
   const failures = [];
-  const { ts, sourceFile, method } = wrappedMethodAst(block, "createNotification");
+  const criticalNames = new Set(propertyNames);
+  const accesses = astNodes(ts, sourceFile, (node) =>
+    (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+    criticalNames.has(staticPropertyName(ts, node)) &&
+    isCriticalReceiver(ts, node.expression, targetClass, className));
+  if (accesses.some((access) => isWriteTarget(ts, access))) failures.push("critical-symbol-write");
+
+  const calls = astNodes(ts, sourceFile, ts.isCallExpression);
+  for (const call of calls) {
+    const callee = unwrapExpression(ts, call.expression);
+    if (!callee || !ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) continue;
+    const owner = callee.expression.text;
+    const operation = callee.name.text;
+    const target = call.arguments[0];
+    if (!target || !isCriticalReceiver(ts, target, targetClass, className)) continue;
+    if (owner === "Object" && operation === "assign") {
+      failures.push("critical-symbol-write");
+      break;
+    }
+    if ((owner === "Object" || owner === "Reflect") &&
+      (operation === "defineProperty" || operation === "set") &&
+      call.arguments[1] && (ts.isStringLiteral(call.arguments[1]) ||
+        ts.isNoSubstitutionTemplateLiteral(call.arguments[1])) &&
+      criticalNames.has(call.arguments[1].text)) {
+      failures.push("critical-symbol-write");
+      break;
+    }
+    if (owner === "Object" && operation === "defineProperties" &&
+      call.arguments[1] && ts.isObjectLiteralExpression(call.arguments[1]) &&
+      call.arguments[1].properties.some((property) => criticalNames.has(staticPropertyName(ts, property)))) {
+      failures.push("critical-symbol-write");
+      break;
+    }
+  }
+
+  const shadowed = astNodes(ts, targetClass, (node) => ts.isIdentifier(node) &&
+    criticalNames.has(node.text) && isBindingDeclarationIdentifier(ts, node));
+  if (shadowed.length) failures.push("critical-symbol-shadow");
+  return [...new Set(failures)];
+}
+
+function hasModuleBlockAncestor(ts, node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isModuleBlock(current)) return true;
+  }
+  return false;
+}
+
+function ownedLockSymbolFailures(ts, sourceFile, targetFunction) {
+  const failures = [];
+  const identifiers = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) &&
+    node.text === "ownedLocalStoreLockHandle");
+  const declarations = identifiers.filter((identifier) => isBindingDeclarationIdentifier(ts, identifier));
+  const targetIdentifier = targetFunction.name;
+  if (declarations.some((identifier) => identifier !== targetIdentifier && !hasModuleBlockAncestor(ts, identifier))) {
+    failures.push("function-shadow");
+  }
+  if (identifiers.some((identifier) => identifier !== targetIdentifier && isWriteTarget(ts, identifier))) {
+    failures.push("function-write");
+  }
+  return failures;
+}
+
+function localNotificationAstFailures(ts, sourceFile, method) {
+  const failures = [];
+  if ((ts.getModifiers(method) || []).length || method.asteriskToken || method.questionToken ||
+    method.exclamationToken || method.typeParameters?.length || decoratorsOfNode(ts, method).length) {
+    failures.push("method-modifiers");
+  }
   const statements = [...method.body.statements];
   const gates = statements.filter((statement) =>
     ts.isIfStatement(statement) && compactAstText(sourceFile, statement.expression) === "effectKey");
@@ -2485,7 +2648,7 @@ function localNotificationAstFailures(block) {
   const expectedPrelude = [
     "constdata=this.read();",
     'consteffectKey=String(target?.effectKey||"").trim();',
-    'constidentity=this.resolveTargetIdentity(data,target||{},"notificationtarget");',
+    'constidentity=this.resolveTargetIdentity(data,target||{},"notification target");',
     "constnormalizedTarget={...(target||{}),...identity.identityFields,identityBinding:identity.binding,};",
   ];
   if (prelude.length !== expectedPrelude.length ||
@@ -2520,9 +2683,12 @@ function localNotificationAstFailures(block) {
   return failures;
 }
 
-function prismaNotificationDispatchAstFailures(block) {
+function prismaNotificationDispatchAstFailures(ts, sourceFile, method) {
   const failures = [];
-  const { ts, sourceFile, method } = wrappedMethodAst(block, "create");
+  if ((ts.getModifiers(method) || []).length || method.asteriskToken || method.questionToken ||
+    method.exclamationToken || method.typeParameters?.length || decoratorsOfNode(ts, method).length) {
+    failures.push("method-modifiers");
+  }
   const statements = [...method.body.statements];
   if (statements.length !== 4) failures.push("statement-count");
   const [localDispatch, effectKeyDeclaration, effectKeyDispatch, prismaFallback] = statements;
@@ -2561,13 +2727,12 @@ function prismaNotificationDispatchAstFailures(block) {
   return failures;
 }
 
-function localStoreLockAstFailures(block) {
+function localStoreLockAstFailures(ts, sourceFile, statement) {
   const failures = [];
-  const { ts, sourceFile } = parseTypeScriptForAudit(block, "owned-local-store-lock.audit.ts", true);
-  const functions = sourceFile.statements.filter((statement) =>
-    ts.isFunctionDeclaration(statement) && statement.name?.text === "ownedLocalStoreLockHandle");
-  if (functions.length !== 1 || !functions[0].body) return ["function-shape"];
-  const statement = functions[0];
+  if ((ts.getModifiers(statement) || []).length || statement.asteriskToken || statement.typeParameters?.length ||
+    decoratorsOfNode(ts, statement).length) {
+    failures.push("function-modifiers");
+  }
   const bodyStatements = [...statement.body.statements];
   if (bodyStatements.length !== 3 || !ts.isReturnStatement(bodyStatements[2]) ||
     !bodyStatements[2].expression || !ts.isObjectLiteralExpression(bodyStatements[2].expression)) {
@@ -2672,18 +2837,57 @@ function localStoreLockAstFailures(block) {
   return failures;
 }
 
-function criticalSectionAstFailures(sectionId, block) {
-  try {
-    if (sectionId === "local-notification-effect-replay") return localNotificationAstFailures(block);
-    if (sectionId === "notification-effect-dispatch") return prismaNotificationDispatchAstFailures(block);
-    if (sectionId === "local-store-lock-owner-fence") return localStoreLockAstFailures(block);
-    return [];
-  } catch (_error) {
-    return ["parse-failed"];
+const CRITICAL_AST_SECTION_IDS = new Set([
+  "local-notification-effect-replay",
+  "notification-effect-dispatch",
+  "local-store-lock-owner-fence",
+  "local-store-lock-release",
+]);
+
+function criticalSectionAstInspection(sectionId, text) {
+  const { ts, sourceFile } = parseTypeScriptForAudit(text, `${sectionId}.audit.ts`, true);
+  if (sectionId === "local-notification-effect-replay" || sectionId === "notification-effect-dispatch") {
+    const isLocal = sectionId === "local-notification-effect-replay";
+    const className = isLocal ? "LocalStoreService" : "NotificationsService";
+    const methodName = isLocal ? "createNotification" : "create";
+    const classes = astNodes(ts, sourceFile, (node) => ts.isClassDeclaration(node) &&
+      ts.isIdentifier(node.name) && node.name.text === className);
+    if (classes.length !== 1) return { range: null, failures: ["target-class-count"] };
+    const targetClass = classes[0];
+    const methods = targetClass.members.filter((node) => ts.isMethodDeclaration(node) &&
+      ts.isIdentifier(node.name) && node.name.text === methodName && node.body);
+    if (methods.length !== 1) return { range: null, failures: ["method-count"] };
+    const failures = isLocal
+      ? localNotificationAstFailures(ts, sourceFile, methods[0])
+      : prismaNotificationDispatchAstFailures(ts, sourceFile, methods[0]);
+    failures.push(...criticalClassSymbolFailures(
+      ts,
+      sourceFile,
+      targetClass,
+      className,
+      isLocal ? ["createNotification"] : ["create", "createPrismaNotificationOnce"],
+    ));
+    return { range: { start: methods[0].getStart(sourceFile), end: methods[0].end }, failures };
   }
+  const functions = sourceFile.statements.filter((statement) => ts.isFunctionDeclaration(statement) &&
+    statement.name?.text === "ownedLocalStoreLockHandle" && statement.body);
+  if (functions.length !== 1) return { range: null, failures: ["function-count"] };
+  const statement = functions[0];
+  const failures = localStoreLockAstFailures(ts, sourceFile, statement);
+  failures.push(...ownedLockSymbolFailures(ts, sourceFile, statement));
+  if (sectionId === "local-store-lock-release") {
+    const releaseProperties = astNodes(ts, statement, (node) => ts.isPropertyAssignment(node) &&
+      ts.isIdentifier(node.name) && node.name.text === "release");
+    if (releaseProperties.length !== 1) return { range: null, failures: [...failures, "release-property-count"] };
+    return {
+      range: { start: releaseProperties[0].getStart(sourceFile), end: releaseProperties[0].end },
+      failures,
+    };
+  }
+  return { range: { start: statement.getStart(sourceFile), end: statement.end }, failures };
 }
 
-function extractBalancedBlockRange(text, startPattern) {
+function extractLegacyBalancedBlockRange(text, startPattern) {
   const match = startPattern.exec(text);
   if (!match) return null;
   const open = text.indexOf("{", match.index + match[0].length);
@@ -2737,7 +2941,7 @@ function extractBalancedBlockRange(text, startPattern) {
 }
 
 function extractBalancedBlock(text, startPattern) {
-  const range = extractBalancedBlockRange(text, startPattern);
+  const range = extractLegacyBalancedBlockRange(text, startPattern);
   return range ? text.slice(range.start, range.end) : null;
 }
 
@@ -2760,7 +2964,7 @@ function patternFailures(text, required = [], forbidden = []) {
 function ordersControllerAstFailures(text) {
   const failures = [];
   const { ts, sourceFile } = parseTypeScriptForAudit(text, "orders.controller.audit.ts", true);
-  const decoratorsOf = (node) => ts.canHaveDecorators(node) ? (ts.getDecorators(node) || []) : [];
+  const decoratorsOf = (node) => decoratorsOfNode(ts, node);
   const decoratorMatches = (decorator, calleeName, expectedArguments) => {
     if (!ts.isCallExpression(decorator.expression) ||
       !ts.isIdentifier(decorator.expression.expression) ||
@@ -2825,6 +3029,14 @@ function ordersControllerAstFailures(text) {
   const classes = classDeclarations.filter((statement) => statement.name?.text === "OrdersController");
   if (classDeclarations.length !== 1 || classes.length !== 1) return [...failures, "orders-controller-count"];
   const ordersController = classes[0];
+  if (sourceFile.statements.length !== 6 ||
+    sourceFile.statements.slice(0, 5).some((statement) => !ts.isImportDeclaration(statement)) ||
+    sourceFile.statements[5] !== ordersController) failures.push("source-statement-set");
+  const classModifiers = ts.getModifiers(ordersController) || [];
+  if (classModifiers.length !== 1 || classModifiers[0].kind !== ts.SyntaxKind.ExportKeyword ||
+    ordersController.typeParameters?.length || ordersController.heritageClauses?.length) {
+    failures.push("orders-controller-shape");
+  }
   if (!decoratorsMatch(ordersController, [
     ["Controller", [stringArgument("orders")]],
     ["RequireOperatorCapability", [stringArgument("view_console")]],
@@ -2854,6 +3066,11 @@ function ordersControllerAstFailures(text) {
   ];
   const methods = ordersController.members.filter(ts.isMethodDeclaration);
   if (methods.length !== expectedMethods.length) failures.push("orders-method-set");
+  if (ordersController.members.length !== expectedMethods.length + 1 ||
+    !ts.isConstructorDeclaration(ordersController.members[0]) ||
+    ordersController.members.slice(1).some((member) => !ts.isMethodDeclaration(member))) {
+    failures.push("orders-member-set");
+  }
   for (const [index, [expectedName, expectedDecorators]] of expectedMethods.entries()) {
     const method = methods[index];
     if (!method || !ts.isIdentifier(method.name) || method.name.text !== expectedName ||
@@ -2862,11 +3079,13 @@ function ordersControllerAstFailures(text) {
       failures.push(`orders-method-${index + 1}-shape`);
     }
   }
-  for (const member of ordersController.members) {
-    if (!ts.isMethodDeclaration(member) && !ts.isConstructorDeclaration(member) && decoratorsOf(member).length) {
-      failures.push("unsupported-member-decorator");
-    }
-  }
+  failures.push(...criticalClassSymbolFailures(
+    ts,
+    sourceFile,
+    ordersController,
+    "OrdersController",
+    expectedMethods.map(([name]) => name),
+  ));
   const routes = [];
   for (const member of ordersController.members) {
     for (const decorator of decoratorsOf(member).filter(postDecorator)) {
@@ -3025,7 +3244,6 @@ function highRiskOperatorRouteResults(root) {
     ["assets-class", "assets"],
     ["catalog-class", "catalog"],
     ["notifications-class", "notifications"],
-    ["orders-class", "orders"],
     ["quotes-class", "quotes"],
     ["routing-class", "routing"],
     ["conversation-operations-class", "conversationOperations"],
@@ -3048,9 +3266,6 @@ function highRiskOperatorRouteResults(root) {
     ["catalog-import-text", "catalog", /@Post\(["']skus\/import-text["']\)/, "manage_design_executions"],
     ["catalog-import-file", "catalog", /@Post\(["']skus\/import-file["']\)/, "manage_design_executions"],
     ["notifications-demo", "notifications", /@Post\(["']demo["']\)/, "manage_training"],
-    ["orders-from-quote", "orders", /@Post\(["']from-quote\/:quoteId["']\)/, "manage_design_executions"],
-    ["orders-update", "orders", /@Post\(["']:id\/update["']\)/, "manage_design_executions"],
-    ["orders-revise", "orders", /@Post\(["']:id\/revise-selection["']\)/, "manage_design_executions"],
     ["quotes-update", "quotes", /@Post\(["']:id\/update["']\)/, "manage_design_executions"],
     ["quotes-revise", "quotes", /@Post\(["']:id\/revise-selection["']\)/, "manage_design_executions"],
   ]) {
@@ -3059,7 +3274,6 @@ function highRiskOperatorRouteResults(root) {
     ]);
   }
   for (const [label, sourceKey, routePattern] of [
-    ["orders-revise-trusted", "orders", /@Post\(["']:id\/revise-selection["']\)/],
     ["quotes-update-trusted", "quotes", /@Post\(["']:id\/update["']\)/],
     ["quotes-revise-trusted", "quotes", /@Post\(["']:id\/revise-selection["']\)/],
   ]) {
@@ -3068,66 +3282,6 @@ function highRiskOperatorRouteResults(root) {
       /owner:\s*_untrustedOwner/,
       /owner:\s*principal\.id/,
     ]);
-  }
-  const ordersUpdateSection = extractRouteSection(sources.orders, /@Post\(["']:id\/update["']\)/);
-  const expectedOrdersPostRoutes = ["from-quote/:quoteId", ":id/update", ":id/revise-selection"];
-  const actualOrdersPostDecoratorCount = [...sources.orders.matchAll(/@Post\s*\(/g)].length;
-  const actualOrdersPostRoutes = [...sources.orders.matchAll(/@Post\(["']([^"']+)["']\)/g)]
-    .map((match) => match[1]);
-  const ordersPostRouteSetIsExact =
-    actualOrdersPostDecoratorCount === expectedOrdersPostRoutes.length &&
-    actualOrdersPostRoutes.length === expectedOrdersPostRoutes.length &&
-    expectedOrdersPostRoutes.every((route) => actualOrdersPostRoutes.filter((candidate) => candidate === route).length === 1);
-  if (!ordersPostRouteSetIsExact) {
-    const failure = "unexpected-post-route-set";
-    forbidden.push(`orders-post-routes-${failure}`);
-    issues.push({
-      label: "orders-post-routes",
-      path: paths.orders,
-      missing: [],
-      forbidden: [failure],
-      expectedRoutes: expectedOrdersPostRoutes,
-      actualRoutes: actualOrdersPostRoutes,
-      actualDecoratorCount: actualOrdersPostDecoratorCount,
-    });
-  }
-  const explicitOrdersUpdateAllowlist = [
-    /return this\.orders\.update\(id,\s*\{/,
-    /status:\s*payload\?\.status/,
-    /customerNotes:\s*payload\?\.customerNotes/,
-    /expectedWechatAccountId:\s*payload\?\.expectedWechatAccountId/,
-    /expectedConversationId:\s*payload\?\.expectedConversationId/,
-    /expectedCustomerId:\s*payload\?\.expectedCustomerId/,
-  ];
-  check(
-    "orders-update-trusted",
-    sources.orders,
-    /@Post\(["']:id\/update["']\)/,
-    [
-      /@TrustedOperator\(\) principal/,
-      /owner:\s*principal\.id/,
-      ...explicitOrdersUpdateAllowlist,
-    ],
-    [
-      /\.\.\./,
-      /\bnotificationEffectKey\b/,
-      /owner:\s*payload(?:\?|\.)/,
-      /Object\.assign\s*\(\s*principal\b/,
-      /\bprincipal(?:\.id)?\s*=/,
-    ],
-  );
-  const ordersUpdateMethodBlock = extractBalancedBlock(
-    ordersUpdateSection || "",
-    /@TrustedOperator\(\)\s+principal(?:\s*:\s*TrustedOperatorPrincipal)?\s*,?\s*\)\s*/,
-  );
-  const ordersUpdateMethodBody = ordersUpdateMethodBlock
-    ? ordersUpdateMethodBlock.slice(ordersUpdateMethodBlock.indexOf("{"))
-    : null;
-  const ordersUpdateMethodIsExact = /^\{\s*return\s+this\.orders\.update\(\s*id\s*,\s*\{\s*status:\s*payload\?\.status\s*,\s*customerNotes:\s*payload\?\.customerNotes\s*,\s*expectedWechatAccountId:\s*payload\?\.expectedWechatAccountId\s*,\s*expectedConversationId:\s*payload\?\.expectedConversationId\s*,\s*expectedCustomerId:\s*payload\?\.expectedCustomerId\s*,\s*owner:\s*principal\.id\s*,?\s*\}\s*\)\s*;?\s*\}$/.test(ordersUpdateMethodBody || "");
-  if (!ordersUpdateMethodIsExact) {
-    const failure = "unexpected-method-body";
-    forbidden.push(`orders-update-trusted-${failure}`);
-    issues.push({ label: "orders-update-trusted", path: paths.orders, missing: [], forbidden: [failure] });
   }
   check("routing-evaluate", sources.routing, /@Post\(["']evaluate["']\)/, [
     /@RequireOperatorCapability\(["']manage_training["']\)/,
