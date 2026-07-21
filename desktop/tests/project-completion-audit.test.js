@@ -3069,6 +3069,51 @@ Reflect.construct(ShadowedReflectNewRunner, []);`],
         return `${source}\n${statement}\n`;
       },
     })),
+    ...[
+      ["direct object getter typeof read", `let wave69bDirectGetterPrototype: any = {};
+const wave69bDirectGetter = { get target() { wave69bDirectGetterPrototype.create = (() => null) as any; return 1; } };
+wave69bDirectGetterPrototype = NotificationsService.prototype;
+if (typeof wave69bDirectGetter.target === "number") {}`],
+      ["direct object setter assignment", `let wave69bDirectSetterPrototype: any = {};
+const wave69bDirectSetter = { set target(_next: number) { wave69bDirectSetterPrototype.create = (() => null) as any; } };
+wave69bDirectSetterPrototype = NotificationsService.prototype;
+wave69bDirectSetter.target = 1;`],
+      ["object getter compound read-write", `let wave69bCompoundGetterPrototype: any = {};
+const wave69bCompoundGetter = { get target() { wave69bCompoundGetterPrototype.create = (() => null) as any; return 1; }, set target(_next: number) {} };
+wave69bCompoundGetterPrototype = NotificationsService.prototype;
+wave69bCompoundGetter.target += 1;`],
+      ["object setter compound read-write", `let wave69bCompoundSetterPrototype: any = {};
+const wave69bCompoundSetter = { get target() { return 1; }, set target(_next: number) { wave69bCompoundSetterPrototype.create = (() => null) as any; } };
+wave69bCompoundSetterPrototype = NotificationsService.prototype;
+wave69bCompoundSetter.target += 1;`],
+      ["object setter for-of write", `let wave69bForOfSetterPrototype: any = {};
+const wave69bForOfSetter = { set target(_next: number) { wave69bForOfSetterPrototype.create = (() => null) as any; } };
+wave69bForOfSetterPrototype = NotificationsService.prototype;
+for (wave69bForOfSetter.target of [1]) {}`],
+      ["object setter destructuring write", `let wave69bPatternSetterPrototype: any = {};
+const wave69bPatternSetter = { set target(_next: number) { wave69bPatternSetterPrototype.create = (() => null) as any; } };
+wave69bPatternSetterPrototype = NotificationsService.prototype;
+({ value: wave69bPatternSetter.target } = { value: 1 });`],
+      ["object method delegates to getter", `let wave69bGetterDelegatePrototype: any = {};
+const wave69bGetterDelegate = { get target() { wave69bGetterDelegatePrototype.create = (() => null) as any; return 1; }, entry() { return this.target; } };
+wave69bGetterDelegatePrototype = NotificationsService.prototype;
+wave69bGetterDelegate.entry();`],
+      ["object getter delegates to setter", `let wave69bSetterGetterDelegatePrototype: any = {};
+const wave69bSetterGetterDelegate = { set target(_next: number) { wave69bSetterGetterDelegatePrototype.create = (() => null) as any; }, get entry() { this.target = 1; return 1; } };
+wave69bSetterGetterDelegatePrototype = NotificationsService.prototype;
+void wave69bSetterGetterDelegate.entry;`],
+      ["object setter delegates to getter", `let wave69bGetterSetterDelegatePrototype: any = {};
+const wave69bGetterSetterDelegate = { get target() { wave69bGetterSetterDelegatePrototype.create = (() => null) as any; return 1; }, set entry(_next: number) { void this.target; } };
+wave69bGetterSetterDelegatePrototype = NotificationsService.prototype;
+wave69bGetterSetterDelegate.entry = 1;`],
+    ].map(([name, statement]) => ({
+      name: `wave69b ${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
   ];
 
   const wave65MutationCount = 101;
@@ -3076,8 +3121,9 @@ Reflect.construct(ShadowedReflectNewRunner, []);`],
   const wave67MutationCount = 4;
   const wave68MutationCount = 9;
   const wave69AMutationCount = 6;
-  const recentMutationCount =
-    wave65MutationCount + wave66MutationCount + wave67MutationCount + wave68MutationCount + wave69AMutationCount;
+  const wave69bMutationCount = 9;
+  const recentMutationCount = wave65MutationCount + wave66MutationCount + wave67MutationCount +
+    wave68MutationCount + wave69AMutationCount + wave69bMutationCount;
   const orderedMutations = [
     ...mutations.slice(-recentMutationCount),
     ...mutations.slice(0, -recentMutationCount),
@@ -3689,6 +3735,71 @@ class SafeDeadNestedPlanRunner {
   entry() { if (false) this.target(); }
 }
 new SafeDeadNestedPlanRunner().entry();
+let safeWave69bGetterWritePrototype: any = NotificationsService.prototype;
+const safeWave69bGetterWrite = {
+  get target() { safeWave69bGetterWritePrototype.create = () => null; return 1; },
+};
+safeWave69bGetterWrite.target = 1;
+let safeWave69bSetterReadPrototype: any = NotificationsService.prototype;
+const safeWave69bSetterRead = {
+  set target(_next: number) { safeWave69bSetterReadPrototype.create = () => null; },
+};
+if (typeof safeWave69bSetterRead.target === "number") {}
+let safeWave69bSameNameGetterPrototype: any = NotificationsService.prototype;
+const safeWave69bSameNameGetter = {
+  get target() { safeWave69bSameNameGetterPrototype.create = () => null; return 1; },
+  set target(_next: number) {},
+};
+safeWave69bSameNameGetter.target = 1;
+let safeWave69bSameNameSetterPrototype: any = NotificationsService.prototype;
+const safeWave69bSameNameSetter = {
+  get target() { return 1; },
+  set target(_next: number) { safeWave69bSameNameSetterPrototype.create = () => null; },
+};
+void safeWave69bSameNameSetter.target;
+let safeWave69bDeletePrototype: any = NotificationsService.prototype;
+const safeWave69bDelete = {
+  get target() { safeWave69bDeletePrototype.create = () => null; return 1; },
+  set target(_next: number) { safeWave69bDeletePrototype.create = () => null; },
+};
+delete safeWave69bDelete.target;
+let safeWave69bGetterPatternPrototype: any = NotificationsService.prototype;
+const safeWave69bGetterPattern = {
+  get target() { safeWave69bGetterPatternPrototype.create = () => null; return 1; },
+};
+for (safeWave69bGetterPattern.target of [1]) {}
+for (safeWave69bGetterPattern.target in { key: true }) {}
+({ value: safeWave69bGetterPattern.target } = { value: 1 });
+let safeWave69bBeforeGetterPrototype: any = {};
+const safeWave69bBeforeGetter = {
+  get target() { safeWave69bBeforeGetterPrototype.create = () => null; return 1; },
+};
+void safeWave69bBeforeGetter.target;
+safeWave69bBeforeGetterPrototype = NotificationsService.prototype;
+let safeWave69bBeforeSetterPrototype: any = {};
+const safeWave69bBeforeSetter = {
+  set target(_next: number) { safeWave69bBeforeSetterPrototype.create = () => null; },
+};
+safeWave69bBeforeSetter.target = 1;
+safeWave69bBeforeSetterPrototype = NotificationsService.prototype;
+let safeWave69bGetterDelegateWritePrototype: any = NotificationsService.prototype;
+const safeWave69bGetterDelegateWrite = {
+  get target() { safeWave69bGetterDelegateWritePrototype.create = () => null; return 1; },
+  entry() { this.target = 1; },
+};
+safeWave69bGetterDelegateWrite.entry();
+let safeWave69bSetterDelegateReadPrototype: any = NotificationsService.prototype;
+const safeWave69bSetterDelegateRead = {
+  set target(_next: number) { safeWave69bSetterDelegateReadPrototype.create = () => null; },
+  entry() { return this.target; },
+};
+safeWave69bSetterDelegateRead.entry();
+let safeWave69bOuterAccessorMismatchPrototype: any = NotificationsService.prototype;
+const safeWave69bOuterAccessorMismatch = {
+  get target() { safeWave69bOuterAccessorMismatchPrototype.create = () => null; return 1; },
+  set entry(_next: number) { void this.target; },
+};
+void safeWave69bOuterAccessorMismatch.entry;
 const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
 /* Reflect["set"](NotificationsService.prototype, "create", () => null); */
 let safeDiscardedClassValuePrototype: any = NotificationsService.prototype;

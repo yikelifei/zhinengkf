@@ -3458,7 +3458,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         unwrapExpression(ts, candidate.expression) === referenceContainer)
       : null;
     const objectFunctionProperty = (() => {
-      if (ts.isMethodDeclaration(referenceContainer) &&
+      if ((ts.isMethodDeclaration(referenceContainer) || ts.isGetAccessorDeclaration(referenceContainer) ||
+        ts.isSetAccessorDeclaration(referenceContainer)) &&
         ts.isObjectLiteralExpression(referenceContainer.parent)) {
         return referenceContainer;
       }
@@ -3537,6 +3538,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       precise: Boolean(objectFunctionVariable.parent &&
         ts.isVariableDeclarationList(objectFunctionVariable.parent) &&
         (objectFunctionVariable.parent.flags & ts.NodeFlags.Const)),
+      invocation: {
+        read: ts.isGetAccessorDeclaration(objectFunctionProperty),
+        write: ts.isSetAccessorDeclaration(objectFunctionProperty),
+        call: !ts.isGetAccessorDeclaration(objectFunctionProperty) &&
+          !ts.isSetAccessorDeclaration(objectFunctionProperty),
+      },
     } : null;
     const callableExpressionIsDiscarded = (expression) => {
       let identity = expression;
@@ -3665,7 +3672,24 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
       return uses;
     };
-    const objectFunctionDelegateNames = new Set();
+    const invocationForObjectProperty = (property) => ({
+      read: ts.isGetAccessorDeclaration(property),
+      write: ts.isSetAccessorDeclaration(property),
+      call: !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property),
+    });
+    const mergeObjectInvocation = (current, next) => ({
+      read: Boolean(current?.read || next.read),
+      write: Boolean(current?.write || next.write),
+      call: Boolean(current?.call || next.call),
+    });
+    const objectElementTrigger = (member, invocation, evaluationSeenBindings = seenBindings) => {
+      const access = memberAccessTrigger(member);
+      if ((invocation.read && access.read) || (invocation.write && access.write)) return access.node;
+      return invocation.call ? callableMemberUse(member, evaluationSeenBindings).trigger : null;
+    };
+    const objectElementEscapes = (member, invocation, evaluationSeenBindings = seenBindings) =>
+      Boolean(invocation.call && callableMemberUse(member, evaluationSeenBindings).escaped);
+    const objectFunctionDelegateInvocations = new Map();
     const objectFunctionEscapedDelegateNames = new Set();
     if (objectFunctionPlan && objectFunctionPlan.propertyName !== null && objectFunctionLiteral) {
       const lexicalThisContainer = (node) => {
@@ -3676,9 +3700,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       };
       for (const property of objectFunctionLiteral.properties) {
         if (property === objectFunctionProperty) continue;
-        const callable = ts.isMethodDeclaration(property)
+        const callable = ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)
           ? property
-          : ts.isPropertyAssignment(property) && ts.isFunctionExpression(unwrapExpression(ts, property.initializer))
+          : ts.isPropertyAssignment(property) &&
+              (ts.isFunctionExpression(unwrapExpression(ts, property.initializer)) ||
+                ts.isArrowFunction(unwrapExpression(ts, property.initializer)))
             ? unwrapExpression(ts, property.initializer)
             : null;
         if (!callable) continue;
@@ -3690,9 +3717,11 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             lexicalThisContainer(candidate.expression) !== callable ||
             staticPropertyName(ts, candidate) !== objectFunctionPlan.propertyName ||
             eventExecutionReachability({ node: candidate }, candidate, seenBindings) === "never") return false;
-          const use = callableMemberUse(candidate, seenBindings);
-          if (use.trigger) delegatesToTarget = true;
-          if (use.escaped) escapesTarget = true;
+          if (objectElementTrigger(candidate, objectFunctionPlan.invocation, seenBindings)) {
+            delegatesToTarget = true;
+          } else if (objectElementEscapes(candidate, objectFunctionPlan.invocation, seenBindings)) {
+            escapesTarget = true;
+          }
           return false;
         });
         for (const use of destructuredThisCallableUses(
@@ -3706,7 +3735,11 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         if (!delegatesToTarget && !escapesTarget) continue;
         const delegateName = exactObjectPropertyName(property);
         if (delegateName !== null) {
-          if (delegatesToTarget) objectFunctionDelegateNames.add(delegateName);
+          if (delegatesToTarget) {
+            objectFunctionDelegateInvocations.set(delegateName, mergeObjectInvocation(
+              objectFunctionDelegateInvocations.get(delegateName),
+              invocationForObjectProperty(property)));
+          }
           if (escapesTarget) objectFunctionEscapedDelegateNames.add(delegateName);
         }
       }
@@ -3724,7 +3757,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return isWriteTarget(ts, identity);
     };
     const exactClassMemberName = exactCallableMemberName;
-    const memberAccessTrigger = (member) => {
+    function memberAccessTrigger(member) {
       let target = member;
       while (target.parent && (ts.isParenthesizedExpression(target.parent) ||
         ts.isAsExpression(target.parent) || ts.isTypeAssertionExpression(target.parent) ||
@@ -3773,7 +3806,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
       if (isWriteTarget(ts, member)) return { read: false, write: true, node: target };
       return { read: true, write: false, node: member };
-    };
+    }
     const classMemberCallAnalysis = callableMemberUse;
     const callForClassMember = (member, evaluationSeenBindings = seenBindings) =>
       classMemberCallAnalysis(member, evaluationSeenBindings).trigger;
@@ -4067,10 +4100,15 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           const member = memberAccessForReference(reference);
           const memberName = exactMemberAccessName(member);
           if (memberName !== null && memberName !== objectFunctionPlan.propertyName) {
-            if (objectFunctionDelegateNames.has(memberName) ||
-              objectFunctionEscapedDelegateNames.has(memberName)) {
-              const siblingUse = callableMemberUse(member, seenBindings);
-              if (siblingUse.trigger || siblingUse.escaped) escaped = true;
+            const delegateInvocation = objectFunctionDelegateInvocations.get(memberName);
+            if (delegateInvocation) {
+              const trigger = objectElementTrigger(member, delegateInvocation, seenBindings);
+              if (trigger) {
+                if (objectFunctionEscapedDelegateNames.has(memberName)) escaped = true;
+                else registerDirectCall(trigger);
+              } else if (objectElementEscapes(member, delegateInvocation, seenBindings)) {
+                escaped = true;
+              }
             }
             continue;
           }
@@ -4078,9 +4116,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             escaped = true;
             continue;
           }
-          const targetUse = callableMemberUse(member, seenBindings);
-          if (targetUse.trigger) registerDirectCall(targetUse.trigger);
-          else if (targetUse.escaped) escaped = true;
+          const trigger = objectElementTrigger(member, objectFunctionPlan.invocation, seenBindings);
+          if (trigger) registerDirectCall(trigger);
+          else if (objectElementEscapes(member, objectFunctionPlan.invocation, seenBindings)) escaped = true;
         }
       } else if (classFunctionPlan) {
         const memberForOwner = (ownerExpression) => {
