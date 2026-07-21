@@ -2964,7 +2964,23 @@ CompoundSetterRunner.value += 1;`],
 class NestedPlanRunner { target() { nestedPlanPrototype.create = (() => null) as any; } entry() { if (nestedPlanPrototype) this.target(); } }
 nestedPlanPrototype = NotificationsService.prototype;
 new NestedPlanRunner().entry();`],
-    ].map(([name, statement]) => ({
+      ["instance bind sibling delegate", `let instanceBindDelegatePrototype: any = {};
+class InstanceBindDelegateRunner { target() { instanceBindDelegatePrototype.create = (() => null) as any; } entry() { this.target.bind(this)(); } }
+const instanceBindDelegateRunner = new InstanceBindDelegateRunner();
+instanceBindDelegatePrototype = NotificationsService.prototype;
+instanceBindDelegateRunner.entry();`],
+      ["static bind apply delegate through transparent wrappers", `let staticBindDelegatePrototype: any = {};
+class StaticBindDelegateRunner { static target() { staticBindDelegatePrototype.create = (() => null) as any; } static entry() { ((this.target.bind(this)) as any).apply(undefined, []); } }
+staticBindDelegatePrototype = NotificationsService.prototype;
+StaticBindDelegateRunner.entry();`],
+      ["two hop bind sibling delegate", `let twoHopBindDelegatePrototype: any = {};
+class TwoHopBindDelegateRunner { target() { twoHopBindDelegatePrototype.create = (() => null) as any; } middle() { this.target.bind(this)(); } entry() { this.middle.bind(this).call(undefined); } }
+twoHopBindDelegatePrototype = NotificationsService.prototype;
+new TwoHopBindDelegateRunner().entry();`],
+      ["stored bind alias remains conservative", `let aliasedBindDelegatePrototype: any = {};
+class AliasedBindDelegateRunner { target() { aliasedBindDelegatePrototype.create = (() => null) as any; } entry() { const boundTarget = this.target.bind(this); boundTarget(); } }
+aliasedBindDelegatePrototype = NotificationsService.prototype;
+new AliasedBindDelegateRunner().entry();`],    ].map(([name, statement]) => ({
       name: `${name} observes critical runtime state`,
       expectedFailure: "critical-symbol-write",
       file: notificationsFile,
@@ -2976,9 +2992,11 @@ new NestedPlanRunner().entry();`],
 
   const wave65MutationCount = 101;
   const wave66MutationCount = 14;
+  const wave67MutationCount = 4;
+  const recentMutationCount = wave65MutationCount + wave66MutationCount + wave67MutationCount;
   const orderedMutations = [
-    ...mutations.slice(-(wave65MutationCount + wave66MutationCount)),
-    ...mutations.slice(0, -(wave65MutationCount + wave66MutationCount)),
+    ...mutations.slice(-recentMutationCount),
+    ...mutations.slice(0, -recentMutationCount),
   ];
   for (const [mutationIndex, mutation] of orderedMutations.entries()) {
     const root = createRealInboundFixture();
@@ -3418,6 +3436,25 @@ class SafeTwoHopDelegateRunner {
 }
 new SafeTwoHopDelegateRunner().entry();
 safeTwoHopDelegatePrototype = NotificationsService.prototype;
+let safeBindBeforePrototype: any = {};
+class SafeBindBeforeRunner {
+  target() { safeBindBeforePrototype.create = () => null; }
+  entry() { this.target.bind(this)(); }
+}
+new SafeBindBeforeRunner().entry();
+safeBindBeforePrototype = NotificationsService.prototype;
+let safeDiscardedBindPrototype: any = NotificationsService.prototype;
+class SafeDiscardedBindRunner {
+  target() { safeDiscardedBindPrototype.create = () => null; }
+  entry() { void this.target.bind(this); }
+}
+new SafeDiscardedBindRunner().entry();
+let safeDeadBindPrototype: any = NotificationsService.prototype;
+class SafeDeadBindRunner {
+  target() { safeDeadBindPrototype.create = () => null; }
+  entry() { if (false) this.target.bind(this)(); }
+}
+new SafeDeadBindRunner().entry();
 let safeDeadDelegatePrototype: any = NotificationsService.prototype;
 class SafeDeadDelegateRunner {
   target() { safeDeadDelegatePrototype.create = () => null; }

@@ -3634,20 +3634,53 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       if (isWriteTarget(ts, member)) return { read: false, write: true, node: target };
       return { read: true, write: false, node: member };
     };
-    const callForClassMember = (member, evaluationSeenBindings = seenBindings) => {
+    const classMemberCallAnalysis = (member, evaluationSeenBindings = seenBindings) => {
       const direct = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
         unwrapExpression(ts, candidate.expression) === member);
-      if (direct) return direct;
+      if (direct) return { trigger: direct, escaped: false };
       let identity = member;
       while (identity?.parent && unwrapExpression(ts, identity.parent) === member) identity = identity.parent;
       const wrapperMember = identity?.parent;
       if (!wrapperMember || (!ts.isPropertyAccessExpression(wrapperMember) &&
         !ts.isElementAccessExpression(wrapperMember)) ||
-        unwrapExpression(ts, wrapperMember.expression) !== identity ||
-        !["call", "apply"].includes(exactClassMemberName(wrapperMember, evaluationSeenBindings))) return null;
-      return sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+        unwrapExpression(ts, wrapperMember.expression) !== identity) {
+        return { trigger: null, escaped: false };
+      }
+      const wrapperName = exactClassMemberName(wrapperMember, evaluationSeenBindings);
+      const wrapperCall = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
         unwrapExpression(ts, candidate.expression) === wrapperMember) || null;
+      if (["call", "apply"].includes(wrapperName)) {
+        return { trigger: wrapperCall, escaped: false };
+      }
+      if (wrapperName !== "bind" || !wrapperCall) return { trigger: null, escaped: false };
+      const boundInvocation = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+        unwrapExpression(ts, candidate.expression) === wrapperCall) || null;
+      if (boundInvocation) return { trigger: boundInvocation, escaped: false };
+      let boundIdentity = wrapperCall;
+      while (boundIdentity.parent && unwrapExpression(ts, boundIdentity.parent) === wrapperCall) {
+        boundIdentity = boundIdentity.parent;
+      }
+      const invocationMember = boundIdentity.parent;
+      if (invocationMember && (ts.isPropertyAccessExpression(invocationMember) ||
+        ts.isElementAccessExpression(invocationMember)) &&
+        unwrapExpression(ts, invocationMember.expression) === wrapperCall &&
+        ["call", "apply"].includes(exactClassMemberName(invocationMember, evaluationSeenBindings))) {
+        const wrappedInvocation = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+          unwrapExpression(ts, candidate.expression) === invocationMember) || null;
+        if (wrappedInvocation) return { trigger: wrappedInvocation, escaped: false };
+      }
+      let discardedIdentity = boundIdentity;
+      if (discardedIdentity.parent && ts.isVoidExpression(discardedIdentity.parent) &&
+        discardedIdentity.parent.expression === discardedIdentity) discardedIdentity = discardedIdentity.parent;
+      return {
+        trigger: null,
+        escaped: !discardedIdentity.parent || !ts.isExpressionStatement(discardedIdentity.parent),
+      };
     };
+    const callForClassMember = (member, evaluationSeenBindings = seenBindings) =>
+      classMemberCallAnalysis(member, evaluationSeenBindings).trigger;
+    const classMemberCallEscapes = (member, evaluationSeenBindings = seenBindings) =>
+      classMemberCallAnalysis(member, evaluationSeenBindings).escaped;
     const classElementTrigger = (member, invocation, evaluationSeenBindings = seenBindings) => {
       const access = memberAccessTrigger(member);
       if ((invocation.read && access.read) || (invocation.write && access.write)) return access.node;
@@ -3800,7 +3833,12 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                 return false;
               }
               const invocation = reachableInvocations.get(delegatedName);
-              return Boolean(invocation && classElementTrigger(candidate, invocation, planSeenBindings));
+              if (!invocation) return false;
+              const trigger = classElementTrigger(candidate, invocation, planSeenBindings);
+              if (!trigger && invocation.call && classMemberCallEscapes(candidate, planSeenBindings)) {
+                hasDynamicDelegate = true;
+              }
+              return Boolean(trigger);
             }).length > 0;
             if (hasDynamicDelegate) {
               if (ts.isConstructorDeclaration(member)) constructorDynamicDelegate = true;
