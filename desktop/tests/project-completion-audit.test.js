@@ -2644,6 +2644,130 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "object property arrow observes an outer Notifications binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet objectArrowNotificationPrototype: any = {};\nconst objectArrowNotificationMutation = {\n  run: () => { objectArrowNotificationPrototype.create = (() => null) as any; },\n};\nobjectArrowNotificationPrototype = NotificationsService.prototype;\nobjectArrowNotificationMutation.run();\n`;
+      },
+    },
+    {
+      name: "object property function expression supports exact string element calls",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet objectExpressionLocalPrototype: any = {};\nconst objectExpressionLocalMutation = {\n  run: function () { objectExpressionLocalPrototype.createNotification = (() => null) as any; },\n};\nobjectExpressionLocalPrototype = LocalStoreService.prototype;\nobjectExpressionLocalMutation["run"]();\n`;
+      },
+    },
+    {
+      name: "object method shorthand observes an outer Notifications binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet objectMethodNotificationPrototype: any = {};\nconst objectMethodNotificationMutation = {\n  run() { objectMethodNotificationPrototype.create = (() => null) as any; },\n};\nobjectMethodNotificationPrototype = NotificationsService.prototype;\nobjectMethodNotificationMutation.run();\n`;
+      },
+    },
+    {
+      name: "static const property keys connect object method definitions and calls",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst objectComputedLocalKey = "run";\nlet objectComputedLocalPrototype: any = {};\nconst objectComputedLocalMutation = {\n  [objectComputedLocalKey]() { objectComputedLocalPrototype.createNotification = (() => null) as any; },\n};\nobjectComputedLocalPrototype = LocalStoreService.prototype;\nobjectComputedLocalMutation[objectComputedLocalKey]();\n`;
+      },
+    },
+    {
+      name: "multiple object method calls union outer Notifications values from every call site",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet repeatedObjectNotificationPrototype: any = {};\nconst repeatedObjectNotificationMutation = {\n  run() { repeatedObjectNotificationPrototype.create = (() => null) as any; },\n};\nrepeatedObjectNotificationMutation.run();\nrepeatedObjectNotificationPrototype = NotificationsService.prototype;\nrepeatedObjectNotificationMutation.run();\n`;
+      },
+    },
+    {
+      name: "live object escape conservatively observes reachable Notifications assignments",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet escapedObjectNotificationPrototype: any = {};\nconst escapedObjectNotificationMutation = {\n  run() { escapedObjectNotificationPrototype.create = (() => null) as any; },\n};\nescapedObjectNotificationPrototype = NotificationsService.prototype;\nconst retainedNotificationObject = escapedObjectNotificationMutation;\nvoid retainedNotificationObject;\n`;
+      },
+    },
+    {
+      name: "live object method escape conservatively observes reachable LocalStore assignments",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet escapedObjectLocalPrototype: any = {};\nconst escapedObjectLocalMutation = {\n  run() { escapedObjectLocalPrototype.createNotification = (() => null) as any; },\n};\nescapedObjectLocalPrototype = LocalStoreService.prototype;\nconst retainedLocalObjectMethod = escapedObjectLocalMutation.run;\nvoid retainedLocalObjectMethod;\n`;
+      },
+    },
+    {
+      name: "dynamic object method access fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedObjectNotificationKey: string;\nlet dynamicObjectNotificationPrototype: any = NotificationsService.prototype;\nconst dynamicObjectNotificationMutation = {\n  run() { dynamicObjectNotificationPrototype.create = (() => null) as any; },\n};\ndynamicObjectNotificationMutation[unresolvedObjectNotificationKey]();\n`;
+      },
+    },
+    {
+      name: "object alias calls fail closed without complete object flow",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet aliasedObjectLocalPrototype: any = LocalStoreService.prototype;\nconst aliasedObjectLocalMutation = {\n  run() { aliasedObjectLocalPrototype.createNotification = (() => null) as any; },\n};\nconst localObjectAlias = aliasedObjectLocalMutation;\nlocalObjectAlias.run();\n`;
+      },
+    },
+    {
+      name: "async object property arrow conservatively includes assignments after invocation",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet asyncObjectNotificationPrototype: any = {};\nconst asyncObjectNotificationMutation = {\n  run: async () => { await Promise.resolve(); asyncObjectNotificationPrototype.create = (() => null) as any; },\n};\nvoid asyncObjectNotificationMutation.run();\nasyncObjectNotificationPrototype = NotificationsService.prototype;\n`;
+      },
+    },
+    {
+      name: "generator object method conservatively includes assignments after invocation",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet generatorObjectLocalPrototype: any = {};\nconst generatorObjectLocalMutation = {\n  *run() { yield undefined; generatorObjectLocalPrototype.createNotification = (() => null) as any; },\n};\nconst generatorObjectLocalIterator = generatorObjectLocalMutation.run();\ngeneratorObjectLocalPrototype = LocalStoreService.prototype;\ngeneratorObjectLocalIterator.next();\n`;
+      },
+    },
+    {
+      name: "object method local rebind before a Notifications write overrides call-site value",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet locallyReboundObjectNotificationPrototype: any = {};\nconst locallyReboundObjectNotificationMutation = {\n  run() {\n    locallyReboundObjectNotificationPrototype = NotificationsService.prototype;\n    locallyReboundObjectNotificationPrototype.create = (() => null) as any;\n  },\n};\nlocallyReboundObjectNotificationMutation.run();\n`;
+      },
+    },
+    {
+      name: "live sibling method delegate reaches a Notifications critical method",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet delegatedObjectNotificationPrototype: any = {};\nconst delegatedObjectNotificationMutation = {\n  run() { delegatedObjectNotificationPrototype.create = (() => null) as any; },\n  other() { this.run(); },\n};\ndelegatedObjectNotificationPrototype = NotificationsService.prototype;\ndelegatedObjectNotificationMutation.other();\n`;
+      },
+    },
+    {
+      name: "string element sibling delegate reaches a LocalStore critical method",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet delegatedObjectLocalPrototype: any = {};\nconst delegatedObjectLocalMutation = {\n  run: function () { delegatedObjectLocalPrototype.createNotification = (() => null) as any; },\n  other: function () { this["run"](); },\n};\ndelegatedObjectLocalPrototype = LocalStoreService.prototype;\ndelegatedObjectLocalMutation.other();\n`;
+      },
+    },
+    ...[
+      ["freeze", "Object.freeze"],
+      ["seal", "Object.seal"],
+      ["preventExtensions", "Object.preventExtensions"],
+    ].map(([name, wrapper]) => ({
+      name: `${name} transparent object wrapper preserves Notifications method identity`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet wrappedObjectNotificationPrototype: any = {};\nconst wrappedObjectNotificationMutation = ${wrapper}(({\n  run() { wrappedObjectNotificationPrototype.create = (() => null) as any; },\n} as const));\nwrappedObjectNotificationPrototype = NotificationsService.prototype;\nwrappedObjectNotificationMutation.run();\n`;
+      },
+    })),
+    {
       name: "unknown spread occupying Object.assign target position fails closed",
       expectedFailure: "critical-symbol-write",
       file: notificationsFile,
@@ -2669,10 +2793,10 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     },
   ];
 
-  const wave61MutationCount = 47;
+  const wave62MutationCount = 64;
   const orderedMutations = [
-    ...mutations.slice(-wave61MutationCount),
-    ...mutations.slice(0, -wave61MutationCount),
+    ...mutations.slice(-wave62MutationCount),
+    ...mutations.slice(0, -wave62MutationCount),
   ];
   for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
@@ -2953,6 +3077,111 @@ let safeEscapedCapturedNotificationArrowPrototype: any = {};
 if (false) safeEscapedCapturedNotificationArrowPrototype = NotificationsService.prototype;
 const retainedSafeEscapedCapturedNotificationArrowMutation = safeEscapedCapturedNotificationArrowMutation;
 void retainedSafeEscapedCapturedNotificationArrowMutation;
+let safeObjectArrowPrototype: any = {};
+const safeObjectArrowMutation = {
+  run: () => {
+    safeObjectArrowPrototype.create = () => null;
+  },
+};
+safeObjectArrowMutation.run();
+safeObjectArrowPrototype = NotificationsService.prototype;
+const safeObjectExpressionKey = "run";
+let safeObjectExpressionPrototype: any = {};
+const safeObjectExpressionMutation = {
+  [safeObjectExpressionKey]: function () {
+    safeObjectExpressionPrototype.create = () => null;
+  },
+};
+safeObjectExpressionMutation[safeObjectExpressionKey]();
+safeObjectExpressionPrototype = NotificationsService.prototype;
+let safeObjectMethodPrototype: any = {};
+const safeObjectMethodMutation = {
+  run() {
+    safeObjectMethodPrototype.create = () => null;
+  },
+};
+safeObjectMethodMutation["run"]();
+safeObjectMethodPrototype = NotificationsService.prototype;
+let safeDeadObjectMethodPrototype: any = NotificationsService.prototype;
+const safeDeadObjectMethodMutation = {
+  run() {
+    safeDeadObjectMethodPrototype.create = () => null;
+  },
+};
+if (false) safeDeadObjectMethodMutation.run();
+let safeInertObjectMethodPrototype: any = NotificationsService.prototype;
+const safeInertObjectMethodMutation = {
+  run() {
+    safeInertObjectMethodPrototype.create = () => null;
+  },
+};
+let safeDeadEscapedObjectMethodPrototype: any = NotificationsService.prototype;
+const safeDeadEscapedObjectMethodMutation = {
+  run() {
+    safeDeadEscapedObjectMethodPrototype.create = () => null;
+  },
+};
+if (false) void safeDeadEscapedObjectMethodMutation.run;
+let safeOtherObjectMemberPrototype: any = {};
+const safeOtherObjectMemberMutation = {
+  run() {
+    safeOtherObjectMemberPrototype.create = () => null;
+  },
+  other() {},
+  label: 1,
+};
+safeOtherObjectMemberMutation.other();
+void safeOtherObjectMemberMutation.label;
+safeOtherObjectMemberPrototype = NotificationsService.prototype;
+let safeLocallyReboundObjectMethodPrototype: any = NotificationsService.prototype;
+const safeLocallyReboundObjectMethodMutation = {
+  run() {
+    safeLocallyReboundObjectMethodPrototype = {};
+    safeLocallyReboundObjectMethodPrototype.create = () => null;
+  },
+};
+safeLocallyReboundObjectMethodMutation.run();
+let safeInertDelegateObjectPrototype: any = NotificationsService.prototype;
+const safeInertDelegateObjectMutation = {
+  run() {
+    safeInertDelegateObjectPrototype.create = () => null;
+  },
+  other() {
+    this.run();
+  },
+};
+let safeDeadDelegateObjectPrototype: any = NotificationsService.prototype;
+const safeDeadDelegateObjectMutation = {
+  run() {
+    safeDeadDelegateObjectPrototype.create = () => null;
+  },
+  other() {
+    this["run"]();
+  },
+};
+if (false) safeDeadDelegateObjectMutation.other();
+let safeFrozenObjectCallPrototype: any = {};
+const safeFrozenObjectCallMutation = Object.freeze(({
+  run() {
+    safeFrozenObjectCallPrototype.create = () => null;
+  },
+} as const));
+safeFrozenObjectCallMutation.run();
+safeFrozenObjectCallPrototype = NotificationsService.prototype;
+let safeInertFrozenObjectPrototype: any = NotificationsService.prototype;
+const safeInertFrozenObjectMutation = Object.freeze({
+  run() {
+    safeInertFrozenObjectPrototype.create = () => null;
+  },
+});
+let safeAssertedObjectPrototype: any = {};
+const safeAssertedObjectMutation = ({
+  run() {
+    safeAssertedObjectPrototype.create = () => null;
+  },
+} as const);
+safeAssertedObjectMutation.run();
+safeAssertedObjectPrototype = NotificationsService.prototype;
 Object.assign({}, ...[]);
 declare const unresolvedSafeAssignSources: object[];
 const unrelatedSafeAssignTarget = {};
