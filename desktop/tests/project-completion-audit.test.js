@@ -1942,6 +1942,34 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "const-computed direct prototype assignment cannot replace a Notifications critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst directNotificationPart = "cre";\nconst directNotificationKey = directNotificationPart + "ate";\nNotificationsService.prototype[directNotificationKey] = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "const-computed prototype alias update cannot mutate a LocalStore critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst directLocalPart = "Notification";\nconst directLocalKey = \`create\${directLocalPart}\`;\nconst directLocalPrototype = LocalStoreService.prototype;\ndirectLocalPrototype[directLocalKey]++;\n`;
+      },
+    },
+    {
+      name: "unknown direct prototype delete is conservatively rejected",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare function unresolvedDirectNotificationMethod(): string;\ndelete NotificationsService.prototype[unresolvedDirectNotificationMethod()];\n`;
+      },
+    },
+    {
+      name: "unknown prototype alias assignment is conservatively rejected",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare function unresolvedDirectLocalMethod(): string;\nconst unknownLocalPrototype = LocalStoreService.prototype;\nunknownLocalPrototype[unresolvedDirectLocalMethod()] = (() => null) as any;\n`;
+      },
+    },
+    {
       name: "computed defineProperty cannot replace a Notifications critical method",
       file: notificationsFile,
       mutate(source) {
@@ -2012,6 +2040,20 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "object declaration default cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { prototype: defaultLocalPrototype = {} } = LocalStoreService;\ndefaultLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "object assignment default cannot hide a Notifications prototype write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet defaultAssignedNotificationPrototype: any;\n({ prototype: defaultAssignedNotificationPrototype = {} } = NotificationsService);\ndefaultAssignedNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
       name: "array declaration destructuring cannot hide a Notifications prototype write",
       file: notificationsFile,
       mutate(source) {
@@ -2026,6 +2068,20 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "array declaration default cannot hide a Notifications prototype write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst [defaultArrayNotificationPrototype = {}] = [NotificationsService.prototype];\ndefaultArrayNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "array assignment default cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet defaultArrayLocalPrototype: any;\n[defaultArrayLocalPrototype = {}] = [LocalStoreService.prototype];\ndefaultArrayLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
       name: "for-of const binding cannot hide a Notifications prototype write",
       file: notificationsFile,
       mutate(source) {
@@ -2037,6 +2093,20 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       file: localStoreFile,
       mutate(source) {
         return `${source}\nlet loopLocalPrototype: any;\nfor (loopLocalPrototype of [LocalStoreService.prototype]) {\n  loopLocalPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "for-of object default cannot hide a Notifications prototype write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfor (const { prototype: loopDefaultNotificationPrototype = {} } of [NotificationsService]) {\n  loopDefaultNotificationPrototype.create = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "for-of array default cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nfor (const [loopDefaultLocalPrototype = {}] of [[LocalStoreService.prototype]]) {\n  loopDefaultLocalPrototype.createNotification = (() => null) as any;\n}\n`;
       },
     },
   ];
@@ -2111,6 +2181,9 @@ Object.defineProperty(NotificationsService.prototype, safeNotificationProperty, 
 Object.defineProperties(NotificationsService.prototype, {
   [safeNotificationDescriptorProperty]: { value: () => null },
 });
+const safeDirectNotificationProperty = "safe" + "Direct";
+NotificationsService.prototype[safeDirectNotificationProperty] = () => null;
+delete NotificationsService.prototype["safeDeletedProperty"];
 const scopedNotificationProperty = "create";
 function safeStaticPropertyScope() {
   const scopedNotificationProperty = "safeScopedCreate";
@@ -2118,11 +2191,13 @@ function safeStaticPropertyScope() {
 }
 function safePatternShadows(NotificationsService: any) {
   let assignedPrototype: any;
-  ({ prototype: assignedPrototype } = NotificationsService);
+  ({ prototype: assignedPrototype = {} } = NotificationsService);
   assignedPrototype.create = () => null;
-  const [arrayPrototype] = [NotificationsService.prototype];
+  const [arrayPrototype = {}] = [NotificationsService.prototype];
   arrayPrototype.create = () => null;
-  for (const loopPrototype of [NotificationsService.prototype]) loopPrototype.create = () => null;
+  for (const [loopPrototype = {}] of [[NotificationsService.prototype]]) loopPrototype.create = () => null;
+  const shadowComputedKey = "cre" + "ate";
+  NotificationsService.prototype[shadowComputedKey] = () => null;
 }
 const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
 /* Reflect["set"](NotificationsService.prototype, "create", () => null); */
