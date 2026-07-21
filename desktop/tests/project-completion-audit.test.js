@@ -1032,6 +1032,14 @@ export class TrainingController {
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
   appendInboundAuditSemanticFixture(root);
+  const repositoryRoot = path.resolve(__dirname, "..", "..");
+  for (const relative of [
+    "desktop/apps/api/src/local-store/local-store.service.ts",
+    "desktop/apps/api/src/notifications/notifications.service.ts",
+    "desktop/apps/api/src/shared/notification-idempotency.ts",
+  ]) {
+    fs.copyFileSync(path.join(repositoryRoot, ...relative.split("/")), path.join(root, ...relative.split("/")));
+  }
   return root;
 }
 
@@ -1430,6 +1438,134 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       to: "if (candidateId && !designJob)",
     },
     {
+      name: "local fs default import cannot become type-only",
+      file: localStoreFile,
+      from: 'import fs from "node:fs";',
+      to: 'import type fs from "node:fs";',
+    },
+    {
+      name: "local replay helper import specifier cannot become type-only",
+      file: localStoreFile,
+      from: "import { assertNotificationEffectReplay }",
+      to: "import { type assertNotificationEffectReplay }",
+    },
+    {
+      name: "notification replay helper import clause cannot become type-only",
+      file: notificationsFile,
+      from: 'import { assertNotificationEffectReplay } from "../shared/notification-idempotency";',
+      to: 'import type { assertNotificationEffectReplay } from "../shared/notification-idempotency";',
+    },
+    {
+      name: "runtime fs binding cannot be overwritten",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nfs.existsSync = () => true;\n`;
+      },
+    },
+    ...[
+      ["async", "async createNotification(level:"],
+      ["static", "static createNotification(level:"],
+      ["generator", "*createNotification(level:"],
+      ["decorated", "@Injectable()\n  createNotification(level:"],
+    ].map(([name, replacement]) => ({
+      name: `local notification method cannot become ${name}`,
+      file: localStoreFile,
+      from: "createNotification(level:",
+      to: replacement,
+    })),
+    {
+      name: "Prisma notification method cannot become static",
+      file: notificationsFile,
+      from: "create(level:",
+      to: "static create(level:",
+    },
+    ...[
+      ["async", "async function ownedLocalStoreLockHandle("],
+      ["exported", "export function ownedLocalStoreLockHandle("],
+      ["generator", "function* ownedLocalStoreLockHandle("],
+    ].map(([name, replacement]) => ({
+      name: `owned local-store lock function cannot become ${name}`,
+      file: localStoreFile,
+      from: "function ownedLocalStoreLockHandle(",
+      to: replacement,
+    })),
+    {
+      name: "same-name method in another class cannot hide a corrupted LocalStore target",
+      file: localStoreFile,
+      mutate(source) {
+        return `class NotificationDecoy { createNotification() {} }\n${source.replace(
+          "  createNotification(level:",
+          "  async createNotification(level:",
+        )}`;
+      },
+    },
+    {
+      name: "same-name namespace function cannot hide a corrupted owned lock target",
+      file: localStoreFile,
+      mutate(source) {
+        return `namespace LockDecoy { export function ownedLocalStoreLockHandle() {} }\n${source.replace(
+          "function ownedLocalStoreLockHandle(",
+          "function* ownedLocalStoreLockHandle(",
+        )}`;
+      },
+    },
+    {
+      name: "same-name method in another class cannot hide a corrupted Notifications target",
+      file: notificationsFile,
+      mutate(source) {
+        return `class PrismaNotificationDecoy { create() {} }\n${source.replace(
+          "  create(level:",
+          "  static create(level:",
+        )}`;
+      },
+    },
+    {
+      name: "LocalStore constructor cannot replace createNotification",
+      file: localStoreFile,
+      from: "export class LocalStoreService {",
+      to: "export class LocalStoreService {\n  constructor() { this.createNotification = (() => null) as any; }",
+    },
+    {
+      name: "Notifications constructor cannot replace Prisma replay helper",
+      file: notificationsFile,
+      from: "  ) {}",
+      to: "  ) { this.createPrismaNotificationOnce = (() => null) as any; }",
+    },
+    {
+      name: "LocalStore prototype cannot replace createNotification",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nLocalStoreService.prototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Notifications prototype cannot replace create",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nNotificationsService.prototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Object.assign cannot replace LocalStore critical methods",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nObject.assign(LocalStoreService.prototype, { createNotification: () => null });\n`;
+      },
+    },
+    {
+      name: "defineProperty cannot replace the Prisma replay helper",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nObject.defineProperty(NotificationsService.prototype, "createPrismaNotificationOnce", { value: () => null });\n`;
+      },
+    },
+    {
+      name: "lock acquisition cannot shadow the owned handle",
+      file: localStoreFile,
+      from: "export function acquireLocalStoreLock(filePath: string) {",
+      to: "export function acquireLocalStoreLock(filePath: string) {\n  const ownedLocalStoreLockHandle = () => unsafeHandle;",
+    },
+    {
       name: "local notification effect replay gate disabled",
       file: localStoreFile,
       anchor: "createNotification(level:",
@@ -1756,6 +1892,31 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     assert.equal(contract.status, STATUS.FAIL, mutation.name);
     assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0, mutation.name);
   }
+
+  {
+    const root = createRealInboundFixture();
+    const localStorePath = path.join(root, "desktop", "apps", "api", "src", "local-store", "local-store.service.ts");
+    const notificationsPath = path.join(root, "desktop", "apps", "api", "src", "notifications", "notifications.service.ts");
+    const localStore = fs.readFileSync(localStorePath, "utf8")
+      .replace('const effectKey = String(target?.effectKey || "").trim();',
+        'const /* audit-safe declaration comment */ effectKey = String(target?.effectKey || "").trim();')
+      .replace("if (effectKey) {", "if /* audit-safe gate comment */ (effectKey) {")
+      .replace("if (released || !fs.existsSync(ownerPath)) {",
+        "if /* audit-safe owner comment */ (released || !fs.existsSync(ownerPath)) {");
+    fs.writeFileSync(
+      localStorePath,
+      `class SafeNotificationDecoy { createNotification() {} }\nnamespace SafeLockDecoy { export function ownedLocalStoreLockHandle() {} }\n${localStore}`,
+      "utf8",
+    );
+    const notifications = fs.readFileSync(notificationsPath, "utf8")
+      .replace("if (effectKey) return this.createPrismaNotificationOnce(",
+        "if /* audit-safe Prisma gate comment */ (effectKey) return this.createPrismaNotificationOnce(");
+    fs.writeFileSync(notificationsPath, `class SafePrismaDecoy { create() {} }\n${notifications}`, "utf8");
+
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
+    assert.equal(contract.status, STATUS.PASS, JSON.stringify(contract.evidence));
+  }
 });
 
 test("completion audit rejects removed archive-bomb preflight and whole-file Windows hashing", () => {
@@ -1829,8 +1990,8 @@ test("completion audit rejects removal of Enterprise WeChat inbound timestamp mo
     {
       id: "contract.local_wechat_work_binding_timestamp_monotonic",
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
-      from: "monotonicWechatWorkInboundAt()",
-      to: "overwriteWechatWorkInboundAt()",
+      from: "Date.parse(currentValue) >= Date.parse(incomingValue)",
+      to: "false",
     },
   ];
 
@@ -1858,8 +2019,8 @@ test("completion audit requires LocalStore send claim recovery and rejects failu
     {
       id: "contract.local_wechat_send_claim_atomicity",
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
-      from: "claimQueuedSendTaskAndCreateAttempt()",
-      to: "updateTaskThenCreateAttempt()",
+      from: "claimQueuedSendTaskAndCreateAttempt(params:",
+      to: "updateTaskThenCreateAttempt(params:",
     },
     {
       id: "contract.local_wechat_adapter_failure_fail_closed",
@@ -1962,8 +2123,8 @@ test("idempotency audit rejects mutable-identity-first replay and browser operat
     {
       id: "contract.local_chat_import_existing_first",
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
-      from: "const existing = data.chatImports.find((item) => item.id === importId); if (existing) { assertStoredOperationIdentityReplay(); return { ...existing, samples: existingSamples }; } const identity = this.validateOptionalConversationBinding(data, payload, \"chat import\");",
-      to: "const identity = this.validateOptionalConversationBinding(data, payload, \"chat import\"); const existing = data.chatImports.find((item) => item.id === importId); if (existing) return existing;",
+      from: "const storedIdentity = assertStoredOperationIdentityReplay(",
+      to: "const storedIdentity = unsafeStoredOperationIdentityReplay(",
     },
     {
       id: "contract.training_import_idempotency",
@@ -2280,10 +2441,8 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
   assert.equal(baseline.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS);
 
   for (const decoy of [
-    'private readonly stringRouteDecoy = "@Post(\\\":id/unsafe-update\\\")";',
     "// @Post(\":id/unsafe-update\")",
     "/* @Post(\":id/unsafe-update\") */",
-    "private readonly templateRouteDecoy = `@Post(\":id/unsafe-update\")`;",
   ]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-route-decoy-"));
     fs.cpSync(baselineRoot, root, { recursive: true });
@@ -2295,10 +2454,8 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
   }
 
   for (const samePathDecoy of [
-    'private readonly samePathStringDecoy = "@Post(\\\":id/update\\\")";',
     "// @Post(\":id/update\")",
     "/* @Post(\":id/update\") */",
-    "private readonly samePathTemplateDecoy = `@Post(\":id/update\")`;",
   ]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-same-route-decoy-"));
     fs.cpSync(baselineRoot, root, { recursive: true });
@@ -2309,7 +2466,84 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
     assert.equal(report.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS, samePathDecoy);
   }
 
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-post-comment-"));
+    fs.cpSync(baselineRoot, root, { recursive: true });
+    const target = path.join(root, "desktop", "apps", "api", "src", "orders", "orders.controller.ts");
+    const source = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(target, source.replace('@Post(":id/update")', '@Post /* audit-safe */ (":id/update")'), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    assert.equal(
+      report.results.find((item) => item.id === "contract.high_risk_operator_routes").status,
+      STATUS.PASS,
+      "AST-equivalent Post comment",
+    );
+  }
+
   const mutations = [
+    {
+      name: "Nest runtime decorators cannot use a type-only import clause",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("import { Body, Controller", "import type { Body, Controller");
+      },
+    },
+    {
+      name: "OrdersService cannot use a type-only import specifier",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("import { OrdersService }", "import { type OrdersService }");
+      },
+    },
+    {
+      name: "operator runtime bindings cannot use a type-only import clause",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("import {\r\n  OperatorAccessGuard,", "import type {\r\n  OperatorAccessGuard,");
+      },
+    },
+    {
+      name: "Orders controller rejects an extra property member",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("export class OrdersController {", "export class OrdersController {\n  unsafeField = true;");
+      },
+    },
+    {
+      name: "Orders controller rejects a static block member",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("export class OrdersController {", "export class OrdersController {\n  static { void 0; }");
+      },
+    },
+    {
+      name: "Orders controller rejects type parameters",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("export class OrdersController {", "export class OrdersController<T> {");
+      },
+    },
+    {
+      name: "Orders controller rejects heritage clauses",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("export class OrdersController {", "export class OrdersController implements UnsafeContract {");
+      },
+    },
+    {
+      name: "Orders prototype cannot replace update",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return `${source}\nOrdersController.prototype.update = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Reflect.set cannot replace Orders update",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return `${source}\nReflect.set(OrdersController.prototype, "update", () => null);\n`;
+      },
+    },
     {
       name: "ordinary extra update field",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
@@ -2649,8 +2883,8 @@ test("completion audit detects payment and routing correction boundary drift", (
     {
       id: "contract.routing_correction_local_parity",
       file: "desktop/apps/api/src/local-store/local-store.service.ts",
-      from: "throw new BadRequestException",
-      to: "throw new Error",
+      from: "throw new BadRequestException(`agent not found:",
+      to: "throw new Error(`agent not found:",
     },
     {
       id: "contract.payment_update_web_surface",
