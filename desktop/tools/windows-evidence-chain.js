@@ -83,20 +83,93 @@ function assertSafePath(rootPath, targetPath, expectedType = "file") {
   return requested;
 }
 
-function hashFile(file) {
+function hashOpenFile(descriptor) {
   const hash = crypto.createHash("sha256");
-  const descriptor = fs.openSync(file, "r");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
+  for (;;) {
+    const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+    if (!bytesRead) break;
+    hash.update(buffer.subarray(0, bytesRead));
+  }
+  return hash.digest("hex");
+}
+
+function hashFile(file) {
+  const descriptor = fs.openSync(file, "r");
   try {
-    for (;;) {
-      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (!bytesRead) break;
-      hash.update(buffer.subarray(0, bytesRead));
-    }
+    return hashOpenFile(descriptor);
   } finally {
     fs.closeSync(descriptor);
   }
-  return hash.digest("hex");
+}
+
+function archiveStatIdentity(stat) {
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: String(stat.mtimeNs),
+    ctimeNs: String(stat.ctimeNs),
+  };
+}
+
+function archiveStatIdentityEqual(left, right) {
+  return Boolean(left && right
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs);
+}
+
+function captureArchiveIdentity(file) {
+  const requested = path.resolve(file);
+  const pathStat = fs.lstatSync(requested, { bigint: true });
+  if (!pathStat.isFile() || pathStat.isSymbolicLink() || pathStat.nlink !== 1n) {
+    throw new Error("archive is not a unique regular file");
+  }
+  const canonical = fs.realpathSync.native(requested);
+  if (comparablePath(canonical) !== comparablePath(requested)) {
+    throw new Error("archive resolves through a reparse point");
+  }
+  const descriptor = fs.openSync(canonical, "r");
+  try {
+    const openedBefore = fs.fstatSync(descriptor, { bigint: true });
+    const pathIdentity = archiveStatIdentity(pathStat);
+    const openedIdentity = archiveStatIdentity(openedBefore);
+    if (!openedBefore.isFile() || openedBefore.nlink !== 1n || !archiveStatIdentityEqual(pathIdentity, openedIdentity)) {
+      throw new Error("archive identity changed while it was opened");
+    }
+    const sha256 = hashOpenFile(descriptor);
+    const openedAfter = fs.fstatSync(descriptor, { bigint: true });
+    const afterIdentity = archiveStatIdentity(openedAfter);
+    if (!archiveStatIdentityEqual(openedIdentity, afterIdentity)) {
+      throw new Error("archive identity changed while it was hashed");
+    }
+    const pathAfter = fs.lstatSync(requested, { bigint: true });
+    const canonicalAfter = fs.realpathSync.native(requested);
+    if (!pathAfter.isFile()
+      || pathAfter.isSymbolicLink()
+      || pathAfter.nlink !== 1n
+      || comparablePath(canonicalAfter) !== comparablePath(requested)
+      || !archiveStatIdentityEqual(afterIdentity, archiveStatIdentity(pathAfter))) {
+      throw new Error("archive path changed while it was hashed");
+    }
+    return { canonical: comparablePath(canonical), ...afterIdentity, sha256 };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function assertArchiveIdentity(file, expected) {
+  const actual = captureArchiveIdentity(file);
+  if (!expected
+    || actual.canonical !== expected.canonical
+    || !archiveStatIdentityEqual(actual, expected)
+    || actual.sha256 !== expected.sha256) {
+    throw new Error("archive identity or SHA-256 changed after technical listing");
+  }
+  return actual;
 }
 
 function normalizeTreeOptions(options = {}) {
@@ -641,13 +714,31 @@ function validateSevenZipListing(output, options = {}) {
   if (!records.length) throw new Error("archive technical listing is empty");
   const entries = [];
   const names = new Set();
+  const entryKinds = new Map();
   const totals = { files: 0, directories: 0, totalBytes: 0, maxDepth: 0 };
   for (const record of records) {
     const entryPath = archiveEntryPath(record.Path);
     const key = process.platform === "win32" ? entryPath.normalized.toLowerCase() : entryPath.normalized;
     if (names.has(key)) throw new Error("archive contains duplicate entry paths");
     names.add(key);
-    const directory = record.Folder === "+" || /^D/i.test(String(record.Attributes || ""));
+    const attributes = String(record.Attributes || "");
+    const unixMode = /(?:^|\s)([bcdlps-][rwxStTs-]{9})(?:\s|$)/.exec(attributes)?.[1] || "";
+    const linked = unixMode && !["-", "d"].includes(unixMode[0].toLowerCase())
+      || ["Symbolic Link", "Hard Link", "Reparse", "Reparse Point", "Alternate Stream"]
+        .some((field) => String(record[field] || "").trim() && String(record[field]).trim() !== "-");
+    if (linked) throw new Error(`archive contains a linked or reparse entry: ${entryPath.normalized}`);
+    const folder = String(record.Folder || "");
+    if (folder && !["+", "-"].includes(folder)) {
+      throw new Error(`archive entry type is missing or ambiguous: ${entryPath.normalized}`);
+    }
+    const attributeDirectory = /^D/i.test(attributes.trim()) || unixMode[0]?.toLowerCase() === "d";
+    const directory = folder === "+" || (!folder && attributeDirectory);
+    if (!folder && !directory && record.Size === undefined) {
+      throw new Error(`archive entry type is missing or ambiguous: ${entryPath.normalized}`);
+    }
+    if (unixMode && (unixMode[0].toLowerCase() === "d") !== directory) {
+      throw new Error(`archive entry type conflicts with its attributes: ${entryPath.normalized}`);
+    }
     const bytes = directory ? 0 : archiveInteger(record.Size, "entry size");
     totals.maxDepth = Math.max(totals.maxDepth, entryPath.segments.length);
     if (totals.maxDepth > limits.maxDepth) throw new Error("archive exceeds maximum path depth");
@@ -661,6 +752,17 @@ function validateSevenZipListing(output, options = {}) {
     }
     if (totals.files + totals.directories > limits.maxEntries) throw new Error("archive exceeds maximum entry count");
     entries.push({ path: entryPath.normalized, directory, bytes });
+    entryKinds.set(key, { directory, segments: entryPath.segments });
+  }
+  for (const [entryKey, entry] of entryKinds) {
+    for (let depth = 1; depth < entry.segments.length; depth += 1) {
+      const prefix = entry.segments.slice(0, depth).join("/");
+      const parentKey = process.platform === "win32" ? prefix.toLowerCase() : prefix;
+      const parent = entryKinds.get(parentKey);
+      if (parent && !parent.directory) {
+        throw new Error(`archive file is an ancestor of another entry: ${entryKey}`);
+      }
+    }
   }
   if (!totals.files) throw new Error("archive does not contain any files");
   if (totals.totalBytes > archiveBytes * limits.maxCompressionRatio) {
@@ -684,11 +786,11 @@ function checkExtractionCapacity(directory, requiredBytes, limits) {
 
 function inspectArchiveBudget(resolution, archive, cwd, overrides = {}) {
   const limits = normalizeExtractionLimits(overrides);
+  let archiveIdentity;
   let archiveBytes;
   try {
-    const stat = fs.lstatSync(archive, { bigint: true });
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw new Error("archive is not a unique regular file");
-    archiveBytes = Number(stat.size);
+    archiveIdentity = captureArchiveIdentity(archive);
+    archiveBytes = Number(BigInt(archiveIdentity.size));
     if (archiveBytes <= 0 || archiveBytes > limits.maxFileBytes) throw new Error("archive input exceeds the file budget");
   } catch (error) {
     return { status: "FAIL", summary: `archive input validation failed: ${error.message}` };
@@ -701,12 +803,29 @@ function inspectArchiveBudget(resolution, archive, cwd, overrides = {}) {
   if (listing.error?.code === "ENOBUFS") return { status: "FAIL", summary: "archive technical listing exceeded its output budget" };
   if (listing.error || listing.status !== 0) return { status: "FAIL", summary: "archive technical listing could not be verified" };
   try {
+    archiveIdentity = assertArchiveIdentity(archive, archiveIdentity);
     const inspected = validateSevenZipListing(listing.stdout, { archiveBytes, limits });
     const capacity = checkExtractionCapacity(cwd, inspected.totals.totalBytes, inspected.limits);
-    return capacity.status === "PASS" ? { status: "PASS", ...inspected } : capacity;
+    return capacity.status === "PASS" ? { status: "PASS", ...inspected, archiveIdentity } : capacity;
   } catch (error) {
     return { status: "FAIL", summary: `archive budget validation failed: ${error.message}` };
   }
+}
+
+function runVerifiedArchiveExtraction({ resolution, archive, budget, outputDirectory, entryPath = "", cwd }) {
+  try {
+    if (budget?.status !== "PASS" || !budget.archiveIdentity) {
+      throw new Error("archive extraction requires a successful technical-listing preflight");
+    }
+    assertArchiveIdentity(archive, budget.archiveIdentity);
+  } catch (error) {
+    return { status: null, error };
+  }
+  return runSevenZip(
+    resolution,
+    ["x", "-y", "-bb0", "-bd", `-o${outputDirectory}`, archive, ...(entryPath ? [entryPath] : [])],
+    cwd,
+  );
 }
 
 function findNamedFile(directory, expectedName, limits = DEFAULT_EXTRACTION_LIMITS) {
@@ -731,11 +850,14 @@ function verifyNativeInstallerBinding({ installer, unpackedDirectory, tempRoot }
     (entry) => !entry.directory && path.posix.basename(entry.path).toLowerCase() === "app-64.7z",
   );
   if (archiveEntries.length !== 1) return { status: "FAIL", summary: "electron-builder NSIS app-64.7z payload is missing or ambiguous", mode: "native" };
-  const outerResult = runSevenZip(
-    sevenZip,
-    ["x", "-y", "-bb0", "-bd", `-o${outer}`, installer, archiveEntries[0].path],
-    tempRoot,
-  );
+  const outerResult = runVerifiedArchiveExtraction({
+    resolution: sevenZip,
+    archive: installer,
+    budget: outerBudget,
+    outputDirectory: outer,
+    entryPath: archiveEntries[0].path,
+    cwd: tempRoot,
+  });
   if (outerResult.error?.code === "ETIMEDOUT") return { status: "FAIL", summary: "signed NSIS installer extraction timed out", mode: "native" };
   if (outerResult.error) return { status: "FAIL", summary: "pinned NSIS extractor could not run safely", mode: "native" };
   if (outerResult.status !== 0) return { status: "FAIL", summary: "installer is not a readable electron-builder NSIS artifact", mode: "native" };
@@ -748,7 +870,13 @@ function verifyNativeInstallerBinding({ installer, unpackedDirectory, tempRoot }
   if (archives.length !== 1) return { status: "FAIL", summary: "electron-builder NSIS app-64.7z payload is missing or ambiguous", mode: "native" };
   const payloadBudget = inspectArchiveBudget(sevenZip, archives[0], tempRoot, extractionLimits);
   if (payloadBudget.status !== "PASS") return { ...payloadBudget, mode: "native" };
-  const payloadResult = runSevenZip(sevenZip, ["x", "-y", "-bb0", "-bd", `-o${payload}`, archives[0]], tempRoot);
+  const payloadResult = runVerifiedArchiveExtraction({
+    resolution: sevenZip,
+    archive: archives[0],
+    budget: payloadBudget,
+    outputDirectory: payload,
+    cwd: tempRoot,
+  });
   if (payloadResult.error?.code === "ETIMEDOUT") return { status: "FAIL", summary: "signed NSIS payload extraction timed out", mode: "native" };
   if (payloadResult.error) return { status: "FAIL", summary: "pinned NSIS payload extractor could not run safely", mode: "native" };
   if (payloadResult.status !== 0) return { status: "FAIL", summary: "electron-builder NSIS payload could not be extracted", mode: "native" };
@@ -812,6 +940,7 @@ module.exports = {
   DEFAULT_POLICY_FILE,
   POLICY_SCHEMA_VERSION,
   absoluteWindowsPowerShell,
+  assertArchiveIdentity,
   assertSafePath,
   assertSafeRoot,
   classifyNativeSmokeFailure,
@@ -831,6 +960,7 @@ module.exports = {
   pathInside,
   validateSevenZipListing,
   runNativePackagedSmoke,
+  runVerifiedArchiveExtraction,
   selectEvidenceProcessEnvironment,
   terminateProcessTree,
   verifyNativeInstallerBinding,

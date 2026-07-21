@@ -152,7 +152,8 @@ const configured = identityStatus === "CONFIGURED" && allowedPublisherSubjects.l
 const powershell = trustedWindowsSystemTool("WindowsPowerShell", "v1.0", "powershell.exe");
 const script = "Get-AuthenticodeSignature";
 const extractor = "windows-release-extractor-policy.json"; if (hashFile(candidate) !== policy.sha256) throw new Error(); const archive = "app-64.7z";
-validateSevenZipListing(); const maxCompressionRatio = 200; inspectArchiveBudget(sevenZip, installer); findNamedFile(outer, "app-64.7z", extractionLimits);
+  validateSevenZipListing(); const maxCompressionRatio = 200; inspectArchiveBudget(sevenZip, installer); runVerifiedArchiveExtraction(); findNamedFile(outer, "app-64.7z", extractionLimits);
+  throw new Error("archive identity or SHA-256 changed after technical listing"); throw new Error("archive contains a linked or reparse entry"); throw new Error("archive file is an ancestor of another entry");
 throw new Error("signed installer payload does not match");
 const env = selectEvidenceProcessEnvironment({ PACKAGED_SMOKE_OUTPUT_DIR: outputDirectory });
 terminateProcessTree(child); throw new Error("packaged runtime smoke orchestrator timed out");
@@ -842,6 +843,133 @@ export class TrainingController {
   write(root, "desktop/prisma/migrations/20260720113000_design_external_operation_idempotency/migration.sql", 'ALTER TABLE "DesignJob" ADD COLUMN "callbackStatus" TEXT, ADD COLUMN "callbackClaimedAt" TIMESTAMP(3);\nCREATE UNIQUE INDEX "DesignJob_submitOperationKey_key" ON "DesignJob"("submitOperationKey");\nCREATE UNIQUE INDEX "DesignJob_callbackOperationKey_key" ON "DesignJob"("callbackOperationKey");\nCREATE UNIQUE INDEX "DesignRevision_operationKey_key" ON "DesignRevision"("operationKey");\nCREATE UNIQUE INDEX "DesignRevision_externalRequestId_key" ON "DesignRevision"("externalRequestId");\nCREATE UNIQUE INDEX "DesignRevision_designJobId_revisionNumber_key" ON "DesignRevision"("designJobId", "revisionNumber");\n');
   write(root, "core/channel_registry.py", 'SUPPORTED_CHANNELS = {"x": ChannelSpec(status="planned")}\nif channel_id != "wechat":\n print("adapter is planned but not implemented; skipped.")\nreturn DisabledChannelAdapter(spec, reason="adapter not implemented")\n');
   write(root, "docs/PROJECT_LANDING_ROADMAP.md", "抖音、小红书、拼多多、淘宝、快手目前是规划渠道，不能假装已接通。\n");
+  appendInboundAuditSemanticFixture(root);
+  return root;
+}
+
+function appendInboundAuditSemanticFixture(root) {
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", `
+private async handleInboundImageSelection(params: {
+  operationId: string;
+  claimToken: string;
+  operationResult?: unknown;
+  conversation: any;
+}) {
+  const recovery = inboundSelectionRecovery(params.operationResult);
+  this.jobMatchesConversationIdentity(recoveryJob, params.conversation);
+  recoveredQuote.designJobId !== recoveryJob.id;
+  recoveredQuote.selectedImageId !== recovery.selectedImageId;
+  const highRecovery = { kind: "high_value_image_selection", phase: "selection_committed" };
+  this.localStore.commitInboundHighValueSelection({
+    operationId: params.operationId,
+    claimToken: params.claimToken,
+    leaseExpiresAt: this.nextInboundLeaseExpiry(),
+    recoveryEffect: highRecovery,
+  });
+  const lowRecovery = { kind: "low_value_image_selection", phase: "selection_committed" };
+  this.localStore.commitInboundLowValueSelection({
+    operationId: params.operationId,
+    claimToken: params.claimToken,
+    leaseExpiresAt: this.nextInboundLeaseExpiry(),
+    recoveryEffect: lowRecovery,
+  });
+}
+
+private async handleInboundQuoteAcceptance(params: {
+  operationId: string;
+  claimToken: string;
+  operationResult?: unknown;
+  conversation: any;
+}) {
+  const recovery = inboundQuoteAcceptanceRecovery(params.operationResult);
+  this.jobMatchesConversationIdentity(quote.designJob, params.conversation);
+  orderDraft.quoteDraftId !== quote.id;
+  String(orderDraft.wechatAccountId || "") !== String(params.conversation.wechatAccountId || "");
+  String(orderDraft.conversationId || "") !== String(params.conversation.id || "");
+  String(orderDraft.customerId || "") !== String(params.conversation.customerId || "");
+  this.localStore.commitInboundQuoteAcceptance({
+    operationId: params.operationId,
+    claimToken: params.claimToken,
+    leaseExpiresAt: this.nextInboundLeaseExpiry(),
+    recoveryEffect: { kind: "low_value_quote_acceptance", phase: "quote_and_order_committed" },
+  });
+  this.localStore.commitInboundQuoteAcceptance({
+    operationId: params.operationId,
+    claimToken: params.claimToken,
+    leaseExpiresAt: this.nextInboundLeaseExpiry(),
+    recoveryEffect: { kind: "low_value_quote_acceptance", phase: "quote_and_order_committed" },
+  });
+}
+
+function inboundSelectionRecovery(value: unknown) {
+  ["high_value_image_selection", "low_value_image_selection"].includes(effect.kind);
+  effect.phase !== "selection_committed";
+  if (!designJobId || !selectedImageId) return null;
+  if (effect.kind === "low_value_image_selection" && !quoteDraftId) return null;
+}
+
+function inboundQuoteAcceptanceRecovery(value: unknown) {
+  effect.kind !== "low_value_quote_acceptance" || effect.phase !== "quote_and_order_committed";
+  if (!quoteDraftId || !orderDraftId || !acceptancePlan?.action || !acceptancePlan?.reason) return null;
+  ["accept_quote_and_create_order", "update_existing_order_payment"].includes(acceptancePlan.action);
+}
+`, true);
+
+  write(root, "desktop/apps/api/src/local-store/local-store.service.ts", `
+commitInboundLowValueSelection(payload: {
+  operationId: string;
+  claimToken: string;
+  leaseExpiresAt: string;
+  recoveryEffect: Record<string, unknown>;
+}) {
+  operation.status !== "processing";
+  operation.claimToken !== payload.claimToken;
+  Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now();
+  String(job.wechatAccountId || "") !== String(operation.wechatAccountId || "");
+  String(job.conversationId || "") !== String(operation.conversationId || "");
+  String(job.customerId || "") !== String(operation.customerId || "");
+  image.designJobId === payload.designJobId;
+  existingQuote?.sendTaskId || existingQuote?.status === "sent";
+  quote.identityBinding = this.validateStoredQuoteDraftIdentity(data, quote);
+  quote.identityBinding = this.validateQuoteDraftIdentity(data, quote);
+  const recoveryEffect = { ...payload.recoveryEffect, quoteDraftId: quote.id };
+  result: { ...(operation.result || {}), recoveryEffect };
+  this.write(data);
+}
+
+commitInboundQuoteAcceptance(payload: {
+  operationId: string;
+  claimToken: string;
+  leaseExpiresAt: string;
+  recoveryEffect: Record<string, unknown>;
+}) {
+  operation.status !== "processing";
+  operation.claimToken !== payload.claimToken;
+  Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now();
+  String(designJob.wechatAccountId || "") !== String(operation.wechatAccountId || "");
+  String(designJob.conversationId || "") !== String(operation.conversationId || "");
+  String(currentQuote.customerId || "") !== String(operation.customerId || "");
+  currentOrder.quoteDraftId !== quote.id;
+  quote.identityBinding = this.validateStoredQuoteDraftIdentity(data, quote);
+  order.identityBinding = this.validateStoredOrderDraftBinding(data, order);
+  quoteDraftId: quote.id;
+  orderDraftId: order.id;
+  result: { ...(operation.result || {}), recoveryEffect };
+  this.write(data);
+}
+`, true);
+}
+
+function createRealInboundFixture() {
+  const root = createPassingFixture();
+  const repositoryRoot = path.resolve(__dirname, "..", "..");
+  for (const relative of [
+    "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+    "desktop/apps/api/src/local-store/local-store.service.ts",
+  ]) {
+    const target = path.join(root, ...relative.split("/"));
+    fs.copyFileSync(path.join(repositoryRoot, ...relative.split("/")), target);
+  }
   return root;
 }
 
@@ -867,22 +995,113 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
 });
 
-test("completion audit accepts renamed inbound recovery and rejects weakened durable recovery semantics", () => {
-  const renamedRoot = createPassingFixture();
-  const renamedReport = buildAudit(renamedRoot, { includeExternal: false });
-  assert.equal(renamedReport.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.PASS);
+test("completion audit checks real inbound recovery function boundaries, helpers, identity and lease CAS", () => {
+  const baselineRoot = createRealInboundFixture();
+  const baseline = buildAudit(baselineRoot, { includeExternal: false });
+  assert.equal(baseline.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.PASS);
 
-  for (const [marker, replacement] of [
-    ["selection_committed", "selection_started"],
-    ["low-value inbound selection recovery lost its durable quote binding", "low-value recovery quote association missing"],
-  ]) {
-    const root = createPassingFixture();
-    const target = path.join(root, "desktop", "apps", "api", "src", "wechat", "wechat-dispatch.service.ts");
+  const dispatchFile = "desktop/apps/api/src/wechat/wechat-dispatch.service.ts";
+  const localStoreFile = "desktop/apps/api/src/local-store/local-store.service.ts";
+  const mutations = [
+    {
+      name: "low-value atomic helper call renamed",
+      file: dispatchFile,
+      from: "this.localStore.commitInboundLowValueSelection({",
+      to: "this.localStore.nonAtomicLowValueSelection({",
+    },
+    {
+      name: "quote acceptance atomic helper calls renamed",
+      file: dispatchFile,
+      from: "this.localStore.commitInboundQuoteAcceptance({",
+      to: "this.localStore.nonAtomicQuoteAcceptance({",
+      all: true,
+    },
+    {
+      name: "low-value selection recovery marker renamed",
+      file: dispatchFile,
+      anchor: "private async handleInboundImageSelection",
+      from: 'kind: "low_value_image_selection"',
+      to: 'kind: "unsafe_low_value_selection"',
+    },
+    {
+      name: "quote acceptance recovery marker removed from one branch",
+      file: dispatchFile,
+      anchor: "private async handleInboundQuoteAcceptance",
+      from: 'phase: "quote_and_order_committed"',
+      to: 'phase: "quote_started"',
+    },
+    {
+      name: "selection recovery parser phase weakened",
+      file: dispatchFile,
+      anchor: "function inboundSelectionRecovery",
+      from: 'effect.phase !== "selection_committed"',
+      to: "false",
+    },
+    {
+      name: "quote recovery parser identity weakened",
+      file: dispatchFile,
+      anchor: "function inboundQuoteAcceptanceRecovery",
+      from: "!quoteDraftId || !orderDraftId",
+      to: "!quoteDraftId",
+    },
+    {
+      name: "low-value helper definition renamed",
+      file: localStoreFile,
+      from: "commitInboundLowValueSelection(payload:",
+      to: "nonAtomicLowValueSelection(payload:",
+    },
+    {
+      name: "low-value helper claim CAS removed",
+      file: localStoreFile,
+      anchor: "commitInboundLowValueSelection(payload:",
+      from: "operation.claimToken !== payload.claimToken",
+      to: "false",
+    },
+    {
+      name: "low-value helper identity removed",
+      file: localStoreFile,
+      anchor: "commitInboundLowValueSelection(payload:",
+      from: 'String(job.wechatAccountId || "") !== String(operation.wechatAccountId || "")',
+      to: "false",
+    },
+    {
+      name: "quote helper definition renamed",
+      file: localStoreFile,
+      from: "commitInboundQuoteAcceptance(payload:",
+      to: "nonAtomicQuoteAcceptance(payload:",
+    },
+    {
+      name: "quote helper lease CAS removed",
+      file: localStoreFile,
+      anchor: "commitInboundQuoteAcceptance(payload:",
+      from: 'Date.parse(String(operation.leaseExpiresAt || "")) <= Date.now()',
+      to: "false",
+    },
+    {
+      name: "quote helper identity removed",
+      file: localStoreFile,
+      anchor: "commitInboundQuoteAcceptance(payload:",
+      from: 'String(currentQuote.customerId || "") !== String(operation.customerId || "")',
+      to: "false",
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createRealInboundFixture();
+    const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
-    assert.ok(source.includes(marker));
-    fs.writeFileSync(target, source.replace(marker, replacement), "utf8");
+    const start = mutation.anchor ? source.indexOf(mutation.anchor) : 0;
+    assert.ok(start >= 0, mutation.name);
+    const occurrence = source.indexOf(mutation.from, start);
+    assert.ok(occurrence >= 0, mutation.name);
+    const mutated = mutation.all
+      ? source.split(mutation.from).join(mutation.to)
+      : `${source.slice(0, occurrence)}${mutation.to}${source.slice(occurrence + mutation.from.length)}`;
+    fs.writeFileSync(target, mutated, "utf8");
     const report = buildAudit(root, { includeExternal: false });
-    assert.equal(report.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.FAIL, marker);
+    const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
+    assert.equal(contract.status, STATUS.FAIL, mutation.name);
+    assert.ok(contract.evidence.missing.length > 0, mutation.name);
   }
 });
 

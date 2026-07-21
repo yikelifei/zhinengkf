@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const {
@@ -16,10 +17,12 @@ const {
   createTreeManifest,
   evaluateArtifactPolicy,
   findSevenZipExecutable,
+  inspectArchiveBudget,
   inspectNativeAuthenticode,
   loadReleasePolicy,
   manifestsEqual,
   selectEvidenceProcessEnvironment,
+  runVerifiedArchiveExtraction,
   validateSevenZipListing,
 } = require("../tools/windows-evidence-chain");
 const { createSmokeWorkspace } = require("../tools/smoke-packaged-api");
@@ -164,12 +167,83 @@ test("7-Zip technical listings reject bombs, unsafe paths and every extraction b
     archiveBytes: 1,
   }), /Windows-unsafe entry path/);
 
+  const realSevenZipSymlinkListing = [
+    "Path = link",
+    "Folder = -",
+    "Size = 14",
+    "Packed Size = 14",
+    "Attributes =  lrwxrwxrwx",
+    "",
+    "Path = link\\escaped.txt",
+    "Folder = -",
+    "Size = 7",
+    "Packed Size = 7",
+    "Attributes =  01800000",
+  ].join("\n");
+  assert.throws(() => validateSevenZipListing(realSevenZipSymlinkListing, {
+    archiveBytes: 235,
+  }), /linked or reparse entry/);
+  assert.throws(() => validateSevenZipListing([
+    "Path = hard-link.bin", "Folder = -", "Size = 1", "Hard Link = original.bin",
+  ].join("\n"), { archiveBytes: 1 }), /linked or reparse entry/);
+  assert.throws(() => validateSevenZipListing([
+    "Path = reparse", "Folder = +", "Reparse Point = +",
+  ].join("\n"), { archiveBytes: 1 }), /linked or reparse entry/);
+  assert.throws(() => validateSevenZipListing(listing([
+    { path: "file-parent", size: 1 },
+    { path: "file-parent/child.bin", size: 1 },
+  ]), { archiveBytes: 1 }), /file is an ancestor/);
+
   const source = fs.readFileSync(path.resolve(__dirname, "../tools/windows-evidence-chain.js"), "utf8");
   const preflight = source.indexOf("inspectArchiveBudget(sevenZip, installer");
-  const extraction = source.indexOf('["x", "-y", "-bb0", "-bd"');
+  const extraction = source.indexOf("const outerResult = runVerifiedArchiveExtraction");
   assert.ok(preflight >= 0 && extraction > preflight, "installer archive list preflight must precede extraction");
+  assert.match(source, /assertArchiveIdentity\(archive, budget\.archiveIdentity\)[\s\S]*?return runSevenZip/);
   assert.match(source, /findNamedFile\(outer, "app-64\.7z", extractionLimits\)/);
   assert.equal(DEFAULT_EXTRACTION_LIMITS.maxTotalBytes, 2 * 1024 * 1024 * 1024);
+});
+
+test("archive replacement after list preflight fails before the pinned extractor can write", (t) => {
+  const sevenZip = findSevenZipExecutable();
+  if (sevenZip.status !== "PASS") return t.skip("host does not have the pinned electron-builder extractor cache");
+  const directory = temporaryDirectory(t);
+  const archive = path.join(directory, "installer.exe");
+  const replacement = path.join(directory, "replacement.7z");
+  const createArchive = (sourceDirectory, target, bytes) => {
+    fs.mkdirSync(sourceDirectory);
+    fs.writeFileSync(path.join(sourceDirectory, "app-64.7z"), Buffer.alloc(bytes, 0x41));
+    const result = spawnSync(sevenZip.executable, ["a", "-t7z", target, "app-64.7z"], {
+      cwd: sourceDirectory,
+      env: selectEvidenceProcessEnvironment(),
+      encoding: "utf8",
+      windowsHide: true,
+      shell: false,
+      timeout: 30_000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  };
+  createArchive(path.join(directory, "safe-source"), archive, 1);
+  createArchive(path.join(directory, "replacement-source"), replacement, 4096);
+  const budget = inspectArchiveBudget(sevenZip, archive, directory, { maxCompressionRatio: 1000 });
+  assert.equal(budget.status, "PASS", budget.summary);
+  const listedIdentity = budget.archiveIdentity;
+  fs.rmSync(archive);
+  fs.renameSync(replacement, archive);
+  const outputDirectory = path.join(directory, "output");
+  fs.mkdirSync(outputDirectory);
+  const extraction = runVerifiedArchiveExtraction({
+    resolution: sevenZip,
+    archive,
+    budget,
+    outputDirectory,
+    entryPath: "app-64.7z",
+    cwd: directory,
+  });
+  assert.equal(extraction.status, null);
+  assert.match(extraction.error?.message || "", /identity or SHA-256 changed after technical listing/);
+  assert.notEqual(fs.statSync(archive, { bigint: true }).ino.toString(), listedIdentity.ino);
+  assert.deepEqual(fs.readdirSync(outputDirectory), []);
 });
 
 test("runtime hangs are FAIL while explicit port occupation is BLOCKED", () => {
