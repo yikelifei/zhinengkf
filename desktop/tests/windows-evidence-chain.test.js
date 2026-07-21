@@ -63,10 +63,14 @@ test("private temp cleanup rejects a replaced directory and preserves its sentin
   assert.equal(fs.readFileSync(sentinel, "utf8"), "preserve\n");
 });
 
-test("failed private temp marker creation reports its write truth and leaves no owned directory", () => {
-  const prefix = "smart-kefu-windows-evidence-";
-  const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(prefix)));
+test("failed private temp marker creation reports its write truth and leaves no owned directory", (t) => {
   const originalWrite = fs.writeFileSync;
+  const originalMkdtemp = fs.mkdtempSync;
+  let mintedDirectory = "";
+  fs.mkdtempSync = (...args) => {
+    mintedDirectory = originalMkdtemp(...args);
+    return mintedDirectory;
+  };
   fs.writeFileSync = (file, ...args) => {
     if (path.basename(String(file)) === ".smart-kefu-private-temp.json") throw new Error("synthetic marker write failure");
     return originalWrite(file, ...args);
@@ -78,10 +82,12 @@ test("failed private temp marker creation reports its write truth and leaves no 
     failure = error;
   } finally {
     fs.writeFileSync = originalWrite;
+    fs.mkdtempSync = originalMkdtemp;
   }
+  t.after(() => { if (mintedDirectory) fs.rmSync(mintedDirectory, { recursive: true, force: true }); });
   assert.equal(failure?.temporaryFilesWritten, true);
-  const after = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(prefix) && !before.has(name));
-  assert.deepEqual(after, []);
+  assert.match(path.basename(mintedDirectory), /^smart-kefu-windows-evidence-/);
+  assert.equal(fs.existsSync(mintedDirectory), false);
 });
 
 test("packaged smoke ignores caller runtime deletion targets and cleans only its minted workspace", (t) => {

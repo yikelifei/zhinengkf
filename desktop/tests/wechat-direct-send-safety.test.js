@@ -1079,20 +1079,42 @@ test("web API exposes current manually locked conversations", () => {
   assert.match(api, /export async function reviewOrder[\s\S]*Promise<ReviewOrderResult>/);
 });
 
-test("inbound quote acceptance carries conversation identity into order mutations", () => {
+test("inbound quote acceptance atomically fences conversation identity with its recovery marker", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const localStore = readProjectFile("apps/api/src/local-store/local-store.service.ts");
   const acceptanceSection = sliceBetween(
     service,
     /\n  private async handleInboundQuoteAcceptance\(/,
     /\n  private findLatestQuoteForConversation\(/,
   );
+  const atomicCommit = sliceBetween(
+    localStore,
+    /\n  commitInboundQuoteAcceptance\(/,
+    /\n  listConversationTimeline\(/,
+  );
 
-  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedWechatAccountId: params\.conversation\.wechatAccountId/);
-  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedConversationId: params\.conversation\.id/);
-  assert.match(acceptanceSection, /this\.orders\.update\(orderDraftId, \{[\s\S]*expectedCustomerId: params\.conversation\.customerId/);
-  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedWechatAccountId: params\.conversation\.wechatAccountId/);
-  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedConversationId: params\.conversation\.id/);
-  assert.match(acceptanceSection, /this\.orders\.createFromQuote\(updatedQuote\.id, \{[\s\S]*expectedCustomerId: params\.conversation\.customerId/);
+  assert.equal((acceptanceSection.match(/this\.localStore\.commitInboundQuoteAcceptance\(\{/g) || []).length, 2);
+  for (const pattern of [
+    /operationId: params\.operationId/,
+    /claimToken: params\.claimToken/,
+    /quoteDraftId: quote\.id/,
+    /kind: "low_value_quote_acceptance"/,
+    /phase: "quote_and_order_committed"/,
+    /action: "update_existing_order_payment"/,
+    /action: "accept_quote_and_create_order"/,
+  ]) assert.match(acceptanceSection, pattern);
+
+  for (const pattern of [
+    /operation\.status !== "processing"/,
+    /operation\.claimToken !== payload\.claimToken/,
+    /Date\.parse\(String\(operation\.leaseExpiresAt/,
+    /designJob\.wechatAccountId[\s\S]*operation\.wechatAccountId/,
+    /designJob\.conversationId[\s\S]*operation\.conversationId/,
+    /currentQuote\.customerId[\s\S]*operation\.customerId/,
+    /currentOrder\.quoteDraftId !== quote\.id/,
+    /data\.inboundMessageOperations\[operationIndex\]/,
+    /this\.write\(data\)/,
+  ]) assert.match(atomicCommit, pattern);
 });
 
 test("quote and order contracts expose guarded next-step guidance", () => {
