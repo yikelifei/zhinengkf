@@ -323,6 +323,97 @@ const CONTRACTS = Object.freeze([
         ],
       },
       {
+        id: "completed-inbound-hydration",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /private async hydrateCompletedInboundReplay\s*\(operation:\s*any,\s*recovered\s*=\s*false\)/,
+        patterns: [
+          /const designJobId = String\(durable\.designJobId \|\| ""\)\.trim\(\)/,
+          /const manualLockRef = isPlainObject\(durable\.manualLock\) \? durable\.manualLock : null/,
+          /const manualConversationId = String\(manualLockRef\?\.conversationId \|\| ""\)\.trim\(\)/,
+          /const manualReviewLogId = String\(manualLockRef\?\.reviewLogId \|\| ""\)\.trim\(\)/,
+          /designJobId \? this\.persistence\.getDesignJob\(designJobId\) : null/,
+          /manualConversationId \? this\.persistence\.getConversation\(manualConversationId\) : null/,
+          /manualReviewLogId \? this\.persistence\.getReviewLog\(manualReviewLogId\) : null/,
+          /if \(manualLockRef && \(!manualConversationId \|\| !manualReviewLogId\)\)/,
+          /selection:\s*hydrateDurableSelection\(durable\.selection, designJob\)/,
+        ],
+      },
+      {
+        id: "completed-selection-hydration",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /function hydrateDurableSelection\s*\(value:\s*unknown,\s*designJob:\s*any\)/,
+        patterns: [
+          /const candidateId = String\(result\.candidateId \|\| result\.imageId \|\| ""\)\.trim\(\)/,
+          /const candidates = Array\.isArray\(designJob\?\.images\) \? designJob\.images : \[\]/,
+          /candidates\.find\(\(item:\s*any\) => String\(item\?\.id \|\| ""\) === candidateId \|\| String\(item\?\.imageId \|\| ""\) === candidateId\)/,
+          /if \(candidateId && \(!designJob \|\| !candidate\)\)/,
+          /throw new BadRequestException\("completed inbound operation is missing its durable selection design job or candidate"\)/,
+          /result:\s*\{[\s\S]*?candidate/,
+        ],
+      },
+      {
+        id: "local-notification-effect-replay",
+        file: "desktop/apps/api/src/local-store/local-store.service.ts",
+        startPattern: /createNotification\s*\(level:\s*string,\s*title:\s*string,\s*body\?:\s*string,\s*target\?:\s*any\)/,
+        patterns: [
+          /const effectKey = String\(target\?\.effectKey \|\| ""\)\.trim\(\)/,
+          /const identity = this\.resolveTargetIdentity\(data, target \|\| \{\}, "notification target"\)/,
+          /const normalizedTarget = \{[\s\S]*?\.\.\.\(target \|\| \{\}\)[\s\S]*?\.\.\.identity\.identityFields[\s\S]*?identityBinding:\s*identity\.binding/,
+          /data\.notifications\.find\(\(notification\) => String\(notification\?\.target\?\.effectKey \|\| ""\) === effectKey\)/,
+          /if \(existing\) return assertNotificationEffectReplay\(existing, \{ level, title, body, target: normalizedTarget \}\)/,
+          /id:\s*effectKey \? deterministicOperationId\("notice", effectKey\) : id\("notice"\)/,
+        ],
+      },
+      {
+        id: "prisma-notification-effect-replay",
+        file: "desktop/apps/api/src/notifications/notifications.service.ts",
+        startPattern: /private async createPrismaNotificationOnce\s*\(/,
+        patterns: [
+          /const id = deterministicOperationId\("notice", effectKey\)/,
+          /if \(existing\) return assertNotificationEffectReplay\(existing, \{ level, title, body, target \}\)/,
+          /if \(!isUniqueConstraintError\(error\) \|\| typeof notification\.findUnique !== "function"\) throw error/,
+          /const winner = await notification\.findUnique\(\{ where: \{ id \} \}\)/,
+          /if \(!winner\) throw error/,
+          /return assertNotificationEffectReplay\(winner, \{ level, title, body, target \}\)/,
+        ],
+        occurrences: [
+          { pattern: /assertNotificationEffectReplay\(/g, minimum: 2 },
+        ],
+      },
+      {
+        id: "notification-effect-replay-assertion",
+        file: "desktop/apps/api/src/shared/notification-idempotency.ts",
+        startPattern: /export function assertNotificationEffectReplay\s*\([\s\S]*?\n\)\s*/,
+        patterns: [
+          /const actualFingerprint = notificationEffectFingerprint\(\{[\s\S]*?level:\s*existing\?\.level[\s\S]*?title:\s*existing\?\.title[\s\S]*?body:\s*existing\?\.body[\s\S]*?target:\s*existing\?\.target/,
+          /const expectedFingerprint = notificationEffectFingerprint\(expected\)/,
+          /if \(actualFingerprint !== expectedFingerprint\)/,
+          /throw new BadRequestException\("notification effectKey replay changed identity or business payload"\)/,
+        ],
+      },
+      {
+        id: "notification-effect-fingerprint",
+        file: "desktop/apps/api/src/shared/notification-idempotency.ts",
+        startPattern: /function notificationEffectFingerprint\s*\(value:\s*\{[\s\S]*?\n\}\)\s*/,
+        patterns: [
+          /return createOperationFingerprint\("notification-effect", \{\}, \{/,
+          /level:\s*String\(value\.level \|\| ""\)/,
+          /title:\s*String\(value\.title \|\| ""\)/,
+          /body:\s*value\.body === undefined \|\| value\.body === null \? null : String\(value\.body\)/,
+          /target:\s*notificationBusinessTarget\(value\.target\)/,
+        ],
+      },
+      {
+        id: "notification-effect-business-target",
+        file: "desktop/apps/api/src/shared/notification-idempotency.ts",
+        startPattern: /function notificationBusinessTarget\s*\(value:\s*unknown\)/,
+        patterns: [
+          /if \(!value \|\| typeof value !== "object" \|\| Array\.isArray\(value\)\) return \{\}/,
+          /const \{ identityBinding: _derivedIdentityBinding, \.\.\.businessTarget \} = value as Record<string, unknown>/,
+          /return businessTarget/,
+        ],
+      },
+      {
         id: "local-low-value-atomic-commit",
         file: "desktop/apps/api/src/local-store/local-store.service.ts",
         startPattern: /commitInboundLowValueSelection\s*\(payload:\s*\{[\s\S]*?\n\s*\}\)\s*/,
@@ -2169,7 +2260,6 @@ function highRiskOperatorRouteResults(root) {
     /expectedConversationId:\s*payload\?\.expectedConversationId/,
     /expectedCustomerId:\s*payload\?\.expectedCustomerId/,
   ];
-  const stripsUntrustedOwner = /owner:\s*_untrustedOwner/.test(ordersUpdateSection || "");
   check(
     "orders-update-trusted",
     sources.orders,
@@ -2177,9 +2267,9 @@ function highRiskOperatorRouteResults(root) {
     [
       /@TrustedOperator\(\) principal/,
       /owner:\s*principal\.id/,
-      ...(stripsUntrustedOwner ? [/owner:\s*_untrustedOwner/] : explicitOrdersUpdateAllowlist),
+      ...explicitOrdersUpdateAllowlist,
     ],
-    stripsUntrustedOwner ? [] : [/\.\.\.(?:payload|trustedPayload)/, /owner:\s*payload(?:\?|\.)/],
+    [/\.\.\./, /\bnotificationEffectKey\b/, /owner:\s*payload(?:\?|\.)/],
   );
   check("routing-evaluate", sources.routing, /@Post\(["']evaluate["']\)/, [
     /@RequireOperatorCapability\(["']manage_training["']\)/,

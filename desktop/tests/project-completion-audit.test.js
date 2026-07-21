@@ -946,6 +946,32 @@ function inboundQuoteAcceptanceRecovery(value: unknown) {
   if (!quoteDraftId || !orderDraftId || !acceptancePlan?.action || !acceptancePlan?.reason) return null;
   ["accept_quote_and_create_order", "update_existing_order_payment"].includes(acceptancePlan.action);
 }
+
+private async hydrateCompletedInboundReplay(operation: any, recovered = false) {
+  const durable = isPlainObject(operation?.result) ? operation.result : {};
+  const designJobId = String(durable.designJobId || "").trim();
+  const manualLockRef = isPlainObject(durable.manualLock) ? durable.manualLock : null;
+  const manualConversationId = String(manualLockRef?.conversationId || "").trim();
+  const manualReviewLogId = String(manualLockRef?.reviewLogId || "").trim();
+  const [designJob, manualConversation, manualReviewLog] = await Promise.all([
+    designJobId ? this.persistence.getDesignJob(designJobId) : null,
+    manualConversationId ? this.persistence.getConversation(manualConversationId) : null,
+    manualReviewLogId ? this.persistence.getReviewLog(manualReviewLogId) : null,
+  ]);
+  if (manualLockRef && (!manualConversationId || !manualReviewLogId)) throw new Error();
+  return { selection: hydrateDurableSelection(durable.selection, designJob) };
+}
+
+function hydrateDurableSelection(value: unknown, designJob: any) {
+  const result = isPlainObject(value.result) ? value.result : {};
+  const candidateId = String(result.candidateId || result.imageId || "").trim();
+  const candidates = Array.isArray(designJob?.images) ? designJob.images : [];
+  const candidate = candidates.find((item: any) => String(item?.id || "") === candidateId || String(item?.imageId || "") === candidateId);
+  if (candidateId && (!designJob || !candidate)) {
+    throw new BadRequestException("completed inbound operation is missing its durable selection design job or candidate");
+  }
+  return { result: { candidate } };
+}
 `, true);
 
   write(root, "desktop/apps/api/src/local-store/local-store.service.ts", `
@@ -995,6 +1021,20 @@ commitInboundQuoteAcceptance(payload: {
   });
 }
 
+createNotification(level: string, title: string, body?: string, target?: any) {
+  const data = this.read();
+  const effectKey = String(target?.effectKey || "").trim();
+  const identity = this.resolveTargetIdentity(data, target || {}, "notification target");
+  const normalizedTarget = {
+    ...(target || {}),
+    ...identity.identityFields,
+    identityBinding: identity.binding,
+  };
+  const existing = data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey);
+  if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });
+  return { id: effectKey ? deterministicOperationId("notice", effectKey) : id("notice") };
+}
+
 private withStoreLock<T>(operation: () => T): T {
   if (this.storeLockDepth > 0) return operation();
   const lock = acquireLocalStoreLock(this.filePath);
@@ -1015,6 +1055,68 @@ export function acquireLocalStoreLock(filePath: string) {
   return ownedLocalStoreLockHandle(lockPath, ownerFileName);
 }
 `, true);
+
+  write(root, "desktop/apps/api/src/notifications/notifications.service.ts", `
+private async createPrismaNotificationOnce(
+  effectKey: string,
+  level: string,
+  title: string,
+  body?: string,
+  target?: Record<string, unknown>,
+) {
+  const notification = this.prisma.notification as any;
+  const id = deterministicOperationId("notice", effectKey);
+  const existing = await notification.findUnique({ where: { id } });
+  if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target });
+  try {
+    return await notification.create({ data: { id, level, title, body, target } });
+  } catch (error) {
+    if (!isUniqueConstraintError(error) || typeof notification.findUnique !== "function") throw error;
+    const winner = await notification.findUnique({ where: { id } });
+    if (!winner) throw error;
+    return assertNotificationEffectReplay(winner, { level, title, body, target });
+  }
+}
+`);
+
+  write(root, "desktop/apps/api/src/shared/notification-idempotency.ts", `
+export function assertNotificationEffectReplay(
+  existing: any,
+  expected: { level: string; title: string; body?: string; target?: Record<string, unknown> },
+) {
+  const actualFingerprint = notificationEffectFingerprint({
+    level: existing?.level,
+    title: existing?.title,
+    body: existing?.body,
+    target: existing?.target,
+  });
+  const expectedFingerprint = notificationEffectFingerprint(expected);
+  if (actualFingerprint !== expectedFingerprint) {
+    throw new BadRequestException("notification effectKey replay changed identity or business payload");
+  }
+  return existing;
+}
+
+function notificationEffectFingerprint(value: {
+  level?: unknown;
+  title?: unknown;
+  body?: unknown;
+  target?: unknown;
+}) {
+  return createOperationFingerprint("notification-effect", {}, {
+    level: String(value.level || ""),
+    title: String(value.title || ""),
+    body: value.body === undefined || value.body === null ? null : String(value.body),
+    target: notificationBusinessTarget(value.target),
+  });
+}
+
+function notificationBusinessTarget(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const { identityBinding: _derivedIdentityBinding, ...businessTarget } = value as Record<string, unknown>;
+  return businessTarget;
+}
+`);
 }
 
 function createRealInboundFixture() {
@@ -1023,6 +1125,8 @@ function createRealInboundFixture() {
   for (const relative of [
     "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
     "desktop/apps/api/src/local-store/local-store.service.ts",
+    "desktop/apps/api/src/notifications/notifications.service.ts",
+    "desktop/apps/api/src/shared/notification-idempotency.ts",
   ]) {
     const target = path.join(root, ...relative.split("/"));
     fs.copyFileSync(path.join(repositoryRoot, ...relative.split("/")), target);
@@ -1059,6 +1163,8 @@ test("completion audit checks real inbound recovery function boundaries, helpers
 
   const dispatchFile = "desktop/apps/api/src/wechat/wechat-dispatch.service.ts";
   const localStoreFile = "desktop/apps/api/src/local-store/local-store.service.ts";
+  const notificationsFile = "desktop/apps/api/src/notifications/notifications.service.ts";
+  const notificationIdempotencyFile = "desktop/apps/api/src/shared/notification-idempotency.ts";
   const mutations = [
     {
       name: "low-value atomic helper call renamed",
@@ -1100,6 +1206,48 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       anchor: "function inboundQuoteAcceptanceRecovery",
       from: "!quoteDraftId || !orderDraftId",
       to: "!quoteDraftId",
+    },
+    {
+      name: "completed manual-lock review hydration removed",
+      file: dispatchFile,
+      anchor: "private async hydrateCompletedInboundReplay",
+      from: "if (manualLockRef && (!manualConversationId || !manualReviewLogId))",
+      to: "if (manualLockRef && !manualConversationId)",
+    },
+    {
+      name: "completed selection candidate hydration weakened",
+      file: dispatchFile,
+      anchor: "function hydrateDurableSelection",
+      from: "if (candidateId && (!designJob || !candidate))",
+      to: "if (candidateId && !designJob)",
+    },
+    {
+      name: "local notification effect replay identity removed",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });",
+      to: "if (existing) return existing;",
+    },
+    {
+      name: "Prisma existing notification effect replay identity removed",
+      file: notificationsFile,
+      anchor: "private async createPrismaNotificationOnce",
+      from: "if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target });",
+      to: "if (existing) return existing;",
+    },
+    {
+      name: "Prisma unique-winner notification effect replay identity removed",
+      file: notificationsFile,
+      anchor: "private async createPrismaNotificationOnce",
+      from: "return assertNotificationEffectReplay(winner, { level, title, body, target });",
+      to: "return winner;",
+    },
+    {
+      name: "notification effect fingerprint strips direct business identity",
+      file: notificationIdempotencyFile,
+      anchor: "function notificationBusinessTarget",
+      from: "const { identityBinding: _derivedIdentityBinding, ...businessTarget } = value as Record<string, unknown>;",
+      to: "const { identityBinding: _derivedIdentityBinding, wechatAccountId: _account, ...businessTarget } = value as Record<string, unknown>;",
     },
     {
       name: "low-value helper definition renamed",
@@ -1705,6 +1853,24 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
   assert.equal(baseline.results.find((item) => item.id === "contract.high_risk_operator_routes").status, STATUS.PASS);
 
   const mutations = [
+    {
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "customerNotes: payload?.customerNotes,",
+          "customerNotes: payload?.customerNotes,\n      notificationEffectKey: payload?.notificationEffectKey,",
+        );
+      },
+    },
+    {
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "return this.orders.update(id, {",
+          "return this.orders.update(id, { ...payload,",
+        );
+      },
+    },
     {
       file: "desktop/apps/api/src/wechat-work/wechat-work.controller.ts",
       mutate(source) {
