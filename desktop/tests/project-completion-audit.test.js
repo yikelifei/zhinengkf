@@ -3691,6 +3691,106 @@ ${notifications}`,
   }
 });
 
+test("completion audit models static this destructuring in sibling callables", () => {
+  const notificationsFile = path.join(
+    "desktop", "apps", "api", "src", "notifications", "notifications.service.ts",
+  );
+  const contractFor = (statement) => {
+    const root = createRealInboundFixture();
+    const target = path.join(root, notificationsFile);
+    fs.writeFileSync(target, `${fs.readFileSync(target, "utf8")}\n${statement}\n`, "utf8");
+    return buildAudit(root, { includeExternal: false }).results
+      .find((item) => item.id === "contract.inbound_effect_recovery");
+  };
+  const failures = [
+    ["class direct renamed binding", `let classDestructuredDirectPrototype: any = {};
+class ClassDestructuredDirectRunner { target() { classDestructuredDirectPrototype.create = (() => null) as any; } entry() { const { target: run } = this; run(); } }
+classDestructuredDirectPrototype = NotificationsService.prototype;
+new ClassDestructuredDirectRunner().entry();`],
+    ["object call wrapper", `let objectDestructuredCallPrototype: any = {};
+const objectDestructuredCallRunner = { target() { objectDestructuredCallPrototype.create = (() => null) as any; }, entry() { const { target } = this; target.call(this); } };
+objectDestructuredCallPrototype = NotificationsService.prototype;
+objectDestructuredCallRunner.entry();`],
+    ["class apply wrapper", `let classDestructuredApplyPrototype: any = {};
+class ClassDestructuredApplyRunner { target() { classDestructuredApplyPrototype.create = (() => null) as any; } entry() { const { target } = this; target.apply(this, []); } }
+classDestructuredApplyPrototype = NotificationsService.prototype;
+new ClassDestructuredApplyRunner().entry();`],
+    ["object immediate bind", `let objectDestructuredBindPrototype: any = {};
+const objectDestructuredBindRunner = { target() { objectDestructuredBindPrototype.create = (() => null) as any; }, entry() { const { target } = this; target.bind(this)(); } };
+objectDestructuredBindPrototype = NotificationsService.prototype;
+objectDestructuredBindRunner.entry();`],
+    ["constructible class function field new", `let classDestructuredNewPrototype: any = {};
+class ClassDestructuredNewRunner { target = function () { classDestructuredNewPrototype.create = (() => null) as any; }; entry() { const { target: Run } = this; new Run(); } }
+classDestructuredNewPrototype = NotificationsService.prototype;
+new ClassDestructuredNewRunner().entry();`],
+    ["constructible object function property Reflect construct", `let objectDestructuredConstructPrototype: any = {};
+const objectDestructuredConstructRunner = { target: function () { objectDestructuredConstructPrototype.create = (() => null) as any; }, entry() { const { target: Run } = this; Reflect.construct(Run, []); } };
+objectDestructuredConstructPrototype = NotificationsService.prototype;
+objectDestructuredConstructRunner.entry();`],
+    ["class Reflect apply", `let classDestructuredReflectApplyPrototype: any = {};
+class ClassDestructuredReflectApplyRunner { target() { classDestructuredReflectApplyPrototype.create = (() => null) as any; } entry() { const { target: run } = this; Reflect.apply(run, this, []); } }
+classDestructuredReflectApplyPrototype = NotificationsService.prototype;
+new ClassDestructuredReflectApplyRunner().entry();`],
+    ["return escape", `let classDestructuredReturnPrototype: any = {};
+class ClassDestructuredReturnRunner { target() { classDestructuredReturnPrototype.create = (() => null) as any; } entry() { const { target } = this; return target; } }
+classDestructuredReturnPrototype = NotificationsService.prototype;
+void new ClassDestructuredReturnRunner().entry();`],
+    ["argument escape", `function retainDestructuredCallable(_value: unknown) {}
+let objectDestructuredArgumentPrototype: any = {};
+const objectDestructuredArgumentRunner = { target() { objectDestructuredArgumentPrototype.create = (() => null) as any; }, entry() { const { target } = this; retainDestructuredCallable(target); } };
+objectDestructuredArgumentPrototype = NotificationsService.prototype;
+objectDestructuredArgumentRunner.entry();`],
+    ["store escape", `let retainedDestructuredCallable: unknown;
+let classDestructuredStorePrototype: any = {};
+class ClassDestructuredStoreRunner { target() { classDestructuredStorePrototype.create = (() => null) as any; } entry() { const { target } = this; retainedDestructuredCallable = target; } }
+classDestructuredStorePrototype = NotificationsService.prototype;
+new ClassDestructuredStoreRunner().entry();`],
+    ["dynamic computed binding", `declare const unresolvedDestructuredKey: string;
+let classDynamicDestructuredPrototype: any = {};
+class ClassDynamicDestructuredRunner { target() { classDynamicDestructuredPrototype.create = (() => null) as any; } entry() { const { [unresolvedDestructuredKey]: run } = this as any; run(); } }
+classDynamicDestructuredPrototype = NotificationsService.prototype;
+new ClassDynamicDestructuredRunner().entry();`],
+    ["rest binding", `let objectRestDestructuredPrototype: any = {};
+const objectRestDestructuredRunner = { target() { objectRestDestructuredPrototype.create = (() => null) as any; }, entry() { const { ...members } = this; members.target(); } };
+objectRestDestructuredPrototype = NotificationsService.prototype;
+objectRestDestructuredRunner.entry();`],
+    ["shadowed Reflect remains fail closed", `let classShadowedReflectDestructuredPrototype: any = {};
+class ClassShadowedReflectDestructuredRunner { target() { classShadowedReflectDestructuredPrototype.create = (() => null) as any; } entry() { const { target: run } = this; const Reflect = { apply: (..._args: unknown[]) => undefined }; Reflect.apply(run, this, []); } }
+classShadowedReflectDestructuredPrototype = NotificationsService.prototype;
+new ClassShadowedReflectDestructuredRunner().entry();`],
+    ["class fixed point", `let classFixedPointDestructuredPrototype: any = {};
+class ClassFixedPointDestructuredRunner { target() { classFixedPointDestructuredPrototype.create = (() => null) as any; } middle() { this.target(); } entry() { const { middle: run } = this; run.call(this); } }
+classFixedPointDestructuredPrototype = NotificationsService.prototype;
+new ClassFixedPointDestructuredRunner().entry();`],
+  ];
+  for (const [name, statement] of failures) {
+    const contract = contractFor(statement);
+    assert.equal(contract.status, STATUS.FAIL, name);
+    assert.ok(contract.evidence.missing.some((item) => item.includes("critical-symbol-write")), name);
+  }
+
+  const safeStatements = [
+    `let safeDiscardedDestructuredPrototype: any = NotificationsService.prototype;
+class SafeDiscardedDestructuredRunner { target() { safeDiscardedDestructuredPrototype.create = (() => null) as any; } entry() { const { target: run } = this; void run; } }
+new SafeDiscardedDestructuredRunner().entry();`,
+    `let safeDeadDestructuredPrototype: any = NotificationsService.prototype;
+const safeDeadDestructuredRunner = { target() { safeDeadDestructuredPrototype.create = (() => null) as any; }, entry() { const { target } = this; if (false) target(); } };
+safeDeadDestructuredRunner.entry();`,
+    `let safeEarlyDestructuredPrototype: any = {};
+class SafeEarlyDestructuredRunner { target() { safeEarlyDestructuredPrototype.create = (() => null) as any; } entry() { const { target } = this; target(); } }
+new SafeEarlyDestructuredRunner().entry();
+safeEarlyDestructuredPrototype = NotificationsService.prototype;`,
+    `function retainDeadDestructuredCallable(_value: unknown) {}
+let safeDeadEscapeDestructuredPrototype: any = NotificationsService.prototype;
+class SafeDeadEscapeDestructuredRunner { target() { safeDeadEscapeDestructuredPrototype.create = (() => null) as any; } entry() { const { target } = this; if (false) retainDeadDestructuredCallable(target); } }
+new SafeDeadEscapeDestructuredRunner().entry();`,
+  ];
+  for (const statement of safeStatements) {
+    const contract = contractFor(statement);
+    assert.equal(contract.status, STATUS.PASS, JSON.stringify(contract.evidence));
+  }
+});
+
 test("completion audit rejects removed archive-bomb preflight and whole-file Windows hashing", () => {
   const budgetRoot = createPassingFixture();
   const chainFile = path.join(budgetRoot, "desktop", "tools", "windows-evidence-chain.js");
