@@ -4,9 +4,37 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const React = require("react");
+const { renderToStaticMarkup } = require("react-dom/server");
+
+require.extensions[".css"] = (module) => {
+  module.exports = new Proxy({}, { get: (_target, key) => String(key) });
+};
+require("ts-node").register({
+  transpileOnly: true,
+  compilerOptions: { module: "CommonJS", jsx: "react-jsx", esModuleInterop: true },
+});
+
+const {
+  CatalogBundlesPage,
+  bundleIntentFingerprint,
+} = require("../apps/web/src/features/catalog/catalog-bundles-page");
 
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+
+function renderBundlesWithState(stateValues) {
+  const originals = { useEffect: React.useEffect, useRef: React.useRef, useState: React.useState };
+  let stateIndex = 0;
+  React.useState = () => [stateValues[stateIndex++], () => {}];
+  React.useRef = (initialValue) => ({ current: initialValue });
+  React.useEffect = () => {};
+  try {
+    return renderToStaticMarkup(CatalogBundlesPage());
+  } finally {
+    Object.assign(React, originals);
+  }
+}
 
 test("commerce list routes do not mount detail or write controllers", () => {
   const contracts = [
@@ -89,4 +117,47 @@ test("catalog write forms bind mutable inputs to the active request", () => {
 
   const bundles = read("apps/web/src/features/catalog/catalog-bundles-page.tsx");
   assert.ok((bundles.match(/disabled=\{busy\}/g) || []).length >= 6);
+  assert.match(bundles, /bundleIntentFingerprint/);
+  assert.match(bundles, /requestSequence = useRef\(0\)/);
+  assert.match(bundles, /status: "error"/);
+});
+
+test("catalog bundle SSR hides stale intent results and distinguishes failed attempts from idle", () => {
+  const draft = {
+    scene: "客户拜访",
+    quantity: "50",
+    perUnitAmount: "200",
+    totalAmount: "10000",
+    maxItems: "6",
+  };
+  const intentKey = bundleIntentFingerprint(draft);
+  const failure = renderBundlesWithState([
+    draft.scene,
+    draft.quantity,
+    draft.perUnitAmount,
+    draft.totalAmount,
+    draft.maxItems,
+    { status: "error", intentKey, message: "组合推荐失败：timeout", attempted: true },
+  ]);
+  assert.match(failure, /组合推荐失败/);
+  assert.match(failure, /本次请求未得到可用组合/);
+  assert.doesNotMatch(failure, /尚未计算组合/);
+
+  const staleResult = {
+    status: "old-result",
+    items: [],
+    totals: { salePrice: 0, cost: 0, profit: 0, profitRate: 0 },
+    warnings: [],
+    automation: null,
+  };
+  const changed = renderBundlesWithState([
+    "员工福利",
+    draft.quantity,
+    draft.perUnitAmount,
+    draft.totalAmount,
+    draft.maxItems,
+    { status: "success", intentKey, result: staleResult },
+  ]);
+  assert.match(changed, /尚未计算组合/);
+  assert.doesNotMatch(changed, /old-result/);
 });

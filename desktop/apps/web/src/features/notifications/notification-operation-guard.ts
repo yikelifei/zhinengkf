@@ -30,6 +30,45 @@ export async function runLatestNotificationOperation<T>({
   }
 }
 
+export type NotificationConfirmationToken = {
+  generation: number;
+  scopeKey: string;
+};
+
+export function createNotificationConfirmationGuard(initialScopeKey: string) {
+  let currentScopeKey = initialScopeKey;
+  let generation = 0;
+
+  function setScope(scopeKey: string) {
+    if (scopeKey === currentScopeKey) return;
+    currentScopeKey = scopeKey;
+    generation += 1;
+  }
+
+  function isCurrent(token: NotificationConfirmationToken, scopeKey: string) {
+    return token.generation === generation
+      && token.scopeKey === currentScopeKey
+      && scopeKey === currentScopeKey;
+  }
+
+  return {
+    setScope,
+
+    begin(scopeKey: string): NotificationConfirmationToken {
+      setScope(scopeKey);
+      return { generation, scopeKey };
+    },
+
+    isCurrent,
+
+    consume(token: NotificationConfirmationToken, scopeKey: string) {
+      if (!isCurrent(token, scopeKey)) return false;
+      generation += 1;
+      return true;
+    },
+  };
+}
+
 export function notificationScopeKey(
   unreadOnly: boolean,
   filters?: { wechatAccountId?: string; conversationId?: string; customerId?: string },

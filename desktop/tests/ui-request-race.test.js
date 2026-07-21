@@ -8,9 +8,11 @@ const test = require("node:test");
 require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "CommonJS" } });
 
 const {
+  createNotificationConfirmationGuard,
   notificationScopeKey,
   runLatestNotificationOperation,
 } = require("../apps/web/src/features/notifications/notification-operation-guard");
+const { reconcileMarkedNotification } = require("../apps/web/src/features/notifications/use-notifications-controller");
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
@@ -73,20 +75,40 @@ test("stale notification rejection cannot erase a newer successful response", as
   assert.deepEqual(state, { records: [{ id: "new" }], loaded: true, error: "" });
 });
 
-test("notification scope changes hide old rows and invalidate an open bulk confirmation", () => {
+test("notification scope changes invalidate bulk confirmation across an A-B-A transition", () => {
   const allScope = notificationScopeKey(false, { wechatAccountId: "account-a", customerId: "customer-a" });
   const unreadScope = notificationScopeKey(true, { wechatAccountId: "account-a", customerId: "customer-a" });
   const otherIdentityScope = notificationScopeKey(false, { wechatAccountId: "account-b", customerId: "customer-b" });
   assert.notEqual(allScope, unreadScope);
   assert.notEqual(allScope, otherIdentityScope);
 
+  const guard = createNotificationConfirmationGuard(allScope);
+  const original = guard.begin(allScope);
+  assert.equal(guard.isCurrent(original, allScope), true);
+  guard.setScope(unreadScope);
+  assert.equal(guard.isCurrent(original, unreadScope), false);
+  guard.setScope(allScope);
+  assert.equal(guard.isCurrent(original, allScope), false, "A-B-A must not revive the original confirmation");
+  assert.equal(guard.consume(original, allScope), false);
+
+  const fresh = guard.begin(allScope);
+  assert.equal(guard.consume(fresh, allScope), true);
+  assert.equal(guard.consume(fresh, allScope), false, "confirmation token must be one-shot");
+
+  const unread = [{ id: "notification-1", readAt: null }, { id: "notification-2", readAt: null }];
+  const updated = { id: "notification-1", readAt: "2026-07-21T00:00:00.000Z" };
+  assert.deepEqual(reconcileMarkedNotification(unread, updated, true), [unread[1]]);
+  assert.deepEqual(reconcileMarkedNotification(unread, updated, false), [updated, unread[1]]);
+
   const controller = read("apps/web/src/features/notifications/use-notifications-controller.ts");
   assert.match(controller, /loadedScopeKey === scopeKey/);
   assert.match(controller, /scopeLoaded \? notifications : \[\]/);
   assert.match(controller, /expectedScopeKey !== scopeKey/);
+  assert.match(controller, /reconcileMarkedNotification\(current, updated, unreadOnly\)/);
   const page = read("apps/web/src/features/notifications/notifications-page.tsx");
-  assert.match(page, /confirmationScopeKey === controller\.scopeKey/);
-  assert.match(page, /controller\.markAllRead\(confirmationScopeKey\)/);
+  assert.match(page, /confirmationGuard\.setScope\(controller\.scopeKey\)/);
+  assert.match(page, /confirmationGuard\.consume\(confirmationToken, controller\.scopeKey\)/);
+  assert.match(page, /controller\.markAllRead\(confirmationToken\.scopeKey\)/);
   assert.match(page, /controller\.loaded && controller\.notifications\.length/);
 });
 

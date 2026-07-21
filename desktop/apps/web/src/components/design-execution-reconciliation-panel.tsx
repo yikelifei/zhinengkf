@@ -48,9 +48,23 @@ export function DesignExecutionReconciliationPanel({
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const submitLock = useRef(false);
+  const pendingExecution = pending
+    ? executions.find((execution) => execution.id === pending.executionId) || null
+    : null;
+  const pendingBlockedReason = !pending
+    ? ""
+    : loading
+      ? "执行记录正在刷新，请返回检查最新状态后重新确认。"
+      : !accessLoaded
+        ? "执行管理权限尚未确认，请返回检查并等待权限读取完成。"
+        : !canManageExecutions
+          ? "当前会话没有执行管理权限，本次核销确认已失效。"
+          : !pendingExecution || pendingExecution.availableResolution !== pending.resolution
+            ? "执行记录或可用核销动作已经变化，请返回检查最新状态。"
+            : "";
 
   async function confirmResolution() {
-    if (!pending || submitLock.current || submittingId || !canManageExecutions) return;
+    if (!pending || submitLock.current || submittingId || pendingBlockedReason) return;
     submitLock.current = true;
     setSubmittingId(pending.executionId);
     setActionError("");
@@ -138,7 +152,7 @@ export function DesignExecutionReconciliationPanel({
                   <button
                     className={styles.resolveButton}
                     type="button"
-                    disabled={!canManageExecutions || Boolean(submittingId)}
+                    disabled={loading || !accessLoaded || !canManageExecutions || Boolean(submittingId)}
                     onClick={() => {
                       setActionError("");
                       setNotice("");
@@ -158,16 +172,23 @@ export function DesignExecutionReconciliationPanel({
       ) : null}
 
       {pending ? (
-        <div className={styles.confirmation} role="alertdialog" aria-modal="true" aria-labelledby="execution-resolution-confirm-title">
+        <div
+          className={styles.confirmation}
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="execution-resolution-confirm-title"
+          aria-describedby={pendingBlockedReason ? "execution-resolution-confirm-status" : undefined}
+        >
           <AlertTriangle size={22} aria-hidden="true" />
           <div>
             <h3 id="execution-resolution-confirm-title">请二次确认线下核对结果</h3>
             <p>{confirmationText(pending.resolution)}</p>
             <p>该动作会写入可信操作员身份；页面不会提交 reviewer 字段，也不会自动重试或生成。</p>
+            {pendingBlockedReason ? <p id="execution-resolution-confirm-status" role="alert">{pendingBlockedReason}</p> : null}
             <div className={styles.confirmActions}>
               <button type="button" disabled={Boolean(submittingId)} onClick={() => setPending(null)}>返回检查</button>
-              <button className={styles.dangerButton} type="button" disabled={Boolean(submittingId)} onClick={() => void confirmResolution()}>
-                {submittingId ? "正在提交" : "确认已核对并提交"}
+              <button className={styles.dangerButton} type="button" disabled={Boolean(submittingId) || Boolean(pendingBlockedReason)} onClick={() => void confirmResolution()}>
+                {submittingId ? "正在提交" : pendingBlockedReason ? "确认已失效" : "确认已核对并提交"}
               </button>
             </div>
           </div>
