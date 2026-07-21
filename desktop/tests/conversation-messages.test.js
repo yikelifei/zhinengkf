@@ -391,6 +391,41 @@ test("completed inbound replay fails closed when a promised durable reference is
   );
 });
 
+test("completed inbound replay requires complete manual-lock and selection references", async () => {
+  for (const scenario of ["manual-lock", "selection"]) {
+    const { localStore, service } = setup();
+    const payload = {
+      ...primaryIdentity,
+      text: `durable ${scenario} reference`,
+      externalId: `completed-replay-incomplete-${scenario}`,
+    };
+    await service.processInboundMessage(payload);
+    const document = JSON.parse(fs.readFileSync(localStore.filePath, "utf8"));
+    const operation = document.inboundMessageOperations.find((item) => item.externalId === payload.externalId);
+    if (scenario === "manual-lock") {
+      operation.result.manualLock = {
+        conversationId: primaryIdentity.conversationId,
+        blockedSendTaskIds: [],
+        inFlightSendTaskIds: [],
+      };
+    } else {
+      delete operation.result.designJobId;
+      operation.result.selection = {
+        action: "select_image",
+        ok: true,
+        result: { candidateId: "missing-durable-candidate" },
+      };
+    }
+    fs.writeFileSync(localStore.filePath, JSON.stringify(document, null, 2));
+    await assert.rejects(
+      () => service.processInboundMessage(payload),
+      scenario === "manual-lock"
+        ? /incomplete durable manual-lock reference/
+        : /missing its durable selection design job or candidate/,
+    );
+  }
+});
+
 test("completed inbound replay fails closed for every existing foreign durable reference", async () => {
   const { localStore, service } = setup();
   const payload = {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { routingCorrectionRequestKey } from "../shared/routing-correction";
 import {
   assertExactOperationReplay,
@@ -16,6 +16,7 @@ import {
   readRequestOperationMetadata,
   requestOperationMetadata,
 } from "../shared/operation-idempotency";
+import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
 
 const {
   buildOrderDraftFromQuote,
@@ -83,6 +84,16 @@ function localStoreNumberEnv(name: string, fallback: number) {
 
 const MAX_WECHAT_WINDOW_SNAPSHOTS = localStoreNumberEnv("LOCAL_STORE_MAX_WECHAT_WINDOW_SNAPSHOTS", 500);
 const DESIGN_CALLBACK_CLAIM_LEASE_MS = 15 * 60 * 1000;
+const LOCAL_STORE_LOCK_STALE_MS = Math.max(5_000, localStoreNumberEnv("LOCAL_STORE_LOCK_STALE_MS", 30_000));
+const LOCAL_STORE_LOCK_WAIT_MS = localStoreNumberEnv("LOCAL_STORE_LOCK_WAIT_MS", 3_000);
+const LOCAL_STORE_LOCK_RETRY_MS = 20;
+
+class LocalStoreConcurrentWriteError extends ConflictException {
+  constructor(message = "local store changed before the transaction could commit") {
+    super({ code: "LOCAL_STORE_CONCURRENT_WRITE", message });
+    this.name = "LocalStoreConcurrentWriteError";
+  }
+}
 
 function localDesignCallbackClaimIsFresh(value: unknown) {
   const claimedAt = Date.parse(String(value || ""));
@@ -235,6 +246,9 @@ function sameSkillIdentityScope(left: IdentityListFilter = {}, right: IdentityLi
 @Injectable()
 export class LocalStoreService {
   private readonly filePath = resolveLocalStoreFilePath();
+  private readonly readFingerprints = new WeakMap<StoreData, string>();
+  private storeLockDepth = 0;
+  private storeLockOwnershipCheck: (() => void) | null = null;
 
   listSkus(options: { includeInactive?: boolean } = {}) {
     return this.read().skus.filter((sku) => options.includeInactive || sku.isActive !== false);
@@ -1375,6 +1389,7 @@ export class LocalStoreService {
     recoveryEffect: Record<string, unknown>;
     highValueAmountCny?: number;
   }) {
+    return this.withStoreLock(() => {
     const data = this.read();
     const operationIndex = data.inboundMessageOperations.findIndex((item) => item.id === payload.operationId);
     if (operationIndex < 0) throw new NotFoundException(`inbound operation not found: ${payload.operationId}`);
@@ -1469,6 +1484,7 @@ export class LocalStoreService {
       designJob: this.hydrateDesignJob(data, data.designJobs[jobIndex]),
       quote: this.hydrateQuoteDraft(data, quote),
     };
+    });
   }
 
   commitInboundQuoteAcceptance(payload: {
@@ -1482,6 +1498,7 @@ export class LocalStoreService {
     orderPatch?: Record<string, unknown>;
     recoveryEffect: Record<string, unknown>;
   }) {
+    return this.withStoreLock(() => {
     const data = this.read();
     const operationIndex = data.inboundMessageOperations.findIndex((item) => item.id === payload.operationId);
     if (operationIndex < 0) throw new NotFoundException(`inbound operation not found: ${payload.operationId}`);
@@ -1554,6 +1571,7 @@ export class LocalStoreService {
       quote: this.hydrateQuoteDraft(data, quote),
       orderDraft: this.hydrateOrderDraft(data, order),
     };
+    });
   }
 
   listConversationTimeline(filter: IdentityListFilter & { limit?: number }) {
@@ -2626,21 +2644,22 @@ export class LocalStoreService {
   createNotification(level: string, title: string, body?: string, target?: any) {
     const data = this.read();
     const effectKey = String(target?.effectKey || "").trim();
+    const identity = this.resolveTargetIdentity(data, target || {}, "notification target");
+    const normalizedTarget = {
+      ...(target || {}),
+      ...identity.identityFields,
+      identityBinding: identity.binding,
+    };
     if (effectKey) {
       const existing = data.notifications.find((notification) => String(notification?.target?.effectKey || "") === effectKey);
-      if (existing) return existing;
+      if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target: normalizedTarget });
     }
-    const identity = this.resolveTargetIdentity(data, target || {}, "notification target");
     const record = {
       id: effectKey ? deterministicOperationId("notice", effectKey) : id("notice"),
       level,
       title,
       body,
-      target: {
-        ...(target || {}),
-        ...identity.identityFields,
-        identityBinding: identity.binding,
-      },
+      target: normalizedTarget,
       readAt: null,
       createdAt: new Date().toISOString(),
     };
@@ -4243,21 +4262,60 @@ export class LocalStoreService {
 
   private read(): StoreData {
     this.ensure();
-    const data = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as StoreData;
+    const contents = fs.readFileSync(this.filePath, "utf8");
+    const data = JSON.parse(contents) as StoreData;
     const normalized = normalizeData(data);
+    this.readFingerprints.set(normalized.data, localStoreContentsFingerprint(contents));
     if (normalized.changed) this.write(normalized.data);
     return normalized.data;
   }
 
   private write(data: StoreData) {
+    return this.withStoreLock(() => this.writeWhileLocked(data));
+  }
+
+  private writeWhileLocked(data: StoreData) {
+    this.storeLockOwnershipCheck?.();
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    writeFileAtomic(this.filePath, `${JSON.stringify(data, null, 2)}\n`);
+    const expectedFingerprint = this.readFingerprints.get(data) || "";
+    const exists = fs.existsSync(this.filePath);
+    if (exists) {
+      const currentContents = fs.readFileSync(this.filePath, "utf8");
+      const currentFingerprint = localStoreContentsFingerprint(currentContents);
+      if (!expectedFingerprint || currentFingerprint !== expectedFingerprint) {
+        throw new LocalStoreConcurrentWriteError();
+      }
+    } else if (expectedFingerprint) {
+      throw new LocalStoreConcurrentWriteError("local store disappeared before the transaction could commit");
+    }
+    const contents = `${JSON.stringify(data, null, 2)}\n`;
+    this.storeLockOwnershipCheck?.();
+    writeFileAtomic(this.filePath, contents);
+    this.readFingerprints.set(data, localStoreContentsFingerprint(contents));
+  }
+
+  private withStoreLock<T>(operation: () => T): T {
+    if (this.storeLockDepth > 0) return operation();
+    const lock = acquireLocalStoreLock(this.filePath);
+    this.storeLockOwnershipCheck = lock.assertOwned;
+    this.storeLockDepth += 1;
+    try {
+      return operation();
+    } finally {
+      this.storeLockDepth -= 1;
+      this.storeLockOwnershipCheck = null;
+      lock.release();
+    }
   }
 
   private ensure() {
     if (fs.existsSync(this.filePath)) return;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    this.write(seedData());
+    try {
+      this.write(seedData());
+    } catch (error) {
+      if (!(error instanceof LocalStoreConcurrentWriteError) || !fs.existsSync(this.filePath)) throw error;
+    }
   }
 
   private decorateTrainingSample(sample: any) {
@@ -4265,6 +4323,130 @@ export class LocalStoreService {
       ...sample,
       quality: evaluateTrainingSampleQuality(sample),
     };
+  }
+}
+
+export function acquireLocalStoreLock(filePath: string) {
+  const lockPath = `${filePath}.lock`;
+  const deadline = Date.now() + LOCAL_STORE_LOCK_WAIT_MS;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  while (true) {
+    const ownerToken = randomUUID();
+    const ownerFileName = `owner-${ownerToken}.json`;
+    const pendingPath = `${lockPath}.pending-${process.pid}-${ownerToken}`;
+    fs.mkdirSync(pendingPath);
+    fs.writeFileSync(
+      path.join(pendingPath, ownerFileName),
+      JSON.stringify({ ownerToken, pid: process.pid, acquiredAt: new Date().toISOString() }),
+      { encoding: "utf8", flag: "wx" },
+    );
+    try {
+      // The directory is populated before the rename, so another owner never observes an empty acquired lock.
+      fs.renameSync(pendingPath, lockPath);
+      return ownedLocalStoreLockHandle(lockPath, ownerFileName);
+    } catch (error: any) {
+      removeOwnedLockDirectory(pendingPath, ownerFileName);
+      if (!localStoreLockAlreadyExists(error)) throw error;
+    }
+
+    const stale = localStoreLockIsStale(lockPath);
+    if (stale) {
+      const abandonedPath = `${lockPath}.abandoned-${process.pid}-${randomUUID()}`;
+      try {
+        fs.renameSync(lockPath, abandonedPath);
+        removeAbandonedLockDirectory(abandonedPath);
+        continue;
+      } catch (error: any) {
+        if (!localStoreLockRace(error)) throw error;
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new LocalStoreConcurrentWriteError("local store transaction lock timed out");
+    }
+    const waitMs = Math.max(1, Math.min(LOCAL_STORE_LOCK_RETRY_MS, deadline - Date.now()));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+  }
+}
+
+function ownedLocalStoreLockHandle(lockPath: string, ownerFileName: string) {
+  let released = false;
+  const ownerPath = path.join(lockPath, ownerFileName);
+  return {
+    assertOwned: () => {
+      if (released || !fs.existsSync(ownerPath)) {
+        throw new LocalStoreConcurrentWriteError("local store transaction lock ownership was lost");
+      }
+    },
+    release: () => {
+      if (released) return;
+      released = true;
+      try {
+        // A stale owner cannot remove a replacement lock because its unique owner file is absent there.
+        fs.unlinkSync(ownerPath);
+      } catch (error: any) {
+        if (error?.code === "ENOENT") return;
+        throw error;
+      }
+      try {
+        fs.rmdirSync(lockPath);
+      } catch (error: any) {
+        if (["ENOENT", "ENOTEMPTY", "EEXIST"].includes(String(error?.code || ""))) return;
+        throw error;
+      }
+    },
+  };
+}
+
+function localStoreLockIsStale(lockPath: string) {
+  try {
+    return fs.statSync(lockPath).mtimeMs < Date.now() - LOCAL_STORE_LOCK_STALE_MS;
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+function localStoreLockAlreadyExists(error: any) {
+  return ["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(String(error?.code || ""));
+}
+
+function localStoreLockRace(error: any) {
+  return ["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(String(error?.code || ""));
+}
+
+function removeOwnedLockDirectory(directoryPath: string, ownerFileName: string) {
+  try {
+    fs.unlinkSync(path.join(directoryPath, ownerFileName));
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  try {
+    fs.rmdirSync(directoryPath);
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+function removeAbandonedLockDirectory(directoryPath: string) {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(directoryPath);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!/^owner-[0-9a-f-]+\.json$/i.test(entry)) continue;
+    try {
+      fs.unlinkSync(path.join(directoryPath, entry));
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  try {
+    fs.rmdirSync(directoryPath);
+  } catch (error: any) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(String(error?.code || ""))) throw error;
   }
 }
 
@@ -4350,6 +4532,10 @@ function timelineTaskAttachments(task: any) {
     ],
     String(task?.status || "queued"),
   );
+}
+
+function localStoreContentsFingerprint(contents: string) {
+  return createHash("sha256").update(contents, "utf8").digest("hex");
 }
 
 function writeFileAtomic(filePath: string, contents: string) {

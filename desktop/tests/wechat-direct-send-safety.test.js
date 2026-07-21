@@ -355,7 +355,7 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   assert.match(wechatService, /throw new BadRequestException\("订单缺少微信账号、客户或会话绑定，不能进入微信发送队列。"\)/);
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order confirmation"\)/);
   assert.match(wechatService, /this\.assertHighValueOrderHasManualRelease\(order, payload, "high value order follow-up"\)/);
-  assert.match(wechatService, /this\.orders\.update\(order\.id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId/);
+  assert.match(wechatService, /this\.orders\.updateFromAutomation\(order\.id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId/);
   assert.match(reviewsService, /private async updateReviewedOrder/);
   assert.match(reviewsService, /assertHighValueOrderHasCompleteIdentity\(order, decision\)/);
   assert.match(reviewsService, /assertHighValueOrderApprovalReady\(order, decision\)/);
@@ -1105,6 +1105,7 @@ test("inbound quote acceptance atomically fences conversation identity with its 
   ]) assert.match(acceptanceSection, pattern);
 
   for (const pattern of [
+    /return this\.withStoreLock\(\(\) => \{/,
     /operation\.status !== "processing"/,
     /operation\.claimToken !== payload\.claimToken/,
     /Date\.parse\(String\(operation\.leaseExpiresAt/,
@@ -1115,6 +1116,7 @@ test("inbound quote acceptance atomically fences conversation identity with its 
     /data\.inboundMessageOperations\[operationIndex\]/,
     /this\.write\(data\)/,
   ]) assert.match(atomicCommit, pattern);
+  assert.doesNotMatch(acceptanceSection, /this\.orders\.(?:update|createFromQuote)\(/);
 });
 
 test("quote and order contracts expose guarded next-step guidance", () => {

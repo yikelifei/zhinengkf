@@ -357,12 +357,13 @@ export class WechatDispatchService {
       orderContext,
       automation: trustedAutomation,
     });
-    const updatedOrder = await this.orders.update(order.id, {
+    const updatedOrder = await this.orders.updateFromAutomation(order.id, {
       expectedWechatAccountId: payload.expectedWechatAccountId,
       expectedConversationId: payload.expectedConversationId,
       expectedCustomerId: payload.expectedCustomerId,
       owner: payload.owner || order.owner || "人工客服",
       customerNotes: payload.note || order.customerNotes || "订单确认已进入微信安全发送队列。",
+    }, {
       notificationEffectKey: `${operationKey}:order-update-notification`,
     });
     const notification = await this.notifications.create(
@@ -1429,7 +1430,7 @@ export class WechatDispatchService {
     for (const task of [...blockedSendTasks, ...inFlightSendTasks]) {
       assertCompletedReplayIdentity("manual-lock send task", task, canonicalIdentity);
     }
-    if (manualLockRef && !manualConversationId) {
+    if (manualLockRef && (!manualConversationId || !manualReviewLogId)) {
       throw new BadRequestException("completed inbound operation has an incomplete durable manual-lock reference");
     }
     const outcome = String(durable.outcome || "processed");
@@ -6617,12 +6618,13 @@ export class WechatDispatchService {
       const note = updatingExistingOrder
         ? "客户补充付款信息后，订单确认已自动进入微信安全发送队列。"
         : "低价值客户确认付款后，订单确认已自动进入微信安全发送队列。";
-      result.orderDraft = await this.orders.update(result.orderDraft.id, {
+      result.orderDraft = await this.orders.updateFromAutomation(result.orderDraft.id, {
         ...this.expectedIdentityFromOrder(result.orderDraft),
         owner: "low_value_automation",
         customerNotes: note,
+      } as any, {
         notificationEffectKey: `${stableOperationKey("order-confirm", `${result.orderDraft.id}:order-confirmation`)}:order-update-notification`,
-      } as any);
+      });
       result.sendTask = existingConfirmationTask;
       result.plan.shouldQueueReply = true;
       confirmationDecision = { ...confirmationDecision, reason: "low_value_order_confirmation_ready" };
@@ -8309,8 +8311,8 @@ function hydrateDurableSelection(value: unknown, designJob: any) {
   const candidate = candidateId
     ? candidates.find((item: any) => String(item?.id || "") === candidateId || String(item?.imageId || "") === candidateId) || null
     : null;
-  if (candidateId && designJob && !candidate) {
-    throw new BadRequestException("completed inbound operation is missing its durable selection candidate");
+  if (candidateId && (!designJob || !candidate)) {
+    throw new BadRequestException("completed inbound operation is missing its durable selection design job or candidate");
   }
   return {
     action: String(value.action || ""),

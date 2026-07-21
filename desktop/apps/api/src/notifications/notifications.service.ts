@@ -3,6 +3,7 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
 import { deterministicOperationId, isUniqueConstraintError } from "../shared/operation-idempotency";
 
 @Injectable()
@@ -38,14 +39,14 @@ export class NotificationsService {
     const existing = typeof notification.findUnique === "function"
       ? await notification.findUnique({ where: { id } })
       : null;
-    if (existing) return existing;
+    if (existing) return assertNotificationEffectReplay(existing, { level, title, body, target });
     try {
       return await notification.create({ data: { id, level, title, body, target: (target || {}) as any } });
     } catch (error) {
       if (!isUniqueConstraintError(error) || typeof notification.findUnique !== "function") throw error;
       const winner = await notification.findUnique({ where: { id } });
       if (!winner) throw error;
-      return winner;
+      return assertNotificationEffectReplay(winner, { level, title, body, target });
     }
   }
 

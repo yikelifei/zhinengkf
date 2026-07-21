@@ -92,6 +92,16 @@ export class OrdersService {
     return this.updateOrderDraft(id, patch || {});
   }
 
+  async updateFromAutomation(
+    id: string,
+    patch: OrderDraftUpdatePatch & ExpectedIdentityPayload,
+    options: { notificationEffectKey: string },
+  ) {
+    const notificationEffectKey = String(options?.notificationEffectKey || "").trim();
+    if (!notificationEffectKey) throw new BadRequestException("automation order update requires a notification effect key");
+    return this.updateOrderDraft(id, patch || {}, { notificationEffectKey });
+  }
+
   async recordVerifiedPayment(
     id: string,
     patch: {
@@ -106,7 +116,11 @@ export class OrdersService {
     return this.updateOrderDraft(id, { ...patch, status: "confirmed" });
   }
 
-  private async updateOrderDraft(id: string, patch: OrderDraftUpdatePatch & ExpectedIdentityPayload) {
+  private async updateOrderDraft(
+    id: string,
+    patch: OrderDraftUpdatePatch & ExpectedIdentityPayload,
+    options: { notificationEffectKey?: string } = {},
+  ) {
     const current = await this.getOrderDraft(id);
     if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
     assertExpectedIdentity(current, patch, "order draft");
@@ -154,10 +168,13 @@ export class OrdersService {
       "订单草稿已更新",
       `订单 ${id} 已更新为 ${updated.status} / ${orderDraftPaymentStatus({ ...current, ...updated }, data)}。`,
       {
-        ...(patch.notificationEffectKey ? { effectKey: patch.notificationEffectKey } : {}),
+        ...(options.notificationEffectKey ? { effectKey: options.notificationEffectKey } : {}),
         orderDraftId: id,
         quoteDraftId: current.quoteDraftId,
         designJobId: current.designJobId,
+        wechatAccountId: current.wechatAccountId,
+        conversationId: current.conversationId,
+        customerId: current.customerId,
         cancelledSendTaskIds: cancelledSendTasks.map((task: any) => task.id),
       },
     );
@@ -962,10 +979,12 @@ type OrderDraftUpdatePatch = {
   paymentStatus?: string;
   customerNotes?: string;
   owner?: string;
-  notificationEffectKey?: string;
 };
 
 function assertGenericOrderUpdatePatch(patch: OrderDraftUpdatePatch) {
+  if (Object.prototype.hasOwnProperty.call(patch, "notificationEffectKey")) {
+    throw new BadRequestException("notificationEffectKey is reserved for trusted automation");
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "paymentStatus")) {
     throw new BadRequestException("订单付款状态只能通过报价付款凭证核验入口更新。");
   }

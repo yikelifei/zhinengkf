@@ -50,14 +50,14 @@ export class OrdersController {
     @Body() payload: { status?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    const {
-      owner: _untrustedOwner,
-      actor: _untrustedActor,
-      operator: _untrustedOperator,
-      reviewer: _untrustedReviewer,
-      ...trustedPayload
-    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
-    return this.orders.update(id, { ...trustedPayload, owner: principal.id });
+    return this.orders.update(id, {
+      status: payload?.status,
+      customerNotes: payload?.customerNotes,
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      owner: principal.id,
+    });
   }
 
   @Post(":id/revise-selection")
