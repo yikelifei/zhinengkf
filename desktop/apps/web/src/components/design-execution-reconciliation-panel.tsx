@@ -31,6 +31,30 @@ type PendingResolution = {
   resolution: Exclude<DesignExecutionAvailableResolution, null>;
 };
 
+export function getDesignExecutionResolutionBlockedReason({
+  pending,
+  executions,
+  loading,
+  accessLoaded,
+  canManageExecutions,
+}: {
+  pending: PendingResolution | null;
+  executions: readonly DesignPlatformExecutionView[];
+  loading: boolean;
+  accessLoaded: boolean;
+  canManageExecutions: boolean;
+}) {
+  if (!pending) return "";
+  if (loading) return "执行记录正在刷新，请返回检查最新状态后重新确认。";
+  if (!accessLoaded) return "执行管理权限尚未确认，请返回检查并等待权限读取完成。";
+  if (!canManageExecutions) return "当前会话没有执行管理权限，本次核销确认已失效。";
+  const currentExecution = executions.find((execution) => execution.id === pending.executionId);
+  if (!currentExecution || currentExecution.availableResolution !== pending.resolution) {
+    return "执行记录或可用核销动作已经变化，请返回检查最新状态。";
+  }
+  return "";
+}
+
 export function DesignExecutionReconciliationPanel({
   executions,
   loading,
@@ -48,20 +72,13 @@ export function DesignExecutionReconciliationPanel({
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const submitLock = useRef(false);
-  const pendingExecution = pending
-    ? executions.find((execution) => execution.id === pending.executionId) || null
-    : null;
-  const pendingBlockedReason = !pending
-    ? ""
-    : loading
-      ? "执行记录正在刷新，请返回检查最新状态后重新确认。"
-      : !accessLoaded
-        ? "执行管理权限尚未确认，请返回检查并等待权限读取完成。"
-        : !canManageExecutions
-          ? "当前会话没有执行管理权限，本次核销确认已失效。"
-          : !pendingExecution || pendingExecution.availableResolution !== pending.resolution
-            ? "执行记录或可用核销动作已经变化，请返回检查最新状态。"
-            : "";
+  const pendingBlockedReason = getDesignExecutionResolutionBlockedReason({
+    pending,
+    executions,
+    loading,
+    accessLoaded,
+    canManageExecutions,
+  });
 
   async function confirmResolution() {
     if (!pending || submitLock.current || submittingId || pendingBlockedReason) return;

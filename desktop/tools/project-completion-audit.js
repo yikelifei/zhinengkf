@@ -2355,21 +2355,77 @@ function designReconciliationResults(root) {
   const executionService = readText(root, executionServicePath) || "";
   const types = readText(root, typesPath) || "";
 
-  const uiChecks = patternFailures(ui, [
-    /export const DESIGN_EXECUTION_RESOLUTIONS\s*=\s*\{[\s\S]*unknown:\s*["']confirmed_not_generated_refunded["'][\s\S]*refund:\s*["']confirmed_refunded["'][\s\S]*\}\s*as const/,
+  const resolutionConstants = /export const DESIGN_EXECUTION_RESOLUTIONS\s*=\s*\{[\s\S]*?\}\s*as const/.exec(ui || "")?.[0] || null;
+  const pendingGuard = extractBalancedBlock(ui, /export function getDesignExecutionResolutionBlockedReason\s*\([^)]*\)\s*/);
+  const component = extractBalancedBlock(ui, /export function DesignExecutionReconciliationPanel\s*\([^)]*\)\s*/);
+  const confirmResolution = extractBalancedBlock(ui, /async function confirmResolution\s*\([^)]*\)\s*/);
+  const resolutionActionBlock = extractBalancedBlock(ui, /function resolutionAction\s*\([^)]*\)\s*/);
+  const unknownClient = extractBalancedBlock(webApi, /export async function resolveUnknownDesignExecution\s*\([^)]*\)\s*[^\{]*/);
+  const refundClient = extractBalancedBlock(webApi, /export async function resolveDesignExecutionRefund\s*\([^)]*\)\s*[^\{]*/);
+  const resolutionRequest = extractBalancedBlock(webApi, /async function postDesignExecutionResolution\s*\([^)]*\)\s*[^\{]*/);
+
+  const resolutionConstantChecks = patternFailures(resolutionConstants, [
+    /unknown:\s*["']confirmed_not_generated_refunded["']/,
+    /refund:\s*["']confirmed_refunded["']/,
+  ]);
+  const pendingGuardChecks = patternFailures(pendingGuard, [
+    /if \(!pending\) return ["']["']/,
+    /if \(loading\) return/,
+    /if \(!accessLoaded\) return/,
+    /if \(!canManageExecutions\) return/,
+    /executions\.find\(\(execution\) => execution\.id === pending\.executionId\)/,
+    /!currentExecution\s*\|\|\s*currentExecution\.availableResolution !== pending\.resolution/,
+  ]);
+  const componentChecks = patternFailures(component, [
+    /getDesignExecutionResolutionBlockedReason\(\{\s*pending,\s*executions,\s*loading,\s*accessLoaded,\s*canManageExecutions,\s*\}\)/,
     /resolutionAction\(execution\.availableResolution\)/,
+    /disabled=\{loading\s*\|\|\s*!accessLoaded\s*\|\|\s*!canManageExecutions\s*\|\|\s*Boolean\(submittingId\)\}/,
+    /role=["']alertdialog["']/,
+    /pendingBlockedReason\s*\?\s*<p[^>]*role=["']alert["']/,
+    /disabled=\{Boolean\(submittingId\)\s*\|\|\s*Boolean\(pendingBlockedReason\)\}/,
+  ]);
+  const confirmChecks = patternFailures(confirmResolution, [
+    /if \(!pending\s*\|\|\s*submitLock\.current\s*\|\|\s*submittingId\s*\|\|\s*pendingBlockedReason\) return/,
+    /submitLock\.current\s*=\s*true/,
+    /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.unknown/,
+    /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.refund/,
+    /else\s*\{\s*throw new Error/,
+    /await onResolveUnknown\(pending\.executionId\)/,
+    /await onResolveRefund\(pending\.executionId\)/,
+    /await onRefresh\(\)/,
+  ]);
+  const resolutionActionChecks = patternFailures(resolutionActionBlock, [
     /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.unknown/,
     /resolution\s*===\s*DESIGN_EXECUTION_RESOLUTIONS\.refund/,
     /return null/,
-    /if \(!pending[^\n{]*submittingId[^\n{]*!canManageExecutions\) return/,
-    /submitLock\.current/,
-    /role=["']alertdialog["']/,
-    /await onRefresh\(\)/,
-  ], [
-    /\breviewer\s*:/,
-    /\bsetInterval\s*\(/,
   ]);
-  const uiOk = uiChecks.missing.length === 0 && uiChecks.forbidden.length === 0;
+  const unknownClientChecks = patternFailures(unknownClient, [
+    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-unknown/,
+    /resolution:\s*["']confirmed_not_generated_refunded["']/,
+  ], [/\breviewer\s*:/]);
+  const refundClientChecks = patternFailures(refundClient, [
+    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-refund/,
+    /resolution:\s*["']confirmed_refunded["']/,
+  ], [/\breviewer\s*:/]);
+  const resolutionRequestChecks = patternFailures(resolutionRequest, [
+    /body:\s*JSON\.stringify\(body\)/,
+  ], [/\breviewer\s*:/]);
+  const uiMissing = [
+    ...resolutionConstantChecks.missing.map((item) => `resolution-constants-${item}`),
+    ...pendingGuardChecks.missing.map((item) => `pending-guard-${item}`),
+    ...componentChecks.missing.map((item) => `component-${item}`),
+    ...confirmChecks.missing.map((item) => `confirm-${item}`),
+    ...resolutionActionChecks.missing.map((item) => `resolution-action-${item}`),
+    ...unknownClientChecks.missing.map((item) => `unknown-client-${item}`),
+    ...refundClientChecks.missing.map((item) => `refund-client-${item}`),
+    ...resolutionRequestChecks.missing.map((item) => `request-body-${item}`),
+  ];
+  const uiForbidden = [
+    ...unknownClientChecks.forbidden.map((item) => `unknown-client-${item}`),
+    ...refundClientChecks.forbidden.map((item) => `refund-client-${item}`),
+    ...resolutionRequestChecks.forbidden.map((item) => `request-body-${item}`),
+  ];
+  const uiOk = uiMissing.length === 0 && uiForbidden.length === 0;
 
   const viewMatch = /export type DesignPlatformExecutionView\s*=\s*\{([\s\S]*?)\n\};/.exec(types);
   const viewBody = viewMatch?.[1] || null;
@@ -2464,8 +2520,6 @@ function designReconciliationResults(root) {
   const unknownRoute = extractRouteSection(controller, /@Post\(["']:id\/executions\/:executionId\/resolve-unknown["']\)/);
   const refundRoute = extractRouteSection(controller, /@Post\(["']:id\/executions\/:executionId\/resolve-refund["']\)/);
   const approveRoute = extractRouteSection(controller, /@Post\(["']:id\/quick-confirm-send["']\)/);
-  const unknownClient = extractBalancedBlock(webApi, /export async function resolveUnknownDesignExecution\s*\([^)]*\)\s*[^\{]*/);
-  const refundClient = extractBalancedBlock(webApi, /export async function resolveDesignExecutionRefund\s*\([^)]*\)\s*[^\{]*/);
   const unknownPublic = extractBalancedBlock(executionService, /async resolveUnknownPublic\s*\([^)]*\)\s*[^\{]*/);
   const refundPublic = extractBalancedBlock(executionService, /async resolveUnsafeRefundPublic\s*\([^)]*\)\s*[^\{]*/);
   const resolveUnknownService = extractBalancedBlock(designService, /async resolveUnknownExecution\s*\([^)]*\)\s*[^\{]*/);
@@ -2492,14 +2546,6 @@ function designReconciliationResults(root) {
     /ResolveUnknownDesignExecutionPayload\s*=\s*\{\s*resolution:\s*["']confirmed_not_generated_refunded["'];?\s*\}/,
     /ResolveDesignExecutionRefundPayload\s*=\s*\{\s*resolution:\s*["']confirmed_refunded["'];?\s*\}/,
   ]);
-  const unknownClientChecks = patternFailures(unknownClient, [
-    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-unknown/,
-    /resolution:\s*["']confirmed_not_generated_refunded["']/,
-  ], [/\breviewer\s*:/]);
-  const refundClientChecks = patternFailures(refundClient, [
-    /\/executions\/\$\{encodeURIComponent\(executionId\)\}\/resolve-refund/,
-    /resolution:\s*["']confirmed_refunded["']/,
-  ], [/\breviewer\s*:/]);
   const unknownPublicChecks = patternFailures(unknownPublic, [
     /toPublicExecutionView\(await this\.resolveUnknown/,
   ]);
@@ -2520,6 +2566,7 @@ function designReconciliationResults(root) {
     ...typeBoundaryChecks.missing.map((item) => `types-${item}`),
     ...unknownClientChecks.missing.map((item) => `unknown-client-${item}`),
     ...refundClientChecks.missing.map((item) => `refund-client-${item}`),
+    ...resolutionRequestChecks.missing.map((item) => `request-body-${item}`),
     ...unknownPublicChecks.missing.map((item) => `unknown-public-mapper-${item}`),
     ...refundPublicChecks.missing.map((item) => `refund-public-mapper-${item}`),
     ...unknownServiceResponseChecks.missing.map((item) => `unknown-service-response-${item}`),
@@ -2528,6 +2575,7 @@ function designReconciliationResults(root) {
   const boundaryForbidden = [
     ...unknownClientChecks.forbidden.map((item) => `unknown-client-${item}`),
     ...refundClientChecks.forbidden.map((item) => `refund-client-${item}`),
+    ...resolutionRequestChecks.forbidden.map((item) => `request-body-${item}`),
   ];
   const boundariesOk = boundaryMissing.length === 0
     && boundaryForbidden.length === 0;
@@ -2537,8 +2585,8 @@ function designReconciliationResults(root) {
       "contract.design_execution_reconciliation_ui",
       "设计执行人工核销 UI 失败关闭契约",
       uiOk ? STATUS.PASS : STATUS.FAIL,
-      uiOk ? "UI 只使用服务端白名单动作和固定 resolution，且不提交 reviewer。" : "UI 文件缺失，或核销动作、固定 resolution、失败关闭/无 reviewer 契约发生漂移。",
-      { paths: [uiPath, webApiPath], ...uiChecks },
+      uiOk ? "UI 确认绑定当前执行动作，并在读取、权限或 intent 变化时失败关闭；客户端只提交固定 resolution，不提交 reviewer。" : "UI 文件缺失，或当前执行 intent、读取/权限失败关闭、固定 resolution、无 reviewer 契约发生漂移。",
+      { paths: [uiPath, webApiPath], missing: uiMissing, forbidden: uiForbidden },
     ),
     result(
       "contract.design_execution_public_view",

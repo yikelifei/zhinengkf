@@ -463,13 +463,43 @@ export const DESIGN_EXECUTION_RESOLUTIONS = {
   unknown: "confirmed_not_generated_refunded",
   refund: "confirmed_refunded",
 } as const;
-async function confirmResolution() {
-  if (!pending || submitLock.current || submittingId || !canManageExecutions) return;
-  submitLock.current = true;
-  if (pending.resolution === DESIGN_EXECUTION_RESOLUTIONS.unknown) await onResolveUnknown();
-  else if (pending.resolution === DESIGN_EXECUTION_RESOLUTIONS.refund) await onResolveRefund();
-  await onRefresh();
-  return <div role="alertdialog" />;
+
+export function getDesignExecutionResolutionBlockedReason({ pending, executions, loading, accessLoaded, canManageExecutions }) {
+  if (!pending) return "";
+  if (loading) return "loading";
+  if (!accessLoaded) return "access unknown";
+  if (!canManageExecutions) return "access downgraded";
+  const currentExecution = executions.find((execution) => execution.id === pending.executionId);
+  if (!currentExecution || currentExecution.availableResolution !== pending.resolution) return "intent changed";
+  return "";
+}
+
+export function DesignExecutionReconciliationPanel() {
+  const pendingBlockedReason = getDesignExecutionResolutionBlockedReason({
+    pending,
+    executions,
+    loading,
+    accessLoaded,
+    canManageExecutions,
+  });
+  async function confirmResolution() {
+    if (!pending || submitLock.current || submittingId || pendingBlockedReason) return;
+    submitLock.current = true;
+    if (pending.resolution === DESIGN_EXECUTION_RESOLUTIONS.unknown) {
+      await onResolveUnknown(pending.executionId);
+    } else if (pending.resolution === DESIGN_EXECUTION_RESOLUTIONS.refund) {
+      await onResolveRefund(pending.executionId);
+    } else {
+      throw new Error("unsupported resolution");
+    }
+    await onRefresh();
+  }
+  const action = resolutionAction(execution.availableResolution);
+  return <div role="alertdialog">
+    <button disabled={loading || !accessLoaded || !canManageExecutions || Boolean(submittingId)} />
+    {pendingBlockedReason ? <p role="alert">{pendingBlockedReason}</p> : null}
+    <button disabled={Boolean(submittingId) || Boolean(pendingBlockedReason)} />
+  </div>;
 }
 function resolutionAction(resolution) {
   if (resolution === DESIGN_EXECUTION_RESOLUTIONS.unknown) return { resolution };
@@ -510,12 +540,15 @@ export async function getDesignJobExecutions(id, expected) {
   return fetch(\`/design-jobs/\${encodeURIComponent(id)}/executions?\${designExecutionExpectedIdentityQuery(expected)}\`);
 }
 export async function resolveUnknownDesignExecution(designJobId, executionId, expected) {
-  return post(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-unknown\`,
+  return postDesignExecutionResolution(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-unknown\`,
     { ...expected, resolution: "confirmed_not_generated_refunded" });
 }
 export async function resolveDesignExecutionRefund(designJobId, executionId, expected) {
-  return post(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-refund\`,
+  return postDesignExecutionResolution(\`/design-jobs/\${encodeURIComponent(designJobId)}/executions/\${encodeURIComponent(executionId)}/resolve-refund\`,
     { ...expected, resolution: "confirmed_refunded" });
+}
+async function postDesignExecutionResolution(path, body) {
+  return fetch(path, { method: "POST", body: JSON.stringify(body) });
 }
 `);
   write(root, "desktop/tools/build-web.js", `
@@ -1857,24 +1890,82 @@ test("design reconciliation UI is a required artifact with a fail-closed action 
   assert.equal(report.results.find((item) => item.id === "ui.design_execution_reconciliation").status, STATUS.FAIL);
   assert.equal(report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui").status, STATUS.FAIL);
 
-  const restored = createPassingFixture();
-  const restoredComponentPath = path.join(restored, "desktop", "apps", "web", "src", "components", "design-execution-reconciliation-panel.tsx");
-  const component = fs.readFileSync(restoredComponentPath, "utf8").replace("return null;", 'return { resolution: "unexpected_server_value" };');
-  fs.writeFileSync(restoredComponentPath, component, "utf8");
-  report = buildAudit(restored, { includeExternal: false });
-  const uiContract = report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
-  assert.equal(uiContract.status, STATUS.FAIL);
-  assert.ok(uiContract.evidence.missing.length > 0);
+  const mutations = [
+    {
+      name: "fixed resolution cannot drift",
+      from: 'unknown: "confirmed_not_generated_refunded"',
+      to: 'unknown: "server_resolution"',
+    },
+    {
+      name: "loading must invalidate pending confirmation",
+      from: 'if (loading) return "loading";',
+      to: 'if (false) return "loading";',
+    },
+    {
+      name: "unknown access must invalidate pending confirmation",
+      from: 'if (!accessLoaded) return "access unknown";',
+      to: 'if (false) return "access unknown";',
+    },
+    {
+      name: "access downgrade must invalidate pending confirmation",
+      from: 'if (!canManageExecutions) return "access downgraded";',
+      to: 'if (false) return "access downgraded";',
+    },
+    {
+      name: "current execution intent and resolution must still match",
+      from: 'if (!currentExecution || currentExecution.availableResolution !== pending.resolution) return "intent changed";',
+      to: 'if (!currentExecution) return "intent changed";',
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const mutatedRoot = createPassingFixture();
+    const mutatedComponentPath = path.join(mutatedRoot, "desktop", "apps", "web", "src", "components", "design-execution-reconciliation-panel.tsx");
+    const component = fs.readFileSync(mutatedComponentPath, "utf8");
+    assert.ok(component.includes(mutation.from), mutation.name);
+    fs.writeFileSync(mutatedComponentPath, component.replace(mutation.from, mutation.to), "utf8");
+    report = buildAudit(mutatedRoot, { includeExternal: false });
+    const uiContract = report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
+    assert.equal(uiContract.status, STATUS.FAIL, mutation.name);
+    assert.ok(uiContract.evidence.missing.length > 0, mutation.name);
+  }
 });
 
 test("design reconciliation UI cannot put reviewer in a browser-owned request body", () => {
-  const root = createPassingFixture();
-  const componentPath = path.join(root, "desktop", "apps", "web", "src", "components", "design-execution-reconciliation-panel.tsx");
-  fs.appendFileSync(componentPath, '\nconst unsafeBody = { reviewer: "browser_operator" };\n', "utf8");
-  const report = buildAudit(root, { includeExternal: false });
-  const contract = report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
-  assert.equal(contract.status, STATUS.FAIL);
-  assert.deepEqual(contract.evidence.forbidden, ["forbidden-pattern-1"]);
+  const repositoryRoot = path.resolve(__dirname, "..", "..");
+  const integrationReport = buildAudit(repositoryRoot, { includeExternal: false });
+  const integrationContract = integrationReport.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
+  assert.equal(integrationContract.status, STATUS.PASS, JSON.stringify(integrationContract.evidence));
+
+  const mutations = [
+    {
+      name: "unknown resolution request",
+      from: '{ ...expected, resolution: "confirmed_not_generated_refunded" }',
+      to: '{ ...expected, resolution: "confirmed_not_generated_refunded", reviewer: "browser_operator" }',
+    },
+    {
+      name: "refund resolution request",
+      from: '{ ...expected, resolution: "confirmed_refunded" }',
+      to: '{ ...expected, resolution: "confirmed_refunded", reviewer: "browser_operator" }',
+    },
+    {
+      name: "shared request serializer",
+      from: 'body: JSON.stringify(body)',
+      to: 'body: JSON.stringify({ ...body, reviewer: "browser_operator" })',
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = createPassingFixture();
+    const apiPath = path.join(root, "desktop", "apps", "web", "src", "lib", "api.ts");
+    const api = fs.readFileSync(apiPath, "utf8");
+    assert.ok(api.includes(mutation.from), mutation.name);
+    fs.writeFileSync(apiPath, api.replace(mutation.from, mutation.to), "utf8");
+    const report = buildAudit(root, { includeExternal: false });
+    const contract = report.results.find((item) => item.id === "contract.design_execution_reconciliation_ui");
+    assert.equal(contract.status, STATUS.FAIL, mutation.name);
+    assert.ok(contract.evidence.forbidden.length > 0, mutation.name);
+  }
 });
 
 test("design execution public view rejects unexpected DTO fields and unsafe projection fields", () => {
