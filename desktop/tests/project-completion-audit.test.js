@@ -803,9 +803,15 @@ export class OrdersController {
   @Post("from-quote/:quoteId") @RequireOperatorCapability("manage_design_executions") create() {}
   @Post(":id/update")
   @RequireOperatorCapability("manage_design_executions")
-  update(@Body() body, @TrustedOperator() principal) {
-    const { owner: _untrustedOwner, ...trusted } = body;
-    return service({ ...trusted, owner: principal.id });
+  update(@Param("id") id, @Body() payload, @TrustedOperator() principal) {
+    return this.orders.update(id, {
+      status: payload?.status,
+      customerNotes: payload?.customerNotes,
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      owner: principal.id,
+    });
   }
   @Post(":id/revise-selection")
   @RequireOperatorCapability("manage_design_executions")
