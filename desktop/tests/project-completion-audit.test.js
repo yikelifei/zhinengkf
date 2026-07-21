@@ -2503,12 +2503,36 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nconst [...sparseLocalAliases] = [, LocalStoreService.prototype];\nsparseLocalAliases[1].createNotification = (() => null) as any;\n`;
       },
     },
+    {
+      name: "Reflect.apply callable union with an unresolved alternative fails closed",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unresolvedCallableSelector: boolean;\ndeclare const unresolvedApplyCallable: (...args: any[]) => unknown;\nconst mixedApplyCallable = unresolvedCallableSelector ? Object.defineProperty : unresolvedApplyCallable;\nReflect.apply(mixedApplyCallable, Object, [NotificationsService.prototype, "safeMixedCallableCreate", { value: () => null }]);\n`;
+      },
+    },
+    {
+      name: "numeric object-rest retained key cannot hide a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { [1]: ignoredNumericLocalKey, ...retainedNumericLocalAliases } = { [0]: LocalStoreService.prototype, [1]: {} };\nretainedNumericLocalAliases[0].createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "canonical numeric string object-rest access cannot hide a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { [1]: ignoredStringNumericLocalKey, ...retainedStringNumericLocalAliases } = { [0]: LocalStoreService.prototype, [1]: {} };\nretainedStringNumericLocalAliases["0"].createNotification = (() => null) as any;\n`;
+      },
+    },
   ];
 
-  const wave57MutationCount = 25;
+  const wave58MutationCount = 28;
   const orderedMutations = [
-    ...mutations.slice(-wave57MutationCount),
-    ...mutations.slice(0, -wave57MutationCount),
+    ...mutations.slice(-wave58MutationCount),
+    ...mutations.slice(0, -wave58MutationCount),
   ];
   for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
@@ -2675,11 +2699,15 @@ function safeParameterAndRestDecoys(
   safeRestAliases[1].create = () => null;
   const { omitted: safeOmitted, ...safeObjectRest } = { omitted: {}, retained: {} };
   safeObjectRest.retained.create = () => null;
-  const { [0]: safeNumericOmitted, ...safeNumericRest } = {
+  const { [0]: safeCriticalNumericOmitted, ...safeNumericRest } = {
     [0]: NotificationsService.prototype,
-    retained: {},
+    [1]: {},
   };
-  safeNumericRest.retained.create = () => null;
+  safeNumericRest[1].create = () => null;
+  safeNumericRest["1"].create = () => null;
+  declare const safeCallableSelector: boolean;
+  const safeCallableUnion = safeCallableSelector ? Object.defineProperty : Reflect.set;
+  Reflect.apply(safeCallableUnion, Object, [NotificationsService.prototype, "safeCallableUnionCreate", { value: () => null }]);
   const { removed: safeKnownOmitted, ...safeKnownRest } = {
     removed: NotificationsService.prototype,
     retained: {},

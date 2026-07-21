@@ -3322,9 +3322,32 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       if (ts.isPropertyAccessExpression(expression)) propertyName = expression.name.text;
       if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
         const computed = staticValueAt(expression.argumentExpression, useNode, seenBindings);
-        if (computed.kind === "string") propertyName = computed.value;
-        if (computed.kind === "number" && Number.isInteger(computed.value) && computed.value >= 0) {
-          return applyStaticProjection(owner, [{ kind: "index", index: computed.value }], useNode, seenBindings);
+        let numericPropertyName = null;
+        let tupleIndex = null;
+        if (computed.kind === "number") {
+          numericPropertyName = String(computed.value);
+          if (Number.isInteger(computed.value) && computed.value >= 0) tupleIndex = computed.value;
+        } else if (computed.kind === "string") {
+          const possibleIndex = Number(computed.value);
+          if (Number.isInteger(possibleIndex) && possibleIndex >= 0 &&
+            String(possibleIndex) === computed.value) {
+            numericPropertyName = computed.value;
+            tupleIndex = possibleIndex;
+          } else {
+            propertyName = computed.value;
+          }
+        }
+        if (numericPropertyName !== null) {
+          return unionStaticValues(...staticAlternatives(owner).map((ownerAlternative) => {
+            if (ownerAlternative.kind === "tuple") {
+              return tupleIndex === null ? unknownStaticValue
+                : applyStaticProjection(ownerAlternative, [{ kind: "index", index: tupleIndex }], useNode, seenBindings);
+            }
+            if (ownerAlternative.kind === "object") {
+              return applyStaticProjection(ownerAlternative, [{ kind: "property", name: numericPropertyName }], useNode, seenBindings);
+            }
+            return unknownStaticValue;
+          }));
         }
       }
       if (propertyName === null) {
@@ -3450,7 +3473,9 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
     const appliedCallable = invocation.arguments[0];
     const appliedArguments = invocation.arguments[2];
+    const callableAlternatives = staticAlternatives(appliedCallable);
     const callables = callableOperations(appliedCallable);
+    const hasUnresolvedCallable = callableAlternatives.some((item) => !["operation", "bound-operation"].includes(item.kind));
     if (!callables.length || appliedArguments?.kind !== "tuple") {
       return [{
         operation: "unknown-operation",
@@ -3460,11 +3485,19 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
     const nextSeen = new Set(seen);
     nextSeen.add(key);
-    return callables.flatMap((callable) => expandApplyInvocation({
+    const expanded = callables.flatMap((callable) => expandApplyInvocation({
       operation: callable.operation,
       arguments: [...callable.arguments, ...appliedArguments.values],
       unknownArguments: Boolean(callable.unknownArguments),
     }, nextSeen, depth + 1));
+    if (hasUnresolvedCallable) {
+      expanded.push({
+        operation: "unknown-operation",
+        arguments: invocation.arguments,
+        unknownArguments: true,
+      });
+    }
+    return expanded;
   };
   const invocationSemantics = (call) => {
     const syntaxArguments = staticArgumentList(call.arguments, call);
