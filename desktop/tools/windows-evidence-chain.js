@@ -172,6 +172,70 @@ function assertArchiveIdentity(file, expected) {
   return actual;
 }
 
+function createVerifiedArchiveSnapshot(file, directory, expectedIdentity) {
+  const safeRoot = assertSafeRoot(directory);
+  const snapshotRoot = path.join(
+    safeRoot.requested,
+    `.archive-snapshot-${process.pid}-${crypto.randomBytes(24).toString("hex")}`,
+  );
+  fs.mkdirSync(snapshotRoot, { mode: 0o700 });
+  assertSafePath(safeRoot, snapshotRoot, "directory");
+  const extension = path.extname(file) || ".archive";
+  const snapshotFile = path.join(snapshotRoot, `verified-input${extension}`);
+  const expectedBytes = Number(BigInt(expectedIdentity?.size || "0"));
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
+    throw new Error("archive snapshot requires a bounded source size");
+  }
+
+  const sourceDescriptor = fs.openSync(path.resolve(file), "r");
+  let snapshotDescriptor;
+  try {
+    const sourceBefore = fs.fstatSync(sourceDescriptor, { bigint: true });
+    if (!sourceBefore.isFile()
+      || sourceBefore.nlink !== 1n
+      || !archiveStatIdentityEqual(archiveStatIdentity(sourceBefore), expectedIdentity)) {
+      throw new Error("archive identity changed before its private snapshot was opened");
+    }
+    snapshotDescriptor = fs.openSync(snapshotFile, "wx", 0o600);
+    const hash = crypto.createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let copiedBytes = 0;
+    for (;;) {
+      const bytesRead = fs.readSync(sourceDescriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      let written = 0;
+      while (written < bytesRead) {
+        written += fs.writeSync(snapshotDescriptor, buffer, written, bytesRead - written, null);
+      }
+      copiedBytes += bytesRead;
+      if (copiedBytes > expectedBytes) throw new Error("archive grew while its private snapshot was copied");
+    }
+    fs.fsyncSync(snapshotDescriptor);
+    const sourceAfter = fs.fstatSync(sourceDescriptor, { bigint: true });
+    if (copiedBytes !== expectedBytes
+      || !archiveStatIdentityEqual(archiveStatIdentity(sourceBefore), archiveStatIdentity(sourceAfter))
+      || hash.digest("hex") !== expectedIdentity.sha256) {
+      throw new Error("archive changed while its private snapshot was copied");
+    }
+  } finally {
+    if (snapshotDescriptor !== undefined) fs.closeSync(snapshotDescriptor);
+    fs.closeSync(sourceDescriptor);
+  }
+
+  assertArchiveIdentity(file, expectedIdentity);
+  fs.chmodSync(snapshotFile, 0o400);
+  const snapshotIdentity = captureArchiveIdentity(snapshotFile);
+  if (snapshotIdentity.sha256 !== expectedIdentity.sha256 || snapshotIdentity.size !== expectedIdentity.size) {
+    throw new Error("private archive snapshot does not match the verified source bytes");
+  }
+  return {
+    path: assertSafePath(safeRoot, snapshotFile, "file"),
+    root: snapshotRoot,
+    identity: snapshotIdentity,
+  };
+}
+
 function normalizeTreeOptions(options = {}) {
   const limits = { ...DEFAULT_TREE_LIMITS, ...(options.limits || {}) };
   for (const [name, value] of Object.entries(limits)) {
@@ -786,16 +850,20 @@ function checkExtractionCapacity(directory, requiredBytes, limits) {
 
 function inspectArchiveBudget(resolution, archive, cwd, overrides = {}) {
   const limits = normalizeExtractionLimits(overrides);
+  let archiveSnapshot;
   let archiveIdentity;
   let archiveBytes;
   try {
     archiveIdentity = captureArchiveIdentity(archive);
     archiveBytes = Number(BigInt(archiveIdentity.size));
     if (archiveBytes <= 0 || archiveBytes > limits.maxFileBytes) throw new Error("archive input exceeds the file budget");
+    const snapshotCapacity = checkExtractionCapacity(cwd, archiveBytes, limits);
+    if (snapshotCapacity.status !== "PASS") return snapshotCapacity;
+    archiveSnapshot = createVerifiedArchiveSnapshot(archive, cwd, archiveIdentity);
   } catch (error) {
     return { status: "FAIL", summary: `archive input validation failed: ${error.message}` };
   }
-  const listing = runSevenZip(resolution, ["l", "-slt", "-ba", archive], cwd, {
+  const listing = runSevenZip(resolution, ["l", "-slt", "-ba", archiveSnapshot.path], cwd, {
     timeoutMs: 30_000,
     maxBuffer: MAX_ARCHIVE_LIST_OUTPUT_BYTES,
   });
@@ -803,27 +871,41 @@ function inspectArchiveBudget(resolution, archive, cwd, overrides = {}) {
   if (listing.error?.code === "ENOBUFS") return { status: "FAIL", summary: "archive technical listing exceeded its output budget" };
   if (listing.error || listing.status !== 0) return { status: "FAIL", summary: "archive technical listing could not be verified" };
   try {
-    archiveIdentity = assertArchiveIdentity(archive, archiveIdentity);
+    archiveIdentity = assertArchiveIdentity(archiveSnapshot.path, archiveSnapshot.identity);
     const inspected = validateSevenZipListing(listing.stdout, { archiveBytes, limits });
     const capacity = checkExtractionCapacity(cwd, inspected.totals.totalBytes, inspected.limits);
-    return capacity.status === "PASS" ? { status: "PASS", ...inspected, archiveIdentity } : capacity;
+    return capacity.status === "PASS" ? {
+      status: "PASS",
+      ...inspected,
+      archiveIdentity,
+      archivePath: archiveSnapshot.path,
+      archiveSnapshotRoot: archiveSnapshot.root,
+      sourceArchivePath: comparablePath(archive),
+    } : capacity;
   } catch (error) {
     return { status: "FAIL", summary: `archive budget validation failed: ${error.message}` };
   }
 }
 
 function runVerifiedArchiveExtraction({ resolution, archive, budget, outputDirectory, entryPath = "", cwd }) {
+  let verifiedArchive;
   try {
-    if (budget?.status !== "PASS" || !budget.archiveIdentity) {
+    if (budget?.status !== "PASS"
+      || !budget.archiveIdentity
+      || !budget.archivePath
+      || !budget.archiveSnapshotRoot
+      || budget.sourceArchivePath !== comparablePath(archive)) {
       throw new Error("archive extraction requires a successful technical-listing preflight");
     }
-    assertArchiveIdentity(archive, budget.archiveIdentity);
+    const safeSnapshotRoot = assertSafeRoot(budget.archiveSnapshotRoot);
+    verifiedArchive = assertSafePath(safeSnapshotRoot, budget.archivePath, "file");
+    assertArchiveIdentity(verifiedArchive, budget.archiveIdentity);
   } catch (error) {
     return { status: null, error };
   }
   return runSevenZip(
     resolution,
-    ["x", "-y", "-bb0", "-bd", `-o${outputDirectory}`, archive, ...(entryPath ? [entryPath] : [])],
+    ["x", "-y", "-bb0", "-bd", `-o${outputDirectory}`, verifiedArchive, ...(entryPath ? [entryPath] : [])],
     cwd,
   );
 }
