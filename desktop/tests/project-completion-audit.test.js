@@ -960,11 +960,17 @@ export class OrdersController {
   @RequireOperatorCapability("manage_design_executions")
   reviseSelection(
     @Param("id") id: string,
-    @Body() body: { selectedImageId?: string; owner?: string; note?: string } & ExpectedIdentityPayload,
+    @Body() payload: { selectedImageId?: string; owner?: string; note?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
-    const { owner: _untrustedOwner, ...trusted } = body;
-    return service({ ...trusted, owner: principal.id });
+    const {
+      owner: _untrustedOwner,
+      actor: _untrustedActor,
+      operator: _untrustedOperator,
+      reviewer: _untrustedReviewer,
+      ...trustedPayload
+    } = (payload || {}) as typeof payload & { actor?: unknown; operator?: unknown; reviewer?: unknown };
+    return this.orders.reviseSelectedImage(id, { ...trustedPayload, owner: principal.id });
   }
 }
 `);
@@ -1865,6 +1871,55 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       from: "const lock = acquireLocalStoreLock(this.filePath)",
       to: "const lock = acquireInProcessLock(this.filePath)",
     },
+    {
+      name: "local notification deterministic id branch cannot be replaced",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: 'id: effectKey ? deterministicOperationId("notice", effectKey) : id("notice"),',
+      to: 'id: id("notice"),',
+    },
+    {
+      name: "local notification cannot return before persistence",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "data.notifications.push(record);",
+      to: "if (target?.skipPersistence) return record;\n    data.notifications.push(record);",
+    },
+    {
+      name: "local notification record must persist the normalized target",
+      file: localStoreFile,
+      anchor: "createNotification(level:",
+      from: "target: normalizedTarget,",
+      to: "target,",
+    },
+    {
+      name: "Prisma dispatch effect key must remain normalized",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: 'const effectKey = String(target?.effectKey || "").trim();',
+      to: 'const effectKey = String(target?.effectKey || "");',
+    },
+    {
+      name: "Prisma dispatch helper must receive the complete trusted argument list",
+      file: notificationsFile,
+      anchor: "create(level:",
+      from: "this.createPrismaNotificationOnce(effectKey, level, title, body, target)",
+      to: "this.createPrismaNotificationOnce(effectKey, title, level, body, target)",
+    },
+    {
+      name: "LocalStore prototype alias chain cannot replace a critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst localPrototype = LocalStoreService.prototype;\nconst localPrototypeAlias = localPrototype;\nlocalPrototypeAlias.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Notifications prototype alias cannot replace a critical method with defineProperty",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst notificationPrototype = NotificationsService.prototype;\nObject.defineProperty(notificationPrototype, "create", { value: () => null });\n`;
+      },
+    },
   ];
 
   for (const mutation of mutations) {
@@ -1911,7 +1966,11 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     const notifications = fs.readFileSync(notificationsPath, "utf8")
       .replace("if (effectKey) return this.createPrismaNotificationOnce(",
         "if /* audit-safe Prisma gate comment */ (effectKey) return this.createPrismaNotificationOnce(");
-    fs.writeFileSync(notificationsPath, `class SafePrismaDecoy { create() {} }\n${notifications}`, "utf8");
+    fs.writeFileSync(
+      notificationsPath,
+      `class SafePrismaDecoy { create() {} }\nfunction safePrototypeShadow(NotificationsService: any) {\n  const prototypeAlias = NotificationsService.prototype;\n  prototypeAlias.create = () => null;\n}\n${notifications}`,
+      "utf8",
+    );
 
     const report = buildAudit(root, { includeExternal: false });
     const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
@@ -2535,6 +2594,43 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
         return `${source}\nOrdersController.prototype.update = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "Orders revise-selection payload type cannot be widened",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "@Body() payload: { selectedImageId?: string; owner?: string; note?: string } & ExpectedIdentityPayload,",
+          "@Body() payload: any,",
+        );
+      },
+    },
+    {
+      name: "Orders revise-selection trusted payload must exclude browser owner",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("      owner: _untrustedOwner,\r\n", "");
+      },
+    },
+    {
+      name: "Orders revise-selection owner must come from the trusted principal",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "return this.orders.reviseSelectedImage(id, { ...trustedPayload, owner: principal.id });",
+          "return this.orders.reviseSelectedImage(id, { ...trustedPayload, owner: payload.owner });",
+        );
+      },
+    },
+    {
+      name: "Orders revise-selection browser payload cannot override trusted owner",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          "{ ...trustedPayload, owner: principal.id }",
+          "{ ...trustedPayload, owner: principal.id, ...payload }",
+        );
       },
     },
     {

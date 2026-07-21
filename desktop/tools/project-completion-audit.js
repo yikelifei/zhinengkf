@@ -2547,15 +2547,45 @@ function unwrapExpression(ts, node) {
   return current;
 }
 
-function isCriticalReceiver(ts, node, targetClass, className) {
-  const expression = unwrapExpression(ts, node);
-  if (expression && expression.kind === ts.SyntaxKind.ThisKeyword) {
-    return nearestClassDeclaration(ts, expression) === targetClass;
+function lexicalBindingScope(ts, node, includeSelf = true) {
+  for (let current = includeSelf ? node : node.parent; current; current = current.parent) {
+    if (ts.isSourceFile(current) || ts.isBlock(current) || ts.isModuleBlock(current) ||
+      ts.isFunctionLike(current) || ts.isCatchClause(current)) return current;
   }
-  return Boolean(expression && (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) &&
-    staticPropertyName(ts, expression) === "prototype" &&
-    ts.isIdentifier(unwrapExpression(ts, expression.expression)) &&
-    unwrapExpression(ts, expression.expression).text === className);
+  return null;
+}
+
+function declarationBindingScope(ts, identifier) {
+  const declaration = identifier.parent;
+  if (ts.isParameter(declaration)) return lexicalBindingScope(ts, declaration.parent, true);
+  return lexicalBindingScope(ts, declaration, false);
+}
+
+function sourceBindingResolver(ts, sourceFile) {
+  const scopeBindings = new Map();
+  const declare = (identifier) => {
+    const scope = declarationBindingScope(ts, identifier);
+    if (!scope) return;
+    if (!scopeBindings.has(scope)) scopeBindings.set(scope, new Map());
+    const names = scopeBindings.get(scope);
+    if (!names.has(identifier.text)) names.set(identifier.text, []);
+    names.get(identifier.text).push(identifier);
+  };
+  for (const identifier of astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) &&
+    isBindingDeclarationIdentifier(ts, node))) declare(identifier);
+  const resolve = (identifier) => {
+    for (let current = identifier.parent; current; current = current.parent) {
+      if (!scopeBindings.has(current)) continue;
+      const declarations = scopeBindings.get(current).get(identifier.text);
+      if (declarations?.length) {
+        const preceding = declarations.filter((declaration) =>
+          declaration.getStart(sourceFile) <= identifier.getStart(sourceFile));
+        return preceding[preceding.length - 1] || declarations[0];
+      }
+    }
+    return null;
+  };
+  return resolve;
 }
 
 function isBindingDeclarationIdentifier(ts, identifier) {
@@ -2570,11 +2600,58 @@ function isBindingDeclarationIdentifier(ts, identifier) {
 function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, propertyNames) {
   const failures = [];
   const criticalNames = new Set(propertyNames);
+  const resolveBinding = sourceBindingResolver(ts, sourceFile);
+  const prototypeAliases = new Set();
+  const isTargetPrototype = (node) => {
+    const expression = unwrapExpression(ts, node);
+    if (!expression || (!ts.isPropertyAccessExpression(expression) && !ts.isElementAccessExpression(expression)) ||
+      staticPropertyName(ts, expression) !== "prototype") return false;
+    const owner = unwrapExpression(ts, expression.expression);
+    return Boolean(owner && ts.isIdentifier(owner) && owner.text === className &&
+      resolveBinding(owner) === targetClass.name);
+  };
+  const aliasDeclarations = astNodes(ts, sourceFile, (node) => ts.isVariableDeclaration(node) &&
+    ts.isIdentifier(node.name) && node.initializer);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const declaration of aliasDeclarations) {
+      if (prototypeAliases.has(declaration.name)) continue;
+      const initializer = unwrapExpression(ts, declaration.initializer);
+      const aliasesPrototype = isTargetPrototype(initializer) ||
+        (initializer && ts.isIdentifier(initializer) && prototypeAliases.has(resolveBinding(initializer)));
+      if (!aliasesPrototype) continue;
+      prototypeAliases.add(declaration.name);
+      changed = true;
+    }
+  }
+  const isPrototypeAlias = (node) => {
+    const expression = unwrapExpression(ts, node);
+    return Boolean(expression && ts.isIdentifier(expression) && prototypeAliases.has(resolveBinding(expression)));
+  };
+  const isCriticalTarget = (node) => {
+    const expression = unwrapExpression(ts, node);
+    const isTargetThis = expression && expression.kind === ts.SyntaxKind.ThisKeyword &&
+      nearestClassDeclaration(ts, expression) === targetClass;
+    return Boolean(isTargetThis || isTargetPrototype(expression) || isPrototypeAlias(expression));
+  };
   const accesses = astNodes(ts, sourceFile, (node) =>
     (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
     criticalNames.has(staticPropertyName(ts, node)) &&
-    isCriticalReceiver(ts, node.expression, targetClass, className));
+    isCriticalTarget(node.expression));
   if (accesses.some((access) => isWriteTarget(ts, access))) failures.push("critical-symbol-write");
+
+  for (const declarationIdentifier of prototypeAliases) {
+    const declaration = declarationIdentifier.parent;
+    const declarationList = declaration.parent;
+    if (!ts.isVariableDeclarationList(declarationList) || !(declarationList.flags & ts.NodeFlags.Const)) {
+      failures.push("critical-prototype-alias-mutable");
+    }
+    const references = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) &&
+      node !== declarationIdentifier && resolveBinding(node) === declarationIdentifier);
+    if (references.some((reference) => isWriteTarget(ts, reference))) {
+      failures.push("critical-prototype-alias-write");
+    }
+  }
 
   const calls = astNodes(ts, sourceFile, ts.isCallExpression);
   for (const call of calls) {
@@ -2583,7 +2660,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const owner = callee.expression.text;
     const operation = callee.name.text;
     const target = call.arguments[0];
-    if (!target || !isCriticalReceiver(ts, target, targetClass, className)) continue;
+    if (!target || !isCriticalTarget(target)) continue;
     if (owner === "Object" && operation === "assign") {
       failures.push("critical-symbol-write");
       break;
@@ -2632,27 +2709,65 @@ function ownedLockSymbolFailures(ts, sourceFile, targetFunction) {
   return failures;
 }
 
+function isTrimmedEffectKeyInitializer(ts, node) {
+  const trimCall = unwrapExpression(ts, node);
+  if (!trimCall || !ts.isCallExpression(trimCall) || trimCall.arguments.length ||
+    !ts.isPropertyAccessExpression(trimCall.expression) || trimCall.expression.name.text !== "trim") return false;
+  const stringCall = unwrapExpression(ts, trimCall.expression.expression);
+  if (!stringCall || !ts.isCallExpression(stringCall) || stringCall.arguments.length !== 1 ||
+    !ts.isIdentifier(stringCall.expression) || stringCall.expression.text !== "String") return false;
+  const fallback = unwrapExpression(ts, stringCall.arguments[0]);
+  if (!fallback || !ts.isBinaryExpression(fallback) ||
+    fallback.operatorToken.kind !== ts.SyntaxKind.BarBarToken ||
+    !ts.isStringLiteral(fallback.right) || fallback.right.text !== "") return false;
+  const targetEffectKey = unwrapExpression(ts, fallback.left);
+  const target = targetEffectKey && ts.isPropertyAccessExpression(targetEffectKey)
+    ? unwrapExpression(ts, targetEffectKey.expression)
+    : null;
+  return Boolean(targetEffectKey && ts.isPropertyAccessExpression(targetEffectKey) &&
+    targetEffectKey.questionDotToken && targetEffectKey.name.text === "effectKey" &&
+    target && ts.isIdentifier(target) && target.text === "target");
+}
+
+function exactCallExpression(ts, sourceFile, node, callee, argumentsText) {
+  const call = unwrapExpression(ts, node);
+  return Boolean(call && ts.isCallExpression(call) &&
+    compactAstText(sourceFile, call.expression) === callee &&
+    call.arguments.length === argumentsText.length &&
+    call.arguments.every((argument, index) => compactAstText(sourceFile, argument) === argumentsText[index]));
+}
+
 function localNotificationAstFailures(ts, sourceFile, method) {
   const failures = [];
   if ((ts.getModifiers(method) || []).length || method.asteriskToken || method.questionToken ||
     method.exclamationToken || method.typeParameters?.length || decoratorsOfNode(ts, method).length) {
     failures.push("method-modifiers");
   }
+  const expectedParameters = ["level:string", "title:string", "body?:string", "target?:any"];
+  if (method.parameters.length !== expectedParameters.length || method.parameters.some((parameter, index) =>
+    compactAstText(sourceFile, parameter) !== expectedParameters[index])) failures.push("method-parameters");
   const statements = [...method.body.statements];
+  if (statements.length !== 9) failures.push("statement-count");
   const gates = statements.filter((statement) =>
     ts.isIfStatement(statement) && compactAstText(sourceFile, statement.expression) === "effectKey");
   if (gates.length !== 1) return ["effect-key-gate-count"];
   const gate = gates[0];
   const gateIndex = statements.indexOf(gate);
   const prelude = statements.slice(0, gateIndex);
-  const expectedPrelude = [
-    "constdata=this.read();",
-    'consteffectKey=String(target?.effectKey||"").trim();',
-    'constidentity=this.resolveTargetIdentity(data,target||{},"notification target");',
-    "constnormalizedTarget={...(target||{}),...identity.identityFields,identityBinding:identity.binding,};",
-  ];
-  if (prelude.length !== expectedPrelude.length ||
-    prelude.some((statement, index) => compactAstText(sourceFile, statement) !== expectedPrelude[index])) {
+  const [dataStatement, effectKeyStatement, identityStatement, normalizedTargetStatement] = prelude;
+  const effectKeyDeclaration = ts.isVariableStatement(effectKeyStatement) &&
+    effectKeyStatement.declarationList.declarations.length === 1
+    ? effectKeyStatement.declarationList.declarations[0]
+    : null;
+  if (prelude.length !== 4 || compactAstText(sourceFile, dataStatement) !== "constdata=this.read();" ||
+    !effectKeyDeclaration || !ts.isIdentifier(effectKeyDeclaration.name) ||
+    effectKeyDeclaration.name.text !== "effectKey" || !effectKeyDeclaration.initializer ||
+    !(effectKeyStatement.declarationList.flags & ts.NodeFlags.Const) ||
+    !isTrimmedEffectKeyInitializer(ts, effectKeyDeclaration.initializer) ||
+    compactAstText(sourceFile, identityStatement) !==
+      'constidentity=this.resolveTargetIdentity(data,target||{},"notification target");' ||
+    compactAstText(sourceFile, normalizedTargetStatement) !==
+      "constnormalizedTarget={...(target||{}),...identity.identityFields,identityBinding:identity.binding,};") {
     failures.push("pre-effect-key-gate-shape");
   }
   if (!ts.isBlock(gate.thenStatement) || gate.thenStatement.statements.length !== 2) {
@@ -2664,22 +2779,51 @@ function localNotificationAstFailures(ts, sourceFile, method) {
       : null;
     if (!declaration || declaration.name.getText(sourceFile) !== "existing" ||
       !declaration.initializer || !ts.isCallExpression(declaration.initializer) ||
-      compactAstText(sourceFile, declaration.initializer.expression) !== "data.notifications.find") {
+      compactAstText(sourceFile, declaration.initializer) !==
+        'data.notifications.find((notification)=>String(notification?.target?.effectKey||"")===effectKey)') {
       failures.push("existing-notification-lookup-shape");
     }
     const returned = ts.isIfStatement(existingGate) && ts.isReturnStatement(existingGate.thenStatement)
       ? existingGate.thenStatement
       : null;
-    if (!returned?.expression || !ts.isCallExpression(returned.expression) ||
+    if (!returned?.expression ||
       compactAstText(sourceFile, existingGate.expression) !== "existing" ||
-      compactAstText(sourceFile, returned.expression.expression) !== "assertNotificationEffectReplay") {
+      !exactCallExpression(ts, sourceFile, returned.expression, "assertNotificationEffectReplay",
+        ["existing", "{level,title,body,target:normalizedTarget}"])) {
       failures.push("existing-notification-replay-shape");
     }
   }
+  const [recordStatement, pushStatement, writeStatement, returnStatement] = statements.slice(gateIndex + 1);
+  const recordDeclaration = ts.isVariableStatement(recordStatement) &&
+    recordStatement.declarationList.declarations.length === 1
+    ? recordStatement.declarationList.declarations[0]
+    : null;
+  const record = recordDeclaration?.initializer && ts.isObjectLiteralExpression(recordDeclaration.initializer)
+    ? recordDeclaration.initializer
+    : null;
+  if (!recordDeclaration || !ts.isIdentifier(recordDeclaration.name) || recordDeclaration.name.text !== "record" ||
+    !record || compactAstText(sourceFile, record) !==
+      '{id:effectKey?deterministicOperationId("notice",effectKey):id("notice"),level,title,body,target:normalizedTarget,readAt:null,createdAt:newDate().toISOString(),}') {
+    failures.push("notification-record-shape");
+  }
+  if (!ts.isExpressionStatement(pushStatement) ||
+    !exactCallExpression(ts, sourceFile, pushStatement.expression, "data.notifications.push", ["record"])) {
+    failures.push("notification-record-push-shape");
+  }
+  if (!ts.isExpressionStatement(writeStatement) ||
+    !exactCallExpression(ts, sourceFile, writeStatement.expression, "this.write", ["data"])) {
+    failures.push("notification-write-shape");
+  }
+  if (!ts.isReturnStatement(returnStatement) || !returnStatement.expression ||
+    compactAstText(sourceFile, returnStatement.expression) !== "record") failures.push("notification-return-shape");
   const calls = astNodes(ts, method.body, ts.isCallExpression);
   const countCall = (callee) => calls.filter((call) => compactAstText(sourceFile, call.expression) === callee).length;
   if (countCall("data.notifications.find") !== 1) failures.push("notification-find-call-count");
   if (countCall("assertNotificationEffectReplay") !== 1) failures.push("notification-replay-call-count");
+  if (countCall("deterministicOperationId") !== 1 || countCall("id") !== 1 ||
+    countCall("data.notifications.push") !== 1 || countCall("this.write") !== 1) {
+    failures.push("notification-create-call-count");
+  }
   return failures;
 }
 
@@ -2689,35 +2833,47 @@ function prismaNotificationDispatchAstFailures(ts, sourceFile, method) {
     method.exclamationToken || method.typeParameters?.length || decoratorsOfNode(ts, method).length) {
     failures.push("method-modifiers");
   }
+  const expectedParameters = [
+    "level:string",
+    "title:string",
+    "body?:string",
+    "target?:Record<string,unknown>",
+  ];
+  if (method.parameters.length !== expectedParameters.length || method.parameters.some((parameter, index) =>
+    compactAstText(sourceFile, parameter) !== expectedParameters[index])) failures.push("method-parameters");
   const statements = [...method.body.statements];
   if (statements.length !== 4) failures.push("statement-count");
   const [localDispatch, effectKeyDeclaration, effectKeyDispatch, prismaFallback] = statements;
   const localReturn = ts.isIfStatement(localDispatch) && ts.isReturnStatement(localDispatch.thenStatement)
     ? localDispatch.thenStatement
     : null;
-  if (!localReturn?.expression || !ts.isCallExpression(localReturn.expression) ||
+  if (!localReturn?.expression ||
     compactAstText(sourceFile, localDispatch.expression) !== "appConfig.useLocalStore" ||
-    compactAstText(sourceFile, localReturn.expression.expression) !== "this.localStore.createNotification") {
+    !exactCallExpression(ts, sourceFile, localReturn.expression, "this.localStore.createNotification",
+      ["level", "title", "body", "target"])) {
     failures.push("local-dispatch-shape");
   }
   const effectDeclaration = ts.isVariableStatement(effectKeyDeclaration)
     ? effectKeyDeclaration.declarationList.declarations[0]
     : null;
-  if (!effectDeclaration || effectDeclaration.name.getText(sourceFile) !== "effectKey") {
+  if (!effectDeclaration || effectKeyDeclaration.declarationList.declarations.length !== 1 ||
+    !(effectKeyDeclaration.declarationList.flags & ts.NodeFlags.Const) ||
+    !ts.isIdentifier(effectDeclaration.name) || effectDeclaration.name.text !== "effectKey" ||
+    !effectDeclaration.initializer || !isTrimmedEffectKeyInitializer(ts, effectDeclaration.initializer)) {
     failures.push("effect-key-declaration-shape");
   }
   const effectReturn = ts.isIfStatement(effectKeyDispatch) && ts.isReturnStatement(effectKeyDispatch.thenStatement)
     ? effectKeyDispatch.thenStatement
     : null;
-  if (!effectReturn?.expression || !ts.isCallExpression(effectReturn.expression) ||
+  if (!effectReturn?.expression ||
     compactAstText(sourceFile, effectKeyDispatch.expression) !== "effectKey" ||
-    compactAstText(sourceFile, effectReturn.expression.expression) !== "this.createPrismaNotificationOnce" ||
-    compactAstText(sourceFile, effectReturn.expression.arguments[0]) !== "effectKey") {
+    !exactCallExpression(ts, sourceFile, effectReturn.expression, "this.createPrismaNotificationOnce",
+      ["effectKey", "level", "title", "body", "target"])) {
     failures.push("effect-key-dispatch-shape");
   }
   if (!ts.isReturnStatement(prismaFallback) || !prismaFallback.expression ||
-    !ts.isCallExpression(prismaFallback.expression) ||
-    compactAstText(sourceFile, prismaFallback.expression.expression) !== "this.prisma.notification.create") {
+    !exactCallExpression(ts, sourceFile, prismaFallback.expression, "this.prisma.notification.create",
+      ["{data:{level,title,body,target:(target||{})asany,},}"])) {
     failures.push("prisma-fallback-shape");
   }
   const calls = astNodes(ts, method.body, ts.isCallExpression);
@@ -3159,6 +3315,38 @@ function ordersControllerAstFailures(text) {
       compactAstText(sourceFile, property.initializer) !== value) {
       failures.push(`update-projection-${index + 1}-shape`);
     }
+  }
+  const reviseRoutes = routes.filter((entry) => entry.route === ":id/revise-selection");
+  if (reviseRoutes.length !== 1 || !ts.isMethodDeclaration(reviseRoutes[0].member) ||
+    !reviseRoutes[0].member.body) return [...failures, "revise-selection-method-shape"];
+  const reviseMethod = reviseRoutes[0].member;
+  const expectedReviseParameters = [
+    ["id", "string", [["Param", [stringArgument("id")]]]],
+    ["payload", "{selectedImageId?:string;owner?:string;note?:string}&ExpectedIdentityPayload", [["Body", []]]],
+    ["principal", "TrustedOperatorPrincipal", [["TrustedOperator", []]]],
+  ];
+  if (reviseMethod.parameters.length !== expectedReviseParameters.length) {
+    failures.push("revise-selection-parameter-count");
+  }
+  for (const [index, [name, expectedType, expectedDecorators]] of expectedReviseParameters.entries()) {
+    const parameter = reviseMethod.parameters[index];
+    if (!parameter || !ts.isIdentifier(parameter.name) || parameter.name.text !== name ||
+      !parameter.type || compactAstText(sourceFile, parameter.type) !== expectedType ||
+      !decoratorsMatch(parameter, expectedDecorators) || parameter.questionToken || parameter.initializer ||
+      parameter.dotDotDotToken || (ts.getModifiers(parameter) || []).length) {
+      failures.push(`revise-selection-parameter-${index + 1}-shape`);
+    }
+  }
+  if (reviseMethod.body.statements.length !== 2 ||
+    compactAstText(sourceFile, reviseMethod.body.statements[0]) !==
+      "const{owner:_untrustedOwner,actor:_untrustedActor,operator:_untrustedOperator,reviewer:_untrustedReviewer,...trustedPayload}=(payload||{})astypeofpayload&{actor?:unknown;operator?:unknown;reviewer?:unknown};") {
+    failures.push("revise-selection-trusted-payload-shape");
+  }
+  const reviseReturn = reviseMethod.body.statements[1];
+  if (!ts.isReturnStatement(reviseReturn) || !reviseReturn.expression ||
+    !exactCallExpression(ts, sourceFile, reviseReturn.expression, "this.orders.reviseSelectedImage",
+      ["id", "{...trustedPayload,owner:principal.id}"])) {
+    failures.push("revise-selection-return-shape");
   }
   return failures;
 }
