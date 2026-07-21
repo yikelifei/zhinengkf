@@ -2165,6 +2165,54 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nfor (const [loopDefaultLocalPrototype = {}] of [[LocalStoreService.prototype]]) {\n  loopDefaultLocalPrototype.createNotification = (() => null) as any;\n}\n`;
       },
     },
+    {
+      name: "for-of object record cannot hide a destructured Notifications prototype write",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfor (const { holder: loopNotificationHolder } of [{ holder: NotificationsService.prototype }]) {\n  loopNotificationHolder.create = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "for-of operation tuple cannot hide an aliased defineProperty call",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfor (const defineNotificationProperty of [Object.defineProperty]) {\n  defineNotificationProperty(NotificationsService.prototype, "create", { value: () => null });\n}\n`;
+      },
+    },
+    {
+      name: "conditional reassignment preserves a possible Notifications prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const auditCondition: boolean;\nlet conditionalNotificationPrototype: any = NotificationsService.prototype;\nif (auditCondition) conditionalNotificationPrototype = {};\nconditionalNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "conditional expression preserves a possible LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const auditCondition: boolean;\nconst conditionalLocalPrototype = auditCondition ? LocalStoreService.prototype : {};\nconditionalLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "function-scoped var redeclaration without initializer keeps the Notifications prototype binding",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfunction mutateRepeatedNotificationVar() {\n  var repeatedNotificationPrototype: any = NotificationsService.prototype;\n  var repeatedNotificationPrototype: any;\n  repeatedNotificationPrototype.create = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "function-scoped var redeclaration initializer updates the same LocalStore binding",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nfunction mutateRepeatedLocalVar() {\n  var repeatedLocalPrototype: any;\n  var repeatedLocalPrototype: any = LocalStoreService.prototype;\n  repeatedLocalPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
   ];
 
   for (const mutation of mutations) {
@@ -2191,6 +2239,12 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
     assert.equal(contract.status, STATUS.FAIL, mutation.name);
     assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0, mutation.name);
+    if (mutation.expectedFailure) {
+      assert.ok(
+        contract.evidence.missing.some((item) => item.includes(mutation.expectedFailure)),
+        `${mutation.name}: ${JSON.stringify(contract.evidence)}`,
+      );
+    }
   }
 
   {
@@ -2273,6 +2327,18 @@ function safeReassignedStaticReferences() {
   let objectOperation = "defineProperty";
   objectOperation = "keys";
   Object[objectOperation](NotificationsService.prototype, "create", {});
+}
+function safeStaticUnionDecoys(auditCondition: boolean) {
+  for (const { holder: safeHolder } of [{ holder: {} }]) safeHolder.create = () => null;
+  for (const safeOperation of [Object.keys]) safeOperation(NotificationsService.prototype);
+  let conditionalPrototype: any = {};
+  if (auditCondition) conditionalPrototype = {};
+  conditionalPrototype.create = () => null;
+  const conditionalExpressionPrototype = auditCondition ? {} : {};
+  conditionalExpressionPrototype.create = () => null;
+  var repeatedPrototype: any = NotificationsService.prototype;
+  var repeatedPrototype: any = {};
+  repeatedPrototype.create = () => null;
 }
 function safeFunctionScopedVarShadow() {
   if (true) {
