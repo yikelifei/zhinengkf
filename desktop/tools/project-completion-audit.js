@@ -3213,6 +3213,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         if (state !== null && ((state && inFalse) || (!state && inTrue))) mergeReachability("never");
         else if (state === null && (inTrue || inFalse)) mergeReachability("conditional");
       }
+      if (ts.isWhileStatement(current) && nodeContains(current.statement, event.node)) {
+        const state = staticTruthiness(staticValueAt(current.expression, current, seenBindings));
+        mergeReachability(state === false ? "never" : state === null ? "conditional" : "always");
+      }
+      if (ts.isForStatement(current)) {
+        const inBody = nodeContains(current.statement, event.node);
+        const inUpdate = Boolean(current.incrementor && nodeContains(current.incrementor, event.node));
+        if (inBody || inUpdate) {
+          const state = current.condition
+            ? staticTruthiness(staticValueAt(current.condition, current, seenBindings))
+            : true;
+          if (state === false) mergeReachability("never");
+          else if (state === null || inUpdate) mergeReachability("conditional");
+        }
+      }
+      if ((ts.isForInStatement(current) || ts.isForOfStatement(current)) &&
+        nodeContains(current.statement, event.node)) {
+        mergeReachability("conditional");
+      }
       if (!ts.isBinaryExpression(current) || !nodeContains(current.right, event.node)) continue;
       const operator = current.operatorToken.kind;
       if (![ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
@@ -3229,6 +3248,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     }
     return reachability;
   };
+  const classFunctionPlanCache = new Map();
+  const classBindingReferencesCache = new Map();
   const staticValueAt = (node, useNode = node, seenBindings = new Set()) => {
     const expression = unwrapExpression(ts, node);
     if (!expression) return unknownStaticValue;
@@ -3240,6 +3261,11 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       return { kind: "boolean", value: expression.kind === ts.SyntaxKind.TrueKeyword };
     }
     if (ts.isNumericLiteral(expression)) return { kind: "number", value: Number(expression.text) };
+    if (ts.isPrefixUnaryExpression(expression) &&
+      expression.operator === ts.SyntaxKind.ExclamationToken) {
+      const operand = staticTruthiness(staticValueAt(expression.operand, useNode, seenBindings));
+      return operand === null ? unknownStaticValue : { kind: "boolean", value: !operand };
+    }
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
       return staticValueAt(expression.right, useNode, seenBindings);
     }
@@ -3538,13 +3564,79 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         if (delegateName !== null) objectFunctionDelegateNames.add(delegateName);
       }
     }
+    const classFunctionPlan = (() => {
+      if (referenceContainer === bindingContainer || useContainer !== referenceContainer) return null;
+      if (classFunctionPlanCache.has(referenceContainer)) return classFunctionPlanCache.get(referenceContainer);
+      let classElement = null;
+      if ((ts.isMethodDeclaration(referenceContainer) || ts.isConstructorDeclaration(referenceContainer)) &&
+        (ts.isClassDeclaration(referenceContainer.parent) || ts.isClassExpression(referenceContainer.parent))) {
+        classElement = referenceContainer;
+      } else if (ts.isArrowFunction(referenceContainer) || ts.isFunctionExpression(referenceContainer)) {
+        let functionIdentity = referenceContainer;
+        while (functionIdentity.parent && unwrapExpression(ts, functionIdentity.parent) === referenceContainer) {
+          functionIdentity = functionIdentity.parent;
+        }
+        const owner = functionIdentity.parent;
+        if (owner && ts.isPropertyDeclaration(owner) &&
+          unwrapExpression(ts, owner.initializer) === referenceContainer &&
+          (ts.isClassDeclaration(owner.parent) || ts.isClassExpression(owner.parent))) classElement = owner;
+      }
+      if (!classElement) return null;
+      const classNode = classElement.parent;
+      let classBinding = null;
+      let precise = false;
+      if (ts.isClassDeclaration(classNode) && classNode.name) {
+        classBinding = resolveBinding(classNode.name);
+        precise = Boolean(classBinding);
+      } else if (ts.isClassExpression(classNode)) {
+        let classIdentity = classNode;
+        while (classIdentity.parent && unwrapExpression(ts, classIdentity.parent) === classNode) {
+          classIdentity = classIdentity.parent;
+        }
+        const owner = classIdentity.parent;
+        if (owner && ts.isVariableDeclaration(owner) &&
+          unwrapExpression(ts, owner.initializer) === classNode && ts.isIdentifier(owner.name)) {
+          classBinding = resolveBinding(owner.name);
+          precise = Boolean(owner.parent && ts.isVariableDeclarationList(owner.parent) &&
+            (owner.parent.flags & ts.NodeFlags.Const));
+        }
+      }
+      if (!classBinding) return null;
+      if (!classBindingReferencesCache.has(classBinding)) {
+        classBindingReferencesCache.set(classBinding, sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+          !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === classBinding));
+      }
+      const references = classBindingReferencesCache.get(classBinding);
+      if (references.some((reference) => isWriteTarget(ts, reference))) precise = false;
+      const isStatic = (ts.getModifiers(classElement) || [])
+        .some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
+      const exported = (ts.getModifiers(classNode) || []).some((modifier) =>
+        modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword);
+      const plan = {
+        binding: classBinding,
+        classNode,
+        classElement,
+        propertyName: ts.isConstructorDeclaration(classElement)
+          ? "constructor"
+          : exactObjectPropertyName(classElement),
+        isConstructor: ts.isConstructorDeclaration(classElement),
+        isStatic,
+        precise,
+        exported,
+        references,
+      };
+      classFunctionPlanCache.set(referenceContainer, plan);
+      return plan;
+    })();
     const localBindingEvents = applicableEvents(binding, useNode)
       .filter((event) => executionContainer(ts, event.node) === referenceContainer &&
         eventExecutionReachability(event, useNode, seenBindings) !== "never");
-    if (!localBindingEvents.length && (functionBinding || immediateCall || objectFunctionPlan) &&
+    if (!localBindingEvents.length &&
+      (functionBinding || immediateCall || objectFunctionPlan || classFunctionPlan) &&
       referenceContainer !== bindingContainer && useContainer === referenceContainer) {
       const directCalls = [];
-      let escaped = false;
+      let escaped = Boolean(classFunctionPlan && (!classFunctionPlan.precise || classFunctionPlan.exported ||
+        classFunctionPlan.propertyName === null));
       const deferredExecution = Boolean(referenceContainer.asteriskToken ||
         (ts.getModifiers(referenceContainer) || [])
           .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
@@ -3560,13 +3652,26 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         }
         if (!directCalls.includes(call)) directCalls.push(call);
       };
+      const directCallableReferenceCall = (reference) => {
+        const direct = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+          unwrapExpression(ts, candidate.expression) === reference);
+        if (direct) return direct;
+        let identity = reference;
+        while (identity.parent && unwrapExpression(ts, identity.parent) === reference) identity = identity.parent;
+        const member = identity.parent;
+        if (!member || (!ts.isPropertyAccessExpression(member) && !ts.isElementAccessExpression(member)) ||
+          unwrapExpression(ts, member.expression) !== reference) return null;
+        const wrapper = staticPropertyName(ts, member);
+        if (!["call", "apply"].includes(wrapper)) return null;
+        return sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+          unwrapExpression(ts, candidate.expression) === member) || null;
+      };
       if (functionBinding) {
         for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
           !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === functionBinding)) {
           if (reference === assignmentBindingReference ||
             eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
-          const call = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
-            unwrapExpression(ts, candidate.expression) === reference);
+          const call = directCallableReferenceCall(reference);
           if (!call) {
             escaped = true;
             continue;
@@ -3622,6 +3727,87 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             continue;
           }
           registerDirectCall(call);
+        }
+      } else if (classFunctionPlan) {
+        const memberForOwner = (ownerExpression) => {
+          let identity = ownerExpression;
+          while (identity.parent && unwrapExpression(ts, identity.parent) === ownerExpression) identity = identity.parent;
+          const member = identity.parent;
+          return member && (ts.isPropertyAccessExpression(member) || ts.isElementAccessExpression(member)) &&
+            unwrapExpression(ts, member.expression) === ownerExpression ? member : null;
+        };
+        const exactMemberName = (member) => {
+          const direct = member ? staticPropertyName(ts, member) : null;
+          if (direct !== null) return direct;
+          if (!member || !ts.isElementAccessExpression(member) || !member.argumentExpression) return null;
+          const computed = staticValueAt(member.argumentExpression, member, seenBindings);
+          return computed.kind === "string" || computed.kind === "number" ? String(computed.value) : null;
+        };
+        const callForMember = (member) => sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+          unwrapExpression(ts, candidate.expression) === member) || null;
+        const inspectInstanceBinding = (instanceBinding) => {
+          for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+            !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === instanceBinding)) {
+            if (eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
+            const member = memberForOwner(reference);
+            const memberName = exactMemberName(member);
+            if (memberName !== classFunctionPlan.propertyName) {
+              if (!member || memberName === null) escaped = true;
+              continue;
+            }
+            const call = callForMember(member);
+            if (call) registerDirectCall(call);
+            else escaped = true;
+          }
+        };
+        for (const reference of classFunctionPlan.references) {
+          if (eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
+          if (isWriteTarget(ts, reference)) {
+            escaped = true;
+            continue;
+          }
+          const staticMember = memberForOwner(reference);
+          if (staticMember) {
+            const memberName = exactMemberName(staticMember);
+            if (classFunctionPlan.isStatic && memberName === classFunctionPlan.propertyName) {
+              const call = callForMember(staticMember);
+              if (call) registerDirectCall(call);
+              else escaped = true;
+            } else if (memberName === null) escaped = true;
+            continue;
+          }
+          let classIdentity = reference;
+          while (classIdentity.parent && unwrapExpression(ts, classIdentity.parent) === reference) classIdentity = classIdentity.parent;
+          const construct = classIdentity.parent && ts.isNewExpression(classIdentity.parent) &&
+            unwrapExpression(ts, classIdentity.parent.expression) === reference ? classIdentity.parent : null;
+          if (!construct) {
+            escaped = true;
+            continue;
+          }
+          if (classFunctionPlan.isConstructor) {
+            registerDirectCall(construct);
+            continue;
+          }
+          if (classFunctionPlan.isStatic) continue;
+          const directMember = memberForOwner(construct);
+          if (directMember) {
+            const memberName = exactMemberName(directMember);
+            if (memberName === classFunctionPlan.propertyName) {
+              const call = callForMember(directMember);
+              if (call) registerDirectCall(call);
+              else escaped = true;
+            } else if (memberName === null) escaped = true;
+            continue;
+          }
+          let constructIdentity = construct;
+          while (constructIdentity.parent && unwrapExpression(ts, constructIdentity.parent) === construct) constructIdentity = constructIdentity.parent;
+          const owner = constructIdentity.parent;
+          const stableInstance = owner && ts.isVariableDeclaration(owner) &&
+            unwrapExpression(ts, owner.initializer) === construct && ts.isIdentifier(owner.name) &&
+            owner.parent && ts.isVariableDeclarationList(owner.parent) &&
+            (owner.parent.flags & ts.NodeFlags.Const) ? resolveBinding(owner.name) : null;
+          if (stableInstance) inspectInstanceBinding(stableInstance);
+          else if (!owner || !ts.isExpressionStatement(owner)) escaped = true;
         }
       }
       if (!escaped && !directCalls.length && ts.isFunctionDeclaration(referenceContainer)) escaped = true;

@@ -1378,7 +1378,7 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
 });
 
-test("completion audit checks real inbound recovery function boundaries, helpers, identity and lease CAS", () => {
+test("completion audit checks real inbound recovery function boundaries, helpers, identity and lease CAS", async (t) => {
   const baselineRoot = createRealInboundFixture();
   const baseline = buildAudit(baselineRoot, { includeExternal: false });
   assert.equal(baseline.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.PASS);
@@ -2791,14 +2791,41 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\ndeclare const unresolvedCriticalAssignSources: object[];\nObject.assign(NotificationsService.prototype, ...unresolvedCriticalAssignSources);\n`;
       },
     },
+    ...[
+      ["static class method", "let classStaticPrototype: any = {};\nclass StaticRunner { static run() { classStaticPrototype.create = (() => null) as any; } }\nclassStaticPrototype = NotificationsService.prototype;\nStaticRunner.run();"],
+      ["class constructor", "let classConstructorPrototype: any = {};\nclass ConstructorRunner { constructor() { classConstructorPrototype.create = (() => null) as any; } }\nclassConstructorPrototype = NotificationsService.prototype;\nnew ConstructorRunner();"],
+      ["direct new instance method", "let classDirectPrototype: any = {};\nclass DirectRunner { run() { classDirectPrototype.create = (() => null) as any; } }\nclassDirectPrototype = NotificationsService.prototype;\nnew DirectRunner().run();"],
+      ["const instance method", "let classInstancePrototype: any = {};\nclass InstanceRunner { run() { classInstancePrototype.create = (() => null) as any; } }\nconst classInstanceRunner = new InstanceRunner();\nclassInstancePrototype = NotificationsService.prototype;\nclassInstanceRunner.run();"],
+      ["static class field arrow", "let classStaticFieldPrototype: any = {};\nclass StaticFieldRunner { static run = () => { classStaticFieldPrototype.create = (() => null) as any; }; }\nclassStaticFieldPrototype = NotificationsService.prototype;\nStaticFieldRunner.run();"],
+      ["class expression external binding", "let classExpressionPrototype: any = {};\nconst ClassExpressionRunner = class InnerRunner { static run() { classExpressionPrototype.create = (() => null) as any; } };\nclassExpressionPrototype = NotificationsService.prototype;\nClassExpressionRunner.run();"],
+      ["multiple class method calls", "let multipleClassPrototype: any = {};\nclass MultipleRunner { static run() { multipleClassPrototype.create = (() => null) as any; } }\nMultipleRunner.run();\nmultipleClassPrototype = NotificationsService.prototype;\nMultipleRunner.run();"],
+      ["async class method", "let asyncClassPrototype: any = {};\nclass AsyncRunner { static async run() { await Promise.resolve(); asyncClassPrototype.create = (() => null) as any; } }\nvoid AsyncRunner.run();\nasyncClassPrototype = NotificationsService.prototype;"],
+      ["generator class method", "let generatorClassPrototype: any = {};\nclass GeneratorRunner { *run() { yield undefined; generatorClassPrototype.create = (() => null) as any; } }\nconst generatorClassIterator = new GeneratorRunner().run();\ngeneratorClassPrototype = NotificationsService.prototype;\ngeneratorClassIterator.next();"],
+      ["class method local rebind", "let localClassPrototype: any = {};\nclass LocalRebindRunner { static run() { localClassPrototype = NotificationsService.prototype; localClassPrototype.create = (() => null) as any; } }\nLocalRebindRunner.run();"],
+      ["instance alias remains conservative", "let aliasedClassPrototype: any = {};\nclass AliasedRunner { run() { aliasedClassPrototype.create = (() => null) as any; } }\nconst originalClassRunner = new AliasedRunner();\nconst aliasedClassRunner = originalClassRunner;\naliasedClassPrototype = NotificationsService.prototype;\naliasedClassRunner.run();"],
+      ["prefix negation makes while body reachable", "let negatedLoopPrototype: any = {};\nwhile (!false) { negatedLoopPrototype = NotificationsService.prototype; break; }\nnegatedLoopPrototype.create = (() => null) as any;"],
+      ["unknown while body remains conditional", "declare const unknownWhileCondition: boolean;\nlet unknownWhilePrototype: any = {};\nwhile (unknownWhileCondition) { unknownWhilePrototype = NotificationsService.prototype; break; }\nunknownWhilePrototype.create = (() => null) as any;"],
+      ["do while first body executes", "let doWhilePrototype: any = {};\ndo { doWhilePrototype = NotificationsService.prototype; } while (false);\ndoWhilePrototype.create = (() => null) as any;"],
+      ["while condition assignment remains live", "let whileConditionPrototype: any = {};\nwhile ((whileConditionPrototype = NotificationsService.prototype, false)) {}\nwhileConditionPrototype.create = (() => null) as any;"],
+      ["for initializer assignment remains live", "let forInitializerPrototype: any = {};\nfor (forInitializerPrototype = NotificationsService.prototype; false;) {}\nforInitializerPrototype.create = (() => null) as any;"],
+      ["Function call wrapper uses invocation time", "let functionCallPrototype: any = {};\nfunction callWrappedMutation() { functionCallPrototype.create = (() => null) as any; }\nfunctionCallPrototype = NotificationsService.prototype;\ncallWrappedMutation.call(undefined);"],
+      ["Function apply wrapper uses invocation time", "let functionApplyPrototype: any = {};\nconst applyWrappedMutation = () => { functionApplyPrototype.create = (() => null) as any; };\nfunctionApplyPrototype = NotificationsService.prototype;\napplyWrappedMutation.apply(undefined, []);"],
+    ].map(([name, statement]) => ({
+      name: `${name} observes critical runtime state`,
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\n${statement}\n`;
+      },
+    })),
   ];
 
-  const wave62MutationCount = 64;
+  const wave64MutationCount = 82;
   const orderedMutations = [
-    ...mutations.slice(-wave62MutationCount),
-    ...mutations.slice(0, -wave62MutationCount),
+    ...mutations.slice(-wave64MutationCount),
+    ...mutations.slice(0, -wave64MutationCount),
   ];
-  for (const mutation of orderedMutations) {
+  for (const [mutationIndex, mutation] of orderedMutations.entries()) {
     const root = createRealInboundFixture();
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
@@ -2827,6 +2854,10 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         contract.evidence.missing.some((item) => item.includes(mutation.expectedFailure)),
         `${mutation.name}: ${JSON.stringify(contract.evidence)}`,
       );
+    }
+    if ((mutationIndex + 1) % 8 === 0) {
+      t.diagnostic(`mutation progress ${mutationIndex + 1}/${orderedMutations.length}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
@@ -3183,6 +3214,58 @@ const safeAssertedObjectMutation = ({
 safeAssertedObjectMutation.run();
 safeAssertedObjectPrototype = NotificationsService.prototype;
 Object.assign({}, ...[]);
+let safeStaticClassPrototype: any = {};
+class SafeStaticClassRunner { static run() { safeStaticClassPrototype.create = () => null; } }
+SafeStaticClassRunner.run();
+safeStaticClassPrototype = NotificationsService.prototype;
+let safeDeadClassPrototype: any = NotificationsService.prototype;
+class SafeDeadClassRunner { static run() { safeDeadClassPrototype.create = () => null; } }
+if (false) SafeDeadClassRunner.run();
+let safeInertClassPrototype: any = NotificationsService.prototype;
+class SafeInertClassRunner { run() { safeInertClassPrototype.create = () => null; } }
+let safeConstructorClassPrototype: any = {};
+class SafeConstructorClassRunner { constructor() { safeConstructorClassPrototype.create = () => null; } }
+new SafeConstructorClassRunner();
+safeConstructorClassPrototype = NotificationsService.prototype;
+let safeDirectClassPrototype: any = {};
+class SafeDirectClassRunner { run() { safeDirectClassPrototype.create = () => null; } }
+new SafeDirectClassRunner().run();
+safeDirectClassPrototype = NotificationsService.prototype;
+let safeClassFieldPrototype: any = NotificationsService.prototype;
+class SafeClassFieldRunner { run = () => { safeClassFieldPrototype.create = () => null; }; }
+new SafeClassFieldRunner();
+let safeLocalClassPrototype: any = NotificationsService.prototype;
+class SafeLocalClassRunner {
+  static run() {
+    safeLocalClassPrototype = {};
+    safeLocalClassPrototype.create = () => null;
+  }
+}
+SafeLocalClassRunner.run();
+let safeNegatedLoopPrototype: any = {};
+if (!true) safeNegatedLoopPrototype = NotificationsService.prototype;
+safeNegatedLoopPrototype.create = () => null;
+let safeWhileLoopPrototype: any = {};
+while (false) safeWhileLoopPrototype = NotificationsService.prototype;
+safeWhileLoopPrototype.create = () => null;
+let safeForLoopPrototype: any = {};
+for (; false; safeForLoopPrototype = NotificationsService.prototype) {
+  safeForLoopPrototype = NotificationsService.prototype;
+}
+safeForLoopPrototype.create = () => null;
+let safeCallWrapperPrototype: any = {};
+function safeCallWrapperMutation() { safeCallWrapperPrototype.create = () => null; }
+safeCallWrapperMutation.call(undefined);
+safeCallWrapperPrototype = NotificationsService.prototype;
+let safeApplyWrapperPrototype: any = {};
+const safeApplyWrapperMutation = () => { safeApplyWrapperPrototype.create = () => null; };
+safeApplyWrapperMutation.apply(undefined, []);
+safeApplyWrapperPrototype = NotificationsService.prototype;
+let safeBoundFunctionPrototype: any = {};
+function safeBoundFunctionMutation() { safeBoundFunctionPrototype.create = () => null; }
+if (false) safeBoundFunctionPrototype = NotificationsService.prototype;
+const retainedSafeBoundFunction = safeBoundFunctionMutation.bind(undefined);
+void retainedSafeBoundFunction;
 declare const unresolvedSafeAssignSources: object[];
 const unrelatedSafeAssignTarget = {};
 Object.assign(unrelatedSafeAssignTarget, ...unresolvedSafeAssignSources);
