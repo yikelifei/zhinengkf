@@ -2622,6 +2622,10 @@ function assignmentPatternEvents(ts, pattern, expression, node) {
   const visit = (targetNode, valueNode, destructuredProperty = null) => {
     const target = unwrapExpression(ts, targetNode);
     if (!target) return;
+    if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      visit(target.left, valueNode, destructuredProperty);
+      return;
+    }
     if (ts.isIdentifier(target)) {
       events.push({ identifier: target, node, expression: valueNode || null, destructuredProperty });
       return;
@@ -2633,7 +2637,7 @@ function assignmentPatternEvents(ts, pattern, expression, node) {
         if (ts.isOmittedExpression(element)) return;
         let elementTarget = element;
         if (ts.isBindingElement(element)) {
-          if (element.dotDotDotToken || element.initializer) return;
+          if (element.dotDotDotToken) return;
           elementTarget = element.name;
         } else if (ts.isSpreadElement(element)) {
           return;
@@ -2647,7 +2651,7 @@ function assignmentPatternEvents(ts, pattern, expression, node) {
     }
     if (ts.isObjectBindingPattern(target)) {
       for (const element of target.elements) {
-        if (element.dotDotDotToken || element.initializer) continue;
+        if (element.dotDotDotToken) continue;
         const propertyName = element.propertyName
           ? staticPropertyName(ts, { name: element.propertyName })
           : ts.isIdentifier(element.name) ? element.name.text : null;
@@ -2856,11 +2860,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
     }
   }
-  const accesses = sourceNodes.filter((node) =>
-    (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
-    criticalNames.has(staticPropertyName(ts, node)) &&
-    isCriticalTarget(node.expression));
-  if (accesses.some((access) => isWriteTarget(ts, access))) failures.push("critical-symbol-write");
+  const unsafeDirectWrite = sourceNodes.some((node) => {
+    if ((!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) ||
+      !isCriticalTarget(node.expression) || !isWriteTarget(ts, node)) return false;
+    if (ts.isPropertyAccessExpression(node)) return criticalNames.has(node.name.text);
+    const propertyName = staticStringAt(node.argumentExpression, node);
+    return !propertyName.known || criticalNames.has(propertyName.value);
+  });
+  if (unsafeDirectWrite) failures.push("critical-symbol-write");
 
   for (const declarationIdentifier of prototypeResolution) {
     const declaration = enclosingVariableDeclaration(ts, declarationIdentifier);
