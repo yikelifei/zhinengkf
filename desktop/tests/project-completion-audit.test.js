@@ -1920,6 +1920,55 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nconst notificationPrototype = NotificationsService.prototype;\nObject.defineProperty(notificationPrototype, "create", { value: () => null });\n`;
       },
     },
+    {
+      name: "destructured LocalStore prototype alias cannot replace a critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { prototype: localPrototype } = LocalStoreService;\nlocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "shorthand destructured Notifications prototype cannot replace a critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst { prototype } = NotificationsService;\nprototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "assigned mutable prototype alias chain cannot replace a critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet localPrototype;\nlocalPrototype = LocalStoreService.prototype;\nconst localPrototypeAlias = localPrototype;\nlocalPrototypeAlias.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "computed defineProperty cannot replace a Notifications critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nObject["defineProperty"](NotificationsService.prototype, "create", { value: () => null });\n`;
+      },
+    },
+    {
+      name: "computed Reflect set cannot replace a LocalStore critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nReflect["set"](LocalStoreService.prototype, "createNotification", () => null);\n`;
+      },
+    },
+    {
+      name: "defineProperty helper alias chain cannot replace a Notifications critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst defineCritical = Object["defineProperty"];\nconst defineCriticalAlias = defineCritical;\ndefineCriticalAlias(NotificationsService.prototype, "create", { value: () => null });\n`;
+      },
+    },
+    {
+      name: "destructured Reflect set helper cannot replace a LocalStore critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst { set: reflectSet } = Reflect;\nreflectSet(LocalStoreService.prototype, "createNotification", () => null);\n`;
+      },
+    },
   ];
 
   for (const mutation of mutations) {
@@ -1968,7 +2017,27 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         "if /* audit-safe Prisma gate comment */ (effectKey) return this.createPrismaNotificationOnce(");
     fs.writeFileSync(
       notificationsPath,
-      `class SafePrismaDecoy { create() {} }\nfunction safePrototypeShadow(NotificationsService: any) {\n  const prototypeAlias = NotificationsService.prototype;\n  prototypeAlias.create = () => null;\n}\n${notifications}`,
+      `class SafePrismaDecoy { create() {} }
+function safePrototypeShadow(NotificationsService: any) {
+  const prototypeAlias = NotificationsService.prototype;
+  const { prototype: destructuredPrototype } = NotificationsService;
+  prototypeAlias.create = () => null;
+  destructuredPrototype.create = () => null;
+}
+function safeLocalMutationHelpers(Object: any, Reflect: any) {
+  const defineProperty = Object["defineProperty"];
+  const set = Reflect.set;
+  defineProperty(NotificationsService.prototype, "create", { value: () => null });
+  set(NotificationsService.prototype, "create", () => null);
+}
+function safeReassignedHelper() {
+  let helper = Object.defineProperty;
+  helper = () => undefined;
+  helper(NotificationsService.prototype, "create", { value: () => null });
+}
+const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
+/* Reflect["set"](NotificationsService.prototype, "create", () => null); */
+${notifications}`,
       "utf8",
     );
 
