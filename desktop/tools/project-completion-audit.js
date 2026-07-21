@@ -3403,39 +3403,90 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const referenceContainer = executionContainer(ts, expression);
     const bindingContainer = executionContainer(ts, binding);
     const useContainer = executionContainer(ts, useNode);
-    if (ts.isFunctionDeclaration(referenceContainer) && referenceContainer.name &&
+    let functionOwner = referenceContainer?.parent;
+    while (functionOwner && !ts.isVariableDeclaration(functionOwner) &&
+      !ts.isBinaryExpression(functionOwner) && unwrapExpression(ts, functionOwner) === referenceContainer) {
+      functionOwner = functionOwner.parent;
+    }
+    const variableFunctionOwner = functionOwner && ts.isVariableDeclaration(functionOwner) &&
+      unwrapExpression(ts, functionOwner.initializer) === referenceContainer && ts.isIdentifier(functionOwner.name)
+      ? functionOwner
+      : null;
+    const assignmentFunctionOwner = functionOwner && ts.isBinaryExpression(functionOwner) &&
+      functionOwner.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      unwrapExpression(ts, functionOwner.right) === referenceContainer && ts.isIdentifier(functionOwner.left)
+      ? functionOwner
+      : null;
+    const assignmentBindingReference = assignmentFunctionOwner?.left || null;
+    const functionBinding = ts.isFunctionDeclaration(referenceContainer) && referenceContainer.name
+      ? resolveBinding(referenceContainer.name)
+      : variableFunctionOwner
+        ? resolveBinding(variableFunctionOwner.name)
+        : assignmentFunctionOwner
+          ? resolveBinding(assignmentFunctionOwner.left)
+          : null;
+    const immediateCall = !functionBinding &&
+      (ts.isArrowFunction(referenceContainer) || ts.isFunctionExpression(referenceContainer))
+      ? sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+        unwrapExpression(ts, candidate.expression) === referenceContainer)
+      : null;
+    const localBindingEvents = applicableEvents(binding, useNode)
+      .filter((event) => executionContainer(ts, event.node) === referenceContainer &&
+        eventExecutionReachability(event, useNode, seenBindings) !== "never");
+    if (!localBindingEvents.length && (functionBinding || immediateCall) &&
       referenceContainer !== bindingContainer && useContainer === referenceContainer) {
-      const functionBinding = resolveBinding(referenceContainer.name);
       const directCalls = [];
       let escaped = false;
-      for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
-        !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === functionBinding)) {
-        const call = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
-          unwrapExpression(ts, candidate.expression) === reference);
-        if (!call || executionContainer(ts, call) !== bindingContainer) {
+      const deferredExecution = Boolean(referenceContainer.asteriskToken ||
+        (ts.getModifiers(referenceContainer) || [])
+          .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
+      const registerDirectCall = (call) => {
+        if (executionContainer(ts, call) !== bindingContainer) {
           escaped = true;
-          continue;
+          return;
+        }
+        if (eventExecutionReachability({ node: call }, call, seenBindings) === "never") return;
+        if (deferredExecution) {
+          escaped = true;
+          return;
         }
         if (!directCalls.includes(call)) directCalls.push(call);
+      };
+      if (functionBinding) {
+        for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
+          !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === functionBinding)) {
+          if (reference === assignmentBindingReference ||
+            eventExecutionReachability({ node: reference }, reference, seenBindings) === "never") continue;
+          const call = sourceNodes.find((candidate) => ts.isCallExpression(candidate) &&
+            unwrapExpression(ts, candidate.expression) === reference);
+          if (!call) {
+            escaped = true;
+            continue;
+          }
+          registerDirectCall(call);
+        }
+      } else {
+        registerDirectCall(immediateCall);
       }
-      if (!directCalls.length) escaped = true;
-      if (!escaped) {
+      if (!escaped && !directCalls.length && ts.isFunctionDeclaration(referenceContainer)) escaped = true;
+      if (!escaped && directCalls.length) {
         return unionStaticValues(...directCalls.map((call) =>
           staticValueAt(expression, call, seenBindings)));
       }
+      if (!escaped) return unknownStaticValue;
       const nextSeen = new Set(seenBindings);
       nextSeen.add(binding);
       const conservativeValues = eventsForBinding(binding)
         .filter((event) => eventExecutionReachability(event, event.node, nextSeen) !== "never")
         .map((event) => {
-        const projected = applyStaticProjection(
-          event.expression ? staticValueAt(event.expression, event.node, nextSeen) : unknownStaticValue,
-          event.projection,
-          event.node,
-          nextSeen,
-        );
-        return applyStaticDefault(projected, event.defaultExpression, event.node, nextSeen);
-      });
+          const projected = applyStaticProjection(
+            event.expression ? staticValueAt(event.expression, event.node, nextSeen) : unknownStaticValue,
+            event.projection,
+            event.node,
+            nextSeen,
+          );
+          return applyStaticDefault(projected, event.defaultExpression, event.node, nextSeen);
+        });
       return unionStaticValues(unknownStaticValue, ...conservativeValues);
     }
     if (seenBindings.has(binding)) return unknownStaticValue;
