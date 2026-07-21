@@ -2198,6 +2198,54 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "satisfies expression cannot hide a LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst satisfiesLocalPrototype = LocalStoreService.prototype satisfies object;\nsatisfiesLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "logical AND preserves a possible Notifications prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const logicalAuditFlag: unknown;\nconst logicalNotificationPrototype = logicalAuditFlag && NotificationsService.prototype;\nlogicalNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "logical OR preserves a possible LocalStore prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare const logicalAuditFlag: unknown;\nconst logicalLocalPrototype = logicalAuditFlag || LocalStoreService.prototype;\nlogicalLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "nullish coalescing preserves a possible Notifications prototype alias",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const nullishAuditValue: unknown;\nconst nullishNotificationPrototype = nullishAuditValue ?? NotificationsService.prototype;\nnullishNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "array default activates for a statically undefined LocalStore projection",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst [undefinedDefaultLocalPrototype = LocalStoreService.prototype] = [undefined];\nundefinedDefaultLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "array default remains possible for an unknown Notifications projection",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare const unknownPrototypeProjection: unknown;\nconst [unknownDefaultNotificationPrototype = NotificationsService.prototype] = [unknownPrototypeProjection];\nunknownDefaultNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
       name: "function-scoped var redeclaration without initializer keeps the Notifications prototype binding",
       expectedFailure: "critical-symbol-write",
       file: notificationsFile,
@@ -2339,6 +2387,22 @@ function safeStaticUnionDecoys(auditCondition: boolean) {
   var repeatedPrototype: any = NotificationsService.prototype;
   var repeatedPrototype: any = {};
   repeatedPrototype.create = () => null;
+}
+function safeStructuredOverwrites(auditCondition: boolean) {
+  let tryPrototype: any = NotificationsService.prototype;
+  try {
+    tryPrototype = {};
+    tryPrototype.create = () => null;
+  } catch {}
+  let exhaustivePrototype: any = NotificationsService.prototype;
+  if (auditCondition) {
+    exhaustivePrototype = {};
+  } else {
+    exhaustivePrototype = {};
+  }
+  exhaustivePrototype.create = () => null;
+  const [definedDefaultPrototype = NotificationsService.prototype] = [{}];
+  definedDefaultPrototype.create = () => null;
 }
 function safeFunctionScopedVarShadow() {
   if (true) {
