@@ -15,7 +15,10 @@ require("ts-node").register({
   compilerOptions: { module: "CommonJS", jsx: "react-jsx", esModuleInterop: true },
 });
 
-const { DesignExecutionReconciliationPanel } = require("../apps/web/src/components/design-execution-reconciliation-panel");
+const {
+  DesignExecutionReconciliationPanel,
+  getDesignExecutionResolutionBlockedReason,
+} = require("../apps/web/src/components/design-execution-reconciliation-panel");
 const { createDesignRequestGuard, runGuardedDesignRequest } = require("../apps/web/src/features/design/design-request-guard");
 const { DesignSettingsPage } = require("../apps/web/src/features/design/design-settings-page");
 const root = path.resolve(__dirname, "..");
@@ -132,6 +135,27 @@ test("execution panel distinguishes failed reads and unknown access from confirm
 
 test("execution confirmation becomes disabled with an explicit reason when access truth changes", () => {
   const pending = { executionId: "execution-1", resolution: "confirmed_not_generated_refunded" };
+  const currentExecution = {
+    id: "execution-1",
+    availableResolution: "confirmed_not_generated_refunded",
+  };
+  const guardInput = {
+    pending,
+    executions: [currentExecution],
+    loading: false,
+    accessLoaded: true,
+    canManageExecutions: true,
+  };
+  assert.equal(getDesignExecutionResolutionBlockedReason(guardInput), "");
+  assert.match(getDesignExecutionResolutionBlockedReason({ ...guardInput, loading: true }), /正在刷新/);
+  assert.match(getDesignExecutionResolutionBlockedReason({ ...guardInput, accessLoaded: false }), /权限尚未确认/);
+  assert.match(getDesignExecutionResolutionBlockedReason({ ...guardInput, canManageExecutions: false }), /没有执行管理权限/);
+  assert.match(getDesignExecutionResolutionBlockedReason({ ...guardInput, executions: [] }), /执行记录或可用核销动作已经变化/);
+  assert.match(getDesignExecutionResolutionBlockedReason({
+    ...guardInput,
+    executions: [{ ...currentExecution, availableResolution: "confirmed_refunded" }],
+  }), /执行记录或可用核销动作已经变化/);
+
   const markup = renderDirectWithHooks(
     () => DesignExecutionReconciliationPanel({
       executions: [{

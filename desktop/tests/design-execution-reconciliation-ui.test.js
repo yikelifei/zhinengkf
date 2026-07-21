@@ -24,6 +24,7 @@ const { appConfig } = require("../apps/api/src/shared/app-config");
 const {
   DESIGN_EXECUTION_RESOLUTIONS,
   DesignExecutionReconciliationPanel,
+  getDesignExecutionResolutionBlockedReason,
 } = require("../apps/web/src/components/design-execution-reconciliation-panel");
 
 const root = path.resolve(__dirname, "..");
@@ -225,7 +226,9 @@ test("panel fails closed on status alone and exposes a guarded second confirmati
 
   const source = read("apps/web/src/components/design-execution-reconciliation-panel.tsx");
   assert.match(source, /if \(!pending \|\| submitLock\.current \|\| submittingId \|\| pendingBlockedReason\) return/);
-  assert.match(source, /!accessLoaded[\s\S]*!canManageExecutions[\s\S]*pendingExecution\.availableResolution !== pending\.resolution/);
+  assert.match(source, /function getDesignExecutionResolutionBlockedReason/);
+  assert.match(source, /if \(loading\)[\s\S]*if \(!accessLoaded\)[\s\S]*if \(!canManageExecutions\)/);
+  assert.match(source, /currentExecution\.availableResolution !== pending\.resolution/);
   assert.match(source, /disabled=\{Boolean\(submittingId\) \|\| Boolean\(pendingBlockedReason\)\}/);
   assert.match(source, /submitLock\.current = true/);
   assert.match(source, /submitLock\.current = false/);
@@ -234,6 +237,23 @@ test("panel fails closed on status alone and exposes a guarded second confirmati
   assert.match(source, /await onRefresh\(\)/);
   assert.match(source, /onRefresh\(\)\.catch\(\(\) => undefined\)/);
   assert.doesNotMatch(source, /useEffect|setInterval|setTimeout|\bfetch\s*\(/);
+
+  const pending = { executionId: baseExecution.id, resolution: DESIGN_EXECUTION_RESOLUTIONS.unknown };
+  const currentIntent = [{ ...baseExecution, availableResolution: DESIGN_EXECUTION_RESOLUTIONS.unknown }];
+  assert.equal(getDesignExecutionResolutionBlockedReason({
+    pending,
+    executions: currentIntent,
+    loading: false,
+    accessLoaded: true,
+    canManageExecutions: true,
+  }), "");
+  assert.notEqual(getDesignExecutionResolutionBlockedReason({
+    pending,
+    executions: [{ ...baseExecution, availableResolution: DESIGN_EXECUTION_RESOLUTIONS.refund }],
+    loading: false,
+    accessLoaded: true,
+    canManageExecutions: true,
+  }), "");
 });
 
 test("reconciliation layout remains usable at 390px and uses workbench tokens", () => {
