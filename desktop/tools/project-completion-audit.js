@@ -2122,10 +2122,9 @@ function contractResults(root) {
     for (const section of contract.sections || []) {
       paths.add(normalizeRelative(section.file));
       const sectionSource = readText(root, section.file);
-      let criticalInspection = null;
       if (sectionSource !== null && CRITICAL_AST_SECTION_IDS.has(section.id)) {
         try {
-          criticalInspection = criticalSectionAstInspection(section.id, sectionSource);
+          const criticalInspection = criticalSectionAstInspection(section.id, sectionSource);
           for (const failure of criticalInspection.failures) missing.push(`${section.id}:ast-${failure}`);
           if (criticalInspection.range === null) missing.push(`${section.id}:section-missing`);
         } catch (_error) {
@@ -2142,9 +2141,9 @@ function contractResults(root) {
           continue;
         }
       }
-      const blockRange = criticalInspection
-        ? criticalInspection.range
-        : inspectionSource === null ? null : extractLegacyBalancedBlockRange(inspectionSource, section.startPattern);
+      const blockRange = inspectionSource === null
+        ? null
+        : extractLegacyBalancedBlockRange(inspectionSource, section.startPattern);
       if (blockRange === null) {
         missing.push(`${section.id}:section-missing`);
         continue;
@@ -2392,6 +2391,13 @@ function isWriteTarget(ts, node) {
       ts.isTypeAssertionExpression(target.parent) || ts.isNonNullExpression(target.parent)) &&
       target.parent.expression === target)
   )) target = target.parent;
+  while (target.parent && (
+    (ts.isPropertyAssignment(target.parent) && target.parent.initializer === target) ||
+    (ts.isShorthandPropertyAssignment(target.parent) && target.parent.name === target) ||
+    (ts.isSpreadAssignment(target.parent) && target.parent.expression === target) ||
+    (ts.isObjectLiteralExpression(target.parent) && target.parent.properties.includes(target)) ||
+    (ts.isArrayLiteralExpression(target.parent) && target.parent.elements.includes(target))
+  )) target = target.parent;
   const parent = target.parent;
   if (!parent) return false;
   if (ts.isBinaryExpression(parent) && parent.left === target &&
@@ -2558,6 +2564,12 @@ function lexicalBindingScope(ts, node, includeSelf = true) {
 function declarationBindingScope(ts, identifier) {
   const declaration = identifier.parent;
   if (ts.isParameter(declaration)) return lexicalBindingScope(ts, declaration.parent, true);
+  const variableDeclaration = enclosingVariableDeclaration(ts, identifier);
+  const declarationList = variableDeclaration?.parent;
+  const loop = declarationList?.parent;
+  if (declarationList && ts.isVariableDeclarationList(declarationList) &&
+    !(declarationList.flags & ts.NodeFlags.Var) && loop &&
+    (ts.isForOfStatement(loop) || ts.isForInStatement(loop) || ts.isForStatement(loop))) return loop;
   return lexicalBindingScope(ts, declaration, false);
 }
 
@@ -2605,27 +2617,69 @@ function enclosingVariableDeclaration(ts, identifier) {
   return null;
 }
 
+function assignmentPatternEvents(ts, pattern, expression, node) {
+  const events = [];
+  const visit = (targetNode, valueNode, destructuredProperty = null) => {
+    const target = unwrapExpression(ts, targetNode);
+    if (!target) return;
+    if (ts.isIdentifier(target)) {
+      events.push({ identifier: target, node, expression: valueNode || null, destructuredProperty });
+      return;
+    }
+    if (ts.isArrayBindingPattern(target) || ts.isArrayLiteralExpression(target)) {
+      const value = unwrapExpression(ts, valueNode);
+      const valueElements = value && ts.isArrayLiteralExpression(value) ? value.elements : null;
+      target.elements.forEach((element, index) => {
+        if (ts.isOmittedExpression(element)) return;
+        let elementTarget = element;
+        if (ts.isBindingElement(element)) {
+          if (element.dotDotDotToken || element.initializer) return;
+          elementTarget = element.name;
+        } else if (ts.isSpreadElement(element)) {
+          return;
+        }
+        const valueElement = valueElements?.[index];
+        const projectedValue = valueElement && !ts.isOmittedExpression(valueElement) &&
+          !ts.isSpreadElement(valueElement) ? valueElement : null;
+        visit(elementTarget, projectedValue);
+      });
+      return;
+    }
+    if (ts.isObjectBindingPattern(target)) {
+      for (const element of target.elements) {
+        if (element.dotDotDotToken || element.initializer) continue;
+        const propertyName = element.propertyName
+          ? staticPropertyName(ts, { name: element.propertyName })
+          : ts.isIdentifier(element.name) ? element.name.text : null;
+        if (propertyName) visit(element.name, valueNode, propertyName);
+      }
+      return;
+    }
+    if (ts.isObjectLiteralExpression(target)) {
+      for (const property of target.properties) {
+        if (ts.isPropertyAssignment(property)) {
+          const propertyName = staticPropertyName(ts, property);
+          if (propertyName) visit(property.initializer, valueNode, propertyName);
+        } else if (ts.isShorthandPropertyAssignment(property)) {
+          visit(property.name, valueNode, property.name.text);
+        }
+      }
+    }
+  };
+  visit(pattern, expression);
+  return events;
+}
+
 function bindingWriteEvents(ts, sourceFile, declarationIdentifier, indexedWrites) {
   const events = [];
   const variableDeclaration = enclosingVariableDeclaration(ts, declarationIdentifier);
   if (variableDeclaration?.initializer) {
-    if (variableDeclaration.name === declarationIdentifier) {
-      events.push({ node: variableDeclaration, expression: variableDeclaration.initializer });
-    } else if (ts.isObjectBindingPattern(variableDeclaration.name) &&
-      ts.isBindingElement(declarationIdentifier.parent) && declarationIdentifier.parent.name === declarationIdentifier &&
-      !declarationIdentifier.parent.dotDotDotToken && !declarationIdentifier.parent.initializer) {
-      const bindingElement = declarationIdentifier.parent;
-      const propertyName = bindingElement.propertyName
-        ? staticPropertyName(ts, { name: bindingElement.propertyName })
-        : declarationIdentifier.text;
-      if (propertyName) {
-        events.push({
-          node: variableDeclaration,
-          destructuredProperty: propertyName,
-          expression: variableDeclaration.initializer,
-        });
-      }
-    }
+    events.push(...assignmentPatternEvents(
+      ts,
+      variableDeclaration.name,
+      variableDeclaration.initializer,
+      variableDeclaration,
+    ).filter((event) => event.identifier === declarationIdentifier));
   }
   events.push(...(indexedWrites.get(declarationIdentifier) || []));
   return events.sort((left, right) => left.node.getStart(sourceFile) - right.node.getStart(sourceFile));
@@ -2659,12 +2713,17 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     indexedWrites.get(binding).push(event);
   };
   for (const binary of sourceNodes.filter(ts.isBinaryExpression)) {
+    if (binary.operatorToken.kind < ts.SyntaxKind.FirstAssignment ||
+      binary.operatorToken.kind > ts.SyntaxKind.LastAssignment) continue;
     const left = unwrapExpression(ts, binary.left);
-    if (!left || !ts.isIdentifier(left)) continue;
-    indexWrite(resolveBinding(left), {
-      node: binary,
-      expression: binary.operatorToken.kind === ts.SyntaxKind.EqualsToken ? binary.right : null,
-    });
+    if (!left) continue;
+    if (binary.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      for (const event of assignmentPatternEvents(ts, left, binary.right, binary)) {
+        indexWrite(resolveBinding(event.identifier), event);
+      }
+    } else if (ts.isIdentifier(left)) {
+      indexWrite(resolveBinding(left), { node: binary, expression: null });
+    }
   }
   for (const unary of sourceNodes.filter((node) =>
     (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
@@ -2672,6 +2731,24 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const operand = unwrapExpression(ts, unary.operand);
     if (operand && ts.isIdentifier(operand)) {
       indexWrite(resolveBinding(operand), { node: unary, expression: null });
+    }
+  }
+  for (const statement of sourceNodes.filter(ts.isForOfStatement)) {
+    const iterable = unwrapExpression(ts, statement.expression);
+    const iterationValue = iterable && ts.isArrayLiteralExpression(iterable) &&
+      iterable.elements.length === 1 && !ts.isSpreadElement(iterable.elements[0])
+      ? iterable.elements[0]
+      : null;
+    if (ts.isVariableDeclarationList(statement.initializer)) {
+      for (const declaration of statement.initializer.declarations) {
+        for (const event of assignmentPatternEvents(ts, declaration.name, iterationValue, statement)) {
+          indexWrite(event.identifier, event);
+        }
+      }
+    } else {
+      for (const event of assignmentPatternEvents(ts, statement.initializer, iterationValue, statement)) {
+        indexWrite(resolveBinding(event.identifier), event);
+      }
     }
   }
   const bindingEvents = new Map();
@@ -2691,6 +2768,51 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         Boolean(eventContainer && nodeContains(eventContainer, useNode));
     });
     return events[events.length - 1] || null;
+  };
+  const unknownStaticString = Object.freeze({ known: false, value: null });
+  const staticStringAt = (node, useNode = node, seenBindings = new Set()) => {
+    const expression = unwrapExpression(ts, node);
+    if (!expression) return unknownStaticString;
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      return { known: true, value: expression.text };
+    }
+    if (ts.isTemplateExpression(expression)) {
+      let value = expression.head.text;
+      for (const span of expression.templateSpans) {
+        const substitution = staticStringAt(span.expression, useNode, seenBindings);
+        if (!substitution.known) return unknownStaticString;
+        value += substitution.value + span.literal.text;
+      }
+      return { known: true, value };
+    }
+    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = staticStringAt(expression.left, useNode, seenBindings);
+      const right = staticStringAt(expression.right, useNode, seenBindings);
+      return left.known && right.known
+        ? { known: true, value: left.value + right.value }
+        : unknownStaticString;
+    }
+    if (ts.isConditionalExpression(expression)) {
+      const whenTrue = staticStringAt(expression.whenTrue, useNode, seenBindings);
+      const whenFalse = staticStringAt(expression.whenFalse, useNode, seenBindings);
+      return whenTrue.known && whenFalse.known && whenTrue.value === whenFalse.value
+        ? whenTrue
+        : unknownStaticString;
+    }
+    if (!ts.isIdentifier(expression)) return unknownStaticString;
+    const binding = resolveBinding(expression);
+    if (!binding || seenBindings.has(binding)) return unknownStaticString;
+    const declaration = enclosingVariableDeclaration(ts, binding);
+    const declarationList = declaration?.parent;
+    if (!declaration || declaration.name !== binding || !declaration.initializer ||
+      !declarationList || !ts.isVariableDeclarationList(declarationList) ||
+      !(declarationList.flags & ts.NodeFlags.Const)) return unknownStaticString;
+    const event = applicableEvent(binding, useNode);
+    if (!event || event.node !== declaration || event.expression !== declaration.initializer ||
+      event.destructuredProperty) return unknownStaticString;
+    const nextSeen = new Set(seenBindings);
+    nextSeen.add(binding);
+    return staticStringAt(declaration.initializer, declaration, nextSeen);
   };
   const isTargetClass = (node) => {
     const expression = unwrapExpression(ts, node);
@@ -2801,18 +2923,31 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       failures.push("critical-symbol-write");
       break;
     }
-    if ((operation === "defineProperty" || operation === "set") &&
-      call.arguments[1] && (ts.isStringLiteral(call.arguments[1]) ||
-        ts.isNoSubstitutionTemplateLiteral(call.arguments[1])) &&
-      criticalNames.has(call.arguments[1].text)) {
-      failures.push("critical-symbol-write");
-      break;
+    if (operation === "defineProperty" || operation === "set") {
+      const propertyName = staticStringAt(call.arguments[1], call);
+      if (!propertyName.known || criticalNames.has(propertyName.value)) {
+        failures.push("critical-symbol-write");
+        break;
+      }
     }
-    if (operation === "defineProperties" &&
-      call.arguments[1] && ts.isObjectLiteralExpression(call.arguments[1]) &&
-      call.arguments[1].properties.some((property) => criticalNames.has(staticPropertyName(ts, property)))) {
-      failures.push("critical-symbol-write");
-      break;
+    if (operation === "defineProperties") {
+      const descriptors = unwrapExpression(ts, call.arguments[1]);
+      const unsafeDescriptor = !descriptors || !ts.isObjectLiteralExpression(descriptors) ||
+        descriptors.properties.some((property) => {
+          if (ts.isSpreadAssignment(property)) return true;
+          const name = property.name;
+          if (!name) return true;
+          if (ts.isComputedPropertyName(name)) {
+            const propertyName = staticStringAt(name.expression, property);
+            return !propertyName.known || criticalNames.has(propertyName.value);
+          }
+          const propertyName = staticPropertyName(ts, property);
+          return propertyName === null || criticalNames.has(propertyName);
+        });
+      if (unsafeDescriptor) {
+        failures.push("critical-symbol-write");
+        break;
+      }
     }
   }
 

@@ -1969,6 +1969,76 @@ test("completion audit checks real inbound recovery function boundaries, helpers
         return `${source}\nconst { set: reflectSet } = Reflect;\nreflectSet(LocalStoreService.prototype, "createNotification", () => null);\n`;
       },
     },
+    {
+      name: "const-computed defineProperty name cannot replace a Notifications critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst notificationMethodPart = "cre";\nconst notificationMethod = notificationMethodPart + "ate";\nObject.defineProperty(NotificationsService.prototype, notificationMethod, { value: () => null });\n`;
+      },
+    },
+    {
+      name: "const template Reflect set name cannot replace a LocalStore critical method",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst localMethodPart = "Notification";\nconst localMethod = \`create\${localMethodPart}\`;\nReflect.set(LocalStoreService.prototype, localMethod, () => null);\n`;
+      },
+    },
+    {
+      name: "const-computed defineProperties key cannot replace a Notifications critical method",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst notificationDescriptorMethod = "create";\nObject.defineProperties(NotificationsService.prototype, { [notificationDescriptorMethod]: { value: () => null } });\n`;
+      },
+    },
+    {
+      name: "unknown defineProperty name is conservatively rejected for a critical prototype",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\ndeclare function unresolvedNotificationMethod(): string;\nconst notificationMethod = unresolvedNotificationMethod();\nObject.defineProperty(NotificationsService.prototype, notificationMethod, { value: () => null });\n`;
+      },
+    },
+    {
+      name: "unknown computed defineProperties key is conservatively rejected for a critical prototype",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\ndeclare function unresolvedLocalMethod(): string;\nconst localMethod = unresolvedLocalMethod();\nObject.defineProperties(LocalStoreService.prototype, { [localMethod]: { value: () => null } });\n`;
+      },
+    },
+    {
+      name: "object assignment destructuring cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet assignedLocalPrototype: any;\n({ prototype: assignedLocalPrototype } = LocalStoreService);\nassignedLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "array declaration destructuring cannot hide a Notifications prototype write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst [arrayNotificationPrototype] = [NotificationsService.prototype];\narrayNotificationPrototype.create = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "array assignment destructuring cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet arrayLocalPrototype: any;\n[arrayLocalPrototype] = [LocalStoreService.prototype];\narrayLocalPrototype.createNotification = (() => null) as any;\n`;
+      },
+    },
+    {
+      name: "for-of const binding cannot hide a Notifications prototype write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nfor (const loopNotificationPrototype of [NotificationsService.prototype]) {\n  loopNotificationPrototype.create = (() => null) as any;\n}\n`;
+      },
+    },
+    {
+      name: "for-of assignment cannot hide a LocalStore prototype write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet loopLocalPrototype: any;\nfor (loopLocalPrototype of [LocalStoreService.prototype]) {\n  loopLocalPrototype.createNotification = (() => null) as any;\n}\n`;
+      },
+    },
   ];
 
   for (const mutation of mutations) {
@@ -2034,6 +2104,25 @@ function safeReassignedHelper() {
   let helper = Object.defineProperty;
   helper = () => undefined;
   helper(NotificationsService.prototype, "create", { value: () => null });
+}
+const safeNotificationProperty = "safeCreate";
+const safeNotificationDescriptorProperty = "safe" + "Descriptor";
+Object.defineProperty(NotificationsService.prototype, safeNotificationProperty, { value: () => null });
+Object.defineProperties(NotificationsService.prototype, {
+  [safeNotificationDescriptorProperty]: { value: () => null },
+});
+const scopedNotificationProperty = "create";
+function safeStaticPropertyScope() {
+  const scopedNotificationProperty = "safeScopedCreate";
+  Object.defineProperty(NotificationsService.prototype, scopedNotificationProperty, { value: () => null });
+}
+function safePatternShadows(NotificationsService: any) {
+  let assignedPrototype: any;
+  ({ prototype: assignedPrototype } = NotificationsService);
+  assignedPrototype.create = () => null;
+  const [arrayPrototype] = [NotificationsService.prototype];
+  arrayPrototype.create = () => null;
+  for (const loopPrototype of [NotificationsService.prototype]) loopPrototype.create = () => null;
 }
 const safeMutationText = "Object[\\\"defineProperty\\\"](NotificationsService.prototype, \\\"create\\\", {})";
 /* Reflect["set"](NotificationsService.prototype, "create", () => null); */
