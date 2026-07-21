@@ -2572,6 +2572,78 @@ test("completion audit checks real inbound recovery function boundaries, helpers
       },
     },
     {
+      name: "directly called arrow observes an outer Notifications binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst mutateCapturedNotificationArrow = () => {\n  capturedNotificationArrow.create = (() => null) as any;\n};\nlet capturedNotificationArrow: any = {};\ncapturedNotificationArrow = NotificationsService.prototype;\nmutateCapturedNotificationArrow();\n`;
+      },
+    },
+    {
+      name: "directly called function expression observes an outer Notifications binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst mutateCapturedNotificationExpression = function () {\n  capturedNotificationExpression.create = (() => null) as any;\n};\nlet capturedNotificationExpression: any = {};\ncapturedNotificationExpression = NotificationsService.prototype;\nmutateCapturedNotificationExpression();\n`;
+      },
+    },
+    {
+      name: "multiple arrow calls union outer LocalStore binding values from every call site",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nconst mutateCapturedLocalArrow = () => {\n  capturedLocalArrow.createNotification = (() => null) as any;\n};\nlet capturedLocalArrow: any = {};\nmutateCapturedLocalArrow();\ncapturedLocalArrow = LocalStoreService.prototype;\nmutateCapturedLocalArrow();\n`;
+      },
+    },
+    {
+      name: "escaped arrow conservatively observes reachable outer Notifications assignments",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst mutateEscapedNotificationArrow = () => {\n  escapedNotificationArrow.create = (() => null) as any;\n};\nlet escapedNotificationArrow: any = {};\nescapedNotificationArrow = NotificationsService.prototype;\nconst retainedEscapedNotificationArrow = mutateEscapedNotificationArrow;\nvoid retainedEscapedNotificationArrow;\n`;
+      },
+    },
+    {
+      name: "synchronous IIFE observes an outer Notifications binding at its exact call site",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet capturedNotificationIife: any = NotificationsService.prototype;\n(() => {\n  capturedNotificationIife.create = (() => null) as any;\n})();\n`;
+      },
+    },
+    {
+      name: "async arrow conservatively includes outer assignments after invocation",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst mutateAsyncCapturedNotification = async () => {\n  await Promise.resolve();\n  asyncCapturedNotification.create = (() => null) as any;\n};\nlet asyncCapturedNotification: any = {};\nvoid mutateAsyncCapturedNotification();\nasyncCapturedNotification = NotificationsService.prototype;\n`;
+      },
+    },
+    {
+      name: "transparent initializer wrappers cannot hide a called Notifications arrow",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nconst mutateWrappedNotificationArrow = (((() => {\n  wrappedNotificationPrototype.create = (() => null) as any;\n}) as (() => void)))!;\nlet wrappedNotificationPrototype: any = {};\nwrappedNotificationPrototype = NotificationsService.prototype;\nmutateWrappedNotificationArrow();\n`;
+      },
+    },
+    {
+      name: "assignment-bound arrow observes an outer LocalStore binding at call time",
+      expectedFailure: "critical-symbol-write",
+      file: localStoreFile,
+      mutate(source) {
+        return `${source}\nlet mutateAssignedLocalArrow: () => void;\nmutateAssignedLocalArrow = () => {\n  assignedLocalPrototype.createNotification = (() => null) as any;\n};\nlet assignedLocalPrototype: any = {};\nassignedLocalPrototype = LocalStoreService.prototype;\nmutateAssignedLocalArrow();\n`;
+      },
+    },
+    {
+      name: "closure-local rebind before a Notifications write overrides the call-site value",
+      expectedFailure: "critical-symbol-write",
+      file: notificationsFile,
+      mutate(source) {
+        return `${source}\nlet locallyReboundNotificationPrototype: any = {};\nconst mutateLocallyReboundNotification = () => {\n  locallyReboundNotificationPrototype = NotificationsService.prototype;\n  locallyReboundNotificationPrototype.create = (() => null) as any;\n};\nmutateLocallyReboundNotification();\n`;
+      },
+    },
+    {
       name: "unknown spread occupying Object.assign target position fails closed",
       expectedFailure: "critical-symbol-write",
       file: notificationsFile,
@@ -2597,10 +2669,10 @@ test("completion audit checks real inbound recovery function boundaries, helpers
     },
   ];
 
-  const wave60MutationCount = 38;
+  const wave61MutationCount = 47;
   const orderedMutations = [
-    ...mutations.slice(-wave60MutationCount),
-    ...mutations.slice(0, -wave60MutationCount),
+    ...mutations.slice(-wave61MutationCount),
+    ...mutations.slice(0, -wave61MutationCount),
   ];
   for (const mutation of orderedMutations) {
     const root = createRealInboundFixture();
@@ -2817,6 +2889,56 @@ function safeCapturedNotificationMutation() {
 let safeCapturedNotificationPrototype: any = {};
 safeCapturedNotificationMutation();
 safeCapturedNotificationPrototype = NotificationsService.prototype;
+const safeCapturedNotificationArrowMutation = () => {
+  safeCapturedNotificationArrowPrototype.create = () => null;
+};
+let safeCapturedNotificationArrowPrototype: any = {};
+safeCapturedNotificationArrowMutation();
+safeCapturedNotificationArrowPrototype = NotificationsService.prototype;
+const safeCapturedNotificationExpressionMutation = function () {
+  safeCapturedNotificationExpressionPrototype.create = () => null;
+};
+let safeCapturedNotificationExpressionPrototype: any = {};
+safeCapturedNotificationExpressionMutation();
+safeCapturedNotificationExpressionPrototype = NotificationsService.prototype;
+let safeDeadCallNotificationPrototype: any = NotificationsService.prototype;
+const safeDeadCallNotificationMutation = () => {
+  safeDeadCallNotificationPrototype.create = () => null;
+};
+if (false) safeDeadCallNotificationMutation();
+let safeInertNotificationPrototype: any = NotificationsService.prototype;
+const safeInertNotificationMutation = () => {
+  safeInertNotificationPrototype.create = () => null;
+};
+let safeIifeNotificationPrototype: any = {};
+(() => {
+  safeIifeNotificationPrototype.create = () => null;
+})();
+safeIifeNotificationPrototype = NotificationsService.prototype;
+let safeWrappedNotificationPrototype: any = {};
+const safeWrappedNotificationMutation = (((() => {
+  safeWrappedNotificationPrototype.create = () => null;
+}) as (() => void)))!;
+safeWrappedNotificationMutation();
+safeWrappedNotificationPrototype = NotificationsService.prototype;
+let safeAssignedNotificationMutation: () => void;
+safeAssignedNotificationMutation = () => {
+  safeAssignedNotificationPrototype.create = () => null;
+};
+let safeAssignedNotificationPrototype: any = {};
+safeAssignedNotificationMutation();
+safeAssignedNotificationPrototype = NotificationsService.prototype;
+let safeLocallyReboundNotificationPrototype: any = NotificationsService.prototype;
+const safeLocallyReboundNotificationMutation = () => {
+  safeLocallyReboundNotificationPrototype = {};
+  safeLocallyReboundNotificationPrototype.create = () => null;
+};
+safeLocallyReboundNotificationMutation();
+let safeDeadEscapeNotificationPrototype: any = NotificationsService.prototype;
+const safeDeadEscapeNotificationMutation = () => {
+  safeDeadEscapeNotificationPrototype.create = () => null;
+};
+if (false) void safeDeadEscapeNotificationMutation;
 function safeEscapedCapturedNotificationMutation() {
   safeEscapedCapturedNotificationPrototype.create = () => null;
 }
@@ -2824,6 +2946,13 @@ let safeEscapedCapturedNotificationPrototype: any = {};
 if (false) safeEscapedCapturedNotificationPrototype = NotificationsService.prototype;
 const retainedSafeCapturedNotificationMutation = safeEscapedCapturedNotificationMutation;
 void retainedSafeCapturedNotificationMutation;
+const safeEscapedCapturedNotificationArrowMutation = () => {
+  safeEscapedCapturedNotificationArrowPrototype.create = () => null;
+};
+let safeEscapedCapturedNotificationArrowPrototype: any = {};
+if (false) safeEscapedCapturedNotificationArrowPrototype = NotificationsService.prototype;
+const retainedSafeEscapedCapturedNotificationArrowMutation = safeEscapedCapturedNotificationArrowMutation;
+void retainedSafeEscapedCapturedNotificationArrowMutation;
 Object.assign({}, ...[]);
 declare const unresolvedSafeAssignSources: object[];
 const unrelatedSafeAssignTarget = {};
