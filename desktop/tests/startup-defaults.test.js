@@ -859,7 +859,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableLaunch, /repair-stable-desktop\.cmd/);
   assert.doesNotMatch(stableLaunch, /keep that service window open/);
   assert.match(stableLaunch, /pause/);
-  assert.match(stableLaunch, /electron\\dist\\electron\.exe" apps\\electron\\main\.js/);
+  assert.match(stableLaunch, /node tools\\launch-stable-electron\.js/);
   const stableLogs = readText("logs-stable-desktop.cmd");
   assert.match(stableLogs, /set "LOG_DIR=%DESKTOP_RUNTIME_DIR%\\logs"/);
   assert.match(stableLogs, /Get-ChildItem/);
@@ -966,7 +966,7 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   assert.match(dependencyBootstrap, /resolve-worktree-node-modules\.js/);
   assert.match(dependencyResolver, /function resolveWorktreeNodeModules\(root\)/);
   assert.doesNotMatch(dependencyResolver, /D:\\zhinengkefu|C:\\Users\\27808/i);
-  assert.match(stableLaunch, /%NODE_PATH%\\electron\\dist\\electron\.exe/);
+  assert.match(stableLaunch, /node tools\\launch-stable-electron\.js/);
 });
 
 test("stable runtime launcher owns one stable runtime and required services", () => {
@@ -1023,6 +1023,10 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.doesNotMatch(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1/);
   assert.match(stableRuntime, /:restart/);
   assert.match(stableRuntime, /goto restart/);
+  const stableSessionDoctor = readText("tools/stable-desktop-doctor.js");
+  assert.match(stableSessionDoctor, /readDesktopWebSessionProof\(desktopWebSessionFile\)/);
+  assert.match(stableSessionDoctor, /smart_kefu_desktop_session=\$\{proof\}/);
+  assert.match(stableSessionDoctor, /Verified desktop session/);
   assert.match(stableRuntime, /SERVICE_EXIT_CODE/);
   assert.match(stableRuntime, /if exist \$\{cmdQuote\(stopRequestFile\)\} exit \/b 0/);
   assert.match(stableRuntime, /const out = openServiceLogForAppend\(spec\.name, "out"\)/);
@@ -1061,7 +1065,8 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /expectedMarkers\.some\(\(marker\) => commandLine\.includes\(marker\)\)/);
   assert.match(stableRuntime, /function portHealthMatches\(spec\)/);
   assert.match(stableRuntime, /normalize\(json\?\.localStore\?\.path\) === normalize\(localStoreFile\)/);
-  assert.match(stableRuntime, /function requestJson\(url\)/);
+  assert.match(stableRuntime, /smart_kefu_desktop_session=\$\{desktopWebSession\.proof\}/);
+  assert.match(stableRuntime, /function requestJson\(url, headers = \[\]\)/);
   assert.match(stableRuntime, /function requestOk\(url\)/);
   assert.match(stableRuntime, /function commandLineForPid\(pid\)/);
   assert.match(stableRuntime, /function isDescendantPid\(pid, ancestorPid\)/);

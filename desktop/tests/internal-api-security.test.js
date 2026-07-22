@@ -237,12 +237,17 @@ test("packaged runtime keeps desktop proof independent and out of the API enviro
 
 test("stable and port-stack launchers scope tokens and filter wrapper files", () => {
   const stable = read("tools/stable-runtime-launcher.js");
+  const stableElectron = read("tools/launch-stable-electron.js");
   const starter = read("tools/ports-stack-starter.js");
   const supervisor = read("tools/desktop-service-supervisor.js");
   const dev = read("tools/start-dev-ports.js");
   assert.match(stable, /const internalApiToken = ensureInternalApiToken\(\)/);
   assert.match(stable, /renderWindowsWrapperEnvironment\(spec\.name, serviceEnv/);
   assert.match(stable, /env: serviceEnv\(spec\.port \|\| ports\.api, spec\.name, spec\.env\)/);
+  assert.match(stable, /createDesktopWebSession\(runtimeDir/);
+  assert.match(stable, /desktopWebSessionServiceEnv\(internalEnv, serviceName, desktopWebSession\.proof\)/);
+  assert.match(stableElectron, /readDesktopWebSessionProof\(sessionFile\)/);
+  assert.match(stableElectron, /env\[DESKTOP_WEB_SESSION_PROOF_ENV\] = proof/);
   assert.match(starter, /INTERNAL_API_TOKEN: internalApiToken/);
   assert.match(supervisor, /process\.env\.INTERNAL_API_TOKEN = ensureInternalApiToken\(\)/);
   assert.match(dev, /internalApiServiceEnv\([\s\S]*?service\?\.name, internalApiToken\)/);

@@ -15,6 +15,11 @@ const {
   createWechatBridgeServiceSession,
   wechatBridgeServiceEnv,
 } = require("./wechat-bridge-service-session");
+const {
+  createDesktopWebSession,
+  desktopWebSessionServiceEnv,
+  resolveDesktopWebSessionFile,
+} = require("./desktop-web-session");
 const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
 const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
 const { atomicWritePrivateJson } = require("./private-runtime-file");
@@ -33,6 +38,9 @@ const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standal
 const webNextDir = path.join(root, "apps", "web", ".next");
 const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
 const internalApiToken = ensureInternalApiToken();
+const desktopWebSession = {
+  sessionFile: resolveDesktopWebSessionFile(runtimeDir),
+};
 const observerProofSession = {
   tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
 };
@@ -84,6 +92,7 @@ if (fs.existsSync(stopRequestFile)) {
   process.exit(0);
 }
 acquireSingleInstanceLock();
+Object.assign(desktopWebSession, createDesktopWebSession(runtimeDir, { sessionFile: desktopWebSession.sessionFile }));
 Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
 Object.assign(bridgeServiceSession, createWechatBridgeServiceSession(runtimeDir, { tokenFile: bridgeServiceSession.tokenFile }));
 if (specs[0].args[0] === webRuntimeServerPath) {
@@ -328,7 +337,8 @@ function serviceEnv(port, serviceName, overrides = {}) {
     WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
   }, serviceName, internalApiToken);
-  const observerEnv = wechatWindowObserverServiceEnv(internalEnv, serviceName, observerProofSession.tokenFile);
+  const desktopSessionEnv = desktopWebSessionServiceEnv(internalEnv, serviceName, desktopWebSession.proof);
+  const observerEnv = wechatWindowObserverServiceEnv(desktopSessionEnv, serviceName, observerProofSession.tokenFile);
   return selectServiceEnvironment(
     serviceName,
     wechatBridgeServiceEnv(observerEnv, serviceName, bridgeServiceSession.tokenFile),
@@ -414,14 +424,18 @@ function portHealthMatches(spec) {
     return json?.ok === true && json?.service === "mock-design-platform";
   }
   if (spec.name === "web") {
-    return requestOk(`http://127.0.0.1:${spec.port}/`);
+    const json = requestJson(`http://127.0.0.1:${spec.port}/api/health`, [
+      `Cookie: smart_kefu_desktop_session=${desktopWebSession.proof}`,
+    ]);
+    return normalize(json?.localStore?.path) === normalize(localStoreFile);
   }
   return false;
 }
 
-function requestJson(url) {
+function requestJson(url, headers = []) {
   try {
-    const result = spawnSync("curl.exe", ["-s", "--max-time", "2", url], { encoding: "utf8", windowsHide: true });
+    const headerArgs = headers.flatMap((header) => ["-H", header]);
+    const result = spawnSync("curl.exe", ["-s", "--max-time", "2", ...headerArgs, url], { encoding: "utf8", windowsHide: true });
     if (result.status !== 0 || !result.stdout) return null;
     return JSON.parse(result.stdout);
   } catch {

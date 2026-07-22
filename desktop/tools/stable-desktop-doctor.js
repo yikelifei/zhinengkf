@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  readDesktopWebSessionProof,
+  resolveDesktopWebSessionFile,
+} = require("./desktop-web-session");
 
 const args = new Set(process.argv.slice(2));
 const waitMs = numberArg("--wait-ms", args.has("--wait") ? 90000 : 0);
@@ -17,6 +21,7 @@ const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
 const windowsProcessQueryTimeoutMs = numberEnv("WINDOWS_PROCESS_QUERY_TIMEOUT_MS", 3000);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const desktopWebSessionFile = resolveDesktopWebSessionFile(runtimeDir);
 const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
 const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
@@ -103,6 +108,9 @@ async function collectReport() {
     });
   }
 
+  const desktopSessionCheck = await checkDesktopWebSession();
+  checks.push(desktopSessionCheck);
+
   return {
     ok: checks.every((item) => item.ok || item.severity === "warn"),
     checks,
@@ -110,6 +118,27 @@ async function collectReport() {
     runtimeDir,
     generatedAt: new Date().toISOString(),
   };
+}
+
+async function checkDesktopWebSession() {
+  try {
+    const proof = readDesktopWebSessionProof(desktopWebSessionFile);
+    const result = await requestJson(`http://127.0.0.1:${webPort}/api/health`, 3000, {
+      headers: { Cookie: `smart_kefu_desktop_session=${proof}` },
+    });
+    const ok = result.statusCode === 200 && localStoreUsesRuntimeDir(result.json);
+    return {
+      ok,
+      label: "Verified desktop session",
+      detail: describeHttpResult(`http://127.0.0.1:${webPort}/api/health`, result),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      label: "Verified desktop session",
+      detail: `${desktopWebSessionFile}: ${error?.message || String(error)}`,
+    };
+  }
 }
 
 function printReport(report) {
@@ -470,9 +499,9 @@ function getPortOwners(ports) {
   return owners;
 }
 
-function requestJson(url, timeoutMs) {
+function requestJson(url, timeoutMs, options = {}) {
   return new Promise((resolve) => {
-    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+    const request = http.get(url, { ...options, timeout: timeoutMs }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => {

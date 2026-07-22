@@ -20,8 +20,8 @@ if not %ERRORLEVEL% EQU 0 (
   pause
   exit /b %ERRORLEVEL%
 )
-if not exist "%NODE_PATH%\electron\dist\electron.exe" (
-  echo [error] Electron runtime was not found under "%NODE_PATH%".
-  exit /b 1
+node tools\launch-stable-electron.js
+if errorlevel 1 (
+  echo [error] Electron desktop failed to start.
+  exit /b %ERRORLEVEL%
 )
-start "Smart Kefu App" "%NODE_PATH%\electron\dist\electron.exe" apps\electron\main.js
