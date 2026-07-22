@@ -11,6 +11,7 @@ $KeepAliveOutLog = Join-Path $LogDir "stable-runtime-launcher.out.log"
 $KeepAliveErrLog = Join-Path $LogDir "stable-runtime-launcher.err.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
+$HeartbeatFile = Join-Path $RuntimeDir "keep-alive.json"
 $SupervisorMode = $env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"
 $env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"
 $env:STABLE_PERSONAL_WECHAT_SEND = "0"
@@ -49,10 +50,22 @@ function Normalize-ProcessPathEnvironment {
 
 function Find-KeepAliveProcess {
   try {
-    Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-      Where-Object { ($_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript)) -or ($_.CommandLine -like "*stable-runtime-launcher.js*") } |
-      Sort-Object ProcessId -Descending |
-      Select-Object -First 1
+    if (-not (Test-Path $HeartbeatFile)) {
+      return $null
+    }
+    $heartbeat = Get-Content -Raw -Path $HeartbeatFile | ConvertFrom-Json
+    $processId = [int]$heartbeat.pid
+    $updatedAt = [DateTimeOffset]::Parse([string]$heartbeat.updatedAt)
+    $heartbeatIsFresh = ([DateTimeOffset]::UtcNow - $updatedAt.ToUniversalTime()).TotalSeconds -le 30
+    $isStableLauncher = @($heartbeat.args) -contains "stable-runtime-launcher"
+    if ($processId -le 0 -or -not $heartbeatIsFresh -or -not $isStableLauncher) {
+      return $null
+    }
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if (-not $process) {
+      return $null
+    }
+    [pscustomobject]@{ ProcessId = $processId }
   } catch {
     Write-Warning "stable launcher process lookup unavailable: $($_.Exception.Message)"
     return $null

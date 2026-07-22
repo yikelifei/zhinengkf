@@ -45,6 +45,7 @@ const ports = {
   api: Number(process.env.API_PORT || 3200),
   mock: Number(process.env.MOCK_DESIGN_PLATFORM_PORT || 3700),
 };
+const windowsProcessQueryTimeoutMs = positiveNumber(process.env.WINDOWS_PROCESS_QUERY_TIMEOUT_MS, 1000);
 
 const specs = [
   webServiceSpec(),
@@ -438,7 +439,11 @@ function requestOk(url) {
 
 function commandLineForPid(pid) {
   const script = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty CommandLine`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
+  });
   return result.stdout || "";
 }
 
@@ -458,7 +463,11 @@ function isDescendantPid(pid, ancestorPid) {
 
 function parentPidForPid(pid) {
   const script = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty ParentProcessId`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
+  });
   const parentPid = Number(String(result.stdout || "").trim());
   return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : null;
 }
@@ -466,7 +475,10 @@ function parentPidForPid(pid) {
 function killPid(pid) {
   try { process.kill(Number(pid), "SIGTERM"); } catch {}
   const script = `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`;
-  spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true });
+  spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
+  });
 }
 
 function closeFd(value) {
@@ -491,6 +503,7 @@ function findLegacyRuntimeProcesses() {
     cwd: root,
     encoding: "utf8",
     windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
   });
   if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
   let items = [];
@@ -596,4 +609,9 @@ function append(name, message) {
 
 function normalize(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
 }

@@ -802,7 +802,7 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.doesNotMatch(stableKeepalivePs1, /-ArgumentList @\("\/d", "\/k"/);
   assert.match(stableKeepalivePs1, /-WindowStyle Hidden[\s\S]*-PassThru/);
   assert.doesNotMatch(stableKeepalivePs1, /\[regex\]::Escape\(\$StableSupervisorCmd\)/);
-  assert.match(stableKeepalivePs1, /\[regex\]::Escape\(\$StableRuntimeLauncherScript\)/);
+  assert.match(stableKeepalivePs1, /\$HeartbeatFile = Join-Path \$RuntimeDir "keep-alive\.json"/);
   assert.doesNotMatch(stableKeepalivePs1, /stable supervisor process was not found/);
   assert.match(stableKeepalivePs1, /stable-start\.log/);
   assert.match(stableKeepalivePs1, /\$StableStartingLock = Join-Path \$RuntimeDir "stable-starting\.lock"/);
@@ -812,7 +812,9 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /function Find-KeepAliveProcess/);
   assert.match(stableKeepalivePs1, /stable launcher process lookup unavailable/);
   assert.doesNotMatch(stableKeepalivePs1, /Invoke-CimMethod -ClassName Win32_Process -MethodName Create/);
-  assert.match(stableKeepalivePs1, /Get-CimInstance Win32_Process -Filter "name = 'node\.exe'"/);
+  assert.match(stableKeepalivePs1, /Get-Content -Raw -Path \$HeartbeatFile \| ConvertFrom-Json/);
+  assert.match(stableKeepalivePs1, /Get-Process -Id \$processId -ErrorAction SilentlyContinue/);
+  assert.doesNotMatch(stableKeepalivePs1, /Get-CimInstance Win32_Process/);
   assert.match(stableKeepalivePs1, /function Wait-StableRuntimeReady/);
   assert.match(stableKeepalivePs1, /AddSeconds\(180\)/);
   assert.match(stableKeepalivePs1, /\$reportedProcessExit = \$false/);
@@ -1013,6 +1015,8 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /existing && isPidAlive\(existing\.pid\) && process\.platform === "win32" && spec\.port/);
   assert.match(stableRuntime, /function startWindowsWrappedPortService\(spec\)/);
   assert.match(stableRuntime, /function buildWindowsPortServiceWrapper\(spec\)/);
+  assert.match(stableRuntime, /const windowsProcessQueryTimeoutMs = positiveNumber\(process\.env\.WINDOWS_PROCESS_QUERY_TIMEOUT_MS, 1000\)/);
+  assert.match(stableRuntime, /function findLegacyRuntimeProcesses\(\)[\s\S]*timeout: windowsProcessQueryTimeoutMs/);
   assert.match(stableRuntime, /netstat\.exe -ano -p TCP \| findstr\.exe \/C:\"127\.0\.0\.1:\$\{spec\.port\} \" \| findstr\.exe \/C:\"LISTENING\" >nul/);
   assert.doesNotMatch(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1/);
   assert.match(stableRuntime, /:restart/);
