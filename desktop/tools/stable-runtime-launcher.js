@@ -246,7 +246,7 @@ function buildWindowsPortServiceWrapper(spec) {
     ...renderWindowsWrapperEnvironment(spec.name, serviceEnv(spec.port, spec.name, spec.env)),
     ":restart",
     `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
-    `netstat.exe -ano -p TCP | findstr.exe /C:"127.0.0.1:${spec.port} " | findstr.exe /C:"LISTENING" >nul`,
+    `${cmdQuote(process.execPath)} ${cmdQuote(path.join(root, "tools", "check-loopback-port.js"))} ${spec.port}`,
     "if not errorlevel 1 (",
     "  timeout /t 2 /nobreak >nul",
     "  goto restart",
