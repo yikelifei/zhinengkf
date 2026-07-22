@@ -245,7 +245,7 @@ function buildWindowsPortServiceWrapper(spec) {
     ...renderWindowsWrapperEnvironment(spec.name, serviceEnv(spec.port, spec.name, spec.env)),
     ":restart",
     `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
-    `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${spec.port} -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`,
+    `netstat.exe -ano -p TCP | findstr.exe /C:"127.0.0.1:${spec.port} " | findstr.exe /C:"LISTENING" >nul`,
     "if not errorlevel 1 (",
     "  timeout /t 2 /nobreak >nul",
     "  goto restart",

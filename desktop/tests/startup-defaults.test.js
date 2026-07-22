@@ -1013,7 +1013,8 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /existing && isPidAlive\(existing\.pid\) && process\.platform === "win32" && spec\.port/);
   assert.match(stableRuntime, /function startWindowsWrappedPortService\(spec\)/);
   assert.match(stableRuntime, /function buildWindowsPortServiceWrapper\(spec\)/);
-  assert.match(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1 -LocalPort \$\{spec\.port\} -State Listen/);
+  assert.match(stableRuntime, /netstat\.exe -ano -p TCP \| findstr\.exe \/C:\"127\.0\.0\.1:\$\{spec\.port\} \" \| findstr\.exe \/C:\"LISTENING\" >nul/);
+  assert.doesNotMatch(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1/);
   assert.match(stableRuntime, /:restart/);
   assert.match(stableRuntime, /goto restart/);
   assert.match(stableRuntime, /SERVICE_EXIT_CODE/);
