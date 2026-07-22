@@ -222,12 +222,16 @@ test("owner project helpers require an absolute resolvable verified project root
 });
 
 test("current Windows workspace junction resolves to the same owner project", { skip: process.platform !== "win32" }, (t) => {
-  const directRepository = "D:\\zhinengkefu";
   const junctionRepository = path.join(process.env.USERPROFILE || "", "Desktop", "zhinengkefu");
+  if (!process.env.USERPROFILE || !fs.existsSync(junctionRepository)) {
+    t.skip("current workspace junction is unavailable");
+    return;
+  }
+  const directRepository = fs.realpathSync.native(junctionRepository);
   const currentDesktop = path.resolve(__dirname, "..");
   const relativeCheckout = path.relative(directRepository, currentDesktop);
-  if (!process.env.USERPROFILE || relativeCheckout.startsWith("..") || !fs.existsSync(junctionRepository)) {
-    t.skip("current D: repository junction is unavailable");
+  if (relativeCheckout.startsWith("..") || path.isAbsolute(relativeCheckout)) {
+    t.skip("current checkout is outside the junction owner project");
     return;
   }
   const junctionDesktop = path.join(junctionRepository, relativeCheckout);

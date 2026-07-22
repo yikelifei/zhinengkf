@@ -15,6 +15,7 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
 const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+const windowsProcessQueryTimeoutMs = numberEnv("WINDOWS_PROCESS_QUERY_TIMEOUT_MS", 3000);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
 const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
@@ -271,6 +272,7 @@ function findStableRuntimeLauncherProcesses() {
     cwd: desktopRoot,
     encoding: "utf8",
     windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
   });
   if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
   try {
@@ -327,6 +329,7 @@ function findStaleRuntimeProcesses() {
     cwd: desktopRoot,
     encoding: "utf8",
     windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
   });
   if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
   try {
@@ -501,6 +504,7 @@ function getCommandLine(pid) {
     cwd: desktopRoot,
     encoding: "utf8",
     windowsHide: true,
+    timeout: windowsProcessQueryTimeoutMs,
   });
   return result.status === 0 ? String(result.stdout || "").trim() : "";
 }
