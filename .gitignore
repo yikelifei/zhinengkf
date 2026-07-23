@@ -4,6 +4,11 @@
 # Local assistant/editor state
 .claude/
 
+# Local orchestration/worktree state
+.runtime/
+.runtime-d-repo/
+.tmp_github/
+
 # Python
 __pycache__/
 .pytest_cache/
@@ -61,7 +66,10 @@ desktop/uploads/
 desktop/generated/
 desktop/*.tsbuildinfo
 desktop/.runtime-stable/
-.runtime-d-repo/
+
+# Personal WeChat RPA local .NET build output
+desktop/tools/personal-wechat-rpa-host/bin/
+desktop/tools/personal-wechat-rpa-host/obj/
 
 # OS
 .DS_Store
