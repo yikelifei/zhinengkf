@@ -3970,6 +3970,203 @@ new SafeDeadEscapeDestructuredRunner().entry();`,
   }
 });
 
+test("completion audit hardens object accessor delegates and captured callable timing", () => {
+  const notificationsFile = path.join(
+    "desktop", "apps", "api", "src", "notifications", "notifications.service.ts",
+  );
+  const contractFor = (statement) => {
+    const root = createRealInboundFixture();
+    const target = path.join(root, notificationsFile);
+    fs.writeFileSync(target, `${fs.readFileSync(target, "utf8")}\n${statement}\n`, "utf8");
+    return buildAudit(root, { includeExternal: false }).results
+      .find((item) => item.id === "contract.inbound_effect_recovery");
+  };
+  const failures = [
+    ["object getter destructuring read", `let objectGetterDestructuredPrototype: any = {};
+const objectGetterDestructuredRunner = { get target() { objectGetterDestructuredPrototype.create = (() => null) as any; return () => undefined; }, entry() { const { target } = this; void target; } };
+objectGetterDestructuredPrototype = NotificationsService.prototype;
+objectGetterDestructuredRunner.entry();`],
+    ["truly unused object getter destructuring read", `let unusedObjectGetterPrototype: any = {};
+const unusedObjectGetterRunner = { get target() { unusedObjectGetterPrototype.create = (() => null) as any; return 1; }, entry() { const { target } = this; } };
+unusedObjectGetterPrototype = NotificationsService.prototype;
+unusedObjectGetterRunner.entry();`],
+    ["class getter destructuring read", `let classGetterDestructuredPrototype: any = {};
+class ClassGetterDestructuredRunner { get target() { classGetterDestructuredPrototype.create = (() => null) as any; return () => undefined; } entry() { const { target } = this; void target; } }
+classGetterDestructuredPrototype = NotificationsService.prototype;
+new ClassGetterDestructuredRunner().entry();`],
+    ["object getter rest read", `let objectGetterRestPrototype: any = {};
+const objectGetterRestRunner = { get target() { objectGetterRestPrototype.create = (() => null) as any; return 1; }, entry() { const { ...members } = this; void members; } };
+objectGetterRestPrototype = NotificationsService.prototype;
+objectGetterRestRunner.entry();`],
+    ["dynamic getter destructuring is fail closed", `declare const unresolvedGetterKey: string;
+let dynamicGetterDestructuredPrototype: any = {};
+const dynamicGetterDestructuredRunner = { get target() { dynamicGetterDestructuredPrototype.create = (() => null) as any; return 1; }, entry() { const { [unresolvedGetterKey]: value } = this as any; void value; } };
+dynamicGetterDestructuredPrototype = NotificationsService.prototype;
+dynamicGetterDestructuredRunner.entry();`],
+    ["object delegate fixed point", `let objectFixedPointPrototype: any = {};
+const objectFixedPointRunner = { target() { objectFixedPointPrototype.create = (() => null) as any; }, middle() { this.target(); }, entry() { this.middle(); } };
+objectFixedPointPrototype = NotificationsService.prototype;
+objectFixedPointRunner.entry();`],
+    ["object escape-only delegate", `let objectEscapeOnlyPrototype: any = {};
+const objectEscapeOnlyRunner = { target() { objectEscapeOnlyPrototype.create = (() => null) as any; }, entry() { return this.target; } };
+objectEscapeOnlyPrototype = NotificationsService.prototype;
+void objectEscapeOnlyRunner.entry();`],
+    ["class target captured assignment", `let classTargetTimingPrototype: any = {};
+class ClassTargetTimingRunner { target() { classTargetTimingPrototype = NotificationsService.prototype; classTargetTimingPrototype.create = (() => null) as any; } }
+new ClassTargetTimingRunner().target();`],
+    ["class delegate captured assignment", `let classDelegateTimingPrototype: any = {};
+class ClassDelegateTimingRunner { target() { classDelegateTimingPrototype.create = (() => null) as any; } entry() { classDelegateTimingPrototype = NotificationsService.prototype; this.target(); } }
+new ClassDelegateTimingRunner().entry();`],
+    ["object target captured assignment", `let objectTargetTimingPrototype: any = {};
+const objectTargetTimingRunner = { target() { objectTargetTimingPrototype = NotificationsService.prototype; objectTargetTimingPrototype.create = (() => null) as any; } };
+objectTargetTimingRunner.target();`],
+    ["object delegate captured assignment", `let objectDelegateTimingPrototype: any = {};
+const objectDelegateTimingRunner = { target() { objectDelegateTimingPrototype.create = (() => null) as any; }, entry() { objectDelegateTimingPrototype = NotificationsService.prototype; this.target(); } };
+objectDelegateTimingRunner.entry();`],
+    ["captured binding assignment before new", `function runCapturedNew() {
+  let capturedNewPrototype: any = {};
+  function CapturedNewRunner() { capturedNewPrototype.create = (() => null) as any; }
+  capturedNewPrototype = NotificationsService.prototype;
+  new CapturedNewRunner();
+}
+runCapturedNew();`],
+    ["object multi-hop assignment before delegate", `let objectMultiHopBeforePrototype: any = {};
+const objectMultiHopBeforeRunner = { target() { objectMultiHopBeforePrototype.create = (() => null) as any; }, middle() { this.target(); }, entry() { objectMultiHopBeforePrototype = NotificationsService.prototype; this.middle(); } };
+objectMultiHopBeforeRunner.entry();`],
+    ["class multi-hop assignment before delegate", `let classMultiHopBeforePrototype: any = {};
+class ClassMultiHopBeforeRunner { target() { classMultiHopBeforePrototype.create = (() => null) as any; } middle() { this.target(); } entry() { classMultiHopBeforePrototype = NotificationsService.prototype; this.middle(); } }
+new ClassMultiHopBeforeRunner().entry();`],
+    ["class escape-only multi-hop", `let classEscapeOnlyMultiHopPrototype: any = {};
+class ClassEscapeOnlyMultiHopRunner { target() { classEscapeOnlyMultiHopPrototype.create = (() => null) as any; } middle() { return this.target; } entry() { this.middle(); } }
+classEscapeOnlyMultiHopPrototype = NotificationsService.prototype;
+new ClassEscapeOnlyMultiHopRunner().entry();`],
+    ["captured binding assignment before Reflect construct", `function runCapturedReflectConstruct() {
+  let capturedReflectConstructPrototype: any = {};
+  function CapturedReflectConstructRunner() { capturedReflectConstructPrototype.create = (() => null) as any; }
+  capturedReflectConstructPrototype = NotificationsService.prototype;
+  Reflect.construct(CapturedReflectConstructRunner, []);
+}
+runCapturedReflectConstruct();`],
+    ["captured binding assignment before Reflect apply", `function runCapturedReflect() {
+  let capturedReflectPrototype: any = {};
+  function CapturedReflectRunner() { capturedReflectPrototype.create = (() => null) as any; }
+  capturedReflectPrototype = NotificationsService.prototype;
+  Reflect.apply(CapturedReflectRunner, undefined, []);
+}
+runCapturedReflect();`],
+    ["class dynamic escape multi-hop", `declare const unresolvedDynamicDelegateKey: string;
+let classDynamicEscapePrototype: any = {};
+class ClassDynamicEscapeRunner { target() { classDynamicEscapePrototype.create = (() => null) as any; } middle() { this[unresolvedDynamicDelegateKey](); } entry() { this.middle(); } }
+classDynamicEscapePrototype = NotificationsService.prototype;
+new ClassDynamicEscapeRunner().entry();`],
+    ["object async delegate after await", `let objectAsyncDelegatePrototype: any = {};
+const objectAsyncDelegateRunner = { target() { objectAsyncDelegatePrototype.create = (() => null) as any; }, async middle() { await Promise.resolve(); this.target(); }, entry() { void this.middle(); } };
+objectAsyncDelegatePrototype = NotificationsService.prototype;
+objectAsyncDelegateRunner.entry();`],
+    ["class generator delegate with next", `let classGeneratorDelegatePrototype: any = {};
+class ClassGeneratorDelegateRunner { target() { classGeneratorDelegatePrototype.create = (() => null) as any; } *middle() { yield 0; this.target(); } entry() { const iterator = this.middle(); iterator.next(); iterator.next(); } }
+classGeneratorDelegatePrototype = NotificationsService.prototype;
+new ClassGeneratorDelegateRunner().entry();`],
+    ["object delegate preserves an earlier dangerous bounded call", `let objectRepeatedBoundedPrototype: any = {};
+const objectRepeatedBoundedRunner = { target() { objectRepeatedBoundedPrototype.create = (() => null) as any; }, entry() { objectRepeatedBoundedPrototype = NotificationsService.prototype; this.target(); objectRepeatedBoundedPrototype = {}; this.target(); } };
+objectRepeatedBoundedRunner.entry();`],
+    ["class delegate preserves a later dangerous bounded call", `let classRepeatedBoundedPrototype: any = NotificationsService.prototype;
+class ClassRepeatedBoundedRunner { target() { classRepeatedBoundedPrototype.create = (() => null) as any; } entry() { classRepeatedBoundedPrototype = {}; this.target(); classRepeatedBoundedPrototype = NotificationsService.prototype; this.target(); } }
+new ClassRepeatedBoundedRunner().entry();`],
+    ["mixed object delegates preserve every bounded path", `let mixedDelegatePrototype: any = {};
+const mixedDelegateRunner = { target() { mixedDelegatePrototype.create = (() => null) as any; }, dangerous() { mixedDelegatePrototype = NotificationsService.prototype; this.target(); }, safe() { mixedDelegatePrototype = {}; this.target(); }, entry() { this.dangerous(); this.safe(); } };
+mixedDelegateRunner.entry();`],
+    ["conditional inner rebind retains the outer target seed", `declare const unresolvedInnerRebind: boolean;
+let conditionalInnerRebindPrototype: any = NotificationsService.prototype;
+const conditionalInnerRebindRunner = { target() { conditionalInnerRebindPrototype.create = (() => null) as any; }, entry() { if (unresolvedInnerRebind) conditionalInnerRebindPrototype = {}; this.target(); } };
+conditionalInnerRebindRunner.entry();`],
+    ["nullish assignment does not replace an existing target seed", `let nullishInnerRebindPrototype: any = NotificationsService.prototype;
+const nullishInnerRebindRunner = { target() { nullishInnerRebindPrototype.create = (() => null) as any; }, entry() { nullishInnerRebindPrototype ??= {}; this.target(); } };
+nullishInnerRebindRunner.entry();`],
+    ["logical assignment does not replace a truthy target seed", `let logicalInnerRebindPrototype: any = NotificationsService.prototype;
+const logicalInnerRebindRunner = { target() { logicalInnerRebindPrototype.create = (() => null) as any; }, entry() { logicalInnerRebindPrototype ||= {}; this.target(); } };
+logicalInnerRebindRunner.entry();`],
+    ["self assignment does not replace the target seed", `let selfInnerRebindPrototype: any = NotificationsService.prototype;
+const selfInnerRebindRunner = { target() { selfInnerRebindPrototype.create = (() => null) as any; }, entry() { selfInnerRebindPrototype = selfInnerRebindPrototype; this.target(); } };
+selfInnerRebindRunner.entry();`],
+    ["object direct target remains dangerous beside a covered delegate", `let objectDirectAndCoveredPrototype: any = NotificationsService.prototype;
+const objectDirectAndCoveredRunner = { target() { objectDirectAndCoveredPrototype.create = (() => null) as any; }, covered() { objectDirectAndCoveredPrototype = {}; this.target(); } };
+objectDirectAndCoveredRunner.target();
+objectDirectAndCoveredRunner.covered();`],
+    ["class direct target remains dangerous beside a covered delegate", `let classDirectAndCoveredPrototype: any = NotificationsService.prototype;
+class ClassDirectAndCoveredRunner { target() { classDirectAndCoveredPrototype.create = (() => null) as any; } covered() { classDirectAndCoveredPrototype = {}; this.target(); } }
+const classDirectAndCoveredRunner = new ClassDirectAndCoveredRunner();
+classDirectAndCoveredRunner.target();
+classDirectAndCoveredRunner.covered();`],
+  ];
+  for (const [name, statement] of failures) {
+    const contract = contractFor(statement);
+    assert.equal(contract.status, STATUS.FAIL, name);
+    assert.ok(contract.evidence.missing.some((item) => item.includes("critical-symbol-write")), name);
+  }
+
+  const safeStatements = [
+    `let safeSetterDestructuredPrototype: any = NotificationsService.prototype;
+const safeSetterDestructuredRunner = { set target(_next: unknown) { safeSetterDestructuredPrototype.create = (() => null) as any; }, entry() { const { target = () => undefined } = this; target(); } };
+safeSetterDestructuredRunner.entry();`,
+    `let objectMultiHopAfterPrototype: any = {};
+const objectMultiHopAfterRunner = { target() { objectMultiHopAfterPrototype.create = (() => null) as any; }, middle() { this.target(); }, entry() { this.middle(); objectMultiHopAfterPrototype = NotificationsService.prototype; } };
+objectMultiHopAfterRunner.entry();`,
+    `let classMultiHopAfterPrototype: any = {};
+class ClassMultiHopAfterRunner { target() { classMultiHopAfterPrototype.create = (() => null) as any; } middle() { this.target(); } entry() { this.middle(); classMultiHopAfterPrototype = NotificationsService.prototype; } }
+new ClassMultiHopAfterRunner().entry();`,
+    `function runCapturedNewAfter() {
+  let capturedNewAfterPrototype: any = {};
+  function CapturedNewAfterRunner() { capturedNewAfterPrototype.create = (() => null) as any; }
+  new CapturedNewAfterRunner();
+  capturedNewAfterPrototype = NotificationsService.prototype;
+}
+runCapturedNewAfter();`,
+    `function runCapturedReflectAfter() {
+  let capturedReflectAfterPrototype: any = {};
+  function CapturedReflectAfterRunner() { capturedReflectAfterPrototype.create = (() => null) as any; }
+  Reflect.construct(CapturedReflectAfterRunner, []);
+  capturedReflectAfterPrototype = NotificationsService.prototype;
+}
+runCapturedReflectAfter();`,
+    `let safeClassGetterRestPrototype: any = NotificationsService.prototype;
+class SafeClassGetterRestRunner { get target() { safeClassGetterRestPrototype.create = (() => null) as any; return 1; } entry() { const { ...members } = this; void members; } }
+new SafeClassGetterRestRunner().entry();`,
+    `let safeObjectInnerRebindPrototype: any = NotificationsService.prototype;
+const safeObjectInnerRebindRunner = { target() { safeObjectInnerRebindPrototype.create = (() => null) as any; }, entry() { safeObjectInnerRebindPrototype = {}; this.target(); } };
+safeObjectInnerRebindRunner.entry();`,
+    `let safeClassGetterInnerRebindPrototype: any = NotificationsService.prototype;
+class SafeClassGetterInnerRebindRunner { get target() { safeClassGetterInnerRebindPrototype.create = (() => null) as any; return 1; } entry() { safeClassGetterInnerRebindPrototype = {}; void this.target; } }
+new SafeClassGetterInnerRebindRunner().entry();`,
+    `let safeObjectIntermediateRebindPrototype: any = NotificationsService.prototype;
+const safeObjectIntermediateRebindRunner = { target() { safeObjectIntermediateRebindPrototype.create = (() => null) as any; }, middle() { safeObjectIntermediateRebindPrototype = {}; this.target(); }, entry() { this.middle(); } };
+safeObjectIntermediateRebindRunner.entry();`,
+    `let safeClassIntermediateRebindPrototype: any = NotificationsService.prototype;
+class SafeClassIntermediateRebindRunner { target() { safeClassIntermediateRebindPrototype.create = (() => null) as any; } middle() { safeClassIntermediateRebindPrototype = {}; this.target(); } entry() { this.middle(); } }
+new SafeClassIntermediateRebindRunner().entry();`,
+    `let safeObjectDirectAndCoveredPrototype: any = NotificationsService.prototype;
+const safeObjectDirectAndCoveredRunner = { target() { safeObjectDirectAndCoveredPrototype.create = (() => null) as any; }, covered() { safeObjectDirectAndCoveredPrototype = {}; this.target(); } };
+safeObjectDirectAndCoveredPrototype = {};
+safeObjectDirectAndCoveredRunner.target();
+safeObjectDirectAndCoveredRunner.covered();`,
+    `let safeClassDirectAndCoveredPrototype: any = NotificationsService.prototype;
+class SafeClassDirectAndCoveredRunner { target() { safeClassDirectAndCoveredPrototype.create = (() => null) as any; } covered() { safeClassDirectAndCoveredPrototype = {}; this.target(); } }
+safeClassDirectAndCoveredPrototype = {};
+const safeClassDirectAndCoveredRunner = new SafeClassDirectAndCoveredRunner();
+safeClassDirectAndCoveredRunner.target();
+safeClassDirectAndCoveredRunner.covered();`,
+    `let safeObjectOuterEntryRebindPrototype: any = NotificationsService.prototype;
+const safeObjectOuterEntryRebindRunner = { target() { safeObjectOuterEntryRebindPrototype.create = (() => null) as any; }, middle() { this.target(); }, entry() { safeObjectOuterEntryRebindPrototype = {}; this.middle(); } };
+safeObjectOuterEntryRebindRunner.entry();`,
+    `let safeClassOuterEntryRebindPrototype: any = NotificationsService.prototype;
+class SafeClassOuterEntryRebindRunner { target() { safeClassOuterEntryRebindPrototype.create = (() => null) as any; } middle() { this.target(); } entry() { safeClassOuterEntryRebindPrototype = {}; this.middle(); } }
+new SafeClassOuterEntryRebindRunner().entry();`,
+  ];
+  for (const statement of safeStatements) {
+    const contract = contractFor(statement);
+    assert.equal(contract.status, STATUS.PASS, JSON.stringify(contract.evidence));
+  }
+});
 test("completion audit rejects removed archive-bomb preflight and whole-file Windows hashing", () => {
   const budgetRoot = createPassingFixture();
   const chainFile = path.join(budgetRoot, "desktop", "tools", "windows-evidence-chain.js");

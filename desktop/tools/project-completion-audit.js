@@ -3625,12 +3625,16 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
       return { trigger: null, escaped: !callableExpressionIsDiscarded(wrapperCall) };
     };
+    const destructuredThisCallableUsesCache = new Map();
     const destructuredThisCallableUses = (
       callable,
       lexicalThisOwner,
       lexicalThisContainer,
       evaluationSeenBindings = seenBindings,
     ) => {
+      if (destructuredThisCallableUsesCache.has(callable)) {
+        return destructuredThisCallableUsesCache.get(callable);
+      }
       const uses = [];
       for (const declaration of astNodes(ts, callable, (candidate) =>
         ts.isVariableDeclaration(candidate) && ts.isObjectBindingPattern(candidate.name))) {
@@ -3642,34 +3646,53 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           continue;
         }
         for (const element of declaration.name.elements) {
-          if (!ts.isIdentifier(element.name)) continue;
           let memberName = null;
-          let dynamic = Boolean(element.dotDotDotToken);
-          if (!dynamic) {
+          let kind = element.dotDotDotToken ? "rest" : "exact";
+          if (kind === "exact") {
             const propertyName = element.propertyName || element.name;
             if (ts.isComputedPropertyName(propertyName)) {
               memberName = exactObjectPropertyName({ name: propertyName }, evaluationSeenBindings);
             } else {
               memberName = staticPropertyName(ts, { name: propertyName });
             }
-            dynamic = memberName === null;
+            if (memberName === null) kind = "dynamic";
+          }
+          const record = {
+            memberName,
+            kind,
+            readTrigger: element,
+            callTriggers: [],
+            escaped: false,
+          };
+          if (!ts.isIdentifier(element.name)) {
+            record.kind = "dynamic";
+            record.escaped = true;
+            uses.push(record);
+            continue;
           }
           const localBinding = resolveBinding(element.name);
-          if (!localBinding) continue;
+          if (!localBinding) {
+            record.escaped = true;
+            uses.push(record);
+            continue;
+          }
           for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
             !isBindingDeclarationIdentifier(ts, candidate) && resolveBinding(candidate) === localBinding)) {
             if (eventExecutionReachability({ node: reference }, reference, evaluationSeenBindings) === "never") {
               continue;
             }
             if (executionContainer(ts, reference) !== callable) {
-              uses.push({ memberName, dynamic, trigger: null, escaped: true });
+              record.escaped = true;
               continue;
             }
             const use = callableMemberUse(reference, evaluationSeenBindings);
-            if (use.trigger || use.escaped) uses.push({ memberName, dynamic, ...use });
+            if (use.trigger) record.callTriggers.push(use.trigger);
+            if (use.escaped) record.escaped = true;
           }
+          uses.push(record);
         }
       }
+      destructuredThisCallableUsesCache.set(callable, uses);
       return uses;
     };
     const invocationForObjectProperty = (property) => ({
@@ -3690,7 +3713,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     const objectElementEscapes = (member, invocation, evaluationSeenBindings = seenBindings) =>
       Boolean(invocation.call && callableMemberUse(member, evaluationSeenBindings).escaped);
     const objectFunctionDelegateInvocations = new Map();
-    const objectFunctionEscapedDelegateNames = new Set();
+    const objectFunctionDelegateTriggers = new Map();
+    const objectFunctionDelegateSeedTriggers = new Map();
+    const objectFunctionDelegateTriggerPaths = new Map();
+    const objectFunctionEscapedDelegateInvocations = new Map();
     if (objectFunctionPlan && objectFunctionPlan.propertyName !== null && objectFunctionLiteral) {
       const lexicalThisContainer = (node) => {
         for (let current = node; current; current = current.parent) {
@@ -3698,49 +3724,180 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         }
         return null;
       };
-      for (const property of objectFunctionLiteral.properties) {
-        if (property === objectFunctionProperty) continue;
-        const callable = ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) ||
-          ts.isSetAccessorDeclaration(property)
-          ? property
-          : ts.isPropertyAssignment(property) &&
-              (ts.isFunctionExpression(unwrapExpression(ts, property.initializer)) ||
-                ts.isArrowFunction(unwrapExpression(ts, property.initializer)))
-            ? unwrapExpression(ts, property.initializer)
-            : null;
-        if (!callable) continue;
-        let delegatesToTarget = false;
-        let escapesTarget = false;
-        astNodes(ts, callable, (candidate) => {
-          if ((!ts.isPropertyAccessExpression(candidate) && !ts.isElementAccessExpression(candidate)) ||
-            unwrapExpression(ts, candidate.expression)?.kind !== ts.SyntaxKind.ThisKeyword ||
-            lexicalThisContainer(candidate.expression) !== callable ||
-            staticPropertyName(ts, candidate) !== objectFunctionPlan.propertyName ||
-            eventExecutionReachability({ node: candidate }, candidate, seenBindings) === "never") return false;
-          if (objectElementTrigger(candidate, objectFunctionPlan.invocation, seenBindings)) {
-            delegatesToTarget = true;
-          } else if (objectElementEscapes(candidate, objectFunctionPlan.invocation, seenBindings)) {
-            escapesTarget = true;
-          }
-          return false;
-        });
-        for (const use of destructuredThisCallableUses(
-          callable, callable, lexicalThisContainer, seenBindings,
-        )) {
-          if (use.dynamic || use.memberName === objectFunctionPlan.propertyName) {
-            if (use.trigger) delegatesToTarget = true;
-            if (use.escaped || use.dynamic) escapesTarget = true;
-          }
+      const invocationChanged = (current, next) => !current || current.read !== next.read ||
+        current.write !== next.write || current.call !== next.call;
+      const mergeInvocationMap = (map, name, invocation) => {
+        const next = mergeObjectInvocation(map.get(name), invocation);
+        if (!invocationChanged(map.get(name), next)) return false;
+        map.set(name, next);
+        return true;
+      };
+      const addObjectTriggerSet = (map, name, triggers) => {
+        if (!triggers.length) return false;
+        const current = map.get(name) || new Set();
+        const previousSize = current.size;
+        for (const trigger of triggers) current.add(trigger);
+        map.set(name, current);
+        return current.size !== previousSize;
+      };
+      const addObjectTriggerPaths = (name, paths) => {
+        if (!paths.length) return false;
+        const current = objectFunctionDelegateTriggerPaths.get(name) || [];
+        const previousLength = current.length;
+        for (const path of paths) {
+          if (!current.some((candidate) => candidate.leaf === path.leaf &&
+            candidate.seeds.length === path.seeds.length &&
+            candidate.seeds.every((seed, index) => seed === path.seeds[index]))) current.push(path);
         }
-        if (!delegatesToTarget && !escapesTarget) continue;
-        const delegateName = exactObjectPropertyName(property);
-        if (delegateName !== null) {
-          if (delegatesToTarget) {
-            objectFunctionDelegateInvocations.set(delegateName, mergeObjectInvocation(
-              objectFunctionDelegateInvocations.get(delegateName),
-              invocationForObjectProperty(property)));
+        objectFunctionDelegateTriggerPaths.set(name, current);
+        return current.length !== previousLength;
+      };
+      const reachableInvocations = new Map([
+        [objectFunctionPlan.propertyName, objectFunctionPlan.invocation],
+      ]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const property of objectFunctionLiteral.properties) {
+          if (property === objectFunctionProperty) continue;
+          const callable = ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property) ||
+            ts.isSetAccessorDeclaration(property)
+            ? property
+            : ts.isPropertyAssignment(property) &&
+                (ts.isFunctionExpression(unwrapExpression(ts, property.initializer)) ||
+                  ts.isArrowFunction(unwrapExpression(ts, property.initializer)))
+              ? unwrapExpression(ts, property.initializer)
+              : null;
+          if (!callable) continue;
+          const deferredCallable = Boolean(callable.asteriskToken ||
+            (ts.getModifiers(callable) || [])
+              .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
+          let delegatesToTarget = false;
+          let escapesTarget = false;
+          const innerTriggers = [];
+          const seedTriggers = [];
+          const innerTriggerPaths = [];
+          astNodes(ts, callable, (candidate) => {
+            if ((!ts.isPropertyAccessExpression(candidate) && !ts.isElementAccessExpression(candidate)) ||
+              unwrapExpression(ts, candidate.expression)?.kind !== ts.SyntaxKind.ThisKeyword ||
+              lexicalThisContainer(candidate.expression) !== callable ||
+              eventExecutionReachability({ node: candidate }, candidate, seenBindings) === "never") return false;
+            const delegatedName = exactObjectPropertyName(candidate, seenBindings);
+            if (delegatedName === null) {
+              if ([...reachableInvocations.values()].some((invocation) =>
+                objectElementTrigger(candidate, invocation, seenBindings) ||
+                  objectElementEscapes(candidate, invocation, seenBindings))) escapesTarget = true;
+              if ([...objectFunctionEscapedDelegateInvocations.values()].some((invocation) =>
+                objectElementTrigger(candidate, invocation, seenBindings) ||
+                  objectElementEscapes(candidate, invocation, seenBindings))) escapesTarget = true;
+              return false;
+            }
+            const invocation = reachableInvocations.get(delegatedName);
+            if (invocation) {
+              const trigger = objectElementTrigger(candidate, invocation, seenBindings);
+              if (trigger) {
+                delegatesToTarget = true;
+                const downstreamTriggers = objectFunctionDelegateTriggers.get(delegatedName) || new Set();
+                if (downstreamTriggers.size) {
+                  innerTriggers.push(...downstreamTriggers);
+                  seedTriggers.push(trigger,
+                    ...(objectFunctionDelegateSeedTriggers.get(delegatedName) || new Set()));
+                  for (const path of objectFunctionDelegateTriggerPaths.get(delegatedName) || []) {
+                    innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                  }
+                } else {
+                  innerTriggers.push(trigger);
+                  innerTriggerPaths.push({ leaf: trigger, seeds: [] });
+                }
+              } else if (objectElementEscapes(candidate, invocation, seenBindings)) {
+                escapesTarget = true;
+              }
+            }
+            const escapedInvocation = objectFunctionEscapedDelegateInvocations.get(delegatedName);
+            if (escapedInvocation && (objectElementTrigger(candidate, escapedInvocation, seenBindings) ||
+              objectElementEscapes(candidate, escapedInvocation, seenBindings))) escapesTarget = true;
+            return false;
+          });
+          for (const use of destructuredThisCallableUses(
+            callable, callable, lexicalThisContainer, seenBindings,
+          )) {
+            if (use.kind === "exact") {
+              const invocation = reachableInvocations.get(use.memberName);
+              if (invocation?.read) {
+                delegatesToTarget = true;
+                const downstreamTriggers = objectFunctionDelegateTriggers.get(use.memberName) || new Set();
+                if (downstreamTriggers.size) {
+                  innerTriggers.push(...downstreamTriggers);
+                  seedTriggers.push(use.readTrigger,
+                    ...(objectFunctionDelegateSeedTriggers.get(use.memberName) || new Set()));
+                  for (const path of objectFunctionDelegateTriggerPaths.get(use.memberName) || []) {
+                    innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, use.readTrigger] });
+                  }
+                } else {
+                  innerTriggers.push(use.readTrigger);
+                  innerTriggerPaths.push({ leaf: use.readTrigger, seeds: [] });
+                }
+              }
+              if (invocation?.call && use.callTriggers.length) {
+                delegatesToTarget = true;
+                const downstreamTriggers = objectFunctionDelegateTriggers.get(use.memberName) || new Set();
+                if (downstreamTriggers.size) {
+                  innerTriggers.push(...downstreamTriggers);
+                  seedTriggers.push(...use.callTriggers,
+                    ...(objectFunctionDelegateSeedTriggers.get(use.memberName) || new Set()));
+                  for (const path of objectFunctionDelegateTriggerPaths.get(use.memberName) || []) {
+                    for (const trigger of use.callTriggers) {
+                      innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                    }
+                  }
+                } else {
+                  innerTriggers.push(...use.callTriggers);
+                  for (const trigger of use.callTriggers) {
+                    innerTriggerPaths.push({ leaf: trigger, seeds: [] });
+                  }
+                }
+              }
+              if (invocation?.call && use.escaped) escapesTarget = true;
+              const escapedInvocation = objectFunctionEscapedDelegateInvocations.get(use.memberName);
+              if (escapedInvocation?.read || (escapedInvocation?.call &&
+                (use.callTriggers.length || use.escaped))) escapesTarget = true;
+              continue;
+            }
+            const reachable = [...reachableInvocations.values()];
+            if (use.kind === "rest" && reachable.some((invocation) => invocation.read)) {
+              delegatesToTarget = true;
+              innerTriggers.push(use.readTrigger);
+              innerTriggerPaths.push({ leaf: use.readTrigger, seeds: [] });
+            } else if (use.kind === "dynamic" && reachable.some((invocation) => invocation.read)) {
+              escapesTarget = true;
+            }
+            if ((use.callTriggers.length || use.escaped) && reachable.some((invocation) => invocation.call)) {
+              escapesTarget = true;
+            }
+            const escaped = [...objectFunctionEscapedDelegateInvocations.values()];
+            if ((use.kind !== "rest" && escaped.some((invocation) => invocation.read)) ||
+              ((use.callTriggers.length || use.escaped) && escaped.some((invocation) => invocation.call))) {
+              escapesTarget = true;
+            }
           }
-          if (escapesTarget) objectFunctionEscapedDelegateNames.add(delegateName);
+          if (delegatesToTarget && deferredCallable) escapesTarget = true;
+          if (!delegatesToTarget && !escapesTarget) continue;
+          const delegateName = exactObjectPropertyName(property);
+          if (delegateName === null) continue;
+          const propertyInvocation = invocationForObjectProperty(property);
+          if (delegatesToTarget) {
+            changed = mergeInvocationMap(reachableInvocations, delegateName, propertyInvocation) || changed;
+            mergeInvocationMap(objectFunctionDelegateInvocations, delegateName, propertyInvocation);
+            changed = addObjectTriggerSet(
+              objectFunctionDelegateTriggers, delegateName, innerTriggers) || changed;
+            changed = addObjectTriggerSet(
+              objectFunctionDelegateSeedTriggers, delegateName, seedTriggers) || changed;
+            changed = addObjectTriggerPaths(delegateName, innerTriggerPaths) || changed;
+          }
+          if (escapesTarget) {
+            changed = mergeInvocationMap(
+              objectFunctionEscapedDelegateInvocations, delegateName, propertyInvocation) || changed;
+          }
         }
       }
     }
@@ -3828,6 +3985,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           references: [],
           delegateNames: new Set(),
           delegateInvocations: new Map(),
+          delegateTriggers: new Map(),
+          delegateSeedTriggers: new Map(),
+          delegateTriggerPaths: new Map(),
+          escapedDelegateInvocations: new Map(),
           dynamicDelegateNames: new Set(),
           constructorDelegates: false,
           constructorDynamicDelegate: true,
@@ -3933,6 +4094,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       };
       const delegateNames = new Set();
       const delegateInvocations = new Map();
+      const delegateTriggers = new Map();
+      const delegateSeedTriggers = new Map();
+      const delegateTriggerPaths = new Map();
+      const escapedDelegateInvocations = new Map();
       const dynamicDelegateNames = new Set();
       let constructorDelegates = false;
       let constructorDynamicDelegate = false;
@@ -3949,7 +4114,14 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             if (!callable) continue;
             const memberDomain = ts.isConstructorDeclaration(member) ? "instance" : classElementDomain(member);
             if (memberDomain !== (plan.isStatic ? "static" : "instance")) continue;
+            const deferredCallable = Boolean(callable.asteriskToken ||
+              (ts.getModifiers(callable) || [])
+                .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
             let hasDynamicDelegate = false;
+            let escapesTarget = false;
+            const memberTriggers = [];
+            const memberSeedTriggers = [];
+            const memberTriggerPaths = [];
             let delegates = astNodes(ts, callable, (candidate) => {
               if ((!ts.isPropertyAccessExpression(candidate) && !ts.isElementAccessExpression(candidate)) ||
                 executionContainer(ts, candidate) !== callable ||
@@ -3964,10 +4136,34 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                 return false;
               }
               const invocation = reachableInvocations.get(delegatedName);
-              if (!invocation) return false;
-              const trigger = classElementTrigger(candidate, invocation, planSeenBindings);
-              if (!trigger && invocation.call && classMemberCallEscapes(candidate, planSeenBindings)) {
-                hasDynamicDelegate = true;
+              let trigger = null;
+              if (dynamicDelegateNames.has(delegatedName) && callForClassMember(candidate, planSeenBindings)) {
+                escapesTarget = true;
+              }
+              if (invocation) {
+                trigger = classElementTrigger(candidate, invocation, planSeenBindings);
+                if (!trigger && invocation.call && classMemberCallEscapes(candidate, planSeenBindings)) {
+                  escapesTarget = true;
+                }
+                if (trigger) {
+                  const downstreamTriggers = delegateTriggers.get(delegatedName) || new Set();
+                  if (downstreamTriggers.size) {
+                    memberTriggers.push(...downstreamTriggers);
+                    memberSeedTriggers.push(trigger,
+                      ...(delegateSeedTriggers.get(delegatedName) || new Set()));
+                    for (const path of delegateTriggerPaths.get(delegatedName) || []) {
+                      memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                    }
+                  } else {
+                    memberTriggers.push(trigger);
+                    memberTriggerPaths.push({ leaf: trigger, seeds: [] });
+                  }
+                }
+              }
+              const escapedInvocation = escapedDelegateInvocations.get(delegatedName);
+              if (escapedInvocation && (classElementTrigger(candidate, escapedInvocation, planSeenBindings) ||
+                (escapedInvocation.call && classMemberCallEscapes(candidate, planSeenBindings)))) {
+                escapesTarget = true;
               }
               return Boolean(trigger);
             }).length > 0;
@@ -3975,20 +4171,78 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             for (const use of destructuredThisCallableUses(
               callable, lexicalThisOwner, lexicalClassThisContainer, planSeenBindings,
             )) {
-              if (use.dynamic) {
-                hasDynamicDelegate = true;
+              if (use.kind !== "exact") {
+                const reachable = [...reachableInvocations.values()];
+                if (use.kind === "dynamic" && reachable.some((invocation) => invocation.read)) {
+                  hasDynamicDelegate = true;
+                }
+                if ((use.callTriggers.length || use.escaped) &&
+                  reachable.some((invocation) => invocation.call)) hasDynamicDelegate = true;
                 continue;
               }
               const invocation = reachableInvocations.get(use.memberName);
-              if (!invocation) continue;
-              if (invocation.read || (invocation.call && use.trigger)) delegates = true;
-              if (invocation.call && use.escaped) hasDynamicDelegate = true;
+              if (dynamicDelegateNames.has(use.memberName) && use.callTriggers.length) escapesTarget = true;
+              if (invocation?.read) {
+                delegates = true;
+                const downstreamTriggers = delegateTriggers.get(use.memberName) || new Set();
+                if (downstreamTriggers.size) {
+                  memberTriggers.push(...downstreamTriggers);
+                  memberSeedTriggers.push(use.readTrigger,
+                    ...(delegateSeedTriggers.get(use.memberName) || new Set()));
+                  for (const path of delegateTriggerPaths.get(use.memberName) || []) {
+                    memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, use.readTrigger] });
+                  }
+                } else {
+                  memberTriggers.push(use.readTrigger);
+                  memberTriggerPaths.push({ leaf: use.readTrigger, seeds: [] });
+                }
+              }
+              if (invocation?.call && use.callTriggers.length) {
+                delegates = true;
+                const downstreamTriggers = delegateTriggers.get(use.memberName) || new Set();
+                if (downstreamTriggers.size) {
+                  memberTriggers.push(...downstreamTriggers);
+                  memberSeedTriggers.push(...use.callTriggers,
+                    ...(delegateSeedTriggers.get(use.memberName) || new Set()));
+                  for (const path of delegateTriggerPaths.get(use.memberName) || []) {
+                    for (const trigger of use.callTriggers) {
+                      memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                    }
+                  }
+                } else {
+                  memberTriggers.push(...use.callTriggers);
+                  for (const trigger of use.callTriggers) {
+                    memberTriggerPaths.push({ leaf: trigger, seeds: [] });
+                  }
+                }
+              }
+              if (invocation?.call && use.escaped) escapesTarget = true;
+              const escapedInvocation = escapedDelegateInvocations.get(use.memberName);
+              if (escapedInvocation?.read || (escapedInvocation?.call &&
+                (use.callTriggers.length || use.escaped))) escapesTarget = true;
             }
+            if (delegates && deferredCallable) escapesTarget = true;
             if (hasDynamicDelegate) {
               if (ts.isConstructorDeclaration(member)) constructorDynamicDelegate = true;
               else {
                 const dynamicMemberName = exactObjectPropertyName(member, planSeenBindings);
-                if (dynamicMemberName !== null) dynamicDelegateNames.add(dynamicMemberName);
+                if (dynamicMemberName !== null && !dynamicDelegateNames.has(dynamicMemberName)) {
+                  dynamicDelegateNames.add(dynamicMemberName);
+                  changed = true;
+                }
+              }
+            }
+            const escapedMemberName = exactObjectPropertyName(member, planSeenBindings);
+            if (escapesTarget) {
+              if (ts.isConstructorDeclaration(member)) constructorDynamicDelegate = true;
+              else if (escapedMemberName !== null) {
+                const previousEscaped = escapedDelegateInvocations.get(escapedMemberName);
+                const nextEscaped = mergeInvocation(previousEscaped, invocationForClassElement(member));
+                if (!previousEscaped || previousEscaped.read !== nextEscaped.read ||
+                  previousEscaped.write !== nextEscaped.write || previousEscaped.call !== nextEscaped.call) {
+                  escapedDelegateInvocations.set(escapedMemberName, nextEscaped);
+                  changed = true;
+                }
               }
             }
             if (!delegates) continue;
@@ -4001,6 +4255,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             }
             const memberName = exactObjectPropertyName(member, planSeenBindings);
             if (memberName !== null) {
+              const triggerSet = delegateTriggers.get(memberName) || new Set();
+              const previousTriggerCount = triggerSet.size;
+              for (const trigger of memberTriggers) triggerSet.add(trigger);
+              delegateTriggers.set(memberName, triggerSet);
+              if (triggerSet.size !== previousTriggerCount) changed = true;
+              const seedTriggerSet = delegateSeedTriggers.get(memberName) || new Set();
+              const previousSeedTriggerCount = seedTriggerSet.size;
+              for (const trigger of memberSeedTriggers) seedTriggerSet.add(trigger);
+              delegateSeedTriggers.set(memberName, seedTriggerSet);
+              if (seedTriggerSet.size !== previousSeedTriggerCount) changed = true;
+              const triggerPaths = delegateTriggerPaths.get(memberName) || [];
+              const previousTriggerPathCount = triggerPaths.length;
+              for (const path of memberTriggerPaths) {
+                if (!triggerPaths.some((candidate) => candidate.leaf === path.leaf &&
+                  candidate.seeds.length === path.seeds.length &&
+                  candidate.seeds.every((seed, index) => seed === path.seeds[index]))) triggerPaths.push(path);
+              }
+              delegateTriggerPaths.set(memberName, triggerPaths);
+              if (triggerPaths.length !== previousTriggerPathCount) changed = true;
               const previous = reachableInvocations.get(memberName);
               const next = mergeInvocation(previous, invocationForClassElement(member));
               if (!previous || previous.read !== next.read || previous.write !== next.write ||
@@ -4016,6 +4289,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
       }
       plan.delegateNames = delegateNames;
       plan.delegateInvocations = delegateInvocations;
+      plan.delegateTriggers = delegateTriggers;
+      plan.delegateSeedTriggers = delegateSeedTriggers;
+      plan.delegateTriggerPaths = delegateTriggerPaths;
+      plan.escapedDelegateInvocations = escapedDelegateInvocations;
       plan.dynamicDelegateNames = dynamicDelegateNames;
       plan.constructorDelegates = constructorDelegates;
       plan.constructorDynamicDelegate = constructorDynamicDelegate;
@@ -4032,23 +4309,50 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
     if (!localBindingEvents.length &&
       (functionBinding || immediateCall || objectFunctionPlan || classFunctionPlan) &&
       referenceContainer !== bindingContainer && useContainer === referenceContainer) {
-      const directCalls = [];
+      const directLeafCalls = [];
+      const delegateRootSeedCalls = [];
+      const boundedInnerCalls = [];
+      const boundedSeedCalls = [];
+      const boundedDelegatePaths = [];
       let escaped = Boolean(classFunctionPlan && (!classFunctionPlan.precise || classFunctionPlan.exported ||
         classFunctionPlan.inherited || classFunctionPlan.propertyName === null));
       const deferredExecution = Boolean(referenceContainer.asteriskToken ||
         (ts.getModifiers(referenceContainer) || [])
           .some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword));
-      const registerDirectCall = (call) => {
+      const registerCall = (calls, call) => {
         if (executionContainer(ts, call) !== bindingContainer) {
           escaped = true;
-          return;
+          return false;
         }
-        if (eventExecutionReachability({ node: call }, call, seenBindings) === "never") return;
+        if (eventExecutionReachability({ node: call }, call, seenBindings) === "never") return false;
         if (deferredExecution) {
           escaped = true;
+          return false;
+        }
+        if (!calls.includes(call)) calls.push(call);
+        return true;
+      };
+      const registerDirectCall = (call) => registerCall(directLeafCalls, call);
+      const registerDelegateRootSeedCall = (call) => registerCall(delegateRootSeedCalls, call);
+      const registerBoundedInnerCall = (innerCall) => {
+        if (!innerCall || eventExecutionReachability({ node: innerCall }, innerCall, seenBindings) === "never") {
           return;
         }
-        if (!directCalls.includes(call)) directCalls.push(call);
+        if (!boundedInnerCalls.includes(innerCall)) boundedInnerCalls.push(innerCall);
+      };
+      const registerBoundedSeedCall = (seedCall) => {
+        if (!seedCall || eventExecutionReachability({ node: seedCall }, seedCall, seenBindings) === "never") {
+          return;
+        }
+        if (!boundedSeedCalls.includes(seedCall)) boundedSeedCalls.push(seedCall);
+      };
+      const registerBoundedDelegatePath = (path, rootCall) => {
+        if (!path?.leaf || !rootCall) return;
+        if (!boundedDelegatePaths.some((candidate) => candidate.leaf === path.leaf &&
+          candidate.root === rootCall && candidate.seeds.length === path.seeds.length &&
+          candidate.seeds.every((seed, index) => seed === path.seeds[index]))) {
+          boundedDelegatePaths.push({ leaf: path.leaf, seeds: path.seeds, root: rootCall });
+        }
       };
       const directCallableReferenceCall = (reference) => callableMemberUse(reference, seenBindings);
       let reachableCallableReferenceCount = 0;
@@ -4101,15 +4405,26 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           const memberName = exactMemberAccessName(member);
           if (memberName !== null && memberName !== objectFunctionPlan.propertyName) {
             const delegateInvocation = objectFunctionDelegateInvocations.get(memberName);
+            const escapedInvocation = objectFunctionEscapedDelegateInvocations.get(memberName);
             if (delegateInvocation) {
               const trigger = objectElementTrigger(member, delegateInvocation, seenBindings);
               if (trigger) {
-                if (objectFunctionEscapedDelegateNames.has(memberName)) escaped = true;
-                else registerDirectCall(trigger);
+                const innerTriggers = objectFunctionDelegateTriggers.get(memberName) || new Set();
+                const seedTriggers = objectFunctionDelegateSeedTriggers.get(memberName) || new Set();
+                if (escapedInvocation) escaped = true;
+                else if (registerDelegateRootSeedCall(trigger)) {
+                  for (const innerTrigger of innerTriggers) registerBoundedInnerCall(innerTrigger);
+                  for (const seedTrigger of seedTriggers) registerBoundedSeedCall(seedTrigger);
+                  for (const path of objectFunctionDelegateTriggerPaths.get(memberName) || []) {
+                    registerBoundedDelegatePath(path, trigger);
+                  }
+                }
               } else if (objectElementEscapes(member, delegateInvocation, seenBindings)) {
                 escaped = true;
               }
             }
+            if (escapedInvocation && (objectElementTrigger(member, escapedInvocation, seenBindings) ||
+              objectElementEscapes(member, escapedInvocation, seenBindings))) escaped = true;
             continue;
           }
           if (!member || memberName === null) {
@@ -4118,7 +4433,7 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           }
           const trigger = objectElementTrigger(member, objectFunctionPlan.invocation, seenBindings);
           if (trigger) registerDirectCall(trigger);
-          else if (objectElementEscapes(member, objectFunctionPlan.invocation, seenBindings)) escaped = true;
+          else if (!trigger && objectElementEscapes(member, objectFunctionPlan.invocation, seenBindings)) escaped = true;
         }
       } else if (classFunctionPlan) {
         const memberForOwner = (ownerExpression) => {
@@ -4139,16 +4454,16 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
         const triggerContainsBindingEvent = (trigger) => eventsForBinding(binding).some((event) =>
           event.node !== trigger && nodeContains(trigger, event.node) &&
           eventExecutionReachability(event, event.node, seenBindings) !== "never");
-        const registerClassTrigger = (trigger) => {
+        const registerClassTrigger = (trigger, callRegistrar = registerDirectCall) => {
           if (!trigger) {
             escaped = true;
-            return;
+            return false;
           }
           if (triggerContainsBindingEvent(trigger)) {
             escaped = true;
-            return;
+            return false;
           }
-          registerDirectCall(trigger);
+          return callRegistrar(trigger);
         };
         const registerTargetMember = (member) => {
           const trigger = targetUseForMember(member);
@@ -4156,14 +4471,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           registerClassTrigger(trigger);
         };
         const registerDelegateMember = (member) => {
-          const invocation = classFunctionPlan.delegateInvocations.get(exactClassMemberName(member));
-          if (!invocation) {
+          const memberName = exactClassMemberName(member);
+          const invocation = classFunctionPlan.delegateInvocations.get(memberName);
+          const escapedInvocation = classFunctionPlan.escapedDelegateInvocations.get(memberName);
+          if (escapedInvocation && (classElementTrigger(member, escapedInvocation) ||
+            (escapedInvocation.call && classMemberCallEscapes(member)))) {
             escaped = true;
             return;
           }
+          if (!invocation) return;
           const trigger = classElementTrigger(member, invocation);
-          if (trigger) registerClassTrigger(trigger);
-          else if (invocation.call && classMemberCallEscapes(member)) escaped = true;
+          const innerTriggers = classFunctionPlan.delegateTriggers.get(memberName) || new Set();
+          const seedTriggers = classFunctionPlan.delegateSeedTriggers.get(memberName) || new Set();
+          if (trigger && registerClassTrigger(trigger, registerDelegateRootSeedCall)) {
+            for (const innerTrigger of innerTriggers) registerBoundedInnerCall(innerTrigger);
+            for (const seedTrigger of seedTriggers) registerBoundedSeedCall(seedTrigger);
+            for (const path of classFunctionPlan.delegateTriggerPaths.get(memberName) || []) {
+              registerBoundedDelegatePath(path, trigger);
+            }
+          } else if (!trigger && invocation.call && classMemberCallEscapes(member)) escaped = true;
         };
         const inspectInstanceBinding = (instanceBinding) => {
           for (const reference of sourceNodes.filter((candidate) => ts.isIdentifier(candidate) &&
@@ -4172,7 +4498,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             const member = memberForOwner(reference);
             const memberName = exactClassMemberName(member);
             if (memberName !== classFunctionPlan.propertyName) {
-              if (classFunctionPlan.delegateNames.has(memberName)) registerDelegateMember(member);
+              if ((classFunctionPlan.delegateNames.has(memberName) ||
+                classFunctionPlan.escapedDelegateInvocations.has(memberName))) registerDelegateMember(member);
               else if (classFunctionPlan.dynamicDelegateNames.has(memberName) && callForClassMember(member)) escaped = true;
               else if (!member || memberName === null) escaped = true;
               continue;
@@ -4191,7 +4518,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             const memberName = exactClassMemberName(staticMember);
             if (classFunctionPlan.isStatic && memberName === classFunctionPlan.propertyName) {
               registerTargetMember(staticMember);
-            } else if (classFunctionPlan.isStatic && classFunctionPlan.delegateNames.has(memberName)) {
+            } else if (classFunctionPlan.isStatic && (classFunctionPlan.delegateNames.has(memberName) ||
+              classFunctionPlan.escapedDelegateInvocations.has(memberName))) {
               registerDelegateMember(staticMember);
             } else if (classFunctionPlan.isStatic && classFunctionPlan.dynamicDelegateNames.has(memberName) &&
               callForClassMember(staticMember)) {
@@ -4201,7 +4529,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
               const prototypeMemberName = exactClassMemberName(prototypeMember);
               if (prototypeMemberName === classFunctionPlan.propertyName) {
                 registerTargetMember(prototypeMember);
-              } else if (classFunctionPlan.delegateNames.has(prototypeMemberName)) {
+              } else if ((classFunctionPlan.delegateNames.has(prototypeMemberName) ||
+                classFunctionPlan.escapedDelegateInvocations.has(prototypeMemberName))) {
                 registerDelegateMember(prototypeMember);
               } else if (classFunctionPlan.dynamicDelegateNames.has(prototypeMemberName) &&
                 callForClassMember(prototypeMember)) {
@@ -4231,7 +4560,8 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
             const memberName = exactClassMemberName(directMember);
             if (memberName === classFunctionPlan.propertyName) {
               registerTargetMember(directMember);
-            } else if (classFunctionPlan.delegateNames.has(memberName)) {
+            } else if ((classFunctionPlan.delegateNames.has(memberName) ||
+              classFunctionPlan.escapedDelegateInvocations.has(memberName))) {
               registerDelegateMember(directMember);
             } else if (classFunctionPlan.dynamicDelegateNames.has(memberName) && callForClassMember(directMember)) {
               escaped = true;
@@ -4249,10 +4579,25 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
           else if (!owner || !ts.isExpressionStatement(owner)) escaped = true;
         }
       }
-      if (!escaped && !directCalls.length && !reachableCallableReferenceCount &&
+      if (!escaped && !directLeafCalls.length && !delegateRootSeedCalls.length &&
+        !reachableCallableReferenceCount &&
         ts.isFunctionDeclaration(referenceContainer)) escaped = true;
-      if (!escaped && directCalls.length) {
-        return unionStaticValues(...directCalls.map((call) =>
+      if (!escaped && (directLeafCalls.length || delegateRootSeedCalls.length ||
+        boundedInnerCalls.length || boundedSeedCalls.length || boundedDelegatePaths.length)) {
+        const hasDefiniteLocalReplacement = (call) => applicableEvents(binding, call).some((event) =>
+          event.expression &&
+          !astNodes(ts, event.expression, (candidate) => ts.isIdentifier(candidate) &&
+            resolveBinding(candidate) === binding).length &&
+          executionContainer(ts, event.node) === executionContainer(ts, call) &&
+          eventExecutionReachability(event, call, seenBindings) === "always");
+        const pathCalls = boundedDelegatePaths.map((path) => {
+          if (hasDefiniteLocalReplacement(path.leaf)) return path.leaf;
+          return path.seeds.find(hasDefiniteLocalReplacement) || path.root;
+        });
+        const evaluationCalls = boundedDelegatePaths.length
+          ? [...directLeafCalls, ...pathCalls]
+          : [...directLeafCalls, ...boundedInnerCalls, ...boundedSeedCalls, ...delegateRootSeedCalls];
+        return unionStaticValues(...evaluationCalls.map((call) =>
           staticValueAt(expression, call, seenBindings)));
       }
       if (!escaped) return unknownStaticValue;
