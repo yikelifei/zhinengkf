@@ -1100,10 +1100,30 @@ test("stable runtime launcher owns one stable runtime and required services", ()
 
 test("electron startup failure points beginners to stable repair script", () => {
   const electronMain = readText("apps/electron/main.js");
-  assert.match(electronMain, /const APP_TITLE = "智能体客服工作台";/);
+  assert.match(electronMain, /const APP_TITLE = process\.env\.DESKTOP_APP_TITLE \|\| "智能体客服工作台";/);
+  assert.match(electronMain, /normalizeDesktopInstanceId\(process\.env\.DESKTOP_INSTANCE_ID\)/);
+  assert.match(electronMain, /persist:smart-kefu-desktop-\$\{DESKTOP_INSTANCE_ID\}/);
+  assert.match(electronMain, /app\.setPath\("userData", `\$\{app\.getPath\("userData"\)\}-\$\{DESKTOP_INSTANCE_ID\}`\)/);
   assert.match(electronMain, /repair-stable-desktop\.cmd/);
   assert.match(electronMain, /保持服务窗口打开/);
   assert.doesNotMatch(electronMain, /璇峰厛杩愯 start-stable-desktop\.cmd/);
+});
+
+test("modular desktop has an isolated named runtime entrypoint", () => {
+  const launch = readText("launch-isolated-modular-desktop.cmd");
+  const status = readText("status-isolated-modular-desktop.cmd");
+  const stop = readText("stop-isolated-modular-desktop.cmd");
+  const resolver = readText("tools/resolve-ui-version-runtime.js");
+  assert.match(launch, /resolve-ui-version-runtime\.js" modular/);
+  assert.match(launch, /WEB_PORT=3110/);
+  assert.match(launch, /API_PORT=3210/);
+  assert.match(launch, /MOCK_DESIGN_PLATFORM_PORT=3710/);
+  assert.match(launch, /DESKTOP_INSTANCE_ID=modular/);
+  assert.match(launch, /launch-stable-desktop-app\.cmd/);
+  assert.match(status, /status-stable-desktop\.cmd/);
+  assert.match(stop, /stop-stable-desktop\.cmd/);
+  assert.match(resolver, /--git-common-dir/);
+  assert.match(resolver, /"\.runtime", "ui-versions", `runtime-\$\{profile\}`/);
 });
 
 test("port stack launcher blocks mock when real mode is active and starts supervised services", () => {

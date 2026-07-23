@@ -229,6 +229,8 @@ test("packaged runtime keeps desktop proof independent and out of the API enviro
   assert.notEqual(manager.webSessionProof, manager.token);
   const main = read("apps/electron/main.js");
   assert.match(main, /partition: DESKTOP_SESSION_PARTITION/);
+  assert.match(main, /DESKTOP_INSTANCE_ID === "default"/);
+  assert.match(main, /app\.setPath\("userData"/);
   assert.match(main, /path: "\/api"/);
   assert.match(main, /httpOnly: true/);
   assert.match(main, /sameSite: "strict"/);

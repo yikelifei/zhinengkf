@@ -5,13 +5,25 @@ const path = require("node:path");
 const { PackagedServiceManager } = require("./packaged-runtime");
 
 const WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
-const APP_TITLE = "智能体客服工作台";
+const APP_TITLE = process.env.DESKTOP_APP_TITLE || "智能体客服工作台";
 const DESKTOP_SESSION_COOKIE = "smart_kefu_desktop_session";
 const DESKTOP_SESSION_PROOF_PATTERN = /^[a-f0-9]{64}$/i;
-const DESKTOP_SESSION_PARTITION = "persist:smart-kefu-desktop";
+const DESKTOP_INSTANCE_ID = normalizeDesktopInstanceId(process.env.DESKTOP_INSTANCE_ID);
+const DESKTOP_SESSION_PARTITION = DESKTOP_INSTANCE_ID === "default"
+  ? "persist:smart-kefu-desktop"
+  : `persist:smart-kefu-desktop-${DESKTOP_INSTANCE_ID}`;
+
+if (DESKTOP_INSTANCE_ID !== "default") {
+  app.setPath("userData", `${app.getPath("userData")}-${DESKTOP_INSTANCE_ID}`);
+}
 
 let mainWindow = null;
 let packagedServices = null;
+
+function normalizeDesktopInstanceId(value) {
+  const normalized = String(value || "default").trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(normalized) ? normalized : "default";
+}
 
 function windowBackgroundColor() {
   return nativeTheme.shouldUseDarkColors ? "#1c1c1e" : "#f5f5f7";
