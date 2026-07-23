@@ -61,6 +61,7 @@ const SERVICE_KEYS = Object.freeze({
   "design-platform-mock": [...RUNTIME_KEYS],
   "wechat-window-observer": OBSERVER_KEYS,
   "wechat-bridge-worker": BRIDGE_KEYS,
+  "personal-wechat-rpa-host": RUNTIME_KEYS,
   "personal-wechat-bridge": PERSONAL_BRIDGE_KEYS,
 });
 

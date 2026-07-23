@@ -36,7 +36,7 @@ test("service environments expose business secrets only to the API", () => {
   }
   assert.equal(api.UNRELATED_SECRET, undefined);
 
-  for (const name of ["web", "design-platform-mock", "wechat-window-observer", "wechat-bridge-worker", "personal-wechat-bridge"]) {
+  for (const name of ["web", "design-platform-mock", "wechat-window-observer", "wechat-bridge-worker", "personal-wechat-rpa-host", "personal-wechat-bridge"]) {
     const env = selectServiceEnvironment(name, sentinels);
     for (const key of ["DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "PERSONAL_WECHAT_RPA_TOKEN", "UNRELATED_SECRET"]) {
       assert.equal(env[key], undefined, `${name}:${key}`);

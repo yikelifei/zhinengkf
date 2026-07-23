@@ -81,6 +81,7 @@ if (options.OcrProbe || options.OcrWatch)
     using var ocrCancellation = new CancellationTokenSource();
     Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; ocrCancellation.Cancel(); };
     var ocrHost = new OcrRpaHost(config, ocr, result.Target, ocrCancellation.Token);
+    AccountsConfigWriter.RefreshIdentity(config.AccountsConfigPath, result.Target);
     await ocrHost.RunAsync();
     return;
 }
@@ -118,6 +119,7 @@ if (options.Probe)
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
 var host = new RpaHost(config, client, identity, cancellation.Token);
+AccountsConfigWriter.RefreshIdentity(config.AccountsConfigPath, identity);
 await host.RunAsync();
 
 static void ConfigureSdkWithoutGlobalSideEffects(HostConfig config)
@@ -723,7 +725,8 @@ static class OcrAccountProbe
                 var ocrEquivalentWxIdMatch = NormalizeOcrIdentity(normalizedProfileText)
                     .Contains(NormalizeOcrIdentity(config.OwnerWxId), StringComparison.OrdinalIgnoreCase);
                 var ocrEquivalentWxIdSuffixMatch = HasOcrIdentitySuffix(normalizedProfileText, config.OwnerWxId);
-                var wxidMatch = exactWxIdMatch || ocrEquivalentWxIdMatch || ocrEquivalentWxIdSuffixMatch;
+                var ocrSplitOwnerWxIdMatch = HasOcrIdentityFragments(profileTextBlocks, config.OwnerWxId);
+                var wxidMatch = exactWxIdMatch || ocrEquivalentWxIdMatch || ocrEquivalentWxIdSuffixMatch || ocrSplitOwnerWxIdMatch;
 
                 windows.Add(new
                 {
@@ -737,6 +740,7 @@ static class OcrAccountProbe
                     exactOwnerWxIdMatch = exactWxIdMatch,
                     ocrEquivalentOwnerWxIdMatch = ocrEquivalentWxIdMatch,
                     ocrEquivalentOwnerWxIdSuffixMatch = ocrEquivalentWxIdSuffixMatch,
+                    ocrSplitOwnerWxIdMatch,
                     ownerWxIdMatch = wxidMatch,
                 });
                 if (nicknameMatch && wxidMatch)
@@ -794,6 +798,29 @@ static class OcrAccountProbe
 
         var tail = suffix[^Math.Min(12, suffix.Length)..];
         return tail.Length >= 12 && profile.Contains(tail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasOcrIdentityFragments(IEnumerable<string> profileTextBlocks, string ownerWxId)
+    {
+        var expected = NormalizeOcrIdentity(ownerWxId).Replace("_", "", StringComparison.Ordinal);
+        if (expected.StartsWith("wxid", StringComparison.Ordinal)) expected = expected["wxid".Length..];
+        if (expected.Length < 12) return false;
+
+        var blocks = profileTextBlocks
+            .Select(block => NormalizeOcrIdentity(block).Replace("_", "", StringComparison.Ordinal))
+            .Where(block => block.Length > 0)
+            .ToList();
+        for (var prefixLength = expected.Length - 3; prefixLength >= 9; prefixLength--)
+        {
+            var prefix = expected[..prefixLength];
+            var tail = expected[prefixLength..];
+            var hasIdentityPrefix = blocks.Any(block =>
+                block.Contains($"wxid{prefix}", StringComparison.OrdinalIgnoreCase) ||
+                block.Contains(prefix, StringComparison.OrdinalIgnoreCase));
+            if (!hasIdentityPrefix) continue;
+            if (blocks.Any(block => block.Contains(tail, StringComparison.OrdinalIgnoreCase))) return true;
+        }
+        return false;
     }
 }
 
@@ -991,6 +1018,27 @@ static class AccountsConfigWriter
 {
     private static readonly object Gate = new();
 
+    public static void RefreshIdentity(string filePath, RuntimeIdentity identity)
+    {
+        lock (Gate)
+        {
+            if (!File.Exists(filePath)) return;
+            var root = JsonNode.Parse(File.ReadAllText(filePath))?.AsObject() ?? new JsonObject();
+            var accounts = root["accounts"] as JsonArray;
+            if (accounts is null) return;
+            var matched = false;
+            foreach (var account in accounts.OfType<JsonObject>())
+            {
+                if (!StringComparer.Ordinal.Equals(account["accountNickname"]?.GetValue<string>(), identity.AccountNickname)) continue;
+                if (!StringComparer.Ordinal.Equals(account["ownerWxId"]?.GetValue<string>(), identity.OwnerWxId)) continue;
+                ApplyIdentity(account, identity);
+                matched = true;
+            }
+            if (!matched) return;
+            WriteAtomic(filePath, root);
+        }
+    }
+
     public static void Upsert(string filePath, RuntimeIdentity identity, JsonElement binding, string chatTitle)
     {
         lock (Gate)
@@ -1009,15 +1057,7 @@ static class AccountsConfigWriter
                 accounts.Add(account);
             }
             account["wechatAccountId"] = accountId;
-            account["sessionId"] = $"{identity.OwnerWxId}:{identity.ProcessId}:{identity.WindowHandle}";
-            account["processId"] = identity.ProcessId;
-            account["windowHandle"] = identity.WindowHandle;
-            account["windowsSessionId"] = identity.WindowsSessionId;
-            account["processName"] = identity.ProcessName;
-            account["executablePath"] = identity.ExecutablePath;
-            account["accountText"] = identity.AccountNickname;
-            account["accountNickname"] = identity.AccountNickname;
-            account["ownerWxId"] = identity.OwnerWxId;
+            ApplyIdentity(account, identity);
             var conversations = account["conversations"] as JsonArray ?? new JsonArray();
             account["conversations"] = conversations;
             var conversationId = binding.GetProperty("conversationId").GetString()!;
@@ -1030,11 +1070,29 @@ static class AccountsConfigWriter
             conversation["conversationId"] = conversationId;
             conversation["customerId"] = binding.GetProperty("customerId").GetString();
             conversation["chatTitle"] = chatTitle;
-            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-            var temp = filePath + ".tmp";
-            File.WriteAllText(temp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-            File.Move(temp, filePath, true);
+            WriteAtomic(filePath, root);
         }
+    }
+
+    private static void ApplyIdentity(JsonObject account, RuntimeIdentity identity)
+    {
+        account["sessionId"] = $"{identity.OwnerWxId}:{identity.ProcessId}:{identity.WindowHandle}";
+        account["processId"] = identity.ProcessId;
+        account["windowHandle"] = identity.WindowHandle;
+        account["windowsSessionId"] = identity.WindowsSessionId;
+        account["processName"] = identity.ProcessName;
+        account["executablePath"] = identity.ExecutablePath;
+        account["accountText"] = identity.AccountNickname;
+        account["accountNickname"] = identity.AccountNickname;
+        account["ownerWxId"] = identity.OwnerWxId;
+    }
+
+    private static void WriteAtomic(string filePath, JsonObject root)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        var temp = filePath + ".tmp";
+        File.WriteAllText(temp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        File.Move(temp, filePath, true);
     }
 }
 

@@ -33,6 +33,11 @@ const stopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const localStoreFile = path.join(runtimeDir, "local-store.json");
 const storageRoot = path.join(runtimeDir, "storage");
 const designConfigFile = path.join(runtimeDir, "design-platform-config.json");
+const personalWechatRpaConfigFile = path.join(runtimeDir, "personal-wechat-rpa.json");
+const personalWechatSendMarkerFile = path.join(runtimeDir, "personal-wechat-send.enabled");
+const personalWechatSendEnabled = fs.existsSync(personalWechatSendMarkerFile);
+const personalWechatRpaDotnetPath = path.join(root, "..", ".runtime", "toolchains", "dotnet-complete", "dotnet.exe");
+const personalWechatRpaHostPath = path.join(root, "tools", "personal-wechat-rpa-host", "bin", "Release", "net10.0-windows", "PersonalWechatRpaHost.dll");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const webNextDir = path.join(root, "apps", "web", ".next");
@@ -68,6 +73,7 @@ const specs = [
     BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "dispatch",
     BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
   }),
+  personalWechatRpaServiceSpec(),
   processServiceSpec("personal-wechat-bridge", [path.join(root, "tools", "personal-wechat-bridge.js"), "--watch"], {
     PERSONAL_WECHAT_API_BASE: `http://127.0.0.1:${ports.api}/api`,
     WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
@@ -77,10 +83,10 @@ const specs = [
     PERSONAL_WECHAT_BRIDGE_STATUS_FILE: path.join(runtimeDir, "personal-wechat-bridge-status.json"),
     PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-accounts.json"),
     PERSONAL_WECHAT_DRIVER: process.env.PERSONAL_WECHAT_DRIVER || "wechatauto_rpa",
-    PERSONAL_WECHAT_RPA_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-rpa.json"),
-    PERSONAL_WECHAT_SEND: process.env.STABLE_PERSONAL_WECHAT_SEND || process.env.PERSONAL_WECHAT_SEND || "0",
+    PERSONAL_WECHAT_RPA_CONFIG_FILE: personalWechatRpaConfigFile,
+    PERSONAL_WECHAT_SEND: personalWechatSendEnabled ? "1" : process.env.STABLE_PERSONAL_WECHAT_SEND || process.env.PERSONAL_WECHAT_SEND || "0",
   }),
-];
+].filter(Boolean);
 
 const children = new Map();
 const runtimeKeepAlive = setInterval(() => undefined, 60000);
@@ -279,6 +285,21 @@ function processServiceSpec(name, args, env = {}) {
   return { name, type: "process", command: process.execPath, args, expected: normalize(args[0]), env };
 }
 
+function personalWechatRpaServiceSpec() {
+  if (!fs.existsSync(personalWechatRpaConfigFile) || !fs.existsSync(personalWechatRpaDotnetPath) || !fs.existsSync(personalWechatRpaHostPath)) {
+    return null;
+  }
+  const config = readJsonFile(personalWechatRpaConfigFile) || {};
+  const mode = String(config.automationMode || "ocr").trim().toLowerCase() === "sdk" ? "--watch" : "--ocr-watch";
+  return {
+    name: "personal-wechat-rpa-host",
+    command: personalWechatRpaDotnetPath,
+    args: [personalWechatRpaHostPath, mode, "--config", personalWechatRpaConfigFile],
+    port: positiveNumber(config.port, 3211),
+    expected: [normalize(personalWechatRpaHostPath), normalize(personalWechatRpaConfigFile)],
+  };
+}
+
 function openServiceLogForAppend(name, streamName) {
   try {
     fs.mkdirSync(logsDir, { recursive: true });
@@ -415,6 +436,13 @@ function ownerMatches(pid, expected) {
 }
 
 function portHealthMatches(spec) {
+  if (spec.name === "personal-wechat-rpa-host") {
+    const config = readJsonFile(personalWechatRpaConfigFile) || {};
+    const token = String(config.token || "").trim();
+    if (!token) return false;
+    const json = requestJson(`http://127.0.0.1:${spec.port}/health`, [`x-personal-wechat-rpa-token: ${token}`]);
+    return json?.ok === true && json?.status === "watching" && json?.target?.accountNickname === config.accountNickname;
+  }
   if (spec.name === "api") {
     const json = requestJson(`http://127.0.0.1:${spec.port}/api/health`);
     return normalize(json?.localStore?.path) === normalize(localStoreFile);

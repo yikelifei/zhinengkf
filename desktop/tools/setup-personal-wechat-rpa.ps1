@@ -14,7 +14,11 @@ $dotnetRoot = Join-Path $toolchainRoot "dotnet-complete"
 $dotnet = Join-Path $dotnetRoot "dotnet.exe"
 $installer = Join-Path $toolchainRoot "dotnet-install.ps1"
 $vendorRoot = Join-Path $workspaceRoot ".runtime\vendor\WeChatAuto.SDK"
-$runtimeRoot = Join-Path $desktopRoot ".runtime"
+$runtimeRoot = if ([string]::IsNullOrWhiteSpace($env:DESKTOP_RUNTIME_DIR)) {
+  Join-Path $desktopRoot ".runtime"
+} else {
+  [System.IO.Path]::GetFullPath($env:DESKTOP_RUNTIME_DIR)
+}
 $rpaConfigPath = Join-Path $runtimeRoot "personal-wechat-rpa.json"
 $accountsConfigPath = Join-Path $runtimeRoot "personal-wechat-accounts.json"
 $sdkRevision = "7596cce0615ffc383c238564545d4847f3ab5ee6"
@@ -77,6 +81,7 @@ $config = [ordered]@{
   token = $token
   apiBase = "http://127.0.0.1:3200/api/"
   port = 3211
+  automationMode = "ocr"
   enableOcr = $true
   listenIntervalSeconds = 5
   modelsPath = (Join-Path $vendorRoot "WeChatAuto4_X\WebSocketServer\Server\models")

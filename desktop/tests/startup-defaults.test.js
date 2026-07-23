@@ -944,9 +944,18 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   const electronMain = readText("apps/electron/main.js");
   const dependencyResolver = readText("tools/resolve-worktree-node-modules.js");
   const dependencyBootstrap = readText("prepare-stable-dependencies.cmd");
+  const personalWechatRpaSetup = readText("tools/setup-personal-wechat-rpa.ps1");
+  const personalWechatRpaHost = readText("tools/personal-wechat-rpa-host/Program.cs");
   assert.match(stableLaunch, /WEB_URL=http:\/\/127\.0\.0\.1:3100\/overview/);
   assert.match(electronMain, /process\.env\.WEB_URL \|\| "http:\/\/127\.0\.0\.1:3100\/overview"/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/overview"/);
+  assert.match(personalWechatRpaSetup, /\$env:DESKTOP_RUNTIME_DIR/);
+  assert.match(personalWechatRpaSetup, /GetFullPath\(\$env:DESKTOP_RUNTIME_DIR\)/);
+  assert.match(personalWechatRpaSetup, /automationMode = "ocr"/);
+  assert.match(personalWechatRpaHost, /HasOcrIdentityFragments\(profileTextBlocks, config\.OwnerWxId\)/);
+  assert.match(personalWechatRpaHost, /prefixLength >= 9/);
+  assert.match(personalWechatRpaHost, /AccountsConfigWriter\.RefreshIdentity\(config\.AccountsConfigPath, result\.Target\)/);
+  assert.match(personalWechatRpaHost, /ApplyIdentity\(account, identity\)/);
 
   for (const [relativePath, source] of [
     ["launch-stable-desktop-app.cmd", stableLaunch],
@@ -1003,8 +1012,12 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /BRIDGE_MODE: process\.env\.STABLE_WECHAT_BRIDGE_MODE \|\| "dispatch"/);
   assert.match(stableRuntime, /BRIDGE_ACK_TRANSPORT: process\.env\.BRIDGE_ACK_TRANSPORT \|\| "file_scan"/);
   assert.match(stableRuntime, /processServiceSpec\("personal-wechat-bridge", \[path\.join\(root, "tools", "personal-wechat-bridge\.js"\), "--watch"\]/);
+  assert.match(stableRuntime, /personalWechatRpaServiceSpec\(\)/);
+  assert.match(stableRuntime, /PersonalWechatRpaHost\.dll/);
+  assert.match(stableRuntime, /personal-wechat-send\.enabled/);
+  assert.match(stableRuntime, /personalWechatSendEnabled \? "1"/);
   assert.match(stableRuntime, /PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path\.join\(runtimeDir, "personal-wechat-accounts\.json"\)/);
-  assert.match(stableRuntime, /PERSONAL_WECHAT_SEND: process\.env\.STABLE_PERSONAL_WECHAT_SEND \|\| process\.env\.PERSONAL_WECHAT_SEND \|\| "0"/);
+  assert.match(stableRuntime, /PERSONAL_WECHAT_SEND: personalWechatSendEnabled \? "1" : process\.env\.STABLE_PERSONAL_WECHAT_SEND \|\| process\.env\.PERSONAL_WECHAT_SEND \|\| "0"/);
   assert.match(stableRuntime, /for \(const spec of specs\) ensureService\(spec\);/);
   assert.match(stableRuntime, /killStaleRuntimeProcesses\(\);/);
   assert.match(stableRuntime, /setInterval\(\(\) => \{[\s\S]*stop request received; stopping[\s\S]*killStaleRuntimeProcesses\(\);[\s\S]*for \(const spec of specs\) ensureService\(spec\);[\s\S]*\}, 5000\);/);
