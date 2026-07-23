@@ -971,3 +971,507 @@ test("revision callback does not double-prefix already versioned image ids", asy
   assert.match(upsertedImages[0].localPath, /r1-candidate_1\.png$/);
   assert.equal(updated.images[0].imageId, "r1-candidate_1");
 });
+
+// Migrated from the former C-drive worktree (6 unique regression tests).
+
+test("design poll notification target inherits identity only when external job matches", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  const { service } = createService({
+    job: {
+      id: "design_poll_notice_1",
+      requestId: "request_poll_notice_1",
+      externalJobId: "external_poll_notice_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    },
+  });
+
+  try {
+    const target = await service.designPollNotificationTarget("request_poll_notice_1", "external_poll_notice_1");
+    const mismatchTarget = await service.designPollNotificationTarget("request_poll_notice_1", "external_poll_notice_2");
+
+    assert.equal(target.designJobId, "design_poll_notice_1");
+    assert.equal(target.requestId, "request_poll_notice_1");
+    assert.equal(target.externalJobId, "external_poll_notice_1");
+    assert.equal(target.wechatAccountId, "wechat_1");
+    assert.equal(target.conversationId, "conversation_1");
+    assert.equal(target.customerId, "customer_1");
+    assert.deepEqual(mismatchTarget, {
+      requestId: "request_poll_notice_1",
+      externalJobId: "external_poll_notice_2",
+    });
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("initial high-resolution design callback retries low-resolution images before saving files", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+
+  let storageCalled = false;
+  let upsertCalled = false;
+  const createPayloads = [];
+  const notifications = [];
+  let job = {
+    id: "design_low_resolution_retry",
+    requestId: "request_low_resolution_retry",
+    externalJobId: "external_original",
+    status: "submitted",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 0,
+    revisionCount: 0,
+    outputCount: 6,
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 10, totalAmount: 2000 },
+    bundle: {},
+    requirements: { useRealSkuImages: true, highResolution: true },
+    assets: [],
+    images: [],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => null,
+    updateDesignJob: (id, patch) => {
+      assert.equal(id, job.id);
+      job = { ...job, ...patch };
+      return job;
+    },
+    upsertDesignImages: () => {
+      upsertCalled = true;
+      return [];
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {
+      createDesignJob: async (payload) => {
+        createPayloads.push(payload);
+        return { externalJobId: "external_retry" };
+      },
+    },
+    localStore,
+    {
+      create: async (level, title, body, metadata) => {
+        notifications.push({ level, title, body, metadata });
+        return { id: `notice_${notifications.length}` };
+      },
+    },
+    {
+      saveDesignImage: async () => {
+        storageCalled = true;
+        return "C:\\storage\\design-jobs\\candidate.png";
+      },
+    },
+    {},
+    {},
+    {},
+  );
+  service.assertDesignPlatformPreflight = async () => ({ ok: true });
+  service.scheduleResultPoll = () => {};
+
+  try {
+    const updated = await service.handleDesignPlatformCallback({
+      requestId: "request_low_resolution_retry",
+      externalJobId: "external_original",
+      status: "completed",
+      images: [
+        { imageId: "candidate_1", downloadUrl: "https://example.test/candidate-1.png", width: 512, height: 512 },
+        { imageId: "candidate_2", downloadUrl: "https://example.test/candidate-2.png", width: 1024, height: 1024 },
+        { imageId: "candidate_3", downloadUrl: "https://example.test/candidate-3.png", width: 1024, height: 1024 },
+        { imageId: "candidate_4", downloadUrl: "https://example.test/candidate-4.png", width: 1024, height: 1024 },
+      ],
+    });
+
+    assert.equal(updated.status, "submitted");
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.externalJobId, "external_retry");
+    assert.equal(createPayloads.length, 1);
+    assert.equal(storageCalled, false);
+    assert.equal(upsertCalled, false);
+    assert.equal(
+      notifications.some((notice) => notice.metadata?.invalidImageReasons?.some((reason) => reason.includes("short edge 512"))),
+      true,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("initial high-resolution design callback hands to manual review when dimensions stay missing", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+
+  let storageCalled = false;
+  let upsertCalled = false;
+  let retrySubmitCalled = false;
+  const reviewLogs = [];
+  const manualLocks = [];
+  let job = {
+    id: "design_missing_dimensions_manual",
+    requestId: "request_missing_dimensions_manual",
+    externalJobId: "external_retry",
+    status: "submitted",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 1,
+    revisionCount: 0,
+    outputCount: 6,
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 10, totalAmount: 2000 },
+    bundle: {},
+    requirements: { useRealSkuImages: true, highResolution: true },
+    assets: [],
+    images: [],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => null,
+    updateDesignJob: (id, patch) => {
+      assert.equal(id, job.id);
+      job = { ...job, ...patch };
+      return job;
+    },
+    upsertDesignImages: () => {
+      upsertCalled = true;
+      return [];
+    },
+    createReviewLog: (payload) => {
+      reviewLogs.push(payload);
+      return payload;
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {
+      createDesignJob: async () => {
+        retrySubmitCalled = true;
+        return { externalJobId: "should_not_retry" };
+      },
+    },
+    localStore,
+    { create: async () => ({}) },
+    {
+      saveDesignImage: async () => {
+        storageCalled = true;
+        return "C:\\storage\\design-jobs\\candidate.png";
+      },
+    },
+    {
+      setConversationManualLock: async (conversationId, payload) => {
+        manualLocks.push({ conversationId, payload });
+        return { blockedSendTasks: [], inFlightSendTasks: [] };
+      },
+    },
+    {},
+    {},
+  );
+
+  try {
+    const updated = await service.handleDesignPlatformCallback({
+      requestId: "request_missing_dimensions_manual",
+      externalJobId: "external_retry",
+      status: "completed",
+      images: [
+        { imageId: "candidate_1", downloadUrl: "https://example.test/candidate-1.png" },
+        { imageId: "candidate_2", downloadUrl: "https://example.test/candidate-2.png", width: 1024, height: 1024 },
+        { imageId: "candidate_3", downloadUrl: "https://example.test/candidate-3.png", width: 1024, height: 1024 },
+        { imageId: "candidate_4", downloadUrl: "https://example.test/candidate-4.png", width: 1024, height: 1024 },
+      ],
+    });
+
+    assert.equal(updated.status, "manual_review");
+    assert.match(job.errorMessage, /invalid image metadata/);
+    assert.equal(reviewLogs.at(-1).decision, "design_platform_invalid_image_metadata");
+    assert.equal(manualLocks.at(-1).conversationId, "conversation_1");
+    assert.equal(manualLocks.at(-1).payload.reason, "design_platform_invalid_image_metadata");
+    assert.equal(retrySubmitCalled, false);
+    assert.equal(storageCalled, false);
+    assert.equal(upsertCalled, false);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("initial design callback retries when every generated image fails local saving", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+
+  let upsertCalled = false;
+  const createPayloads = [];
+  const notifications = [];
+  let job = {
+    id: "design_all_downloads_failed_retry",
+    requestId: "request_all_downloads_failed_retry",
+    externalJobId: "external_original",
+    status: "submitted",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 0,
+    revisionCount: 0,
+    outputCount: 6,
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 10, totalAmount: 2000 },
+    bundle: {},
+    requirements: { useRealSkuImages: true, highResolution: true },
+    assets: [],
+    images: [],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => null,
+    updateDesignJob: (id, patch) => {
+      assert.equal(id, job.id);
+      job = { ...job, ...patch };
+      return job;
+    },
+    upsertDesignImages: () => {
+      upsertCalled = true;
+      return [];
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {
+      createDesignJob: async (payload) => {
+        createPayloads.push(payload);
+        return { externalJobId: "external_retry" };
+      },
+    },
+    localStore,
+    {
+      create: async (level, title, body, metadata) => {
+        notifications.push({ level, title, body, metadata });
+        return { id: `notice_${notifications.length}` };
+      },
+    },
+    {
+      saveDesignImage: async () => {
+        throw new Error("download requires authenticated design platform session");
+      },
+    },
+    {},
+    {},
+    {},
+  );
+  service.assertDesignPlatformPreflight = async () => ({ ok: true });
+  service.scheduleResultPoll = () => {};
+
+  try {
+    const updated = await service.handleDesignPlatformCallback({
+      requestId: "request_all_downloads_failed_retry",
+      externalJobId: "external_original",
+      status: "completed",
+      images: [
+        { imageId: "candidate_1", downloadUrl: "http://127.0.0.1:3000/generated/candidate-1.png", width: 1024, height: 1024 },
+        { imageId: "candidate_2", downloadUrl: "http://127.0.0.1:3000/generated/candidate-2.png", width: 1024, height: 1024 },
+        { imageId: "candidate_3", downloadUrl: "http://127.0.0.1:3000/generated/candidate-3.png", width: 1024, height: 1024 },
+        { imageId: "candidate_4", downloadUrl: "http://127.0.0.1:3000/generated/candidate-4.png", width: 1024, height: 1024 },
+      ],
+    });
+
+    assert.equal(updated.status, "submitted");
+    assert.equal(updated.retryCount, 1);
+    assert.equal(updated.externalJobId, "external_retry");
+    assert.equal(createPayloads.length, 1);
+    assert.equal(upsertCalled, false);
+    assert.equal(
+      notifications.some((notice) => notice.title === "设计图本地保存失败" && notice.metadata?.downloadFailureCount === 4),
+      true,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("design callback moves to manual review when local image saving still fails after retry", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+
+  let retrySubmitCalled = false;
+  let upsertCalled = false;
+  const reviewLogs = [];
+  const manualLocks = [];
+  let job = {
+    id: "design_all_downloads_failed_manual",
+    requestId: "request_all_downloads_failed_manual",
+    externalJobId: "external_retry",
+    status: "submitted",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 1,
+    revisionCount: 0,
+    outputCount: 6,
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 10, totalAmount: 2000 },
+    bundle: {},
+    requirements: { useRealSkuImages: true, highResolution: true },
+    assets: [],
+    images: [],
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => null,
+    updateDesignJob: (id, patch) => {
+      assert.equal(id, job.id);
+      job = { ...job, ...patch };
+      return job;
+    },
+    upsertDesignImages: () => {
+      upsertCalled = true;
+      return [];
+    },
+    createReviewLog: (payload) => {
+      reviewLogs.push(payload);
+      return payload;
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {
+      createDesignJob: async () => {
+        retrySubmitCalled = true;
+        return { externalJobId: "should_not_retry" };
+      },
+    },
+    localStore,
+    { create: async () => ({}) },
+    {
+      saveDesignImage: async () => {
+        throw new Error("download requires authenticated design platform session");
+      },
+    },
+    {
+      setConversationManualLock: async (conversationId, payload) => {
+        manualLocks.push({ conversationId, payload });
+        return { blockedSendTasks: [], inFlightSendTasks: [] };
+      },
+    },
+    {},
+    {},
+  );
+
+  try {
+    const updated = await service.handleDesignPlatformCallback({
+      requestId: "request_all_downloads_failed_manual",
+      externalJobId: "external_retry",
+      status: "completed",
+      images: [
+        { imageId: "candidate_1", downloadUrl: "http://127.0.0.1:3000/generated/candidate-1.png", width: 1024, height: 1024 },
+        { imageId: "candidate_2", downloadUrl: "http://127.0.0.1:3000/generated/candidate-2.png", width: 1024, height: 1024 },
+        { imageId: "candidate_3", downloadUrl: "http://127.0.0.1:3000/generated/candidate-3.png", width: 1024, height: 1024 },
+        { imageId: "candidate_4", downloadUrl: "http://127.0.0.1:3000/generated/candidate-4.png", width: 1024, height: 1024 },
+      ],
+    });
+
+    assert.equal(updated.status, "manual_review");
+    assert.match(job.errorMessage, /could not be saved locally/);
+    assert.equal(reviewLogs.at(-1).decision, "design_platform_local_image_save_failed");
+    assert.equal(manualLocks.at(-1).conversationId, "conversation_1");
+    assert.equal(manualLocks.at(-1).payload.reason, "design_platform_local_image_save_failed");
+    assert.equal(retrySubmitCalled, false);
+    assert.equal(upsertCalled, false);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("poll active results keeps invalid completed images out of completed bucket while retrying", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+
+  let storageCalled = false;
+  let upsertCalled = false;
+  const createPayloads = [];
+  let job = {
+    id: "design_poll_low_resolution_retry",
+    requestId: "request_poll_low_resolution_retry",
+    externalJobId: "external_original",
+    status: "submitted",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    isHighValue: false,
+    manualQcRequired: true,
+    retryCount: 0,
+    revisionCount: 0,
+    outputCount: 6,
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 10, totalAmount: 2000 },
+    bundle: {},
+    requirements: { useRealSkuImages: true, highResolution: true },
+    assets: [],
+    images: [],
+  };
+  const localStore = {
+    listDesignJobs: () => [job],
+    getDesignJob: () => job,
+    getLatestActiveDesignRevision: () => null,
+    updateDesignJob: (id, patch) => {
+      assert.equal(id, job.id);
+      job = { ...job, ...patch };
+      return job;
+    },
+    upsertDesignImages: () => {
+      upsertCalled = true;
+      return [];
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {
+      getDesignJobResults: async () => ({
+        status: "completed",
+        images: [
+          { imageId: "candidate_1", downloadUrl: "https://example.test/candidate-1.png", width: 512, height: 512 },
+          { imageId: "candidate_2", downloadUrl: "https://example.test/candidate-2.png", width: 1024, height: 1024 },
+        ],
+      }),
+      createDesignJob: async (payload) => {
+        createPayloads.push(payload);
+        return { externalJobId: "external_retry" };
+      },
+    },
+    localStore,
+    { create: async () => ({}) },
+    {
+      saveDesignImage: async () => {
+        storageCalled = true;
+        return "C:\\storage\\design-jobs\\candidate.png";
+      },
+    },
+    {},
+    {},
+    {},
+  );
+  service.assertDesignPlatformPreflight = async () => ({ ok: true });
+  service.scheduleResultPoll = () => {};
+
+  try {
+    const result = await service.pollActiveResults();
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.completed.length, 0);
+    assert.equal(result.failed.length, 0);
+    assert.equal(result.generating.length, 0);
+    assert.equal(result.retried.length, 1);
+    assert.equal(result.retried[0].status, "submitted");
+    assert.equal(result.retried[0].externalJobId, "external_retry");
+    assert.equal(job.retryCount, 1);
+    assert.equal(createPayloads.length, 1);
+    assert.equal(storageCalled, false);
+    assert.equal(upsertCalled, false);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});

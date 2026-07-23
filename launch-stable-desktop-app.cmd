@@ -1,2 +1,2 @@
 @echo off
-call "D:\zhinengkefu\desktop\launch-stable-desktop-app.cmd" %*
+call "%~dp0desktop\launch-stable-desktop-app.cmd" %*

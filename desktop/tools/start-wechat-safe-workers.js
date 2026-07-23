@@ -11,6 +11,7 @@ const logsDir = path.join(runtimeDir, "logs");
 const pidFile = path.join(runtimeDir, "wechat-safe-workers.json");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const personalWechatBridgeStatusFile = path.join(runtimeDir, "personal-wechat-bridge-status.json");
+const personalWechatRpaConfigFile = path.join(runtimeDir, "personal-wechat-rpa.json");
 const apiPort = numberEnv("API_PORT", 3200);
 const apiBase = String(process.env.BRIDGE_API_BASE || process.env.WECHAT_WINDOW_OBSERVER_API_BASE || `http://127.0.0.1:${apiPort}/api`).replace(/\/$/, "");
 const args = new Set(process.argv.slice(2));
@@ -115,9 +116,16 @@ function buildServices() {
         PERSONAL_WECHAT_API_BASE: apiBase,
         WECHAT_BRIDGE_DISPATCH_DIR: process.env.WECHAT_BRIDGE_DISPATCH_DIR || path.join(runtimeDir, "wechat-dispatch"),
         WECHAT_BRIDGE_INBOX_DIR: process.env.WECHAT_BRIDGE_INBOX_DIR || path.join(runtimeDir, "wechat-inbox"),
+        WECHAT_BRIDGE_LOCK_DIR: process.env.WECHAT_BRIDGE_LOCK_DIR || path.join(runtimeDir, "wechat-bridge-locks"),
+        PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE:
+          process.env.PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE || path.join(runtimeDir, "personal-wechat-accounts.json"),
+        PERSONAL_WECHAT_DRIVER:
+          process.env.PERSONAL_WECHAT_DRIVER || (fs.existsSync(personalWechatRpaConfigFile) ? "wechatauto_rpa" : "windows_uia"),
+        PERSONAL_WECHAT_RPA_CONFIG_FILE:
+          process.env.PERSONAL_WECHAT_RPA_CONFIG_FILE || personalWechatRpaConfigFile,
+        PERSONAL_WECHAT_BLOCKED_DIR:
+          process.env.PERSONAL_WECHAT_BLOCKED_DIR || path.join(runtimeDir, "personal-wechat-blocked"),
         PERSONAL_WECHAT_SEND: process.env.PERSONAL_WECHAT_SEND || "0",
-        PERSONAL_WECHAT_AUTO_ENTER: process.env.PERSONAL_WECHAT_AUTO_ENTER || "0",
-        PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW: process.env.PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW || "0",
       },
     });
   }
@@ -336,6 +344,7 @@ function printStatus() {
     const statusPid = Number(status.pid);
     const ok = Object.hasOwn(status, "ok") ? ` ok=${status.ok === true}` : "";
     const mode = status.mode || records[service.name]?.mode ? ` mode=${status.mode || records[service.name]?.mode}` : "";
+    const driver = status.driver ? ` driver=${status.driver}` : "";
     const failedCount = Number(status.result?.failedCount);
     const failed = Number.isFinite(failedCount) && failedCount > 0 ? ` failed=${failedCount}` : "";
     const stale = running && Number.isFinite(statusPid) && statusPid > 0 && statusPid !== pid
@@ -343,7 +352,7 @@ function printStatus() {
       : "";
     const message = singleLine(status.errorMessage || status.message || "");
     const detail = message ? ` message=${message.slice(0, 160)}` : "";
-    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}${ok}${mode}${failed}${stale}${detail}`);
+    console.log(`[${running ? "running" : "down"}] ${service.label} pid=${pid || "-"} lastStatus=${lastStatus}${ok}${mode}${driver}${failed}${stale}${detail}`);
   }
 }
 

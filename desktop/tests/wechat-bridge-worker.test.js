@@ -16,6 +16,7 @@ const {
   normalizeAckTransport,
   normalizeMode,
   numberValue,
+  runOnce,
   safeFileSegment,
   validateOutboxEntry,
   validateOutboxPayload,
@@ -600,4 +601,104 @@ test("writes bridge worker status json file", () => {
   const saved = JSON.parse(fs.readFileSync(statusFile, "utf8"));
   assert.equal(saved.ok, true);
   assert.equal(saved.status, "completed");
+});
+
+// Migrated from the former C-drive worktree (2 unique regression tests).
+
+test("rejects bridge outbox file body with mismatched customer identity", () => {
+  const result = validateOutboxPayload(
+    validOutboxEntry(),
+    validOutboxPayload({
+      customerId: "customer_2",
+      target: {
+        wechatAccountId: "wechat_1",
+        conversationId: "conv_1",
+        customerId: "customer_2",
+      },
+      sendPlan: {
+        ...validOutboxPayload().sendPlan,
+        target: {
+          wechatAccountId: "wechat_1",
+          conversationId: "conv_1",
+          customerId: "customer_2",
+          windowSnapshotId: "window_1",
+        },
+      },
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedKeys.includes("customerId"), true);
+  assert.equal(result.failedKeys.includes("targetIdentity"), true);
+  assert.equal(result.failedKeys.includes("sendPlanTargetIdentity"), true);
+});
+
+test("worker account lock records task conversation and customer identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-bridge-lock-"));
+  const outboxDir = path.join(root, "outbox");
+  const inboxDir = path.join(root, "inbox");
+  const lockDir = path.join(root, "locks");
+  fs.mkdirSync(outboxDir, { recursive: true });
+  fs.writeFileSync(path.join(outboxDir, "outbox.json"), `${JSON.stringify(validOutboxPayload(), null, 2)}\n`, "utf8");
+
+  const previousFetch = global.fetch;
+  const lockSnapshots = [];
+  global.fetch = async (url, init = {}) => {
+    const method = String(init.method || "GET").toUpperCase();
+    if (method === "GET" && String(url).endsWith("/wechat/bridge/outbox")) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            outboxDir,
+            pending: [validOutboxEntry({ outboxDir })],
+          };
+        },
+      };
+    }
+    if (method === "POST" && String(url).includes("/bridge/inbox/scan")) {
+      const lockPath = path.join(lockDir, "wechat_1.lock");
+      lockSnapshots.push(JSON.parse(fs.readFileSync(lockPath, "utf8")));
+      return {
+        ok: true,
+        async json() {
+          return { processed: [{ taskId: "send_1", attemptId: "attempt_1" }], failed: [] };
+        },
+      };
+    }
+    throw new Error(`unexpected fetch ${method} ${url}`);
+  };
+
+  try {
+    const result = await runOnce({
+      apiBase: "http://127.0.0.1:3200/api",
+      outboxDir,
+      inboxDir,
+      lockDir,
+      statusFile: path.join(root, "status.json"),
+      mode: "simulate_sent",
+      ackTransport: "file_scan",
+      limit: 5,
+      intervalMs: 1000,
+      lockStaleMs: 300000,
+      watch: false,
+    });
+
+    assert.equal(result.processed.length, 1);
+    assert.equal(lockSnapshots.length, 1);
+    assert.deepEqual(lockSnapshots[0], {
+      accountId: "wechat_1",
+      wechatAccountId: "wechat_1",
+      taskId: "send_1",
+      attemptId: "attempt_1",
+      conversationId: "conv_1",
+      customerId: "customer_1",
+      pid: process.pid,
+      createdAt: lockSnapshots[0].createdAt,
+    });
+    assert.equal(fs.existsSync(path.join(lockDir, "wechat_1.lock")), false);
+    assert.equal(fs.existsSync(path.join(lockDir, "customer_1.lock")), false);
+  } finally {
+    global.fetch = previousFetch;
+  }
 });

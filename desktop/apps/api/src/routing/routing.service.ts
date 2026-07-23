@@ -2,7 +2,11 @@ import { Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
-import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import {
+  ExpectedIdentityPayload,
+  assertExpectedIdentity,
+  assertRequiredExpectedIdentity,
+} from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 
 const { buildAgentReplyDraft, classifyTrainingSampleUsage, evaluateAgentRoute, findPendingSceneClarificationContext } = rules;
@@ -36,6 +40,14 @@ export class RoutingService {
 
   evaluate(payload: RouteEvaluatePayload) {
     if (!appConfig.useLocalStore) throw new Error("routing prisma mode is not implemented yet");
+    assertRequiredExpectedIdentity(
+      {
+        expectedWechatAccountId: payload.wechatAccountId,
+        expectedConversationId: payload.conversationId,
+        expectedCustomerId: payload.customerId,
+      },
+      "route evaluation",
+    );
     const clarificationContext = payload.clarificationContext || this.findLatestSceneClarification(payload.conversationId);
     const identityFilter = {
       wechatAccountId: payload.wechatAccountId,
@@ -82,6 +94,7 @@ export class RoutingService {
     if (!appConfig.useLocalStore) throw new Error("routing correction prisma mode is not implemented yet");
     const route = this.localStore.listRouteEvaluations().find((item: any) => item.id === id);
     if (!route) throw new Error(`route evaluation not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "route evaluation");
     assertExpectedIdentity(route, payload, "route evaluation");
     const result = this.localStore.correctRouteEvaluation(id, payload || {});
     await this.notifications.create(
@@ -92,6 +105,9 @@ export class RoutingService {
         routeId: id,
         agentKey: result.route.agentKey,
         trainingSampleId: result.trainingSample.id,
+        wechatAccountId: result.route.wechatAccountId,
+        conversationId: result.route.conversationId,
+        customerId: result.route.customerId,
       },
     );
     return result;

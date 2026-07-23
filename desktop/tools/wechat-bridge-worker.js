@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 
 const desktopRoot = path.resolve(__dirname, "..");
@@ -55,24 +56,28 @@ async function runOnce(config = readConfig()) {
   fs.mkdirSync(config.lockDir, { recursive: true });
 
   const outbox = await fetchJson(`${config.apiBase}/wechat/bridge/outbox`);
-  const pending = Array.isArray(outbox.pending) ? outbox.pending.slice(0, config.limit) : [];
+  const allPending = Array.isArray(outbox.pending) ? outbox.pending : [];
   const handledAccounts = new Set();
   const processed = [];
   const skipped = [];
   const failed = [];
-
-  for (const entry of pending) {
+  const pending = [];
+  for (const entry of allPending) {
     const accountId = String(entry.wechatAccountId || "unknown");
     if (handledAccounts.has(accountId)) {
       skipped.push({ taskId: entry.taskId, wechatAccountId: accountId, reason: "same_account_already_handled" });
       continue;
     }
     handledAccounts.add(accountId);
+    if (pending.length < config.limit) pending.push(entry);
+  }
 
-    const lock = acquireAccountLock(accountId, config);
+  await Promise.all(pending.map(async (entry) => {
+    const accountId = String(entry.wechatAccountId || "unknown");
+    const lock = acquireAccountLock(accountId, config, entry);
     if (!lock) {
       skipped.push({ taskId: entry.taskId, wechatAccountId: accountId, reason: "account_lock_busy" });
-      continue;
+      return;
     }
 
     try {
@@ -86,7 +91,7 @@ async function runOnce(config = readConfig()) {
     } finally {
       lock.release();
     }
-  }
+  }));
 
   return {
     scanned: pending.length,
@@ -182,15 +187,17 @@ function assertScanAcceptedAck(scanResult, ackPayload) {
 
 function buildDispatchPayload(entry, outbox, config = {}) {
   const payload = outbox?.payload || {};
-  const sendPlan = payload && typeof payload.sendPlan === "object" && payload.sendPlan ? payload.sendPlan : {};
-  const target = payload && typeof payload.target === "object" && payload.target ? payload.target : {};
+  const sendPlan = bridgeObject(payload.sendPlan) || bridgeObject(payload.payload?.sendPlan) || {};
+  const target = bridgeObject(payload.target) || bridgeObject(payload.payload?.target) || {};
   const dispatchTarget = {
     wechatAccountId: String(target.wechatAccountId || entry.wechatAccountId || ""),
     accountDisplayName: String(target.accountDisplayName || ""),
     conversationId: String(target.conversationId || entry.conversationId || ""),
     conversationTitle: String(target.conversationTitle || ""),
-    customerId: String(target.customerId || ""),
+    customerId: String(target.customerId || resolveEntryCustomerId(entry) || ""),
     customerName: String(target.customerName || ""),
+    recentMessageText: String(target.recentMessageText || ""),
+    windowCapturedAt: String(target.windowCapturedAt || ""),
     windowSnapshotId: target.windowSnapshotId || null,
     requiredChecks: Array.isArray(target.requiredChecks) ? target.requiredChecks : [],
   };
@@ -219,6 +226,8 @@ function buildDispatchPayload(entry, outbox, config = {}) {
       expectedConversationTitle: dispatchTarget.conversationTitle,
       expectedCustomerId: dispatchTarget.customerId,
       expectedCustomerName: dispatchTarget.customerName,
+      expectedRecentMessageText: dispatchTarget.recentMessageText,
+      expectedWindowCapturedAt: dispatchTarget.windowCapturedAt,
       expectedWindowSnapshotId: dispatchTarget.windowSnapshotId,
       rejectIfAnyCheckFails: true,
       rejectIfWindowChanged: true,
@@ -277,7 +286,7 @@ function writeDispatchFile(dispatchDir, entry, outbox, config = {}) {
 
 function buildAckPayload(entry, mode, outboxPayload = {}) {
   const status = mode === "simulate_failed" ? "failed" : "sent";
-  const target = outboxPayload && typeof outboxPayload.target === "object" && outboxPayload.target ? outboxPayload.target : {};
+  const outboxTarget = outboxPayload && typeof outboxPayload.target === "object" && outboxPayload.target ? outboxPayload.target : {};
   return {
     version: BRIDGE_ACK_VERSION,
     ackToken: typeof outboxPayload.ackToken === "string" ? outboxPayload.ackToken : undefined,
@@ -285,7 +294,7 @@ function buildAckPayload(entry, mode, outboxPayload = {}) {
     attemptId: entry.attemptId || undefined,
     wechatAccountId: String(entry.wechatAccountId || ""),
     conversationId: String(entry.conversationId || ""),
-    customerId: String(entry.customerId || target.customerId || ""),
+    customerId: String(entry.customerId || outboxPayload.customerId || outboxTarget.customerId || ""),
     outboxFileName: String(entry.fileName || ""),
     status,
     errorMessage: status === "failed" ? "桥接 worker 模拟失败，需人工检查发送环境" : "",
@@ -301,6 +310,7 @@ function buildAckPayload(entry, mode, outboxPayload = {}) {
 
 function validateOutboxEntry(entry = {}) {
   const preview = entry.preview || {};
+  const customerId = resolveEntryCustomerId(entry);
   const checks = [
     {
       key: "protocolVersion",
@@ -328,6 +338,15 @@ function validateOutboxEntry(entry = {}) {
     failedKeys,
     reason: failedKeys.length ? failedKeys.join(",") : "bridge outbox entry is valid",
   };
+}
+
+function resolveEntryCustomerId(entry = {}) {
+  const preview = entry && typeof entry.preview === "object" && entry.preview ? entry.preview : {};
+  return String(entry.customerId || preview.customerId || "").trim();
+}
+
+function bridgeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
 function loadAndValidateOutboxPayload(entry = {}) {
@@ -402,7 +421,7 @@ function validateOutboxPayload(entry = {}, payload = {}) {
   const entryTaskId = String(entry.taskId || "");
   const entryWechatAccountId = String(entry.wechatAccountId || "");
   const entryConversationId = String(entry.conversationId || "");
-  const entryCustomerId = String(entry.customerId || "");
+  const entryCustomerId = resolveEntryCustomerId(entry);
   const hasPassedGuard = guardSnapshot.status === "passed" || guardSnapshot.ok === true || context.guardStatus === "passed";
 
   const checks = [
@@ -604,15 +623,25 @@ function writeWorkerStatus(statusFile, status) {
   return statusFile;
 }
 
-function acquireAccountLock(accountId, config) {
+function acquireAccountLock(accountId, config, entry = {}) {
   fs.mkdirSync(config.lockDir, { recursive: true });
   const lockPath = path.join(config.lockDir, `${safeFileSegment(accountId)}.lock`);
   removeStaleLock(lockPath, config.lockStaleMs);
   try {
     const fd = fs.openSync(lockPath, "wx");
+    const lockPayload = {
+      accountId,
+      wechatAccountId: accountId,
+      taskId: String(entry.taskId || ""),
+      attemptId: String(entry.attemptId || ""),
+      conversationId: String(entry.conversationId || ""),
+      customerId: String(entry.customerId || ""),
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+    };
     fs.writeFileSync(
       fd,
-      `${JSON.stringify({ accountId, pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`,
+      `${JSON.stringify(lockPayload, null, 2)}\n`,
       "utf8",
     );
     fs.closeSync(fd);
@@ -634,6 +663,11 @@ function removeStaleLock(lockPath, staleMs) {
   if (Date.now() - stat.mtimeMs > staleMs) {
     fs.rmSync(lockPath, { force: true });
   }
+}
+
+function accountLockFileName(accountId) {
+  const digest = createHash("sha256").update(String(accountId || "")).digest("hex").slice(0, 16);
+  return `${safeFileSegment(accountId)}-${digest}.lock`;
 }
 
 async function fetchJson(url) {

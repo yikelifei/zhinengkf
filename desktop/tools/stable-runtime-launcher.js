@@ -3,6 +3,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const {
+  ensureInternalApiToken,
+  internalApiServiceEnv,
+  withoutInternalApiToken,
+} = require("./internal-api-session");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
@@ -17,6 +22,7 @@ const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const webNextDir = path.join(root, "apps", "web", ".next");
 const nextCliPath = path.join(root, "node_modules", "next", "dist", "bin", "next");
+const internalApiToken = ensureInternalApiToken();
 
 const ports = {
   web: Number(process.env.WEB_PORT || 3100),
@@ -34,8 +40,20 @@ const specs = [
   }),
   processServiceSpec("wechat-bridge-worker", [path.join(root, "tools", "wechat-bridge-worker.js"), "--watch"], {
     BRIDGE_API_BASE: `http://127.0.0.1:${ports.api}/api`,
-    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "noop",
+    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "dispatch",
     BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
+  }),
+  processServiceSpec("personal-wechat-bridge", [path.join(root, "tools", "personal-wechat-bridge.js"), "--watch"], {
+    PERSONAL_WECHAT_API_BASE: `http://127.0.0.1:${ports.api}/api`,
+    WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
+    WECHAT_BRIDGE_INBOX_DIR: path.join(runtimeDir, "wechat-inbox"),
+    WECHAT_BRIDGE_LOCK_DIR: path.join(runtimeDir, "wechat-bridge-locks"),
+    PERSONAL_WECHAT_BLOCKED_DIR: path.join(runtimeDir, "personal-wechat-blocked"),
+    PERSONAL_WECHAT_BRIDGE_STATUS_FILE: path.join(runtimeDir, "personal-wechat-bridge-status.json"),
+    PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-accounts.json"),
+    PERSONAL_WECHAT_DRIVER: process.env.PERSONAL_WECHAT_DRIVER || "wechatauto_rpa",
+    PERSONAL_WECHAT_RPA_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-rpa.json"),
+    PERSONAL_WECHAT_SEND: process.env.STABLE_PERSONAL_WECHAT_SEND || process.env.PERSONAL_WECHAT_SEND || "0",
   }),
 ];
 
@@ -48,7 +66,12 @@ if (fs.existsSync(stopRequestFile)) {
   append("stable-runtime", `stop request exists; exiting pid=${process.pid}`);
   process.exit(0);
 }
-acquireSingleInstanceLock();
+try {
+  acquireSingleInstanceLock();
+} catch (error) {
+  append("stable-runtime", `single-instance lock failed: ${error?.stack || error?.message || error}`);
+  process.exit(1);
+}
 if (specs[0].args[0] === webRuntimeServerPath) {
   writeWebRuntimeServer();
 } else {
@@ -68,7 +91,6 @@ setInterval(() => {
     }
     process.exit(0);
   }
-  killStaleRuntimeProcesses();
   for (const spec of specs) ensureService(spec);
 }, 5000);
 
@@ -156,7 +178,7 @@ function startService(spec) {
     append(spec.name, `starting ${spec.command} ${spec.args.join(" ")}`);
     const child = spawn(spec.command, spec.args, {
       cwd: root,
-      env: { ...serviceEnv(spec.port || ports.api), ...(spec.env || {}) },
+      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
       detached: process.platform === "win32",
       stdio: ["ignore", out, err],
       windowsHide: true,
@@ -183,6 +205,7 @@ function startWindowsWrappedPortService(spec) {
     append(spec.name, `starting wrapper ${wrapperPath}`);
     const child = spawn("cmd.exe", ["/d", "/c", wrapperPath], {
       cwd: root,
+      env: { ...serviceEnv(spec.port || ports.api, spec.name), ...(spec.env || {}) },
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -201,7 +224,7 @@ function startWindowsWrappedPortService(spec) {
 }
 
 function buildWindowsPortServiceWrapper(spec) {
-  const env = { ...serviceEnv(spec.port), ...(spec.env || {}) };
+  const env = withoutInternalApiToken({ ...serviceEnv(spec.port, spec.name), ...(spec.env || {}) });
   return [
     "@echo off",
     "setlocal",
@@ -209,11 +232,6 @@ function buildWindowsPortServiceWrapper(spec) {
     ...Object.entries(env).map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)}`),
     ":restart",
     `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
-    `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${spec.port} -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`,
-    "if not errorlevel 1 (",
-    "  timeout /t 2 /nobreak >nul",
-    "  goto restart",
-    ")",
     `echo [%date% %time%] launching ${spec.name} >> ${cmdQuote(path.join(logsDir, `${spec.name}.launcher.log`))}`,
     `${cmdQuote(spec.command)} ${spec.args.map(cmdQuote).join(" ")} >> ${cmdQuote(path.join(logsDir, `${spec.name}.out.log`))} 2>> ${cmdQuote(path.join(logsDir, `${spec.name}.err.log`))}`,
     "set SERVICE_EXIT_CODE=%ERRORLEVEL%",
@@ -265,8 +283,8 @@ function webStandaloneBuildReady() {
   ].every((filePath) => fs.existsSync(filePath));
 }
 
-function serviceEnv(port) {
-  return {
+function serviceEnv(port, serviceName) {
+  return internalApiServiceEnv({
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
@@ -290,27 +308,50 @@ function serviceEnv(port) {
     WECHAT_BRIDGE_WORKER_STATUS_FILE: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
     WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
     WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
-  };
+  }, serviceName, internalApiToken);
 }
 
 function acquireSingleInstanceLock() {
   fs.mkdirSync(runtimeDir, { recursive: true });
-  try {
-    const existingPid = Number(fs.readFileSync(lockFile, "utf8").trim());
-    if (Number.isFinite(existingPid) && existingPid > 0) {
-      if (!isPidAlive(existingPid)) {
-        fs.rmSync(lockFile, { force: true });
-        append("stable-runtime", `removed stale launcher pid file pid=${existingPid}`);
-      } else if (isCurrentStableRuntimeLauncher(existingPid)) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const fd = fs.openSync(lockFile, "wx");
+      try {
+        fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
+      installSingleInstanceLockCleanup();
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+
+    const existingPid = readLauncherLockPid();
+    if (existingPid && isPidAlive(existingPid)) {
+      const identity = stableRuntimeLauncherIdentity(existingPid);
+      if (identity !== "mismatch" || isCurrentStableRuntimeHeartbeat(existingPid)) {
         console.log(`[stable-runtime] existing launcher pid=${existingPid}; exiting`);
         process.exit(0);
-      } else {
-        fs.rmSync(lockFile, { force: true });
-        append("stable-runtime", `removed stale launcher pid file with stale heartbeat pid=${existingPid}`);
       }
+      fs.rmSync(lockFile, { force: true });
+      append("stable-runtime", `removed launcher pid file owned by non-launcher pid=${existingPid}`);
+      continue;
     }
-  } catch {}
-  fs.writeFileSync(lockFile, `${process.pid}\n`, "utf8");
+
+    if (!existingPid && recentLockFileExists()) {
+      console.log("[stable-runtime] launcher lock is being initialized; exiting");
+      process.exit(0);
+    }
+
+    fs.rmSync(lockFile, { force: true });
+    append("stable-runtime", `removed stale launcher pid file pid=${existingPid || "unknown"}`);
+  }
+
+  throw new Error(`could not acquire stable runtime launcher lock: ${lockFile}`);
+}
+
+function installSingleInstanceLockCleanup() {
   process.on("exit", () => {
     try {
       if (fs.readFileSync(lockFile, "utf8").trim() === String(process.pid)) fs.rmSync(lockFile, { force: true });
@@ -318,18 +359,34 @@ function acquireSingleInstanceLock() {
   });
 }
 
-function isCurrentStableRuntimeLauncher(pid) {
-  if (!isStableRuntimeLauncherPid(pid)) return false;
+function readLauncherLockPid() {
+  try {
+    const pid = Number(fs.readFileSync(lockFile, "utf8").trim());
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function recentLockFileExists() {
+  try {
+    return Date.now() - fs.statSync(lockFile).mtimeMs < 30000;
+  } catch {
+    return false;
+  }
+}
+
+function isCurrentStableRuntimeHeartbeat(pid) {
   const heartbeat = readJsonFile(heartbeatFile);
   const heartbeatPid = Number(heartbeat?.pid);
   const heartbeatUpdatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
   return heartbeatPid === Number(pid) && Number.isFinite(heartbeatUpdatedAt) && Date.now() - heartbeatUpdatedAt < 30000;
 }
 
-
-function isStableRuntimeLauncherPid(pid) {
+function stableRuntimeLauncherIdentity(pid) {
   const commandLine = normalize(commandLineForPid(pid));
-  return Boolean(commandLine && commandLine.includes("stable-runtime-launcher.js"));
+  if (!commandLine) return "unknown";
+  return commandLine.includes("stable-runtime-launcher.js") ? "match" : "mismatch";
 }
 
 function readJsonFile(filePath) {
@@ -396,7 +453,11 @@ function requestOk(url) {
 
 function commandLineForPid(pid) {
   const script = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty CommandLine`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 2000,
+  });
   return result.stdout || "";
 }
 
@@ -416,7 +477,11 @@ function isDescendantPid(pid, ancestorPid) {
 
 function parentPidForPid(pid) {
   const script = `Get-CimInstance Win32_Process -Filter "ProcessId = ${Number(pid)}" | Select-Object -ExpandProperty ParentProcessId`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 2000,
+  });
   const parentPid = Number(String(result.stdout || "").trim());
   return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : null;
 }
@@ -424,7 +489,10 @@ function parentPidForPid(pid) {
 function killPid(pid) {
   try { process.kill(Number(pid), "SIGTERM"); } catch {}
   const script = `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`;
-  spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true });
+  spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    windowsHide: true,
+    timeout: 2000,
+  });
 }
 
 function closeFd(value) {
@@ -449,6 +517,7 @@ function findLegacyRuntimeProcesses() {
     cwd: root,
     encoding: "utf8",
     windowsHide: true,
+    timeout: 3000,
   });
   if (result.status !== 0 || !String(result.stdout || "").trim()) return [];
   let items = [];

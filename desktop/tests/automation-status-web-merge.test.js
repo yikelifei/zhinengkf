@@ -317,3 +317,57 @@ test("web low value automation run is blocked by readiness blockers", () => {
   assert.match(runSection, /processLowValueSendQueue/);
   assert.match(runSection, /mergeAutomationStatusRun\(current, result, \{ incrementRunCount: !result\.skipped \}\)/);
 });
+
+// Migrated from the former C-drive worktree (3 unique regression tests).
+
+test("web background automation renders the active identity scope", () => {
+  const scopeSection = webPage.slice(
+    webPage.indexOf("function buildAutomationActiveScope"),
+    webPage.indexOf("function buildAutomationRunHistorySummary"),
+  );
+
+  assert.match(webPage, /const automationActiveScope = useMemo/);
+  assert.match(webPage, /buildAutomationActiveScope\(automationStatus\)/);
+  assert.match(webPage, /className=\{`automation-active-scope \$\{automationActiveScope\.tone\}`\}/);
+  assert.match(webPage, /aria-label="当前后台自动化绑定范围"/);
+  assert.match(scopeSection, /status\.activeFilter \|\| \{\}/);
+  assert.match(scopeSection, /filter\.wechatAccountId && filter\.conversationId && filter\.customerId/);
+  assert.match(scopeSection, /label: "微信账号"/);
+  assert.match(scopeSection, /label: "客户会话"/);
+  assert.match(scopeSection, /label: "客户"/);
+  assert.match(webCss, /\.automation-active-scope/);
+  assert.match(webCss, /\.automation-active-scope\.ok/);
+  assert.match(webCss, /\.automation-active-scope\.warning/);
+  assert.match(webCss, /\.automation-active-scope\.error/);
+});
+
+test("web manual automation cycle uses the active conversation identity", () => {
+  const runSection = webPage.slice(
+    webPage.indexOf("async function runAutomationCycle"),
+    webPage.indexOf("async function scanHighValue"),
+  );
+
+  assert.match(runSection, /const filters = requireActiveBridgeIdentity\("后台自动化跑一轮"\)/);
+  assert.match(runSection, /if \(!filters\) return/);
+  assert.match(runSection, /await runAutomationOnce\(filters\)/);
+});
+
+test("web background automation start is scoped to the active conversation identity", () => {
+  const apiStartSection = webApi.slice(
+    webApi.indexOf("export async function startAutomation"),
+    webApi.indexOf("export async function stopAutomation"),
+  );
+  const toggleSection = webPage.slice(
+    webPage.indexOf("async function toggleAutomationActive"),
+    webPage.indexOf("function handleAutomationRuntimeItem"),
+  );
+
+  assert.match(apiStartSection, /startAutomation\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiStartSection, /postJson<AutomationStatus>\("\/automation\/start", requireIdentityFilters\(filters, "automation start"\)\)/);
+  assert.match(webApi, /activeFilter\?: IdentityFilters \| null/);
+  assert.match(toggleSection, /const filters = shouldStop \? null : requireActiveBridgeIdentity\("开启后台自动化"\)/);
+  assert.match(toggleSection, /if \(!shouldStop && !filters\)/);
+  assert.match(toggleSection, /await startAutomation\(filters \|\| \{\}\)/);
+  assert.match(webPage, /onClick=\{toggleAutomationActive\}[\s\S]*disabled=\{Boolean\(busy\) \|\| !automationStatus\?\.enabled \|\| \(!automationStatus\?\.active && !safeSendIdentityReady\)\}/);
+  assert.match(toggleSection, /只会按当前客户会话范围自动推进/);
+});

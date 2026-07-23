@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { appConfig } from "../shared/app-config";
+import { WechatWorkApiClient } from "../wechat-work/wechat-work-api.client";
 
 type AdapterStatus = "started" | "dry_run" | "sent" | "failed";
 
@@ -60,10 +61,18 @@ const adapters = {
     realSend: true,
     description: "预留给后续合规 Windows 桥接程序；未接桥接程序前只生成 outbox 文件，不会伪装发送成功。",
   },
+  wechat_work_kf: {
+    name: "wechat_work_kf",
+    label: "企业微信官方客服 API",
+    realSend: true,
+    description: "通过企业微信微信客服 kf/send_msg 发送文本，并以 SendAttempt 和异步失败事件记录最终结果。",
+  },
 };
 
 @Injectable()
 export class WechatSendAdapterService {
+  constructor(@Optional() private readonly wechatWorkApi?: WechatWorkApiClient) {}
+
   describe(adapterName?: string) {
     const adapter = this.resolve(adapterName);
     const supportsImageActions = adapter.name === "dry_run" || adapter.name === "windows_bridge";
@@ -74,7 +83,7 @@ export class WechatSendAdapterService {
         text: true,
         images: supportsImageActions,
         quote: true,
-        requiresWindowGuard: true,
+        requiresWindowGuard: adapter.name !== "wechat_work_kf",
         writesOutbox: adapter.name === "windows_bridge",
       },
     };
@@ -83,7 +92,27 @@ export class WechatSendAdapterService {
   execute(task: any, context: AdapterContext, adapterName?: string): AdapterResult {
     const adapter = this.resolve(adapterName);
     if (adapter.name === "windows_bridge") return this.executeWindowsBridge(task, context);
+    if (adapter.name === "wechat_work_kf") return this.startWechatWorkKf(task, context);
     return this.executeDryRun(task, context);
+  }
+
+  async deliverWechatWorkKf(
+    task: any,
+    binding: { openKfid: string; externalUserId: string },
+    msgid: string,
+  ) {
+    if (!this.wechatWorkApi) throw new Error("wechat work api client is unavailable");
+    const text = String(task?.payload?.textBeforeImages || task?.payload?.text || "").trim();
+    if (!text) throw new Error("wechat work customer-service send requires a text payload");
+    if (Buffer.byteLength(text, "utf8") > 2048) {
+      throw new Error("wechat work customer-service text exceeds 2048 bytes");
+    }
+    return this.wechatWorkApi.sendText({
+      externalUserId: binding.externalUserId,
+      openKfid: binding.openKfid,
+      text,
+      msgid,
+    });
   }
 
   listBridgeOutbox(): BridgeFileEntry[] {
@@ -203,6 +232,18 @@ export class WechatSendAdapterService {
     };
   }
 
+  private startWechatWorkKf(task: any, context: AdapterContext): AdapterResult {
+    return {
+      adapter: "wechat_work_kf",
+      status: "started",
+      metadata: {
+        bridgeState: "calling_wechat_work_api",
+        payloadKind: task?.payload?.kind || "unknown",
+        guardStatus: context.guardStatus,
+      },
+    };
+  }
+
   private writeBridgeOutbox(task: any, context: AdapterContext) {
     fs.mkdirSync(appConfig.wechatBridgeOutboxDir, { recursive: true });
     const safeId = String(task?.id || "send").replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -217,8 +258,14 @@ export class WechatSendAdapterService {
           taskId: task?.id,
           wechatAccountId: task?.wechatAccountId,
           conversationId: task?.conversationId,
+          customerId: target.customerId || "",
           target,
           sendPlan: this.buildBridgeSendPlan(task, target),
+          preflight: {
+            expectedWindowSnapshotId: context.windowSnapshotId || target.windowSnapshotId || null,
+            rejectIfWindowChanged: true,
+            rejectIfAnyCheckFails: true,
+          },
           payload: task?.payload || {},
           guardSnapshot: task?.guardSnapshot || {},
           context,
@@ -233,14 +280,18 @@ export class WechatSendAdapterService {
   }
 
   private buildBridgeTarget(task: any, context: AdapterContext) {
+    const payload = task?.payload || {};
+    const activeWindow = task?.guardSnapshot?.activeWindow || {};
     return {
       wechatAccountId: task?.wechatAccountId || "",
       accountDisplayName: task?.wechatAccount?.displayName || "",
       conversationId: task?.conversationId || "",
       conversationTitle: task?.conversation?.title || "",
-      customerId: task?.conversation?.customerId || task?.customerId || task?.designJob?.customerId || task?.quoteDraft?.customerId || "",
+      customerId: task?.conversation?.customerId || task?.customerId || payload.customerId || "",
       customerName: task?.conversation?.customer?.name || "",
       windowSnapshotId: context.windowSnapshotId || null,
+      recentMessageText: activeWindow?.recentMessageText || "",
+      windowCapturedAt: activeWindow?.capturedAt || activeWindow?.createdAt || "",
       requiredChecks: task?.guardSnapshot?.requiredChecks || ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
     };
   }
@@ -342,6 +393,7 @@ export class WechatSendAdapterService {
   private resolve(adapterName?: string) {
     const name = String(adapterName || appConfig.wechatSendAdapter || "dry_run").trim();
     if (name === "windows_bridge") return adapters.windows_bridge;
+    if (name === "wechat_work_kf") return adapters.wechat_work_kf;
     return adapters.dry_run;
   }
 }

@@ -16,6 +16,7 @@ function validateSendGuard({
   const checks = [];
   const windowState = activeWindow || {};
   const queueHeadId = accountQueueTaskIds[0];
+  const manualOperatorSend = isManualOperatorSend(task);
 
   checks.push(check("wechatAccount", "微信账号正确", task?.wechatAccountId, windowState.wechatAccountId || windowState.accountId));
   checks.push(
@@ -46,10 +47,10 @@ function validateSendGuard({
   });
   checks.push({
     key: "conversationManualUnlocked",
-    label: "会话未被人工接管",
-    expected: "未锁定",
+    label: manualOperatorSend ? "人工接管会话仅允许人工回复" : "会话未被人工接管",
+    expected: manualOperatorSend ? "可信人工回复" : "未锁定",
     actual: conversation?.manualLocked ? "已人工接管" : "未锁定",
-    passed: conversation?.manualLocked !== true,
+    passed: conversation?.manualLocked !== true || manualOperatorSend,
   });
 
   const maxAgeSeconds = Number(maxWindowSnapshotAgeSeconds);
@@ -100,6 +101,7 @@ function windowSnapshotFreshness(windowState, now = new Date()) {
 function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) {
   const checks = [];
   const payload = task && typeof task.payload === "object" && task.payload ? task.payload : {};
+  const manualOperatorSend = isManualOperatorSend(task);
 
   checks.push({
     key: "conversationExists",
@@ -118,10 +120,10 @@ function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) 
   });
   checks.push({
     key: "conversationManualUnlocked",
-    label: "会话未被人工接管",
-    expected: "未锁定",
+    label: manualOperatorSend ? "人工接管会话仅允许人工回复" : "会话未被人工接管",
+    expected: manualOperatorSend ? "可信人工回复" : "未锁定",
     actual: conversation?.manualLocked ? "已人工接管" : "未锁定",
-    passed: conversation?.manualLocked !== true,
+    passed: conversation?.manualLocked !== true || manualOperatorSend,
   });
 
   if (payload.wechatAccountId) {
@@ -392,7 +394,12 @@ function validateBridgeAckBinding({ task, attempt, payload = {} }) {
       label: "bridge ack customer matches send task",
       expected: expectedCustomerId,
       actual: payload.customerId || "",
-      passed: Boolean(expectedCustomerId && payload.customerId === expectedCustomerId),
+      passed: Boolean(
+        expectedCustomerId &&
+          payload.customerId === expectedCustomerId &&
+          (!(task?.conversation?.customerId || task?.customerId) ||
+            payload.customerId === (task?.conversation?.customerId || task?.customerId)),
+      ),
     });
   }
 
@@ -456,7 +463,7 @@ function evaluateSendTaskRequeue({ task } = {}) {
       message: "发送任务正在等待 Windows 桥接回执，不能直接重新排队。请先取消任务或等待失败回执。",
     };
   }
-  if (task.conversation?.manualLocked || task.manualLocked) {
+  if ((task.conversation?.manualLocked || task.manualLocked) && !isManualOperatorSend(task)) {
     return {
       ok: false,
       action: "reject_requeue",
@@ -471,6 +478,14 @@ function evaluateSendTaskRequeue({ task } = {}) {
     reason: "manual_requeue_allowed",
     failedKeys: [],
   };
+}
+
+function isManualOperatorSend(task) {
+  return Boolean(
+    task?.payload?.source === "manual_reply" &&
+      task?.payload?.manualReply === true &&
+      task?.guardSnapshot?.manualReply === true,
+  );
 }
 
 function buildSendQueueSkipAdvice({ reason, task, queueHeadTask } = {}) {

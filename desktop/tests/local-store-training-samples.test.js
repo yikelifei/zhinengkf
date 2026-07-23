@@ -645,3 +645,307 @@ test("skill suggestion apply does not update existing skills with conflicting id
   assert.equal(conflictSkill.description, "身份冲突的旧 Skill，不能被继续更新。");
   assert.equal(conflictSkill.scope.label, "混合来源");
 });
+
+// Migrated from the former C-drive worktree (5 unique regression tests).
+
+test("training sample notifications stay scoped to the sample conversation identity", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      conversations: [
+        { id: "conversation_demo_1", customerId: "customer_demo_1", wechatAccountId: "wechat_demo_1" },
+        { id: "conversation_demo_2", customerId: "customer_demo_2", wechatAccountId: "wechat_demo_2" },
+      ],
+      trainingSamples: [
+        {
+          id: "sample_notice_one",
+          agentId: "agent_gift_design",
+          agentKey: "gift_design",
+          customerId: "customer_demo_1",
+          conversationId: "conversation_demo_1",
+          wechatAccountId: "wechat_demo_1",
+          customerText: "每盒 200 做礼盒",
+          idealReply: "我先帮您确认搭配。",
+          score: 95,
+          status: "ready",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const notice = store.createNotification("info", "训练样本状态已更新", "body", {
+    source: "training_sample_review",
+    trainingSampleId: "sample_notice_one",
+  });
+
+  assert.equal(notice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(notice.target.conversationId, "conversation_demo_1");
+  assert.equal(notice.target.customerId, "customer_demo_1");
+  assert.equal(notice.target.identityBinding.ok, true);
+  assert.deepEqual(
+    store.listNotifications({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }).map((item) => item.id),
+    [notice.id],
+  );
+  assert.deepEqual(
+    store.listNotifications({
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+    }),
+    [],
+  );
+  assert.throws(
+    () =>
+      store.markNotificationRead(notice.id, {
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_2",
+        customerId: "customer_demo_2",
+      }),
+    /notification identity mismatch/,
+  );
+});
+
+test("batch training sample notifications use shared identity and reject conflicting explicit identity", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      conversations: [{ id: "conversation_demo_1", customerId: "customer_demo_1", wechatAccountId: "wechat_demo_1" }],
+      trainingSamples: [
+        {
+          id: "sample_batch_one",
+          customerId: "customer_demo_1",
+          conversationId: "conversation_demo_1",
+          wechatAccountId: "wechat_demo_1",
+          customerText: "预算 100",
+          idealReply: "先确认数量。",
+          status: "ready",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "sample_batch_two",
+          customerId: "customer_demo_1",
+          conversationId: "conversation_demo_1",
+          wechatAccountId: "wechat_demo_1",
+          customerText: "预算 200",
+          idealReply: "可以做更完整搭配。",
+          status: "ready",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const notice = store.createNotification("info", "训练样本批量状态已更新", "body", {
+    source: "training_sample_batch_review",
+    sampleIds: ["sample_batch_one", "sample_batch_two"],
+  });
+
+  assert.equal(notice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(notice.target.conversationId, "conversation_demo_1");
+  assert.equal(notice.target.customerId, "customer_demo_1");
+  assert.throws(
+    () =>
+      store.createNotification("info", "错误身份", "body", {
+        source: "training_sample_batch_review",
+        sampleIds: ["sample_batch_one", "sample_batch_two"],
+        wechatAccountId: "wechat_demo_2",
+      }),
+    /notification target .*binding invalid/,
+  );
+});
+
+test("training sample review logs are scoped by sample conversation identity", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      trainingSamples: [
+        {
+          id: "sample_review_log_one",
+          agentId: "agent_gift_design",
+          agentKey: "gift_design",
+          customerId: "customer_demo_1",
+          conversationId: "conversation_demo_1",
+          wechatAccountId: "wechat_demo_1",
+          identityBinding: {
+            ok: true,
+            customerId: "customer_demo_1",
+            conversationId: "conversation_demo_1",
+            wechatAccountId: "wechat_demo_1",
+          },
+          scene: "gift_design",
+          customerText: "budget 200 per box",
+          idealReply: "I will confirm the bundle first.",
+          score: 95,
+          status: "review",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const result = store.reviewTrainingSample("sample_review_log_one", {
+    status: "ready",
+    reviewer: "operator",
+    note: "approved",
+  });
+
+  assert.equal(result.reviewLog.metadata.wechatAccountId, "wechat_demo_1");
+  assert.equal(result.reviewLog.metadata.conversationId, "conversation_demo_1");
+  assert.equal(result.reviewLog.metadata.customerId, "customer_demo_1");
+  assert.deepEqual(
+    store.listReviewLogs({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }).map((log) => log.id),
+    [result.reviewLog.id],
+  );
+  assert.deepEqual(
+    store.listReviewLogs({
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+    }),
+    [],
+  );
+});
+
+test("route correction review logs are scoped by route conversation identity", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      agents: [{ id: "agent_after_sales", key: "after_sales", name: "After Sales Agent", scene: "after_sales" }],
+      routeEvaluations: [
+        {
+          id: "route_review_log_one",
+          channel: "wechat",
+          text: "package arrived broken",
+          customerId: "customer_demo_1",
+          conversationId: "conversation_demo_1",
+          wechatAccountId: "wechat_demo_1",
+          identityBinding: {
+            ok: true,
+            customerId: "customer_demo_1",
+            conversationId: "conversation_demo_1",
+            wechatAccountId: "wechat_demo_1",
+          },
+          agentId: null,
+          agentKey: "general",
+          scene: "general",
+          action: "auto_agent",
+          confidence: 40,
+          missingFields: [],
+          suggestedReply: "I can help.",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const result = store.correctRouteEvaluation("route_review_log_one", {
+    agentKey: "after_sales",
+    reviewer: "operator",
+    note: "correct scene",
+  });
+
+  assert.equal(result.reviewLog.metadata.wechatAccountId, "wechat_demo_1");
+  assert.equal(result.reviewLog.metadata.conversationId, "conversation_demo_1");
+  assert.equal(result.reviewLog.metadata.customerId, "customer_demo_1");
+  assert.deepEqual(
+    store.listReviewLogs({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }).map((log) => log.id),
+    [result.reviewLog.id],
+  );
+  assert.deepEqual(
+    store.listReviewLogs({
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+    }),
+    [],
+  );
+});
+
+test("agent skills with direct identity fields stay scoped even without source samples", () => {
+  const now = "2026-07-02T00:00:00.000Z";
+  const { store } = createStore(
+    emptyStoreData({
+      agents: [{ id: "agent_gift_design", key: "gift_design", name: "Gift Design Agent" }],
+      agentSkills: [
+        {
+          id: "skill_global",
+          agentId: "agent_gift_design",
+          name: "通用礼貌话术",
+          description: "系统预置全局话术。",
+          enabled: true,
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "skill_direct_private",
+          agentId: "agent_gift_design",
+          name: "一号客户预算偏好",
+          description: "手工维护的一号客户私有 Skill。",
+          enabled: true,
+          version: 1,
+          wechatAccountId: "wechat_demo_1",
+          conversationId: "conversation_demo_1",
+          customerId: "customer_demo_1",
+          identityBinding: {
+            wechatAccountId: "wechat_demo_1",
+            conversationId: "conversation_demo_1",
+            customerId: "customer_demo_1",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }),
+  );
+
+  const accountOneSkillIds = store
+    .listAgentSkills("agent_gift_design", {
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    })
+    .map((skill) => skill.id);
+  const accountTwoSkillIds = store
+    .listAgentSkills("agent_gift_design", {
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+    })
+    .map((skill) => skill.id);
+
+  assert.equal(accountOneSkillIds.includes("skill_global"), true);
+  assert.equal(accountOneSkillIds.includes("skill_direct_private"), true);
+  assert.equal(accountTwoSkillIds.includes("skill_global"), true);
+  assert.equal(accountTwoSkillIds.includes("skill_direct_private"), false);
+
+  const accountTwoAgent = store
+    .listAgents({
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+    })
+    .find((agent) => agent.id === "agent_gift_design");
+  assert.ok(accountTwoAgent);
+  const accountTwoAgentSkillIds = accountTwoAgent.skills.map((skill) => skill.id);
+  assert.equal(accountTwoAgentSkillIds.includes("skill_global"), true);
+  assert.equal(accountTwoAgentSkillIds.includes("skill_direct_private"), false);
+});

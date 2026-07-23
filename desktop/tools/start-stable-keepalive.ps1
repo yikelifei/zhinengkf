@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Root = "D:\zhinengkefu\desktop"
+$Root = Split-Path -Parent $PSScriptRoot
 $RuntimeDir = if ($env:DESKTOP_RUNTIME_DIR) { $env:DESKTOP_RUNTIME_DIR } else { Join-Path $Root ".runtime-stable" }
 $LogDir = Join-Path $RuntimeDir "logs"
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
@@ -10,8 +10,12 @@ $StartLog = Join-Path $RuntimeDir "stable-start.log"
 $KeepAliveOutLog = Join-Path $LogDir "stable-runtime-launcher.out.log"
 $KeepAliveErrLog = Join-Path $LogDir "stable-runtime-launcher.err.log"
 $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
+$StableRuntimePidFile = Join-Path $RuntimeDir "stable-runtime-launcher.pid"
+$StableRuntimeHeartbeatFile = Join-Path $RuntimeDir "keep-alive.json"
+$StableSupervisorPidFile = Join-Path $RuntimeDir "stable-keepalive-supervisor.pid"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 $SupervisorMode = $env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"
+$script:OwnsSupervisorLock = $false
 
 function Write-StableStartLog($Message) {
   try {
@@ -29,7 +33,38 @@ function Write-StableStartingLock {
   }
 }
 
+function Normalize-ProcessPathEnvironment {
+  $environment = [Environment]::GetEnvironmentVariables()
+  $pathKeys = @($environment.Keys | Where-Object {
+    [string]::Equals([string]$_, "Path", [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if (-not $pathKeys.Count) {
+    return
+  }
+
+  $pathValue = [string]$environment[$pathKeys[0]]
+  foreach ($pathKey in $pathKeys) {
+    [Environment]::SetEnvironmentVariable([string]$pathKey, $null, "Process")
+  }
+  [Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+}
+
 function Find-KeepAliveProcess {
+  foreach ($pidFile in @($StableRuntimePidFile, $StableRuntimeHeartbeatFile)) {
+    try {
+      $recordedPid = if ($pidFile -eq $StableRuntimeHeartbeatFile) {
+        [int](Get-Content -Raw -Path $pidFile -ErrorAction Stop | ConvertFrom-Json).pid
+      } else {
+        [int](Get-Content -Raw -Path $pidFile -ErrorAction Stop).Trim()
+      }
+      $recordedProcess = Get-Process -Id $recordedPid -ErrorAction SilentlyContinue
+      if ($recordedProcess) {
+        return [pscustomobject]@{ ProcessId = $recordedPid; Source = $pidFile }
+      }
+    } catch {
+    }
+  }
+
   try {
     Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
       Where-Object { ($_.CommandLine -match [regex]::Escape($StableRuntimeLauncherScript)) -or ($_.CommandLine -like "*stable-runtime-launcher.js*") } |
@@ -39,6 +74,68 @@ function Find-KeepAliveProcess {
     Write-Warning "stable launcher process lookup unavailable: $($_.Exception.Message)"
     return $null
   }
+}
+
+function Acquire-StableSupervisorLock {
+  for ($attempt = 1; $attempt -le 3; $attempt += 1) {
+    try {
+      $stream = [System.IO.File]::Open(
+        $StableSupervisorPidFile,
+        [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::Read
+      )
+      try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$PID`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+      } finally {
+        $stream.Dispose()
+      }
+      $script:OwnsSupervisorLock = $true
+      return $true
+    } catch [System.IO.IOException] {
+      $existingPid = 0
+      try {
+        $existingPid = [int](Get-Content -Raw -Path $StableSupervisorPidFile -ErrorAction Stop).Trim()
+      } catch {
+      }
+      if ($existingPid -gt 0 -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
+        Write-StableStartLog "stable keepalive supervisor already running pid=$existingPid"
+        return $false
+      }
+      if ($existingPid -le 0) {
+        try {
+          $lockAge = (Get-Date) - (Get-Item -Path $StableSupervisorPidFile -ErrorAction Stop).LastWriteTime
+          if ($lockAge.TotalSeconds -lt 30) {
+            Write-StableStartLog "stable keepalive supervisor lock is being initialized"
+            return $false
+          }
+        } catch {
+        }
+      }
+      try {
+        Remove-Item -Force -Path $StableSupervisorPidFile -ErrorAction Stop
+      } catch {
+        Write-StableStartLog "stable supervisor stale lock cleanup failed: $($_.Exception.Message)"
+        return $false
+      }
+    }
+  }
+  return $false
+}
+
+function Release-StableSupervisorLock {
+  if (-not $script:OwnsSupervisorLock) {
+    return
+  }
+  try {
+    $recordedPid = [int](Get-Content -Raw -Path $StableSupervisorPidFile -ErrorAction Stop).Trim()
+    if ($recordedPid -eq $PID) {
+      Remove-Item -Force -Path $StableSupervisorPidFile -ErrorAction Stop
+    }
+  } catch {
+  }
+  $script:OwnsSupervisorLock = $false
 }
 
 function Test-StableHttp($Url) {
@@ -98,6 +195,8 @@ function Start-StableSupervisorProcess {
   $command = @"
 `$env:DESKTOP_RUNTIME_DIR = "$RuntimeDir"
 `$env:STABLE_KEEPALIVE_SUPERVISOR = "1"
+`$env:STABLE_WECHAT_BRIDGE_MODE = "$(if ($env:STABLE_WECHAT_BRIDGE_MODE) { $env:STABLE_WECHAT_BRIDGE_MODE } else { "dispatch" })"
+`$env:STABLE_PERSONAL_WECHAT_SEND = "$(if ($env:STABLE_PERSONAL_WECHAT_SEND) { $env:STABLE_PERSONAL_WECHAT_SEND } else { "0" })"
 & "$PSCommandPath"
 "@
   return Start-Process `
@@ -113,7 +212,7 @@ function Invoke-StableSupervisorLoop {
   while ($true) {
     if (Test-Path $StopRequestFile) {
       Write-StableStartLog "stable keepalive supervisor stop request received pid=$PID"
-      exit 0
+      return
     }
 
     Write-StableStartingLock
@@ -129,18 +228,32 @@ function Invoke-StableSupervisorLoop {
 }
 
 try {
+  Normalize-ProcessPathEnvironment
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-  try {
-    Remove-Item -Force -ErrorAction Stop -Path $StopRequestFile
-  } catch [System.Management.Automation.ItemNotFoundException] {
-  } catch {
-    Write-Warning "stable stop request cleanup unavailable: $($_.Exception.Message)"
+  if (-not $SupervisorMode) {
+    try {
+      Remove-Item -Force -ErrorAction Stop -Path $StopRequestFile
+    } catch [System.Management.Automation.ItemNotFoundException] {
+    } catch {
+      Write-Warning "stable stop request cleanup unavailable: $($_.Exception.Message)"
+    }
   }
   Write-StableStartingLock
 
   if ($SupervisorMode) {
-    Invoke-StableSupervisorLoop
+    if (Test-Path $StopRequestFile) {
+      Write-StableStartLog "stable keepalive supervisor found stop request; exiting pid=$PID"
+      exit 0
+    }
+    if (-not (Acquire-StableSupervisorLock)) {
+      exit 0
+    }
+    try {
+      Invoke-StableSupervisorLoop
+    } finally {
+      Release-StableSupervisorLock
+    }
     exit 0
   }
 

@@ -455,7 +455,7 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 - `WECHAT_BRIDGE_WORKER_STATUS_FILE`：默认 `.runtime/wechat-bridge-worker-status.json`
 - `BRIDGE_LIMIT`：单轮最多处理几个 outbox 任务
 
-这只是桥接骨架。真实微信 PC 发送器只能接在 worker 内部的发送动作位置，并且必须继续使用当前任务里的账号、会话、窗口校验结果和单账号锁；不能绕过平台登录、不能跨客户会话发送、不能把未真实发送的任务伪造成成功。
+个人微信 Windows 操作端已接在同一 dispatch/ACK 协议后：`tools/personal-wechat-bridge.js` 只操作配置明确绑定的进程、窗口和 Windows 会话，并在发送前后用 UI Automation 校验账号、聊天对象、最近消息及发送结果。详细配置和操作步骤见 `docs/PERSONAL_WECHAT_BRIDGE.md`。
 
 后续如果要接真实微信 PC 操作，应该只替换或扩展适配器层，继续复用现有的账号校验、聊天对象校验、最近消息校验、单账号串行锁和发送审计。
 
@@ -884,7 +884,7 @@ POST /api/wechat/send-tasks/process-safe-queue
 ## 尚未接真实外部系统
 
 - 真实设计平台接口。
-- 微信 PC 真实窗口识别和图片发送。
+- 微信 PC 真实运行仍依赖现场版本能稳定暴露 UI Automation 元素，并需要为每个账号配置进程、窗口、Windows 会话和会话绑定；不满足时桥接会阻断。
 - PostgreSQL/Redis 自动安装和 BullMQ worker。
 - Excel 文件解析导入。
 - 引用图片和截图的图片指纹匹配。

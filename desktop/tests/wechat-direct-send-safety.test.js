@@ -47,7 +47,7 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   const page = readProjectFile("apps/web/src/app/page.tsx");
   const styles = readProjectFile("apps/web/src/app/globals.css");
   const statusSection = sliceBetween(service, /function channelStatus\(/, /function maskSecret/);
-  const topbarSection = sliceBetween(page, /<div className="top-actions">/, /<\/header>/);
+  const toolbarSection = sliceBetween(page, /<div className="top-actions">/, /<\/header>/);
 
   assert.match(statusSection, /const runtimeKeys = new Set\(\["window_observer", "windows_bridge"\]\)/);
   assert.match(statusSection, /const sendAdapterKeys = new Set\(\["safe_send_queue"\]\)/);
@@ -86,9 +86,9 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(page, /function renderTopContextActions/);
   assert.match(page, /data-toolbar-scope="wechat-actions"/);
   assert.match(page, /isDesignWorkspace && platformReadiness && !platformReadiness\.canSubmitFormalGeneration/);
-  assert.match(topbarSection, /renderTopStatusPills\(\)/);
-  assert.match(topbarSection, /renderTopContextActions\(\)/);
-  assert.doesNotMatch(topbarSection, /checkDesignPlatform|createDemo|preflightActiveJob|submitActiveJob/);
+  assert.match(toolbarSection, /renderTopStatusPills\(\)/);
+  assert.match(toolbarSection, /renderTopContextActions\(\)/);
+  assert.doesNotMatch(toolbarSection, /checkDesignPlatform|createDemo|preflightActiveJob|submitActiveJob/);
   assert.match(styles, /\.wechat-channel-card\.needs_send_adapter::before/);
   assert.match(styles, /\.wechat-channel-next-step\.needs_runtime,[\s\S]*\.wechat-channel-next-step\.needs_send_adapter/);
   assert.match(styles, /\.wechat-config-sections/);
@@ -828,9 +828,10 @@ test("notifications and review center are scoped by selected conversation identi
   assert.match(notificationsController, /conversationId/);
   assert.match(notificationsController, /customerId/);
   assert.match(notificationsService, /list\(options: \{ unreadOnly\?: boolean; limit\?: number; wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
-  assert.match(notificationsService, /if \(options\.wechatAccountId \|\| options\.conversationId \|\| options\.customerId\)/);
-  assert.match(notificationsService, /take: Math\.min\(limit \* 5, 1000\)/);
-  assert.match(notificationsService, /\.then\(\(rows\) => rows\.filter\(\(row\) => this\.matchesTargetIdentity\(row\.target, options\)\)\.slice\(0, limit\)\)/);
+  assert.match(notificationsService, /const hasIdentityFilter = Boolean\(options\.wechatAccountId \|\| options\.conversationId \|\| options\.customerId\)/);
+  assert.match(notificationsService, /const take = hasIdentityFilter \? Math\.max\(limit, 300\) : limit/);
+  assert.match(notificationsService, /const scopedRows = hasIdentityFilter \? rows\.filter\(\(row\) => this\.matchesTargetIdentity\(row\.target, options\)\) : rows/);
+  assert.match(notificationsService, /return scopedRows\.slice\(0, limit\)/);
   assert.match(reviewsController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
   assert.match(reviewsController, /return this\.reviews\.list\(\{ wechatAccountId, conversationId, customerId \}\)/);
   assert.match(reviewsService, /async list\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
@@ -838,14 +839,15 @@ test("notifications and review center are scoped by selected conversation identi
   assert.match(reviewsService, /\.listQuoteDrafts\(filter\)/);
   assert.match(reviewsService, /\.listOrderDrafts\(filter\)/);
   assert.match(reviewsService, /function isOrderReviewVisible\(order: any\)/);
-  assert.match(reviewsService, /return isOrderHighValue\(order\) \|\| orderNeedsManualSendAttention\(order\)/);
+  assert.match(reviewsService, /return status === "manual_review" \|\| isOrderHighValue\(order\) \|\| orderNeedsManualSendAttention\(order\)/);
   assert.match(reviewsService, /function orderNeedsManualSendAttention\(order: any\)/);
   assert.match(reviewsService, /function isOrderHighValue\(order: any\)/);
-  assert.match(reviewsService, /listReviewLogs\(\{ \.\.\.filter, limit: 80 \}\)/);
-  assert.match(reviewsService, /prisma\.reviewLog\.findMany\(\{ orderBy: \{ createdAt: "desc" \}, take: hasIdentityFilter\(filter\) \? 240 : 80 \}\)/);
-  assert.match(reviewsService, /logs: logs\.filter\(\(log: any\) => matchesReviewLogIdentity\(log, filter\)\)\.slice\(0, 80\)/);
-  assert.match(reviewsService, /function hasIdentityFilter\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \}\)/);
-  assert.match(reviewsService, /function matchesReviewLogIdentity\(log: any, filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(reviewsService, /listReviewLogs\(\{ \.\.\.filter, limit: hasIdentityFilter\(filter\) \? 300 : 80 \}\)/);
+  assert.match(reviewsService, /prisma\.reviewLog\.findMany\(\{ orderBy: \{ createdAt: "desc" \}, take: hasIdentityFilter\(filter\) \? 300 : 80 \}\)/);
+  assert.match(reviewsService, /logs: filterReviewLogsByIdentity\(logs, filter, \{ designJobs, quoteDrafts, orderDrafts, sendTasks \}\)\.slice\(0, 80\)/);
+  assert.match(reviewsService, /function hasIdentityFilter\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(reviewsService, /function filterReviewLogsByIdentity\(/);
+  assert.match(reviewsService, /function matchesMetadataIdentity\(/);
   assert.match(reviewsService, /metadata\.wechatAccountId/);
   assert.match(reviewsService, /metadata\.conversationId/);
   assert.match(reviewsService, /metadata\.customerId/);
@@ -908,7 +910,7 @@ test("notification bulk read is scoped by selected conversation identity", () =>
   assert.match(api, /export async function markAllNotificationsRead\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /postJson<\{ count: number \}>\("\/notifications\/read-all", filters\)/);
   assert.match(page, /function activeIdentityFilters\(\)/);
-  assert.match(page, /markAllNotificationsRead\(activeIdentityFilters\(\)\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("全部提醒已读"\);\s*if \(!filters\) return;[\s\S]*markAllNotificationsRead\(filters\)/);
   assert.match(controller, /markAllRead\(@Body\(\) body: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
   assert.match(controller, /return this\.notifications\.markAllRead\(\{[\s\S]*wechatAccountId: body\?\.wechatAccountId,[\s\S]*conversationId: body\?\.conversationId,[\s\S]*customerId: body\?\.customerId,[\s\S]*\}\)/);
   assert.match(service, /markAllRead\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
@@ -944,8 +946,11 @@ test("review decisions carry and enforce expected conversation identity", () => 
   assert.match(controller, /reviewQuote\([\s\S]*\} & ExpectedIdentityPayload/);
   assert.match(controller, /@Post\("orders\/:id"\)/);
   assert.match(controller, /reviewOrder\([\s\S]*approve_confirmation[\s\S]*approve_followup[\s\S]*\} & ExpectedIdentityPayload/);
-  assert.match(service, /ExpectedIdentityPayload, assertExpectedIdentity/);
+  assert.match(service, /ExpectedIdentityPayload,[\s\S]*assertExpectedIdentity,[\s\S]*assertRequiredExpectedIdentity/);
   assert.match(service, /type ReviewPayload = ExpectedIdentityPayload & \{/);
+  assert.match(service, /assertRequiredExpectedIdentity\(payload, "design job"\)/);
+  assert.match(service, /assertRequiredExpectedIdentity\(payload, "quote draft"\)/);
+  assert.match(service, /assertRequiredExpectedIdentity\(payload, "order draft"\)/);
   assert.match(service, /assertExpectedIdentity\(job, payload, "design job"\)/);
   assert.match(service, /assertExpectedIdentity\(quote, payload, "quote draft"\)/);
   assert.match(service, /assertExpectedIdentity\(order, payload, "order draft"\)/);
@@ -961,10 +966,10 @@ test("review decisions carry and enforce expected conversation identity", () => 
   assert.match(service, /\{ \.\.\.quoteTarget, sendTaskId: result\?\.sendTask\?\.id \}/);
   assert.match(service, /metadata: \{[\s\S]*\.\.\.quoteTarget,[\s\S]*sendTaskId: result\?\.sendTask\?\.id/);
   assert.match(service, /\.filter\(\(job: any\) => isDesignJobReviewVisible\(job\)\)/);
-  assert.match(service, /where: \{ status: \{ in: \["manual_review", "failed", "timeout", "completed", "quick_confirm"\] \} \}/);
+  assert.match(service, /const designJobWhere: any = \{[\s\S]*status: \{ in: \["manual_review", "failed", "timeout", "completed", "quick_confirm"\] \},[\s\S]*\.\.\.designJobIdentityWhere\(filter\)/);
   assert.match(service, /function isDesignJobReviewVisible\(job: any\)[\s\S]*isDesignJobHighValue\(job\)[\s\S]*"completed", "quick_confirm"/);
   assert.match(service, /\.filter\(\(quote: any\) => isQuoteReviewVisible\(quote\)\)/);
-  assert.match(service, /where: \{ status: \{ in: \["manual_review", "draft", "auto_sent", "send_queued", "sent", "accepted"\] \} \}/);
+  assert.match(service, /const quoteDraftWhere: any = \{[\s\S]*status: \{ in: \["manual_review", "draft", "auto_sent", "send_queued", "sent", "accepted"\] \},[\s\S]*\.\.\.quoteDraftIdentityWhere\(filter\)/);
   assert.match(service, /function isQuoteHighValue\(quote: any\)[\s\S]*isDesignJobHighValue\(quote\?\.designJob \|\| \{\}\)[\s\S]*totalPrice >= highValueAmount/);
   assert.match(service, /quickConfirmAndQueueSend\(id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId,/);
   assert.match(service, /this\.quotes\.queueSend\(id, \{[\s\S]*expectedWechatAccountId: payload\.expectedWechatAccountId,[\s\S]*expectedConversationId: payload\.expectedConversationId,[\s\S]*expectedCustomerId: payload\.expectedCustomerId,/);
@@ -1137,9 +1142,10 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(assetsService, /customer asset list requires conversation identity: \$\{missing\.join\(", "\)\}/);
   assert.match(assetsService, /assertExpectedIdentity\([\s\S]*\{ customerId: filter\.ownerId \},[\s\S]*\{ expectedCustomerId: filter\.customerId \},[\s\S]*"customer asset list owner"/);
   assert.match(assetsService, /"customer asset list conversation customer"/);
-  assert.match(assetsService, /\.\.\.\(filter\.wechatAccountId \? \{ wechatAccountId: filter\.wechatAccountId \} : \{\}\)/);
-  assert.match(assetsService, /\.\.\.\(filter\.conversationId \? \{ conversationId: filter\.conversationId \} : \{\}\)/);
-  assert.match(assetsService, /\.\.\.\(filter\.customerId \? \{ customerId: filter\.customerId \} : \{\}\)/);
+  assert.match(assetsService, /where: designAssetWhere\(filter\)/);
+  assert.match(assetsService, /wechatAccountId: filter\.wechatAccountId \|\| undefined/);
+  assert.match(assetsService, /conversationId: filter\.conversationId \|\| undefined/);
+  assert.match(assetsService, /customerId: filter\.customerId \|\| undefined/);
   assert.match(assetsService, /wechatAccountId: payload\.expectedWechatAccountId \|\| null/);
   assert.match(assetsService, /conversationId: payload\.expectedConversationId \|\| null/);
   assert.match(assetsService, /customerId: payload\.expectedCustomerId \|\| \(payload\.ownerType === "customer" \? payload\.ownerId : null\)/);
@@ -1157,7 +1163,9 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(assetsService, /local customer asset requires conversation identity: \$\{missing\.join\(", "\)\}/);
   assert.match(assetsService, /assertExpectedIdentity\(asset, expected, "local asset"\)/);
   assert.match(assetsService, /private async findDesignAssetByLocalPath\(localPath: string\)/);
-  assert.match(assetsService, /this\.localStore\.listConversations\(payload\.expectedWechatAccountId\)/);
+  assert.match(assetsService, /private async findConversationForIdentity\(filter: \{ wechatAccountId\?: string; conversationId\?: string \}\)/);
+  assert.match(assetsService, /this\.localStore\.listConversations\(filter\.wechatAccountId\)/);
+  assert.match(assetsService, /wechatAccountId: payload\.expectedWechatAccountId,[\s\S]*conversationId: payload\.expectedConversationId/);
   assert.match(assetsService, /conversation \? \{ \.\.\.conversation, conversationId: conversation\.id \} : conversation/);
   assert.match(assetsService, /"customer asset conversation customer"/);
   assert.match(prismaSchema, /model DesignAsset \{[\s\S]*wechatAccountId String\?/);
@@ -1204,7 +1212,8 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(wechatService, /payload\.locked === false && before\.manualLocked[\s\S]*this\.assertManualLockTransitionHasExpectedIdentity\(payload, "解除人工接管"\)/);
   assert.match(wechatService, /private assertManualLockTransitionHasExpectedIdentity\(payload: ExpectedIdentityPayload, action: string\)/);
   assert.match(wechatService, /throw new BadRequestException\(`\$\{action\}必须带完整会话身份：\$\{missing\.join\(", "\)\}`\)/);
-  assert.match(wechatService, /cancelInFlightSendTasksForManualLock\(conversationId: string, reviewer: string\)[\s\S]*this\.cancelSendTask\(task\.id, \{[\s\S]*expectedWechatAccountId: task\.wechatAccountId,[\s\S]*expectedConversationId: task\.conversationId,[\s\S]*expectedCustomerId: task\.customerId \|\| task\.conversation\?\.customerId,[\s\S]*reason,/);
+  assert.match(wechatService, /cancelInFlightSendTasksForManualLock\(conversation: any, reviewer: string\)[\s\S]*this\.cancelSendTask\(task\.id, \{[\s\S]*reason,[\s\S]*\.\.\.this\.expectedIdentityForSendTask\(task\)/);
+  assert.match(wechatService, /private expectedIdentityForSendTask\(task: any\): ExpectedIdentityPayload/);
   assert.match(wechatService, /validateSendTask\([\s\S]*\} & ExpectedIdentityPayload = \{\}/);
   assert.match(wechatService, /assertExpectedIdentity\(task, params, "send task"\)/);
   assert.match(wechatService, /validateSendTaskWithCurrentWindow\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
@@ -1247,7 +1256,8 @@ test("routing decisions and chat imports stay bound to selected conversation ide
   assert.match(routingController, /list\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.routing\.list\(\{ wechatAccountId, conversationId, customerId \}\)/);
   assert.match(routingController, /wechatAccountId\?: string/);
   assert.match(routingController, /ExpectedIdentityPayload/);
-  assert.match(routingService, /ExpectedIdentityPayload, assertExpectedIdentity/);
+  assert.match(routingService, /ExpectedIdentityPayload,[\s\S]*assertExpectedIdentity,[\s\S]*assertRequiredExpectedIdentity/);
+  assert.match(routingService, /assertRequiredExpectedIdentity\([\s\S]*expectedWechatAccountId: payload\.wechatAccountId,[\s\S]*expectedConversationId: payload\.conversationId,[\s\S]*expectedCustomerId: payload\.customerId,[\s\S]*"route evaluation"/);
   assert.match(routingService, /type IdentityFilter = \{/);
   assert.match(routingService, /list\(filter: IdentityFilter = \{\}\)/);
   assert.match(routingService, /return this\.localStore\.listRouteEvaluations\(filter\)/);
@@ -1262,6 +1272,7 @@ test("routing decisions and chat imports stay bound to selected conversation ide
   assert.match(routingService, /\.listTrainingSamples\(filter\)/);
   assert.match(routingService, /const route = this\.localStore\.listRouteEvaluations\(\)\.find/);
   assert.match(routingService, /assertExpectedIdentity\(route, payload, "route evaluation"\)/);
+  assert.match(routingService, /assertRequiredExpectedIdentity\(payload, "route evaluation"\)/);
   assert.match(trainingController, /listChatImports\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.training\.listChatImports\(\{ wechatAccountId, conversationId, customerId \}\)/);
   assert.match(trainingService, /type IdentityFilter = \{/);
   assert.match(trainingService, /listChatImports\(filter: IdentityFilter = \{\}\)/);
@@ -1270,7 +1281,7 @@ test("routing decisions and chat imports stay bound to selected conversation ide
   assert.match(wechatService, /customerId\?: string/);
   assert.match(wechatService, /wechatAccountId: conversation\.wechatAccountId/);
   assert.match(wechatService, /this\.localStore\.listKnowledgeEntries\(\{[\s\S]*agentId: agent\.id,[\s\S]*wechatAccountId: conversation\.wechatAccountId,[\s\S]*conversationId: conversation\.id,[\s\S]*customerId: conversation\.customerId,[\s\S]*\}\)/);
-  assert.match(wechatService, /findPendingSceneClarificationContext\(this\.localStore\.listRouteEvaluations\(\{ conversationId \}\), conversationId\)/);
+  assert.match(wechatService, /private findLatestSceneClarification\(filter: IdentityFilter\)[\s\S]*findPendingSceneClarificationContext\([\s\S]*this\.localStore\.listRouteEvaluations\(filter\),[\s\S]*String\(filter\.conversationId \|\| ""\)/);
   assert.match(store, /listRouteEvaluations\(filter: IdentityListFilter = \{\}\)/);
   assert.match(store, /\.filter\(\(route\) => this\.matchesIdentityFilter\(route, filter\)\)/);
   assert.match(store, /listChatImports\(filter: IdentityListFilter = \{\}\)/);
@@ -1361,18 +1372,9 @@ test("single notification read carries and enforces expected conversation identi
 test("window observer public endpoints expose summaries without local paths", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const apiClient = readProjectFile("apps/web/src/lib/api.ts");
-  const statusSection = service.slice(
-    service.indexOf("  getWindowObserverStatus()"),
-    service.indexOf("  captureWindowObserverOnce()"),
-  );
-  const captureSection = service.slice(
-    service.indexOf("  captureWindowObserverOnce()"),
-    service.indexOf("  createWindowSnapshot("),
-  );
-  const scanSection = service.slice(
-    service.indexOf("  scanWindowSnapshotInbox()"),
-    service.indexOf("  createDemoWindowSnapshot("),
-  );
+  const statusSection = sliceBetween(service, /\n  getWindowObserverStatus\(\)/, /\n  captureWindowObserverOnce\(/);
+  const captureSection = sliceBetween(service, /\n  captureWindowObserverOnce\(/, /\n  createWindowSnapshot\(/);
+  const scanSection = sliceBetween(service, /\n  scanWindowSnapshotInbox\(/, /\n  createDemoWindowSnapshot\(/);
   const sanitizerSection = service.slice(
     service.indexOf("function sanitizeWindowObserverStatus"),
     service.indexOf("function sanitizeBridgeWorkerStatus"),
@@ -2822,17 +2824,21 @@ test("bridge acknowledgement rejects sent ack after dispatch instruction expires
 
   assert.match(ackSection, /const dispatchState = this\.findPendingBridgeDispatchForTask\(task, pendingAttempt\)/);
   assert.match(ackSection, /const requiresBridgeDispatch = pendingAttempt\.adapter === "windows_bridge" \|\| bridgeAttemptMetadata\.requiresBridge === true/);
-  assert.match(ackSection, /status === "sent" && requiresBridgeDispatch && !dispatchState/);
+  assert.match(ackSection, /status === "sent" && requiresBridgeDispatch && !dispatchState && !outboxPayloadValidation\?\.ok/);
   assert.match(ackSection, /bridge ack rejected: dispatch instruction is required before marking sent/);
   assert.match(ackSection, /status === "sent" && dispatchState\?\.expired/);
   assert.match(ackSection, /bridge ack rejected: dispatch instruction expired/);
   assert.ok(
-    ackSection.indexOf("!dispatchState") < ackSection.indexOf("validateBridgeAckBinding"),
-    "missing dispatch sent ack must be rejected before binding and persistence",
+    ackSection.indexOf("validateBridgeAckOutboxPayload") < ackSection.indexOf("!dispatchState && !outboxPayloadValidation?.ok"),
+    "missing dispatch sent ack must first check trusted outbox proof",
   );
   assert.ok(
     ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("validateBridgeAckBinding"),
     "expired dispatch sent ack must be rejected before binding and persistence",
+  );
+  assert.ok(
+    ackSection.indexOf("!dispatchState && !outboxPayloadValidation?.ok") < ackSection.indexOf("archiveBridgeOutboxFile"),
+    "missing dispatch sent ack without valid outbox proof must be rejected before archiving files",
   );
   assert.ok(
     ackSection.indexOf("dispatchState?.expired") < ackSection.indexOf("archiveBridgeOutboxFile"),
@@ -2999,10 +3005,7 @@ test("bridge file proof and archive paths use realpath regular-file checks", () 
 test("bridge inbox scan forwards acknowledgement protocol version", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
-  const scanSection = service.slice(
-    service.indexOf("  scanBridgeInbox()"),
-    service.indexOf("  scanSendOperations()"),
-  );
+  const scanSection = sliceBetween(service, /\n  scanBridgeInbox\(/, /\n  async scanSendOperations\(/);
   const controllerAckSection = controller.slice(
     controller.indexOf('@Post("send-tasks/:id/bridge-ack")'),
     controller.indexOf("  ) {", controller.indexOf('@Post("send-tasks/:id/bridge-ack")')),
@@ -3017,10 +3020,7 @@ test("bridge inbox scan forwards acknowledgement protocol version", () => {
 
 test("bridge inbox scan keeps system provenance after external ack metadata", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
-  const scanSection = service.slice(
-    service.indexOf("  scanBridgeInbox()"),
-    service.indexOf("  scanSendOperations()"),
-  );
+  const scanSection = sliceBetween(service, /\n  scanBridgeInbox\(/, /\n  async scanSendOperations\(/);
   const metadataSection = scanSection.slice(
     scanSection.indexOf("metadata: {"),
     scanSection.indexOf("sentAt: typeof data.sentAt"),
@@ -3037,10 +3037,7 @@ test("bridge inbox scan keeps system provenance after external ack metadata", ()
 
 test("bridge inbox scan fails trusted rejected sent acknowledgements without bypassing validation", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
-  const scanSection = service.slice(
-    service.indexOf("  scanBridgeInbox()"),
-    service.indexOf("  scanSendOperations()"),
-  );
+  const scanSection = sliceBetween(service, /\n  scanBridgeInbox\(/, /\n  async scanSendOperations\(/);
   const recoverySection = service.slice(
     service.indexOf("  private failTaskForRejectedTrustedBridgeAck("),
     service.indexOf("  private validateBridgeAckOutboxPayload("),
@@ -3065,4 +3062,351 @@ test("bridge inbox scan fails trusted rejected sent acknowledgements without byp
     recoverySection.indexOf("validateBridgeAckOutboxPayload") < recoverySection.indexOf("updateSendTask"),
     "rejected sent ack recovery must validate the outbox body before failing the task",
   );
+});
+
+// Migrated from the former C-drive worktree (11 unique regression tests).
+
+test("bridge outbox and status are scoped by selected conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+
+  assert.match(api, /export async function getBridgeOutbox\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/bridge\/outbox\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /export async function getBridgeStatus\(filters: IdentityFilters = \{\}\)/);
+  assert.match(api, /\/wechat\/bridge\/status\$\{identityQuery\(filters\)\}/);
+  assert.match(page, /getBridgeOutbox\(identityFilters\)/);
+  assert.match(page, /getBridgeStatus\(identityFilters\)/);
+  assert.match(page, /const result = await getBridgeOutbox\(filters\)/);
+  assert.match(page, /const status = await getBridgeStatus\(filters\)\.catch\(\(\) => null\)/);
+  assert.match(page, /setBridgeOutbox\(result\)/);
+  assert.match(page, /if \(status\) setBridgeStatus\(status\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("刷新桥接待发送"\);\s*if \(!filters\) return;[\s\S]*const result = await getBridgeOutbox\(filters\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("扫描桥接回执"\);\s*if \(!filters\) return;[\s\S]*const result = await scanBridgeInbox\(filters\)[\s\S]*await refreshBridgeSafetyStatus\(filters\)/);
+  assert.match(page, /getBridgeOutbox\([\s\S]*wechatAccountId: conversation\.wechatAccountId[\s\S]*conversationId: conversation\.id[\s\S]*customerId: conversation\.customerId/);
+  assert.match(page, /function bridgeOutboxEntryForTask\([\s\S]*const taskCustomerId = \(task as \{ customerId\?: string \| null \}\)\.customerId \|\| task\.conversation\?\.customerId \|\| ""/);
+  assert.match(page, /const entryCustomerId = entry\.customerId \|\| entry\.preview\?\.customerId \|\| ""/);
+  assert.match(page, /entryWechatAccountId === taskWechatAccountId[\s\S]*entryConversationId === taskConversationId[\s\S]*entryCustomerId === taskCustomerId/);
+  assert.match(controller, /listBridgeOutbox\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeOutbox\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(controller, /getBridgeStatus\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.getBridgeStatus\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(service, /type IdentityFilter = \{/);
+  assert.match(service, /getBridgeStatus\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /const outbox = this\.listBridgeOutbox\(filter\)/);
+  assert.match(service, /listBridgeOutbox\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /matchesBridgeEntryIdentity\(entry, task, filter\)/);
+  assert.match(service, /actualWechatAccountId/);
+  assert.match(service, /actualConversationId/);
+  assert.match(service, /actualCustomerId/);
+});
+
+test("bulk notification read is scoped to the active conversation identity", () => {
+  const api = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const controller = readProjectFile("apps/api/src/notifications/notifications.controller.ts");
+  const service = readProjectFile("apps/api/src/notifications/notifications.service.ts");
+
+  assert.match(api, /markAllNotificationsRead\(filters: IdentityFilters = \{\}\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("全部提醒已读"\);\s*if \(!filters\) return;[\s\S]*markAllNotificationsRead\(filters\)/);
+  assert.match(page, /onClick=\{readAllNotices\} disabled=\{!unreadNoticeCount \|\| Boolean\(busy\) \|\| !safeSendIdentityReady\}/);
+  assert.match(controller, /markAllRead\(@Body\(\) body: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(service, /markAllRead\(filter: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(service, /expectedWechatAccountId: filter\.wechatAccountId/);
+  assert.match(service, /expectedConversationId: filter\.conversationId/);
+  assert.match(service, /expectedCustomerId: filter\.customerId/);
+  assert.match(service, /assertRequiredExpectedIdentity\(expected, "notifications"\)/);
+  assert.doesNotMatch(service, /where: \{ readAt: null \},\s*data: \{ readAt: new Date\(\) \}/);
+});
+
+test("window snapshot and bridge inbox scans are scoped to the active conversation identity", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
+  const apiClient = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const windowScanSection = sliceBetween(service, /\n  scanWindowSnapshotInbox\(/, /\n  createDemoWindowSnapshot\(/);
+  const bridgeScanSection = sliceBetween(service, /\n  scanBridgeInbox\(/, /\n  async scanSendOperations\(/);
+  const matchSection = sliceBetween(service, /\n  private matchesBridgeEntryIdentity\(/, /\n  private buildBridgeOutboxListItem\(/);
+
+  assert.match(controller, /scanBridgeInbox\(@Body\(\) payload: IdentityFilterPayload = \{\}\)/);
+  assert.match(controller, /assertRequiredIdentityFilter\(payload, "wechat bridge inbox scan"\)/);
+  assert.match(controller, /return this\.wechat\.scanBridgeInbox\(payload \|\| \{\}\)/);
+  assert.match(controller, /captureWindowObserverOnce\(@Body\(\) payload: IdentityFilterPayload = \{\}\)/);
+  assert.match(controller, /assertRequiredIdentityFilter\(payload, "wechat window observer capture"\)/);
+  assert.match(controller, /return this\.wechat\.captureWindowObserverOnce\(payload \|\| \{\}\)/);
+  assert.match(controller, /scanWindowSnapshotInbox\(@Body\(\) payload: IdentityFilterPayload = \{\}\)/);
+  assert.match(controller, /assertRequiredIdentityFilter\(payload, "wechat window snapshot scan"\)/);
+  assert.match(controller, /return this\.wechat\.scanWindowSnapshotInbox\(payload \|\| \{\}\)/);
+  assert.match(controller, /function assertRequiredIdentityFilter\(payload: IdentityFilterPayload = \{\}, label: string\)/);
+
+  assert.match(apiClient, /captureWindowObserverOnce\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson\("\/wechat\/window-observer\/capture-once", requireIdentityFilters\(filters, "wechat window observer capture"\)\)/);
+  assert.match(apiClient, /scanBridgeInbox\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson<BridgeInboxScanResult>\("\/wechat\/bridge\/inbox\/scan", requireIdentityFilters\(filters, "wechat bridge inbox scan"\)\)/);
+  assert.match(apiClient, /scanWindowSnapshotInbox\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson<WindowSnapshotInboxScanResult>\("\/wechat\/window-snapshots\/inbox\/scan", requireIdentityFilters\(filters, "wechat window snapshot scan"\)\)/);
+  assert.match(apiClient, /ignored\?: BridgeInboxEntry\[\]/);
+  assert.match(apiClient, /ignored\?: Array<\{[\s\S]*reason: string/);
+
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("扫描真实微信窗口快照"\);\s*if \(!filters\) return;[\s\S]*scanWindowSnapshotInbox\(filters\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("采集当前微信窗口"\);\s*if \(!filters\) return;[\s\S]*captureWindowObserverOnce\(filters\)/);
+  assert.match(page, /async function captureDemoWindow\(account: WechatAccount, mode: "correct" \| "wrong_chat" \| "offline"\)[\s\S]*const filters = requireActiveBridgeIdentity\("模拟微信窗口"\);\s*if \(!filters\) return;/);
+  assert.match(page, /const accountWindowDemoDisabled = Boolean\(busy\) \|\| !safeSendIdentityReady \|\| activeConversation\?\.wechatAccountId !== account\.id/);
+  assert.match(page, /captureDemoWindow\(account, "correct"\)[\s\S]*disabled=\{accountWindowDemoDisabled\}/);
+  assert.match(page, /captureDemoWindow\(account, "wrong_chat"\)[\s\S]*disabled=\{accountWindowDemoDisabled\}/);
+  assert.match(page, /captureDemoWindow\(account, "offline"\)[\s\S]*disabled=\{accountWindowDemoDisabled\}/);
+  assert.match(page, /onClick=\{scanRealWindowSnapshots\} disabled=\{Boolean\(busy\) \|\| !safeSendIdentityReady\}/);
+  assert.match(page, /onClick=\{captureCurrentWindowOnce\} disabled=\{Boolean\(busy\) \|\| !safeSendIdentityReady\}/);
+  assert.match(page, /const result = await scanBridgeInbox\(filters\)/);
+  assert.match(page, /忽略 \$\{result\.ignored\.length\} 个非当前会话回执/);
+  assert.match(page, /忽略 \$\{result\.ignored\.length\} 个非当前会话文件/);
+
+  assert.match(windowScanSection, /scanWindowSnapshotInbox\(filter: IdentityFilter = \{\}\)/);
+  assert.match(windowScanSection, /const ignored: any\[\] = \[\]/);
+  assert.match(windowScanSection, /matchesWindowSnapshotIdentity\(snapshot, filter\)/);
+  assert.match(windowScanSection, /wechatAccountId: filter\.wechatAccountId/);
+  assert.match(windowScanSection, /conversationId: filter\.conversationId/);
+  assert.match(windowScanSection, /customerId: filter\.customerId/);
+  assert.match(windowScanSection, /reason: "identity_filter_mismatch"/);
+  assert.match(windowScanSection, /ignored,/);
+  assert.match(service, /captureWindowObserverOnce\(filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /const scan = this\.scanWindowSnapshotInbox\(filter\)/);
+  assert.match(service, /private matchesWindowSnapshotIdentity\(snapshotInput: unknown, filter: IdentityFilter = \{\}\)/);
+  assert.match(service, /diagnoseWechatWindowSnapshot\(\{ snapshot, account, conversations \}\)/);
+
+  assert.match(bridgeScanSection, /scanBridgeInbox\(filter: IdentityFilter = \{\}\)/);
+  assert.match(bridgeScanSection, /const ignored: any\[\] = \[\]/);
+  assert.match(bridgeScanSection, /this\.localStore\.getSendTask\(taskId\)/);
+  assert.match(bridgeScanSection, /matchesBridgeEntryIdentity\(\{ \.\.\.entry, data \}, task, filter\)/);
+  assert.match(bridgeScanSection, /identity_filter_mismatch/);
+  assert.match(bridgeScanSection, /ignored,/);
+  assert.match(matchSection, /const data = isPlainObject\(entry\?\.data\) \? entry\.data : \{\}/);
+  assert.match(matchSection, /data\.wechatAccountId/);
+  assert.match(matchSection, /data\.conversationId/);
+  assert.match(matchSection, /data\.customerId/);
+});
+
+test("manual automation run propagates the active conversation identity to every sub step", () => {
+  const automationController = readProjectFile("apps/api/src/automation/automation.controller.ts");
+  const automationService = readProjectFile("apps/api/src/automation/automation.service.ts");
+  const apiClient = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const runOnceSection = sliceBetween(automationService, /\n  async runOnce\(/, /\n  private recordRun\(/);
+  const readinessSection = sliceBetween(automationService, /\n  async readiness\(/, /\n  async runOnce\(/);
+
+  assert.match(automationController, /import \{ Body, Controller, Get, Post, Query \} from "@nestjs\/common"/);
+  assert.match(automationController, /readiness\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string,[\s\S]*@Query\("conversationId"\) conversationId\?: string,[\s\S]*@Query\("customerId"\) customerId\?: string/);
+  assert.match(automationController, /return this\.automation\.readiness\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.match(automationController, /runOnce\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(automationController, /return this\.automation\.runOnce\("manual", payload \|\| \{\}\)/);
+  assert.match(automationController, /start\(@Body\(\) payload: \{ wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
+  assert.match(automationController, /return this\.automation\.start\(payload \|\| \{\}\)/);
+
+  assert.match(apiClient, /getAutomationReadiness\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /new URLSearchParams\(\)/);
+  assert.match(apiClient, /automation\/readiness\$\{query \? `\?\$\{query\}` : ""\}/);
+  assert.match(apiClient, /runAutomationOnce\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson<AutomationRun>\("\/automation\/run-once", requireIdentityFilters\(filters, "automation run"\)\)/);
+  assert.match(apiClient, /startAutomation\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson<AutomationStatus>\("\/automation\/start", requireIdentityFilters\(filters, "automation start"\)\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("低价值自动处理"\);\s*if \(!filters\) return;[\s\S]*getAutomationReadiness\(filters\)/);
+  assert.match(page, /const filters = requireActiveBridgeIdentity\("后台自动化跑一轮"\);\s*if \(!filters\) return;[\s\S]*runAutomationOnce\(filters\)/);
+  assert.match(page, /getAutomationReadiness\(filters\)/);
+  assert.match(apiClient, /autoProcessLowValue\(filters: IdentityFilters = \{\}\)/);
+  assert.match(apiClient, /postJson<LowValueAutomationResult>\("\/design-jobs\/auto-process-low-value", requireIdentityFilters\(filters, "low-value automation"\)\)/);
+  assert.match(page, /runAutomationOnce\(filters\)/);
+  assert.match(page, /const filters = shouldStop \? null : requireActiveBridgeIdentity\("开启后台自动化"\)/);
+  assert.match(page, /if \(!shouldStop && !filters\)/);
+  assert.match(page, /await startAutomation\(filters \|\| \{\}\)/);
+  assert.match(page, /onClick=\{runAutomationCycle\} disabled=\{Boolean\(busy\) \|\| !safeSendIdentityReady\}/);
+  assert.match(page, /onClick=\{runLowValueAutomation\} disabled=\{Boolean\(busy\) \|\| !safeSendIdentityReady\}/);
+  assert.match(page, /onClick=\{toggleAutomationActive\}[\s\S]*disabled=\{Boolean\(busy\) \|\| !automationStatus\?\.enabled \|\| \(!automationStatus\?\.active && !safeSendIdentityReady\)\}/);
+  assert.match(automationService, /import \{ assertRequiredExpectedIdentity \} from "\.\.\/shared\/identity-expectation"/);
+
+  assert.match(readinessSection, /readiness\(filter: IdentityFields = \{\}\)/);
+  assert.match(readinessSection, /safeListDesignJobs\(filter\)/);
+  assert.match(readinessSection, /listSendTasks\?\.\(filter\)/);
+  assert.match(readinessSection, /listConversations\?\.\(filter\.wechatAccountId\)/);
+  assert.match(readinessSection, /filter\.conversationId && conversation\.id !== filter\.conversationId/);
+  assert.match(readinessSection, /filter\.customerId && conversation\.customerId !== filter\.customerId/);
+  assert.match(readinessSection, /listQuoteDrafts\?\.\(filter\)/);
+  assert.match(readinessSection, /listOrderDrafts\?\.\(filter\)/);
+  assert.match(runOnceSection, /runOnce\(trigger: AutomationRun\["trigger"\] = "manual", filter: IdentityFields = \{\}\)/);
+  assert.match(runOnceSection, /if \(this\.running\) \{/);
+  assert.match(runOnceSection, /assertRequiredAutomationIdentity\(filter\)/);
+  assert.match(runOnceSection, /const readiness = await this\.readiness\(filter\)/);
+  assert.match(runOnceSection, /pollActiveResults\(appConfig\.lowValueAutomationPollLimit, filter\)/);
+  assert.match(runOnceSection, /runLowValueAutomation\(filter\)/);
+  assert.match(runOnceSection, /scanTimeouts\(filter\)/);
+  assert.match(runOnceSection, /scanSendOperations\(filter\)/);
+  assert.match(runOnceSection, /\.\.\.filter,[\s\S]*limit: appConfig\.lowValueAutomationSendQueueLimit,[\s\S]*automationOnly: true/);
+  assert.match(runOnceSection, /scanLowValueAutoOrderDrafts\(filter\)/);
+  assert.match(runOnceSection, /scanLowValueOrderConfirmations\(filter\)/);
+  assert.match(runOnceSection, /scanLowValueOrderFollowups\(filter\)/);
+  assert.match(automationService, /function assertRequiredAutomationIdentity\(filter: IdentityFields = \{\}\)/);
+  assert.match(automationService, /expectedWechatAccountId: filter\.wechatAccountId/);
+  assert.match(automationService, /expectedConversationId: filter\.conversationId/);
+  assert.match(automationService, /expectedCustomerId: filter\.customerId/);
+  assert.match(automationService, /assertRequiredExpectedIdentity\([\s\S]*"automation run"/);
+});
+
+test("bridge ack validation includes customer identity", () => {
+  const rules = readProjectFile("packages/rules/sendGuard.js");
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const adapter = readProjectFile("apps/api/src/wechat/wechat-send-adapter.service.ts");
+  const apiClient = readProjectFile("apps/web/src/lib/api.ts");
+  const page = readProjectFile("apps/web/src/app/page.tsx");
+  const worker = readProjectFile("tools/wechat-bridge-worker.js");
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const schema = readProjectFile("prisma/schema.prisma");
+  const ackSection = service.slice(
+    service.indexOf("  acknowledgeBridgeSend("),
+    service.indexOf("  requeueSendTask("),
+  );
+  const outboxListSection = service.slice(
+    service.indexOf("  private buildBridgeOutboxListItem("),
+    service.indexOf("  private buildBridgeOutboxPreview("),
+  );
+  const outboxValidationSection = service.slice(
+    service.indexOf("  private validateBridgeAckOutboxPayload("),
+    service.indexOf("  private resolveBridgeAckAttempt("),
+  );
+
+  assert.match(adapter, /customerId: task\?\.conversation\?\.customerId \|\| task\?\.customerId \|\| payload\.customerId \|\| ""/);
+  assert.match(adapter, /customerId: target\.customerId \|\| ""/);
+  assert.match(page, /客户\{" "\}[\s\S]*preview\?\.customerId \|\| entry\?\.customerId \|\| dispatchEntry\?\.preflight\?\.expectedCustomerId \|\| "-"/);
+  assert.match(apiClient, /export type BridgeOutboxEntry = \{[\s\S]*customerId\?: string \| null/);
+  assert.match(outboxListSection, /customerId: entry\.customerId \|\| task\?\.conversation\?\.customerId \|\| task\?\.customerId \|\| null/);
+  assert.match(worker, /customerId: String\(entry\.customerId \|\| outboxPayload\.customerId \|\| outboxTarget\.customerId \|\| ""\)/);
+  assert.match(worker, /\{ key: "customerId", passed: Boolean\(entry\.customerId\) \}/);
+  assert.match(worker, /String\(target\.customerId \|\| ""\) === entryCustomerId/);
+  assert.match(worker, /String\(sendPlanTarget\.customerId \|\| ""\) === entryCustomerId/);
+  assert.match(worker, /const lock = acquireAccountLock\(accountId, config, entry\)/);
+  assert.match(worker, /const lockPath = path\.join\(config\.lockDir, `\$\{safeFileSegment\(accountId\)\}\.lock`\)/);
+  assert.match(worker, /conversationId: String\(entry\.conversationId \|\| ""\)/);
+  assert.match(worker, /customerId: String\(entry\.customerId \|\| ""\)/);
+  assert.match(schema, /model WechatSendTask \{[\s\S]*customerId\s+String\?/);
+  assert.match(schema, /@@index\(\[customerId\]\)/);
+  assert.match(store, /customerId: payload\.customerId \|\| binding\.customerId \|\| null/);
+  assert.match(store, /customerId: conversation\?\.customerId \|\| designJob\?\.customerId \|\| quoteDraft\?\.customerId \|\| null/);
+  assert.match(service, /customerId: binding\.customerId/);
+  assert.match(service, /customerId: context\.conversation\?\.customerId \|\| context\.designJob\?\.customerId \|\| context\.quoteDraft\?\.customerId \|\| null/);
+  assert.match(rules, /key: "ackCustomerPresent"/);
+  assert.match(rules, /key: "ackCustomerMatches"/);
+  assert.match(rules, /payload\.customerId === \(task\?\.conversation\?\.customerId \|\| task\?\.customerId\)/);
+  assert.match(ackSection, /customerId\?: string/);
+  assert.match(ackSection, /customerId: payload\.customerId \|\| ""/);
+  assert.match(outboxValidationSection, /key: "ackCustomerId"/);
+  assert.match(outboxValidationSection, /key: "customerId"/);
+  assert.match(outboxValidationSection, /String\(target\.customerId \|\| ""\) === String\(task\?\.conversation\?\.customerId \|\| task\?\.customerId \|\| ""\)/);
+  assert.match(outboxValidationSection, /String\(sendPlanTarget\.customerId \|\| ""\) === String\(task\?\.conversation\?\.customerId \|\| task\?\.customerId \|\| ""\)/);
+});
+
+test("manual conversation locks inherit account conversation and customer identity", () => {
+  const designJobs = readProjectFile("apps/api/src/design-jobs/design-jobs.service.ts");
+  const quotes = readProjectFile("apps/api/src/quotes/quotes.service.ts");
+
+  const designLockCalls = (designJobs.match(/setConversationManualLock\(job\.conversationId,\s*\{\s*\.\.\.expectedIdentityFromRecord\(job\)/g) || []).length;
+  assert.equal(designLockCalls, 4);
+
+  const quoteLockCalls = (quotes.match(/setConversationManualLock\(designJob\.conversationId,\s*\{\s*\.\.\.expectedIdentityFromRecord\(\{\s*\.\.\.designJob,\s*customerId: quote\.customerId,\s*\}\)/g) || []).length;
+  assert.equal(quoteLockCalls, 2);
+
+  assert.match(
+    quotes,
+    /setConversationManualLock\(conversationId,\s*\{\s*\.\.\.expectedIdentityFromRecord\(\{\s*\.\.\.designJob,\s*customerId: quote\.customerId,\s*\}\)/,
+  );
+});
+
+test("local store nested business hydration keeps quote order and send task identity isolated", () => {
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const sendHydration = sliceBetween(store, /\n  private hydrateSendTask\(/, /\n  private recordMatchesConversationForHydration\(/);
+  const quoteHydration = sliceBetween(store, /\n  private hydrateQuoteDraft\(/, /\n  private hydrateOrderDraft\(/);
+  const orderHydration = sliceBetween(store, /\n  private hydrateOrderDraft\(/, /\n  private findOrderConfirmationSendTask\(/);
+  const orderSendTaskLookup = sliceBetween(store, /\n  private findOrderConfirmationSendTask\(/, /\n  private orderFollowupType\(/);
+  const sendAttemptHydration = sliceBetween(store, /\n  private hydrateSendAttempt\(/, /\n  private hydrateQuoteDraft\(/);
+  const sendBindingValidation = sliceBetween(store, /\n  private validateSendTaskBinding\(/, /\n  private validateSendTaskImagePayload\(/);
+  const quoteBindingValidation = sliceBetween(store, /\n  private validateStoredQuoteDraftIdentity\(/, /\n  listQuoteDrafts\(/);
+  const orderBindingValidation = sliceBetween(store, /\n  private validateStoredOrderDraftBinding\(/, /\n  createSendAttempt\(/);
+
+  assert.match(store, /private designJobMatchesRecordIdentity\(job: any, record: any\)/);
+  assert.match(store, /private quoteDraftMatchesRecordIdentity\(quote: any, record: any\)/);
+  assert.match(store, /private sendTaskMatchesRecordIdentity\(task: any, record: any\)/);
+  assert.match(store, /metadata\.sendPlan\?\.target/);
+  assert.match(sendHydration, /this\.designJobMatchesRecordIdentity\(item, task\)/);
+  assert.match(sendHydration, /this\.quoteDraftMatchesRecordIdentity\(item, task\)/);
+  assert.match(sendAttemptHydration, /this\.sendTaskMatchesRecordIdentity\(item, attempt\)/);
+  assert.match(quoteHydration, /this\.designJobMatchesRecordIdentity\(item, quote\)/);
+  assert.match(quoteHydration, /this\.sendTaskMatchesRecordIdentity\(item, \{ \.\.\.quote, quoteDraftId: quote\.id \}\)/);
+  assert.match(quoteHydration, /designJob[\s\S]*item\.designJobId === designJob\.id/);
+  assert.match(orderHydration, /this\.quoteDraftMatchesRecordIdentity\(item, order\)/);
+  assert.match(orderHydration, /this\.designJobMatchesRecordIdentity\(item, order\)/);
+  assert.match(orderHydration, /designJob[\s\S]*item\.designJobId === designJob\.id/);
+  assert.match(sendBindingValidation, /this\.recordMatchesConversationForHydration\(payload, item\)/);
+  assert.match(sendBindingValidation, /this\.quoteDraftMatchesRecordIdentity\(item, payload\)/);
+  assert.match(sendBindingValidation, /this\.designJobMatchesRecordIdentity\(item, \{ \.\.\.payload, designJobId \}\)/);
+  assert.match(quoteBindingValidation, /this\.designJobMatchesRecordIdentity\(item, quoteDraft\)/);
+  assert.match(quoteBindingValidation, /this\.recordMatchesConversationForHydration\(designJob, item\)/);
+  assert.match(quoteBindingValidation, /designJob[\s\S]*item\.designJobId === designJob\.id/);
+  assert.match(orderBindingValidation, /this\.quoteDraftMatchesRecordIdentity\(item, orderDraft\)/);
+  assert.match(orderBindingValidation, /this\.designJobMatchesRecordIdentity\(item, orderDraft\)/);
+  assert.match(orderBindingValidation, /this\.recordMatchesConversationForHydration\(orderDraft, item\)/);
+  assert.match(orderBindingValidation, /designJob[\s\S]*item\.designJobId === designJob\.id/);
+  assert.match(orderSendTaskLookup, /this\.isOrderConfirmationSendTask\(task, order\) && this\.sendTaskMatchesRecordIdentity\(task, order\)/);
+  assert.match(orderSendTaskLookup, /this\.isOrderFollowupSendTask\(task, order\) && this\.sendTaskMatchesRecordIdentity\(task, order\)/);
+});
+
+test("local store target identity sources reject drifted stored bindings", () => {
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const sourceResolution = sliceBetween(store, /\n  private resolveTargetIdentitySource\(/, /\n  private matchesIdentityFilter\(/);
+
+  assert.match(store, /private findIdentitySourceRecord\(records: any\[\], recordId: unknown, label: string\)/);
+  assert.match(store, /private assertIdentitySourceRecordIsCurrent\(record: any, label: string\)/);
+  assert.match(store, /private recordMatchesStoredIdentityBinding\(record: any\)/);
+  assert.match(store, /record\?\.identityBinding \|\| record\?\.guardSnapshot\?\.binding/);
+  assert.match(store, /stored identity no longer matches record/);
+  assert.match(sourceResolution, /this\.findIdentitySourceRecord\(data\.sendTasks, target\.sendTaskId, "send task"\)/);
+  assert.match(sourceResolution, /this\.findIdentitySourceRecord\(data\.orderDrafts, target\.orderDraftId, "order draft"\)/);
+  assert.match(sourceResolution, /this\.quoteDraftMatchesRecordIdentity\(item, orderDraft\)/);
+  assert.match(sourceResolution, /this\.designJobMatchesRecordIdentity\(item, designJobSource\)/);
+  assert.doesNotMatch(sourceResolution, /data\.sendTasks\.find\(\(item\) => item\.id === target\.sendTaskId\)/);
+  assert.doesNotMatch(sourceResolution, /data\.designJobs\.find\(\(item\) => item\.id === \(target\.designJobId/);
+});
+
+test("local design job validation uses full conversation identity lookup", () => {
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const validation = sliceBetween(store, /\n  private validateDesignJobIdentity\(/, /\n  private validateDesignRevisionBinding\(/);
+
+  assert.match(validation, /this\.recordMatchesConversationForHydration\(payload, item\)/);
+  assert.doesNotMatch(validation, /data\.conversations\.find\(\(item\) => item\.id === payload\.conversationId\)/);
+});
+
+test("local optional conversation binding uses full identity lookup", () => {
+  const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
+  const optionalBinding = sliceBetween(store, /\n  private validateOptionalConversationBinding\(/, /\n  listWechatWindowSnapshots\(/);
+
+  assert.match(optionalBinding, /this\.recordMatchesConversationForHydration\(/);
+  assert.match(optionalBinding, /conversationId: requestedConversationId/);
+  assert.match(optionalBinding, /wechatAccountId: requestedWechatAccountId/);
+  assert.match(optionalBinding, /requestedCustomerId && requestedCustomerId !== conversation\?\.customerId/);
+  assert.doesNotMatch(store, /data\.conversations\.find\(\(item\) => item\.id ===/);
+  assert.doesNotMatch(store, /conversations\.find\(\(item\) => item\.id ===/);
+});
+
+test("wechat send enqueue and manual lock resolve local conversations by account identity", () => {
+  const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
+  const queueGuard = sliceBetween(service, /\n  private async assertConversationCanQueueSend\(/, /\n  validateSendTask\(/);
+  const manualLock = sliceBetween(service, /\n  async setConversationManualLock\(/, /\n  async processInboundMessage\(/);
+
+  const scopedQueueGuardCalls = (
+    service.match(/assertConversationCanQueueSend\(\{\s*conversationId: params\.conversationId,\s*wechatAccountId: params\.wechatAccountId,\s*\}\)/g) || []
+  ).length;
+  assert.equal(scopedQueueGuardCalls, 3);
+
+  assert.match(service, /private findLocalConversationForIdentity\(identity: \{ conversationId\?: string; wechatAccountId\?: string \}\)/);
+  assert.match(service, /listConversations\(identity\.wechatAccountId \|\| undefined\)/);
+  assert.match(queueGuard, /this\.findLocalConversationForIdentity\(identity\)/);
+  assert.match(queueGuard, /conversation does not belong to selected wechat account/);
+  assert.match(manualLock, /this\.findLocalConversationForIdentity\(\{\s*conversationId: id,\s*wechatAccountId: payload\.expectedWechatAccountId,\s*\}\)/);
+  assert.doesNotMatch(queueGuard, /listConversations\(\)\.find\(\(item\) => item\.id === conversationId\)/);
+  assert.doesNotMatch(manualLock, /listConversations\(\)\.find\(\(conversation: any\) => conversation\.id === id\)/);
 });

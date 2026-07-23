@@ -1,2 +1,2 @@
 @echo off
-call "D:\zhinengkefu\desktop\status-stable-desktop.cmd" %*
+call "%~dp0desktop\status-stable-desktop.cmd" %*

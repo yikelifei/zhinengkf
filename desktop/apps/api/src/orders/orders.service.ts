@@ -4,7 +4,11 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
-import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  assertExpectedIdentity,
+  assertRequiredExpectedIdentity,
+  ExpectedIdentityPayload,
+} from "../shared/identity-expectation";
 
 const {
   buildOrderConfirmationCustomerMessage,
@@ -45,6 +49,7 @@ export class OrdersService {
   async confirmationPreview(id: string, expected: ExpectedIdentityPayload = {}) {
     const order = await this.getOrderDraft(id);
     if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertRequiredExpectedIdentity(expected, "order draft");
     assertExpectedIdentity(order, expected, "order draft");
     const warnings = this.orderConfirmationPreviewWarnings(order);
     return {
@@ -57,6 +62,7 @@ export class OrdersService {
   async createFromQuote(quoteId: string, expected: ExpectedIdentityPayload = {}) {
     const quote = await this.getQuote(quoteId);
     if (!quote) throw new BadRequestException(`没有找到报价草稿：${quoteId}`);
+    assertRequiredExpectedIdentity(expected, "quote draft");
     assertExpectedIdentity(quote, expected, "quote draft");
 
     const decision = buildOrderDraftFromQuote(quote);
@@ -90,6 +96,7 @@ export class OrdersService {
   async update(id: string, patch: OrderDraftUpdatePatch & ExpectedIdentityPayload) {
     const current = await this.getOrderDraft(id);
     if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertRequiredExpectedIdentity(patch, "order draft");
     assertExpectedIdentity(current, patch, "order draft");
 
     const data = cleanOrderDraftPatch(patch || {});
@@ -156,6 +163,7 @@ export class OrdersService {
   ) {
     const current = await this.getOrderDraft(id);
     if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertRequiredExpectedIdentity(payload, "order draft");
     assertExpectedIdentity(current, payload, "order draft");
     if (!["draft", "confirmed"].includes(current.status)) {
       throw new BadRequestException("订单已进入生产、完成或取消状态，不能再修改选中的效果图。");

@@ -121,9 +121,9 @@ function printReport(report) {
   }
   console.log(report.ok ? "[doctor] stable desktop stack is healthy." : "[doctor] stable desktop stack is not healthy.");
   if (!report.ok) {
-    console.log("[doctor] easiest fix: run C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd and keep that window open.");
-    console.log("[doctor] next step: run C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop-foreground.cmd and keep that window open.");
-    console.log("[doctor] if ports are occupied by old services, run C:\\Users\\27808\\Desktop\\zhinengkefu\\stop-stable-desktop.cmd first.");
+    console.log("[doctor] easiest fix: run E:\\zhinengkefu\\repair-stable-desktop.cmd and keep that window open.");
+    console.log("[doctor] next step: run E:\\zhinengkefu\\start-stable-desktop-foreground.cmd and keep that window open.");
+    console.log("[doctor] if ports are occupied by old services, run E:\\zhinengkefu\\stop-stable-desktop.cmd first.");
     console.log(`[doctor] logs: ${path.join(report.runtimeDir, "logs")}`);
   }
 }
@@ -242,7 +242,7 @@ function checkStableRuntimeVersion(portOwners = new Map()) {
     ok: true,
     severity: "warn",
     label: "Stable runtime version",
-    detail: `old launcher process is still running (${stale.map((item) => `pid=${item.pid}`).join(", ")}); close the Smart Kefu Services window once, then start C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop.cmd again`,
+        detail: `old launcher process is still running (${stale.map((item) => `pid=${item.pid}`).join(", ")}); close the Smart Kefu Services window once, then start E:\\zhinengkefu\\start-stable-desktop.cmd again`,
   };
 }
 

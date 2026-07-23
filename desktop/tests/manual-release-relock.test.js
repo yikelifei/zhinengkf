@@ -14,6 +14,15 @@ const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
 const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
 
+function demoExpectedIdentity(extra = {}) {
+  return {
+    ...extra,
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  };
+}
+
 test("approved high-value budget design job stays in manual review after image approval", async () => {
   const reviewLogs = [];
   const notifications = [];
@@ -511,11 +520,11 @@ test("manual-approved design image send relocks conversation when queueing fails
 
   await assert.rejects(
     () =>
-      service.quickConfirmAndQueueSend("design_1", {
+      service.quickConfirmAndQueueSend("design_1", demoExpectedIdentity({
         releaseManualLock: true,
         reviewer: "Alice",
         releaseReason: "manual_approve_send",
-      }),
+      })),
     /binding failed/,
   );
 
@@ -584,11 +593,11 @@ test("manual-approved quote send relocks conversation when queueing fails", asyn
 
   await assert.rejects(
     () =>
-      service.queueSend("quote_1", {
+      service.queueSend("quote_1", demoExpectedIdentity({
         releaseManualLock: true,
         owner: "Alice",
         releaseReason: "manual_approve_quote",
-      }),
+      })),
     /binding failed/,
   );
 
@@ -635,7 +644,7 @@ test("design image send refuses to release manual lock without explicit manual r
   );
 
   await assert.rejects(
-    () => service.quickConfirmAndQueueSend("design_1", { releaseManualLock: true, reviewer: "Alice" }),
+    () => service.quickConfirmAndQueueSend("design_1", demoExpectedIdentity({ releaseManualLock: true, reviewer: "Alice" })),
     /需要填写明确的人工处理原因/,
   );
 
@@ -684,7 +693,7 @@ test("automatic design image send refuses high-value budget before queueing", as
   );
 
   await assert.rejects(
-    () => service.quickConfirmAndQueueSend("design_1"),
+    () => service.quickConfirmAndQueueSend("design_1", demoExpectedIdentity()),
     /manual approval: manual_review_required/,
   );
 
@@ -730,11 +739,11 @@ test("manual-approved design image send writes review log with send task id", as
     {},
   );
 
-  await service.quickConfirmAndQueueSend("design_1", {
+  await service.quickConfirmAndQueueSend("design_1", demoExpectedIdentity({
     releaseManualLock: true,
     reviewer: "Alice",
     releaseReason: "manual_approve_send",
-  });
+  }));
 
   assert.equal(reviewLogs.length, 1);
   assert.equal(reviewLogs[0].targetType, "design_job");
@@ -792,7 +801,7 @@ test("quote send refuses to release manual lock without explicit manual reason",
   );
 
   await assert.rejects(
-    () => service.queueSend("quote_1", { releaseManualLock: true, owner: "Alice" }),
+    () => service.queueSend("quote_1", demoExpectedIdentity({ releaseManualLock: true, owner: "Alice" })),
     /需要填写明确的人工处理原因/,
   );
 
@@ -853,7 +862,7 @@ test("quote send refuses high-value total without manual release", async () => {
   );
 
   await assert.rejects(
-    () => service.queueSend("quote_1", {}),
+    () => service.queueSend("quote_1", demoExpectedIdentity()),
     /高价值报价必须先由人工审核/,
   );
   assert.equal(enqueueCalled, false);
@@ -914,7 +923,7 @@ test("quote send refuses high-value budget without manual release", async () => 
   );
 
   await assert.rejects(
-    () => service.queueSend("quote_1", {}),
+    () => service.queueSend("quote_1", demoExpectedIdentity()),
     /高价值报价必须先由人工审核/,
   );
   assert.equal(enqueueCalled, false);
@@ -984,7 +993,7 @@ test("quote preview and send readiness warnings stay readable Chinese", async ()
     /quote draft identity mismatch: wechatAccountId expected wechat_2, got wechat_1/,
   );
   await assert.rejects(
-    () => service.queueSend("quote_1", {}),
+    () => service.queueSend("quote_1", demoExpectedIdentity()),
     /付款凭证需要先人工核验金额和收款账户/,
   );
 });
@@ -1042,11 +1051,11 @@ test("manual-approved quote send writes review log with send task id", async () 
     },
   );
 
-  await service.queueSend("quote_1", {
+  await service.queueSend("quote_1", demoExpectedIdentity({
     releaseManualLock: true,
     owner: "Alice",
     releaseReason: "manual_approve_quote",
-  });
+  }));
 
   assert.equal(reviewLogs.length, 1);
   assert.equal(reviewLogs[0].targetType, "quote");
@@ -1106,7 +1115,7 @@ test("quote send refuses payment proof review quotes before payment verification
   );
 
   await assert.rejects(
-    () => service.queueSend("quote_1", {}),
+    () => service.queueSend("quote_1", demoExpectedIdentity()),
     /付款凭证需要先人工核验金额和收款账户/,
   );
   assert.equal(enqueueCalled, false);
@@ -1375,7 +1384,7 @@ test("queued quote selection cannot be changed by later customer image selection
   );
 
   await assert.rejects(
-    () => service.createFromDesignJob("design_1", "image_2"),
+    () => service.createFromDesignJob("design_1", "image_2", demoExpectedIdentity()),
     /quote selection is locked/,
   );
 
@@ -1528,7 +1537,7 @@ test("manual quote revision is blocked after order draft exists", async () => {
   );
 
   await assert.rejects(
-    () => service.reviseSelectedImage("quote_1", { selectedImageId: "image_2" }),
+    () => service.reviseSelectedImage("quote_1", demoExpectedIdentity({ selectedImageId: "image_2" })),
     /already has an order draft/,
   );
 
@@ -1701,7 +1710,7 @@ test("manual order revision is blocked while confirmation send task is active", 
   );
 
   await assert.rejects(
-    () => service.reviseSelectedImage("order_1", { selectedImageId: "image_2" }),
+    () => service.reviseSelectedImage("order_1", demoExpectedIdentity({ selectedImageId: "image_2" })),
     /订单选图暂不能修改/,
   );
 
@@ -1753,15 +1762,15 @@ test("manual order revision explains missing or wrong selected image in Chinese"
   );
 
   await assert.rejects(
-    () => service.reviseSelectedImage("order_1", {}),
+    () => service.reviseSelectedImage("order_1", demoExpectedIdentity()),
     /请选择要改成哪一张候选图/,
   );
   await assert.rejects(
-    () => service.reviseSelectedImage("order_1", { selectedImageId: "missing_image" }),
+    () => service.reviseSelectedImage("order_1", demoExpectedIdentity({ selectedImageId: "missing_image" })),
     /没有找到这张候选图/,
   );
   await assert.rejects(
-    () => service.reviseSelectedImage("order_1", { selectedImageId: "image_2" }),
+    () => service.reviseSelectedImage("order_1", demoExpectedIdentity({ selectedImageId: "image_2" })),
     /不属于当前订单的设计任务/,
   );
 });
@@ -1831,7 +1840,7 @@ test("order service customer-facing failures stay readable Chinese", async () =>
     },
   );
   await assert.rejects(
-    () => service.createFromQuote(quote.id),
+    () => service.createFromQuote(quote.id, demoExpectedIdentity()),
     (error) => {
       assert.match(error.message, /报价还不能生成订单草稿/);
       assert.match(error.message, /客户选中的效果图|数量|总价/);
@@ -1840,7 +1849,7 @@ test("order service customer-facing failures stay readable Chinese", async () =>
     },
   );
   await assert.rejects(
-    () => service.update(order.id, {}),
+    () => service.update(order.id, demoExpectedIdentity()),
     (error) => {
       assert.match(error.message, /订单草稿没有可更新的字段/);
       assert.doesNotMatch(error.message, /order draft update has no allowed fields/);
@@ -1848,7 +1857,7 @@ test("order service customer-facing failures stay readable Chinese", async () =>
     },
   );
   await assert.rejects(
-    () => service.update(order.id, { status: "fulfilled" }),
+    () => service.update(order.id, demoExpectedIdentity({ status: "fulfilled" })),
     (error) => {
       assert.match(error.message, /订单未绑定客户选中的效果图，不能标记为完成/);
       assert.doesNotMatch(error.message, /selectedImageId|order has no selected image/);
@@ -1856,7 +1865,7 @@ test("order service customer-facing failures stay readable Chinese", async () =>
     },
   );
   await assert.rejects(
-    () => service.reviseSelectedImage(order.id, { selectedImageId: "image_1" }),
+    () => service.reviseSelectedImage(order.id, demoExpectedIdentity({ selectedImageId: "image_1" })),
     (error) => {
       assert.match(error.message, /不能再修改选中的效果图/);
       assert.doesNotMatch(error.message, /order selection can only be revised/);
@@ -1981,9 +1990,537 @@ test("order confirmation preview warns when selected image is missing", async ()
     { create: async () => ({}) },
   );
 
-  const preview = await service.confirmationPreview("order_1");
+  const preview = await service.confirmationPreview("order_1", demoExpectedIdentity());
 
   assert.ok(preview.warnings.includes("订单还没有选图"));
   assert.doesNotMatch(preview.warnings.join(" "), /order has no selected image/);
   assert.ok(preview.message.length > 20);
+});
+
+// Migrated from the former C-drive worktree (6 unique regression tests).
+
+test("manual review quote and order logs keep account conversation and customer identity", async () => {
+  const reviewLogs = [];
+  const notifications = [];
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    status: "manual_review",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_1",
+    selectedImage: { id: "image_1", designJobId: "design_1" },
+    designJob: {
+      id: "design_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    },
+  };
+  const order = {
+    id: "order_1",
+    quoteDraftId: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    wechatAccountId: "wechat_1",
+    status: "manual_review",
+    paymentStatus: "unpaid",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      createReviewLog: (payload) => {
+        reviewLogs.push(payload);
+        return payload;
+      },
+    },
+    {},
+    {
+      update: async (id, payload) => ({ ...quote, id, status: payload.status }),
+    },
+    {
+      create: async (...args) => {
+        notifications.push(args);
+        return {};
+      },
+    },
+    {
+      getById: async () => order,
+      update: async (id, payload) => ({ ...order, id, status: payload.status }),
+    },
+    {
+      queueOrderConfirmation: async () => {
+        throw new Error("should not queue confirmation for reject order");
+      },
+      queueOrderFollowup: async () => {
+        throw new Error("should not queue followup for reject order");
+      },
+    },
+  );
+
+  await service.reviewQuote("quote_1", {
+    decision: "reject_quote",
+    reviewer: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+  await service.reviewOrder("order_1", {
+    decision: "reject_order",
+    reviewer: "Alice",
+    expectedWechatAccountId: "wechat_1",
+    expectedConversationId: "conversation_1",
+    expectedCustomerId: "customer_1",
+  });
+
+  assert.equal(notifications.length, 2);
+  for (const notification of notifications) {
+    assert.equal(notification[3].wechatAccountId, "wechat_1");
+    assert.equal(notification[3].conversationId, "conversation_1");
+    assert.equal(notification[3].customerId, "customer_1");
+  }
+  assert.equal(reviewLogs[0].metadata.wechatAccountId, "wechat_1");
+  assert.equal(reviewLogs[0].metadata.conversationId, "conversation_1");
+  assert.equal(reviewLogs[0].metadata.customerId, "customer_1");
+  assert.equal(reviewLogs[1].metadata.wechatAccountId, "wechat_1");
+  assert.equal(reviewLogs[1].metadata.conversationId, "conversation_1");
+  assert.equal(reviewLogs[1].metadata.customerId, "customer_1");
+});
+
+test("manual review decisions require full expected identity before mutating records", async () => {
+  const calls = [];
+  const job = {
+    id: "design_1",
+    status: "manual_review",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    status: "manual_review",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_1",
+    selectedImage: { id: "image_1", designJobId: "design_1" },
+    designJob: {
+      id: "design_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+      conversation: {
+        id: "conversation_1",
+        wechatAccountId: "wechat_1",
+        customerId: "customer_1",
+      },
+    },
+  };
+  const order = {
+    id: "order_1",
+    status: "manual_review",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const service = new ReviewsService(
+    {},
+    {
+      getDesignJob: () => job,
+      getQuoteDraft: () => quote,
+      updateDesignJob: () => {
+        calls.push("updateDesignJob");
+        throw new Error("should not update design job without identity");
+      },
+      createReviewLog: () => {
+        calls.push("createReviewLog");
+        throw new Error("should not create review log without identity");
+      },
+    },
+    {},
+    {
+      update: async () => {
+        calls.push("quoteUpdate");
+        throw new Error("should not update quote without identity");
+      },
+      queueSend: async () => {
+        calls.push("quoteQueueSend");
+        throw new Error("should not queue quote without identity");
+      },
+    },
+    {
+      create: async () => {
+        calls.push("notification");
+        throw new Error("should not notify without identity");
+      },
+    },
+    {
+      getById: async () => order,
+      update: async () => {
+        calls.push("orderUpdate");
+        throw new Error("should not update order without identity");
+      },
+    },
+    {
+      queueOrderConfirmation: async () => {
+        calls.push("queueOrderConfirmation");
+        throw new Error("should not queue order without identity");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.reviewDesignJob("design_1", { decision: "approve_images", reviewer: "Alice" }),
+    /design job identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.reviewQuote("quote_1", { decision: "request_followup", reviewer: "Alice" }),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.reviewOrder("order_1", { decision: "approve_confirmation", reviewer: "Alice" }),
+    /order draft identity expectation required/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("quote write operations require full expected identity before mutating records", async () => {
+  const calls = [];
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 50,
+    unitPrice: 200,
+    totalPrice: 10000,
+    totalCost: 7000,
+    profit: 3000,
+    status: "manual_review",
+    paymentStatus: "unpaid",
+    selectedImage: { id: "image_1", designJobId: "design_1" },
+    designJob: {
+      id: "design_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      bundle: { items: [] },
+      conversation: {
+        id: "conversation_1",
+        customerId: "customer_1",
+        wechatAccountId: "wechat_1",
+      },
+      images: [
+        { id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1 },
+        { id: "image_2", imageId: "candidate_2", designJobId: "design_1", position: 2 },
+      ],
+    },
+  };
+  const service = new QuotesService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      getDesignJob: () => quote.designJob,
+      listQuoteDrafts: () => [],
+      createQuoteFromDesignJob: () => {
+        calls.push("createQuoteFromDesignJob");
+        throw new Error("should not create quote from design job without identity");
+      },
+      updateQuoteDraft: () => {
+        calls.push("updateQuoteDraft");
+        throw new Error("should not update quote without identity");
+      },
+      listOrderDrafts: () => [],
+      createReviewLog: () => {
+        calls.push("createReviewLog");
+        throw new Error("should not create review log without identity");
+      },
+    },
+    {
+      createFromQuote: async () => {
+        calls.push("createOrder");
+        throw new Error("should not create order without identity");
+      },
+      update: async () => {
+        calls.push("updateOrder");
+        throw new Error("should not update order without identity");
+      },
+    },
+    {
+      enqueueQuoteMessage: async () => {
+        calls.push("enqueueQuoteMessage");
+        throw new Error("should not queue quote without identity");
+      },
+      setConversationManualLock: async () => {
+        calls.push("manualLock");
+        throw new Error("should not change lock without identity");
+      },
+      queueOrderConfirmation: async () => {
+        calls.push("queueOrderConfirmation");
+        throw new Error("should not queue order without identity");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.update("quote_1", { status: "manual_review" }),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.reviseSelectedImage("quote_1", { selectedImageId: "image_2" }),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.queueSend("quote_1", { releaseManualLock: true, releaseReason: "manual_quote_send" }),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.verifyPaymentProofAndQueueConfirmation("quote_1", { paymentStatus: "paid" }),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.createFromDesignJob("design_1", "image_1"),
+    /quote design job identity expectation required/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("order write operations require full expected identity before mutating records", async () => {
+  const calls = [];
+  const designJob = {
+    id: "design_1",
+    customerId: "customer_1",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    conversation: {
+      id: "conversation_1",
+      customerId: "customer_1",
+      wechatAccountId: "wechat_1",
+    },
+    images: [{ id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1 }],
+  };
+  const quote = {
+    id: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    selectedImageId: "image_1",
+    quantity: 20,
+    unitPrice: 200,
+    totalPrice: 4000,
+    totalCost: 2600,
+    profit: 1400,
+    status: "sent",
+    paymentStatus: "unpaid",
+    selectedImage: designJob.images[0],
+    designJob,
+  };
+  const order = {
+    id: "order_1",
+    quoteDraftId: "quote_1",
+    designJobId: "design_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    wechatAccountId: "wechat_1",
+    selectedImageId: "image_1",
+    status: "confirmed",
+    paymentStatus: "unpaid",
+    selectedImage: designJob.images[0],
+    quoteDraft: quote,
+    designJob,
+  };
+  const service = new OrdersService(
+    {},
+    {
+      getQuoteDraft: () => quote,
+      getOrderDraft: () => order,
+      getDesignJob: () => designJob,
+      upsertOrderDraftFromQuote: () => {
+        calls.push("upsertOrderDraftFromQuote");
+        throw new Error("should not create order without identity");
+      },
+      updateOrderDraft: () => {
+        calls.push("updateOrderDraft");
+        throw new Error("should not update order without identity");
+      },
+      updateQuoteDraft: () => {
+        calls.push("updateQuoteDraft");
+        throw new Error("should not sync quote without identity");
+      },
+      createReviewLog: () => {
+        calls.push("createReviewLog");
+        throw new Error("should not log order change without identity");
+      },
+    },
+    {
+      create: async () => {
+        calls.push("notification");
+        throw new Error("should not notify without identity");
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => service.createFromQuote("quote_1"),
+    /quote draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.update("order_1", { status: "manual_review" }),
+    /order draft identity expectation required/,
+  );
+  await assert.rejects(
+    () => service.reviseSelectedImage("order_1", { selectedImageId: "image_1" }),
+    /order draft identity expectation required/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("design job write operations require full expected identity before mutating records", async () => {
+  const calls = [];
+  const job = {
+    id: "design_1",
+    requestId: "request_1",
+    externalJobId: "external_1",
+    status: "quick_confirm",
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+    images: [
+      {
+        id: "image_1",
+        imageId: "candidate_1",
+        position: 1,
+        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
+      },
+    ],
+  };
+  const service = new DesignJobsService(
+    {
+      designJob: {
+        findUnique: async () => job,
+        update: async () => {
+          calls.push("prismaDesignJobUpdate");
+          throw new Error("should not update design job without identity");
+        },
+      },
+      designImageCandidate: {
+        updateMany: async () => {
+          calls.push("imageUpdateMany");
+          throw new Error("should not update images without identity");
+        },
+        update: async () => {
+          calls.push("imageUpdate");
+          throw new Error("should not update images without identity");
+        },
+      },
+    },
+    {
+      getDesignJobResults: async () => {
+        calls.push("getDesignJobResults");
+        throw new Error("should not poll design platform without identity");
+      },
+      cancelDesignJob: async () => {
+        calls.push("cancelDesignJob");
+        throw new Error("should not cancel design platform job without identity");
+      },
+    },
+    {
+      getDesignJob: () => job,
+      updateDesignJob: () => {
+        calls.push("updateDesignJob");
+        throw new Error("should not update design job without identity");
+      },
+      attachDesignAssetsToJob: () => {
+        calls.push("attachAssets");
+        throw new Error("should not attach assets without identity");
+      },
+      createDesignRevision: () => {
+        calls.push("createRevision");
+        throw new Error("should not create revision without identity");
+      },
+      selectDesignImage: () => {
+        calls.push("selectDesignImage");
+        throw new Error("should not select image without identity");
+      },
+    },
+    {
+      create: async () => {
+        calls.push("notification");
+        throw new Error("should not notify without identity");
+      },
+    },
+    {},
+    {
+      enqueueDesignImages: async () => {
+        calls.push("enqueueDesignImages");
+        throw new Error("should not queue send without identity");
+      },
+    },
+    {
+      createFromDesignJob: async () => {
+        calls.push("createQuote");
+        throw new Error("should not create quote without identity");
+      },
+    },
+    {},
+  );
+
+  await assert.rejects(() => service.pollResult("design_1"), /design job identity expectation required/);
+  await assert.rejects(() => service.attachAssets("design_1", ["asset_1"]), /design job identity expectation required/);
+  await assert.rejects(() => service.requestRevision("design_1", { instruction: "换成红色" }), /design job identity expectation required/);
+  await assert.rejects(() => service.cancel("design_1"), /design job identity expectation required/);
+  await assert.rejects(() => service.quickConfirmAndQueueSend("design_1"), /design job identity expectation required/);
+  await assert.rejects(() => service.selectImage("design_1", { text: "选第1张" }), /design job identity expectation required/);
+  await assert.rejects(() => service.createQuote("design_1"), /design job identity expectation required/);
+  await assert.rejects(() => service.markManualReview("design_1"), /design job identity expectation required/);
+  await assert.rejects(() => service.retry("design_1"), /design job identity expectation required/);
+  assert.deepEqual(calls, []);
+});
+
+test("design text automation marks low-value and high-value queue levels separately", async () => {
+  const enqueuedTextMessages = [];
+  const service = new DesignJobsService(
+    {},
+    {},
+    {},
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueTextMessage: async (payload) => {
+        enqueuedTextMessages.push(payload);
+        return { id: `send_${enqueuedTextMessages.length}`, payload };
+      },
+    },
+    {},
+    {},
+  );
+  const lowValueJob = {
+    id: "design_low",
+    requestId: "request_low",
+    status: "submitted",
+    isHighValue: false,
+    budget: { mode: "per_box", amount: 180, quantity: 20 },
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    customerId: "customer_1",
+  };
+  const highValueJob = {
+    ...lowValueJob,
+    id: "design_high",
+    requestId: "request_high",
+    isHighValue: true,
+    budget: { mode: "total", amount: 15000, quantity: 50 },
+  };
+
+  await service.queueDesignTextMessage(lowValueJob, "低价值等待说明", "design-timeout-customer-explain");
+  await service.queueDesignTextMessage(highValueJob, "高价值等待说明", "design-timeout-customer-explain");
+
+  assert.equal(enqueuedTextMessages.length, 2);
+  assert.equal(enqueuedTextMessages[0].automation.source, "design-timeout-customer-explain");
+  assert.equal(enqueuedTextMessages[0].automation.valueLevel, "low");
+  assert.equal(enqueuedTextMessages[0].automation.queuedBy, "low_value_automation");
+  assert.equal(enqueuedTextMessages[1].automation.source, "design-timeout-customer-explain");
+  assert.equal(enqueuedTextMessages[1].automation.valueLevel, "high");
+  assert.equal(enqueuedTextMessages[1].automation.queuedBy, "manual_review_flow");
 });

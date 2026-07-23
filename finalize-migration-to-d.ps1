@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $oldPath = "C:\Users\27808\Desktop\zhinengkefu"
-$newPath = "D:\zhinengkefu"
+$newPath = "E:\zhinengkefu"
 $desktopPath = Join-Path $newPath "desktop"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runOnceKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce"

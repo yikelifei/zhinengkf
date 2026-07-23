@@ -5,6 +5,7 @@ import { DesignPlatformClient } from "../integrations/design-platform/design-pla
 import { LocalStoreService } from "../local-store/local-store.service";
 import { OrdersService } from "../orders/orders.service";
 import { appConfig } from "../shared/app-config";
+import { assertRequiredExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
@@ -443,6 +444,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
   private lastRun: AutomationRun | null = null;
   private recentRuns: AutomationRun[] = [];
   private runCount = 0;
+  private activeFilter: IdentityFields | null = null;
 
   constructor(
     private readonly designJobs: DesignJobsService,
@@ -459,26 +461,28 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     if (!appConfig.lowValueAutomationEnabled) return;
-    this.start();
-    if (appConfig.lowValueAutomationRunOnStart) {
-      setTimeout(() => {
-        void this.runOnce("startup");
-      }, 1500);
-    }
   }
 
   onModuleDestroy() {
     this.stop();
   }
 
-  start() {
-    if (this.timer) return this.status();
+  start(filter: IdentityFields = {}) {
+    assertRequiredAutomationIdentity(filter);
+    const normalizedFilter = normalizeAutomationIdentity(filter);
+    if (this.timer) {
+      if (automationIdentityKey(this.activeFilter || {}) !== automationIdentityKey(normalizedFilter)) {
+        throw new Error("automation already running for another conversation; stop it before switching identity");
+      }
+      return this.status();
+    }
+    this.activeFilter = normalizedFilter;
     this.startedAt = new Date().toISOString();
     const intervalMs = Math.max(3000, appConfig.lowValueAutomationIntervalMs);
     this.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
     this.timer = setInterval(() => {
       this.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
-      void this.runOnce("interval");
+      void this.runOnce("interval", this.activeFilter || {});
     }, intervalMs);
     this.timer.unref?.();
     return this.status();
@@ -488,6 +492,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.nextRunAt = null;
+    this.activeFilter = null;
     return this.status();
   }
 
@@ -499,6 +504,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       startedAt: this.startedAt,
       runningStartedAt: this.runningStartedAt,
       nextRunAt: this.nextRunAt,
+      activeFilter: this.activeFilter,
       intervalMs: Math.max(3000, appConfig.lowValueAutomationIntervalMs),
       processSendQueue: appConfig.lowValueAutomationProcessSendQueue,
       sendQueueLimit: appConfig.lowValueAutomationSendQueueLimit,
@@ -509,7 +515,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async readiness() {
+  async readiness(filter: IdentityFields = {}) {
     const checkedAt = new Date().toISOString();
     const checks: Array<{
       key: string;
@@ -557,11 +563,15 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       action: designPlatformHealth.ok ? undefined : "出图会转人工或等待重试，先启动设计平台再跑自动化。",
     });
 
-    const designJobs = await this.safeListDesignJobs();
-    const sendTasks = this.store?.listSendTasks?.() || [];
-    const conversations = this.store?.listConversations?.() || [];
-    const quoteDrafts = this.store?.listQuoteDrafts?.() || [];
-    const orderDrafts = this.store?.listOrderDrafts?.() || [];
+    const designJobs = await this.safeListDesignJobs(filter);
+    const sendTasks = this.store?.listSendTasks?.(filter) || [];
+    const conversations = (this.store?.listConversations?.(filter.wechatAccountId) || []).filter((conversation: any) => {
+      if (filter.conversationId && conversation.id !== filter.conversationId) return false;
+      if (filter.customerId && conversation.customerId !== filter.customerId) return false;
+      return true;
+    });
+    const quoteDrafts = this.store?.listQuoteDrafts?.(filter) || [];
+    const orderDrafts = this.store?.listOrderDrafts?.(filter) || [];
     const isLowValueDesignJob = (job: any) => !job.isHighValue && !isHighValueBudget(job.budget, appConfig.highValueAmountCny);
     const isHighValueAmount = (total?: unknown, unit?: unknown) => {
       const totalAmount = Number(total || 0);
@@ -657,6 +667,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       this.recordRun(skipped);
       return skipped;
     }
+    assertRequiredAutomationIdentity(filter);
 
     this.running = true;
     const startedAt = new Date();
@@ -670,8 +681,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     };
 
     try {
-      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
-      const readiness = await this.readiness();
+      const readiness = await this.readiness(filter);
       run.results.readiness = readiness;
       if (!readiness.ready) {
         run.skipped = true;
@@ -683,6 +693,7 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
         this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit, filter),
       );
       await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation(filter));
+      await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
       await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
       await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
         this.wechatDispatch.scanLowValueOrderConfirmations(filter),
@@ -694,9 +705,9 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
       if (appConfig.lowValueAutomationProcessSendQueue) {
         await this.captureStep(run, "processLowValueSendQueue", () =>
           this.wechatDispatch.processSafeSendQueue({
+            ...filter,
             limit: appConfig.lowValueAutomationSendQueueLimit,
             automationOnly: true,
-            ...filter,
           }),
         );
       }
@@ -772,11 +783,30 @@ export class AutomationService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async safeListDesignJobs() {
+  private async safeListDesignJobs(filter: IdentityFields = {}) {
     try {
-      return await this.designJobs.list();
+      return await this.designJobs.list(filter);
     } catch {
       return [];
     }
   }
+}
+
+function assertRequiredAutomationIdentity(filter: IdentityFields = {}) {
+  assertRequiredExpectedIdentity(
+    {
+      expectedWechatAccountId: filter.wechatAccountId,
+      expectedConversationId: filter.conversationId,
+      expectedCustomerId: filter.customerId,
+    },
+    "automation run",
+  );
+}
+
+function normalizeAutomationIdentity(filter: IdentityFields = {}): IdentityFields {
+  return {
+    wechatAccountId: String(filter.wechatAccountId || "").trim(),
+    conversationId: String(filter.conversationId || "").trim(),
+    customerId: String(filter.customerId || "").trim(),
+  };
 }

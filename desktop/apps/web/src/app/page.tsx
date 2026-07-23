@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
@@ -119,6 +119,7 @@ import {
   getWindowObserverStatus,
   importChatTranscript,
   identityExpectation,
+  IdentityFilters,
   localAssetUrl,
   localDesignImageUrl,
   loginDesignPlatform,
@@ -223,7 +224,8 @@ function windowSnapshotScanSummary(result: WindowSnapshotInboxScanResult) {
   const limit = Number(result.limit || 0);
   const batchText = limit && total > result.scanned ? `本轮最多 ${limit} 个，` : "";
   const pendingText = pending > 0 ? `，剩余 ${pending} 个排队分批扫描` : "";
-  return `${batchText}扫描 ${result.scanned} 个文件，成功 ${result.processed.length} 个，失败 ${result.failed.length} 个${pendingText}`;
+  const ignoredText = result.ignored?.length ? `，忽略 ${result.ignored.length} 个非当前会话文件` : "";
+  return `${batchText}扫描 ${result.scanned} 个文件，成功 ${result.processed.length} 个，失败 ${result.failed.length} 个${pendingText}${ignoredText}`;
 }
 
 function isSkillSuggestionAutoSelected(suggestion: SkillSuggestion) {
@@ -1765,6 +1767,29 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
       : {};
   }
 
+  function requireActiveBridgeIdentity(label: string): IdentityFilters | null {
+    const conversation = activeConversationId ? conversations.find((item) => item.id === activeConversationId) : null;
+    if (!conversation) {
+      setMessage(`${label}需要先选择客户会话，系统不会默认跨客户执行。`);
+      return null;
+    }
+    const filters = {
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+    };
+    const missing = [
+      !filters.wechatAccountId ? "微信账号" : "",
+      !filters.conversationId ? "会话" : "",
+      !filters.customerId ? "客户" : "",
+    ].filter(Boolean);
+    if (missing.length) {
+      setMessage(`${label}缺少${missing.join("、")}绑定，已停止执行。`);
+      return null;
+    }
+    return filters;
+  }
+
   async function loadWechatChannelStatusOnly(
     identityFilterOverride?: { wechatAccountId?: string; conversationId?: string; customerId?: string } | null,
   ) {
@@ -2216,7 +2241,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function runLowValueAutomation() {
-    const latestReadiness = automationReadiness || (await getAutomationReadiness());
+    const filters = requireActiveBridgeIdentity("低价值自动处理");
+    if (!filters) return;
+    const latestReadiness = automationReadiness || (await getAutomationReadiness(filters));
     if (latestReadiness) setAutomationReadiness(latestReadiness);
     const firstBlocker = latestReadiness?.blockers[0];
     if (firstBlocker) {
@@ -2228,7 +2255,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     await runAction(
       "低价值自动处理",
       async () => {
-        const result = await runAutomationOnce(activeIdentityFilters());
+        const result = await runAutomationOnce(filters);
         const lowValue = result.results.lowValueAutomation as LowValueAutomationResult | undefined;
         const sendQueue = result.results.processLowValueSendQueue as SafeSendQueueResult | undefined;
         const orderDraft = result.results.scanLowValueOrderDrafts as LowValueOrderDraftResult | undefined;
@@ -2260,11 +2287,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function runAutomationCycle() {
+    const filters = requireActiveBridgeIdentity("后台自动化跑一轮");
+    if (!filters) return;
     let summary = "";
     await runAction(
       "后台自动化跑一轮",
       async () => {
-        const result = await runAutomationOnce(activeIdentityFilters());
+        const result = await runAutomationOnce(filters);
         const lowValue = result.results.lowValueAutomation as LowValueAutomationResult | undefined;
         const sendQueue = result.results.processLowValueSendQueue as SafeSendQueueResult | undefined;
         const orderDraft = result.results.scanLowValueOrderDrafts as LowValueOrderDraftResult | undefined;
@@ -2294,10 +2323,12 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function toggleAutomationActive() {
     const shouldStop = Boolean(automationStatus?.active);
+    const filters = shouldStop ? null : requireActiveBridgeIdentity("开启后台自动化");
+    if (!shouldStop && !filters) return;
     await runAction(
       shouldStop ? "暂停低价值后台自动化" : "开启低价值后台自动化",
       async () => {
-        const nextStatus = shouldStop ? await stopAutomation() : await startAutomation();
+        const nextStatus = shouldStop ? await stopAutomation() : await startAutomation(filters || {});
         setAutomationStatus(nextStatus);
       },
       () => {
@@ -2332,8 +2363,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function readAllNotices() {
+    const filters = requireActiveBridgeIdentity("全部提醒已读");
+    if (!filters) return;
     await runAction("全部提醒已读", async () => {
-      await markAllNotificationsRead(activeIdentityFilters());
+      await markAllNotificationsRead(filters);
       const readAt = new Date().toISOString();
       setNotifications((items) => items.map((notice) => (notice.readAt ? notice : { ...notice, readAt })));
     });
@@ -3315,6 +3348,8 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function captureDemoWindow(account: WechatAccount, mode: "correct" | "wrong_chat" | "offline") {
+    const filters = requireActiveBridgeIdentity("模拟微信窗口");
+    if (!filters) return;
     const targetConversation = conversations.find((conversation) => conversation.id === activeConversationId);
     if (!targetConversation) {
       setMessage("请先选择要模拟窗口的客户会话。");
@@ -3335,11 +3370,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function scanRealWindowSnapshots() {
+    const filters = requireActiveBridgeIdentity("扫描真实微信窗口快照");
+    if (!filters) return;
     let summary = "";
     await runAction(
       "扫描真实微信窗口快照",
       async () => {
-        const result = await scanWindowSnapshotInbox();
+        const result = await scanWindowSnapshotInbox(filters);
         summary = windowSnapshotScanSummary(result);
         return result;
       },
@@ -3348,11 +3385,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function captureCurrentWindowOnce() {
+    const filters = requireActiveBridgeIdentity("采集当前微信窗口");
+    if (!filters) return;
     let summary = "";
     await runAction(
       "采集当前微信窗口",
       async () => {
-        const result = await captureWindowObserverOnce();
+        const result = await captureWindowObserverOnce(filters);
         const status = result.status;
         summary = `观察器 ${status.status}，${windowSnapshotScanSummary(result.scan)}`;
         return result;
@@ -3404,6 +3443,14 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
 
   async function validateCurrentWindow(task: SendTask) {
     await runAction("当前窗口快照校验", () => validateSendTaskCurrentWindow(task.id, identityExpectation(task)));
+  }
+
+  async function refreshBridgeSafetyStatus(filters: IdentityFilters = activeIdentityFilters()) {
+    const result = await getBridgeOutbox(filters);
+    const status = await getBridgeStatus(filters).catch(() => null);
+    setBridgeOutbox(result);
+    if (status) setBridgeStatus(status);
+    return { result, status };
   }
 
   async function executeDryRun(task: SendTask) {
@@ -3551,22 +3598,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function refreshBridgeOutbox() {
+    const filters = requireActiveBridgeIdentity("刷新桥接待发送");
+    if (!filters) return;
     let summary = "";
     await runAction(
       "刷新桥接待发送",
       async () => {
-        const conversation = activeConversationId
-          ? conversations.find((item) => item.id === activeConversationId)
-          : null;
-        const result = await getBridgeOutbox(
-          conversation
-            ? {
-                wechatAccountId: conversation.wechatAccountId,
-                conversationId: conversation.id,
-                customerId: conversation.customerId,
-              }
-            : {},
-        );
+        const result = await getBridgeOutbox(filters);
+        const status = await getBridgeStatus(filters).catch(() => null);
+        setBridgeOutbox(result);
+        if (status) setBridgeStatus(status);
         summary = `桥接待处理 ${result.pending.length} 个，忽略旧文件 ${result.ignored.length} 个。`;
       },
       () => {
@@ -3576,12 +3617,16 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
   }
 
   async function scanBridgeAcks() {
+    const filters = requireActiveBridgeIdentity("扫描桥接回执");
+    if (!filters) return;
     let summary = "";
     await runAction(
       "扫描桥接回执",
       async () => {
-        const result = await scanBridgeInbox();
-        summary = `扫描 ${result.scanned} 个回执，处理 ${result.processed.length} 个，失败 ${result.failed.length} 个。`;
+        const result = await scanBridgeInbox(filters);
+        await refreshBridgeSafetyStatus(filters);
+        const ignoredText = result.ignored?.length ? `，忽略 ${result.ignored.length} 个非当前会话回执` : "";
+        summary = `扫描 ${result.scanned} 个回执，处理 ${result.processed.length} 个，失败 ${result.failed.length} 个${ignoredText}。`;
       },
       () => {
         setMessage(summary || "桥接回执扫描完成。");
@@ -6677,6 +6722,9 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
     () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
     [conversations, activeConversationId],
   );
+  const safeSendIdentityReady = Boolean(
+    activeConversation?.wechatAccountId && activeConversation.id && activeConversation.customerId,
+  );
 
   useEffect(() => {
     let loadInFlight = false;
@@ -8529,10 +8577,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <button type="button" className="ghost" onClick={refreshWechatWorkspaceStatus} disabled={Boolean(busy)}>
               <RefreshCw size={16} aria-hidden="true" />刷新通道
             </button>
-            <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+            <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy) || !safeSendIdentityReady}>
               <Search size={16} aria-hidden="true" />采集窗口
             </button>
-            <button type="button" className="ghost" onClick={scanBridgeAcks} disabled={Boolean(busy)}>
+            <button type="button" className="ghost" onClick={scanBridgeAcks} disabled={Boolean(busy) || !safeSendIdentityReady}>
               <ShieldCheck size={16} aria-hidden="true" />扫描回执
             </button>
             <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
@@ -8552,7 +8600,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
           <button type="button" className="ghost" onClick={scanSendOps} disabled={Boolean(busy)}>
             <ShieldAlert size={16} aria-hidden="true" />扫描异常
           </button>
-          <button type="button" className="ghost" onClick={scanBridgeAcks} disabled={Boolean(busy)}>
+          <button type="button" className="ghost" onClick={scanBridgeAcks} disabled={Boolean(busy) || !safeSendIdentityReady}>
             <ShieldCheck size={16} aria-hidden="true" />扫描回执
           </button>
           <button type="button" className="primary" onClick={processSafeQueue} disabled={Boolean(busy)}>
@@ -8641,7 +8689,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
         <button type="button" className="ghost" onClick={() => void load()} disabled={Boolean(busy)}>
           <RefreshCw size={16} aria-hidden="true" />刷新
         </button>
-        <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+        <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy) || !safeSendIdentityReady}>
           <Bot size={16} aria-hidden="true" />后台跑一轮
         </button>
       </div>
@@ -8746,7 +8794,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
             <button type="button" className="primary" onClick={createDemo} disabled={Boolean(busy)}>
               <Boxes size={16} aria-hidden="true" />新建演示任务
             </button>
-            <button type="button" className="ghost" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+            <button type="button" className="ghost" onClick={runAutomationCycle} disabled={Boolean(busy) || !safeSendIdentityReady}>
               <Bot size={16} aria-hidden="true" />后台跑一轮
             </button>
             <button type="button" className="ghost" onClick={processSafeQueue} disabled={Boolean(busy)}>
@@ -9304,10 +9352,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                               <div className="wechat-action-group">
                                 <small>采集</small>
                                 <div className="wechat-action-buttons">
-                                  <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                                  <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy) || !safeSendIdentityReady}>
                                     <Search size={15} aria-hidden="true" />采集窗口
                                   </button>
-                                  <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+                                  <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy) || !safeSendIdentityReady}>
                                     <RefreshCw size={15} aria-hidden="true" />扫描快照
                                   </button>
                                 </div>
@@ -9435,10 +9483,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                         <div className="wechat-visual-action-group" aria-label="个人微信采集">
                           <small>个人微信采集</small>
                           <div className="wechat-visual-action-buttons">
-                            <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+                            <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy) || !safeSendIdentityReady}>
                               <Search size={14} aria-hidden="true" />采集微信
                             </button>
-                            <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+                            <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy) || !safeSendIdentityReady}>
                               <RefreshCw size={14} aria-hidden="true" />扫描快照
                             </button>
                           </div>
@@ -11601,21 +11649,21 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <div className="notice-actions">
                 {noticeWorkbenchView === "automation" ? (
                   <>
-                    <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}><Bot size={16} aria-hidden="true" />后台跑一轮</button>
-                    <button type="button" className="ghost" onClick={toggleAutomationActive} disabled={Boolean(busy) || !automationStatus?.enabled}>
+                    <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy) || !safeSendIdentityReady}><Bot size={16} aria-hidden="true" />后台跑一轮</button>
+                    <button type="button" className="ghost" onClick={toggleAutomationActive} disabled={Boolean(busy) || !automationStatus?.enabled || (!automationStatus?.active && !safeSendIdentityReady)}>
                       {automationStatus?.active ? <Ban size={16} aria-hidden="true" /> : <Bot size={16} aria-hidden="true" />}
                       {automationStatus?.active ? "暂停后台" : "开启后台"}
                     </button>
-                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />低价值自动处理</button>
+                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy) || !safeSendIdentityReady}><Check size={16} aria-hidden="true" />低价值自动处理</button>
                     <button type="button" className="ghost" onClick={autoSubmitDrafts} disabled={Boolean(busy)}><Send size={16} aria-hidden="true" />自动提交草稿</button>
                     <button type="button" className="ghost" onClick={scanTimeouts} disabled={Boolean(busy)}><RefreshCw size={16} aria-hidden="true" />扫描超时</button>
                   </>
                 ) : null}
                 {noticeWorkbenchView === "issues" ? (
                   <>
-                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy)}><Check size={16} aria-hidden="true" />处理低价值</button>
+                    <button type="button" className="primary" onClick={runLowValueAutomation} disabled={Boolean(busy) || !safeSendIdentityReady}><Check size={16} aria-hidden="true" />处理低价值</button>
                     <button type="button" className="ghost danger" onClick={handoffHighValueJobs} disabled={Boolean(busy)}><ShieldAlert size={16} aria-hidden="true" />高价值转人工</button>
-                    <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy)}><Bell size={16} aria-hidden="true" />全部已读</button>
+                    <button type="button" className="ghost" onClick={readAllNotices} disabled={!unreadNoticeCount || Boolean(busy) || !safeSendIdentityReady}><Bell size={16} aria-hidden="true" />全部已读</button>
                   </>
                 ) : null}
                 {noticeWorkbenchView === "history" ? (
@@ -11859,7 +11907,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 <strong>暂无运行记录</strong>
                 <span>后台自动化跑完后会在这里显示结果、耗时和失败步骤。</span>
                 <div className="empty-actions">
-                  <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+                  <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy) || !safeSendIdentityReady}>
                     <Bot size={16} aria-hidden="true" />后台跑一轮
                   </button>
                   <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}>
@@ -11934,7 +11982,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                           const firstIssue = lowValueAutomationIssueSummary.firstIssue;
                           if (firstIssue) handleLowValueAutomationIssue(firstIssue);
                         }}
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || (lowValueAutomationIssueSummary.resolutionAction !== "scan_send_ops" && !safeSendIdentityReady)}
                       >
                         <Search size={14} aria-hidden="true" />处理第一个卡点
                       </button>
@@ -12040,7 +12088,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                     <strong>暂无提醒</strong>
                     <span>可以主动跑一轮后台自动化，或创建超时/失败演示来验证提醒链路。</span>
                     <div className="empty-actions">
-                      <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy)}>
+                      <button type="button" className="primary" onClick={runAutomationCycle} disabled={Boolean(busy) || !safeSendIdentityReady}>
                         <Bot size={16} aria-hidden="true" />后台跑一轮
                       </button>
                       <button type="button" className="ghost" onClick={createTimeoutDemo} disabled={Boolean(busy)}>
@@ -13599,10 +13647,10 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
               <LockKeyhole size={20} aria-hidden="true" />
             </div>
             <div className="window-actions">
-              <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy)}>
+              <button type="button" className="ghost" onClick={captureCurrentWindowOnce} disabled={Boolean(busy) || !safeSendIdentityReady}>
                 <Search size={15} aria-hidden="true" />采集当前窗口
               </button>
-              <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy)}>
+              <button type="button" className="ghost" onClick={scanRealWindowSnapshots} disabled={Boolean(busy) || !safeSendIdentityReady}>
                 <RefreshCw size={15} aria-hidden="true" />扫描真实窗口快照
               </button>
             </div>
@@ -13640,6 +13688,7 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                 const snapshot = latestWindowByAccount.get(account.id);
                 const snapshotAge = windowSnapshotAgeSeconds(snapshot);
                 const snapshotStale = isWindowSnapshotStale(snapshot);
+                const accountWindowDemoDisabled = Boolean(busy) || !safeSendIdentityReady || activeConversation?.wechatAccountId !== account.id;
                 return (
                   <div className="account-card" key={account.id}>
                     <div>
@@ -13670,13 +13719,13 @@ CARD-B\t感谢卡B\t配件\t贺卡\t3\t12\t200\t客户拜访\tC:\\products\\card
                       ))}
                     </div>
                     <div className="window-actions">
-                      <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "correct")} disabled={Boolean(busy)}>
+                      <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "correct")} disabled={accountWindowDemoDisabled}>
                         <ShieldCheck size={15} aria-hidden="true" />正确窗口
                       </button>
-                      <button type="button" className="ghost danger" onClick={() => captureDemoWindow(account, "wrong_chat")} disabled={Boolean(busy)}>
+                      <button type="button" className="ghost danger" onClick={() => captureDemoWindow(account, "wrong_chat")} disabled={accountWindowDemoDisabled}>
                         <AlertTriangle size={15} aria-hidden="true" />错聊窗口
                       </button>
-                      <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "offline")} disabled={Boolean(busy)}>
+                      <button type="button" className="ghost" onClick={() => captureDemoWindow(account, "offline")} disabled={accountWindowDemoDisabled}>
                         <Ban size={15} aria-hidden="true" />离线窗口
                       </button>
                     </div>
@@ -15977,11 +16026,23 @@ function bridgeOutboxEntryForTask(
     ...(bridgeStatus?.outbox?.pending || []),
     ...(bridgeOutbox?.pending || []),
   ];
-  return entries.find((entry) =>
-    entry.taskId === task.id ||
-    (latestAttempt?.id && entry.attemptId === latestAttempt.id) ||
-    (outboxFileName && entry.fileName === outboxFileName),
-  ) || null;
+  const taskWechatAccountId = task.wechatAccountId || task.conversation?.wechatAccountId || "";
+  const taskConversationId = task.conversationId || task.conversation?.id || "";
+  const taskCustomerId = (task as { customerId?: string | null }).customerId || task.conversation?.customerId || "";
+  return entries.find((entry) => {
+    const entryWechatAccountId = entry.wechatAccountId || entry.preview?.wechatAccountId || "";
+    const entryConversationId = entry.conversationId || entry.preview?.conversationId || "";
+    const entryCustomerId = entry.customerId || entry.preview?.customerId || "";
+    const identityMatches =
+      entryWechatAccountId === taskWechatAccountId &&
+      entryConversationId === taskConversationId &&
+      entryCustomerId === taskCustomerId;
+    const taskMatches =
+      entry.taskId === task.id ||
+      (latestAttempt?.id && entry.attemptId === latestAttempt.id) ||
+      (outboxFileName && entry.fileName === outboxFileName);
+    return identityMatches && taskMatches;
+  }) || null;
 }
 
 function bridgeDispatchEntryForTask(task: SendTask, bridgeStatus?: BridgeStatusResult | null) {

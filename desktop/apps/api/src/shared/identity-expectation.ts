@@ -24,6 +24,20 @@ export function assertExpectedIdentity(record: any, expected: ExpectedIdentityPa
   }
 }
 
+export function assertRequiredExpectedIdentity(expected: ExpectedIdentityPayload = {}, label = "record") {
+  const missing = [
+    ["expectedWechatAccountId", "wechatAccountId"],
+    ["expectedConversationId", "conversationId"],
+    ["expectedCustomerId", "customerId"],
+  ].filter(([payloadKey]) => !expected[payloadKey as keyof ExpectedIdentityPayload]);
+
+  if (missing.length) {
+    throw new BadRequestException(
+      `${label} identity expectation required: ${missing.map(([, identityKey]) => identityKey).join(", ")}`,
+    );
+  }
+}
+
 function resolveWechatAccountId(record: any) {
   return record?.wechatAccountId || record?.target?.wechatAccountId || record?.designJob?.wechatAccountId || record?.quoteDraft?.designJob?.wechatAccountId;
 }

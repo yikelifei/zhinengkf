@@ -1,2 +1,2 @@
 @echo off
-call "D:\zhinengkefu\desktop\start-stable-desktop-foreground.cmd" %*
+call "%~dp0desktop\start-stable-desktop-foreground.cmd" %*

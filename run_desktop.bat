@@ -54,7 +54,7 @@ echo.
 call "%DESKTOP_DIR%\start-stable-desktop-foreground.cmd"
 if errorlevel 1 (
   echo [error] Desktop services stopped with an error. Check logs under desktop\.runtime-stable\logs.
-  echo You can also run C:\Users\27808\Desktop\zhinengkefu\repair-stable-desktop.cmd.
+  echo You can also run E:\zhinengkefu\repair-stable-desktop.cmd.
   pause
   exit /b 1
 )

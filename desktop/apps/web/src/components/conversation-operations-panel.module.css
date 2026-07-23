@@ -1,0 +1,217 @@
+.panel {
+  border-top: 1px solid var(--wk-color-border);
+  background: var(--wk-color-surface);
+  color: var(--wk-color-text);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 16px 12px;
+}
+
+.header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.header strong {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 20px;
+}
+
+.header span:not(.state) {
+  overflow: hidden;
+  color: #8f959e;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.ready { color: #159455; background: #effaf4; }
+.danger { color: #d54941; background: #fff3f2; }
+.muted { color: #6f7681; background: #f5f6f7; }
+
+.assignmentRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.assignmentRow label,
+.fieldGrid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assignmentRow label > span,
+.fieldGrid label > span {
+  color: #646a73;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.assignmentRow input,
+.fieldGrid input,
+.fieldGrid select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid #dfe3e8;
+  border-radius: 5px;
+  background: #fff;
+  color: #1f2329;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 30px;
+  outline: none;
+}
+
+.assignmentRow input:focus,
+.fieldGrid input:focus,
+.fieldGrid select:focus {
+  border-color: var(--wk-color-brand);
+  box-shadow: 0 0 0 2px rgb(22 119 255 / 12%);
+}
+
+.assignButton,
+.saveButton,
+.clearButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  border-radius: 5px;
+  padding: 0 11px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 30px;
+  cursor: pointer;
+}
+
+.assignButton,
+.clearButton {
+  border: 1px solid #dfe3e8;
+  background: #fff;
+  color: var(--wk-color-brand);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px 10px;
+  padding: 0 16px 13px;
+}
+
+.slaFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 16px 12px;
+  border: 1px solid #edf0f4;
+  border-radius: 5px;
+  background: #fafbfc;
+  padding: 9px 10px;
+}
+
+.slaFacts span {
+  display: grid;
+  gap: 2px;
+  color: #646a73;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.slaFacts b {
+  color: #1f2329;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.warning,
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 16px 12px;
+  border: 1px solid #ffd4d0;
+  border-radius: 5px;
+  background: #fff6f5;
+  color: #b42318;
+  padding: 8px 9px;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid #edf0f4;
+  padding: 10px 16px 13px;
+}
+
+.saveButton {
+  border: 1px solid #3370ff;
+  background: #3370ff;
+  color: #fff;
+}
+
+.assignButton:disabled,
+.saveButton:disabled,
+.clearButton:disabled,
+.assignmentRow input:disabled,
+.fieldGrid input:disabled,
+.fieldGrid select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.empty {
+  margin: 0 16px 16px;
+  border: 1px dashed #dfe3e8;
+  border-radius: 5px;
+  color: #8f959e;
+  padding: 13px;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+@media (max-width: 1000px) {
+  .assignmentRow,
+  .fieldGrid,
+  .slaFacts {
+    grid-template-columns: 1fr;
+  }
+
+  .assignButton {
+    width: 100%;
+  }
+}

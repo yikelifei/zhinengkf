@@ -4,6 +4,9 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { ensureInternalApiToken } = require("./internal-api-session");
+
+process.env.INTERNAL_API_TOKEN = ensureInternalApiToken();
 
 const args = new Set(process.argv.slice(2));
 const realDesignMode = args.has("--real-design");

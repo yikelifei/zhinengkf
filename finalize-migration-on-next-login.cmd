@@ -1,8 +1,8 @@
 @echo off
 setlocal
-set "LOG=D:\zhinengkefu\finalize-migration-on-next-login.log"
+set "LOG=%~dp0finalize-migration-on-next-login.log"
 echo [%date% %time%] starting finalize >> "%LOG%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\zhinengkefu\finalize-migration-to-d.ps1" >> "%LOG%" 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0finalize-migration-to-d.ps1" >> "%LOG%" 2>&1
 set "CODE=%ERRORLEVEL%"
 echo [%date% %time%] exit code %CODE% >> "%LOG%"
 if "%CODE%"=="0" (

@@ -18,6 +18,7 @@ const { NotificationsService } = require("../apps/api/src/notifications/notifica
 const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
 const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
+const { RoutingService } = require("../apps/api/src/routing/routing.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
@@ -29,12 +30,16 @@ function setupService(overrides = {}) {
   process.env.WECHAT_BRIDGE_DISPATCH_DIR = path.join(tempDir, "dispatch");
   process.env.WECHAT_BRIDGE_LOCK_DIR = path.join(tempDir, "locks");
   process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE = path.join(tempDir, "worker-status.json");
+  process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR = path.join(tempDir, "window-snapshots");
+  process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE = path.join(tempDir, "window-observer-status.json");
 
   appConfig.wechatBridgeOutboxDir = process.env.WECHAT_BRIDGE_OUTBOX_DIR;
   appConfig.wechatBridgeInboxDir = process.env.WECHAT_BRIDGE_INBOX_DIR;
   appConfig.wechatBridgeDispatchDir = process.env.WECHAT_BRIDGE_DISPATCH_DIR;
   appConfig.wechatBridgeLockDir = process.env.WECHAT_BRIDGE_LOCK_DIR;
   appConfig.wechatBridgeWorkerStatusFile = process.env.WECHAT_BRIDGE_WORKER_STATUS_FILE;
+  appConfig.wechatWindowSnapshotInboxDir = process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR;
+  appConfig.wechatWindowObserverStatusFile = process.env.WECHAT_WINDOW_OBSERVER_STATUS_FILE;
 
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
@@ -44,8 +49,9 @@ function setupService(overrides = {}) {
   const service = new WechatDispatchService({}, localStore, sendAdapter, notifications, orders);
   const quotes = new QuotesService({}, localStore, orders, service);
   const reviews = new ReviewsService({}, localStore, {}, {}, notifications, service, orders);
+  const routing = new RoutingService(localStore, notifications);
 
-  return { tempDir, localStore, service, reviews, orders, quotes };
+  return { tempDir, localStore, service, reviews, routing, orders, quotes };
 }
 
 function demoExpectedIdentity() {
@@ -53,6 +59,51 @@ function demoExpectedIdentity() {
     expectedWechatAccountId: "wechat_demo_1",
     expectedConversationId: "conversation_demo_1",
     expectedCustomerId: "customer_demo_1",
+  };
+}
+
+function expectedForTask(task, extra = {}) {
+  const customerByConversationId = {
+    conversation_demo_1: "customer_demo_1",
+    conversation_demo_2: "customer_demo_2",
+  };
+  return {
+    ...extra,
+    expectedWechatAccountId: task.wechatAccountId,
+    expectedConversationId: task.conversationId,
+    expectedCustomerId: task.customerId || task.conversation?.customerId || customerByConversationId[task.conversationId],
+  };
+}
+
+function expectedForConversation(conversationId = "conversation_demo_1", extra = {}) {
+  const conversationIdentity = {
+    conversation_demo_1: {
+      expectedWechatAccountId: "wechat_demo_1",
+      expectedConversationId: "conversation_demo_1",
+      expectedCustomerId: "customer_demo_1",
+    },
+    conversation_demo_2: {
+      expectedWechatAccountId: "wechat_demo_2",
+      expectedConversationId: "conversation_demo_2",
+      expectedCustomerId: "customer_demo_2",
+    },
+  };
+  return {
+    ...extra,
+    ...(conversationIdentity[conversationId] || {
+      expectedWechatAccountId: "wechat_demo_1",
+      expectedConversationId: conversationId,
+      expectedCustomerId: "customer_demo_1",
+    }),
+  };
+}
+
+function expectedForOrder(order, extra = {}) {
+  return {
+    ...extra,
+    expectedWechatAccountId: order.wechatAccountId,
+    expectedConversationId: order.conversationId,
+    expectedCustomerId: order.customerId,
   };
 }
 
@@ -960,7 +1011,7 @@ test("requeue rejects send task after its design binding becomes invalid", async
   localStore.updateDesignJob(designJob.id, { conversationId: "conversation_demo_2" }, { skipIdentityValidation: true });
 
   await assert.rejects(
-    () => service.requeueSendTask(task.id, { reason: "test invalid binding" }),
+    () => service.requeueSendTask(task.id, expectedForTask(task, { reason: "test invalid binding" })),
     /send task binding invalid/,
   );
 
@@ -992,6 +1043,7 @@ test("requeue records explicit manual audit reason", async () => {
   });
 
   const updated = await service.requeueSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "manual_resolution_before_send_requeue",
   });
 
@@ -1008,6 +1060,43 @@ test("requeue records explicit manual audit reason", async () => {
   assert.match(orderAfterRequeue.customerNotes, /\[发送任务:.*:requeue\]订单跟进发送已人工重新排队/);
   assert.match(orderAfterRequeue.customerNotes, /manual_resolution_before_send_requeue/);
   assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
+});
+
+test("requeue allows manual reply task while conversation remains manually locked", async () => {
+  const { localStore, service } = setupService();
+  localStore.updateConversation("conversation_demo_1", { manualLocked: true });
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "blocked",
+    payload: {
+      kind: "text",
+      text: "manual reply should requeue while locked",
+      source: "manual_reply",
+      manualReply: true,
+      customerId: "customer_demo_1",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      manualReply: true,
+      history: [{ action: "manual_reply_blocked", fromStatus: "queued", reason: "expired window snapshot" }],
+    },
+  });
+
+  const updated = await service.requeueSendTask(task.id, {
+    ...demoExpectedIdentity(),
+    reason: "manual_reply_retry_after_fresh_window_snapshot",
+  });
+
+  assert.equal(updated.status, "queued");
+  assert.equal(updated.guardSnapshot.binding.ok, true);
+  assert.equal(updated.guardSnapshot.binding.reason, "发送任务绑定关系正确");
+  assert.equal(updated.guardSnapshot.manualReply, true);
+  assert.equal(updated.guardSnapshot.requeueReason, "manual_reply_retry_after_fresh_window_snapshot");
+  assert.equal(localStore.listConversations().find((item) => item.id === "conversation_demo_1").manualLocked, true);
 });
 
 test("low-value failed send task retries once before human alert", async () => {
@@ -1093,7 +1182,7 @@ test("requeue rejects order confirmation task after order payment is refunded", 
     },
   });
 
-  await assert.rejects(() => service.requeueSendTask(task.id), /订单确认重新排队需要先核验定金或全款/);
+  await assert.rejects(() => service.requeueSendTask(task.id, expectedForTask(task)), /订单确认重新排队需要先核验定金或全款/);
   assert.equal(localStore.getSendTask(task.id).status, "failed");
 });
 
@@ -1126,6 +1215,7 @@ test("requeue records order note for low-value quote acceptance order task", asy
   });
 
   const updated = await service.requeueSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "quote_acceptance_order_requeue_after_operator_review",
   });
   const orderAfterRequeue = localStore.getOrderDraft(order.id);
@@ -1164,7 +1254,7 @@ test("requeue rejects low-value quote acceptance order task after payment is ref
     },
   });
 
-  await assert.rejects(() => service.requeueSendTask(task.id), /订单确认重新排队需要先核验定金或全款/);
+  await assert.rejects(() => service.requeueSendTask(task.id, expectedForTask(task)), /订单确认重新排队需要先核验定金或全款/);
   assert.equal(localStore.getSendTask(task.id).status, "failed");
   assert.equal(localStore.getQuoteDraft(order.quoteDraftId).status, "accepted");
 });
@@ -1203,7 +1293,7 @@ test("requeue rejects order follow-up task while conversation is manually locked
     reason: "manual_takeover_test",
   });
 
-  await assert.rejects(() => service.requeueSendTask(task.id), /会话已人工接管/);
+  await assert.rejects(() => service.requeueSendTask(task.id, expectedForTask(task)), /会话已人工接管/);
   assert.equal(localStore.getSendTask(task.id).status, "failed");
 });
 
@@ -1343,6 +1433,7 @@ test("cancel records explicit manual audit reason", () => {
   });
 
   const updated = service.cancelSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "manual_takeover_cancel_send_task",
   });
 
@@ -1380,6 +1471,7 @@ test("cancel order send task records order note without changing quote status", 
   });
 
   const updated = service.cancelSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "manual_cancel_order_confirmation_before_send",
   });
   const cancelledOrder = localStore.getOrderDraft(order.id);
@@ -1634,11 +1726,12 @@ test("requeue rejects audited cancelled send task", async () => {
     },
   });
   service.cancelSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "manual_takeover_cancel_send_task",
   });
 
   await assert.rejects(
-    () => service.requeueSendTask(task.id, { reason: "manual_resolution_before_send_requeue" }),
+    () => service.requeueSendTask(task.id, expectedForTask(task, { reason: "manual_resolution_before_send_requeue" })),
     /人工取消|审计|audited_cancelled_task/,
   );
 
@@ -1660,11 +1753,12 @@ test("cancel rejects audited cancelled send task without overwriting audit", () 
     },
   });
   const firstCancel = service.cancelSendTask(task.id, {
+    ...expectedForTask(task),
     reason: "manual_takeover_cancel_send_task",
   });
 
   assert.throws(
-    () => service.cancelSendTask(task.id, { reason: "second_cancel_should_not_overwrite" }),
+    () => service.cancelSendTask(task.id, expectedForTask(task, { reason: "second_cancel_should_not_overwrite" })),
     /已人工取消并记录审计/,
   );
 
@@ -1705,7 +1799,7 @@ test("execute send blocks task after its design binding becomes invalid", () => 
   });
   localStore.updateDesignJob(designJob.id, { conversationId: "conversation_demo_2" }, { skipIdentityValidation: true });
 
-  const result = service.executeDryRunSend(task.id);
+  const result = service.executeDryRunSend(task.id, expectedForTask(task));
   const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
 
   assert.equal(result.task.status, "blocked");
@@ -1765,7 +1859,7 @@ test("execute send blocks queued quote task when quote returned to manual review
     customerNotes: "客户改需求，报价回到人工审核。",
   });
 
-  const result = service.executeDryRunSend(task.id);
+  const result = service.executeDryRunSend(task.id, expectedForTask(task));
   const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
   const quoteAfterBlock = localStore.getQuoteDraft(quote.id);
 
@@ -1837,7 +1931,7 @@ test("execute send blocks queued order task when payment is refunded before send
   });
   localStore.updateOrderDraft(order.id, { paymentStatus: "refunded" });
 
-  const result = service.executeDryRunSend(task.id);
+  const result = service.executeDryRunSend(task.id, expectedForTask(task));
   const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
 
   assert.equal(result.task.status, "blocked");
@@ -1910,7 +2004,7 @@ test("execute send blocks queued order follow-up when order is cancelled before 
   });
   localStore.updateOrderDraft(order.id, { status: "cancelled" });
 
-  const result = service.executeDryRunSend(task.id);
+  const result = service.executeDryRunSend(task.id, expectedForTask(task));
   const attempts = localStore.listSendAttempts({ sendTaskId: task.id });
 
   assert.equal(result.task.status, "blocked");
@@ -2688,9 +2782,16 @@ test("order image revision syncs selected marker on design candidates", async ()
   localStore.selectDesignImage(job.id, images[0].id, "客户先选第1张");
   const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
   localStore.updateQuoteDraft(quote.id, { status: "accepted", paymentStatus: "unpaid" });
-  const order = await orders.createFromQuote(quote.id);
+  const order = await orders.createFromQuote(quote.id, {
+    expectedWechatAccountId: job.wechatAccountId,
+    expectedConversationId: job.conversationId,
+    expectedCustomerId: job.customerId,
+  });
 
   const revised = await orders.reviseSelectedImage(order.id, {
+    expectedWechatAccountId: order.wechatAccountId,
+    expectedConversationId: order.conversationId,
+    expectedCustomerId: order.customerId,
     selectedImageId: images[1].id,
     owner: "人工客服",
   });
@@ -3009,7 +3110,7 @@ test("bridge sent ack rejects order task after payment is refunded while waiting
     },
   });
   createPassingWechatWindowSnapshot(localStore, "sent ack should recheck order payment");
-  const started = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const started = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
   const outboxFile = started.attempt.metadata.outboxFile;
   const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
   writeDispatchInstructionForStartedBridgeSend(localStore, task.id);
@@ -3091,7 +3192,7 @@ test("bridge sent ack rejects quote task after quote returned to manual review w
     sendTaskId: task.id,
   });
   createPassingWechatWindowSnapshot(localStore, "桥接等待时状态变化不能标记已发送");
-  const started = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const started = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
   const outboxFile = started.attempt.metadata.outboxFile;
   const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
   writeDispatchInstructionForStartedBridgeSend(localStore, task.id);
@@ -3562,7 +3663,7 @@ test("send operation scan fails bridge task when pending outbox file is missing"
   });
   createPassingWechatWindowSnapshot(localStore, "pending bridge send should not hang forever");
 
-  const execution = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const execution = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
   assert.equal(execution.task.status, "sending");
   const outboxFile = execution.attempt.metadata.outboxFile;
   assert.equal(fs.existsSync(outboxFile), true);
@@ -3599,12 +3700,15 @@ test("execute send rejects duplicate execution while bridge ack is pending", () 
   });
   createPassingWechatWindowSnapshot(localStore, "do not duplicate bridge outbox");
 
-  const first = service.executeSend(task.id, { adapter: "windows_bridge" });
+  const first = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
   const outboxBefore = fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json"));
 
   assert.equal(first.task.status, "sending");
   assert.equal(outboxBefore.length, 1);
-  assert.throws(() => service.executeSend(task.id, { adapter: "windows_bridge" }), /send task is not queued: sending/);
+  assert.throws(
+    () => service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" })),
+    /send task is not queued: sending/,
+  );
 
   const outboxAfter = fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json"));
   assert.deepEqual(outboxAfter, outboxBefore);
@@ -4246,14 +4350,25 @@ test("low value automation queue skips queued task when design budget became hig
   });
 
   createPassingWechatWindowSnapshot(localStore, "ready to send");
-  const sendScan = await service.processSafeSendQueue({ adapter: "windows_bridge", automationOnly: true });
+  const sendScan = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    automationOnly: true,
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
   const freshTask = localStore.getSendTask(task.id);
 
   assert.equal(sendScan.scanned, 0);
   assert.equal(sendScan.processed.length, 0);
   assert.equal(freshTask.status, "queued");
 
-  const manualQueueScan = await service.processSafeSendQueue({ adapter: "windows_bridge" });
+  const manualQueueScan = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
   const blockedTask = localStore.getSendTask(task.id);
 
   assert.equal(manualQueueScan.processed.length, 0);
@@ -4751,7 +4866,12 @@ test("sent low-value quote becomes unpaid order draft after customer accepts wit
   assert.equal(selection.sendTask.status, "queued");
 
   createPassingWechatWindowSnapshot(localStore, "我选第2张，就按这个报价");
-  const sendScan = await service.processSafeSendQueue({ adapter: "windows_bridge" });
+  const sendScan = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
   assert.equal(sendScan.processed.length, 1);
   assert.equal(sendScan.processed[0].task.id, selection.sendTask.id);
   assert.equal(sendScan.processed[0].task.status, "sending");
@@ -5119,4 +5239,1641 @@ test("inbound payment proof attachment goes to manual verification without marki
   assert.ok(reviewLog);
   assert.match(reviewLog.note, /manual|payment|status|人工|付款/);
   assert.equal(reviewCenter.quoteDrafts.some((item) => item.id === quote.id), true);
+});
+
+// Migrated from the former C-drive worktree (30 unique regression tests).
+
+test("send task queue records and payload carry customer identity", async () => {
+  const { localStore, service } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "send_task_customer_identity_request_1",
+    status: "quick_confirm",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 20 },
+    bundle: {
+      items: [{ skuCode: "BOX-A", name: "box", costPrice: 50, salePrice: 120 }],
+    },
+    requirements: { useRealSkuImages: true, showAllItems: true },
+  });
+  const [image] = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\temp\\send-task-candidate-1.png",
+      downloadUrl: "",
+      width: 1024,
+      height: 1024,
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, image.id);
+
+  const textTask = await service.enqueueTextMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    text: "test text",
+  });
+  const quoteTask = await service.enqueueQuoteMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    quoteDraftId: quote.id,
+    text: "quote text",
+  });
+  const imageTask = await service.enqueueDesignImages({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: designJob.id,
+    imagePaths: [image.localPath],
+  });
+
+  for (const task of [textTask, quoteTask, imageTask]) {
+    assert.equal(task.customerId, "customer_demo_1");
+    assert.equal(task.payload.wechatAccountId, "wechat_demo_1");
+    assert.equal(task.payload.conversationId, "conversation_demo_1");
+    assert.equal(task.payload.customerId, "customer_demo_1");
+    assert.equal(task.guardSnapshot.binding.customerId, "customer_demo_1");
+  }
+  assert.equal(quoteTask.payload.quoteDraftId, quote.id);
+  assert.equal(imageTask.payload.designJobId, designJob.id);
+});
+
+test("manual lock only blocks and cancels send tasks from the same full conversation identity", async () => {
+  const { localStore, service } = setupService();
+
+  const queuedMatch = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "same customer queued task should block" },
+  });
+  const sendingMatch = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "sending",
+    payload: { kind: "text", text: "same customer sending task should cancel" },
+  });
+  const queuedCrossIdentity = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "cross identity queued task should stay queued" },
+  });
+  const sendingCrossIdentity = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "sending",
+    payload: { kind: "text", text: "cross identity sending task should stay sending" },
+  });
+  localStore.updateSendTask(
+    queuedCrossIdentity.id,
+    { wechatAccountId: "wechat_demo_2", customerId: "customer_demo_2" },
+    { skipBindingValidation: true },
+  );
+  localStore.updateSendTask(
+    sendingCrossIdentity.id,
+    { wechatAccountId: "wechat_demo_2", customerId: "customer_demo_2" },
+    { skipBindingValidation: true },
+  );
+
+  const result = await service.setConversationManualLock("conversation_demo_1", expectedForConversation("conversation_demo_1", {
+    locked: true,
+    reviewer: "test",
+    reason: "manual_takeover_test",
+  }));
+
+  assert.deepEqual(result.blockedSendTasks.map((task) => task.id), [queuedMatch.id]);
+  assert.deepEqual(result.inFlightSendTasks.map((task) => task.id), [sendingMatch.id]);
+  assert.equal(localStore.getSendTask(queuedMatch.id).status, "blocked");
+  assert.equal(localStore.getSendTask(sendingMatch.id).status, "cancelled");
+  assert.equal(localStore.getSendTask(queuedCrossIdentity.id).status, "queued");
+  assert.equal(localStore.getSendTask(sendingCrossIdentity.id).status, "sending");
+});
+
+test("bridge inbox scan ignores acknowledgements outside the active conversation identity", () => {
+  const { service } = setupService();
+
+  fs.mkdirSync(process.env.WECHAT_BRIDGE_INBOX_DIR, { recursive: true });
+  const inboxFile = path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "wrong-conversation-ack.json");
+  fs.writeFileSync(
+    inboxFile,
+    JSON.stringify({
+      version: "wechat_bridge_ack_v1",
+      taskId: "send_wrong_conversation",
+      status: "sent",
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+      sentAt: new Date().toISOString(),
+    }),
+    "utf8",
+  );
+
+  const result = service.scanBridgeInbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.processed.length, 0);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.ignored.length, 1);
+  assert.equal(result.ignored[0].errorMessage, "identity_filter_mismatch");
+  assert.equal(fs.existsSync(inboxFile), true);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "processed")), false);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "failed")), false);
+});
+
+test("bridge inbox scan ignores acknowledgements whose declared identity conflicts with the task", () => {
+  const { localStore, service } = setupService();
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "sending",
+    payload: { kind: "text", text: "task one should not accept mismatched ack" },
+  });
+
+  fs.mkdirSync(process.env.WECHAT_BRIDGE_INBOX_DIR, { recursive: true });
+  const inboxFile = path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "conflicting-identity-ack.json");
+  fs.writeFileSync(
+    inboxFile,
+    JSON.stringify({
+      version: "wechat_bridge_ack_v1",
+      taskId: task.id,
+      status: "sent",
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      customerId: "customer_demo_2",
+      sentAt: new Date().toISOString(),
+    }),
+    "utf8",
+  );
+
+  const result = service.scanBridgeInbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const freshTask = localStore.getSendTask(task.id);
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.processed.length, 0);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.ignored.length, 1);
+  assert.equal(result.ignored[0].errorMessage, "identity_filter_mismatch");
+  assert.equal(freshTask.status, "sending");
+  assert.equal(fs.existsSync(inboxFile), true);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "processed")), false);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "failed")), false);
+});
+
+test("bridge inbox scan returns processed customer identity for matching acknowledgements", () => {
+  const { localStore, service } = setupService();
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "matching ack should preserve customer identity" },
+  });
+  createPassingWechatWindowSnapshot(localStore, "matching bridge inbox customer identity");
+  const execution = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  const outboxFile = execution.attempt.metadata.outboxFile;
+  const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+
+  fs.mkdirSync(process.env.WECHAT_BRIDGE_INBOX_DIR, { recursive: true });
+  const inboxFile = path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "matching-customer-ack.json");
+  fs.writeFileSync(
+    inboxFile,
+    JSON.stringify({
+      version: "wechat_bridge_ack_v1",
+      taskId: task.id,
+      status: "sent",
+      ackToken: outbox.ackToken,
+      attemptId: execution.attempt.id,
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      outboxFileName: path.basename(outboxFile),
+      sentAt: new Date().toISOString(),
+    }),
+    "utf8",
+  );
+
+  const result = service.scanBridgeInbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const freshTask = localStore.getSendTask(task.id);
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.processed.length, 1);
+  assert.equal(result.processed[0].customerId, "customer_demo_1");
+  assert.equal(result.processed[0].taskId, task.id);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.ignored.length, 0);
+  assert.equal(freshTask.status, "sent");
+  assert.equal(fs.existsSync(inboxFile), false);
+  assert.equal(fs.existsSync(outboxFile), false);
+  const processedFiles = fs.readdirSync(path.join(process.env.WECHAT_BRIDGE_INBOX_DIR, "processed"));
+  assert.equal(processedFiles.some((fileName) => fileName.endsWith("matching-customer-ack.json")), true);
+});
+
+test("window snapshot inbox scan ignores snapshots outside the active conversation identity", () => {
+  const { localStore, service } = setupService();
+
+  fs.mkdirSync(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, { recursive: true });
+  const inboxFile = path.join(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, "wrong-conversation-snapshot.json");
+  fs.writeFileSync(
+    inboxFile,
+    JSON.stringify({
+      source: "test",
+      isOnline: true,
+      wechatAccountId: "wechat_demo_2",
+      accountDisplayName: "微信客服2号",
+      activeChatTitle: "李经理-企业伴手礼",
+      chatTitle: "李经理-企业伴手礼",
+      externalChatId: "demo_li_chat",
+      recentCustomerId: "customer_demo_2",
+      recentMessageText: "我们要做一批企业伴手礼，预算比较高",
+      confidence: 1,
+      capturedAt: new Date().toISOString(),
+    }),
+    "utf8",
+  );
+
+  const beforeCount = localStore.listWechatWindowSnapshots({}).length;
+  const result = service.scanWindowSnapshotInbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const afterCount = localStore.listWechatWindowSnapshots({}).length;
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.processed.length, 0);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.ignored.length, 1);
+  assert.equal(result.ignored[0].reason, "identity_filter_mismatch");
+  assert.equal(afterCount, beforeCount);
+  assert.equal(fs.existsSync(inboxFile), true);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, "processed")), false);
+  assert.equal(fs.existsSync(path.join(process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, "failed")), false);
+});
+
+test("requeue rejects high-value manual approval reason for ordinary blocked send task", async () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "ordinary blocked task cannot forge high value approval" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      blockedByManualLock: true,
+      reason: "conversation_manual_locked",
+      history: [{ action: "manual_lock_block", fromStatus: "queued", reason: "manual takeover" }],
+    },
+  });
+  const beforeLogs = localStore.listReviewLogs().length;
+
+  await assert.rejects(
+    () =>
+      service.requeueSendTask(
+        task.id,
+        expectedForTask(task, {
+          reason: "manual_approve_high_value_send",
+          reviewer: "manual_agent",
+          note: "attempt to misuse high value approval",
+        }),
+      ),
+    /high value manual approval is only allowed for send tasks awaiting high value review/,
+  );
+  const freshTask = localStore.getSendTask(task.id);
+  assert.equal(freshTask.status, "blocked");
+  assert.equal(freshTask.guardSnapshot.automation?.manualApproved, undefined);
+  assert.equal(freshTask.guardSnapshot.manualApprovedAt, undefined);
+  assert.equal(localStore.listReviewLogs().length, beforeLogs);
+});
+
+test("manual send task operations require full expected identity", async () => {
+  const { localStore, service } = setupService();
+  const queuedTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "manual send operations require identity" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  const blockedTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "blocked",
+    payload: { kind: "text", text: "manual requeue and cancel require identity" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+
+  assert.throws(() => service.executeDryRunSend(queuedTask.id), /send task identity expectation required/);
+  assert.throws(() => service.executeSend(queuedTask.id, { adapter: "dry_run" }), /send task identity expectation required/);
+  assert.throws(() => service.validateSendTask(queuedTask.id, { mode: "wrong_chat" }), /send task identity expectation required/);
+  assert.throws(() => service.validateSendTaskWithCurrentWindow(queuedTask.id), /send task identity expectation required/);
+  await assert.rejects(
+    () => service.requeueSendTask(blockedTask.id, { reason: "missing identity" }),
+    /send task identity expectation required/,
+  );
+  assert.throws(
+    () => service.cancelSendTask(blockedTask.id, { reason: "missing identity" }),
+    /send task identity expectation required/,
+  );
+  assert.equal(localStore.getSendTask(queuedTask.id).status, "queued");
+  assert.equal(localStore.getSendTask(blockedTask.id).status, "blocked");
+  assert.equal(localStore.listSendAttempts({ sendTaskId: queuedTask.id }).length, 0);
+});
+
+test("wechat send enqueue rejects conversation from another account before creating a task", async () => {
+  const { localStore, service } = setupService();
+  const beforeCount = localStore.listSendTasks().length;
+
+  await assert.rejects(
+    () =>
+      service.enqueueTextMessage({
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_1",
+        text: "wrong account should not enqueue",
+      }),
+    /conversation not found|selected wechat account|send task binding invalid/,
+  );
+
+  assert.equal(localStore.listSendTasks().length, beforeCount);
+});
+
+test("local send attempt hydration does not attach a task after stored identity drift", () => {
+  const { localStore } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "attempt hydration must stay scoped" },
+  });
+  const attempt = localStore.createSendAttempt({
+    sendTaskId: task.id,
+    adapter: "dry_run",
+    status: "blocked",
+    metadata: {
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      target: {
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+      },
+    },
+  });
+
+  const data = localStore.read();
+  const index = data.sendAttempts.findIndex((item) => item.id === attempt.id);
+  data.sendAttempts[index] = {
+    ...data.sendAttempts[index],
+    metadata: {
+      ...data.sendAttempts[index].metadata,
+      wechatAccountId: "wechat_demo_2",
+      conversationId: "conversation_demo_2",
+      target: {
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_2",
+      },
+    },
+  };
+  localStore.write(data);
+
+  const dirtyAttempt = localStore.getLatestSendAttempt(task.id);
+  assert.equal(dirtyAttempt.sendTaskId, task.id);
+  assert.equal(dirtyAttempt.sendTask, null);
+});
+
+test("local send task hydration does not attach a mismatched conversation identity", () => {
+  const { localStore } = setupService();
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    status: "queued",
+    payload: {
+      kind: "text",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      text: "dirty task should not inherit the wrong conversation",
+    },
+  });
+
+  localStore.updateSendTask(
+    task.id,
+    {
+      wechatAccountId: "wechat_demo_2",
+      customerId: "customer_demo_2",
+      payload: {
+        ...task.payload,
+        wechatAccountId: "wechat_demo_2",
+        customerId: "customer_demo_2",
+      },
+    },
+    { skipBindingValidation: true },
+  );
+
+  const dirtyTask = localStore.getSendTask(task.id);
+  const dirtyListTask = localStore.listSendTasks({ conversationId: "conversation_demo_1" })[0];
+
+  assert.equal(dirtyTask.conversationId, "conversation_demo_1");
+  assert.equal(dirtyTask.wechatAccountId, "wechat_demo_2");
+  assert.equal(dirtyTask.customerId, "customer_demo_2");
+  assert.equal(dirtyTask.conversation, null);
+  assert.equal(dirtyListTask.conversation, null);
+  assert.deepEqual(
+    localStore.listSendTasks({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }),
+    [],
+  );
+});
+
+test("local design and order hydration do not attach a mismatched conversation identity", () => {
+  const { localStore } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "dirty_hydration_design_request_1",
+    status: "completed",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 180, quantity: 20 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 50, salePrice: 120 }] },
+  });
+  const quote = localStore.createQuoteFromDesignJob(designJob.id);
+  const order = localStore.upsertOrderDraftFromQuote(quote.id, {
+    designJobId: designJob.id,
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    quantity: 20,
+    unitPrice: 180,
+    totalPrice: 3600,
+    totalCost: 2000,
+    profit: 1600,
+    paymentStatus: "unpaid",
+    status: "draft",
+  });
+  const confirmationTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    designJobId: designJob.id,
+    quoteDraftId: quote.id,
+    status: "queued",
+    payload: {
+      kind: "text",
+      text: "order confirmation should not hydrate into a dirty order",
+    },
+    guardSnapshot: {
+      reason: "order-confirmation",
+      automation: {
+        source: "order_confirmation",
+        orderDraftId: order.id,
+      },
+    },
+  });
+
+  localStore.updateDesignJob(
+    designJob.id,
+    {
+      wechatAccountId: "wechat_demo_2",
+      customerId: "customer_demo_2",
+    },
+    { skipIdentityValidation: true },
+  );
+  localStore.updateOrderDraft(
+    order.id,
+    {
+      wechatAccountId: "wechat_demo_2",
+      customerId: "customer_demo_2",
+    },
+    { skipIdentityValidation: true },
+  );
+
+  const dirtyJob = localStore.getDesignJob(designJob.id);
+  const dirtyListJob = localStore.listDesignJobs({ conversationId: "conversation_demo_1" })[0] || null;
+  const dirtyOrder = localStore.getOrderDraft(order.id);
+  const dirtyListOrder = localStore.listOrderDrafts({ conversationId: "conversation_demo_1" })[0] || null;
+
+  assert.equal(dirtyJob.conversationId, "conversation_demo_1");
+  assert.equal(dirtyJob.wechatAccountId, "wechat_demo_2");
+  assert.equal(dirtyJob.customerId, "customer_demo_2");
+  assert.equal(dirtyJob.conversation, null);
+  assert.equal(dirtyListJob, null);
+  assert.deepEqual(
+    localStore.listDesignJobs({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }),
+    [],
+  );
+
+  assert.equal(dirtyOrder.conversationId, "conversation_demo_1");
+  assert.equal(dirtyOrder.wechatAccountId, "wechat_demo_2");
+  assert.equal(dirtyOrder.customerId, "customer_demo_2");
+  assert.equal(dirtyOrder.conversation, null);
+  assert.equal(dirtyOrder.quoteDraft, null);
+  assert.equal(dirtyOrder.confirmationSendTask, null);
+  assert.equal(dirtyOrder.confirmationSendTaskId, null);
+  assert.deepEqual(dirtyOrder.followupSendTasks, []);
+  assert.equal(dirtyListOrder.conversation, null);
+  assert.equal(dirtyListOrder.quoteDraft, null);
+  assert.equal(dirtyListOrder.confirmationSendTask, null);
+  assert.equal(localStore.getSendTask(confirmationTask.id).conversation.id, "conversation_demo_1");
+  assert.deepEqual(
+    localStore.listOrderDrafts({
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+    }),
+    [],
+  );
+});
+
+test("local quote creation rejects design jobs whose full conversation identity no longer matches", () => {
+  const { localStore } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "dirty_quote_creation_design_request_1",
+    status: "completed",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 120, quantity: 10 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 40, salePrice: 90 }] },
+  });
+
+  localStore.updateDesignJob(
+    designJob.id,
+    {
+      wechatAccountId: "wechat_demo_2",
+      customerId: "customer_demo_2",
+    },
+    { skipIdentityValidation: true },
+  );
+
+  assert.throws(
+    () => localStore.createQuoteFromDesignJob(designJob.id),
+    /quote draft identity invalid: .*报价设计任务匹配会话/,
+  );
+  assert.deepEqual(localStore.listQuoteDrafts({ conversationId: "conversation_demo_1" }), []);
+});
+
+test("safe send queue processes only tasks matching the active conversation identity filter", async () => {
+  const { localStore, service } = setupService();
+  localStore.updateConversation("conversation_demo_2", { manualLocked: false });
+
+  const job1 = localStore.createDesignJob({
+    requestId: "safe_queue_identity_request_1",
+    status: "completed",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "gift box",
+    budget: { mode: "per_box", amount: 100, quantity: 10 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 30, salePrice: 60 }] },
+    isHighValue: false,
+  });
+  const job2 = localStore.createDesignJob({
+    requestId: "safe_queue_identity_request_2",
+    status: "completed",
+    customerId: "customer_demo_2",
+    conversationId: "conversation_demo_2",
+    wechatAccountId: "wechat_demo_2",
+    scene: "corporate gift",
+    budget: { mode: "per_box", amount: 120, quantity: 5 },
+    bundle: { items: [{ skuCode: "TEA-A", name: "tea", costPrice: 45, salePrice: 90 }] },
+    isHighValue: false,
+  });
+  const quote1 = localStore.createQuoteFromDesignJob(job1.id);
+  const quote2 = localStore.createQuoteFromDesignJob(job2.id);
+  const task1 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job1.id,
+    quoteDraftId: quote1.id,
+    status: "queued",
+    payload: { kind: "quote", text: "quote one should be processed" },
+  });
+  const task2 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_2",
+    designJobId: job2.id,
+    quoteDraftId: quote2.id,
+    status: "queued",
+    payload: { kind: "quote", text: "quote two must stay queued" },
+  });
+  localStore.updateQuoteDraft(quote1.id, { status: "send_queued", sendTaskId: task1.id });
+  localStore.updateQuoteDraft(quote2.id, { status: "send_queued", sendTaskId: task2.id });
+
+  createPassingWechatWindowSnapshot(localStore, "ready to send quote one");
+  const result = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const freshTask1 = localStore.getSendTask(task1.id);
+  const freshTask2 = localStore.getSendTask(task2.id);
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.processed.length, 1);
+  assert.equal(result.processed[0].task.id, task1.id);
+  assert.equal(freshTask1.status, "sending");
+  assert.equal(freshTask2.status, "queued");
+  assert.equal(fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json")).length, 1);
+});
+
+test("safe send queue service rejects direct processing without complete conversation identity", async () => {
+  const { service } = setupService();
+
+  await assert.rejects(
+    () => service.processSafeSendQueue({ adapter: "windows_bridge" }),
+    /safe send queue identity expectation required: wechatAccountId, conversationId, customerId/,
+  );
+  await assert.rejects(
+    () =>
+      service.processSafeSendQueue({
+        adapter: "windows_bridge",
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+      }),
+    /safe send queue identity expectation required: customerId/,
+  );
+});
+
+test("high-value automatic design text is blocked before safe queue or direct execution", async () => {
+  const { localStore, service, reviews } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "high_value_text_manual_review_request_1",
+    status: "submitted",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "年度客户礼盒",
+    budget: { mode: "total", amount: 15000, quantity: 50 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 30, salePrice: 60 }] },
+    isHighValue: true,
+  });
+  const queueTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job.id,
+    status: "queued",
+    payload: {
+      kind: "text",
+      text: "高价值客户自动等待说明不能直接发",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "design-timeout-customer-explain",
+        valueLevel: "high",
+        queuedBy: "manual_review_flow",
+      },
+    },
+  });
+  const directTask = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job.id,
+    status: "queued",
+    payload: {
+      kind: "text",
+      text: "高价值客户自动等待说明不能单独执行",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "design-timeout-customer-explain",
+        valueLevel: "high",
+        queuedBy: "manual_review_flow",
+      },
+    },
+  });
+
+  const direct = service.executeSend(directTask.id, expectedForTask(directTask, { adapter: "windows_bridge" }));
+  const scan = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const blockedQueueTask = localStore.getSendTask(queueTask.id);
+  const blockedDirectTask = localStore.getSendTask(directTask.id);
+
+  assert.equal(scan.processed.length, 0);
+  assert.equal(scan.blocked.length, 1);
+  assert.equal(scan.blocked[0].reason, "manual_review_required");
+  assert.equal(blockedQueueTask.status, "blocked");
+  assert.equal(blockedQueueTask.guardSnapshot.blockedByHighValueReview, true);
+  assert.equal(blockedQueueTask.guardSnapshot.reason, "高价值客户自动话术需要人工确认后再发送。");
+  assert.equal(direct.task.status, "blocked");
+  assert.equal(direct.attempt.status, "blocked");
+  assert.equal(direct.attempt.guardStatus, "manual_review_required");
+  assert.equal(blockedDirectTask.guardSnapshot.blockedByHighValueReview, true);
+  const manualReviewLogs = localStore
+    .listReviewLogs()
+    .filter((log) => log.targetType === "send_task" && [queueTask.id, directTask.id].includes(log.targetId));
+  assert.equal(manualReviewLogs.length, 2);
+  for (const log of manualReviewLogs) {
+    assert.equal(log.decision, "manual_review_required");
+    assert.equal(log.afterStatus, "blocked");
+    assert.equal(log.metadata.wechatAccountId, "wechat_demo_1");
+    assert.equal(log.metadata.conversationId, "conversation_demo_1");
+    assert.equal(log.metadata.customerId, "customer_demo_1");
+    assert.equal(log.metadata.designJobId, job.id);
+    assert.equal(log.metadata.blockedByHighValueReview, true);
+    assert.equal(log.metadata.automationValueLevel, "high");
+    assert.equal(log.metadata.automationQueuedBy, "manual_review_flow");
+  }
+  const queueNotice = localStore
+    .listNotifications()
+    .find((notice) => notice.target?.sendTaskId === queueTask.id && notice.target?.reason === "manual_review_required");
+  assert.ok(queueNotice);
+  assert.equal(queueNotice.level, "warning");
+  assert.equal(queueNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(queueNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(queueNotice.target.customerId, "customer_demo_1");
+  assert.equal(queueNotice.target.blockSource, "safe_send_queue");
+  const directReviewLog = manualReviewLogs.find((log) => log.targetId === directTask.id);
+  const directNotice = localStore
+    .listNotifications()
+    .find((notice) => notice.target?.sendTaskId === directTask.id && notice.target?.blockSource === "direct_send_execute");
+  assert.ok(directReviewLog);
+  assert.ok(directNotice);
+  assert.equal(directNotice.level, "warning");
+  assert.equal(directNotice.target.reviewLogId, directReviewLog.id);
+  assert.equal(directNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(directNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(directNotice.target.customerId, "customer_demo_1");
+  const reviewCenter = await reviews.list({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  assert.deepEqual(
+    reviewCenter.sendTasks.map((task) => task.id).sort(),
+    [directTask.id, queueTask.id].sort(),
+  );
+  assert.equal(reviewCenter.sendTasks.every((task) => task.guardSnapshot?.blockedByHighValueReview), true);
+  assert.equal(reviewCenter.logs.some((log) => log.targetType === "send_task" && log.targetId === queueTask.id), true);
+  const outboxFiles = fs.existsSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR)
+    ? fs.readdirSync(process.env.WECHAT_BRIDGE_OUTBOX_DIR).filter((fileName) => fileName.endsWith(".json"))
+    : [];
+  assert.equal(outboxFiles.length, 0);
+
+  await assert.rejects(
+    () => service.requeueSendTask(queueTask.id, expectedForTask(blockedQueueTask, { reason: "manual_operator_requeue_from_send_center" })),
+    /high value send task requires explicit manual approval/,
+  );
+  const logsBeforeEmptyApproval = localStore.listReviewLogs().length;
+  await assert.rejects(
+    () =>
+      service.requeueSendTask(
+        queueTask.id,
+        expectedForTask(blockedQueueTask, {
+          reason: "manual_approve_high_value_send",
+          reviewer: "manual_agent",
+          note: " ",
+        }),
+      ),
+    /需要填写人工处理结果/,
+  );
+  assert.equal(localStore.getSendTask(queueTask.id).status, "blocked");
+  assert.equal(localStore.listReviewLogs().length, logsBeforeEmptyApproval);
+  const approved = await service.requeueSendTask(
+    queueTask.id,
+    expectedForTask(blockedQueueTask, {
+      reason: "manual_approve_high_value_send",
+      reviewer: "manual_agent",
+      note: "reviewed customer, chat target, content and timing",
+    }),
+  );
+  assert.equal(approved.status, "queued");
+  assert.equal(approved.guardSnapshot.blockedByHighValueReview, false);
+  assert.equal(approved.guardSnapshot.manualApprovedBy, "manual_agent");
+  assert.equal(approved.guardSnapshot.automation.manualApproved, true);
+  assert.equal(approved.guardSnapshot.automation.queuedBy, "manual_agent");
+  assert.equal(approved.guardSnapshot.automation.releaseReason, "manual_approve_high_value_send");
+  assert.equal(approved.guardSnapshot.history.at(-1).reviewer, "manual_agent");
+  assert.equal(approved.guardSnapshot.history.at(-1).manualApproved, true);
+  assert.equal(approved.guardSnapshot.history.at(-1).manualApprovalNote, "reviewed customer, chat target, content and timing");
+  const approvalLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "send_task" && log.targetId === queueTask.id && log.decision === "manual_approve_high_value_send");
+  assert.ok(approvalLog);
+  assert.equal(approvalLog.afterStatus, "queued");
+  assert.equal(approvalLog.metadata.manualApprovedBy, "manual_agent");
+  assert.equal(approvalLog.metadata.manualApprovalNote, "reviewed customer, chat target, content and timing");
+  const approvalNotice = localStore
+    .listNotifications()
+    .find((notice) => notice.target?.sendTaskId === queueTask.id && notice.target?.blockSource === "manual_requeue_approval");
+  assert.ok(approvalNotice);
+  assert.equal(approvalNotice.level, "info");
+  assert.equal(approvalNotice.target.reviewLogId, approvalLog.id);
+  assert.equal(approvalNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(approvalNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(approvalNotice.target.customerId, "customer_demo_1");
+  assert.equal(approvalNotice.target.manualApprovedBy, "manual_agent");
+  assert.equal(approvalNotice.target.releaseReason, "manual_approve_high_value_send");
+  const reviewCenterAfterApproval = await reviews.list({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  assert.equal(reviewCenterAfterApproval.sendTasks.some((task) => task.id === queueTask.id), false);
+  assert.equal(reviewCenterAfterApproval.sendTasks.some((task) => task.id === directTask.id), true);
+
+  const cancelledDirect = service.cancelSendTask(
+    directTask.id,
+    expectedForTask(blockedDirectTask, {
+      reason: "manual_takeover_cancel_send_task",
+      note: "客户预算高，需要人工继续跟进，不发送自动话术",
+    }),
+  );
+  assert.equal(cancelledDirect.status, "cancelled");
+  assert.equal(cancelledDirect.guardSnapshot.cancelNote, "客户预算高，需要人工继续跟进，不发送自动话术");
+  assert.equal(cancelledDirect.guardSnapshot.history.at(-1).note, "客户预算高，需要人工继续跟进，不发送自动话术");
+  const cancelLog = localStore
+    .listReviewLogs()
+    .find((log) => log.targetType === "send_task" && log.targetId === directTask.id && log.decision === "manual_cancel_high_value_send");
+  const cancelNotice = localStore
+    .listNotifications()
+    .find((notice) => notice.target?.sendTaskId === directTask.id && notice.target?.blockSource === "manual_cancel");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog.afterStatus, "cancelled");
+  assert.equal(cancelLog.metadata.cancelReason, "manual_takeover_cancel_send_task");
+  assert.equal(cancelLog.metadata.cancelNote, "客户预算高，需要人工继续跟进，不发送自动话术");
+  assert.equal(cancelLog.metadata.wechatAccountId, "wechat_demo_1");
+  assert.equal(cancelLog.metadata.conversationId, "conversation_demo_1");
+  assert.equal(cancelLog.metadata.customerId, "customer_demo_1");
+  assert.ok(cancelNotice);
+  assert.equal(cancelNotice.level, "info");
+  assert.equal(cancelNotice.target.reviewLogId, cancelLog.id);
+  assert.equal(cancelNotice.target.cancelReason, "manual_takeover_cancel_send_task");
+  assert.equal(cancelNotice.target.cancelNote, "客户预算高，需要人工继续跟进，不发送自动话术");
+  assert.equal(cancelNotice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(cancelNotice.target.conversationId, "conversation_demo_1");
+  assert.equal(cancelNotice.target.customerId, "customer_demo_1");
+  const reviewCenterAfterCancel = await reviews.list({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  assert.equal(reviewCenterAfterCancel.sendTasks.some((task) => task.id === directTask.id), false);
+
+  createPassingWechatWindowSnapshot(localStore, "approved high value send can proceed");
+  const releasedScan = await service.processSafeSendQueue({
+    adapter: "windows_bridge",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  assert.equal(releasedScan.blocked.length, 0);
+  assert.equal(releasedScan.processed.length, 1);
+  assert.equal(releasedScan.processed[0].task.id, queueTask.id);
+  assert.equal(localStore.getSendTask(queueTask.id).status, "sending");
+});
+
+test("manual-approved high-value send task can be directly executed without another high-value block", async () => {
+  const { localStore, service, reviews } = setupService();
+  const job = localStore.createDesignJob({
+    requestId: "manual_approved_direct_high_value_send_request_1",
+    status: "submitted",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "年度客户礼盒",
+    budget: { mode: "total", amount: 18000, quantity: 60 },
+    bundle: { items: [{ skuCode: "BOX-A", name: "box", costPrice: 30, salePrice: 60 }] },
+    isHighValue: true,
+  });
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    designJobId: job.id,
+    status: "queued",
+    payload: {
+      kind: "text",
+      text: "高价值客户自动等待说明必须先人工批准",
+    },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+      automation: {
+        source: "design-timeout-customer-explain",
+        valueLevel: "high",
+        queuedBy: "manual_review_flow",
+      },
+    },
+  });
+
+  const blocked = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  assert.equal(blocked.task.status, "blocked");
+  assert.equal(blocked.attempt.status, "blocked");
+  assert.equal(blocked.attempt.guardStatus, "manual_review_required");
+
+  const approved = await service.requeueSendTask(
+    task.id,
+    expectedForTask(blocked.task, {
+      reason: "manual_approve_high_value_send",
+      reviewer: "manual_agent",
+      note: "reviewed customer, chat target, content and timing",
+    }),
+  );
+  assert.equal(approved.status, "queued");
+  assert.equal(approved.guardSnapshot.automation.manualApproved, true);
+  assert.equal(approved.guardSnapshot.blockedByHighValueReview, false);
+  const reviewCenterAfterApproval = await reviews.list({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  assert.equal(reviewCenterAfterApproval.sendTasks.some((item) => item.id === task.id), false);
+
+  createPassingWechatWindowSnapshot(localStore, "高价值客户自动等待说明必须先人工批准");
+  const executed = service.executeSend(task.id, expectedForTask(approved, { adapter: "windows_bridge" }));
+  assert.equal(executed.task.status, "sending");
+  assert.equal(executed.attempt.status, "started");
+  assert.notEqual(executed.attempt.guardStatus, "manual_review_required");
+  const blockLogsAfterApproval = localStore
+    .listReviewLogs()
+    .filter((log) => log.targetType === "send_task" && log.targetId === task.id && log.decision === "manual_review_required");
+  assert.equal(blockLogsAfterApproval.length, 1);
+});
+
+test("bridge sent ack rejects mismatched customer identity", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "customer identity must match bridge ack" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "customer identity must match bridge ack");
+  service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  const attempt = localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge", status: "started" });
+  const outboxFile = attempt.metadata.outboxFile;
+  const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+
+  assert.throws(
+    () =>
+      service.acknowledgeBridgeSend(task.id, {
+        status: "sent",
+        version: "wechat_bridge_ack_v1",
+        ackToken: outbox.ackToken,
+        taskId: task.id,
+        attemptId: attempt.id,
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_2",
+        outboxFileName: path.basename(outboxFile),
+        sentAt: new Date().toISOString(),
+      }),
+    /bridge ack binding invalid|bridge outbox payload invalid/,
+  );
+
+  assert.equal(localStore.getSendTask(task.id).status, "sending");
+  assert.equal(localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge" }).status, "started");
+});
+
+test("bridge sent ack rejects changed preflight window snapshot", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "window snapshot must stay bound before bridge ack" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "window snapshot must stay bound before bridge ack");
+  service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  const attempt = localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge", status: "started" });
+  const outboxFile = attempt.metadata.outboxFile;
+  const outbox = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+  assert.equal(outbox.preflight.rejectIfWindowChanged, true);
+  assert.equal(outbox.preflight.rejectIfAnyCheckFails, true);
+  assert.equal(outbox.preflight.expectedWindowSnapshotId, outbox.context.windowSnapshotId);
+
+  outbox.context.windowSnapshotId = "window_snapshot_after_focus_changed";
+  fs.writeFileSync(outboxFile, `${JSON.stringify(outbox, null, 2)}\n`, "utf8");
+
+  assert.throws(
+    () =>
+      service.acknowledgeBridgeSend(task.id, {
+        status: "sent",
+        version: "wechat_bridge_ack_v1",
+        ackToken: outbox.ackToken,
+        taskId: task.id,
+        attemptId: attempt.id,
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_1",
+        outboxFileName: path.basename(outboxFile),
+        sentAt: new Date().toISOString(),
+      }),
+    /preflightWindowSnapshot/,
+  );
+
+  assert.equal(localStore.getSendTask(task.id).status, "sending");
+  assert.equal(localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge" }).status, "started");
+  assert.equal(fs.existsSync(outboxFile), true);
+});
+
+test("bridge worker ack built from backend outbox entry carries customer identity", () => {
+  const { buildAckPayload } = require("../tools/wechat-bridge-worker");
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "worker ack should include customer identity" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "worker ack should include customer identity");
+  const execution = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  const outboxFile = execution.attempt.metadata.outboxFile;
+  const outboxPayload = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+  const outbox = service.listBridgeOutbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const [entry] = outbox.pending;
+
+  assert.equal(entry.taskId, task.id);
+  assert.equal(entry.customerId, "customer_demo_1");
+  assert.equal(entry.preview.customerId, "customer_demo_1");
+
+  const ack = buildAckPayload(entry, "simulate_sent", outboxPayload);
+  assert.equal(ack.customerId, "customer_demo_1");
+
+  const result = service.acknowledgeBridgeSend(task.id, ack);
+  assert.equal(result.task.status, "sent");
+  assert.equal(localStore.getLatestSendAttempt(task.id, { adapter: "windows_bridge" }).status, "sent");
+});
+
+test("order confirmation and follow-up queue audit target keep account conversation and customer identity", async () => {
+  const { localStore, service, orders } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "order_queue_identity_request_1",
+    status: "quick_confirm",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "employee gift",
+    budget: { mode: "per_box", amount: 120, quantity: 30 },
+    bundle: {
+      items: [{ skuCode: "BOX-A", name: "box", costPrice: 45, salePrice: 100 }],
+    },
+    requirements: { useRealSkuImages: true, showAllItems: true },
+  });
+  const [image] = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "order_queue_candidate_1",
+      position: 1,
+      localPath: "C:\\temp\\order-queue-candidate-1.png",
+      downloadUrl: "",
+      width: 1024,
+      height: 1024,
+      selected: true,
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, image.id);
+  localStore.updateQuoteDraft(quote.id, { status: "accepted", paymentStatus: "deposit_paid" });
+  const order = await orders.createFromQuote(quote.id, {
+    expectedWechatAccountId: designJob.wechatAccountId,
+    expectedConversationId: designJob.conversationId,
+    expectedCustomerId: designJob.customerId,
+  });
+
+  const confirmation = await service.queueOrderConfirmation(
+    order.id,
+    expectedForOrder(order, { owner: "low_value_automation" }),
+  );
+  const followup = await service.queueOrderFollowup(
+    order.id,
+    expectedForOrder(order, { owner: "low_value_automation", type: "production" }),
+  );
+
+  for (const task of [confirmation.sendTask, followup.sendTask]) {
+    assert.equal(task.wechatAccountId, order.wechatAccountId);
+    assert.equal(task.conversationId, order.conversationId);
+    assert.equal(task.customerId, order.customerId);
+    assert.equal(task.payload.wechatAccountId, order.wechatAccountId);
+    assert.equal(task.payload.conversationId, order.conversationId);
+    assert.equal(task.payload.customerId, order.customerId);
+    assert.equal(task.guardSnapshot.binding.customerId, order.customerId);
+    assert.equal(task.guardSnapshot.automation.wechatAccountId, order.wechatAccountId);
+    assert.equal(task.guardSnapshot.automation.conversationId, order.conversationId);
+    assert.equal(task.guardSnapshot.automation.customerId, order.customerId);
+  }
+
+  const orderNotices = localStore
+    .listNotifications()
+    .filter((notice) => notice.target?.orderDraftId === order.id);
+  assert.equal(orderNotices.length >= 4, true);
+  for (const notice of orderNotices) {
+    assert.equal(notice.target.wechatAccountId, order.wechatAccountId);
+    assert.equal(notice.target.conversationId, order.conversationId);
+    assert.equal(notice.target.customerId, order.customerId);
+  }
+
+  const notices = orderNotices.filter((notice) => notice.target?.sendTaskId);
+  assert.equal(notices.length, 2);
+  for (const notice of notices) {
+    assert.equal(notice.target.wechatAccountId, order.wechatAccountId);
+    assert.equal(notice.target.conversationId, order.conversationId);
+    assert.equal(notice.target.customerId, order.customerId);
+  }
+});
+
+test("low value order scanners queue confirmation and follow-up with expected identity", async () => {
+  const { localStore, service, orders } = setupService();
+  const designJob = localStore.createDesignJob({
+    requestId: "low_value_order_scanner_identity_request_1",
+    status: "quote_created",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "employee gift",
+    budget: { mode: "per_box", amount: 120, quantity: 30 },
+    bundle: {
+      items: [{ skuCode: "BOX-A", name: "box", costPrice: 45, salePrice: 100 }],
+    },
+    requirements: { useRealSkuImages: true, showAllItems: true },
+  });
+  const [image] = localStore.upsertDesignImages(designJob.id, [
+    {
+      imageId: "order_scanner_candidate_1",
+      position: 1,
+      localPath: "C:\\temp\\order-scanner-candidate-1.png",
+      downloadUrl: "",
+      width: 1024,
+      height: 1024,
+      selected: true,
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(designJob.id, image.id);
+  localStore.updateQuoteDraft(quote.id, {
+    status: "accepted",
+    paymentStatus: "deposit_paid",
+  });
+  const order = await orders.createFromQuote(quote.id, {
+    expectedWechatAccountId: designJob.wechatAccountId,
+    expectedConversationId: designJob.conversationId,
+    expectedCustomerId: designJob.customerId,
+  });
+  const readyOrder = await orders.update(order.id, {
+    expectedWechatAccountId: order.wechatAccountId,
+    expectedConversationId: order.conversationId,
+    expectedCustomerId: order.customerId,
+    status: "confirmed",
+    paymentStatus: "deposit_paid",
+  });
+
+  const confirmationScan = await service.scanLowValueOrderConfirmations({ orderDrafts: [readyOrder] });
+  assert.equal(confirmationScan.failed.length, 0);
+  assert.equal(confirmationScan.queued.length, 1);
+  const confirmationTask = confirmationScan.queued[0].sendTask;
+  assert.equal(confirmationTask.wechatAccountId, readyOrder.wechatAccountId);
+  assert.equal(confirmationTask.conversationId, readyOrder.conversationId);
+  assert.equal(confirmationTask.customerId, readyOrder.customerId);
+  assert.equal(confirmationTask.guardSnapshot.automation.wechatAccountId, readyOrder.wechatAccountId);
+  assert.equal(confirmationTask.guardSnapshot.automation.conversationId, readyOrder.conversationId);
+  assert.equal(confirmationTask.guardSnapshot.automation.customerId, readyOrder.customerId);
+
+  const processingOrder = await orders.update(readyOrder.id, {
+    expectedWechatAccountId: readyOrder.wechatAccountId,
+    expectedConversationId: readyOrder.conversationId,
+    expectedCustomerId: readyOrder.customerId,
+    status: "processing",
+  });
+  const followupScan = await service.scanLowValueOrderFollowups({ orderDrafts: [processingOrder] });
+  assert.equal(followupScan.failed.length, 0);
+  assert.equal(followupScan.queued.length, 1);
+  const followupTask = followupScan.queued[0].sendTask;
+  assert.equal(followupTask.wechatAccountId, processingOrder.wechatAccountId);
+  assert.equal(followupTask.conversationId, processingOrder.conversationId);
+  assert.equal(followupTask.customerId, processingOrder.customerId);
+  assert.equal(followupTask.guardSnapshot.automation.wechatAccountId, processingOrder.wechatAccountId);
+  assert.equal(followupTask.guardSnapshot.automation.conversationId, processingOrder.conversationId);
+  assert.equal(followupTask.guardSnapshot.automation.customerId, processingOrder.customerId);
+});
+
+test("send operation scan only repairs broken bridge outbox tasks for the active conversation identity", async () => {
+  const { localStore, service } = setupService();
+  localStore.updateConversation("conversation_demo_2", { manualLocked: false });
+
+  const task1 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "account one broken outbox" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  const task2 = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_2",
+    status: "queued",
+    payload: { kind: "text", text: "account two broken outbox must stay untouched" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "account one broken outbox");
+  localStore.createWechatWindowSnapshot({
+    source: "test",
+    isOnline: true,
+    wechatAccountId: "wechat_demo_2",
+    accountDisplayName: "微信客服2号",
+    chatTitle: "李经理-企业伴手礼",
+    activeChatTitle: "李经理-企业伴手礼",
+    externalChatId: "demo_li_chat",
+    recentCustomerId: "customer_demo_2",
+    recentMessageText: "account two broken outbox must stay untouched",
+    confidence: 1,
+    capturedAt: new Date().toISOString(),
+  });
+
+  const execution1 = service.executeSend(task1.id, expectedForTask(task1, { adapter: "windows_bridge" }));
+  const execution2 = service.executeSend(task2.id, expectedForTask(task2, { adapter: "windows_bridge" }));
+  fs.unlinkSync(execution1.attempt.metadata.outboxFile);
+  fs.unlinkSync(execution2.attempt.metadata.outboxFile);
+
+  const scan = await service.scanSendOperations({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const updatedTask1 = localStore.getSendTask(task1.id);
+  const updatedTask2 = localStore.getSendTask(task2.id);
+  const attempt1 = localStore.getLatestSendAttempt(task1.id, { adapter: "windows_bridge" });
+  const attempt2 = localStore.getLatestSendAttempt(task2.id, { adapter: "windows_bridge" });
+
+  assert.equal(scan.scanned, 1);
+  assert.equal(scan.bridgeOutboxBroken, 1);
+  assert.equal(scan.tasks.bridgeOutboxBroken[0].id, task1.id);
+  assert.equal(updatedTask1.status, "failed");
+  assert.equal(attempt1.status, "failed");
+  assert.equal(updatedTask2.status, "sending");
+  assert.equal(attempt2.status, "started");
+  assert.equal(localStore.listNotifications().some((notice) => notice.target?.sendTaskId === task1.id), true);
+  assert.equal(localStore.listNotifications().some((notice) => notice.target?.sendTaskId === task2.id), false);
+});
+
+test("bridge outbox list ignores files whose target identity conflicts with the task", () => {
+  const { localStore, service } = setupService();
+
+  const task = localStore.createSendTask({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    status: "queued",
+    payload: { kind: "text", text: "outbox target must stay identity bound" },
+    guardSnapshot: {
+      requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+      policy: "single-account-serial-queue",
+    },
+  });
+  createPassingWechatWindowSnapshot(localStore, "outbox target must stay identity bound");
+  const execution = service.executeSend(task.id, expectedForTask(task, { adapter: "windows_bridge" }));
+  const outboxFile = execution.attempt.metadata.outboxFile;
+  const outboxData = JSON.parse(fs.readFileSync(outboxFile, "utf8"));
+  outboxData.target.customerId = "customer_demo_2";
+  fs.writeFileSync(outboxFile, `${JSON.stringify(outboxData, null, 2)}\n`, "utf8");
+
+  const outbox = service.listBridgeOutbox({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const status = service.getBridgeStatus({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+
+  assert.equal(localStore.getSendTask(task.id).status, "sending");
+  assert.equal(outbox.pending.length, 0);
+  assert.equal(status.outbox.pendingCount, 0);
+});
+
+test("recent message lookup ignores records outside the requested full conversation identity", () => {
+  const { localStore } = setupService();
+  const cleanMessage = localStore.createMessage({
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    customerId: "customer_demo_1",
+    text: "correct recent message",
+    createdAt: "2030-07-06T10:00:00.000Z",
+  });
+  const dirtyMessage = localStore.createMessage({
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    customerId: "customer_demo_1",
+    text: "dirty recent message should be ignored",
+    createdAt: "2030-07-06T10:05:00.000Z",
+  });
+  const data = localStore.read();
+  const dirtyIndex = data.messages.findIndex((message) => message.id === dirtyMessage.id);
+  data.messages[dirtyIndex] = {
+    ...data.messages[dirtyIndex],
+    wechatAccountId: "wechat_demo_2",
+    customerId: "customer_demo_2",
+    metadata: {
+      ...(data.messages[dirtyIndex].metadata || {}),
+      wechatAccountId: "wechat_demo_2",
+      customerId: "customer_demo_2",
+    },
+  };
+  localStore.write(data);
+
+  const unfilteredRecentMessage = localStore.getRecentMessage("conversation_demo_1");
+  const scopedRecentMessage = localStore.getRecentMessage("conversation_demo_1", {
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+  const dirtyScopedRecentMessage = localStore.getRecentMessage("conversation_demo_1", {
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_2",
+  });
+
+  assert.equal(unfilteredRecentMessage.id, dirtyMessage.id);
+  assert.equal(unfilteredRecentMessage.conversation, null);
+  assert.equal(scopedRecentMessage.id, cleanMessage.id);
+  assert.equal(scopedRecentMessage.wechatAccountId, "wechat_demo_1");
+  assert.equal(scopedRecentMessage.customerId, "customer_demo_1");
+  assert.equal(scopedRecentMessage.conversation.id, "conversation_demo_1");
+  assert.equal(dirtyScopedRecentMessage, null);
+});
+
+test("route correction service requires full expected identity before training sedimentation", async () => {
+  const { localStore, routing } = setupService();
+  const route = localStore.createRouteEvaluation(
+    {
+      channel: "wechat",
+      text: "identity route correction",
+      customerId: "customer_demo_1",
+      conversationId: "conversation_demo_1",
+      wechatAccountId: "wechat_demo_1",
+    },
+    {
+      agentKey: "gift_design",
+      scene: "gift",
+      action: "auto_agent",
+      confidence: 88,
+      isHighValue: false,
+    },
+  );
+
+  await assert.rejects(
+    () =>
+      routing.correctEvaluation(route.id, {
+        agentKey: "gift_design",
+        scene: "gift",
+        idealReply: "ok",
+      }),
+    /route evaluation identity expectation required/,
+  );
+  await assert.rejects(
+    () =>
+      routing.correctEvaluation(route.id, {
+        agentKey: "gift_design",
+        scene: "gift",
+        idealReply: "ok",
+        expectedWechatAccountId: "wechat_demo_2",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
+      }),
+    /route evaluation identity mismatch/,
+  );
+  assert.equal(localStore.listTrainingSamples().filter((sample) => sample.sourceRouteId === route.id).length, 0);
+  assert.equal(localStore.listNotifications().filter((notice) => notice.target?.routeId === route.id).length, 0);
+
+  const correction = await routing.correctEvaluation(route.id, {
+    agentKey: "gift_design",
+    scene: "gift",
+    idealReply: "ok",
+    expectedWechatAccountId: "wechat_demo_1",
+    expectedConversationId: "conversation_demo_1",
+    expectedCustomerId: "customer_demo_1",
+  });
+  const notice = localStore.listNotifications().find((item) => item.target?.routeId === route.id);
+
+  assert.equal(correction.trainingSample.wechatAccountId, "wechat_demo_1");
+  assert.equal(correction.trainingSample.conversationId, "conversation_demo_1");
+  assert.equal(correction.trainingSample.customerId, "customer_demo_1");
+  assert.ok(notice);
+  assert.equal(notice.target.wechatAccountId, "wechat_demo_1");
+  assert.equal(notice.target.conversationId, "conversation_demo_1");
+  assert.equal(notice.target.customerId, "customer_demo_1");
+});
+
+test("inbound message inherits account customer and conversation identity from resolved conversation", async () => {
+  const { localStore, service } = setupService();
+
+  const result = await service.processInboundMessage({
+    conversationId: "conversation_demo_1",
+    text: "想看一套端午员工礼盒效果图",
+  });
+
+  const message = localStore.getRecentMessage("conversation_demo_1");
+  const route = localStore.listRouteEvaluations({ conversationId: "conversation_demo_1" })[0];
+
+  assert.equal(result.message.wechatAccountId, "wechat_demo_1");
+  assert.equal(result.message.conversationId, "conversation_demo_1");
+  assert.equal(result.message.customerId, "customer_demo_1");
+  assert.equal(message.wechatAccountId, "wechat_demo_1");
+  assert.equal(message.identityBinding.wechatAccountId, "wechat_demo_1");
+  assert.equal(message.metadata.wechatAccountId, "wechat_demo_1");
+  assert.equal(route.wechatAccountId, "wechat_demo_1");
+  assert.equal(route.conversationId, "conversation_demo_1");
+  assert.equal(route.customerId, "customer_demo_1");
+  assert.equal(route.identityBinding.wechatAccountId, "wechat_demo_1");
+});
+
+test("inbound message rejects mismatched customer identity before creating records", async () => {
+  const { localStore, service } = setupService();
+  const recentMessageBefore = localStore.getRecentMessage("conversation_demo_1");
+  const routeCountBefore = localStore.listRouteEvaluations({ conversationId: "conversation_demo_1" }).length;
+
+  await assert.rejects(
+    () =>
+      service.processInboundMessage({
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_1",
+        text: "想看一套端午员工礼盒效果图",
+      }),
+    /inbound conversation binding invalid/,
+  );
+  await assert.rejects(
+    () =>
+      service.processInboundMessage({
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_2",
+        text: "想看一套端午员工礼盒效果图",
+      }),
+    /inbound conversation binding invalid/,
+  );
+
+  assert.equal(localStore.getRecentMessage("conversation_demo_1")?.id, recentMessageBefore?.id);
+  assert.equal(localStore.listRouteEvaluations({ conversationId: "conversation_demo_1" }).length, routeCountBefore);
+});
+
+test("direct window snapshot creation requires and matches selected conversation identity", () => {
+  const { localStore, service } = setupService();
+
+  assert.throws(
+    () =>
+      service.createWindowSnapshot({
+        source: "test",
+        isOnline: true,
+        wechatAccountId: "wechat_demo_1",
+        chatTitle: "端午礼盒客户A",
+        recentCustomerId: "customer_demo_1",
+      }),
+    /wechat window snapshot identity expectation required: conversationId, customerId/,
+  );
+
+  assert.throws(
+    () =>
+      service.createWindowSnapshot({
+        source: "test",
+        isOnline: true,
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+        customerId: "customer_demo_2",
+        chatTitle: "端午礼盒客户A",
+        recentCustomerId: "customer_demo_1",
+      }),
+    /identity does not match selected conversation/,
+  );
+
+  const created = service.createWindowSnapshot({
+    source: "test",
+    isOnline: true,
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    chatTitle: "端午礼盒客户A",
+    recentCustomerId: "customer_demo_1",
+  });
+
+  assert.equal(created.wechatAccountId, "wechat_demo_1");
+  assert.equal(created.diagnostic.activeConversationId, "conversation_demo_1");
+  assert.equal(created.diagnostic.activeCustomerId, "customer_demo_1");
+  assert.equal(localStore.listWechatWindowSnapshots({ conversationId: "conversation_demo_1", customerId: "customer_demo_1" }).length, 1);
+});
+
+test("existing low-value order payment update queues confirmation with expected identity", async () => {
+  const { localStore, service } = setupService();
+
+  const job = localStore.createDesignJob({
+    requestId: "existing_order_payment_update_request_1",
+    status: "sent",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    scene: "端午员工福利礼盒",
+    budget: { mode: "per_box", amount: 180, quantity: 50 },
+    bundle: {
+      items: [
+        { skuCode: "BOX-A", name: "红金礼盒A", costPrice: 35, salePrice: 80 },
+        { skuCode: "TEA-A", name: "明前绿茶A", costPrice: 60, salePrice: 100 },
+      ],
+    },
+    isHighValue: false,
+  });
+  const images = localStore.upsertDesignImages(job.id, [
+    {
+      imageId: "candidate_1",
+      position: 1,
+      localPath: "C:\\storage\\design-jobs\\existing_order_payment_update_request_1\\candidate_1.png",
+      downloadUrl: "http://127.0.0.1:3700/files/candidate_1.png",
+    },
+  ]);
+  const quote = localStore.createQuoteFromDesignJob(job.id, images[0].id);
+  localStore.updateQuoteDraft(quote.id, { status: "sent", paymentStatus: "unpaid" });
+
+  const accepted = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "可以，就这套，定金怎么付",
+  });
+  assert.equal(accepted.plan.type, "quote_accepted");
+  assert.equal(accepted.sendTask, null);
+
+  const paid = await service.processInboundMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    text: "定金已经转账了，麻烦安排制作",
+  });
+
+  assert.equal(paid.plan.type, "order_payment_updated");
+  assert.equal(paid.plan.shouldQueueReply, true);
+  assert.equal(paid.orderDraft.id, accepted.orderDraft.id);
+  assert.equal(paid.orderDraft.paymentStatus, "deposit_paid");
+  assert.equal(paid.sendTask.status, "queued");
+  assert.equal(paid.sendTask.wechatAccountId, "wechat_demo_1");
+  assert.equal(paid.sendTask.conversationId, "conversation_demo_1");
+  assert.equal(paid.sendTask.customerId, "customer_demo_1");
+  assert.equal(paid.sendTask.guardSnapshot.automation.source, "low_value_quote_payment_update");
+  assert.equal(paid.sendTask.guardSnapshot.automation.wechatAccountId, "wechat_demo_1");
+  assert.equal(paid.sendTask.guardSnapshot.automation.conversationId, "conversation_demo_1");
+  assert.equal(paid.sendTask.guardSnapshot.automation.customerId, "customer_demo_1");
+  assert.equal(paid.sendTask.guardSnapshot.automation.orderDraftId, paid.orderDraft.id);
+  assert.match(paid.sendTask.payload.text, /订单|确认|9000/);
 });

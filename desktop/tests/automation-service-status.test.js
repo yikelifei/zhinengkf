@@ -11,6 +11,12 @@ require("ts-node").register({
 
 const { AutomationService } = require("../apps/api/src/automation/automation.service");
 
+const selectedIdentity = {
+  wechatAccountId: "wechat_demo_1",
+  conversationId: "conversation_demo_1",
+  customerId: "customer_demo_1",
+};
+
 function createService(overrides = {}) {
   const designJobs = {
     pollActiveResults: async () => ({ scanned: 0 }),
@@ -49,7 +55,7 @@ test("automation status exposes next scheduled run while active", () => {
   const service = createService();
   const before = Date.now();
 
-  const started = service.start();
+  const started = service.start(selectedIdentity);
 
   assert.equal(started.active, true);
   assert.equal(started.running, false);
@@ -66,7 +72,7 @@ test("automation status exposes next scheduled run while active", () => {
 test("automation run records last run and clears running marker", async () => {
   const service = createService();
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
   const status = service.status();
 
   assert.equal(run.trigger, "manual");
@@ -78,7 +84,7 @@ test("automation run records last run and clears running marker", async () => {
   assert.equal(status.recentRuns.length, 1);
   assert.equal(status.recentRuns[0], run);
   assert.ok(run.steps.length >= 7);
-  assert.equal(run.steps[0].step, "scanTimeouts");
+  assert.equal(run.steps[0].step, "pollActiveResults");
   assert.equal(run.steps[0].status, "completed");
   assert.equal(typeof run.steps[0].durationMs, "number");
 });
@@ -141,9 +147,9 @@ test("manual automation run forwards selected conversation identity to each side
   assert.deepEqual(
     calls.map(([step]) => step),
     [
-      "scanTimeouts",
       "pollActiveResults",
       "runLowValueAutomation",
+      "scanTimeouts",
       "scanLowValueAutoOrderDrafts",
       "scanLowValueOrderConfirmations",
       "scanLowValueOrderFollowups",
@@ -199,7 +205,7 @@ test("automation run records identity audit for low value side effects", async (
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.identityAudit.status, "passed");
   assert.equal(run.identityAudit.identityCount, 1);
@@ -233,7 +239,7 @@ test("automation run identity audit warns on conflicting target identity", async
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.identityAudit.status, "warning");
   assert.equal(run.identityAudit.identityCount, 0);
@@ -280,7 +286,7 @@ test("automation identity audit ignores skipped no-side-effect items", async () 
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.identityAudit.status, "passed");
   assert.equal(run.identityAudit.identityCount, 0);
@@ -330,7 +336,7 @@ test("automation run summarizes skipped reasons for operator triage", async () =
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.skipSummary.total, 4);
   assert.equal(run.skipSummary.reasons[0].reason, "status_not_draft");
@@ -406,7 +412,7 @@ test("automation run summarizes low value stage progress and next action", async
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.stageSummary.progressed, 9);
   assert.equal(run.stageSummary.blocked, 4);
@@ -451,7 +457,7 @@ test("automation run next action prioritizes manual send attention", async () =>
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.stageSummary.failed, 0);
   assert.equal(run.stageSummary.blocked, 1);
@@ -474,7 +480,7 @@ test("automation skipped run includes stage summary for blocked readiness", asyn
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   assert.equal(run.skipped, true);
   assert.equal(run.stageSummary.progressed, 0);
@@ -487,7 +493,7 @@ test("automation status keeps recent runs newest first with a cap", async () => 
   const service = createService();
 
   for (let index = 0; index < 12; index += 1) {
-    await service.runOnce("manual");
+    await service.runOnce("manual", selectedIdentity);
   }
 
   const status = service.status();
@@ -533,7 +539,7 @@ test("automation status restores persisted recent runs from store", async () => 
   assert.deepEqual(initialStatus.recentRuns, [skippedRun, persistedRun]);
   assert.equal(initialStatus.runCount, 1);
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
   const nextStatus = service.status();
   assert.equal(saved[0], run);
   assert.equal(nextStatus.recentRuns[0], run);
@@ -546,13 +552,15 @@ test("automation status persists skipped run when another run is active", async 
   let releaseRunningStep;
   const saved = [];
   const service = createService({
-    designJobs: {
-      scanTimeouts: () =>
+    catalog: {
+      auditSkus: () =>
         new Promise((resolve) => {
           releaseRunningStep = () =>
             resolve({
-              scanned: 0,
-              timedOut: 0,
+              total: 2,
+              readyCount: 2,
+              catalogStructureIssueCount: 0,
+              blockingRepairCount: 0,
             });
         }),
     },
@@ -565,8 +573,8 @@ test("automation status persists skipped run when another run is active", async 
     },
   });
 
-  const running = service.runOnce("manual");
-  const skipped = await service.runOnce("interval");
+  const running = service.runOnce("manual", selectedIdentity);
+  const skipped = await service.runOnce("interval", selectedIdentity);
   releaseRunningStep();
   await running;
 
@@ -592,7 +600,7 @@ test("automation run clears running marker when history persistence fails", asyn
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
   const status = service.status();
 
   assert.equal(status.running, false);
@@ -603,13 +611,8 @@ test("automation run clears running marker when history persistence fails", asyn
 
 test("automation run is skipped before side effects when readiness has blockers", async () => {
   let lowValueRan = false;
-  let timeoutScanRan = false;
   const service = createService({
     designJobs: {
-      scanTimeouts: async () => {
-        timeoutScanRan = true;
-        return { scanned: 1, timedOut: 1 };
-      },
       runLowValueAutomation: async () => {
         lowValueRan = true;
         return { autoSubmit: { submitted: [] } };
@@ -625,19 +628,15 @@ test("automation run is skipped before side effects when readiness has blockers"
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
   const status = service.status();
 
   assert.equal(run.skipped, true);
   assert.equal(run.reason, "automation_readiness_blocked");
   assert.equal(run.skipSummary.total, 1);
   assert.equal(run.skipSummary.reasons[0].reason, "automation_readiness_blocked");
-  assert.equal(run.steps.length, 1);
-  assert.equal(run.steps[0].step, "scanTimeouts");
-  assert.equal(run.steps[0].status, "completed");
-  assert.equal(timeoutScanRan, true);
+  assert.equal(run.steps.length, 0);
   assert.equal(lowValueRan, false);
-  assert.equal(run.results.scanTimeouts.timedOut, 1);
   assert.equal(run.results.readiness.ready, false);
   assert.equal(run.results.readiness.blockers.some((item) => item.key === "sku_catalog"), true);
   assert.equal(status.runCount, 0);
@@ -653,7 +652,7 @@ test("automation step timing records failures without stopping later steps", asy
     },
   });
 
-  const run = await service.runOnce("manual");
+  const run = await service.runOnce("manual", selectedIdentity);
 
   const failedStep = run.steps.find((step) => step.step === "scanTimeouts");
   const laterStep = run.steps.find((step) => step.step === "scanSendOperations");
@@ -734,4 +733,186 @@ test("automation readiness warns when design platform health check fails", async
   assert.equal(readiness.ready, true);
   assert.equal(readiness.tone, "warning");
   assert.equal(readiness.warnings.some((item) => item.key === "design_platform"), true);
+});
+
+// Migrated from the former C-drive worktree (5 unique regression tests).
+
+test("automation background start requires full selected conversation identity", () => {
+  const service = createService();
+
+  assert.throws(
+    () => service.start({ wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1" }),
+    /automation run identity expectation required: customerId/,
+  );
+  assert.equal(service.status().active, false);
+});
+
+test("automation background start rejects switching identity while already active", () => {
+  const service = createService();
+  const started = service.start(selectedIdentity);
+  const restarted = service.start({ ...selectedIdentity });
+
+  assert.equal(restarted.active, true);
+  assert.equal(restarted.startedAt, started.startedAt);
+  assert.deepEqual(restarted.activeFilter, selectedIdentity);
+  assert.throws(
+    () =>
+      service.start({
+        wechatAccountId: "wechat_demo_2",
+        conversationId: "conversation_demo_2",
+        customerId: "customer_demo_2",
+      }),
+    /automation already running for another conversation/,
+  );
+  assert.deepEqual(service.status().activeFilter, selectedIdentity);
+  service.stop();
+});
+
+test("manual automation run requires full selected conversation identity before side effects", async () => {
+  let sideEffectCount = 0;
+  const service = createService({
+    designJobs: {
+      pollActiveResults: async () => {
+        sideEffectCount += 1;
+        return { scanned: 0 };
+      },
+      runLowValueAutomation: async () => {
+        sideEffectCount += 1;
+        return { autoSubmit: { submitted: [] } };
+      },
+      scanTimeouts: async () => {
+        sideEffectCount += 1;
+        return { scanned: 0 };
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.runOnce("manual", { wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1" }),
+    /automation run identity expectation required: customerId/,
+  );
+
+  assert.equal(sideEffectCount, 0);
+  assert.equal(service.status().runCount, 0);
+});
+
+test("automation run passes selected conversation identity to every mutating step", async () => {
+  const calls = [];
+  const service = createService({
+    designJobs: {
+      pollActiveResults: async (limit, filter) => {
+        calls.push(["pollActiveResults", filter, limit]);
+        return { scanned: 0 };
+      },
+      runLowValueAutomation: async (filter) => {
+        calls.push(["runLowValueAutomation", filter]);
+        return { autoSubmit: { submitted: [] } };
+      },
+      scanTimeouts: async (filter) => {
+        calls.push(["scanTimeouts", filter]);
+        return { scanned: 0 };
+      },
+    },
+    orders: {
+      scanLowValueAutoOrderDrafts: async (filter) => {
+        calls.push(["scanLowValueAutoOrderDrafts", filter]);
+        return { scanned: 0 };
+      },
+    },
+    wechatDispatch: {
+      scanSendOperations: async (filter) => {
+        calls.push(["scanSendOperations", filter]);
+        return { scanned: 0 };
+      },
+      processSafeSendQueue: async (params) => {
+        calls.push(["processSafeSendQueue", params]);
+        return { processed: [] };
+      },
+      scanLowValueOrderConfirmations: async (filter) => {
+        calls.push(["scanLowValueOrderConfirmations", filter]);
+        return { scanned: 0 };
+      },
+      scanLowValueOrderFollowups: async (filter) => {
+        calls.push(["scanLowValueOrderFollowups", filter]);
+        return { scanned: 0 };
+      },
+    },
+  });
+
+  const run = await service.runOnce("manual", selectedIdentity);
+  const callByName = new Map(calls.map(([name, params, extra]) => [name, { params, extra }]));
+
+  assert.equal(run.skipped, undefined);
+  for (const stepName of [
+    "pollActiveResults",
+    "runLowValueAutomation",
+    "scanTimeouts",
+    "scanSendOperations",
+    "scanLowValueAutoOrderDrafts",
+    "scanLowValueOrderConfirmations",
+    "scanLowValueOrderFollowups",
+  ]) {
+    assert.deepEqual(callByName.get(stepName).params, selectedIdentity);
+  }
+  assert.equal(callByName.get("pollActiveResults").extra > 0, true);
+  assert.equal(callByName.get("processSafeSendQueue").params.wechatAccountId, selectedIdentity.wechatAccountId);
+  assert.equal(callByName.get("processSafeSendQueue").params.conversationId, selectedIdentity.conversationId);
+  assert.equal(callByName.get("processSafeSendQueue").params.customerId, selectedIdentity.customerId);
+  assert.equal(callByName.get("processSafeSendQueue").params.automationOnly, true);
+  assert.equal(callByName.get("processSafeSendQueue").params.limit > 0, true);
+});
+
+test("automation readiness scopes operational metrics to selected conversation identity", async () => {
+  const selectedIdentity = {
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  };
+  const calls = [];
+  const service = createService({
+    designJobs: {
+      list: async (filter) => {
+        calls.push(["designJobs.list", filter]);
+        return [{ id: "job_1", status: "draft", isHighValue: false, ...selectedIdentity }];
+      },
+    },
+    store: {
+      listAutomationRuns: () => [],
+      listSendTasks: (filter) => {
+        calls.push(["store.listSendTasks", filter]);
+        return [{ id: "send_1", status: "queued", ...selectedIdentity }];
+      },
+      listConversations: (wechatAccountId) => {
+        calls.push(["store.listConversations", { wechatAccountId }]);
+        return [
+          { id: "conversation_demo_1", customerId: "customer_demo_1", wechatAccountId: "wechat_demo_1", manualLocked: false },
+          { id: "conversation_demo_2", customerId: "customer_demo_2", wechatAccountId: "wechat_demo_1", manualLocked: true },
+        ];
+      },
+      listQuoteDrafts: (filter) => {
+        calls.push(["store.listQuoteDrafts", filter]);
+        return [{ id: "quote_1", status: "draft", totalPrice: 1000, unitPrice: 100, ...selectedIdentity }];
+      },
+      listOrderDrafts: (filter) => {
+        calls.push(["store.listOrderDrafts", filter]);
+        return [{ id: "order_1", status: "confirmed", totalPrice: 1000, unitPrice: 100, ...selectedIdentity }];
+      },
+      saveAutomationRun: () => {},
+    },
+  });
+
+  const readiness = await service.readiness(selectedIdentity);
+  const callByName = new Map(calls);
+
+  assert.deepEqual(callByName.get("designJobs.list"), selectedIdentity);
+  assert.deepEqual(callByName.get("store.listSendTasks"), selectedIdentity);
+  assert.deepEqual(callByName.get("store.listQuoteDrafts"), selectedIdentity);
+  assert.deepEqual(callByName.get("store.listOrderDrafts"), selectedIdentity);
+  assert.deepEqual(callByName.get("store.listConversations"), { wechatAccountId: selectedIdentity.wechatAccountId });
+  assert.equal(readiness.metrics.lowValueDrafts, 1);
+  assert.equal(readiness.metrics.pendingSendTasks, 1);
+  assert.equal(readiness.metrics.lowValueQuotesReady, 1);
+  assert.equal(readiness.metrics.lowValueOrdersReady, 1);
+  assert.equal(readiness.metrics.manualLockedConversations, 0);
+  assert.equal(readiness.warnings.some((item) => item.key === "manual_locks"), false);
 });

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { AutomationService } from "./automation.service";
 
 @Controller("automation")
@@ -11,8 +11,12 @@ export class AutomationController {
   }
 
   @Get("readiness")
-  readiness() {
-    return this.automation.readiness();
+  readiness(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.automation.readiness({ wechatAccountId, conversationId, customerId });
   }
 
   @Post("run-once")
@@ -21,8 +25,8 @@ export class AutomationController {
   }
 
   @Post("start")
-  start() {
-    return this.automation.start();
+  start(@Body() payload: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    return this.automation.start(payload || {});
   }
 
   @Post("stop")

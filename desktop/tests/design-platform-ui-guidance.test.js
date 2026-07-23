@@ -8,6 +8,14 @@ const test = require("node:test");
 const desktopRoot = path.resolve(__dirname, "..");
 const pageSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/page.tsx"), "utf8");
 const cssSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/globals.css"), "utf8");
+const workbenchShellCss = fs.readFileSync(
+  path.join(desktopRoot, "apps/web/src/components/workbench-shell/workbench-shell.module.css"),
+  "utf8",
+);
+const workbenchSidebarSource = fs.readFileSync(
+  path.join(desktopRoot, "apps/web/src/components/workbench-shell/app-sidebar.tsx"),
+  "utf8",
+);
 const apiSource = fs.readFileSync(path.join(desktopRoot, "apps/web/src/lib/api.ts"), "utf8");
 const controllerSource = fs.readFileSync(
   path.join(desktopRoot, "apps/api/src/integrations/design-platform/design-platform.controller.ts"),
@@ -122,17 +130,17 @@ test("design center mobile commands and empty actions fit one app viewport", () 
 });
 
 test("mobile global navigation uses a bottom app dock instead of a stacked top rail", () => {
-  assert.match(cssSource, /Iteration 97 Mobile app dock/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \{[\s\S]*position: fixed !important[\s\S]*inset: auto 0 0 0 !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \{[\s\S]*flex-direction: row !important[\s\S]*overflow-x: auto !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \.brand \{[\s\S]*display: none !important/);
-  assert.match(pageSource, /<span className="rail-label">\{item\.label\}<\/span>/);
-  assert.match(cssSource, /\.rail-label \{[\s\S]*display: none/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail button::after \{[\s\S]*display: none !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail \.rail-label \{[\s\S]*display: block !important[\s\S]*text-overflow: ellipsis !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.rail button\.active \{[\s\S]*background: var\(--blue\) !important[\s\S]*color: #fff !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.workspace \{[\s\S]*padding-bottom: calc\(72px \+ env\(safe-area-inset-bottom\)\) !important[\s\S]*overflow-y: auto !important/);
-  assert.match(cssSource, /\.apple-light-shell\.shell \.dock-strip,[\s\S]*\.apple-light-shell\.shell \.system-footer \{[\s\S]*display: none !important/);
+  assert.match(workbenchSidebarSource, /<nav className=\{styles\.mobileNav\}/);
+  assert.match(workbenchSidebarSource, /primaryMobileItems\.map/);
+  assert.match(workbenchSidebarSource, /aria-expanded=\{mobileNavigationOpen\}/);
+  assert.match(workbenchSidebarSource, /aria-controls=\{MOBILE_NAVIGATION_ID\}/);
+  assert.match(workbenchSidebarSource, /role="dialog"/);
+  assert.match(workbenchShellCss, /@media \(max-width: 760px\)/);
+  assert.match(workbenchShellCss, /\.sidebarRail \{\s*display: none/);
+  assert.match(workbenchShellCss, /\.mobileNav \{[\s\S]*position: fixed[\s\S]*bottom: 0[\s\S]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(workbenchShellCss, /min-height: calc\(58px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(workbenchShellCss, /\.shellContent \{\s*padding-bottom: calc\(58px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(workbenchShellCss, /@media \(max-width: 390px\)/);
 });
 
 test("design platform config exposes a real one-click smoke test path", () => {

@@ -5,6 +5,11 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const {
+  ensureInternalApiToken,
+  internalApiServiceEnv,
+  withoutInternalApiToken,
+} = require("./internal-api-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -39,6 +44,7 @@ const webStandaloneBuildIdPath = path.join(
   ".next",
   "BUILD_ID",
 );
+const internalApiToken = ensureInternalApiToken();
 const args = new Set(process.argv.slice(2));
 const includeApi = !args.has("--no-api");
 const statusOnly = args.has("--status");
@@ -803,10 +809,10 @@ function runPackageScript(scriptName) {
 }
 
 function packageScriptEnv() {
-  const env = {
+  const env = withoutInternalApiToken({
     ...process.env,
     FORCE_WEB_CLEAN_BUILD: "0",
-  };
+  });
   return process.platform === "win32" ? windowsSafeEnv(env) : env;
 }
 
@@ -1607,10 +1613,10 @@ function truncateText(value, maxLength) {
 }
 
 function serviceEnv(service) {
-  return {
+  return internalApiServiceEnv({
     ...process.env,
     ...serviceDefaultEnv(service),
-  };
+  }, service?.name, internalApiToken);
 }
 
 function windowsSafeEnv(env) {

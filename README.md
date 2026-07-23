@@ -2,6 +2,10 @@
 
 这是一个面向礼盒定制、企业礼品、伴手礼等私域场景的智能客服与线索转化系统。当前版本以 Windows 微信 PC 客户端自动化为入口，结合规则话术、行业知识库、AI 兜底、人工接管和线索 CRM，服务于中小商家快速落地。
 
+## 仓库结构说明
+
+本 README 主要描述仓库根目录的第一代 Python/兼容线。新版 Windows 桌面客服平台位于 `desktop/`，其入口文档是 [`desktop/README.md`](desktop/README.md)。源码、旧版系统、运行产物和 Git worktree 的完整边界见 [`docs/REPOSITORY_MAP.md`](docs/REPOSITORY_MAP.md)。当前物理路径和迁移状态见 [`MIGRATION_TO_E_STATUS.md`](MIGRATION_TO_E_STATUS.md)。
+
 ## 核心能力
 
 - 高频问题自动回复：价格、起订量、交期、定制流程、物流、案例。
@@ -251,8 +255,8 @@ tools/quality/run_tests.bat
 
 ## 交付文档
 
-- [部署与验收指南](C:/Users/27808/Desktop/zhinengkefu/docs/DEPLOYMENT_GUIDE.md)
-- [商业化落地路线](C:/Users/27808/Desktop/zhinengkefu/docs/COMMERCIALIZATION_ROADMAP.md)
+- [部署与验收指南](docs/DEPLOYMENT_GUIDE.md)
+- [商业化落地路线](docs/COMMERCIALIZATION_ROADMAP.md)
 
 ## 验收口径
 

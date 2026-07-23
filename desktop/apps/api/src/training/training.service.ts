@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
-import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import { ExpectedIdentityPayload, assertExpectedIdentity, assertRequiredExpectedIdentity } from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 
 const {
@@ -147,6 +147,14 @@ export class TrainingService {
 
   importChat(payload: ChatImportPayload) {
     if (!appConfig.useLocalStore) throw new Error("chat import prisma mode is not implemented yet");
+    assertRequiredExpectedIdentity(
+      {
+        expectedWechatAccountId: payload.wechatAccountId,
+        expectedConversationId: payload.conversationId,
+        expectedCustomerId: payload.customerId,
+      },
+      "chat import",
+    );
     const parsed = parseChatTranscript(payload.text || "");
     return this.localStore.createChatImport(payload, parsed);
   }
@@ -155,6 +163,7 @@ export class TrainingService {
     if (!appConfig.useLocalStore) throw new Error("training sample review prisma mode is not implemented yet");
     const sample = this.localStore.listTrainingSamples().find((item: any) => item.id === id);
     if (!sample) throw new Error(`training sample not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "training sample");
     assertExpectedIdentity(sample, payload, "training sample");
     const result = this.localStore.reviewTrainingSample(id, payload || {});
     const statusLabel = result.sample.status === "ready" ? "已确认训练" : result.sample.status === "rejected" ? "已禁用" : "待复核";
@@ -162,7 +171,14 @@ export class TrainingService {
       result.sample.status === "rejected" ? "warning" : "info",
       "训练样本状态已更新",
       `样本「${String(result.sample.customerText || "").slice(0, 24)}」${statusLabel}。`,
-      { source: "training_sample_review", trainingSampleId: result.sample.id, status: result.sample.status },
+      {
+        source: "training_sample_review",
+        trainingSampleId: result.sample.id,
+        status: result.sample.status,
+        wechatAccountId: result.sample.wechatAccountId,
+        conversationId: result.sample.conversationId,
+        customerId: result.sample.customerId,
+      },
     );
     return result;
   }
@@ -184,7 +200,13 @@ export class TrainingService {
     for (const sampleId of sampleIds) {
       const sample = samplesById.get(sampleId);
       if (!sample) throw new BadRequestException(`training sample not found: ${sampleId}`);
+      const expected = payload.expectedBySampleId?.[sampleId] || {};
+      assertRequiredExpectedIdentity(expected, "training sample");
       assertExpectedIdentity(sample, payload.expectedBySampleId?.[sampleId] || {}, "training sample");
+    }
+    const batchIdentity = commonIdentityFromRecords(sampleIds.map((sampleId) => samplesById.get(sampleId)));
+    if (!batchIdentity) {
+      throw new BadRequestException("training sample batch review cannot mix conversation identities");
     }
     const results = sampleIds.map((sampleId) => this.localStore.reviewTrainingSample(sampleId, reviewPayload));
     this.notifications.create(
@@ -196,6 +218,7 @@ export class TrainingService {
         status,
         count: results.length,
         sampleIds,
+        ...batchIdentity,
       },
     );
     return {
@@ -229,6 +252,8 @@ export class TrainingService {
 
   applySkillSuggestions(options: ApplySkillSuggestionsPayload = {}) {
     if (!appConfig.useLocalStore) throw new Error("skill apply prisma mode is not implemented yet");
+    const expectedIdentity = expectedIdentityFromFilter(options);
+    assertRequiredExpectedIdentity(expectedIdentity, "skill suggestion apply");
     const allSuggestions = this.listSkillSuggestions(options);
     const selectedKeys = normalizeSuggestionKeySet(options.suggestionKeys);
     const selectedSuggestions = selectedKeys.size
@@ -254,6 +279,16 @@ export class TrainingService {
         });
       }
     }
+    if (suggestions.length) {
+      const suggestionIdentity = commonIdentityFromSkillSuggestionSamples(
+        suggestions,
+        this.localStore.listTrainingSamples(),
+      );
+      if (!suggestionIdentity) {
+        throw new BadRequestException("skill suggestion apply cannot mix conversation identities");
+      }
+      assertExpectedIdentity(suggestionIdentity, expectedIdentity, "skill suggestion apply");
+    }
     const result: any = this.localStore.applyAgentSkillSuggestions(suggestions);
     result.selected = selectedSuggestions.length;
     result.applied = suggestions.length;
@@ -262,15 +297,77 @@ export class TrainingService {
     result.requiresReview = blocked.length;
     const changedCount = result.created.length + result.updated.length;
     if (changedCount > 0) {
+      const changedSkills = [...result.created, ...result.updated];
+      const notificationIdentity = commonIdentityFromRecords(changedSkills);
       this.notifications.create(
         "info",
         "Agent Skill 已更新",
         `已根据训练样本新增 ${result.created.length} 个 Skill，更新 ${result.updated.length} 个 Skill。`,
-        { source: "training", created: result.created.length, updated: result.updated.length },
+        {
+          source: "training",
+          created: result.created.length,
+          updated: result.updated.length,
+          sourceSampleIds: uniqueSourceSampleIds(changedSkills),
+          ...(notificationIdentity || {}),
+        },
       );
     }
     return result;
   }
+}
+
+function expectedIdentityFromFilter(filter: IdentityFilter = {}): ExpectedIdentityPayload {
+  return {
+    expectedWechatAccountId: String(filter.wechatAccountId || "").trim() || undefined,
+    expectedConversationId: String(filter.conversationId || "").trim() || undefined,
+    expectedCustomerId: String(filter.customerId || "").trim() || undefined,
+  };
+}
+
+function commonIdentityFromRecords(records: any[]) {
+  const fields: IdentityFilter = {};
+  for (const key of ["wechatAccountId", "conversationId", "customerId"] as const) {
+    const values = [
+      ...new Set(
+        (Array.isArray(records) ? records : [])
+          .map((record) => String(record?.[key] || record?.identityBinding?.[key] || "").trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (values.length > 1) return null;
+    if (values.length === 1) fields[key] = values[0];
+  }
+  return fields;
+}
+
+function uniqueSourceSampleIds(records: any[]) {
+  return [
+    ...new Set(
+      (Array.isArray(records) ? records : [])
+        .flatMap((record) => (Array.isArray(record?.sourceSampleIds) ? record.sourceSampleIds : []))
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function commonIdentityFromSkillSuggestionSamples(suggestions: any[], samples: any[]) {
+  const sampleIds = [
+    ...new Set(
+      (Array.isArray(suggestions) ? suggestions : [])
+        .flatMap((suggestion) => [
+          ...(Array.isArray(suggestion?.sampleIds) ? suggestion.sampleIds : []),
+          ...(Array.isArray(suggestion?.sourceSampleIds) ? suggestion.sourceSampleIds : []),
+        ])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!sampleIds.length) return commonIdentityFromRecords(suggestions);
+  const samplesById = new Map((Array.isArray(samples) ? samples : []).map((sample) => [String(sample?.id || ""), sample]));
+  const sourceSamples = sampleIds.map((sampleId) => samplesById.get(sampleId)).filter(Boolean);
+  if (sourceSamples.length !== sampleIds.length) return null;
+  return commonIdentityFromRecords(sourceSamples);
 }
 
 function normalizeTrainingSampleIds(value?: string[]) {

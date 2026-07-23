@@ -1,2 +1,2 @@
 @echo off
-call "D:\zhinengkefu\desktop\logs-stable-desktop.cmd" %*
+call "%~dp0desktop\logs-stable-desktop.cmd" %*

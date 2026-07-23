@@ -8,6 +8,7 @@ const requiredPorts = [3100, 3200, 3700];
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
 const heartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const lockFile = path.join(runtimeDir, "stable-runtime-launcher.pid");
 const result = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", windowsHide: true });
 if (result.status !== 0 || !result.stdout) process.exit(1);
 const listening = new Set();
@@ -22,7 +23,7 @@ for (const line of result.stdout.split(/\r?\n/)) {
 if (!requiredPorts.every((port) => listening.has(port))) process.exit(1);
 
 const apiHealth = requestJson("http://127.0.0.1:3200/api/health");
-if (!normalize(apiHealth?.localStore?.path).startsWith(normalize(runtimeDir))) process.exit(1);
+if (!canonicalPath(apiHealth?.localStore?.path).startsWith(canonicalPath(runtimeDir))) process.exit(1);
 
 const designHealth = requestJson("http://127.0.0.1:3700/v1/health");
 if (designHealth?.ok !== true || designHealth?.service !== "mock-design-platform") process.exit(1);
@@ -32,7 +33,10 @@ const heartbeatPid = Number(heartbeat?.pid);
 const heartbeatUpdatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
 if (!Number.isFinite(heartbeatPid) || heartbeatPid <= 0) process.exit(1);
 if (!Number.isFinite(heartbeatUpdatedAt) || Date.now() - heartbeatUpdatedAt > 30000) process.exit(1);
-if (!isStableRuntimeLauncherPid(heartbeatPid)) process.exit(1);
+const lockPid = Number(readTextFile(lockFile));
+if (lockPid !== heartbeatPid || !isPidAlive(heartbeatPid)) process.exit(1);
+const launcherCommandLine = normalize(commandLineForPid(heartbeatPid));
+if (launcherCommandLine && !launcherCommandLine.includes("stable-runtime-launcher.js")) process.exit(1);
 
 process.exit(0);
 
@@ -54,10 +58,21 @@ function readJsonFile(filePath) {
   }
 }
 
-function isStableRuntimeLauncherPid(pid) {
-  const commandLine = commandLineForPid(pid);
-  if (normalize(commandLine).includes("stable-runtime-launcher.js")) return true;
-  return false;
+function readTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function commandLineForPid(pid) {
@@ -71,11 +86,19 @@ function commandLineForPid(pid) {
       "-Command",
       `Get-CimInstance Win32_Process -Filter \"ProcessId = ${Number(pid)}\" | Select-Object -ExpandProperty CommandLine`,
     ],
-    { encoding: "utf8", windowsHide: true },
+    { encoding: "utf8", windowsHide: true, timeout: 2000 },
   );
   return response.status === 0 ? String(response.stdout || "") : "";
 }
 
 function normalize(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function canonicalPath(value) {
+  try {
+    return normalize(fs.realpathSync.native(String(value || "")));
+  } catch {
+    return normalize(value);
+  }
 }

@@ -1,5 +1,7 @@
 # Migration to D Drive Status
 
+> Archived historical record. The active project moved to `E:\zhinengkefu` on 2026-07-22. Do not follow the D-drive cutover instructions below. See `MIGRATION_TO_E_STATUS.md` for the current state.
+
 Current project path:
 
 ```text

@@ -1,5 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { config as loadDotEnv } from "dotenv";
+
+loadDotEnv({
+  path: process.env.DESKTOP_ENV_FILE ? path.resolve(process.env.DESKTOP_ENV_FILE) : path.resolve(process.cwd(), ".env"),
+  override: false,
+  quiet: true,
+});
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -16,6 +23,7 @@ function booleanEnv(name: string, fallback: boolean): boolean {
 const defaultDesignPlatformAdapter = "standard_v1";
 const defaultDesignPlatformBaseUrl = "http://127.0.0.1:3700";
 const apiPort = numberEnv("API_PORT", 3200);
+const webPort = numberEnv("WEB_PORT", 3100);
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
   : path.resolve("./.runtime");
@@ -68,6 +76,8 @@ const designPlatformRuntime = resolveDesignPlatformRuntime();
 
 export const appConfig = {
   apiPort,
+  webPort,
+  internalApiToken: process.env.INTERNAL_API_TOKEN || "",
   useLocalStore: process.env.USE_LOCAL_STORE !== "false",
   localStorageRoot: path.resolve(process.env.LOCAL_STORAGE_ROOT || runtimePath("storage")),
   designPlatformAdapter: designPlatformRuntime.adapter,
@@ -99,7 +109,13 @@ export const appConfig = {
   wechatWindowSnapshotScanLimit: numberEnv("WECHAT_WINDOW_SNAPSHOT_SCAN_LIMIT", 5),
   wechatWorkCorpId: process.env.WECHAT_WORK_CORP_ID || "",
   wechatWorkAgentId: process.env.WECHAT_WORK_AGENT_ID || "",
+  wechatWorkSecret: process.env.WECHAT_WORK_SECRET || "",
   wechatWorkToken: process.env.WECHAT_WORK_TOKEN || "",
+  wechatWorkEncodingAesKey: process.env.WECHAT_WORK_ENCODING_AES_KEY || "",
+  wechatWorkOpenKfid: process.env.WECHAT_WORK_OPEN_KFID || "",
+  wechatWorkApiBaseUrl: trimTrailingSlash(process.env.WECHAT_WORK_API_BASE_URL || "https://qyapi.weixin.qq.com"),
+  wechatWorkSendMaxAttempts: Math.max(1, numberEnv("WECHAT_WORK_SEND_MAX_ATTEMPTS", 3)),
+  wechatWorkSendRetryDelaySeconds: Math.max(1, numberEnv("WECHAT_WORK_SEND_RETRY_DELAY_SECONDS", 30)),
   wechatMiniAppId: process.env.WECHAT_MINI_APP_ID || "",
   wechatMiniToken: process.env.WECHAT_MINI_TOKEN || "",
   sendBridgeAckTimeoutMinutes: numberEnv("SEND_BRIDGE_ACK_TIMEOUT_MINUTES", 5),
@@ -114,6 +130,10 @@ export const appConfig = {
   lowValueAutomationProcessSendQueue: booleanEnv("LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE", true),
   lowValueAutomationSendQueueLimit: numberEnv("LOW_VALUE_AUTOMATION_SEND_QUEUE_LIMIT", 10),
 };
+
+if (!process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR) {
+  process.env.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR = appConfig.wechatWindowSnapshotInboxDir;
+}
 
 export type DesignPlatformRuntimeConfigPatch = {
   adapter?: string;

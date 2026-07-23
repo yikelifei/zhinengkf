@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 
 const {
@@ -46,6 +46,10 @@ type StoreData = {
   knowledgeEntries: any[];
   routeEvaluations: any[];
   automationRuns: any[];
+  wechatWorkBindings: any[];
+  wechatWorkAuditLogs: any[];
+  personalWechatRpaBindings: any[];
+  personalWechatRpaAuditLogs: any[];
 };
 
 type IdentityListFilter = {
@@ -491,6 +495,350 @@ export class LocalStoreService {
     );
   }
 
+  upsertWechatWorkBinding(payload: { openKfid: string; externalUserId: string; sendTime?: number }) {
+    const openKfid = String(payload.openKfid || "").trim();
+    const externalUserId = String(payload.externalUserId || "").trim();
+    if (!openKfid || !externalUserId) throw new Error("wechat work binding requires openKfid and externalUserId");
+    const data = this.read();
+    const now = new Date().toISOString();
+    const bindingIndex = data.wechatWorkBindings.findIndex(
+      (item) => item.openKfid === openKfid && item.externalUserId === externalUserId,
+    );
+    const current = bindingIndex >= 0 ? data.wechatWorkBindings[bindingIndex] : null;
+
+    let account = current?.wechatAccountId
+      ? data.wechatAccounts.find((item) => item.id === current.wechatAccountId) || null
+      : null;
+    account ||= data.wechatAccounts.find((item) => item.wechatWork?.openKfid === openKfid) || null;
+    if (!account) {
+      account = {
+        id: id("wechat_work"),
+        displayName: `企业微信客服 ${shortExternalId(openKfid)}`,
+        alias: shortExternalId(openKfid),
+        platform: "wechat_work_kf",
+        isActive: true,
+        wechatWork: { openKfid },
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.wechatAccounts.push(account);
+    } else if (account.wechatWork?.openKfid !== openKfid) {
+      account.wechatWork = { ...(account.wechatWork || {}), openKfid };
+      account.platform = account.platform || "wechat_work_kf";
+      account.updatedAt = now;
+    }
+
+    let customer = current?.customerId
+      ? data.customers.find((item) => item.id === current.customerId) || null
+      : null;
+    customer ||= data.customers.find((item) => item.wechatWorkExternalUserId === externalUserId) || null;
+    if (!customer) {
+      customer = {
+        id: id("customer"),
+        name: `企业微信客户 ${shortExternalId(externalUserId)}`,
+        wechatId: null,
+        source: "wechat_work_kf",
+        wechatWorkExternalUserId: externalUserId,
+        tags: ["企业微信客服"],
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.customers.push(customer);
+    }
+
+    const externalChatId = `wechat_work_kf:${openKfid}:${externalUserId}`;
+    let conversation = current?.conversationId
+      ? data.conversations.find((item) =>
+          this.recordMatchesConversationForHydration(
+            {
+              conversationId: current.conversationId,
+              wechatAccountId: account.id,
+              customerId: customer.id,
+            },
+            item,
+          ),
+        ) || null
+      : null;
+    conversation ||= data.conversations.find(
+      (item) => item.wechatAccountId === account.id && item.externalChatId === externalChatId,
+    ) || null;
+    if (!conversation) {
+      conversation = {
+        id: id("conversation"),
+        channel: "work_wechat",
+        externalChatId,
+        title: customer.name,
+        customerId: customer.id,
+        wechatAccountId: account.id,
+        lastMessageAt: payload.sendTime ? new Date(payload.sendTime * 1000).toISOString() : null,
+        manualLocked: false,
+        wechatWork: { openKfid, externalUserId },
+        createdAt: now,
+        updatedAt: now,
+      };
+      conversation.identityBinding = this.validateConversationIdentity(data, conversation);
+      data.conversations.push(conversation);
+    }
+
+    const binding = {
+      id: current?.id || id("wechat_work_binding"),
+      openKfid,
+      externalUserId,
+      wechatAccountId: account.id,
+      customerId: customer.id,
+      conversationId: conversation.id,
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+      lastInboundAt: payload.sendTime ? new Date(payload.sendTime * 1000).toISOString() : current?.lastInboundAt || null,
+    };
+    if (bindingIndex >= 0) data.wechatWorkBindings[bindingIndex] = binding;
+    else data.wechatWorkBindings.push(binding);
+    this.write(data);
+    return { ...binding, wechatAccount: account, customer, conversation };
+  }
+
+  getWechatWorkBinding(openKfid: string, externalUserId: string) {
+    const data = this.read();
+    const binding = data.wechatWorkBindings.find(
+      (item) => item.openKfid === String(openKfid || "") && item.externalUserId === String(externalUserId || ""),
+    );
+    return binding ? this.hydrateWechatWorkBinding(data, binding) : null;
+  }
+
+  findWechatWorkBindingByIdentity(identity: IdentityListFilter = {}) {
+    const data = this.read();
+    const binding = data.wechatWorkBindings.find(
+      (item) =>
+        (!identity.wechatAccountId || item.wechatAccountId === identity.wechatAccountId) &&
+        (!identity.conversationId || item.conversationId === identity.conversationId) &&
+        (!identity.customerId || item.customerId === identity.customerId),
+    );
+    return binding ? this.hydrateWechatWorkBinding(data, binding) : null;
+  }
+
+  findMessageByExternalId(conversationId: string, externalId: string) {
+    const data = this.read();
+    return data.messages.find(
+      (message) => message.conversationId === conversationId && message.externalId === externalId,
+    ) || null;
+  }
+
+  recordWechatWorkAudit(payload: Record<string, unknown>) {
+    const data = this.read();
+    const record = {
+      id: id("wechat_work_audit"),
+      ...payload,
+      createdAt: payload.createdAt || new Date().toISOString(),
+    };
+    data.wechatWorkAuditLogs.push(record);
+    if (data.wechatWorkAuditLogs.length > 2000) {
+      data.wechatWorkAuditLogs = data.wechatWorkAuditLogs
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, 2000);
+    }
+    this.write(data);
+    return record;
+  }
+
+  listWechatWorkAuditLogs(limit = 100) {
+    const safeLimit = Math.max(1, Math.min(Number(limit || 100), 500));
+    return this.read().wechatWorkAuditLogs
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, safeLimit);
+  }
+
+  hasWechatWorkAuditMsgId(msgid: string) {
+    return this.read().wechatWorkAuditLogs.some((item) => item.msgid === msgid);
+  }
+
+  upsertPersonalWechatRpaBinding(payload: {
+    accountNickname: string;
+    ownerWxId: string;
+    chatTitle: string;
+    conversationType?: string;
+    senderName?: string;
+    receivedAt?: string;
+  }) {
+    const accountNickname = String(payload.accountNickname || "").trim();
+    const ownerWxId = String(payload.ownerWxId || "").trim();
+    const chatTitle = String(payload.chatTitle || "").trim();
+    const conversationType = String(payload.conversationType || "direct").trim().toLowerCase();
+    if (!accountNickname || !ownerWxId || !chatTitle) {
+      throw new Error("personal WeChat RPA binding requires accountNickname, ownerWxId and chatTitle");
+    }
+
+    const data = this.read();
+    const now = new Date().toISOString();
+    const receivedAt = payload.receivedAt || now;
+    const bindingKey = personalWechatRpaBindingKey(ownerWxId, chatTitle);
+    const bindingIndex = data.personalWechatRpaBindings.findIndex((item) => item.bindingKey === bindingKey);
+    const current = bindingIndex >= 0 ? data.personalWechatRpaBindings[bindingIndex] : null;
+
+    let account = current?.wechatAccountId
+      ? data.wechatAccounts.find((item) => item.id === current.wechatAccountId) || null
+      : null;
+    account ||= data.wechatAccounts.find(
+      (item) => item.platform === "personal_wechat_rpa" && item.personalWechatRpa?.ownerWxId === ownerWxId,
+    ) || null;
+    if (!account) {
+      account = {
+        id: id("personal_wechat_rpa"),
+        displayName: accountNickname,
+        alias: ownerWxId,
+        platform: "personal_wechat_rpa",
+        isActive: true,
+        personalWechatRpa: { ownerWxId, accountNickname },
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.wechatAccounts.push(account);
+    } else {
+      const boundNickname = String(account.personalWechatRpa?.accountNickname || account.displayName || "").trim();
+      if (boundNickname && boundNickname !== accountNickname) {
+        throw new Error("personal WeChat RPA owner nickname changed; manual rebind is required");
+      }
+      account.displayName = accountNickname;
+      account.platform = "personal_wechat_rpa";
+      account.personalWechatRpa = { ...(account.personalWechatRpa || {}), ownerWxId, accountNickname };
+      account.updatedAt = now;
+    }
+
+    let customer = current?.customerId
+      ? data.customers.find((item) => item.id === current.customerId) || null
+      : null;
+    customer ||= data.customers.find((item) => item.personalWechatRpaBindingKey === bindingKey) || null;
+    if (!customer) {
+      customer = {
+        id: id("customer"),
+        name: chatTitle,
+        wechatId: null,
+        source: "personal_wechat_rpa",
+        personalWechatRpaBindingKey: bindingKey,
+        tags: [conversationType === "group" ? "个人微信群聊" : "个人微信好友"],
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.customers.push(customer);
+    } else if (customer.name !== chatTitle) {
+      throw new Error("personal WeChat RPA chat title changed; manual rebind is required");
+    }
+
+    const externalChatId = `personal_wechat_rpa:${bindingKey}`;
+    let conversation = current?.conversationId
+      ? data.conversations.find((item) =>
+          this.recordMatchesConversationForHydration(
+            {
+              conversationId: current.conversationId,
+              wechatAccountId: account.id,
+              customerId: customer.id,
+            },
+            item,
+          ),
+        ) || null
+      : null;
+    conversation ||= data.conversations.find(
+      (item) => item.wechatAccountId === account.id && item.externalChatId === externalChatId,
+    ) || null;
+    if (!conversation) {
+      conversation = {
+        id: id("conversation"),
+        channel: "personal_wechat",
+        externalChatId,
+        title: chatTitle,
+        customerId: customer.id,
+        wechatAccountId: account.id,
+        lastMessageAt: receivedAt,
+        manualLocked: false,
+        personalWechatRpa: { ownerWxId, chatTitle, conversationType },
+        createdAt: now,
+        updatedAt: now,
+      };
+      conversation.identityBinding = this.validateConversationIdentity(data, conversation);
+      data.conversations.push(conversation);
+    } else {
+      if (conversation.title !== chatTitle) {
+        throw new Error("personal WeChat RPA conversation title changed; manual rebind is required");
+      }
+      conversation.lastMessageAt = receivedAt;
+      conversation.updatedAt = now;
+      conversation.personalWechatRpa = {
+        ...(conversation.personalWechatRpa || {}),
+        ownerWxId,
+        chatTitle,
+        conversationType,
+      };
+    }
+
+    const binding = {
+      id: current?.id || id("personal_wechat_rpa_binding"),
+      bindingKey,
+      ownerWxId,
+      accountNickname,
+      chatTitle,
+      conversationType,
+      senderName: String(payload.senderName || current?.senderName || "").trim() || null,
+      wechatAccountId: account.id,
+      customerId: customer.id,
+      conversationId: conversation.id,
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+      lastInboundAt: receivedAt,
+    };
+    if (bindingIndex >= 0) data.personalWechatRpaBindings[bindingIndex] = binding;
+    else data.personalWechatRpaBindings.push(binding);
+    this.write(data);
+    return { ...binding, wechatAccount: account, customer, conversation };
+  }
+
+  getPersonalWechatRpaBinding(ownerWxId: string, chatTitle: string) {
+    const data = this.read();
+    const bindingKey = personalWechatRpaBindingKey(ownerWxId, chatTitle);
+    const binding = data.personalWechatRpaBindings.find((item) => item.bindingKey === bindingKey);
+    return binding ? this.hydratePersonalWechatRpaBinding(data, binding) : null;
+  }
+
+  findPersonalWechatRpaBindingByIdentity(identity: IdentityListFilter = {}) {
+    const data = this.read();
+    const binding = data.personalWechatRpaBindings.find(
+      (item) =>
+        (!identity.wechatAccountId || item.wechatAccountId === identity.wechatAccountId) &&
+        (!identity.conversationId || item.conversationId === identity.conversationId) &&
+        (!identity.customerId || item.customerId === identity.customerId),
+    );
+    return binding ? this.hydratePersonalWechatRpaBinding(data, binding) : null;
+  }
+
+  listPersonalWechatRpaBindings() {
+    const data = this.read();
+    return data.personalWechatRpaBindings
+      .map((binding) => this.hydratePersonalWechatRpaBinding(data, binding))
+      .sort((a, b) => String(b.lastInboundAt || b.updatedAt).localeCompare(String(a.lastInboundAt || a.updatedAt)));
+  }
+
+  recordPersonalWechatRpaAudit(payload: Record<string, unknown>) {
+    const data = this.read();
+    const record = {
+      id: id("personal_wechat_rpa_audit"),
+      ...payload,
+      createdAt: payload.createdAt || new Date().toISOString(),
+    };
+    data.personalWechatRpaAuditLogs.push(record);
+    if (data.personalWechatRpaAuditLogs.length > 2000) {
+      data.personalWechatRpaAuditLogs = data.personalWechatRpaAuditLogs
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, 2000);
+    }
+    this.write(data);
+    return record;
+  }
+
+  listPersonalWechatRpaAuditLogs(limit = 100) {
+    const safeLimit = Math.max(1, Math.min(Number(limit || 100), 500));
+    return this.read().personalWechatRpaAuditLogs
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, safeLimit);
+  }
+
   listConversations(wechatAccountId?: string) {
     const data = this.read();
     return data.conversations
@@ -518,6 +866,58 @@ export class LocalStoreService {
     data.conversations[index] = next;
     this.write(data);
     return this.hydrateConversation(data, data.conversations[index]);
+  }
+
+  updateConversationOperations(
+    id: string,
+    identity: { wechatAccountId: string; conversationId: string; customerId: string },
+    patch: Record<string, unknown>,
+    audit: {
+      reviewer: string;
+      note?: string;
+      decision?: string;
+      beforeStatus?: string;
+      afterStatus?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    if (identity.conversationId !== id) throw new Error("conversation operations identity mismatch: conversationId");
+    const data = this.read();
+    const validatedIdentity = this.requireCompleteConversationIdentity(data, identity, "conversation operations update");
+    const index = data.conversations.findIndex((conversation) => conversation.id === id);
+    if (index < 0) throw new Error(`local conversation not found: ${id}`);
+    const allowedFields = ["assignee", "priority", "status", "slaDueAt", "firstResponseDueAt"];
+    const safePatch = Object.fromEntries(Object.entries(patch).filter(([key]) => allowedFields.includes(key)));
+    if (!Object.keys(safePatch).length) throw new Error("conversation operations update has no mutable fields");
+    const now = new Date().toISOString();
+    const next = {
+      ...data.conversations[index],
+      ...safePatch,
+      updatedAt: now,
+    };
+    const reviewLog = this.buildReviewLogRecord(
+      data,
+      {
+        targetType: "conversation",
+        targetId: id,
+        decision: audit.decision || "conversation_operations_update",
+        reviewer: audit.reviewer,
+        note: audit.note || "",
+        beforeStatus: audit.beforeStatus || "",
+        afterStatus: audit.afterStatus || "",
+        metadata: {
+          ...(audit.metadata || {}),
+          wechatAccountId: validatedIdentity.wechatAccountId,
+          conversationId: validatedIdentity.conversationId,
+          customerId: validatedIdentity.customerId,
+        },
+      },
+      now,
+    );
+    data.conversations[index] = next;
+    data.reviewLogs.push(reviewLog);
+    this.write(data);
+    return { conversation: this.hydrateConversation(data, next), audit: reviewLog };
   }
 
   private validateConversationIdentity(data: StoreData, conversation: any, currentId?: string) {
@@ -589,6 +989,19 @@ export class LocalStoreService {
     if (requestedCustomerId && requestedCustomerId !== conversation.customerId) {
       throw new Error("message customer binding invalid: requested customer does not match conversation");
     }
+    const existing = payload.externalId
+      ? data.messages.find(
+          (message) => message.conversationId === conversation.id && message.externalId === payload.externalId,
+        ) || null
+      : null;
+    if (existing) {
+      return {
+        ...existing,
+        customerId: conversation.customerId || null,
+        wechatAccountId: conversation.wechatAccountId || null,
+        conversation: this.hydrateConversation(data, conversation),
+      };
+    }
     const record: any = {
       id: id("msg"),
       conversationId: payload.conversationId,
@@ -599,6 +1012,7 @@ export class LocalStoreService {
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       externalId: payload.externalId || null,
       metadata: payload.metadata || {},
+      readAt: payload.direction === "outbound" ? payload.readAt || now : payload.readAt || null,
       identityBinding: {
         status: "passed",
         conversationId: conversation.id,
@@ -620,6 +1034,76 @@ export class LocalStoreService {
     };
   }
 
+  listConversationTimeline(filter: IdentityListFilter & { limit?: number }) {
+    const data = this.read();
+    const identity = this.requireCompleteConversationIdentity(data, filter, "message history");
+    const limit = Math.max(1, Math.min(Number(filter.limit || 300), 500));
+    const messages = data.messages
+      .filter((message) => message.conversationId === identity.conversationId)
+      .map((message) => ({
+        ...message,
+        source: "message",
+        customerId: identity.customerId,
+        wechatAccountId: identity.wechatAccountId,
+        status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
+        attachments: normalizeTimelineAttachments(message.attachments, message.readAt ? "read" : "received"),
+      }));
+    const outbound = data.sendTasks
+      .filter((task) => task.conversationId === identity.conversationId)
+      .map((task) => ({
+        id: `send-task:${task.id}`,
+        source: "send_task",
+        sendTaskId: task.id,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+        wechatAccountId: identity.wechatAccountId,
+        direction: "outbound",
+        text: String(task.payload?.text || task.payload?.textBeforeImages || ""),
+        attachments: timelineTaskAttachments(task),
+        status: task.status || "queued",
+        errorMessage: task.errorMessage || "",
+        createdAt: task.queuedAt || task.createdAt,
+        updatedAt: task.updatedAt || task.createdAt,
+        sentAt: task.sentAt || null,
+        metadata: {
+          kind: task.payload?.kind || "text",
+          manualReply: task.payload?.source === "manual_reply",
+        },
+      }));
+    return [...messages, ...outbound]
+      .sort((left, right) => {
+        const byTime = String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
+        return byTime || String(left.id || "").localeCompare(String(right.id || ""));
+      })
+      .slice(-limit);
+  }
+
+  markConversationMessagesRead(filter: IdentityListFilter) {
+    const data = this.read();
+    const identity = this.requireCompleteConversationIdentity(data, filter, "mark messages read");
+    const readAt = new Date().toISOString();
+    let updatedCount = 0;
+    data.messages = data.messages.map((message) => {
+      if (message.conversationId !== identity.conversationId || message.direction !== "inbound" || message.readAt) {
+        return message;
+      }
+      updatedCount += 1;
+      return { ...message, readAt };
+    });
+    if (updatedCount) this.write(data);
+    return { ...identity, updatedCount, readAt };
+  }
+
+  private requireCompleteConversationIdentity(data: StoreData, filter: IdentityListFilter, label: string) {
+    const missing = [
+      !String(filter.wechatAccountId || "").trim() ? "wechatAccountId" : "",
+      !String(filter.conversationId || "").trim() ? "conversationId" : "",
+      !String(filter.customerId || "").trim() ? "customerId" : "",
+    ].filter(Boolean);
+    if (missing.length) throw new Error(`${label} requires complete conversation identity: ${missing.join(", ")}`);
+    return this.validateOptionalConversationBinding(data, filter, label);
+  }
+
   private validateOptionalConversationBinding(data: StoreData, payload: any, label: string) {
     const requestedConversationId = payload.conversationId || null;
     const requestedWechatAccountId = payload.wechatAccountId || null;
@@ -633,7 +1117,15 @@ export class LocalStoreService {
       };
     }
     const conversation = requestedConversationId
-      ? data.conversations.find((item) => item.id === requestedConversationId) || null
+      ? data.conversations.find((item) =>
+          this.recordMatchesConversationForHydration(
+            {
+              conversationId: requestedConversationId,
+              wechatAccountId: requestedWechatAccountId,
+            },
+            item,
+          ),
+        ) || null
       : null;
     const binding = validateInboundConversationBinding({
       requestedWechatAccountId,
@@ -799,7 +1291,8 @@ export class LocalStoreService {
   }
 
   private validateDesignJobIdentity(data: StoreData, payload: any) {
-    const conversation = data.conversations.find((item) => item.id === payload.conversationId) || null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(payload, item)) || null;
     const normalizedPayload = {
       ...payload,
       customerId: payload.customerId || conversation?.customerId,
@@ -1101,6 +1594,10 @@ export class LocalStoreService {
         scene: sample.scene,
         sourceType: sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : "manual"),
         changedFields,
+        wechatAccountId: sample.wechatAccountId || null,
+        conversationId: sample.conversationId || null,
+        customerId: sample.customerId || null,
+        identityBinding: sample.identityBinding || null,
       },
       createdAt: now,
     };
@@ -1315,6 +1812,10 @@ export class LocalStoreService {
         afterScene: scene,
         trainingSampleId: sample.id,
         knowledgeEntryId: knowledge.id,
+        wechatAccountId: before.wechatAccountId || null,
+        conversationId: before.conversationId || null,
+        customerId: before.customerId || null,
+        identityBinding: before.identityBinding || null,
       },
       createdAt: now,
     };
@@ -1417,10 +1918,11 @@ export class LocalStoreService {
     const data = this.read();
     const now = new Date().toISOString();
     const binding = this.validateSendTaskBinding(data, payload);
-    const conversation = data.conversations.find((item) => item.id === payload.conversationId) || null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(payload, item)) || null;
     const normalizedPayload = {
       ...payload,
-      customerId: payload.customerId || conversation?.customerId || null,
+      customerId: payload.customerId || binding.customerId || null,
       designJobId: payload.designJobId || binding.designJobId,
     };
     const record = {
@@ -1479,7 +1981,8 @@ export class LocalStoreService {
     );
     if (bindingChanged && !options.skipBindingValidation) {
       const binding = this.validateSendTaskBinding(data, next);
-      const conversation = data.conversations.find((item) => item.id === next.conversationId) || null;
+      const conversation =
+        data.conversations.find((item) => this.recordMatchesConversationForHydration(next, item)) || null;
       next.customerId = next.customerId || conversation?.customerId || null;
       next.designJobId = next.designJobId || binding.designJobId;
       next.guardSnapshot = {
@@ -1524,13 +2027,16 @@ export class LocalStoreService {
   }
 
   private validateSendTaskBinding(data: StoreData, payload: any) {
-    const conversation = data.conversations.find((item) => item.id === payload.conversationId) || null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(payload, item)) || null;
     const quoteDraft = payload.quoteDraftId
-      ? data.quoteDrafts.find((item) => item.id === payload.quoteDraftId) || null
+      ? data.quoteDrafts.find((item) => item.id === payload.quoteDraftId && this.quoteDraftMatchesRecordIdentity(item, payload)) ||
+        null
       : null;
     const designJobId = payload.designJobId || quoteDraft?.designJobId;
     const designJob = designJobId
-      ? data.designJobs.find((item) => item.id === designJobId) || null
+      ? data.designJobs.find((item) => item.id === designJobId && this.designJobMatchesRecordIdentity(item, { ...payload, designJobId })) ||
+        null
       : null;
     const result = validateSendTaskBinding({
       task: {
@@ -1548,6 +2054,7 @@ export class LocalStoreService {
     return {
       ...result,
       designJobId,
+      customerId: conversation?.customerId || designJob?.customerId || quoteDraft?.customerId || null,
     };
   }
 
@@ -1570,21 +2077,34 @@ export class LocalStoreService {
   }
 
   private validateStoredOrderDraftBinding(data: StoreData, orderDraft: any) {
-    const quoteDraft = data.quoteDrafts.find((item) => item.id === orderDraft.quoteDraftId) || null;
+    const quoteDraft =
+      data.quoteDrafts.find((item) => item.id === orderDraft.quoteDraftId && this.quoteDraftMatchesRecordIdentity(item, orderDraft)) ||
+      null;
     const designJob = orderDraft.designJobId
-      ? data.designJobs.find((item) => item.id === orderDraft.designJobId) || null
+      ? data.designJobs.find((item) => item.id === orderDraft.designJobId && this.designJobMatchesRecordIdentity(item, orderDraft)) || null
       : quoteDraft?.designJobId
-        ? data.designJobs.find((item) => item.id === quoteDraft.designJobId) || null
+        ? data.designJobs.find((item) => item.id === quoteDraft.designJobId && this.designJobMatchesRecordIdentity(item, quoteDraft)) ||
+          null
         : null;
     const conversation = orderDraft.conversationId
-      ? data.conversations.find((item) => item.id === orderDraft.conversationId) || null
+      ? data.conversations.find((item) => this.recordMatchesConversationForHydration(orderDraft, item)) || null
       : designJob?.conversationId
-        ? data.conversations.find((item) => item.id === designJob.conversationId) || null
+        ? data.conversations.find((item) => this.recordMatchesConversationForHydration(designJob, item)) || null
         : null;
     const selectedImage = orderDraft.selectedImageId
-      ? data.designImages.find((item) => item.id === orderDraft.selectedImageId || item.imageId === orderDraft.selectedImageId) || null
+      ? data.designImages.find(
+          (item) =>
+            designJob &&
+            item.designJobId === designJob.id &&
+            (item.id === orderDraft.selectedImageId || item.imageId === orderDraft.selectedImageId),
+        ) || null
       : quoteDraft?.selectedImageId
-        ? data.designImages.find((item) => item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId) || null
+        ? data.designImages.find(
+            (item) =>
+              designJob &&
+              item.designJobId === designJob.id &&
+              (item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId),
+          ) || null
         : null;
     const result = validateOrderDraftQuoteBinding({
       orderDraft,
@@ -1694,14 +2214,28 @@ export class LocalStoreService {
     return attempt ? this.hydrateSendAttempt(data, attempt) : null;
   }
 
-  getRecentMessage(conversationId: string) {
+  findWechatWorkSendAttemptByMsgId(msgid: string) {
+    const data = this.read();
+    const attempt = data.sendAttempts
+      .filter((item) => item.adapter === "wechat_work_kf")
+      .find((item) => item.metadata?.wechatWorkMsgId === msgid || item.metadata?.apiMsgId === msgid);
+    return attempt ? this.hydrateSendAttempt(data, attempt) : null;
+  }
+
+  getRecentMessage(conversationId: string, filter: IdentityListFilter = {}) {
     const data = this.read();
     const message = data.messages
       .filter((item) => item.conversationId === conversationId)
+      .filter((item) => this.matchesIdentityFilter(item, filter))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
     if (!message) return null;
-    const conversation = data.conversations.find((item) => item.id === message.conversationId);
-    return { ...message, customerId: conversation?.customerId || null };
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(message, item)) || null;
+    return {
+      ...message,
+      customerId: message.customerId || conversation?.customerId || null,
+      conversation: conversation ? this.hydrateConversation(data, conversation) : null,
+    };
   }
 
   listAccountQueueTaskIds(wechatAccountId: string) {
@@ -1716,7 +2250,8 @@ export class LocalStoreService {
     const data = this.read();
     const job = data.designJobs.find((item) => item.id === designJobId);
     if (!job) throw new Error(`local design job not found: ${designJobId}`);
-    const conversation = data.conversations.find((item) => item.id === job.conversationId) || null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(job, item)) || null;
     const items = Array.isArray(job.bundle?.items) ? job.bundle.items : [];
     const totals = calculateTotals(items);
     const quantity = Number(job.budget?.quantity || 1);
@@ -1774,12 +2309,19 @@ export class LocalStoreService {
   }
 
   private validateStoredQuoteDraftIdentity(data: StoreData, quoteDraft: any) {
-    const designJob = data.designJobs.find((item) => item.id === quoteDraft.designJobId) || null;
+    const designJob =
+      data.designJobs.find((item) => item.id === quoteDraft.designJobId && this.designJobMatchesRecordIdentity(item, quoteDraft)) ||
+      null;
     const conversation = designJob?.conversationId
-      ? data.conversations.find((item) => item.id === designJob.conversationId) || null
+      ? data.conversations.find((item) => this.recordMatchesConversationForHydration(designJob, item)) || null
       : null;
     const selectedImage = quoteDraft.selectedImageId
-      ? data.designImages.find((item) => item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId) || null
+      ? data.designImages.find(
+          (item) =>
+            designJob &&
+            item.designJobId === designJob.id &&
+            (item.id === quoteDraft.selectedImageId || item.imageId === quoteDraft.selectedImageId),
+        ) || null
       : null;
     return this.validateQuoteDraftIdentity({
       quoteDraft,
@@ -1901,6 +2443,13 @@ export class LocalStoreService {
   createReviewLog(payload: any) {
     const data = this.read();
     const now = new Date().toISOString();
+    const record = this.buildReviewLogRecord(data, payload, now);
+    data.reviewLogs.push(record);
+    this.write(data);
+    return record;
+  }
+
+  private buildReviewLogRecord(data: StoreData, payload: any, now: string) {
     const identity = this.resolveTargetIdentity(
       data,
       this.buildReviewLogIdentityTarget(payload),
@@ -1922,8 +2471,6 @@ export class LocalStoreService {
       },
       createdAt: now,
     };
-    data.reviewLogs.push(record);
-    this.write(data);
     return record;
   }
 
@@ -1974,22 +2521,113 @@ export class LocalStoreService {
   }
 
   private resolveTargetIdentitySource(data: StoreData, target: any) {
-    const sendTask = target.sendTaskId ? data.sendTasks.find((item) => item.id === target.sendTaskId) || null : null;
-    const orderDraft = target.orderDraftId ? data.orderDrafts.find((item) => item.id === target.orderDraftId) || null : null;
+    const sendTask = target.sendTaskId ? this.findIdentitySourceRecord(data.sendTasks, target.sendTaskId, "send task") : null;
+    const orderDraft = target.orderDraftId ? this.findIdentitySourceRecord(data.orderDrafts, target.orderDraftId, "order draft") : null;
     const quoteDraft =
       target.quoteDraftId || orderDraft?.quoteDraftId
-        ? data.quoteDrafts.find((item) => item.id === (target.quoteDraftId || orderDraft?.quoteDraftId)) || null
+        ? this.findIdentitySourceRecord(
+            data.quoteDrafts.filter((item) => !orderDraft || this.quoteDraftMatchesRecordIdentity(item, orderDraft)),
+            target.quoteDraftId || orderDraft?.quoteDraftId,
+            "quote draft",
+          )
         : null;
+    const designJobSource = target.designJobId
+      ? target
+      : sendTask?.designJobId
+        ? sendTask
+        : quoteDraft?.designJobId
+          ? quoteDraft
+          : orderDraft?.designJobId
+            ? orderDraft
+            : null;
     const designJob =
       target.designJobId || sendTask?.designJobId || quoteDraft?.designJobId || orderDraft?.designJobId
-        ? data.designJobs.find((item) => item.id === (target.designJobId || sendTask?.designJobId || quoteDraft?.designJobId || orderDraft?.designJobId)) ||
-          null
+        ? this.findIdentitySourceRecord(
+            data.designJobs.filter((item) => !designJobSource || this.designJobMatchesRecordIdentity(item, designJobSource)),
+            target.designJobId || sendTask?.designJobId || quoteDraft?.designJobId || orderDraft?.designJobId,
+            "design job",
+          )
         : null;
-    const route = target.routeId ? data.routeEvaluations.find((item) => item.id === target.routeId) || null : null;
+    const route = target.routeId ? this.findIdentitySourceRecord(data.routeEvaluations, target.routeId, "route evaluation") : null;
+    const trainingSampleIds = [
+      target.trainingSampleId,
+      ...(Array.isArray(target.trainingSampleIds) ? target.trainingSampleIds : []),
+      ...(Array.isArray(target.sampleIds) ? target.sampleIds : []),
+      ...(Array.isArray(target.sourceSampleIds) ? target.sourceSampleIds : []),
+    ]
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    const trainingSamples = trainingSampleIds.length
+      ? data.trainingSamples
+          .filter((sample) => trainingSampleIds.includes(sample.id))
+          .filter((sample) => this.assertIdentitySourceRecordIsCurrent(sample, "training sample"))
+      : [];
+    const trainingSampleIdentity = trainingSamples.length === trainingSampleIds.length ? sharedIdentityFields(trainingSamples) : null;
+    const chatImportId = String(target.chatImportId || target.importId || "").trim();
+    const chatImport = chatImportId ? this.findIdentitySourceRecord(data.chatImports, chatImportId, "chat import") : null;
     return {
-      conversationId: sendTask?.conversationId || orderDraft?.conversationId || designJob?.conversationId || route?.conversationId || null,
-      customerId: orderDraft?.customerId || quoteDraft?.customerId || designJob?.customerId || route?.customerId || null,
-      wechatAccountId: sendTask?.wechatAccountId || orderDraft?.wechatAccountId || designJob?.wechatAccountId || route?.wechatAccountId || null,
+      conversationId:
+        sendTask?.conversationId ||
+        orderDraft?.conversationId ||
+        designJob?.conversationId ||
+        route?.conversationId ||
+        trainingSampleIdentity?.conversationId ||
+        chatImport?.conversationId ||
+        null,
+      customerId:
+        orderDraft?.customerId ||
+        quoteDraft?.customerId ||
+        designJob?.customerId ||
+        route?.customerId ||
+        trainingSampleIdentity?.customerId ||
+        chatImport?.customerId ||
+        null,
+      wechatAccountId:
+        sendTask?.wechatAccountId ||
+        orderDraft?.wechatAccountId ||
+        designJob?.wechatAccountId ||
+        route?.wechatAccountId ||
+        trainingSampleIdentity?.wechatAccountId ||
+        chatImport?.wechatAccountId ||
+        null,
+    };
+  }
+
+  private findIdentitySourceRecord(records: any[], recordId: unknown, label: string) {
+    const idValue = String(recordId || "").trim();
+    if (!idValue) return null;
+    const record = records.find((item) => String(item?.id || "") === idValue) || null;
+    if (!record) return null;
+    return this.assertIdentitySourceRecordIsCurrent(record, label);
+  }
+
+  private assertIdentitySourceRecordIsCurrent(record: any, label: string) {
+    if (!this.recordMatchesStoredIdentityBinding(record)) {
+      throw new Error(`${label} identity binding invalid: stored identity no longer matches record`);
+    }
+    return record;
+  }
+
+  private recordMatchesStoredIdentityBinding(record: any) {
+    const binding = record?.identityBinding || record?.guardSnapshot?.binding || record?.metadata?.identityBinding || record?.target?.identityBinding || null;
+    if (!binding || typeof binding !== "object") return true;
+    const current: Record<string, unknown> = this.directRecordIdentityFields(record);
+    for (const key of ["wechatAccountId", "conversationId", "customerId"]) {
+      const expected = String(binding[key] || "").trim();
+      if (!expected) continue;
+      if (String(current[key] || "").trim() !== expected) return false;
+    }
+    return true;
+  }
+
+  private directRecordIdentityFields(record: any) {
+    const metadata = record?.metadata && typeof record.metadata === "object" ? record.metadata : {};
+    const target = record?.target && typeof record.target === "object" ? record.target : {};
+    const payload = record?.payload && typeof record.payload === "object" ? record.payload : {};
+    return {
+      wechatAccountId: record?.wechatAccountId || payload.wechatAccountId || metadata.wechatAccountId || target.wechatAccountId || "",
+      conversationId: record?.conversationId || payload.conversationId || metadata.conversationId || target.conversationId || "",
+      customerId: record?.customerId || payload.customerId || metadata.customerId || target.customerId || "",
     };
   }
 
@@ -2035,10 +2673,13 @@ export class LocalStoreService {
     const sendTask = record?.sendTask || null;
     const conversation = record?.conversation || record?.activeConversation || designJob?.conversation || quoteDraft?.designJob?.conversation || null;
     const target = record?.target || null;
+    const metadata = record?.metadata || null;
     return {
       conversationId: String(
         record?.conversationId ||
           record?.identityBinding?.conversationId ||
+          metadata?.conversationId ||
+          metadata?.identityBinding?.conversationId ||
           target?.conversationId ||
           conversation?.id ||
           sendTask?.conversationId ||
@@ -2050,6 +2691,8 @@ export class LocalStoreService {
       customerId: String(
         record?.customerId ||
           record?.identityBinding?.customerId ||
+          metadata?.customerId ||
+          metadata?.identityBinding?.customerId ||
           target?.customerId ||
           conversation?.customerId ||
           sendTask?.conversation?.customerId ||
@@ -2062,6 +2705,8 @@ export class LocalStoreService {
       wechatAccountId: String(
         record?.wechatAccountId ||
           record?.identityBinding?.wechatAccountId ||
+          metadata?.wechatAccountId ||
+          metadata?.identityBinding?.wechatAccountId ||
           target?.wechatAccountId ||
           conversation?.wechatAccountId ||
           sendTask?.wechatAccountId ||
@@ -2107,10 +2752,18 @@ export class LocalStoreService {
   }
 
   private hydrateConversation(data: StoreData, conversation: any) {
+    const inbound = data.messages.filter(
+      (message) => message.conversationId === conversation.id && message.direction === "inbound",
+    );
+    const latestMessage = data.messages
+      .filter((message) => message.conversationId === conversation.id)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))[0] || null;
     return {
       ...conversation,
       customer: data.customers.find((item) => item.id === conversation.customerId) || null,
       wechatAccount: data.wechatAccounts.find((item) => item.id === conversation.wechatAccountId) || null,
+      unreadCount: inbound.filter((message) => !message.readAt).length,
+      lastMessagePreview: String(latestMessage?.text || ""),
     };
   }
 
@@ -2131,10 +2784,12 @@ export class LocalStoreService {
   }
 
   private hydrateDesignJob(data: StoreData, job: any) {
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(job, item)) || null;
     return {
       ...job,
       customer: data.customers.find((item) => item.id === job.customerId) || null,
-      conversation: data.conversations.find((item) => item.id === job.conversationId) || null,
+      conversation: conversation ? this.hydrateConversation(data, conversation) : null,
       wechatAccount: data.wechatAccounts.find((item) => item.id === job.wechatAccountId) || null,
       assets: data.designAssets
         .filter((item) => (job.assetIds || []).includes(item.id))
@@ -2156,7 +2811,17 @@ export class LocalStoreService {
   }
 
   private hydrateSendTask(data: StoreData, task: any) {
-    const conversation = data.conversations.find((item) => item.id === task.conversationId) || null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(task, item)) || null;
+    const designJob = task.designJobId
+      ? data.designJobs.find((item) => item.id === task.designJobId && this.designJobMatchesRecordIdentity(item, task)) || null
+      : null;
+    const quoteDraft =
+      data.quoteDrafts.find(
+        (item) =>
+          (item.id === task.quoteDraftId || item.sendTaskId === task.id) &&
+          this.quoteDraftMatchesRecordIdentity(item, task),
+      ) || null;
     const attempts = data.sendAttempts
       .filter((attempt) => attempt.sendTaskId === task.id)
       .sort((a, b) => String(b.startedAt || b.createdAt).localeCompare(String(a.startedAt || a.createdAt)));
@@ -2164,18 +2829,76 @@ export class LocalStoreService {
       ...task,
       wechatAccount: data.wechatAccounts.find((item) => item.id === task.wechatAccountId) || null,
       conversation: conversation ? this.hydrateConversation(data, conversation) : null,
-      designJob: task.designJobId ? data.designJobs.find((item) => item.id === task.designJobId) || null : null,
-      quoteDraft: data.quoteDrafts.find((item) => item.id === task.quoteDraftId || item.sendTaskId === task.id) || null,
+      designJob,
+      quoteDraft,
       attempts,
       attemptCount: attempts.length,
       latestAttempt: attempts[0] || null,
     };
   }
 
+  private recordMatchesConversationForHydration(record: any, conversation: any) {
+    if (!record || !conversation) return false;
+    if (String(record.conversationId || "") !== String(conversation.id || "")) return false;
+    const recordWechatAccountId = String(record.wechatAccountId || record.payload?.wechatAccountId || "");
+    const recordCustomerId = String(record.customerId || record.payload?.customerId || "");
+    if (recordWechatAccountId && conversation.wechatAccountId && recordWechatAccountId !== String(conversation.wechatAccountId)) return false;
+    if (recordCustomerId && conversation.customerId && recordCustomerId !== String(conversation.customerId)) return false;
+    return true;
+  }
+
+  private designJobMatchesRecordIdentity(job: any, record: any) {
+    if (!job || !record) return false;
+    if (record.designJobId && String(job.id || "") !== String(record.designJobId || "")) return false;
+    const recordWechatAccountId = String(record.wechatAccountId || record.payload?.wechatAccountId || "");
+    const recordConversationId = String(record.conversationId || record.payload?.conversationId || "");
+    const recordCustomerId = String(record.customerId || record.payload?.customerId || "");
+    if (recordWechatAccountId && job.wechatAccountId && recordWechatAccountId !== String(job.wechatAccountId)) return false;
+    if (recordConversationId && job.conversationId && recordConversationId !== String(job.conversationId)) return false;
+    if (recordCustomerId && job.customerId && recordCustomerId !== String(job.customerId)) return false;
+    return true;
+  }
+
+  private quoteDraftMatchesRecordIdentity(quote: any, record: any) {
+    if (!quote || !record) return false;
+    if (record.quoteDraftId && String(quote.id || "") !== String(record.quoteDraftId || "")) return false;
+    const recordCustomerId = String(record.customerId || record.payload?.customerId || "");
+    const recordDesignJobId = String(record.designJobId || record.payload?.designJobId || "");
+    if (recordCustomerId && quote.customerId && recordCustomerId !== String(quote.customerId)) return false;
+    if (recordDesignJobId && quote.designJobId && recordDesignJobId !== String(quote.designJobId)) return false;
+    return true;
+  }
+
+  private sendTaskMatchesRecordIdentity(task: any, record: any) {
+    if (!task || !record) return false;
+    const metadata = record.metadata && typeof record.metadata === "object" ? record.metadata : {};
+    const target = metadata.target && typeof metadata.target === "object" ? metadata.target : {};
+    const sendPlanTarget =
+      metadata.sendPlan?.target && typeof metadata.sendPlan.target === "object" ? metadata.sendPlan.target : {};
+    const recordWechatAccountId = String(
+      record.wechatAccountId || record.payload?.wechatAccountId || metadata.wechatAccountId || target.wechatAccountId || sendPlanTarget.wechatAccountId || "",
+    );
+    const recordConversationId = String(
+      record.conversationId || record.payload?.conversationId || metadata.conversationId || target.conversationId || sendPlanTarget.conversationId || "",
+    );
+    const recordCustomerId = String(record.customerId || record.payload?.customerId || metadata.customerId || target.customerId || sendPlanTarget.customerId || "");
+    const recordQuoteDraftId = String(record.quoteDraftId || record.payload?.quoteDraftId || metadata.quoteDraftId || "");
+    const recordDesignJobId = String(record.designJobId || record.payload?.designJobId || metadata.designJobId || "");
+    if (recordWechatAccountId && task.wechatAccountId && recordWechatAccountId !== String(task.wechatAccountId)) return false;
+    if (recordConversationId && task.conversationId && recordConversationId !== String(task.conversationId)) return false;
+    if (recordCustomerId && task.customerId && recordCustomerId !== String(task.customerId)) return false;
+    if (recordQuoteDraftId && task.quoteDraftId && recordQuoteDraftId !== String(task.quoteDraftId)) return false;
+    if (recordDesignJobId && task.designJobId && recordDesignJobId !== String(task.designJobId)) return false;
+    return true;
+  }
+
   private hydrateSendAttempt(data: StoreData, attempt: any) {
+    const sendTask =
+      data.sendTasks.find((item) => item.id === attempt.sendTaskId && this.sendTaskMatchesRecordIdentity(item, attempt)) ||
+      null;
     return {
       ...attempt,
-      sendTask: data.sendTasks.find((item) => item.id === attempt.sendTaskId) || null,
+      sendTask,
       windowSnapshot: attempt.windowSnapshotId
         ? data.wechatWindowSnapshots.find((item) => item.id === attempt.windowSnapshotId) || null
         : null,
@@ -2183,12 +2906,20 @@ export class LocalStoreService {
   }
 
   private hydrateQuoteDraft(data: StoreData, quote: any) {
-    const designJob = data.designJobs.find((item) => item.id === quote.designJobId) || null;
+    const designJob =
+      data.designJobs.find((item) => item.id === quote.designJobId && this.designJobMatchesRecordIdentity(item, quote)) ||
+      null;
     const sendTask = quote.sendTaskId
-      ? data.sendTasks.find((item) => item.id === quote.sendTaskId) || null
+      ? data.sendTasks.find((item) => item.id === quote.sendTaskId && this.sendTaskMatchesRecordIdentity(item, { ...quote, quoteDraftId: quote.id })) ||
+        null
       : null;
     const selectedImage = quote.selectedImageId
-      ? data.designImages.find((item) => item.id === quote.selectedImageId || item.imageId === quote.selectedImageId) || null
+      ? data.designImages.find(
+          (item) =>
+            designJob &&
+            item.designJobId === designJob.id &&
+            (item.id === quote.selectedImageId || item.imageId === quote.selectedImageId),
+        ) || null
       : null;
     const totalPrice = Number(quote.totalPrice || 0);
     const profit = Number(quote.profit || 0);
@@ -2203,10 +2934,21 @@ export class LocalStoreService {
   }
 
   private hydrateOrderDraft(data: StoreData, order: any) {
-    const quoteDraft = data.quoteDrafts.find((item) => item.id === order.quoteDraftId) || null;
-    const designJob = data.designJobs.find((item) => item.id === order.designJobId) || null;
+    const quoteDraft =
+      data.quoteDrafts.find((item) => item.id === order.quoteDraftId && this.quoteDraftMatchesRecordIdentity(item, order)) ||
+      null;
+    const designJob =
+      data.designJobs.find((item) => item.id === order.designJobId && this.designJobMatchesRecordIdentity(item, order)) ||
+      null;
+    const conversation =
+      data.conversations.find((item) => this.recordMatchesConversationForHydration(order, item)) || null;
     const selectedImage = order.selectedImageId
-      ? data.designImages.find((item) => item.id === order.selectedImageId || item.imageId === order.selectedImageId) || null
+      ? data.designImages.find(
+          (item) =>
+            designJob &&
+            item.designJobId === designJob.id &&
+            (item.id === order.selectedImageId || item.imageId === order.selectedImageId),
+        ) || null
       : null;
     const confirmationSendTask = this.findOrderConfirmationSendTask(data, order);
     const followupSendTasks = this.findOrderFollowupSendTasks(data, order);
@@ -2222,7 +2964,7 @@ export class LocalStoreService {
       profitRate: order.profitRate ?? (totalPrice > 0 ? round(profit / totalPrice) : 0),
       quoteDraft: quoteDraft ? this.hydrateQuoteDraft(data, quoteDraft) : null,
       customer: data.customers.find((item) => item.id === order.customerId) || null,
-      conversation: data.conversations.find((item) => item.id === order.conversationId) || null,
+      conversation: conversation ? this.hydrateConversation(data, conversation) : null,
       wechatAccount: data.wechatAccounts.find((item) => item.id === order.wechatAccountId) || null,
       designJob: designJob ? this.hydrateDesignJob(data, designJob) : null,
       selectedImage,
@@ -2240,9 +2982,29 @@ export class LocalStoreService {
     };
   }
 
+  private hydrateWechatWorkBinding(data: StoreData, binding: any) {
+    return {
+      ...binding,
+      wechatAccount: data.wechatAccounts.find((item) => item.id === binding.wechatAccountId) || null,
+      customer: data.customers.find((item) => item.id === binding.customerId) || null,
+      conversation:
+        data.conversations.find((item) => this.recordMatchesConversationForHydration(binding, item)) || null,
+    };
+  }
+
+  private hydratePersonalWechatRpaBinding(data: StoreData, binding: any) {
+    return {
+      ...binding,
+      wechatAccount: data.wechatAccounts.find((item) => item.id === binding.wechatAccountId) || null,
+      customer: data.customers.find((item) => item.id === binding.customerId) || null,
+      conversation:
+        data.conversations.find((item) => this.recordMatchesConversationForHydration(binding, item)) || null,
+    };
+  }
+
   private findOrderConfirmationSendTask(data: StoreData, order: any) {
     return data.sendTasks
-      .filter((task) => this.isOrderConfirmationSendTask(task, order))
+      .filter((task) => this.isOrderConfirmationSendTask(task, order) && this.sendTaskMatchesRecordIdentity(task, order))
       .sort((a, b) => String(b.createdAt || b.updatedAt).localeCompare(String(a.createdAt || a.updatedAt)))[0] || null;
   }
 
@@ -2260,7 +3022,7 @@ export class LocalStoreService {
 
   private findOrderFollowupSendTasks(data: StoreData, order: any) {
     return data.sendTasks
-      .filter((task) => this.isOrderFollowupSendTask(task, order))
+      .filter((task) => this.isOrderFollowupSendTask(task, order) && this.sendTaskMatchesRecordIdentity(task, order))
       .sort((a, b) => String(b.createdAt || b.updatedAt).localeCompare(String(a.createdAt || a.updatedAt)));
   }
 
@@ -2308,6 +3070,58 @@ export class LocalStoreService {
 
 function id(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
+function normalizeTimelineAttachments(value: unknown, fallbackStatus: string) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((attachment) => {
+    if (typeof attachment === "string") return Boolean(attachment.trim());
+    if (!attachment || typeof attachment !== "object") return false;
+    const item = attachment as Record<string, unknown>;
+    return [
+      item.kind,
+      item.type,
+      item.msgtype,
+      item.mimeType,
+      item.contentType,
+      item.url,
+      item.localPath,
+      item.path,
+      item.filePath,
+      item.name,
+      item.fileName,
+    ].some((candidate) => Boolean(String(candidate || "").trim()));
+  }).map((attachment, index) => {
+    const item = attachment && typeof attachment === "object"
+      ? attachment as Record<string, unknown>
+      : { name: String(attachment || "") };
+    const mimeType = String(item.mimeType || item.contentType || "");
+    const source = String(item.url || item.localPath || item.path || item.filePath || item.name || "");
+    const explicitKind = String(item.kind || item.type || item.msgtype || "").toLowerCase();
+    const kind = explicitKind.includes("image") || mimeType.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(source)
+      ? "image"
+      : "file";
+    return {
+      ...item,
+      id: String(item.id || `attachment-${index + 1}`),
+      kind,
+      name: String(item.name || item.fileName || (source ? path.basename(source) : kind === "image" ? "图片" : "附件")),
+      mimeType,
+      status: String(item.status || fallbackStatus),
+    };
+  });
+}
+
+function timelineTaskAttachments(task: any) {
+  const imagePaths = Array.isArray(task?.payload?.imagePaths) ? task.payload.imagePaths : [];
+  const attachments = Array.isArray(task?.payload?.attachments) ? task.payload.attachments : [];
+  return normalizeTimelineAttachments(
+    [
+      ...imagePaths.map((filePath: unknown) => ({ kind: "image", path: String(filePath || "") })),
+      ...attachments,
+    ],
+    String(task?.status || "queued"),
+  );
 }
 
 const SKU_TRACKED_FIELDS = [
@@ -2564,6 +3378,10 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "knowledgeEntries",
     "routeEvaluations",
     "automationRuns",
+    "wechatWorkBindings",
+    "wechatWorkAuditLogs",
+    "personalWechatRpaBindings",
+    "personalWechatRpaAuditLogs",
   ];
   for (const key of keys) {
     if (!Array.isArray(normalized[key])) {
@@ -2725,7 +3543,22 @@ function seedData(): StoreData {
     knowledgeEntries: [],
     routeEvaluations: [],
     automationRuns: [],
+    wechatWorkBindings: [],
+    wechatWorkAuditLogs: [],
+    personalWechatRpaBindings: [],
+    personalWechatRpaAuditLogs: [],
   };
+}
+
+function personalWechatRpaBindingKey(ownerWxId: string, chatTitle: string) {
+  return createHash("sha256")
+    .update(`${String(ownerWxId || "").trim()}\n${String(chatTitle || "").trim()}`, "utf8")
+    .digest("hex");
+}
+
+function shortExternalId(value: string) {
+  const text = String(value || "");
+  return text.length <= 10 ? text : text.slice(-10);
 }
 
 function automationRunKey(run: any) {

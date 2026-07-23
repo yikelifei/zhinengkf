@@ -581,6 +581,145 @@ export type ApplySkillSuggestionsResult = {
   skipped: Array<Record<string, unknown>>;
 };
 
+export type PersonalWechatRpaInstance = {
+  wechatAccountId: string;
+  endpoint: string;
+  port: number | null;
+  accountNickname: string;
+  enabled: boolean;
+  tokenConfigured: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type PersonalWechatRpaRegistry = {
+  version: string;
+  ready: boolean;
+  mode: "registry" | "legacy_single" | "unconfigured";
+  configPath: string;
+  activeCount: number;
+  disabledCount: number;
+  instances: PersonalWechatRpaInstance[];
+  legacy: {
+    present: boolean;
+    used: boolean;
+    ready: boolean;
+    endpoint: string;
+    port: number | null;
+    accountNickname: string | null;
+    tokenConfigured: boolean;
+  };
+  checks: Array<{ key: string; ok: boolean; detail: string }>;
+  errors: string[];
+};
+
+export type PersonalWechatRpaInstanceInput = {
+  wechatAccountId?: string;
+  endpoint?: string;
+  token?: string;
+  accountNickname?: string;
+  enabled?: boolean;
+};
+
+export type PersonalWechatRpaInstanceValidation = {
+  ok: boolean;
+  operation: "create" | "update" | "blocked";
+  errors: string[];
+  instance: PersonalWechatRpaInstance | null;
+  registry: PersonalWechatRpaRegistry;
+};
+
+export type OperatorRole = "admin" | "supervisor" | "agent" | "read_only";
+export type OperatorCapability =
+  | "view_console"
+  | "manage_channels"
+  | "manage_assignments"
+  | "reply_conversations"
+  | "approve_send"
+  | "manage_training"
+  | "manage_roles";
+
+export type OperatorAccessStatus = {
+  mode: "preflight_only" | "local_desktop_enforced";
+  policyLoaded: boolean;
+  trustedPrincipal: boolean;
+  enforcementReady: boolean;
+  authenticationProvider: "not_authenticated" | "local_desktop_session";
+  roleBindingReady: boolean;
+  defaultDecision: "deny";
+  principal: {
+    id: "local_admin";
+    displayName: string;
+    role: "admin";
+    authenticationProvider: "local_desktop_session";
+  } | null;
+  capabilities: OperatorCapability[];
+  blockers: Array<{ code: string; message: string }>;
+  limitations: Array<{ code: string; message: string }>;
+  requiredNextSteps: string[];
+  notice: string;
+};
+
+export type OperatorAccessPolicy = {
+  version: string;
+  mode: "preflight_only" | "local_desktop_enforced";
+  defaultDecision: "deny";
+  roles: OperatorRole[];
+  capabilities: OperatorCapability[];
+  matrix: Record<OperatorRole, OperatorCapability[]>;
+  semantics: {
+    roleInput: string;
+    policyAllows: string;
+    authorizationGranted: string;
+  };
+  notice: string;
+};
+
+export type WechatWorkReadinessStatus = "ready" | "blocked" | "missing";
+
+export type WechatWorkReadinessCheck = {
+  key: string;
+  status: WechatWorkReadinessStatus;
+  detail: string;
+  external: boolean;
+};
+
+export type WechatWorkProductionReadiness = {
+  schema: "smart_kefu_wechat_work_readiness_v1";
+  mode: "offline_preflight";
+  networkCalls: false;
+  status: WechatWorkReadinessStatus;
+  productionReady: boolean;
+  local: {
+    status: WechatWorkReadinessStatus;
+    ready: boolean;
+    checks: WechatWorkReadinessCheck[];
+  };
+  external: {
+    status: WechatWorkReadinessStatus;
+    ready: boolean;
+    checks: WechatWorkReadinessCheck[];
+    blockers: string[];
+  };
+  callback: {
+    path: string;
+    url: string;
+    publicHttpsFormatReady: boolean;
+  };
+  identityPolicy: {
+    channel: "work_wechat";
+    accountPlatform: "wechat_work_kf";
+    adapter: "wechat_work_kf";
+    requiresPersistentBinding: true;
+    callerSelectableAdapter: false;
+  };
+  codeContracts: string[];
+  metrics: {
+    mappedAccounts: number;
+    auditRecords: number;
+  };
+};
+
 export type WechatAccount = {
   id: string;
   displayName: string;
@@ -595,8 +734,104 @@ export type Conversation = {
   customerId: string;
   wechatAccountId: string;
   manualLocked?: boolean;
-  customer?: { id: string; name: string };
+  unreadCount?: number;
+  lastMessagePreview?: string;
+  lastMessageAt?: string;
+  customer?: {
+    id: string;
+    name: string;
+    wechatId?: string | null;
+    phone?: string | null;
+    tags?: string[];
+    notes?: string | null;
+    source?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  };
   wechatAccount?: WechatAccount;
+};
+
+export type ConversationOperations = Conversation & {
+  assignee: string | null;
+  assignmentState: "assigned" | "unassigned";
+  priority: "low" | "normal" | "high" | "urgent";
+  status: "open" | "pending" | "resolved" | "closed";
+  slaDueAt: string | null;
+  firstResponseDueAt: string | null;
+  firstResponseAt: string | null;
+  firstResponseBreached: boolean;
+  slaOverdue: boolean;
+  firstResponseOverdue: boolean;
+  isOverdue: boolean;
+  slaState: "no_sla" | "on_track" | "overdue" | "closed" | "invalid";
+  configurationIssues: string[];
+};
+
+export type ConversationOperationsSummary = {
+  total: number;
+  assigned: number;
+  unassigned: number;
+  overdue: number;
+  slaOverdue: number;
+  firstResponseOverdue: number;
+  firstResponseBreached: number;
+  noSla: number;
+  invalidConfiguration: number;
+  priorities: Record<"low" | "normal" | "high" | "urgent", number>;
+  statuses: Record<"open" | "pending" | "resolved" | "closed", number>;
+};
+
+export type ConversationOperationsQueue = {
+  records: ConversationOperations[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: ConversationOperationsSummary;
+};
+
+export type ConversationOperationsPatch = {
+  assignee?: string | null;
+  priority?: ConversationOperations["priority"];
+  status?: ConversationOperations["status"];
+  slaDueAt?: string | null;
+  firstResponseDueAt?: string | null;
+};
+
+export type ConversationIdentity = {
+  wechatAccountId: string;
+  conversationId: string;
+  customerId: string;
+};
+
+export type ConversationAttachment = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mimeType?: string;
+  status: string;
+  url?: string;
+  localPath?: string;
+  path?: string;
+  sizeBytes?: number;
+};
+
+export type ConversationTimelineItem = {
+  id: string;
+  source: "message" | "send_task";
+  sendTaskId?: string;
+  conversationId: string;
+  customerId: string;
+  wechatAccountId: string;
+  direction: "inbound" | "outbound";
+  text?: string;
+  attachments: ConversationAttachment[];
+  status: string;
+  errorMessage?: string;
+  readAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  sentAt?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type WechatWindowSnapshot = {
@@ -775,6 +1010,7 @@ export type BridgeInboxEntry = {
   attemptId?: string;
   wechatAccountId?: string;
   conversationId?: string;
+  customerId?: string;
   status?: string;
   protocolVersion?: string;
   outboxFileName?: string;
@@ -831,6 +1067,7 @@ export type BridgeInboxScanResult = {
   scanned: number;
   processed: BridgeInboxEntry[];
   failed: BridgeInboxEntry[];
+  ignored?: BridgeInboxEntry[];
 };
 
 export type BridgeDispatchResult = {
@@ -865,6 +1102,12 @@ export type WindowSnapshotInboxScanResult = {
     modifiedAt: string;
     ageSeconds: number;
     errorMessage: string;
+  }>;
+  ignored?: Array<{
+    fileName: string;
+    modifiedAt: string;
+    ageSeconds: number;
+    reason: string;
   }>;
 };
 
@@ -1512,7 +1755,7 @@ export type UploadAssetPayload = {
   url?: string;
 } & IdentityExpectation;
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "/api").replace(/\/$/, "");
+const API_BASE = "/api";
 const WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS = [300, 700, 1200, 2000, 3200];
 
 export type IdentityFilters = {
@@ -1525,6 +1768,71 @@ export type IdentityExpectation = {
   expectedWechatAccountId?: string;
   expectedConversationId?: string;
   expectedCustomerId?: string;
+};
+
+export type AiProviderProtocol = "openai_chat" | "openai_responses" | "anthropic_messages";
+
+export type AiProviderSettingsProvider = {
+  id: string;
+  label: string;
+  vendor: string;
+  description: string;
+  enabled: boolean;
+  hasApiKey: boolean;
+  apiKeyRequired: boolean;
+  isLocal: boolean;
+  baseUrl: string;
+  model: string;
+  protocol: AiProviderProtocol;
+  temperature: number;
+  maxTokens: number;
+  apiEndpoint: string;
+  configured: boolean;
+  issues: string[];
+  modelSuggestions: string[];
+};
+
+export type AiProviderSettings = {
+  schemaVersion: number;
+  enabled: boolean;
+  primary: string;
+  fallbackChain: string[];
+  timeoutSeconds: number;
+  maxRetries: number;
+  providers: AiProviderSettingsProvider[];
+  storage: {
+    scope: string;
+    keyStorage: string;
+  };
+};
+
+export type AiProviderSettingsPatch = {
+  enabled: boolean;
+  primary: string;
+  fallbackChain: string[];
+  timeoutSeconds: number;
+  maxRetries: number;
+  providers: Record<
+    string,
+    {
+      enabled: boolean;
+      apiKey?: string;
+      clearApiKey?: boolean;
+      baseUrl: string;
+      model: string;
+      protocol: AiProviderProtocol;
+      temperature: number;
+      maxTokens: number;
+    }
+  >;
+};
+
+export type AiProviderTestResult = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  attempts: number;
+  latencyMs: number;
 };
 
 export type ManualReleaseOptions = {
@@ -1596,9 +1904,44 @@ function expectedIdentityQuery(expected: IdentityExpectation = {}) {
   return query ? `?${query}` : "";
 }
 
+function requireIdentityExpectation(expected: IdentityExpectation = {}, label = "operation") {
+  const missing = [
+    ["expectedWechatAccountId", "wechatAccountId"],
+    ["expectedConversationId", "conversationId"],
+    ["expectedCustomerId", "customerId"],
+  ].filter(([payloadKey]) => !expected[payloadKey as keyof IdentityExpectation]);
+  if (missing.length) {
+    throw new Error(`${label} requires conversation identity: ${missing.map(([, identityKey]) => identityKey).join(", ")}`);
+  }
+  return expected;
+}
+
+function requireIdentityFilters(filters: IdentityFilters = {}, label = "operation") {
+  const missing = ["wechatAccountId", "conversationId", "customerId"].filter(
+    (key) => !filters[key as keyof IdentityFilters],
+  );
+  if (missing.length) {
+    throw new Error(`${label} requires conversation identity: ${missing.join(", ")}`);
+  }
+  return filters;
+}
+
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+async function patchJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -1832,23 +2175,145 @@ export async function batchReviewTrainingSamples(payload: {
 }
 
 export async function getWechatAccounts(): Promise<WechatAccount[]> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/accounts`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
+  const response = await fetch(`${API_BASE}/wechat/accounts`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
   }
+  return response.json();
+}
+
+export async function getPersonalWechatRpaRegistry(): Promise<PersonalWechatRpaRegistry> {
+  const response = await fetch(`${API_BASE}/personal-wechat-rpa/instances`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function validatePersonalWechatRpaInstance(
+  payload: PersonalWechatRpaInstanceInput,
+): Promise<PersonalWechatRpaInstanceValidation> {
+  return postJson("/personal-wechat-rpa/instances/validate", payload);
+}
+
+export async function savePersonalWechatRpaInstance(
+  payload: PersonalWechatRpaInstanceInput,
+): Promise<{
+  ok: true;
+  operation: "created" | "updated";
+  instance: PersonalWechatRpaInstance;
+  registry: PersonalWechatRpaRegistry;
+}> {
+  return postJson("/personal-wechat-rpa/instances", payload);
+}
+
+export async function disablePersonalWechatRpaInstance(wechatAccountId: string): Promise<{
+  ok: true;
+  operation: "disabled" | "unchanged";
+  instance: PersonalWechatRpaInstance;
+  registry: PersonalWechatRpaRegistry;
+}> {
+  return postJson(`/personal-wechat-rpa/instances/${encodeURIComponent(wechatAccountId)}/disable`, {});
+}
+
+export async function getOperatorAccessStatus(): Promise<OperatorAccessStatus> {
+  const response = await fetch(`${API_BASE}/operator-access/status`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getOperatorAccessPolicy(): Promise<OperatorAccessPolicy> {
+  const response = await fetch(`${API_BASE}/operator-access/policy`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getWechatWorkProductionPreflight(): Promise<WechatWorkProductionReadiness> {
+  const response = await fetch(`${API_BASE}/wechat-work/preflight`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function getWechatConversations(): Promise<Conversation[]> {
-  try {
-    const response = await fetch(`${API_BASE}/wechat/conversations`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`api ${response.status}`);
-    return response.json();
-  } catch {
-    return [];
+  const response = await fetch(`${API_BASE}/wechat/conversations`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
   }
+  return response.json();
+}
+
+export async function getConversationOperationsQueue(): Promise<ConversationOperationsQueue> {
+  const response = await fetch(`${API_BASE}/conversation-ops/queue`, { cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updateConversationOperations(
+  identity: ConversationIdentity,
+  patch: ConversationOperationsPatch,
+  operator: string,
+  reason = "客服工作台更新会话分配与 SLA",
+): Promise<{ conversation: ConversationOperations; audit: ReviewLog | null; changedFields: string[] }> {
+  return patchJson(`/conversation-ops/conversations/${encodeURIComponent(identity.conversationId)}`, {
+    ...identityExpectation(identity),
+    ...patch,
+    operator,
+    reason,
+  });
+}
+
+export async function getConversationTimeline(
+  identity: ConversationIdentity,
+  limit = 300,
+): Promise<ConversationTimelineItem[]> {
+  const params = new URLSearchParams({
+    wechatAccountId: identity.wechatAccountId,
+    customerId: identity.customerId,
+    limit: String(limit),
+  });
+  const response = await fetch(
+    `${API_BASE}/wechat/conversations/${encodeURIComponent(identity.conversationId)}/messages?${params.toString()}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `api ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function markConversationMessagesRead(identity: ConversationIdentity): Promise<{
+  updatedCount: number;
+  readAt: string;
+}> {
+  return postJson(`/wechat/conversations/${encodeURIComponent(identity.conversationId)}/read`, identityExpectation(identity));
+}
+
+export async function queueManualConversationReply(
+  identity: ConversationIdentity,
+  text: string,
+  operator = "人工客服",
+): Promise<{ queued: true; task: SendTask }> {
+  return postJson(`/wechat/conversations/${encodeURIComponent(identity.conversationId)}/manual-replies`, {
+    ...identityExpectation(identity),
+    text,
+    operator,
+  });
 }
 
 export async function setConversationManualLock(
@@ -1945,7 +2410,7 @@ export async function getWindowObserverStatus(): Promise<WindowObserverStatus> {
   return response.json();
 }
 
-export async function captureWindowObserverOnce(): Promise<{
+export async function captureWindowObserverOnce(filters: IdentityFilters = {}): Promise<{
   status: WindowObserverStatus;
   scan: WindowSnapshotInboxScanResult;
   summary?: {
@@ -1953,11 +2418,11 @@ export async function captureWindowObserverOnce(): Promise<{
     lineCount: number;
   };
 }> {
-  return postJson("/wechat/window-observer/capture-once", {});
+  return postJson("/wechat/window-observer/capture-once", requireIdentityFilters(filters, "wechat window observer capture"));
 }
 
-export async function scanBridgeInbox(): Promise<BridgeInboxScanResult> {
-  return postJson<BridgeInboxScanResult>("/wechat/bridge/inbox/scan", {});
+export async function scanBridgeInbox(filters: IdentityFilters = {}): Promise<BridgeInboxScanResult> {
+  return postJson<BridgeInboxScanResult>("/wechat/bridge/inbox/scan", requireIdentityFilters(filters, "wechat bridge inbox scan"));
 }
 
 export async function getWechatWindowSnapshots(filters: IdentityFilters = {}): Promise<WechatWindowSnapshot[]> {
@@ -1984,8 +2449,8 @@ export async function createDemoWindowSnapshot(
   });
 }
 
-export async function scanWindowSnapshotInbox(): Promise<WindowSnapshotInboxScanResult> {
-  return postJson<WindowSnapshotInboxScanResult>("/wechat/window-snapshots/inbox/scan", {});
+export async function scanWindowSnapshotInbox(filters: IdentityFilters = {}): Promise<WindowSnapshotInboxScanResult> {
+  return postJson<WindowSnapshotInboxScanResult>("/wechat/window-snapshots/inbox/scan", requireIdentityFilters(filters, "wechat window snapshot scan"));
 }
 
 export async function createDemoSendTask(
@@ -2332,7 +2797,7 @@ export type LowValueOrderFollowupResult = {
 };
 
 export async function autoProcessLowValue(filters: IdentityFilters = {}): Promise<LowValueAutomationResult> {
-  return postJson<LowValueAutomationResult>("/design-jobs/auto-process-low-value", filters);
+  return postJson<LowValueAutomationResult>("/design-jobs/auto-process-low-value", requireIdentityFilters(filters, "low-value automation"));
 }
 
 export type AutomationRun = {
@@ -2397,6 +2862,7 @@ export type AutomationStatus = {
   startedAt?: string | null;
   runningStartedAt?: string | null;
   nextRunAt?: string | null;
+  activeFilter?: IdentityFilters | null;
   intervalMs: number;
   processSendQueue: boolean;
   sendQueueLimit: number;
@@ -2468,9 +2934,14 @@ export async function getAutomationStatus(): Promise<AutomationStatus | null> {
   }
 }
 
-export async function getAutomationReadiness(): Promise<AutomationReadiness | null> {
+export async function getAutomationReadiness(filters: IdentityFilters = {}): Promise<AutomationReadiness | null> {
   try {
-    const response = await fetch(`${API_BASE}/automation/readiness`, { cache: "no-store" });
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key, String(value));
+    }
+    const query = params.toString();
+    const response = await fetch(`${API_BASE}/automation/readiness${query ? `?${query}` : ""}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`api ${response.status}`);
     return response.json();
   } catch {
@@ -2479,11 +2950,11 @@ export async function getAutomationReadiness(): Promise<AutomationReadiness | nu
 }
 
 export async function runAutomationOnce(filters: IdentityFilters = {}): Promise<AutomationRun> {
-  return postJson<AutomationRun>("/automation/run-once", filters);
+  return postJson<AutomationRun>("/automation/run-once", requireIdentityFilters(filters, "automation run"));
 }
 
-export async function startAutomation(): Promise<AutomationStatus> {
-  return postJson<AutomationStatus>("/automation/start", {});
+export async function startAutomation(filters: IdentityFilters = {}): Promise<AutomationStatus> {
+  return postJson<AutomationStatus>("/automation/start", requireIdentityFilters(filters, "automation start"));
 }
 
 export async function stopAutomation(): Promise<AutomationStatus> {
@@ -2509,6 +2980,20 @@ export async function getDesignPlatformHealth(): Promise<DesignPlatformHealth> {
   const response = await fetch(`${API_BASE}/integrations/design-platform/health`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
+}
+
+export async function getAiProviderSettings(): Promise<AiProviderSettings> {
+  const response = await fetch(`${API_BASE}/ai/providers/config`, { cache: "no-store" });
+  if (!response.ok) throw new Error((await response.text()) || `api ${response.status}`);
+  return response.json();
+}
+
+export async function updateAiProviderSettings(payload: AiProviderSettingsPatch): Promise<AiProviderSettings> {
+  return postJson<AiProviderSettings>("/ai/providers/config", payload);
+}
+
+export async function testAiProvider(providerId: string): Promise<AiProviderTestResult> {
+  return postJson<AiProviderTestResult>(`/ai/providers/${encodeURIComponent(providerId)}/test`, {});
 }
 
 export async function getDesignPlatformReadiness(): Promise<DesignPlatformReadiness> {

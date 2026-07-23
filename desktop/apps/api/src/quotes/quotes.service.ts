@@ -2,7 +2,11 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
-import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  assertExpectedIdentity,
+  assertRequiredExpectedIdentity,
+  ExpectedIdentityPayload,
+} from "../shared/identity-expectation";
 import { rules } from "../shared/rules";
 import { OrdersService } from "../orders/orders.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
@@ -27,13 +31,23 @@ export class QuotesService {
     private readonly wechatDispatch: WechatDispatchService,
   ) {}
 
-  async createFromDesignJob(designJobId: string, selectedImageId?: string) {
+  async createFromDesignJob(
+    designJobId: string,
+    selectedImageId?: string,
+    expected: ExpectedIdentityPayload = {},
+  ) {
     const existing = await this.findExistingForDesignJob(designJobId);
     if (existing) {
+      assertRequiredExpectedIdentity(expected, "quote design job");
+      assertExpectedIdentity(existing, expected, "quote design job");
       return this.syncExistingQuoteSelection(existing, selectedImageId);
     }
 
     if (appConfig.useLocalStore) {
+      const job = this.localStore.getDesignJob(designJobId);
+      if (!job) throw new Error(`design job not found: ${designJobId}`);
+      assertRequiredExpectedIdentity(expected, "quote design job");
+      assertExpectedIdentity(job, expected, "quote design job");
       return this.localStore.createQuoteFromDesignJob(designJobId, selectedImageId, {
         highValueAmountCny: appConfig.highValueAmountCny,
       });
@@ -43,6 +57,8 @@ export class QuotesService {
       include: { images: true, conversation: true },
     });
     if (!job) throw new Error(`design job not found: ${designJobId}`);
+    assertRequiredExpectedIdentity(expected, "quote design job");
+    assertExpectedIdentity(job, expected, "quote design job");
 
     const bundle = job.bundle as { items?: Array<Record<string, unknown>> };
     const totals = calculateTotals(bundle.items || []);
@@ -118,6 +134,7 @@ export class QuotesService {
     const current = await this.getQuoteForSend(id);
     if (!current) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(current);
+    assertRequiredExpectedIdentity(patch, "quote draft");
     assertExpectedIdentity(current, patch, "quote draft");
     const data = cleanQuotePatch(patch, current);
     const shouldClearLinkedSendTask =
@@ -168,6 +185,7 @@ export class QuotesService {
     const current = await this.getQuoteForSend(id);
     if (!current) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(current);
+    assertRequiredExpectedIdentity(payload, "quote draft");
     assertExpectedIdentity(current, payload, "quote draft");
     if (current.status === "accepted") {
       throw new BadRequestException("accepted quote cannot be revised; create a new order or quote instead");
@@ -236,6 +254,7 @@ export class QuotesService {
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new Error(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(quote);
+    assertRequiredExpectedIdentity(expected, "quote draft");
     assertExpectedIdentity(quote, expected, "quote draft");
     return {
       quote,
@@ -259,6 +278,7 @@ export class QuotesService {
     const designJob = quote.designJob;
     if (!designJob) throw new Error(`quote draft has no design job: ${id}`);
     this.ensureQuoteIdentity(quote);
+    assertRequiredExpectedIdentity(options, "quote draft");
     assertExpectedIdentity(quote, options, "quote draft");
     this.assertQuoteHasCompleteSendIdentity(quote);
     this.assertQuoteReadyForSend(quote);
@@ -268,6 +288,10 @@ export class QuotesService {
     if (options.releaseManualLock && designJob.conversationId) {
       assertManualReleaseReason(options.releaseReason, "quote send manual release");
       await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+        ...expectedIdentityFromRecord({
+          ...designJob,
+          customerId: quote.customerId,
+        }),
         expectedWechatAccountId: designJob.wechatAccountId,
         expectedConversationId: designJob.conversationId,
         expectedCustomerId: quote.customerId || designJob.customerId,
@@ -291,6 +315,10 @@ export class QuotesService {
     } catch (error) {
       if (options.releaseManualLock && designJob.conversationId) {
         await this.wechatDispatch.setConversationManualLock(designJob.conversationId, {
+          ...expectedIdentityFromRecord({
+            ...designJob,
+            customerId: quote.customerId,
+          }),
           expectedWechatAccountId: designJob.wechatAccountId,
           expectedConversationId: designJob.conversationId,
           expectedCustomerId: quote.customerId || designJob.customerId,
@@ -356,6 +384,7 @@ export class QuotesService {
     const quote = await this.getQuoteForSend(id);
     if (!quote) throw new BadRequestException(`quote draft not found: ${id}`);
     this.ensureQuoteIdentity(quote);
+    assertRequiredExpectedIdentity(payload, "quote draft");
     assertExpectedIdentity(quote, payload, "quote draft");
     this.assertQuoteHasSelectedImageForPaymentProof(quote);
 
@@ -748,6 +777,10 @@ export class QuotesService {
     const conversationId = designJob?.conversationId;
     if (!conversationId) return null;
     return this.wechatDispatch.setConversationManualLock(conversationId, {
+      ...expectedIdentityFromRecord({
+        ...designJob,
+        customerId: quote.customerId,
+      }),
       expectedWechatAccountId: designJob.wechatAccountId,
       expectedConversationId: conversationId,
       expectedCustomerId: quote.customerId || designJob.customerId,
@@ -892,6 +925,18 @@ function assertManualReleaseReason(reason: unknown, context: string) {
   if (!text || !text.startsWith("manual_")) {
     throw new BadRequestException(`${context} 需要填写明确的人工处理原因，原因编码必须以 manual_ 开头。`);
   }
+}
+
+function expectedIdentityFromRecord(record: {
+  wechatAccountId?: string | null;
+  conversationId?: string | null;
+  customerId?: string | null;
+}): ExpectedIdentityPayload {
+  return {
+    expectedWechatAccountId: record.wechatAccountId || undefined,
+    expectedConversationId: record.conversationId || undefined,
+    expectedCustomerId: record.customerId || undefined,
+  };
 }
 
 function normalizeVerifiedPaymentStatus(value: unknown): "deposit_paid" | "paid" {

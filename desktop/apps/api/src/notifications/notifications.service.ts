@@ -2,7 +2,11 @@ import { Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
-import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import {
+  ExpectedIdentityPayload,
+  assertExpectedIdentity,
+  assertRequiredExpectedIdentity,
+} from "../shared/identity-expectation";
 
 @Injectable()
 export class NotificationsService {
@@ -26,23 +30,20 @@ export class NotificationsService {
   list(options: { unreadOnly?: boolean; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     const limit = Math.max(1, Math.min(Number(options.limit || 100), 300));
     if (appConfig.useLocalStore) return this.localStore.listNotifications({ ...options, limit });
-    if (options.wechatAccountId || options.conversationId || options.customerId) {
-      return this.prisma.notification
-        .findMany({
-          where: options.unreadOnly ? { readAt: null } : undefined,
-          orderBy: { createdAt: "desc" },
-          take: Math.min(limit * 5, 1000),
-        })
-        .then((rows) => rows.filter((row) => this.matchesTargetIdentity(row.target, options)).slice(0, limit));
-    }
+    const hasIdentityFilter = Boolean(options.wechatAccountId || options.conversationId || options.customerId);
+    const take = hasIdentityFilter ? Math.max(limit, 300) : limit;
     return this.prisma.notification.findMany({
       where: options.unreadOnly ? { readAt: null } : undefined,
       orderBy: { createdAt: "desc" },
-      take: limit,
+      take,
+    }).then((rows) => {
+      const scopedRows = hasIdentityFilter ? rows.filter((row) => this.matchesTargetIdentity(row.target, options)) : rows;
+      return scopedRows.slice(0, limit);
     });
   }
 
   async markRead(id: string, expected: ExpectedIdentityPayload = {}) {
+    assertRequiredExpectedIdentity(expected, "notification");
     if (appConfig.useLocalStore) return this.localStore.markNotificationRead(id, {
       wechatAccountId: expected.expectedWechatAccountId,
       conversationId: expected.expectedConversationId,
@@ -58,24 +59,23 @@ export class NotificationsService {
   }
 
   async markAllRead(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    const expected = {
+      expectedWechatAccountId: filter.wechatAccountId,
+      expectedConversationId: filter.conversationId,
+      expectedCustomerId: filter.customerId,
+    };
+    assertRequiredExpectedIdentity(expected, "notifications");
     if (appConfig.useLocalStore) return this.localStore.markAllNotificationsRead(filter);
-    if (filter.wechatAccountId || filter.conversationId || filter.customerId) {
-      const rows = await this.prisma.notification.findMany({
-        where: { readAt: null },
-        select: { id: true, target: true },
-      });
-      const ids = rows
-        .filter((row) => this.matchesTargetIdentity(row.target, filter))
-        .map((row) => row.id);
-      if (!ids.length) return { count: 0 };
-      const result = await this.prisma.notification.updateMany({
-        where: { id: { in: ids } },
-        data: { readAt: new Date() },
-      });
-      return { count: result.count };
-    }
-    const result = await this.prisma.notification.updateMany({
+    const rows = await this.prisma.notification.findMany({
       where: { readAt: null },
+      select: { id: true, target: true },
+    });
+    const ids = rows
+      .filter((row) => this.matchesTargetIdentity(row.target, filter))
+      .map((row) => row.id);
+    if (!ids.length) return { count: 0 };
+    const result = await this.prisma.notification.updateMany({
+      where: { id: { in: ids } },
       data: { readAt: new Date() },
     });
     return { count: result.count };

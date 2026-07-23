@@ -51,7 +51,7 @@ call npm.cmd run stable:doctor
 if errorlevel 1 (
   echo.
   echo [warn] Stable services are not running yet.
-  echo Run C:\Users\27808\Desktop\zhinengkefu\repair-stable-desktop.cmd and keep that window open.
+  echo Run E:\zhinengkefu\repair-stable-desktop.cmd and keep that window open.
   pause
   exit /b 1
 )

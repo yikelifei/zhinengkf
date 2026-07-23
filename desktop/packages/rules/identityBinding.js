@@ -1,6 +1,6 @@
 "use strict";
 
-function validateInboundConversationBinding({ requestedWechatAccountId, requestedConversationId, conversation }) {
+function validateInboundConversationBinding({ requestedWechatAccountId, requestedConversationId, requestedCustomerId, conversation }) {
   const checks = [];
 
   checks.push({
@@ -36,6 +36,16 @@ function validateInboundConversationBinding({ requestedWechatAccountId, requeste
       expected: requestedWechatAccountId,
       actual: conversation?.wechatAccountId || "",
       passed: conversation?.wechatAccountId === requestedWechatAccountId,
+    });
+  }
+
+  if (requestedCustomerId) {
+    checks.push({
+      key: "requestedCustomerMatches",
+      label: "requested customer matches conversation",
+      expected: requestedCustomerId,
+      actual: conversation?.customerId || "",
+      passed: conversation?.customerId === requestedCustomerId,
     });
   }
 

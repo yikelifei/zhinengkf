@@ -7,7 +7,11 @@ import { PrismaService } from "../prisma/prisma.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { rules } from "../shared/rules";
 import { appConfig } from "../shared/app-config";
-import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import {
+  ExpectedIdentityPayload,
+  assertExpectedIdentity,
+  assertRequiredExpectedIdentity,
+} from "../shared/identity-expectation";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
 const { isHighValueBudget, quoteNeedsPaymentProofReview } = rules;
@@ -45,30 +49,53 @@ export class ReviewsService {
         .listOrderDrafts(filter)
         .filter((order: any) => isOrderReviewVisible(order))
         .slice(0, 80);
+      const sendTasks =
+        typeof this.localStore.listSendTasks === "function"
+          ? this.localStore
+              .listSendTasks(filter)
+              .filter((task: any) => isSendTaskReviewVisible(task))
+              .slice(0, 80)
+          : [];
       return {
         designJobs,
         quoteDrafts,
         orderDrafts,
-        logs: this.localStore.listReviewLogs({ ...filter, limit: 80 }),
+        sendTasks,
+        logs: filterReviewLogsByIdentity(
+          this.localStore.listReviewLogs({ ...filter, limit: hasIdentityFilter(filter) ? 300 : 80 }),
+          filter,
+          { designJobs, quoteDrafts, orderDrafts, sendTasks },
+        ).slice(0, 80),
       };
     }
 
     const prisma = this.prisma as any;
-    const [designJobCandidates, quoteCandidates, orderCandidates, logs] = await Promise.all([
+    const designJobWhere: any = {
+      status: { in: ["manual_review", "failed", "timeout", "completed", "quick_confirm"] },
+      ...designJobIdentityWhere(filter),
+    };
+    const quoteDraftWhere: any = {
+      status: { in: ["manual_review", "draft", "auto_sent", "send_queued", "sent", "accepted"] },
+      ...quoteDraftIdentityWhere(filter),
+    };
+    const [designJobCandidates, quoteCandidates, orderCandidates, sendTaskCandidates, logs] = await Promise.all([
       this.prisma.designJob.findMany({
-        where: { status: { in: ["manual_review", "failed", "timeout", "completed", "quick_confirm"] } },
+        where: designJobWhere,
         include: { customer: true, conversation: true, images: true, assets: true },
         orderBy: { updatedAt: "desc" },
         take: 120,
       }),
       this.prisma.quoteDraft.findMany({
-        where: { status: { in: ["manual_review", "draft", "auto_sent", "send_queued", "sent", "accepted"] } },
+        where: quoteDraftWhere,
         include: { customer: true, designJob: true, selectedImage: true },
         orderBy: { updatedAt: "desc" },
         take: 120,
       }),
       prisma.orderDraft.findMany({
-        where: { status: { in: ["draft", "confirmed", "processing"] } },
+        where: {
+          status: { in: ["manual_review", "draft", "confirmed", "processing"] },
+          ...orderDraftIdentityWhere(filter),
+        },
         include: {
           customer: true,
           conversation: true,
@@ -80,12 +107,28 @@ export class ReviewsService {
         orderBy: { updatedAt: "desc" },
         take: 120,
       }),
-      prisma.reviewLog.findMany({ orderBy: { createdAt: "desc" }, take: hasIdentityFilter(filter) ? 240 : 80 }),
+      prisma.wechatSendTask.findMany({
+        where: {
+          status: "blocked",
+          ...sendTaskIdentityWhere(filter),
+        },
+        include: { conversation: true, designJob: true },
+        orderBy: { updatedAt: "desc" },
+        take: 300,
+      }),
+      prisma.reviewLog.findMany({ orderBy: { createdAt: "desc" }, take: hasIdentityFilter(filter) ? 300 : 80 }),
     ]);
     const designJobs = designJobCandidates.filter((job: any) => isDesignJobReviewVisible(job)).slice(0, 80);
     const quoteDrafts = quoteCandidates.filter((quote: any) => isQuoteReviewVisible(quote)).slice(0, 80);
     const orderDrafts = orderCandidates.filter((order: any) => isOrderReviewVisible(order)).slice(0, 80);
-    return { designJobs, quoteDrafts, orderDrafts, logs: logs.filter((log: any) => matchesReviewLogIdentity(log, filter)).slice(0, 80) };
+    const sendTasks = sendTaskCandidates.filter((task: any) => isSendTaskReviewVisible(task)).slice(0, 80);
+    return {
+      designJobs,
+      quoteDrafts,
+      orderDrafts,
+      sendTasks,
+      logs: filterReviewLogsByIdentity(logs, filter, { designJobs, quoteDrafts, orderDrafts, sendTasks }).slice(0, 80),
+    };
   }
 
   async reviewDesignJob(id: string, payload: ReviewPayload) {
@@ -93,6 +136,7 @@ export class ReviewsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "design job");
     assertExpectedIdentity(job, payload, "design job");
     const beforeStatus = job.status;
     const decision = payload.decision || "approve_images";
@@ -200,6 +244,7 @@ export class ReviewsService {
       ? this.localStore.getQuoteDraft(id)
       : await this.prisma.quoteDraft.findUnique({ where: { id }, include: { designJob: true } });
     if (!quote) throw new Error(`quote draft not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "quote draft");
     assertExpectedIdentity(quote, payload, "quote draft");
     const beforeStatus = quote.status;
     const decision = payload.decision || "approve_quote";
@@ -216,6 +261,9 @@ export class ReviewsService {
     if (decision === "reject_quote") {
       customerNotes = payload.note || "人工审核驳回报价";
       result = await this.quotes.update(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         status: "rejected",
         owner: payload.reviewer || "人工客服",
         customerNotes,
@@ -223,6 +271,9 @@ export class ReviewsService {
     } else if (decision === "request_followup") {
       customerNotes = payload.note || "需要继续跟进客户";
       result = await this.quotes.update(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         status: "manual_review",
         owner: payload.reviewer || "人工客服",
         customerNotes,
@@ -266,20 +317,26 @@ export class ReviewsService {
   }
 
   async reviewOrder(id: string, payload: ReviewPayload) {
-    const order = appConfig.useLocalStore
-      ? this.localStore.getOrderDraft(id)
-      : await (this.prisma as any).orderDraft.findUnique({
-          where: { id },
-          include: {
-            customer: true,
-            conversation: true,
-            wechatAccount: true,
-            designJob: true,
-            quoteDraft: { include: { designJob: true, customer: true, selectedImage: true } },
-            selectedImage: true,
-          },
-        });
+    // Older local-store callers injected only the dispatch dependency, while the
+    // stricter identity implementation also injects OrdersService. Resolve by
+    // capability so both persisted records and legacy local-store records remain
+    // reviewable during the migration.
+    const dependencies = [this.wechat as any, this.orders as any].filter(Boolean);
+    const orderService = dependencies.find((dependency) => typeof dependency?.getById === "function");
+    if (
+      !this.wechat ||
+      (typeof (this.wechat as any).queueOrderConfirmation !== "function" &&
+        typeof (this.wechat as any).queueOrderFollowup !== "function")
+    ) {
+      throw new Error("order review dependencies are not configured");
+    }
+    const order = orderService
+      ? await orderService.getById(id)
+      : appConfig.useLocalStore && typeof (this.localStore as any).getOrderDraft === "function"
+        ? (this.localStore as any).getOrderDraft(id)
+        : await (this.prisma as any).orderDraft.findUnique({ where: { id } });
     if (!order) throw new Error(`order draft not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "order draft");
     assertExpectedIdentity(order, payload, "order draft");
 
     const beforeStatus = order.status;
@@ -302,6 +359,9 @@ export class ReviewsService {
         automation: { source: "manual_order_review", valueLevel: "high" },
       });
       result.orderDraft = await this.updateReviewedOrder(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         owner: reviewer,
         customerNotes: appendCustomerNote(
           order.customerNotes,
@@ -322,6 +382,9 @@ export class ReviewsService {
         automation: { source: "manual_order_review", valueLevel: "high", followupType },
       });
       result.orderDraft = await this.updateReviewedOrder(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         owner: reviewer,
         customerNotes: appendCustomerNote(
           order.customerNotes,
@@ -340,6 +403,9 @@ export class ReviewsService {
             : "高价值订单已保留在人工处理队列，请客服继续核对客户需求、收款、交期和话术。"),
       );
       result.orderDraft = await this.updateReviewedOrder(id, {
+        expectedWechatAccountId: payload.expectedWechatAccountId,
+        expectedConversationId: payload.expectedConversationId,
+        expectedCustomerId: payload.expectedCustomerId,
         owner: reviewer,
         customerNotes: note,
         ...(decision === "reject_order" ? { status: "cancelled" } : {}),
@@ -383,14 +449,26 @@ export class ReviewsService {
     return { result, log, notification: result?.notification || notification || null };
   }
 
-  private async updateReviewedOrder(id: string, data: { owner?: string; customerNotes?: string; status?: string }) {
+  private async updateReviewedOrder(
+    id: string,
+    data: { owner?: string; customerNotes?: string; status?: string } & ExpectedIdentityPayload,
+  ) {
+    const orderService = [this.orders as any, this.wechat as any].find(
+      (dependency) => typeof dependency?.update === "function",
+    );
+    if (orderService) return orderService.update(id, data);
+    const {
+      expectedWechatAccountId: _expectedWechatAccountId,
+      expectedConversationId: _expectedConversationId,
+      expectedCustomerId: _expectedCustomerId,
+      ...updateData
+    } = data;
     if (appConfig.useLocalStore) {
-      if (this.orders) return this.orders.update(id, data);
-      return this.localStore.updateOrderDraft(id, data);
+      return this.localStore.updateOrderDraft(id, updateData);
     }
     return (this.prisma as any).orderDraft.update({
       where: { id },
-      data,
+      data: updateData,
       include: {
         customer: true,
         conversation: true,
@@ -431,17 +509,81 @@ function appendCustomerNote(current: unknown, next: string) {
   return `${existing} ${note}`;
 }
 
-function hasIdentityFilter(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string }) {
+function hasIdentityFilter(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
   return Boolean(filter.wechatAccountId || filter.conversationId || filter.customerId);
 }
 
-function matchesReviewLogIdentity(log: any, filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
-  if (!hasIdentityFilter(filter)) return true;
-  const metadata = log?.metadata || {};
+function designJobIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  return {
+    ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+    ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+    ...(filter.customerId ? { customerId: filter.customerId } : {}),
+  };
+}
+
+function quoteDraftIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  return {
+    ...(filter.customerId ? { customerId: filter.customerId } : {}),
+    ...(filter.wechatAccountId || filter.conversationId
+      ? {
+          designJob: {
+            ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+            ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function orderDraftIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  return {
+    ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+    ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+    ...(filter.customerId ? { customerId: filter.customerId } : {}),
+  };
+}
+
+function sendTaskIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+  return {
+    ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+    ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+    ...(filter.customerId ? { customerId: filter.customerId } : {}),
+  };
+}
+
+function filterReviewLogsByIdentity(
+  logs: any[],
+  filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {},
+  visible: { designJobs: any[]; quoteDrafts: any[]; orderDrafts: any[]; sendTasks?: any[] },
+) {
+  if (!hasIdentityFilter(filter)) return logs;
+  const designJobIds = new Set(visible.designJobs.map((item) => String(item.id || "")).filter(Boolean));
+  const quoteDraftIds = new Set(visible.quoteDrafts.map((item) => String(item.id || "")).filter(Boolean));
+  const orderDraftIds = new Set(visible.orderDrafts.map((item) => String(item.id || "")).filter(Boolean));
+  const sendTaskIds = new Set((visible.sendTasks || []).map((item) => String(item.id || "")).filter(Boolean));
+  return logs.filter((log) => {
+    const metadata = log?.metadata && typeof log.metadata === "object" ? log.metadata : {};
+    if (matchesMetadataIdentity(metadata, filter)) return true;
+    if (log.targetType === "design_job" && designJobIds.has(String(log.targetId || ""))) return true;
+    if ((log.targetType === "quote" || log.targetType === "quote_draft") && quoteDraftIds.has(String(log.targetId || ""))) return true;
+    if (log.targetType === "order_draft" && orderDraftIds.has(String(log.targetId || ""))) return true;
+    if (log.targetType === "send_task" && sendTaskIds.has(String(log.targetId || ""))) return true;
+    if (metadata.designJobId && designJobIds.has(String(metadata.designJobId))) return true;
+    if (metadata.quoteDraftId && quoteDraftIds.has(String(metadata.quoteDraftId))) return true;
+    if (metadata.orderDraftId && orderDraftIds.has(String(metadata.orderDraftId))) return true;
+    if (metadata.sendTaskId && sendTaskIds.has(String(metadata.sendTaskId))) return true;
+    return false;
+  });
+}
+
+function matchesMetadataIdentity(
+  metadata: Record<string, unknown>,
+  filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {},
+) {
   if (filter.wechatAccountId && String(metadata.wechatAccountId || "") !== String(filter.wechatAccountId)) return false;
   if (filter.conversationId && String(metadata.conversationId || "") !== String(filter.conversationId)) return false;
   if (filter.customerId && String(metadata.customerId || "") !== String(filter.customerId)) return false;
-  return true;
+  return Boolean(metadata.wechatAccountId || metadata.conversationId || metadata.customerId);
 }
 
 function isDesignJobReviewVisible(job: any) {
@@ -473,7 +615,19 @@ function isQuoteHighValue(quote: any) {
 function isOrderReviewVisible(order: any) {
   const status = String(order?.status || "");
   if (["fulfilled", "cancelled"].includes(status)) return false;
-  return isOrderHighValue(order) || orderNeedsManualSendAttention(order);
+  return status === "manual_review" || isOrderHighValue(order) || orderNeedsManualSendAttention(order);
+}
+
+function isSendTaskReviewVisible(task: any) {
+  if (task?.status !== "blocked") return false;
+  const guardSnapshot = task.guardSnapshot || {};
+  const automation = guardSnapshot.automation || {};
+  if (automation.manualApproved === true) return false;
+  return (
+    guardSnapshot.blockedByHighValueReview === true ||
+    guardSnapshot.reason === "manual_review_required" ||
+    (automation.valueLevel === "high" && automation.queuedBy === "manual_review_flow")
+  );
 }
 
 function isOrderHighValue(order: any) {

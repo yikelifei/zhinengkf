@@ -1,2 +1,2 @@
 @echo off
-call "D:\zhinengkefu\desktop\repair-stable-desktop.cmd" %*
+call "%~dp0desktop\repair-stable-desktop.cmd" %*

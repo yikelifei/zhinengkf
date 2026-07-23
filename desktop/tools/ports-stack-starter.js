@@ -4,6 +4,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { ensureInternalApiToken } = require("./internal-api-session");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
@@ -38,6 +39,7 @@ const stackStarterLog = path.join(runtimeDir, "logs", "ports-stack-starter.log")
 const conflictMode = realDesignMode ? "mock" : "real";
 const managedPorts = [numberEnv("WEB_PORT", 3100), numberEnv("API_PORT", 3200), numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)];
 const stackStarterLockFile = path.join(runtimeDir, `ports-stack-starter-${supervisorMode}.lock`);
+const internalApiToken = ensureInternalApiToken();
 let stackStarterLockHeld = false;
 
 main().catch((error) => {
@@ -166,6 +168,7 @@ async function main() {
 
     const env = {
       ...process.env,
+      INTERNAL_API_TOKEN: internalApiToken,
     };
     if (mockDesignMode) {
       env.DESIGN_PLATFORM_ADAPTER = "standard_v1";

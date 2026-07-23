@@ -16,7 +16,7 @@ import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { OrdersService } from "../orders/orders.service";
 import { rules } from "../shared/rules";
-import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import { ExpectedIdentityPayload, assertExpectedIdentity, assertRequiredExpectedIdentity } from "../shared/identity-expectation";
 
 const SMOKE_TEST_PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -496,7 +496,9 @@ export class DesignJobsService {
       }
 
       try {
-        imageSend.queued.push(await this.quickConfirmAndQueueSend(job.id));
+        imageSend.queued.push(
+          await this.quickConfirmAndQueueSend(job.id, expectedIdentityForDesignJob(job)),
+        );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "unknown error";
         imageSend.failed.push({
@@ -555,7 +557,7 @@ export class DesignJobsService {
 
     for (const job of jobs as any[]) {
       try {
-        const polled = await this.pollResult(job.id);
+        const polled = await this.pollResult(job.id, expectedIdentityForDesignJob(job));
         const remoteStatus = polled.remoteStatus || "generating";
         if (polled.autoRetried || this.wasAutoRetried(job, polled.job)) result.retried.push(polled.job);
         else if (remoteStatus === "completed") result.completed.push(polled.job);
@@ -595,7 +597,7 @@ export class DesignJobsService {
     for (const job of candidates as any[]) {
       if (job.externalJobId) {
         try {
-          const polled = await this.pollResult(job.id);
+          const polled = await this.pollResult(job.id, expectedIdentityForDesignJob(job));
           const remoteStatus = String(polled.remoteStatus || "").toLowerCase();
           const recovered =
             polled.autoRetried ||
@@ -1108,6 +1110,7 @@ export class DesignJobsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
     if (!job.externalJobId) throw new Error("design job has no externalJobId");
     const terminalStatusLabel = this.designJobTerminalStatusLabel(job.status);
@@ -1168,6 +1171,7 @@ export class DesignJobsService {
           select: { id: true, customerId: true, conversationId: true, wechatAccountId: true, status: true, errorMessage: true },
         });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
     this.assertDesignJobCanManualRetry(job);
     const revision = await this.findLatestRevisionForRetry(job.id);
@@ -1175,6 +1179,7 @@ export class DesignJobsService {
   }
 
   async attachAssets(id: string, assetIds: string[], expected: ExpectedIdentityPayload = {}) {
+    assertRequiredExpectedIdentity(expected, "design job");
     const uniqueAssetIds = [...new Set((assetIds || []).filter(Boolean))];
     if (!uniqueAssetIds.length) throw new Error("assetIds is required");
     if (appConfig.useLocalStore) {
@@ -1251,6 +1256,7 @@ export class DesignJobsService {
           include: { images: true, assets: true, revisions: true },
         });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(payload, "design job");
     assertExpectedIdentity(job, payload, "design job");
     this.assertDesignJobCanRequestRevision(job);
 
@@ -1305,6 +1311,7 @@ export class DesignJobsService {
     if (!decision.submitAllowed) {
       const manualLock = job.conversationId
         ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+            ...expectedIdentityFromRecord(job),
             expectedWechatAccountId: job.wechatAccountId,
             expectedConversationId: job.conversationId,
             expectedCustomerId: job.customerId,
@@ -1439,6 +1446,7 @@ export class DesignJobsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
     this.assertDesignJobCanCancel(job);
     let remoteResult: Record<string, unknown> | null = null;
@@ -1598,6 +1606,27 @@ export class DesignJobsService {
     const downloadFailureCount = savedImages.filter((item) => !item.localPath).length;
     const localSavedCount = savedImages.length - downloadFailureCount;
     const requiredLocalImageCount = this.minimumRequiredLocalImageCount(job);
+    if (downloadFailureCount === savedImages.length) {
+      const errorMessage = `design platform saved only 0 local image files; expected at least ${requiredLocalImageCount}; generated images could not be saved locally: ${downloadFailureCount}/${savedImages.length}`;
+      const retryCount = Number(job.retryCount || 0);
+      await this.notifications.create(
+        retryCount < 1 ? "warning" : "error",
+        "设计图本地保存失败",
+        `全部 ${downloadFailureCount} 张候选图都没有保存到本地文件，已停止后续入库和发送。`,
+        this.designJobNotificationTarget(job, {
+          externalJobId: payload.externalJobId || job.externalJobId,
+          downloadFailureCount,
+        }),
+      );
+      if (retryCount < 1) {
+        return this.retryDesignJob(job.id, "automatic", errorMessage);
+      }
+      return this.failDesignJobForManualReview(job, {
+        reason: "design_platform_local_image_save_failed",
+        source: "design_platform_callback",
+        errorMessage,
+      });
+    }
     if (localSavedCount < requiredLocalImageCount) {
       const errorMessage = `design platform saved only ${localSavedCount} local image files; expected at least ${requiredLocalImageCount}`;
       const failedRevision = await this.finishLatestRevision(job.id, "failed", [], errorMessage);
@@ -1630,10 +1659,10 @@ export class DesignJobsService {
         "warning",
         "设计图本地保存失败",
         `有 ${downloadFailureCount} 张候选图没有保存到本地文件，自动微信发图会等待人工确认。`,
-        {
-          designJobId: job.id,
+        this.designJobNotificationTarget(job, {
           externalJobId: payload.externalJobId || job.externalJobId,
-        },
+          downloadFailureCount,
+        }),
       );
     }
 
@@ -1805,6 +1834,16 @@ export class DesignJobsService {
         reasons.push(`duplicate downloadUrl: ${image.downloadUrl}`);
       }
       seenDownloadUrls.add(image.downloadUrl);
+      if (job?.requirements?.highResolution !== false) {
+        const width = Number(image.width || 0);
+        const height = Number(image.height || 0);
+        const label = image.imageId || `candidate_${index + 1}`;
+        if (!width || !height) {
+          reasons.push(`${label} missing dimensions`);
+        } else if (Math.min(width, height) < 1024) {
+          reasons.push(`${label} short edge ${Math.min(width, height)} below 1024`);
+        }
+      }
     });
     return { ok: reasons.length === 0, reasons };
   }
@@ -1820,6 +1859,7 @@ export class DesignJobsService {
           include: { images: true },
     });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(options, "design job");
     assertExpectedIdentity(job, options, "design job");
     this.assertDesignJobHasCompleteSendIdentity(job);
 
@@ -1857,6 +1897,7 @@ export class DesignJobsService {
     if (options.releaseManualLock) {
       assertManualReleaseReason(options.releaseReason, "design send manual release");
       await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+        ...expectedIdentityFromRecord(job),
         expectedWechatAccountId: job.wechatAccountId,
         expectedConversationId: job.conversationId,
         expectedCustomerId: job.customerId,
@@ -1906,6 +1947,7 @@ export class DesignJobsService {
     } catch (error) {
       if (options.releaseManualLock) {
         await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          ...expectedIdentityFromRecord(job),
           expectedWechatAccountId: job.wechatAccountId,
           expectedConversationId: job.conversationId,
           expectedCustomerId: job.customerId,
@@ -1925,6 +1967,7 @@ export class DesignJobsService {
       : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
     const expected = typeof input === "string" ? {} : input || {};
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
     const orderedImages = [...((job.images || []) as DesignImageCandidateLike[])].sort(
       (a, b) => a.position - b.position,
@@ -1987,7 +2030,12 @@ export class DesignJobsService {
     }
 
     try {
-      const quote = await this.quotes.createFromDesignJob(job.id, selectedImageId);
+      const expected = {
+        expectedWechatAccountId: job.wechatAccountId,
+        expectedConversationId: job.conversationId,
+        expectedCustomerId: job.customerId,
+      };
+      const quote = await this.quotes.createFromDesignJob(job.id, selectedImageId, expected);
       const updated = appConfig.useLocalStore
         ? this.localStore.updateDesignJob(job.id, { status: "quote_created" })
         : await this.prisma.designJob.update({ where: { id: job.id }, data: { status: "quote_created" } });
@@ -2026,9 +2074,10 @@ export class DesignJobsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
 
-    const quote = await this.quotes.createFromDesignJob(id);
+    const quote = await this.quotes.createFromDesignJob(id, undefined, expected);
     if (appConfig.useLocalStore) this.localStore.updateDesignJob(id, { status: "quote_created" });
     else await this.prisma.designJob.update({ where: { id }, data: { status: "quote_created" } });
     return quote;
@@ -2039,6 +2088,7 @@ export class DesignJobsService {
       ? this.localStore.getDesignJob(id)
       : await this.prisma.designJob.findUnique({ where: { id } });
     if (!job) throw new Error(`design job not found: ${id}`);
+    assertRequiredExpectedIdentity(expected, "design job");
     assertExpectedIdentity(job, expected, "design job");
 
     return this.handoffDesignJobToManual(job, {
@@ -2099,6 +2149,7 @@ export class DesignJobsService {
 
     const manualLock = job.conversationId
       ? await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+          ...expectedIdentityFromRecord(job),
           expectedWechatAccountId: job.wechatAccountId,
           expectedConversationId: job.conversationId,
           expectedCustomerId: job.customerId,
@@ -2180,6 +2231,7 @@ export class DesignJobsService {
 
   private async queueDesignTextMessage(job: any, text: string, reason: string) {
     if (!job.wechatAccountId || !job.conversationId) return null;
+    const isHighValue = this.isHighValueDesignJob(job);
     try {
       return await this.wechatDispatch.enqueueTextMessage({
         wechatAccountId: job.wechatAccountId,
@@ -2187,6 +2239,11 @@ export class DesignJobsService {
         designJobId: job.id,
         text,
         reason,
+        automation: {
+          source: reason,
+          valueLevel: isHighValue ? "high" : "low",
+          queuedBy: isHighValue ? "manual_review_flow" : "low_value_automation",
+        },
       });
     } catch (error) {
       if (await this.isConversationManualLocked(job.conversationId)) {
@@ -2641,6 +2698,37 @@ export class DesignJobsService {
     if (!belongsToJob) throw new BadRequestException("design image file is not bound to this design job");
   }
 
+  private designJobNotificationTarget(job: any, target: Record<string, unknown> = {}) {
+    return {
+      designJobId: job?.id,
+      requestId: job?.requestId,
+      ...target,
+      wechatAccountId: job?.wechatAccountId || undefined,
+      conversationId: job?.conversationId || undefined,
+      customerId: job?.customerId || undefined,
+    };
+  }
+
+  private async designPollNotificationTarget(requestId: string, externalJobId: string) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(requestId)
+      : await this.prisma.designJob.findUnique({
+          where: { requestId },
+          select: {
+            id: true,
+            requestId: true,
+            externalJobId: true,
+            wechatAccountId: true,
+            conversationId: true,
+            customerId: true,
+          },
+        });
+    if (!job || String(job.externalJobId || "") !== String(externalJobId || "")) {
+      return { requestId, externalJobId };
+    }
+    return this.designJobNotificationTarget(job, { externalJobId });
+  }
+
   private scheduleResultPoll(requestId: string, externalJobId: string) {
     const pollKey = `${requestId}:${externalJobId}`;
     if (this.activeResultPolls.has(pollKey)) return;
@@ -2690,10 +2778,7 @@ export class DesignJobsService {
           "warning",
           "设计结果轮询超时",
           lastErrorMessage || "超过配置等待时间，请客服手动刷新或检查设计平台。",
-          {
-            requestId,
-            externalJobId,
-          },
+          await this.designPollNotificationTarget(requestId, externalJobId),
         );
         return;
       }
@@ -2716,10 +2801,12 @@ export class DesignJobsService {
           images: result.images || [],
         });
       } catch {
-        await this.notifications.create("warning", "设计结果轮询失败", "等待设计平台回调或人工刷新。", {
-          requestId,
-          externalJobId,
-        });
+        await this.notifications.create(
+          "warning",
+          "设计结果轮询失败",
+          "等待设计平台回调或人工刷新。",
+          await this.designPollNotificationTarget(requestId, externalJobId),
+        );
       }
     }, 2500);
   }
@@ -2776,6 +2863,16 @@ async function localImagePreviewDataUrl(filePath: string) {
     return "";
   }
 }
+
+function expectedIdentityFromRecord(job: any): ExpectedIdentityPayload {
+  return {
+    expectedWechatAccountId: job?.wechatAccountId,
+    expectedConversationId: job?.conversationId,
+    expectedCustomerId: job?.customerId,
+  };
+}
+
+const expectedIdentityForDesignJob = expectedIdentityFromRecord;
 
 function cleanIdentityWhere(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
   return {

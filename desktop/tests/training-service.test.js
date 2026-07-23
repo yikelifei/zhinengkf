@@ -52,6 +52,16 @@ function createTrainingService(samples) {
       calls.push({ method: "applyAgentSkillSuggestions", suggestionCount: suggestions.length });
       return { created: [], updated: [], skipped: [] };
     },
+    createChatImport: (payload, parsed) => {
+      calls.push({ method: "createChatImport", payload, parsed });
+      return {
+        id: "import_test",
+        ...payload,
+        messageCount: parsed.messageCount || 0,
+        pairCount: parsed.pairCount || 0,
+        samples: [],
+      };
+    },
   };
   return {
     calls,
@@ -434,6 +444,9 @@ test("passes identity filters when listing training samples", () => {
     const result = service.applySkillSuggestions({
       agentId: "agent_gift",
       includeNeedsReview: true,
+      wechatAccountId: "wechat_top",
+      conversationId: "conv_top",
+      customerId: "customer_top",
     });
 
     assert.equal(result.applied, 0);
@@ -498,6 +511,9 @@ test("passes identity filters when listing training samples", () => {
     const result = service.applySkillSuggestions({
       agentId: "agent_gift",
       includeNeedsReview: false,
+      wechatAccountId: "wechat_top",
+      conversationId: "conv_top",
+      customerId: "customer_top",
     });
 
     assert.equal(result.selected, 2);
@@ -526,15 +542,33 @@ test("passes identity filters when listing training samples", () => {
     assert.doesNotMatch(controller, /suggestionKeys\?: string\[\];[\s\S]*includeNeedsReview\?: boolean;[\s\S]*wechatAccountId\?: string;/);
   });
 
-  test("batch reviews visible training samples with de-duplicated ids", () => {
+test("batch reviews visible training samples with de-duplicated ids", () => {
   const notifications = [];
-  const { service, calls, rows } = createTrainingService(samples);
+  const scopedSamples = samples.map((sample) => ({
+    ...sample,
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  }));
+  const { service, calls, rows } = createTrainingService(scopedSamples);
   service["notifications"] = { create: (...args) => notifications.push(args) };
 
   const result = service.batchReviewSamples({
     sampleIds: ["safe_1", "safe_1", "risk_1"],
     status: "review",
     reviewer: "operator",
+    expectedBySampleId: {
+      safe_1: {
+        expectedWechatAccountId: "wechat_demo_1",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
+      },
+      risk_1: {
+        expectedWechatAccountId: "wechat_demo_1",
+        expectedConversationId: "conversation_demo_1",
+        expectedCustomerId: "customer_demo_1",
+      },
+    },
     note: "批量退回复核",
   });
 
@@ -593,4 +627,181 @@ test("rejects unknown training sample quality filters", () => {
     () => service.listSamples({ quality: "maybe" }),
     /quality must be one of safe, review, risk, blocked, needs_attention, scene_uncertain, anti_wrong_reply, trainable, not_trainable, route_memory, reply_skill, route_and_reply, all/,
   );
+});
+
+// Migrated from the former C-drive worktree (4 unique regression tests).
+
+test("chat import requires complete conversation identity before training data is created", () => {
+  const { service, calls } = createTrainingService(samples);
+
+  assert.throws(
+    () =>
+      service.importChat({
+        text: "客户：有现货吗\n客服：有的，我帮您确认库存",
+        wechatAccountId: "wechat_demo_1",
+        conversationId: "conversation_demo_1",
+      }),
+    /chat import identity expectation required: customerId/,
+  );
+  assert.equal(calls.filter((call) => call.method === "createChatImport").length, 0);
+
+  const result = service.importChat({
+    text: "客户：有现货吗\n客服：有的，我帮您确认库存",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+
+  assert.equal(result.id, "import_test");
+  assert.equal(calls.filter((call) => call.method === "createChatImport").length, 1);
+});
+
+test("rejects applying skill suggestions without a complete active conversation identity", () => {
+  const { service, calls } = createTrainingService([
+    {
+      id: "conv_a_budget",
+      agentId: "agent_gift",
+      agentKey: "gift_design",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+      scene: "gift_design",
+      customerText: "200 per box, want renderings",
+      idealReply: "I will confirm the bundle by budget.",
+      score: 95,
+      skillHints: ["budget_clarify"],
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+    {
+      id: "conv_b_after_sales",
+      agentId: "agent_after_sales",
+      agentKey: "after_sales",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_b",
+      conversationId: "conv_b",
+      customerId: "customer_b",
+      scene: "after_sales",
+      customerText: "I want to return the order",
+      idealReply: "I will check the order and after-sales rules.",
+      score: 95,
+      skillHints: ["after_sales_plan"],
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+  ]);
+
+  assert.throws(
+    () => service.applySkillSuggestions({ includeNeedsReview: true, minScore: 70 }),
+    /skill suggestion apply identity expectation required: wechatAccountId, conversationId, customerId/,
+  );
+  assert.equal(calls.filter((call) => call.method === "applyAgentSkillSuggestions").length, 0);
+});
+
+test("applies skill suggestions only inside the active conversation identity", () => {
+  const { service, calls } = createTrainingService([
+    {
+      id: "conv_a_budget",
+      agentId: "agent_gift",
+      agentKey: "gift_design",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+      scene: "gift_design",
+      customerText: "200 per box, want renderings",
+      idealReply: "I will confirm the bundle by budget.",
+      score: 95,
+      skillHints: ["budget_clarify"],
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+    {
+      id: "conv_b_after_sales",
+      agentId: "agent_after_sales",
+      agentKey: "after_sales",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_b",
+      conversationId: "conv_b",
+      customerId: "customer_b",
+      scene: "after_sales",
+      customerText: "I want to return the order",
+      idealReply: "I will check the order and after-sales rules.",
+      score: 95,
+      skillHints: ["after_sales_plan"],
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+  ]);
+
+  service.applySkillSuggestions({
+    includeNeedsReview: true,
+    minScore: 70,
+    wechatAccountId: "wechat_a",
+    conversationId: "conv_a",
+    customerId: "customer_a",
+  });
+
+  assert.deepEqual(calls.find((call) => call.method === "listTrainingSamples"), {
+    method: "listTrainingSamples",
+    agentId: undefined,
+    wechatAccountId: "wechat_a",
+    conversationId: "conv_a",
+    customerId: "customer_a",
+  });
+  assert.equal(calls.filter((call) => call.method === "applyAgentSkillSuggestions").length, 1);
+});
+
+test("rejects mixed conversation identities in one training sample batch review", () => {
+  const notifications = [];
+  const { service, calls, rows } = createTrainingService([
+    {
+      id: "conv_a_sample",
+      agentId: "agent_gift",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+    {
+      id: "conv_b_sample",
+      agentId: "agent_gift",
+      status: "ready",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_b",
+      customerId: "customer_b",
+      quality: { level: "safe", trainable: true, flags: [], usage: { routeMemory: true, replySkill: true } },
+    },
+  ]);
+  service["notifications"] = { create: (...args) => notifications.push(args) };
+
+  assert.throws(
+    () =>
+      service.batchReviewSamples({
+        sampleIds: ["conv_a_sample", "conv_b_sample"],
+        status: "review",
+        expectedBySampleId: {
+          conv_a_sample: {
+            expectedWechatAccountId: "wechat_a",
+            expectedConversationId: "conv_a",
+            expectedCustomerId: "customer_a",
+          },
+          conv_b_sample: {
+            expectedWechatAccountId: "wechat_a",
+            expectedConversationId: "conv_b",
+            expectedCustomerId: "customer_b",
+          },
+        },
+      }),
+    /training sample batch review cannot mix conversation identities/,
+  );
+
+  assert.equal(rows.find((sample) => sample.id === "conv_a_sample").status, "ready");
+  assert.equal(rows.find((sample) => sample.id === "conv_b_sample").status, "ready");
+  assert.equal(calls.filter((call) => call.method === "reviewTrainingSample").length, 0);
+  assert.equal(notifications.length, 0);
 });

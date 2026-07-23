@@ -1,0 +1,656 @@
+.panel {
+  --wechat-brand: var(--wk-color-brand);
+  --wechat-brand-soft: var(--wk-color-brand-soft);
+  --wechat-text: var(--wk-color-text);
+  --wechat-muted: var(--wk-color-text-secondary);
+  --wechat-border: var(--wk-color-border);
+  --wechat-subtle: var(--wk-color-surface-subtle);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--wechat-border);
+  border-radius: 8px;
+  background: var(--wk-color-surface);
+  color: var(--wechat-text);
+}
+
+.panel,
+.panel * {
+  box-sizing: border-box;
+}
+
+.panel button,
+.panel input {
+  font: inherit;
+}
+
+.header,
+.headerActions,
+.summary,
+.editorHeader,
+.editorFooter,
+.statusCell,
+.rowActions,
+.disableConfirm,
+.disableConfirm > div,
+.readinessAlert,
+.validationSuccess,
+.validationError,
+.instanceErrors {
+  display: flex;
+  align-items: center;
+}
+
+.header {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--wechat-border);
+  padding: 16px 18px;
+}
+
+.titleBlock {
+  min-width: 0;
+}
+
+.titleBlock h2 {
+  margin: 0;
+  font-size: var(--wk-font-size-lg);
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.titleBlock p {
+  margin: 4px 0 0;
+  color: var(--wechat-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.headerActions {
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.primaryButton,
+.secondaryButton,
+.textButton,
+.dangerButton,
+.confirmDangerButton,
+.iconButton {
+  display: inline-flex;
+  min-height: var(--wk-control-height);
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: var(--wk-radius-md);
+  padding: 0 11px;
+  cursor: pointer;
+  font-size: var(--wk-font-size-sm);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.primaryButton {
+  border: 1px solid var(--wechat-brand);
+  background: var(--wechat-brand);
+  color: #ffffff;
+}
+
+.secondaryButton,
+.textButton,
+.dangerButton,
+.iconButton {
+  border: 1px solid #d7dbe3;
+  background: #ffffff;
+}
+
+.secondaryButton,
+.textButton,
+.iconButton {
+  color: #30343b;
+}
+
+.textButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
+.iconButton:hover:not(:disabled) {
+  border-color: #aebbe0;
+  background: var(--wechat-brand-soft);
+  color: var(--wechat-brand);
+}
+
+.dangerButton,
+.confirmDangerButton {
+  color: #c93535;
+}
+
+.dangerButton:hover:not(:disabled) {
+  border-color: #f1b7b4;
+  background: #fff5f4;
+}
+
+.confirmDangerButton {
+  border: 1px solid #d54941;
+  background: #d54941;
+  color: #ffffff;
+}
+
+.iconButton {
+  width: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+}
+
+.panel button:focus-visible,
+.panel input:focus-visible {
+  outline: 2px solid #7aa7ff;
+  outline-offset: 2px;
+}
+
+.panel button:disabled,
+.panel input:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.readyState,
+.warningState,
+.loadingState,
+.enabledState,
+.disabledState {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.readyState,
+.enabledState {
+  background: #eaf7f0;
+  color: #0b7a42;
+}
+
+.warningState {
+  background: #fff3e5;
+  color: #a85400;
+}
+
+.loadingState,
+.disabledState {
+  background: #f0f2f5;
+  color: #68707c;
+}
+
+.summary {
+  min-width: 0;
+  gap: 18px;
+  border-bottom: 1px solid #f0f1f3;
+  padding: 9px 18px;
+  color: var(--wechat-muted);
+  background: var(--wechat-subtle);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.summary b {
+  color: #30343b;
+  font-weight: 650;
+}
+
+.readinessAlert,
+.errorAlert {
+  margin: 12px 18px 0;
+  border: 1px solid #f2c29f;
+  border-radius: 6px;
+  background: #fff8f2;
+  color: #9b4b05;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.readinessAlert {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.readinessAlert svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.readinessAlert strong {
+  display: block;
+  color: #7d3c06;
+}
+
+.readinessAlert ul {
+  margin: 3px 0 0;
+  padding-left: 17px;
+}
+
+.errorAlert {
+  border-color: #f0b8b5;
+  background: #fff5f4;
+  color: #b42318;
+}
+
+.editor {
+  margin: 14px 18px;
+  overflow: hidden;
+  border: 1px solid #d8e4f8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.editorHeader {
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e7edf7;
+  padding: 11px 13px;
+  background: #f7faff;
+}
+
+.editorHeader > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.editorHeader strong {
+  font-size: 14px;
+}
+
+.editorHeader span {
+  color: var(--wechat-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 13px;
+}
+
+.formGrid label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.formGrid label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.formGrid input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  border: 1px solid #d7dbe3;
+  border-radius: 6px;
+  outline: 0;
+  background: #ffffff;
+  color: #25282d;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.formGrid input:focus {
+  border-color: var(--wechat-brand);
+  box-shadow: 0 0 0 3px rgb(0 82 217 / 10%);
+}
+
+.formGrid small {
+  color: var(--wechat-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.endpointField,
+.tokenField {
+  grid-column: span 1;
+}
+
+.switchField {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 13px 12px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.switchField input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--wechat-brand);
+}
+
+.validationSuccess,
+.validationError {
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 13px 12px;
+  border-radius: 6px;
+  padding: 8px 9px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.validationSuccess {
+  background: #edf8f2;
+  color: #0b7a42;
+}
+
+.validationError {
+  background: #fff3f2;
+  color: #b42318;
+}
+
+.validationSuccess svg,
+.validationError svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.editorFooter {
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid #edf0f4;
+  padding: 10px 13px;
+}
+
+.listHeader,
+.instanceRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.85fr) minmax(210px, 1.35fr) minmax(110px, 0.55fr) auto;
+  min-width: 0;
+  column-gap: 14px;
+  align-items: center;
+}
+
+.listHeader {
+  border-top: 1px solid var(--wechat-border);
+  border-bottom: 1px solid var(--wechat-border);
+  padding: 8px 18px;
+  color: #59606b;
+  background: var(--wechat-subtle);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.instanceList {
+  min-width: 0;
+}
+
+.instanceRow {
+  position: relative;
+  border-bottom: 1px solid #eff0f2;
+  padding: 12px 18px;
+}
+
+.instanceRow:last-child {
+  border-bottom: 0;
+}
+
+.accountCell,
+.endpointCell {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.accountCell strong {
+  overflow: hidden;
+  color: #25282d;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCell span,
+.endpointCell small,
+.statusCell small {
+  color: var(--wechat-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.accountCell span,
+.endpointCell code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.endpointCell code {
+  min-width: 0;
+  overflow: hidden;
+  color: #30343b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusCell {
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rowActions {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.rowActions button {
+  min-height: 30px;
+  padding: 0 9px;
+}
+
+.instanceErrors,
+.disableConfirm {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+}
+
+.instanceErrors {
+  align-items: flex-start;
+  gap: 6px;
+  border-left: 2px solid #e34d59;
+  color: #b42318;
+  padding: 3px 0 3px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.instanceErrors svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.disableConfirm {
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #f1c3c0;
+  border-radius: 6px;
+  background: #fff7f6;
+  color: #9f2f2a;
+  padding: 8px 9px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.disableConfirm > div {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.disableConfirm button {
+  min-height: 28px;
+}
+
+.emptyState {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px;
+  color: var(--wechat-muted);
+  text-align: center;
+}
+
+.emptyState strong {
+  color: #30343b;
+  font-size: 14px;
+}
+
+.emptyState span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.emptyState button {
+  margin-top: 5px;
+}
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 11px;
+    padding: 14px 13px;
+  }
+
+  .headerActions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .summary {
+    flex-wrap: wrap;
+    gap: 5px 14px;
+    padding: 9px 13px;
+  }
+
+  .readinessAlert,
+  .errorAlert,
+  .editor {
+    margin-right: 13px;
+    margin-left: 13px;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .endpointField,
+  .tokenField {
+    grid-column: auto;
+  }
+
+  .editorFooter {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .editorFooter .secondaryButton:first-child {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .listHeader {
+    display: none;
+  }
+
+  .instanceRow {
+    grid-template-columns: 1fr;
+    gap: 9px;
+    padding: 13px;
+  }
+
+  .endpointCell code {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .statusCell {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .rowActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .rowActions button {
+    width: 100%;
+  }
+
+  .disableConfirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .disableConfirm > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .disableConfirm button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .headerActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions .primaryButton,
+  .readyState,
+  .warningState,
+  .loadingState {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
