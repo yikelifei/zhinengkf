@@ -29,8 +29,19 @@ const proof = readDesktopWebSessionProof(sessionFile);
 const env = withoutDesktopWebSessionProof(process.env);
 env[DESKTOP_WEB_SESSION_PROOF_ENV] = proof;
 env.WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
+const requestedInstanceId = String(process.env.DESKTOP_INSTANCE_ID || "default").trim().toLowerCase();
+const instanceId = /^[a-z0-9][a-z0-9-]{0,31}$/.test(requestedInstanceId)
+  ? requestedInstanceId
+  : "default";
+const electronArgs = [];
+if (instanceId !== "default") {
+  const userDataDir = path.join(runtimeDir, "electron-user-data", instanceId);
+  fs.mkdirSync(userDataDir, { recursive: true });
+  electronArgs.push(`--user-data-dir=${userDataDir}`);
+}
+electronArgs.push(electronEntry);
 
-const child = spawn(electronPath, [electronEntry], {
+const child = spawn(electronPath, electronArgs, {
   cwd: root,
   env,
   detached: true,

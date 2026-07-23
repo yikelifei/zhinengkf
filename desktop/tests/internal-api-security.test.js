@@ -230,7 +230,8 @@ test("packaged runtime keeps desktop proof independent and out of the API enviro
   const main = read("apps/electron/main.js");
   assert.match(main, /partition: DESKTOP_SESSION_PARTITION/);
   assert.match(main, /DESKTOP_INSTANCE_ID === "default"/);
-  assert.match(main, /app\.setPath\("userData"/);
+  assert.match(main, /acquireNamedInstanceLock\(\)/);
+  assert.match(main, /electron-\$\{DESKTOP_INSTANCE_ID\}\.lock/);
   assert.match(main, /path: "\/api"/);
   assert.match(main, /httpOnly: true/);
   assert.match(main, /sameSite: "strict"/);
@@ -250,6 +251,7 @@ test("stable and port-stack launchers scope tokens and filter wrapper files", ()
   assert.match(stable, /desktopWebSessionServiceEnv\(internalEnv, serviceName, desktopWebSession\.proof\)/);
   assert.match(stableElectron, /readDesktopWebSessionProof\(sessionFile\)/);
   assert.match(stableElectron, /env\[DESKTOP_WEB_SESSION_PROOF_ENV\] = proof/);
+  assert.match(stableElectron, /--user-data-dir=\$\{userDataDir\}/);
   assert.match(starter, /INTERNAL_API_TOKEN: internalApiToken/);
   assert.match(supervisor, /process\.env\.INTERNAL_API_TOKEN = ensureInternalApiToken\(\)/);
   assert.match(dev, /internalApiServiceEnv\([\s\S]*?service\?\.name, internalApiToken\)/);

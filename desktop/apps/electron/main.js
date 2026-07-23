@@ -1,6 +1,7 @@
 "use strict";
 
 const { app, BrowserWindow, Notification, ipcMain, nativeTheme, session } = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
 const { PackagedServiceManager } = require("./packaged-runtime");
 
@@ -13,16 +14,61 @@ const DESKTOP_SESSION_PARTITION = DESKTOP_INSTANCE_ID === "default"
   ? "persist:smart-kefu-desktop"
   : `persist:smart-kefu-desktop-${DESKTOP_INSTANCE_ID}`;
 
-if (DESKTOP_INSTANCE_ID !== "default") {
-  app.setPath("userData", `${app.getPath("userData")}-${DESKTOP_INSTANCE_ID}`);
-}
-
 let mainWindow = null;
 let packagedServices = null;
+let namedInstanceLockFile = null;
 
 function normalizeDesktopInstanceId(value) {
   const normalized = String(value || "default").trim().toLowerCase();
   return /^[a-z0-9][a-z0-9-]{0,31}$/.test(normalized) ? normalized : "default";
+}
+
+function acquireNamedInstanceLock() {
+  const lockRoot = path.resolve(process.env.DESKTOP_RUNTIME_DIR || app.getPath("userData"));
+  const lockFile = path.join(lockRoot, `electron-${DESKTOP_INSTANCE_ID}.lock`);
+  fs.mkdirSync(lockRoot, { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, instanceId: DESKTOP_INSTANCE_ID })}\n`, "utf8");
+      fs.closeSync(fd);
+      namedInstanceLockFile = lockFile;
+      return true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const stat = fs.lstatSync(lockFile);
+        if (!stat.isFile() || stat.isSymbolicLink()) return false;
+        const existing = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+        if (isPidAlive(existing?.pid)) return false;
+        fs.rmSync(lockFile, { force: true });
+      } catch (readError) {
+        if (readError?.code === "ENOENT") continue;
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function releaseNamedInstanceLock() {
+  if (!namedInstanceLockFile) return;
+  try {
+    const payload = JSON.parse(fs.readFileSync(namedInstanceLockFile, "utf8"));
+    if (Number(payload?.pid) === process.pid) fs.rmSync(namedInstanceLockFile, { force: true });
+  } catch {}
+  namedInstanceLockFile = null;
+}
+
+function isPidAlive(pid) {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0) return false;
+  try {
+    process.kill(value, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function windowBackgroundColor() {
@@ -131,7 +177,9 @@ async function installDesktopSessionCookie(proof) {
   return true;
 }
 
-const ownsSingleInstance = app.requestSingleInstanceLock();
+const ownsSingleInstance = DESKTOP_INSTANCE_ID === "default"
+  ? app.requestSingleInstanceLock()
+  : acquireNamedInstanceLock();
 if (!ownsSingleInstance) {
   app.quit();
 } else {
@@ -152,6 +200,7 @@ if (!ownsSingleInstance) {
 }
 
 app.on("before-quit", () => {
+  releaseNamedInstanceLock();
   packagedServices?.stop();
   packagedServices = null;
 });

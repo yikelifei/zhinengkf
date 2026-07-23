@@ -1103,7 +1103,13 @@ test("electron startup failure points beginners to stable repair script", () => 
   assert.match(electronMain, /const APP_TITLE = process\.env\.DESKTOP_APP_TITLE \|\| "智能体客服工作台";/);
   assert.match(electronMain, /normalizeDesktopInstanceId\(process\.env\.DESKTOP_INSTANCE_ID\)/);
   assert.match(electronMain, /persist:smart-kefu-desktop-\$\{DESKTOP_INSTANCE_ID\}/);
-  assert.match(electronMain, /app\.setPath\("userData", `\$\{app\.getPath\("userData"\)\}-\$\{DESKTOP_INSTANCE_ID\}`\)/);
+  assert.match(electronMain, /DESKTOP_INSTANCE_ID === "default"[\s\S]*app\.requestSingleInstanceLock\(\)[\s\S]*acquireNamedInstanceLock\(\)/);
+  assert.match(electronMain, /fs\.openSync\(lockFile, "wx", 0o600\)/);
+  assert.match(electronMain, /releaseNamedInstanceLock\(\)/);
+  const stableElectron = readText("tools/launch-stable-electron.js");
+  assert.match(stableElectron, /electron-user-data", instanceId/);
+  assert.match(stableElectron, /electronArgs\.push\(`--user-data-dir=\$\{userDataDir\}`\)/);
+  assert.match(stableElectron, /spawn\(electronPath, electronArgs/);
   assert.match(electronMain, /repair-stable-desktop\.cmd/);
   assert.match(electronMain, /保持服务窗口打开/);
   assert.doesNotMatch(electronMain, /璇峰厛杩愯 start-stable-desktop\.cmd/);
