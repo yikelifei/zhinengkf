@@ -73,6 +73,44 @@ test("wechat manual review copy stays readable Chinese", () => {
   assert.match(source, /订单确认已进入微信安全发送队列/);
 });
 
+test("employee testing queues and processes a safe reply for low-risk ambiguous inbound messages", async () => {
+  const previous = appConfig.wechatInternalTestAutoReplyEnabled;
+  appConfig.wechatInternalTestAutoReplyEnabled = true;
+  try {
+    const { localStore, service } = setupService();
+    const result = await service.processInboundMessage({
+      externalId: "employee-test-safe-auto-reply-1",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      text: "天梯奖",
+    });
+
+    assert.equal(result.route.action, "manual_review");
+    assert.equal(result.plan.reason, "internal_test_safe_reply");
+    assert.equal(result.plan.shouldQueueReply, true);
+    assert.equal(result.sendTask.status, "queued");
+    assert.equal(result.sendTask.guardSnapshot.automation.source, "inbound_message");
+    assert.equal(result.sendTask.guardSnapshot.automation.valueLevel, "low");
+    assert.equal(result.sendTask.guardSnapshot.automation.internalTestOverride, true);
+    assert.match(result.sendTask.payload.text, /确认|补充/);
+
+    createPassingWechatWindowSnapshot(localStore, "天梯奖");
+    const queue = await service.processSafeSendQueue({ adapter: "dry_run", automationOnly: true });
+    assert.equal(queue.scanned, 1);
+    assert.equal(queue.processed.length, 1, JSON.stringify({
+      blocked: queue.blocked.map((item) => ({
+        reason: item.reason,
+        errorMessage: item.task?.errorMessage,
+        guard: item.task?.guardSnapshot,
+      })),
+      skipped: queue.skipped.map((item) => item.reason),
+      failed: queue.failed.map((item) => item.errorMessage),
+    }));
+  } finally {
+    appConfig.wechatInternalTestAutoReplyEnabled = previous;
+  }
+});
+
 function buildOrderDraft(overrides = {}) {
   const conversation = {
     id: "conversation_demo_1",

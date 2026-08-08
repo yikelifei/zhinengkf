@@ -227,6 +227,7 @@ export const appConfig = {
   wechatWorkApiBaseUrl: trimTrailingSlash(process.env.WECHAT_WORK_API_BASE_URL || "https://qyapi.weixin.qq.com"),
   wechatWorkSendMaxAttempts: Math.max(1, numberEnv("WECHAT_WORK_SEND_MAX_ATTEMPTS", 3)),
   wechatWorkSendRetryDelaySeconds: Math.max(1, numberEnv("WECHAT_WORK_SEND_RETRY_DELAY_SECONDS", 30)),
+  wechatInternalTestAutoReplyEnabled: booleanEnv("WECHAT_INTERNAL_TEST_AUTO_REPLY_ENABLED", false),
   wechatMiniAppId: process.env.WECHAT_MINI_APP_ID || "",
   wechatMiniToken: process.env.WECHAT_MINI_TOKEN || "",
   sendBridgeAckTimeoutMinutes: numberEnv("SEND_BRIDGE_ACK_TIMEOUT_MINUTES", 5),

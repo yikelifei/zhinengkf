@@ -17,6 +17,16 @@ function planInboundAutomation(input = {}) {
   }
 
   if (routingPolicy?.manualRequired || route.action === "manual_review") {
+    if (canQueueInternalTestReply(input, route, routingPolicy)) {
+      return withRoutingPolicy({
+        type: "queue_reply",
+        reason: "internal_test_safe_reply",
+        shouldQueueReply: true,
+        shouldCreateDesignJob: false,
+        shouldNotifyHuman: false,
+        internalTestOverride: true,
+      }, routingPolicy);
+    }
     return withRoutingPolicy({
       type: "manual_review",
       reason: manualReviewReason(route, routingPolicy),
@@ -102,11 +112,23 @@ function planInboundAutomation(input = {}) {
 
 function buildInboundReplyText(route = {}, plan = {}) {
   const base = String(route.suggestedReply || "").trim();
+  if (plan.reason === "internal_test_safe_reply") {
+    return String(route.sceneClarification?.question || "").trim()
+      || "收到，我已经看到您的消息。为了准确回复，请补充您想咨询的具体问题和关键信息，我会继续为您处理。";
+  }
   if (plan.reason === "missing_real_customer_assets") {
     const suffix = "另外效果图必须使用真实素材，麻烦您把 Logo、参考图或产品图发我一下，我收到后再开始整理效果图，避免图片和实际商品不一致。";
     return base ? `${base}\n${suffix}` : suffix;
   }
   return base || "收到，我先帮您整理关键信息，再给您明确的下一步。";
+}
+
+function canQueueInternalTestReply(input, route, routingPolicy) {
+  if (input.internalTestAutoReply !== true) return false;
+  if (route.action !== "manual_review") return false;
+  if (route.isHighValue === true || (route.riskFlags || []).length) return false;
+  if (["high_value_human", "risk_human"].includes(String(routingPolicy?.lane || ""))) return false;
+  return true;
 }
 
 function normalizeList(value) {

@@ -45,6 +45,47 @@ test("keeps manually locked conversation out of automation", () => {
   assert.equal(plan.shouldCreateDesignJob, false);
 });
 
+test("queues a safe clarification for low-risk manual review during employee testing", () => {
+  const plan = planInboundAutomation({
+    internalTestAutoReply: true,
+    route: {
+      action: "manual_review",
+      agentKey: "general",
+      isHighValue: false,
+      riskFlags: [],
+      routingPolicy: {
+        lane: "manual_review",
+        manualRequired: true,
+        canQueueAutoReply: false,
+      },
+    },
+  });
+
+  assert.equal(plan.type, "queue_reply");
+  assert.equal(plan.reason, "internal_test_safe_reply");
+  assert.equal(plan.shouldQueueReply, true);
+  assert.equal(plan.internalTestOverride, true);
+  assert.equal(plan.shouldNotifyHuman, false);
+  assert.match(buildInboundReplyText({}, plan), /补充/);
+});
+
+test("employee testing never overrides high-value or risky manual review", () => {
+  for (const route of [
+    { action: "manual_review", isHighValue: true, riskFlags: [] },
+    { action: "manual_review", isHighValue: false, riskFlags: ["payment_claim"] },
+    {
+      action: "manual_review",
+      isHighValue: false,
+      riskFlags: [],
+      routingPolicy: { lane: "risk_human", manualRequired: true },
+    },
+  ]) {
+    const plan = planInboundAutomation({ internalTestAutoReply: true, route });
+    assert.equal(plan.type, "manual_review");
+    assert.equal(plan.shouldQueueReply, false);
+  }
+});
+
 test("does not create gift design job without real asset ids", () => {
   const plan = planInboundAutomation({
     route: { action: "auto_agent", agentKey: "gift_design", missingFields: [] },

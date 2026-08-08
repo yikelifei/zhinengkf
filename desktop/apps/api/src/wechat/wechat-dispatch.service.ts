@@ -645,6 +645,14 @@ export class WechatDispatchService {
     const routingPolicy = isPlainObject(task?.payload?.routingPolicy) ? task.payload.routingPolicy : null;
     if (!routingPolicy) return { ok: true };
 
+    const internalTestSafeReply =
+      appConfig.wechatInternalTestAutoReplyEnabled
+      && task?.payload?.automationPlan === "queue_reply"
+      && task?.guardSnapshot?.automation?.source === "inbound_message"
+      && task?.guardSnapshot?.automation?.internalTestOverride === true
+      && !isHighValueAutomationTask(task);
+    if (internalTestSafeReply) return { ok: true, routingPolicy };
+
     const manualRequired = routingPolicy.manualRequired === true;
     const canQueueAutoReply = routingPolicy.canQueueAutoReply !== false;
     const canQueueClarificationReply =
@@ -1159,6 +1167,7 @@ export class WechatDispatchService {
       const plan = planInboundAutomation({
         route: { ...route, conversationManualLocked: true },
         conversationManualLocked: true,
+        internalTestAutoReply: appConfig.wechatInternalTestAutoReplyEnabled,
       });
       const result: any = {
         message,
@@ -1213,7 +1222,12 @@ export class WechatDispatchService {
       route.action === "auto_agent" && route.agentKey === "gift_design"
         ? this.recommendGiftBundle(route, payload.text || "")
         : null;
-    const plan = planInboundAutomation({ route, assetIds, bundleRecommendation });
+    const plan = planInboundAutomation({
+      route,
+      assetIds,
+      bundleRecommendation,
+      internalTestAutoReply: appConfig.wechatInternalTestAutoReplyEnabled,
+    });
     const result: any = {
       message,
       route,
@@ -1286,6 +1300,7 @@ export class WechatDispatchService {
             requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
             policy: "single-account-serial-queue",
             reason: `inbound-${plan.reason}`,
+            automation: buildInboundReplyAutomationMetadata(message, route, plan),
           },
         });
       }
@@ -1638,6 +1653,12 @@ export class WechatDispatchService {
       skills,
       knowledgeEntries,
     });
+    const aiAssistance = await this.buildAiAssistedInboundDraft({
+      conversation,
+      route: routeBase,
+      draft,
+      customerText: payload.text || "",
+    });
     const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, claimToken, {
         channel: conversation.channel || "wechat",
         text: payload.text || "",
@@ -1653,10 +1674,15 @@ export class WechatDispatchService {
         budget: routeBase.budget || Prisma.JsonNull,
         missingFields: routeBase.missingFields || [],
         riskFlags: routeBase.riskFlags || [],
-        suggestedReply: draft.suggestedReply,
+        suggestedReply: aiAssistance?.text || draft.suggestedReply,
         appliedSkills: draft.appliedSkills || [],
         knowledgeMatches: draft.knowledgeMatches || [],
-        replyDraft: draft.replyDraft || Prisma.JsonNull,
+        replyDraft: {
+          ...(draft.replyDraft || {}),
+          source: aiAssistance?.used ? "ai_assisted" : draft.replyDraft?.source,
+          ruleSuggestedReply: draft.suggestedReply,
+          aiAssistance,
+        },
     });
     await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
       stage: "routed",
@@ -1677,6 +1703,7 @@ export class WechatDispatchService {
       route: conversation.manualLocked ? { ...route, conversationManualLocked: true } : route,
       conversationManualLocked: Boolean(conversation.manualLocked),
       assetIds,
+      internalTestAutoReply: appConfig.wechatInternalTestAutoReplyEnabled,
     });
     let sendTask: any = null;
     let notification: any = null;
@@ -1705,6 +1732,7 @@ export class WechatDispatchService {
             requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
             policy: "single-account-serial-queue",
             reason: `inbound-${plan.reason}`,
+            automation: buildInboundReplyAutomationMetadata(message, route, plan),
             binding: sendBinding,
           },
         });
@@ -8726,6 +8754,18 @@ function isConfirmedChatImportScene(sample: any) {
   if (sample.sceneScore === undefined || sample.sceneScore === null) return true;
   const sceneScore = Number(sample.sceneScore || 0);
   return Number.isFinite(sceneScore) && sceneScore >= 14;
+}
+
+function buildInboundReplyAutomationMetadata(message: any, route: any, plan: any) {
+  return {
+    source: "inbound_message",
+    valueLevel: "low",
+    reason: String(plan?.reason || "inbound_reply"),
+    planType: String(plan?.type || "queue_reply"),
+    inboundMessageId: String(message?.id || ""),
+    routeId: String(route?.id || ""),
+    internalTestOverride: plan?.internalTestOverride === true,
+  };
 }
 
 function isLowValueAutomationTask(task: any) {
