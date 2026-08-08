@@ -424,10 +424,14 @@ test("explicit WeChat Work dispatch calls kf/send_msg and persists send attempt 
   assert.equal(api.sendCalls[0].externalUserId, "wm-send");
   assert.equal(api.sendCalls[0].openKfid, "wk-send");
   assert.equal(api.sendCalls[0].text, "您好，方案已确认");
+  const outboundMsgId = api.sendCalls[0].msgid;
+  const expectedMsgId = `kf_${crypto.createHash("sha256").update(queued.task.id).digest("hex").slice(0, 27)}`;
+  assert.equal(outboundMsgId, expectedMsgId);
+  assert.equal(Buffer.byteLength(outboundMsgId, "utf8"), 30);
   assert.equal(localStore.getSendTask(queued.task.id).status, "sent");
   const attempt = localStore.getLatestSendAttempt(queued.task.id, { adapter: "wechat_work_kf" });
   assert.equal(attempt.status, "sent");
-  assert.equal(attempt.metadata.apiMsgId, `api-kf_${queued.task.id}`);
+  assert.equal(attempt.metadata.apiMsgId, `api-${outboundMsgId}`);
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_dispatch_requested"));
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_accepted"));
 });
@@ -594,7 +598,13 @@ test("WeChat Work image send uploads and dispatches text plus multiple images in
   assert.equal(result.task.status, "sent");
   assert.deepEqual(api.operationCalls.map((item) => item.type), ["text", "upload", "image", "upload", "image"]);
   assert.deepEqual(api.imageSendCalls.map((item) => item.mediaId), ["media-1", "media-2"]);
-  assert.deepEqual(api.imageSendCalls.map((item) => item.msgid), [`kf_${queued.task.id}_2`, `kf_${queued.task.id}_3`]);
+  const baseMsgId = `kf_${crypto.createHash("sha256").update(queued.task.id).digest("hex").slice(0, 27)}`;
+  assert.equal(api.sendCalls[0].msgid, `${baseMsgId}_1`);
+  assert.deepEqual(api.imageSendCalls.map((item) => item.msgid), [`${baseMsgId}_2`, `${baseMsgId}_3`]);
+  assert.ok(
+    [api.sendCalls[0], ...api.imageSendCalls]
+      .every((item) => Buffer.byteLength(item.msgid, "utf8") <= 32),
+  );
   const attempt = localStore.getLatestSendAttempt(queued.task.id, { adapter: "wechat_work_kf" });
   assert.equal(attempt.status, "sent");
   assert.equal(attempt.metadata.apiMsgIds.length, 3);

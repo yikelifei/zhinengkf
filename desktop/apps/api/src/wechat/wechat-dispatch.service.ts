@@ -36,6 +36,13 @@ import {
 } from "./wechat-send-adapter.service";
 import { WechatPersistence } from "./wechat-persistence";
 
+const WECHAT_WORK_MSGID_BASE_LENGTH = 30;
+
+function createWechatWorkMsgId(sendTaskId: string) {
+  const digest = createHash("sha256").update(String(sendTaskId)).digest("hex");
+  return `kf_${digest.slice(0, WECHAT_WORK_MSGID_BASE_LENGTH - 3)}`;
+}
+
 const {
   buildConversationManualLockTransition,
   buildAgentReplyDraft,
@@ -4397,7 +4404,7 @@ export class WechatDispatchService {
     });
     const attemptNumber = this.localStore.listSendAttempts({ sendTaskId: task.id, limit: 300 })
       .filter((attempt: any) => attempt.adapter === "wechat_work_kf").length;
-    const wechatWorkMsgId = `kf_${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const wechatWorkMsgId = createWechatWorkMsgId(task.id);
     try {
       if (!binding) throw new Error("wechat work mapping disappeared after send guard");
       const response = await this.sendAdapter.deliverWechatWorkKf(task, binding, wechatWorkMsgId);
@@ -4541,7 +4548,7 @@ export class WechatDispatchService {
     });
     const attempts = await this.persistence.listSendAttempts({ sendTaskId: task.id, limit: 300 });
     const attemptNumber = attempts.filter((attempt: any) => attempt.adapter === "wechat_work_kf").length;
-    const wechatWorkMsgId = `kf_${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const wechatWorkMsgId = createWechatWorkMsgId(task.id);
     let acceptedApiMsgIds: string[] = [];
     try {
       if (!binding) throw new Error("wechat work mapping disappeared after send guard");
