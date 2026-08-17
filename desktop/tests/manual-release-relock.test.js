@@ -2,6 +2,10 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { installIsolatedAppConfigEnv } = require("./isolated-app-config-env");
+
+const isolatedConfig = installIsolatedAppConfigEnv("smart-kefu-release-relock-");
+test.after(() => isolatedConfig.cleanup());
 
 require("reflect-metadata");
 require("ts-node").register({
@@ -13,6 +17,15 @@ const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.s
 const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
 const { ReviewsService } = require("../apps/api/src/reviews/reviews.service");
+
+function localCandidateImages(jobId = "design_1") {
+  return [1, 2, 3, 4].map((position) => ({
+    id: `image_${position}`,
+    imageId: `candidate_${position}`,
+    position,
+    localPath: `C:\\storage\\design-jobs\\${jobId}\\candidate_${position}.png`,
+  }));
+}
 
 test("approved high-value budget design job stays in manual review after image approval", async () => {
   const reviewLogs = [];
@@ -479,14 +492,7 @@ test("manual-approved design image send relocks conversation when queueing fails
     wechatAccountId: "wechat_1",
     customerId: "customer_1",
     conversationId: "conversation_1",
-    images: [
-      {
-        id: "image_1",
-        imageId: "candidate_1",
-        position: 1,
-        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
-      },
-    ],
+    images: localCandidateImages(),
   };
   const service = new DesignJobsService(
     {},
@@ -616,14 +622,7 @@ test("design image send refuses to release manual lock without explicit manual r
         wechatAccountId: "wechat_1",
         customerId: "customer_1",
         conversationId: "conversation_1",
-        images: [
-          {
-            id: "image_1",
-            imageId: "candidate_1",
-            position: 1,
-            localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
-          },
-        ],
+        images: localCandidateImages(),
       }),
     },
     { create: async () => ({}) },
@@ -659,14 +658,7 @@ test("automatic design image send refuses high-value budget before queueing", as
     wechatAccountId: "wechat_1",
     customerId: "customer_1",
     conversationId: "conversation_1",
-    images: [
-      {
-        id: "image_1",
-        imageId: "candidate_1",
-        position: 1,
-        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
-      },
-    ],
+    images: localCandidateImages(),
   };
   const service = new DesignJobsService(
     {},
@@ -706,14 +698,7 @@ test("manual-approved design image send writes review log with send task id", as
     wechatAccountId: "wechat_1",
     customerId: "customer_1",
     conversationId: "conversation_1",
-    images: [
-      {
-        id: "image_1",
-        imageId: "candidate_1",
-        position: 1,
-        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
-      },
-    ],
+    images: localCandidateImages(),
   };
   const service = new DesignJobsService(
     {},
@@ -1172,11 +1157,19 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   };
   let quoteRecord = quote;
   let orderRecord = null;
+  const paymentEvents = [];
   const localStore = {
     getQuoteDraft: () => quoteRecord,
     updateQuoteDraft: (id, patch) => {
       quoteRecord = { ...quoteRecord, id, ...patch };
       return quoteRecord;
+    },
+    recordPaymentEvent: (payload) => {
+      const existing = paymentEvents.find((event) => event.idempotencyKey === payload.idempotencyKey);
+      if (existing) return existing;
+      const event = { id: `payment_${paymentEvents.length + 1}`, ...payload, createdAt: new Date().toISOString() };
+      paymentEvents.push(event);
+      return event;
     },
     createReviewLog: (payload) => {
       reviewLogs.push(payload);
@@ -1229,6 +1222,9 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   const result = await service.verifyPaymentProofAndQueueConfirmation("quote_1", {
     operationKey: "test-manual-payment-proof-confirmation-1",
     paymentStatus: "deposit_paid",
+    amountCny: 9000,
+    method: "bank_transfer",
+    proofReference: "payment-proof-quote-1",
     owner: "Alice",
     expectedWechatAccountId: "wechat_1",
     expectedConversationId: "conversation_1",
@@ -1238,6 +1234,9 @@ test("verified quote payment proof creates confirmed order and queues safe confi
   assert.equal(result.quote.status, "accepted");
   assert.equal(result.orderDraft.status, "confirmed");
   assert.equal(result.orderDraft.paymentStatus, "deposit_paid");
+  assert.equal(result.paymentEvent.id, "payment_1");
+  assert.equal(paymentEvents[0].paymentStatus, "deposit_paid");
+  assert.equal(paymentEvents[0].idempotencyKey, "test-manual-payment-proof-confirmation-1:payment-event");
   assert.equal(result.sendTask.status, "queued");
   assert.deepEqual(
     locks.map((item) => ({ conversationId: item.conversationId, locked: item.payload.locked, reason: item.payload.reason })),
@@ -1285,11 +1284,19 @@ test("verified high-value payment proof keeps manual handoff instead of queueing
   };
   let quoteRecord = quote;
   let orderRecord = null;
+  const paymentEvents = [];
   const localStore = {
     getQuoteDraft: () => quoteRecord,
     updateQuoteDraft: (id, patch) => {
       quoteRecord = { ...quoteRecord, id, ...patch };
       return quoteRecord;
+    },
+    recordPaymentEvent: (payload) => {
+      const existing = paymentEvents.find((event) => event.idempotencyKey === payload.idempotencyKey);
+      if (existing) return existing;
+      const event = { id: `payment_high_${paymentEvents.length + 1}`, ...payload, createdAt: new Date().toISOString() };
+      paymentEvents.push(event);
+      return event;
     },
     createReviewLog: (payload) => {
       reviewLogs.push(payload);
@@ -1339,6 +1346,9 @@ test("verified high-value payment proof keeps manual handoff instead of queueing
   const result = await service.verifyPaymentProofAndQueueConfirmation("quote_high_1", {
     operationKey: "test-manual-high-value-payment-proof-1",
     paymentStatus: "paid",
+    amountCny: 18000,
+    method: "bank_transfer",
+    proofReference: "payment-proof-high-1",
     owner: "Alice",
     expectedWechatAccountId: "wechat_1",
     expectedConversationId: "conversation_1",
@@ -1348,6 +1358,9 @@ test("verified high-value payment proof keeps manual handoff instead of queueing
   assert.equal(result.quote.status, "accepted");
   assert.equal(result.orderDraft.status, "confirmed");
   assert.equal(result.orderDraft.paymentStatus, "paid");
+  assert.equal(result.paymentEvent.id, "payment_high_1");
+  assert.equal(paymentEvents[0].paymentStatus, "paid");
+  assert.equal(paymentEvents[0].idempotencyKey, "test-manual-high-value-payment-proof-1:payment-event");
   assert.equal(result.sendTask, null);
   assert.match(result.message, /高价值订单付款已核验/);
   assert.deepEqual(

@@ -9,7 +9,6 @@ import styles from "./integration-pages.module.css";
 import { useAsyncResource } from "./use-async-resource";
 
 const CHANNEL_DESTINATIONS: Partial<Record<WechatChannelKey, { href: string; label: string }>> = {
-  personal_wechat: { href: "/integrations/personal-wechat/instances", label: "查看个人微信实例" },
   work_wechat: { href: "/integrations/wechat-work", label: "进入企业微信预检" },
 };
 
@@ -18,12 +17,21 @@ export function ChannelsStatusPage() {
     loadWechatChannelStatus,
     "微信通道状态读取失败",
   );
+  const enterpriseChannels = status?.channels.filter((channel) => channel.key === "work_wechat") || [];
+  const enterpriseSummary = status
+    ? {
+        total: enterpriseChannels.length,
+        ready: enterpriseChannels.filter((channel) => channel.ready).length,
+        needsConfig: enterpriseChannels.filter((channel) => channel.status === "needs_config").length,
+        degraded: enterpriseChannels.filter((channel) => ["needs_runtime", "needs_send_adapter"].includes(channel.status)).length,
+      }
+    : null;
 
   return (
     <FeaturePage
       id="integration-channels-status-page"
       title="接入通道状态"
-      description="只负责汇总个人微信、企业微信和小程序的真实状态，并导航到各自操作页。"
+      description="只汇总企业微信官方客服通道的真实状态，并导航到企业微信预检和配置页面。"
       icon={<Network size={20} />}
       busy={busy}
       actions={(
@@ -41,16 +49,16 @@ export function ChannelsStatusPage() {
       {error ? <FeatureNotice tone="error" title="通道状态读取失败">{error}</FeatureNotice> : null}
       {busy && !status ? <LoadingState label="正在读取通道状态" /> : null}
       {!busy && !status ? <EmptyState title="暂无通道状态" detail="页面不会用演示数据代替真实结果，请先恢复本机 API。" /> : null}
-      {status ? (
+      {enterpriseSummary ? (
         <>
           <dl className={styles.summaryGrid} aria-label="通道状态摘要">
-            <Summary label="通道总数" value={status.summary.total} />
-            <Summary label="已就绪" value={status.summary.ready} />
-            <Summary label="待配置" value={status.summary.needsConfig} />
-            <Summary label="异常或降级" value={status.summary.degraded} />
+            <Summary label="通道总数" value={enterpriseSummary.total} />
+            <Summary label="已就绪" value={enterpriseSummary.ready} />
+            <Summary label="待配置" value={enterpriseSummary.needsConfig} />
+            <Summary label="异常或降级" value={enterpriseSummary.degraded} />
           </dl>
           <div className={styles.channelList} aria-label="微信通道列表">
-            {status.channels.map((channel) => (
+            {enterpriseChannels.map((channel) => (
               <article className={styles.channelRow} key={channel.key}>
                 <div className={styles.channelIdentity}>
                   <div><h2>{channel.label}</h2><p>{channel.description}</p></div>

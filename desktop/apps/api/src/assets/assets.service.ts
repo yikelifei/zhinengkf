@@ -5,6 +5,7 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { createDemoPngBase64 } from "../shared/demo-png";
+import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { StorageService } from "../storage/storage.service";
 import { UploadAssetPayload } from "./assets.types";
@@ -64,6 +65,7 @@ export class AssetsService {
       data: {
         ownerType: record.ownerType,
         ownerId: record.ownerId,
+        role: record.role,
         fileName: record.fileName,
         mimeType: record.mimeType,
         localPath: record.localPath,
@@ -78,6 +80,7 @@ export class AssetsService {
   }
 
   async createDemoCustomerLogo(customerId: string, expected: ExpectedIdentityPayload = {}) {
+    assertDemoDataMutationAllowed("demo customer logo");
     return this.upload({
       ownerType: "customer",
       ownerId: customerId,
@@ -93,6 +96,31 @@ export class AssetsService {
   async readLocalAsset(localPath: string, expected: ExpectedIdentityPayload = {}) {
     const canonicalLocalPath = await this.resolveCanonicalLocalAssetPath(localPath);
     await this.assertLocalAssetReadIdentity(canonicalLocalPath, expected);
+    return this.storage.readLocalAsset(canonicalLocalPath);
+  }
+
+  async readLocalAssetById(assetId: string, expected: ExpectedIdentityPayload = {}) {
+    const id = String(assetId || "").trim();
+    if (!id) throw new BadRequestException("asset id is required");
+    const asset = await this.findDesignAssetById(id);
+    if (!asset) throw new BadRequestException(`asset not found: ${id}`);
+    const normalized = this.normalizeLocalAssetPath(asset.localPath);
+    const scopedToCustomer =
+      this.isCustomerAssetPath(normalized) ||
+      asset.ownerType === "customer" ||
+      Boolean(asset.wechatAccountId || asset.conversationId || asset.customerId);
+    if (scopedToCustomer) {
+      const missing = [
+        !expected.expectedWechatAccountId ? "expectedWechatAccountId" : "",
+        !expected.expectedConversationId ? "expectedConversationId" : "",
+        !expected.expectedCustomerId ? "expectedCustomerId" : "",
+      ].filter(Boolean);
+      if (missing.length) {
+        throw new BadRequestException(`local customer asset requires conversation identity: ${missing.join(", ")}`);
+      }
+      assertExpectedIdentity(asset, expected, "local asset");
+    }
+    const canonicalLocalPath = await this.resolveCanonicalLocalAssetPath(asset.localPath);
     return this.storage.readLocalAsset(canonicalLocalPath);
   }
 
@@ -253,6 +281,11 @@ export class AssetsService {
       throw new ForbiddenException("local asset path resolves to ambiguous persisted identities");
     }
     return matches[0] || null;
+  }
+
+  private async findDesignAssetById(assetId: string) {
+    if (appConfig.useLocalStore) return this.localStore.getDesignAsset(assetId);
+    return (this.prisma as any).designAsset.findUnique({ where: { id: assetId } });
   }
 
   private normalizeLocalAssetPath(value?: string | null) {

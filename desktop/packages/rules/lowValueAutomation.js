@@ -1,6 +1,6 @@
 "use strict";
 
-const { inspectBundleAutomationReadiness } = require("./designWorkflow");
+const { CUSTOMER_DESIGN_CANDIDATE_COUNT, inspectBundleAutomationReadiness } = require("./designWorkflow");
 const { isHighValueBudget } = require("./budget");
 
 function evaluateLowValueDesignImageSend(job = {}, options = {}) {
@@ -14,12 +14,20 @@ function evaluateLowValueDesignImageSend(job = {}, options = {}) {
   if (!job.wechatAccountId || !job.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
-  const automation = inspectBundleAutomationReadiness(job.bundle || {});
-  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  if (String(job.designType || "") !== "zhenxi_image") {
+    const automation = inspectBundleAutomationReadiness(job.bundle || {});
+    if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  }
 
   const images = Array.isArray(job.images) ? job.images : [];
   const sendableImages = images.filter((image) => image.localPath);
   if (!sendableImages.length) return skip("missing_images", ["images"]);
+  if (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) {
+    return skip("candidate_count_mismatch", [`images:${CUSTOMER_DESIGN_CANDIDATE_COUNT}`]);
+  }
+  if (sendableImages.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) {
+    return skip("missing_images", ["images"]);
+  }
 
   return {
     ok: true,
@@ -74,10 +82,10 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   const unitPrice = Number(quote.unitPrice || 0);
   const profit = Number(quote.profit);
   const paymentStatus = quote.paymentStatus || "unpaid";
-  const readyStatuses = new Set(["sent", "accepted"]);
+  const readyStatuses = new Set(["accepted"]);
   const readyPayments = new Set(["deposit_paid", "paid"]);
 
-  if (!readyStatuses.has(quote.status) && !readyPayments.has(paymentStatus)) {
+  if (!readyStatuses.has(quote.status)) {
     return skip("status_not_ready", ["status"]);
   }
   if (!quote.selectedImageId) return skip("missing_selected_image", ["selectedImageId"]);
@@ -88,6 +96,9 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   }
   if (designJob.conversation?.manualLocked || designJob.manualLocked) {
     return skip("conversation_manual_locked", ["manualLocked"]);
+  }
+  if (!readyPayments.has(paymentStatus)) {
+    return skip("payment_not_ready", ["paymentStatus"]);
   }
   if (!designJob.wechatAccountId || !designJob.conversationId) {
     return skip("missing_order_target", ["wechatAccountId", "conversationId"]);

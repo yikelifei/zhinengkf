@@ -41,6 +41,7 @@ function emptyStoreData(overrides = {}) {
     sendAttempts: [],
     quoteDrafts: [],
     orderDrafts: [],
+    paymentEvents: [],
     reviewLogs: [],
     agents: [],
     agentSkills: [],
@@ -343,6 +344,54 @@ test("low-value customer image selection flows to quote send queue and order dra
       errorMessage: "",
     });
 
+    const pendingOrderDraft = await orders.scanLowValueAutoOrderDrafts({
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    });
+
+    assert.equal(pendingOrderDraft.created.length, 0);
+    assert.equal(pendingOrderDraft.failed.length, 0);
+    assert.equal(pendingOrderDraft.skipped.length, 1);
+    assert.equal(pendingOrderDraft.skipped[0].quoteDraftId, queuedQuote.id);
+    assert.equal(pendingOrderDraft.skipped[0].reason, "status_not_ready");
+
+    store.updateQuoteDraft(queuedQuote.id, {
+      status: "accepted",
+      customerNotes: "accepted in local automation test before payment is verified",
+    });
+
+    const unpaidOrderDraft = await orders.scanLowValueAutoOrderDrafts({
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+    });
+
+    assert.equal(unpaidOrderDraft.created.length, 0);
+    assert.equal(unpaidOrderDraft.failed.length, 0);
+    assert.equal(unpaidOrderDraft.skipped.length, 1);
+    assert.equal(unpaidOrderDraft.skipped[0].quoteDraftId, queuedQuote.id);
+    assert.equal(unpaidOrderDraft.skipped[0].reason, "payment_not_ready");
+
+    store.updateQuoteDraft(queuedQuote.id, {
+      status: "accepted",
+      paymentStatus: "deposit_paid",
+      customerNotes: "accepted and deposit verified in local automation test",
+    });
+    store.recordPaymentEvent({
+      quoteDraftId: queuedQuote.id,
+      customerId: "customer_1",
+      conversationId: "conversation_1",
+      wechatAccountId: "wechat_1",
+      paymentStatus: "deposit_paid",
+      amountCny: 1000,
+      method: "bank_transfer",
+      proofReference: "automation-flow-deposit-proof",
+      reviewer: "测试客服",
+      source: "manual_payment_proof",
+      idempotencyKey: "automation-flow-deposit-proof:payment-event",
+    });
+
     const orderDraft = await orders.scanLowValueAutoOrderDrafts({
       wechatAccountId: "wechat_1",
       conversationId: "conversation_1",
@@ -359,59 +408,10 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(order.conversationId, "conversation_1");
     assert.equal(order.customerId, "customer_1");
     assert.equal(order.selectedImageId, "image_2");
-    assert.equal(order.status, "draft");
-    assert.equal(order.paymentStatus, "unpaid");
+    assert.equal(order.status, "confirmed");
+    assert.equal(order.paymentStatus, "deposit_paid");
     assert.equal(order.totalPrice, 2800);
     assert.equal(order.profit, 1440);
-
-    const unacceptedConfirmation = await wechatDispatch.scanLowValueOrderConfirmations({
-      wechatAccountId: "wechat_1",
-      conversationId: "conversation_1",
-      customerId: "customer_1",
-    });
-
-    assert.equal(unacceptedConfirmation.queued.length, 0);
-    assert.equal(unacceptedConfirmation.failed.length, 0);
-    assert.equal(unacceptedConfirmation.skipped.length, 1);
-    assert.equal(unacceptedConfirmation.skipped[0].orderDraftId, order.id);
-    assert.equal(unacceptedConfirmation.skipped[0].reason, "quote_not_accepted");
-
-    store.updateQuoteDraft(queuedQuote.id, {
-      status: "accepted",
-      customerNotes: "测试中模拟客户已确认报价但还没有付款。",
-    });
-
-    const unpaidConfirmation = await wechatDispatch.scanLowValueOrderConfirmations({
-      wechatAccountId: "wechat_1",
-      conversationId: "conversation_1",
-      customerId: "customer_1",
-    });
-
-    assert.equal(unpaidConfirmation.queued.length, 0);
-    assert.equal(unpaidConfirmation.failed.length, 0);
-    assert.equal(unpaidConfirmation.skipped.length, 1);
-    assert.equal(unpaidConfirmation.skipped[0].orderDraftId, order.id);
-    assert.equal(unpaidConfirmation.skipped[0].reason, "payment_not_ready");
-
-    await assert.rejects(
-      () =>
-        orders.update(order.id, {
-          expectedWechatAccountId: "wechat_1",
-          expectedConversationId: "conversation_1",
-          expectedCustomerId: "customer_1",
-          status: "processing",
-          owner: "测试客服",
-        }),
-      /付款|定金|全款/,
-    );
-
-    await orders.recordVerifiedPayment(order.id, {
-      expectedWechatAccountId: "wechat_1",
-      expectedConversationId: "conversation_1",
-      expectedCustomerId: "customer_1",
-      paymentStatus: "deposit_paid",
-      owner: "测试客服",
-    });
 
     const confirmation = await wechatDispatch.scanLowValueOrderConfirmations({
       wechatAccountId: "wechat_1",
@@ -473,6 +473,8 @@ test("low-value customer image selection flows to quote send queue and order dra
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
       status: "processing",
+      productionStatus: "in_production",
+      productionDueAt: "2026-08-06 18:00",
       owner: "测试客服",
     });
 
@@ -510,7 +512,7 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.match(productionSendTask.payload.text, /礼盒、茶叶/);
     assert.match(productionSendTask.payload.text, /数量 20 份/);
     assert.match(productionSendTask.payload.text, /金额 2800 元/);
-    assert.match(productionSendTask.payload.text, /备货|排产/);
+    assert.match(productionSendTask.payload.text, /生产中|预计完成/);
 
     createPassingWechatWindowSnapshot(store, "好的，有进度麻烦同步");
     const productionSend = await wechatDispatch.processSafeSendQueue({
@@ -536,11 +538,49 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(duplicateProductionFollowup.skipped[0].reason, "already_queued");
     assert.deepEqual(duplicateProductionFollowup.skipped[0].missing, ["productionFollowupSendTask"]);
 
-    await orders.recordVerifiedPayment(order.id, {
+    const fullPayment = await quotes.verifyPaymentProofAndQueueConfirmation(queuedQuote.id, {
+      operationKey: "low-value-flow-full-payment-proof-1",
       expectedWechatAccountId: "wechat_1",
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
       paymentStatus: "paid",
+      amountCny: 2800,
+      method: "wechat_pay",
+      proofReference: "proof-paid-001",
+      owner: "测试客服",
+    });
+    assert.equal(fullPayment.orderDraft.id, order.id);
+    assert.equal(fullPayment.orderDraft.status, "processing");
+    assert.equal(fullPayment.orderDraft.productionStatus, "in_production");
+    assert.equal(fullPayment.orderDraft.paymentStatus, "paid");
+    assert.equal(fullPayment.paymentEvent.orderDraftId, order.id);
+    assert.equal(fullPayment.paymentEvent.quoteDraftId, queuedQuote.id);
+    assert.equal(fullPayment.paymentEvent.paymentStatus, "paid");
+    assert.equal(fullPayment.paymentEvent.amountCny, 2800);
+    assert.equal(fullPayment.sendTask.id, confirmationSendTask.id);
+    assert.equal(fullPayment.sendTask.status, "sent");
+    await orders.update(order.id, {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+      productionStatus: "quality_check",
+      owner: "测试客服",
+    });
+    await orders.update(order.id, {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+      productionStatus: "ready_to_ship",
+      owner: "测试客服",
+    });
+    await orders.update(order.id, {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+      productionStatus: "shipped",
+      carrier: "SF Express",
+      trackingNo: "SF202608060001",
+      shippedAt: "2026-08-06 20:00",
       owner: "测试客服",
     });
     await orders.update(order.id, {
@@ -548,6 +588,11 @@ test("low-value customer image selection flows to quote send queue and order dra
       expectedConversationId: "conversation_1",
       expectedCustomerId: "customer_1",
       status: "fulfilled",
+      productionStatus: "delivered",
+      carrier: "SF Express",
+      trackingNo: "SF202608060001",
+      shippedAt: "2026-08-06 20:00",
+      deliveredAt: "2026-08-07 10:00",
       owner: "测试客服",
     });
 
@@ -609,6 +654,32 @@ test("low-value customer image selection flows to quote send queue and order dra
     assert.equal(duplicateDeliveryFollowup.skipped.length, 1);
     assert.equal(duplicateDeliveryFollowup.skipped[0].reason, "already_queued");
     assert.deepEqual(duplicateDeliveryFollowup.skipped[0].missing, ["deliveryFollowupSendTask"]);
+
+    const completedOrder = store.getOrderDraft(order.id);
+    assert.ok(completedOrder);
+    assert.equal(completedOrder.status, "fulfilled");
+    assert.equal(completedOrder.productionStatus, "delivered");
+    assert.equal(completedOrder.paymentStatus, "paid");
+    assert.equal(completedOrder.confirmationSendTask.status, "sent");
+    assert.equal(completedOrder.productionFollowupSendTask.status, "sent");
+    assert.equal(completedOrder.deliveryFollowupSendTask.status, "sent");
+    assert.equal(completedOrder.carrier, "SF Express");
+    assert.equal(completedOrder.trackingNo, "SF202608060001");
+    assert.equal(completedOrder.shippedAt, "2026-08-06 20:00");
+    assert.equal(completedOrder.deliveredAt, "2026-08-07 10:00");
+
+    const finalPaymentEvents = store.listPaymentEvents({
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+      customerId: "customer_1",
+      orderDraftId: order.id,
+    });
+    assert.equal(finalPaymentEvents.length, 1);
+    assert.equal(finalPaymentEvents[0].id, fullPayment.paymentEvent.id);
+    assert.equal(finalPaymentEvents[0].paymentStatus, "paid");
+    assert.equal(completedOrder.paymentEvents.length, 2);
+    assert.ok(completedOrder.paymentEvents.some((event) => event.id === fullPayment.paymentEvent.id && event.paymentStatus === "paid"));
+    assert.ok(completedOrder.paymentEvents.some((event) => event.proofReference === "automation-flow-deposit-proof" && event.paymentStatus === "deposit_paid"));
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
     appConfig.wechatBridgeOutboxDir = previousBridgeConfig.outbox;

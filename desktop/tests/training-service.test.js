@@ -10,6 +10,13 @@ require("ts-node").register({
 });
 
 const { TrainingService } = require("../apps/api/src/training/training.service");
+const { appConfig } = require("../apps/api/src/shared/app-config");
+
+const previousUseLocalStore = appConfig.useLocalStore;
+appConfig.useLocalStore = true;
+test.after(() => {
+  appConfig.useLocalStore = previousUseLocalStore;
+});
 
 function createTrainingService(samples) {
   const calls = [];
@@ -250,6 +257,63 @@ test("passes identity filters when listing training samples", () => {
       customerId: "customer_a",
     });
   });
+
+test("gets a training sample by id even when it is beyond the UI list cap", async () => {
+  const bulkSamples = Array.from({ length: 201 }, (_, index) => {
+    const number = index + 1;
+    return {
+      id: `sample_${number}`,
+      agentId: "agent_gift",
+      agentKey: "gift_design",
+      status: "review",
+      sourceType: "chat_import",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+      scene: "gift_design",
+      customerText: `customer question ${number}`,
+      idealReply: `ideal reply ${number}`,
+      score: 92,
+      quality: {
+        level: "review",
+        trainable: false,
+        flags: ["manual_review_required"],
+        usage: { routeMemory: false, replySkill: false },
+      },
+    };
+  });
+  const { service } = createTrainingService(bulkSamples);
+
+  assert.equal(
+    service.listSamples({
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "customer_a",
+      limit: 200,
+    }).some((sample) => sample.id === "sample_201"),
+    false,
+  );
+
+  const sample = await service.getSample("sample_201", {
+    agentId: "agent_gift",
+    wechatAccountId: "wechat_a",
+    conversationId: "conv_a",
+    customerId: "customer_a",
+  });
+
+  assert.equal(sample.id, "sample_201");
+  assert.equal(sample.customerText, "customer question 201");
+  await assert.rejects(
+    () => service.getSample("sample_201", {
+      agentId: "agent_gift",
+      wechatAccountId: "wechat_a",
+      conversationId: "conv_a",
+      customerId: "other_customer",
+    }),
+    /training sample not found: sample_201/,
+  );
+});
 
   test("filters training samples by chat import id after identity filtering", () => {
     const { service, calls } = createTrainingService([

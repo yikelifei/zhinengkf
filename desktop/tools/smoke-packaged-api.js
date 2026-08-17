@@ -55,8 +55,8 @@ async function main() {
     path.join(readOnlyRoot, "packages", "rules", "index.js"),
     path.join(readOnlyRoot, "config", "settings.yaml"),
     path.join(readOnlyRoot, "node_modules", ".prisma", "client", "default.js"),
-    path.join(readOnlyRoot, "node_modules", "sharp", "lib", "index.js"),
-    path.join(readOnlyRoot, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"),
+    path.join(readOnlyRoot, "node_modules", "sharp", "dist", "index.cjs"),
+    path.join(readOnlyRoot, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64-0.35.3.node"),
     path.join(resourcesDir, "services", "api", "shared", "image-fingerprint.js"),
   ];
   for (const required of requiredFiles) {
@@ -83,6 +83,10 @@ async function main() {
       path.join(resourcesDir, "app.asar", "node_modules"),
       path.join(resourcesDir, "app.asar.unpacked", "node_modules"),
     ].join(path.delimiter),
+    SMART_KEFU_RUNTIME_TARGET: "desktop",
+    LOW_VALUE_AUTOMATION_MODE: "interval",
+    LOW_VALUE_AUTOMATION_RUN_ON_START: "false",
+    LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
   }, smokeRoot);
 
   const processes = [];
@@ -156,7 +160,7 @@ async function main() {
     const evidence = processes.map((item) => `${item.serviceName}: stdout=${redact(item.stdoutText)} stderr=${redact(item.stderrText)}`).join("; ");
     throw new Error(`${error.message}; ${evidence}`);
   } finally {
-    await Promise.all(processes.reverse().map(stopChild));
+    for (const child of processes.reverse()) await stopChild(child);
     cleanupPrivateTemp(smokeTemp);
   }
 }
@@ -230,7 +234,31 @@ function createSmokeWorkspace() {
 
 async function stopChild(child) {
   if (child.exitCode !== null) return;
-  await terminateProcessTree(child);
+  try {
+    await terminateProcessTree(child);
+  } catch (error) {
+    try {
+      if (child.kill() && await waitForChildExit(child, 3000)) return;
+    } catch {}
+    throw error;
+  }
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(child.exitCode !== null), timeoutMs);
+    child.once("exit", onExit);
+  });
 }
 
 function spawnService(name, entry, cwd, env) {

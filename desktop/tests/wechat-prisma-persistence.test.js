@@ -14,6 +14,7 @@ process.env.LOCAL_STORE_FILE = path.join(tempRoot, "local-store.json");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
+const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 
 test("local-json and Prisma expose the same account/conversation identity shape", async (t) => {
   t.after(() => {
@@ -80,6 +81,9 @@ test("Prisma WeChat persistence keeps idempotency, indexes, transactions and swi
   assert.match(source, /findWechatWorkSendAttemptByMsgId/);
   assert.match(dispatch, /validatePrismaWechatWorkKfSendTask/);
   assert.match(dispatch, /completePrismaWechatWorkKfSend/);
+  assert.match(dispatch, /createPrismaDesignDraftFromInbound/);
+  assert.match(dispatch, /outputCount:\s*CUSTOMER_DESIGN_CANDIDATE_COUNT/);
+  assert.match(dispatch, /designJobId:\s*designJob\?\.id/);
   assert.match(workService, /new WechatPersistence\(prisma, localStore\)/);
   assert.doesNotMatch(workService, /Prisma mode is not implemented for this integration/);
   assert.match(importer, /prisma\.\$transaction\(actions\.slice/);
@@ -89,6 +93,62 @@ test("Prisma WeChat persistence keeps idempotency, indexes, transactions and swi
   assert.doesNotMatch(readStateMigration, /DATETIME/);
   assert.match(pkg.scripts["prisma:wechat:import"], /migrate-wechat-local-json-to-prisma/);
   assert.match(pkg.scripts["prisma:migrate:deploy"], /prisma migrate deploy/);
+});
+
+test("Prisma inbound design draft is lease-fenced and fixed to four candidates", async () => {
+  let created = null;
+  let fenceQuery = null;
+  const tx = {
+    inboundMessageOperation: {
+      updateMany: async (query) => {
+        fenceQuery = query;
+        return { count: 1 };
+      },
+    },
+    designJob: {
+      findUnique: async () => created,
+      create: async ({ data }) => {
+        created = { id: "design_prisma_inbound_1", ...data };
+        return created;
+      },
+    },
+  };
+  const prisma = {
+    $transaction: async (work) => work(tx),
+    designJob: { findUnique: async () => created },
+  };
+  const service = new WechatDispatchService(prisma, {}, {}, {}, {});
+
+  const result = await service.createPrismaDesignDraftFromInbound({
+    operationId: "inbound_operation_1",
+    claimToken: "claim_1",
+    messageId: "message_1",
+    conversation: {
+      id: "conversation_1",
+      customerId: "customer_1",
+      wechatAccountId: "work_wechat_1",
+    },
+    route: {
+      budget: { mode: "unit", amount: 120, quantity: 20 },
+      scene: "员工福利礼盒",
+    },
+    assetIds: ["asset_logo_1"],
+    bundleRecommendation: {
+      items: [{ type: "gift_box", skuCode: "BOX-1" }],
+      automation: { ready: true },
+    },
+    customerText: "做一套员工福利礼盒效果图",
+  });
+
+  assert.equal(result.outputCount, 4);
+  assert.equal(result.customerId, "customer_1");
+  assert.deepEqual(result.assets, { connect: [{ id: "asset_logo_1" }] });
+  assert.equal(result.requirements.useRealSkuImages, true);
+  assert.equal(result.requirements.requestOperation.key, result.requestId);
+  assert.match(result.requirements.requestOperation.fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(fenceQuery.where.id, "inbound_operation_1");
+  assert.equal(fenceQuery.where.claimToken, "claim_1");
+  assert.equal(fenceQuery.where.status, "processing");
 });
 
 test("Prisma sync idempotency only accepts explicit inbound terminal action-status pairs", async (t) => {

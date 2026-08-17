@@ -22,9 +22,9 @@ const OTHER_REVISION = "b".repeat(40);
 const NOW = "2026-07-20T12:00:00.000Z";
 const STAGING_RESULT_IDS = [
   "config.doctor", "config.environment", "config.database", "config.automation_queue", "config.api_access",
-  "config.wechat_work", "config.design_platform", "config.personal_wechat", "config.model_chain",
+  "config.wechat_work", "config.design_platform", "config.model_chain",
   "evidence.database_migrations", "evidence.api_health", "evidence.wechat_work", "evidence.design_platform",
-  "evidence.personal_wechat", "evidence.automation_queue",
+  "evidence.automation_queue",
 ];
 const RECOVERY_PREFIX_RESULTS = [
   "safety.source", "safety.target", "safety.distinct", "safety.isolated_target", "safety.confirmation",
@@ -37,7 +37,8 @@ const WINDOWS_CHECKS = [
   "packaged placeholder-only AI settings", "packaged Prisma client", "packaged generated Prisma client",
   "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "NSIS installer PE format", "packaged API smoke",
   "asar entry /apps/electron/main.js", "asar entry /apps/electron/preload.js",
-  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json", "asar entry /.package-provenance.json",
+  "asar entry /apps/electron/packaged-runtime.js", "asar entry /apps/electron/desktop-session-refresh.js",
+  "asar entry /package.json", "asar entry /.package-provenance.json",
   "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ];
 let cachedAsarFixture = null;
@@ -207,8 +208,8 @@ function createWindowsPackageFixture(root) {
     "services/runtime-root/config/settings.yaml",
     "services/runtime-root/node_modules/@prisma/client/default.js",
     "services/runtime-root/node_modules/.prisma/client/default.js",
-    "services/runtime-root/node_modules/sharp/lib/index.js",
-    "services/runtime-root/node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64.node",
+    "services/runtime-root/node_modules/sharp/dist/index.cjs",
+    "services/runtime-root/node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64-0.35.3.node",
   ];
   for (const relative of requiredResources) writeArtifact(resources, relative, "fixture\n");
   writeArtifact(root, "verification/packaged-api-smoke.json", `${JSON.stringify({ status: "PASS" })}\n`);
@@ -217,6 +218,7 @@ function createWindowsPackageFixture(root) {
   writeArtifact(asarSource, "apps/electron/main.js", "module.exports = {};\n");
   writeArtifact(asarSource, "apps/electron/preload.js", "module.exports = {};\n");
   writeArtifact(asarSource, "apps/electron/packaged-runtime.js", "module.exports = {};\n");
+  writeArtifact(asarSource, "apps/electron/desktop-session-refresh.js", "module.exports = {};\n");
   writeArtifact(asarSource, "package.json", `${JSON.stringify({ version: "0.1.0", main: "apps/electron/main.js" })}\n`);
   writeArtifact(asarSource, ".package-provenance.json", `${JSON.stringify({
     schemaVersion: "smart_kefu_package_provenance_v1",

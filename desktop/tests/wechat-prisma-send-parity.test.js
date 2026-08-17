@@ -34,7 +34,8 @@ test("Prisma queue honors retry due time, manual-reply exception and official We
   const queue = section(service, "private async processPrismaSafeSendQueue", "createDemoSendTask(");
   assert.match(queue, /manualLockBlocksTask[\s\S]*!isManualReplySendTask\(freshTask\)/);
   assert.match(queue, /wechatWorkNextRetryAt[\s\S]*wechat_work_retry_not_due/);
-  assert.match(queue, /seenAccounts[\s\S]*same_account_already_processed_this_cycle/);
+  assert.match(queue, /attemptedPerAccount[\s\S]*account_cycle_limit_reached/);
+  assert.match(queue, /roundRobinSendTasksByAccount/);
   assert.match(queue, /await this\.executeQueuedSend\(freshTask\.id/);
 
   const execute = section(service, "private async executePrismaSend", "private validateExistingSendTaskBinding");
@@ -193,7 +194,7 @@ test("official API accepted plus DB guard drift is unknown and never automatical
   assert.match(official, /deliveryState: "unknown"/);
   assert.match(official, /retrySafe: false/);
   assert.match(official, /acceptedMessageIds: apiMsgIds/);
-  assert.match(official, /automaticRetryBlocked: deliveryUnknown \|\| !deliveryFailure\.retrySafe/);
+  assert.match(official, /automaticRetryBlocked = retrySuppressed \|\| deliveryUnknown \|\| !deliveryFailure\.retrySafe/);
   assert.match(official, /!retryScheduled && !deliveryUnknown[\s\S]*buildPrismaLinkedTransition/);
 });
 

@@ -10,10 +10,16 @@ require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "C
 
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { ConversationOperationsService } = require("../apps/api/src/conversation-ops/conversation-operations.service");
+const { appConfig } = require("../apps/api/src/shared/app-config");
 
 function setup(t) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "conversation-operations-"));
-  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  t.after(() => {
+    appConfig.useLocalStore = previousUseLocalStore;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
   const localStore = new LocalStoreService();
   localStore.filePath = path.join(tempDir, "local-store.json");
   const service = new ConversationOperationsService(localStore);

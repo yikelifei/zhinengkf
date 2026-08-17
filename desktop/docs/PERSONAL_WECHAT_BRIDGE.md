@@ -1,5 +1,7 @@
 # 多个人微信账号安全桥接
 
+> 遗留文档：当前产品只交付企业微信官方客服通道。本手册不属于企业微信-only 客户交付、默认产品验收或预发布证据包；只有显式切换 legacy 产品模式并重新完成安全评审时才可参考。
+
 `tools/personal-wechat-bridge.js` 是现有 `windows_bridge` 出站协议的真实 Windows 操作端。它不创建第二套发送任务或 ACK 接口，仍然只消费 `.runtime/wechat-dispatch`，成功后把 `wechat_bridge_ack_v1` 写到 `.runtime/wechat-inbox`，再调用现有 `/api/wechat/bridge/inbox/scan`。
 
 ## 安全边界

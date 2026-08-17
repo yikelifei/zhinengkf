@@ -83,11 +83,11 @@ async function verifyWindowsPackage(options) {
   checkExists(checks, "packaged placeholder-only AI settings", path.join(resourcesDir, "services", "runtime-root", "config", "settings.yaml"), safeOutputRoot);
   checkExists(checks, "packaged Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@prisma", "client", "default.js"), safeOutputRoot);
   checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"), safeOutputRoot);
-  checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "lib", "index.js"), safeOutputRoot);
-  checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"), safeOutputRoot);
+  checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "dist", "index.cjs"), safeOutputRoot);
+  checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64-0.35.3.node"), safeOutputRoot);
   if (!options.directoryOnly) {
     checkExists(checks, "NSIS installer", installer, safeOutputRoot);
-    checkPortableExecutable(checks, "NSIS installer PE format", installer);
+    checkPortableExecutable(checks, "NSIS installer PE format", installer, ["x86", "x64"]);
   }
 
   const smokeReport = options.runtimeSmokeResult || (options.trustStoredSmokeReport === false
@@ -156,7 +156,14 @@ async function verifyWindowsPackage(options) {
 
 function verifyAsar(checks, asarPath, expectedVersion, repositoryState) {
   const entries = asar.listPackage(asarPath).map(normalizeArchivePath);
-  for (const required of ["/apps/electron/main.js", "/apps/electron/preload.js", "/apps/electron/packaged-runtime.js", "/package.json", "/.package-provenance.json"]) {
+  for (const required of [
+    "/apps/electron/main.js",
+    "/apps/electron/preload.js",
+    "/apps/electron/packaged-runtime.js",
+    "/apps/electron/desktop-session-refresh.js",
+    "/package.json",
+    "/.package-provenance.json",
+  ]) {
     checks.push({
       name: `asar entry ${required}`,
       status: entries.includes(required) ? "PASS" : "FAIL",
@@ -264,7 +271,7 @@ function checkExists(checks, name, target, safeRoot = null, expectedType = "file
   }
 }
 
-function checkPortableExecutable(checks, name, target) {
+function checkPortableExecutable(checks, name, target, allowedArchitectures = ["x64"]) {
   let result = { valid: false, architecture: "unknown" };
   try {
     result = inspectPeArchitecture(target);
@@ -273,7 +280,7 @@ function checkPortableExecutable(checks, name, target) {
   }
   checks.push({
     name,
-    status: result.valid && result.architecture === "x64" ? "PASS" : "FAIL",
+    status: result.valid && allowedArchitectures.includes(result.architecture) ? "PASS" : "FAIL",
     detail: result.valid ? `${path.basename(target)} is a ${result.architecture} PE executable.` : "missing or invalid Windows PE executable",
   });
 }
@@ -358,6 +365,7 @@ function writeReport(result, directory) {
 
 module.exports = {
   SCHEMA_VERSION,
+  checkPortableExecutable,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
   normalizeArchivePath,

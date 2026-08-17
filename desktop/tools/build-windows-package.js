@@ -32,6 +32,7 @@ function main() {
     ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "1",
     FORCE_WEB_CLEAN_BUILD: "1",
   });
+  runNode(["tools/prepare-packaged-runtime-dependencies.js"]);
   assertBuildInputs();
   const packageRepositoryState = requireCleanRepository();
   if (packageRepositoryState.revision !== initialRepositoryState.revision) {
@@ -103,10 +104,12 @@ function assertBuildInputs() {
   const required = [
     path.join(root, "dist", "apps", "api", "main.js"),
     path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js"),
+    path.join(root, ".package-runtime", "node_modules", "tslib", "tslib.js"),
+    path.join(root, ".package-runtime", "node_modules", "next", "dist", "server", "next.js"),
     path.join(root, "node_modules", ".prisma", "client", "default.js"),
     path.join(root, "packages", "rules", "index.js"),
-    path.join(root, "node_modules", "sharp", "lib", "index.js"),
-    path.join(root, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64.node"),
+    path.join(root, "node_modules", "sharp", "dist", "index.cjs"),
+    path.join(root, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64-0.35.3.node"),
     path.resolve(root, "..", "config", "settings.yaml"),
     path.join(root, "tools", "wechat-window-observer.js"),
   ];

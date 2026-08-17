@@ -265,7 +265,7 @@ test("reply draft does not apply private skills from another conversation", () =
 
   assert.deepEqual(
     draft.appliedSkills.map((skill) => skill.id),
-    ["skill_current"],
+    ["skill_current", "skill_builtin_xiaoshi_single_question"],
   );
   assert.equal(draft.appliedSkills[0].scope.label, "当前会话私有");
 });
@@ -305,7 +305,7 @@ test("reply draft ignores private skills when no conversation identity is availa
 
   assert.deepEqual(
     draft.appliedSkills.map((skill) => skill.id),
-    ["skill_global"],
+    ["skill_global", "skill_builtin_xiaoshi_single_question"],
   );
   assert.equal(draft.appliedSkills[0].scope.label, "全局 Skill");
 });
@@ -346,7 +346,10 @@ test("reply draft rejects skills with conflicting identity fields", () => {
     },
   );
 
-  assert.equal(draft.appliedSkills.length, 0);
+  assert.deepEqual(
+    draft.appliedSkills.map((skill) => skill.id),
+    ["skill_builtin_xiaoshi_single_question"],
+  );
 });
 
 test("reply draft respects computed scope on legacy private skills", () => {
@@ -403,7 +406,7 @@ test("reply draft respects computed scope on legacy private skills", () => {
 
   assert.deepEqual(
     draft.appliedSkills.map((skill) => skill.id),
-    ["skill_legacy_current"],
+    ["skill_legacy_current", "skill_builtin_xiaoshi_single_question"],
   );
   assert.equal(draft.appliedSkills[0].scope.label, "当前会话私有");
   assert.equal(draft.appliedSkills[0].scope.conversationId, "conversation_1");
@@ -444,7 +447,10 @@ test("reply draft blocks ambiguous mixed scope skills", () => {
     },
   );
 
-  assert.equal(draft.appliedSkills.length, 0);
+  assert.deepEqual(
+    draft.appliedSkills.map((skill) => skill.id),
+    ["skill_builtin_xiaoshi_single_question"],
+  );
 });
 
 test("direct knowledge matching applies identity guard before scoring", () => {

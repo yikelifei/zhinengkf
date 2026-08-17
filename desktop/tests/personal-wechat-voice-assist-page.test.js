@@ -20,10 +20,7 @@ const files = {
 };
 const combined = Object.values(files).join("\n");
 const routeManifest = fs.readFileSync(path.join(desktopRoot, "apps/web/src/app/route-manifest.ts"), "utf8");
-const routePage = fs.readFileSync(
-  path.join(desktopRoot, "apps/web/src/app/integrations/personal-wechat/voice-assist/page.tsx"),
-  "utf8",
-);
+const routePagePath = path.join(desktopRoot, "apps/web/src/app/integrations/personal-wechat/voice-assist/page.tsx");
 const controlPage = read("personal-wechat-control-page.tsx");
 const uiDocs = ["UI_ACCEPTANCE_MATRIX.md", "UI_MODULE_MAP.md"]
   .map((name) => fs.readFileSync(path.join(desktopRoot, "docs", name), "utf8"))
@@ -39,23 +36,26 @@ test("personal WeChat voice assist is an independent fail-closed feature", () =>
   assert.match(files.stages, /本页没有发送按钮/);
 });
 
-test("the production route honestly exposes an unavailable read-only capability", () => {
-  assert.match(routeManifest, /title: "语音辅助（未启用）"/);
-  assert.match(routeManifest, /primaryAction: "查看启用条件"/);
+test("the legacy production route is removed while Enterprise WeChat remains available", () => {
+  assert.doesNotMatch(routeManifest, /\/integrations\/personal-wechat/);
+  assert.match(routeManifest, /href: "\/integrations\/wechat-work\/flow"/);
+  assert.match(routeManifest, /title: "企业微信流程"/);
+  assert.doesNotMatch(routeManifest, /title: "语音辅助（未启用）"/);
   assert.doesNotMatch(routeManifest, /primaryAction: "完成人工语音审批"/);
   assert.match(files.page, /title="语音辅助（未启用）"/);
   assert.match(files.page, /语音辅助当前未启用/);
   assert.match(files.page, /当前路由没有语音控制器/);
-  assert.match(routePage, /<PersonalWechatVoiceAssistPage\s*\/>/);
-  assert.doesNotMatch(routePage, /enabled=|actions=|controller|use[A-Z]/);
+  assert.equal(fs.existsSync(routePagePath), false);
   assert.match(controlPage, />语音辅助（未启用）<\/Link>/);
-  assert.match(uiDocs, /语音辅助（未启用）/);
-  assert.match(uiDocs, /查看启用条件/);
+  assert.doesNotMatch(uiDocs, /\/integrations\/personal-wechat\/voice-assist/);
   assert.doesNotMatch(uiDocs, /完成人工语音审批/);
 });
 
-test("account navigation is named for its actual read-only status capability", () => {
-  assert.match(routeManifest, /title: "账号状态与入口"/);
+test("legacy account route is absent while the archived page remains read-only", () => {
+  assert.doesNotMatch(routeManifest, /\/integrations\/personal-wechat/);
+  assert.match(routeManifest, /href: "\/integrations\/wechat-work"/);
+  assert.match(routeManifest, /title: "企业微信生产预检"/);
+  assert.doesNotMatch(routeManifest, /title: "账号状态与入口"/);
   assert.match(controlPage, /title="账号状态与入口"/);
   assert.match(controlPage, /data-action-id="integrations\.personal-wechat\.control\.refresh"/);
   assert.doesNotMatch(controlPage, /title="个人微信账号控制"/);

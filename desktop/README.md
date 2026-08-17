@@ -64,19 +64,18 @@ cd desktop
 npm.cmd run project:completion:audit
 ```
 
-报告固定写入 `desktop/.runtime/project-completion-audit/latest.json` 和 `latest.md`。工具无网络、无子进程、无数据库连接、无真实发送，也不读取 `.env`。仓库内代码缺口记为 `FAIL`，真实签名/密钥/账号/预发布/Windows 微信现场证据记为 `BLOCKED`。完整口径见 `docs/PROJECT_COMPLETION_AUDIT.md`。
+报告固定写入 `desktop/.runtime/project-completion-audit/latest.json` 和 `latest.md`。工具无网络、无子进程、无数据库连接、无真实发送，也不读取 `.env`。仓库内代码缺口记为 `FAIL`，真实签名/密钥/账号/预发布/企业微信真实渠道证据记为 `BLOCKED`。完整口径见 `docs/PROJECT_COMPLETION_AUDIT.md`。
 
-Optional WeChat safe-send helpers:
+企业微信-only 交付常用命令：
 
 ```bat
 cd desktop
-npm.cmd run ports:start:mock
-npm.cmd run wechat:safe:start
-npm.cmd run wechat:safe:status
-npm.cmd run wechat:safe:stop
+npm.cmd run acceptance:e2e:local-safe
+npm.cmd run project:completion:audit
+npm.cmd run delivery:staging-readiness
 ```
 
-`wechat:safe:start` is explicit on purpose. It starts the window observer and bridge worker only after the API is reachable. The bridge worker defaults to `BRIDGE_MODE=noop`, so it observes safe-send outbox tasks but does not mark messages as sent unless a real authorized bridge returns a validated ack.
+备案和真实账号未完成前，`local-safe` 只验证本机安全队列、企业微信 AES 回调、CRM、自动化和 UI 布局；不会真实调用企业微信发信。
 
 如果只想启动前端和模拟设计平台，不启动 API：
 
@@ -106,7 +105,7 @@ npm.cmd run data:reset
 - `desktop/.env` 里的 `DATABASE_URL`
 - `USE_LOCAL_STORE=false`
 
-Prisma schema 固定 PostgreSQL。微信/企业微信绑定、消息、发送任务、attempt、审计日志、SKU、设计任务等已有 Prisma 路径；但不能据此推断所有模块均已完成生产持久化。`project:completion:audit` 会单独核对会话运营、个人微信 RPA 业务记录和源码占位：仍固定走 LocalStore、缺少强制 Prisma 路由或存在明确占位时才列为 `FAIL`，通过审计前不得宣称数据库模式全量完成。
+Prisma schema 固定 PostgreSQL。企业微信绑定、消息、发送任务、attempt、审计日志、SKU、设计任务等已有 Prisma 路径；但不能据此推断所有模块均已完成生产持久化。`project:completion:audit` 会单独核对会话运营、遗留通道默认禁用和源码占位：仍固定走 LocalStore、缺少强制 Prisma 路由或存在明确占位时才列为 `FAIL`，通过审计前不得宣称数据库模式全量完成。
 
 数据库模式部署必须先执行 migration，再显式初始化默认 Agent/Skill；读取接口不会偷偷写入种子数据。完整步骤、事务边界、身份隔离和会话队列 500 条审计上限见 [`docs/PRISMA_OPERATIONS.md`](docs/PRISMA_OPERATIONS.md)。
 
@@ -181,27 +180,27 @@ Prisma schema 固定 PostgreSQL。微信/企业微信绑定、消息、发送任
 页面底部有 `多账号控制` 和 `发送安全队列`：
 
 1. 点击 `创建演示发送`，系统会创建一条待发送任务。
-2. 点击 `错误窗口校验`，系统会模拟当前微信窗口停在另一个客户会话，任务会被拦截。
-3. 点击 `正确窗口校验`，系统会模拟账号、聊天对象、最近客户消息都匹配。
-4. 点击 `通过后发送`，只有校验通过的任务才会标记为已发送。
+2. 选择不匹配的企业微信账号、会话或客户身份时，任务会被拦截。
+3. 选择匹配的账号、会话、客户和队列顺序后，任务才允许进入发送执行。
+4. 备案未完成前，本地演示只证明安全队列和审计，不真实发信。
 
 当前校验规则：
 
-- 微信账号必须匹配。
-- 当前聊天对象必须匹配。
-- 最近消息或客户 ID 必须匹配。
-- 单个微信账号内必须按队列顺序串行发送。
+- 企业微信账号必须匹配。
+- 会话 ID 必须匹配。
+- 客户 ID 必须匹配。
+- 单个企业微信账号内必须按队列顺序串行发送。
 
 发送任务进入队列前还会先做绑定校验：
 
-- `wechatAccountId` 必须等于会话所属微信账号。
+- `wechatAccountId` 必须等于会话所属企业微信账号。
 - `conversationId` 必须是真实存在的会话。
-- 如果任务关联设计任务，设计任务必须属于同一个会话、同一个客户、同一个微信账号。
+- 如果任务关联设计任务，设计任务必须属于同一个会话、同一个客户、同一个企业微信账号。
 - 如果任务关联报价草稿，报价草稿必须属于同一个客户，并且报价绑定的设计任务不能和发送任务冲突。
 
-这层校验发生在任务创建时，错误任务不会进入发送队列；发送前仍然会继续做窗口快照和最近消息校验。
+这层校验发生在任务创建时，错误任务不会进入发送队列；发送前仍然会继续校验企业微信账号、会话、客户、人工锁和队列顺序。
 
-第一版不会绕过平台规则去登录、多开或真实控制微信发送；这里先把商业落地最关键的“不要发错账号、不要发错客户”的安全闸门做成可验证逻辑。
+第一版不会绕过平台规则去登录、多开或控制个人微信；这里先把商业落地最关键的“不要发错账号、不要发错客户”的安全闸门做成可验证逻辑，并等待企业微信备案完成后做真实渠道联调。
 
 ## 智能体路由决策演示
 
@@ -370,113 +369,39 @@ POST /api/design-jobs/auto-process-low-value
 
 第一版这里不是完整财务订单系统，先承接“客户选图后生成报价/成交草稿”的业务闭环。后续可以继续扩展合同、发票、收款流水、生产单和发货单。
 
-## 报价发送安全队列演示
+## 报价发送安全队列
 
-报价不是直接改成“已发送”，而是先进入微信安全发送队列：
+报价不会在前端直接改成“已发送”，而是先进入企业微信发送安全队列：
 
 1. 普通报价可以在 `报价/订单草稿` 里点击 `发送报价`。
 2. 高价值报价在 `人工审核中心` 点击 `通过并入队` 后，会自动创建一条报价发送任务。
 3. 发送任务的 payload 类型是 `quote`，会绑定 `quoteDraftId`，避免报价和客户会话断链。
-4. 发送前仍然校验微信账号、当前聊天对象、最近消息/客户 ID 和单账号队列顺序。
-5. 点击 `执行干跑发送` 后，不会真实操作微信，只会记录一次发送尝试，并把任务标记为 `dry_run`。
-6. `dry_run` 代表“安全校验和审计已跑过，但客户还没有收到消息”。如果要真实发送，需要重新排队后用 `windows_bridge` 执行。
-7. 切换到 `windows_bridge` 后，任务会先进入 `sending`，必须等桥接回执校验通过后才会变成 `sent`，报价草稿才会从 `send_queued` 回写为 `sent`。
+4. 人工自由文本回复同样调用 `/api/wechat/conversations/:id/manual-replies`，先生成 `manual_reply` 发送任务。
+5. 发送前校验企业微信账号、会话、客户、单账号队列顺序、人工锁和付款/审核状态。
+6. 正式发送由企业微信微信客服 API 完成；成功、失败、异步失败和人工终态处置都会写入发送 attempt 与审计日志。
+7. 投递状态不确定时保持 `unknown`，禁止自动重排或伪造成功，需要人工在发送诊断和阻断页处理。
 
-这一块后续可以把 `dry_run` 适配器替换成真实 Windows 微信操作适配器，但业务层接口、队列、安全闸门和审计记录不用重做。
+## 企业微信发送适配器
 
-## 微信发送适配器
+当前产品只交付企业微信官方客服通道：
 
-发送执行层现在已经拆成适配器：
-
-- 默认适配器：`dry_run`
-- 当前配置：`WECHAT_SEND_ADAPTER=dry_run`
+- 生产适配器：`WECHAT_SEND_ADAPTER=wechat_work_kf`
 - 查看当前适配器：`GET /api/wechat/send-adapter`
 - 执行当前适配器：`POST /api/wechat/send-tasks/:id/execute`
-- 强制干跑执行：`POST /api/wechat/send-tasks/:id/execute-dry-run`
+- 企业微信只读状态：`GET /api/wechat-work/status`
+- 企业微信脱敏审计：`GET /api/wechat-work/kf/audit?limit=100`
 
-`dry_run` 只做窗口校验、队列顺序校验和审计记录，不会真实操作微信，也不会把任务当成真实已发送。
+旧的直通标记接口 `POST /api/wechat/send-tasks/:id/mark-sent` 和 `POST /api/wechat/send-tasks/:id/mark-sent-current-window` 已禁用。它们不会再把任务直接改成 `sent`；所有发送完成状态都必须来自企业微信发送结果、企业微信回调审计或受控人工终态处置。
 
-旧的直通标记接口 `POST /api/wechat/send-tasks/:id/mark-sent` 和 `POST /api/wechat/send-tasks/:id/mark-sent-current-window` 已禁用。它们不会再把任务直接改成 `sent`；所有发送完成状态都必须来自发送适配器结果，真实桥接发送还必须等待 `bridge-ack`。
+备案完成后，真实联调只做这些外部验收：
 
-预留适配器：`windows_bridge`
+1. 企业微信回调地址能完成 Token/AES 校验。
+2. `sync_msg` 能把客户消息落库，并推进企业微信入站游标。
+3. 受控发送任务能调用企业微信客服 `send_msg`，并记录 attempt 与审计。
+4. `msg_send_fail` 等异步事件能把已接受发送反转为失败或人工处理。
+5. 预发布报告 `npm.cmd run staging:readiness -- --execute` 能读取企业微信状态和审计证据。
 
-- 可以通过 `WECHAT_SEND_ADAPTER=windows_bridge` 启用。
-- 未接入真实 Windows 桥接程序前，它只会在 `.runtime/wechat-outbox` 生成待桥接 JSON 文件。
-- 生成 outbox 后，发送任务会保持 `sending`，发送尝试会保持 `started`，表示“等待桥接回执”。
-- 外部桥接程序完成后，调用 `POST /api/wechat/send-tasks/:id/bridge-ack` 回传 `sent` 或 `failed`。
-- 回执成功后，任务更新为 `sent`；如果关联的是报价任务，报价也会回写为 `sent`。
-- 回执失败后，任务更新为 `failed`；如果关联的是报价任务，报价会回到 `manual_review`，提醒人工处理。
-- 工作台不提供手动“桥接成功回执”按钮，避免人工误把未真实发送的任务标记为 `sent`；人工处理异常时应取消任务、重新排队或扫描 worker/inbox 回执。
-
-桥接程序也可以走文件回执：
-
-```http
-GET /api/wechat/bridge/outbox
-GET /api/wechat/bridge/status
-POST /api/wechat/bridge/inbox/scan
-```
-
-- 上述 bridge 查询/扫描接口不接受匿名本机请求：已登录工作台通过 `view_console` 操作员会话访问；bridge worker 和个人微信桥接通过启动器创建的 `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`，逐次读取并发送 `x-wechat-bridge-token`。两个 worker 不接收 `INTERNAL_API_TOKEN`。
-- 桥接专用 token 与窗口观察器 proof token 互不通用。凭据文件使用随机值、同目录原子替换、普通文件和拒绝符号链接等保护；Windows 上仍需由部署账号 ACL 保护运行时目录，代码不声称 `mode: 0600` 等价于 Windows ACL。
-- `bridge/outbox` 只返回仍处于 `sending`，且最新 `windows_bridge` attempt 仍是 `started` 的任务。
-- `bridge/status` 汇总 worker 最近一次运行状态、outbox 待处理数、inbox 待扫描回执数和账号锁状态。
-- 已完成、失败、取消或旧 outbox 文件会进入 `ignored`，不会被桥接程序误处理。
-- outbox 列表会返回 `preview` 摘要，展示目标微信账号 ID、客户会话 ID、动作数量、文字长度、图片数量、窗口快照和 outbox 文件名；列表不直接暴露完整原始 payload、逐条绝对 `filePath`、客户姓名、微信显示名、聊天标题、文字预览或本地图片文件名。
-- 新版 outbox 文件包含 `version: wechat_bridge_outbox_v1`、一次性 `ackToken`、`target` 和 `sendPlan`。真实桥接器应按 `sendPlan.actions` 顺序执行文字/图片动作，并继续校验 `target` 里的账号、会话和客户身份。
-- 桥接 worker 和后端 `bridge-ack` 在写入外部 `sent/failed` 回执前都会校验 API pending 摘要和本地 outbox JSON 本体，确认文件路径、真实普通文件、协议版本、`ackToken`、账号、会话、动作数量、动作内容、安全约束和发送守卫都匹配，不能只凭 `taskId` 或文件名伪造成功或失败。
-- 真实 bridge worker 应使用接口返回的 `outboxDir + fileName` 读取本地 JSON；公开列表不再依赖逐条 `filePath`。
-- `sendPlan.actions` 只允许非空文本动作和本地存储目录内真实存在的图片文件；远程 URL、空文本、缺失文件、符号链接或跳出本地存储目录的路径都不能回执为 `sent` 或外部 `failed`。
-- 桥接程序可以把回执 JSON 放到 `.runtime/wechat-inbox`，字段包括 `version: wechat_bridge_ack_v1`、`ackToken`、`taskId`、`attemptId`、`wechatAccountId`、`conversationId`、`outboxFileName`、`status`、`errorMessage`、`metadata`、`sentAt`。
-- 回执 `metadata` 只放桥接程序名、模式、worker id 这类运行信息，不放客户聊天标题、微信显示名、密钥、Cookie 或 Authorization；后端保存审计前会继续过滤常见敏感字段。
-- `bridge/inbox/scan` 会读取回执，复用同一套 `bridge-ack` 逻辑，并把回执文件归档到 `processed` 或 `failed` 子目录。
-- 同一份受信回执因网络丢包而重复提交时，后端会用任务、attempt、账号、会话、客户、outbox 文件和 `ackToken` 哈希做幂等校验；完全一致的重放返回既有结果，任何字段冲突都失败关闭。
-- `bridge/status` 和 `bridge/inbox/scan` 只返回回执摘要，例如任务、attempt、状态、文件名和 `hasAckToken`，不会返回 `ackToken` 本体或原始回执 `data`。
-- 详细协议见 `docs/WECHAT_BRIDGE_PROTOCOL.md`，异常恢复步骤见 `docs/WECHAT_RESTART_RECOVERY.md`。真实桥接程序必须按该协议接入，不能只凭 `taskId` 生成成功回执。
-
-## Windows 桥接 worker 骨架
-
-新增脚本：
-
-```bash
-npm run wechat:bridge:once
-npm run wechat:bridge:watch
-```
-
-默认模式是 `BRIDGE_MODE=noop`：
-
-- 只读取 `GET /api/wechat/bridge/outbox`。
-- 按微信账号创建本地锁，避免一个账号同时处理多个发送任务。
-- 不写回执，不会把任务标记成已发送。
-
-开发演示模式：
-
-```bash
-BRIDGE_MODE=simulate_sent npm run wechat:bridge:once
-BRIDGE_MODE=simulate_failed npm run wechat:bridge:once
-```
-
-Windows PowerShell 可用：
-
-```powershell
-$env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
-```
-
-配置项：
-
-- `BRIDGE_API_BASE`：默认 `http://127.0.0.1:3200/api`
-- `BRIDGE_MODE`：`noop`、`simulate_sent`、`simulate_failed`
-- `BRIDGE_ACK_TRANSPORT`：`file_scan`、`file`、`api`
-- `WECHAT_BRIDGE_INBOX_DIR`：默认 `.runtime/wechat-inbox`
-- `WECHAT_BRIDGE_LOCK_DIR`：默认 `.runtime/wechat-bridge-locks`
-- `WECHAT_BRIDGE_WORKER_STATUS_FILE`：默认 `.runtime/wechat-bridge-worker-status.json`
-- `WECHAT_BRIDGE_SERVICE_TOKEN_FILE`：启动器管理的 bridge 专用 API 凭据文件，不要把 token 内容复制到环境变量、状态文件或日志
-- `BRIDGE_LIMIT`：单轮最多处理几个 outbox 任务
-
-个人微信 Windows 操作端已接在同一 dispatch/ACK 协议后：`tools/personal-wechat-bridge.js` 只操作配置明确绑定的进程、窗口和 Windows 会话，并在发送前后用 UI Automation 校验账号、聊天对象、最近消息及发送结果。详细配置和操作步骤见 `docs/PERSONAL_WECHAT_BRIDGE.md`。
-
-个人微信粘贴桥接同样失败关闭：没有受信窗口验证器，或验证器返回的账号、会话、客户任一项不一致时，不会触碰微信窗口。旧的 `PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW` 绕过开关已被忽略。
-
-后续如果要接真实微信 PC 操作，应该只替换或扩展适配器层，继续复用现有的账号校验、聊天对象校验、最近消息校验、单账号串行锁和发送审计。
+旧 Windows/本机桥接和个人微信 RPA 文件仍作为历史安全测试与迁移档案保留，但不属于当前企业微信-only 交付范围，不进入默认产品验收、预发布证据包或客户操作步骤。
 
 ## 发送失败后的人工处理
 
@@ -487,12 +412,12 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 
 适用场景：
 
-1. 当前微信窗口错聊导致任务被 `blocked`，客服切回正确窗口后可以重新排队。
-2. 只有桥接明确证明“发送前失败”并返回受信 `failed` 回执后，客服才可以修复问题再重新排队。
+1. 企业微信账号、会话、客户或人工锁校验失败导致任务被 `blocked`，客服修复业务状态后可以重新排队。
+2. 只有企业微信 API 或异步审计明确证明“发送前失败”后，客服才可以修复问题再重新排队。
 3. 客户临时撤回需求或客服确认不再发送时，可以取消任务。
-4. 如果取消的是等待桥接回执的任务，系统会把那条 `started` 的桥接发送尝试关闭为 `failed`，避免审计记录一直挂起。
-5. 如果任务关联报价，取消或桥接失败会把报价转回 `manual_review`；重新排队会把报价恢复到 `send_queued`。
-6. ACK 丢失、发送中断、outbox 缺失或 dispatch 过期都不能证明消息未发出；任务保持 `sending`，并记录 `guardSnapshot.deliveryState = unknown` 和 `automaticRetryBlocked = true`，禁止直接重排。
+4. 如果取消的是等待企业微信回执的任务，系统会把在途 attempt 关闭为受控人工终态，避免审计记录一直挂起。
+5. 如果任务关联报价，取消或发送失败会把报价转回 `manual_review`；重新排队会把报价恢复到 `send_queued`。
+6. 回调丢失、发送中断或异步状态未知都不能证明消息未发出；任务保持 `sending` 或 `unknown`，并记录 `automaticRetryBlocked = true`，禁止直接重排。
 
 ## 发送异常扫描
 
@@ -503,14 +428,14 @@ $env:BRIDGE_MODE='simulate_sent'; npm.cmd run wechat:bridge:once
 
 扫描会处理这些情况：
 
-1. `windows_bridge` 任务长时间停在 `sending`，并且发送尝试仍是 `started`，只说明桥接程序没有回执，不能证明消息未发送。系统会把投递标记为 `unknown`，任务和 attempt 分别保持 `sending`、`started`，禁止自动或直接重排，并生成一次提醒。
+1. 企业微信发送任务长时间停在 `sending`，且没有确认失败或成功审计时，不能证明消息未发送。系统会把投递标记为 `unknown`，禁止自动或直接重排，并生成一次提醒。
 2. 任务长时间停在 `queued`，系统会生成“排队过久”提醒。
 3. 任务处于 `blocked` 或 `failed`，系统会生成一次站内提醒，避免客服漏看。
 4. 同一个状态不会重复刷提醒；任务重新排队或状态变化后，下一次异常会重新提醒。
 
 默认配置：
 
-- `SEND_BRIDGE_ACK_TIMEOUT_MINUTES=5`
+- `SEND_BRIDGE_ACK_TIMEOUT_MINUTES=5`（遗留变量名，当前表示企业微信发送回执超时阈值）
 - `SEND_QUEUE_STALE_MINUTES=10`
 
 ## 商品导入与搭配演示
@@ -678,168 +603,15 @@ SKU 新增、手动保存、批量导入、批量修改、下架和恢复都会�
 5. 高价值报价会进入 `待审报价`，支持 `通过报价`、`继续跟进`、`驳回报价`。
 6. 每次审核都会生成 ReviewLog，记录审核人、决策、前后状态和备注，方便后续复盘。
 
-## 微信窗口快照演示
+## 企业微信会话身份与发送审计
 
-`多账号控制` 里每个账号可以模拟三种窗口状态：
+当前交付范围不依赖本机聊天窗口。发送前身份校验来自企业微信回调、持久化客户映射和发送任务绑定：
 
-1. `正确窗口`：当前微信账号、聊天对象、最近客户消息都和发送任务匹配。
-2. `错聊窗口`：当前窗口停留在另一个客户，系统会拦截发送。
-3. `离线窗口`：当前账号窗口不可用，系统会要求人工确认。
-
-`发送安全队列` 支持 `当前快照校验` 和 `执行当前适配器`。快照只负责证明“现在是不是正确微信账号、正确聊天对象、正确客户上下文”，不能直接代表消息已经发送。正式接入微信 PC 时，只需要把真实窗口识别结果写入同一个快照接口，后面的安全闸门可以复用。
-
-默认只有 30 秒内采集的窗口快照可以用于真实发送校验，避免用旧窗口状态误把 A 客户的内容发给 B 客户。需要调整时可设置 `WECHAT_WINDOW_SNAPSHOT_MAX_AGE_SECONDS=30`。
-
-外部窗口识别器也可以走文件接入箱，不需要直接调用数据库：
-
-```http
-POST /api/wechat/window-snapshots/inbox/scan
-```
-
-默认扫描目录：
-
-```text
-.runtime/wechat-window-snapshots
-```
-
-识别器每次写一个 `.json` 文件即可，扫描成功后文件会被移到 `processed`，失败会移到 `failed`。示例：
-
-```json
-{
-  "source": "windows_observer",
-  "isOnline": true,
-  "wechatAccountId": "wechat_demo_1",
-  "accountDisplayName": "客服微信 1",
-  "activeChatTitle": "王总 端午礼盒",
-  "chatTitle": "王总 端午礼盒",
-  "recentCustomerId": "customer_demo_1",
-  "recentMessageText": "客户最近一句消息",
-  "confidence": 0.96
-}
-```
-
-也支持批量文件：
-
-```json
-{
-  "snapshots": [
-    {
-      "source": "windows_observer",
-      "isOnline": true,
-      "wechatAccountId": "wechat_demo_1",
-      "chatTitle": "王总 端午礼盒",
-      "recentCustomerId": "customer_demo_1",
-      "confidence": 0.96
-    }
-  ]
-}
-```
-
-这层只接收窗口状态和最近消息证据，不做微信登录、多开或绕过平台限制的能力。
-
-### Windows 前台窗口观察器
-
-新增本地观察器脚本：
-
-```bash
-npm.cmd run wechat:observe-window:once
-npm.cmd run wechat:observe-window:watch
-```
-
-默认行为：
-
-- 只读取当前前台窗口标题、进程名、进程 ID。
-- 如果识别为微信窗口，就写入 `.runtime/wechat-window-snapshots/*.json`。
-- 每次运行都会写状态文件 `.runtime/wechat-window-observer-status.json`。
-- 不点击、不输入、不发送、不登录、不多开。
-- 默认不自动扫描入库；如果要写完立刻让后端扫描，直接运行：
-
-```bash
-node tools/wechat-window-observer.js --once --scan
-```
-
-观察器对扫描接口发送 `x-wechat-window-observer-token`，其值从现有 `WECHAT_WINDOW_OBSERVER_PROOF_FILE` 逐次读取，轮换后下一次请求立即生效。该 proof token 只能访问观察器的快照/状态/扫描端点，不能访问 bridge 端点；工作台访问这些端点仍使用 `view_console` 操作员会话。
-
-建议先创建配置文件：
-
-```text
-.runtime/wechat-window-observer-config.json
-```
-
-示例：
-
-```json
-{
-  "accounts": [
-    {
-      "name": "客服微信1",
-      "wechatAccountId": "wechat_demo_1",
-      "accountDisplayName": "客服微信 1",
-      "processNames": ["WeChat"],
-      "titleIncludes": ["王总"]
-    }
-  ],
-  "conversations": [
-    {
-      "name": "王总礼盒会话",
-      "wechatAccountId": "wechat_demo_1",
-      "conversationId": "conversation_demo_1",
-      "customerId": "customer_demo_1",
-      "titleIncludes": ["王总"],
-      "chatTitle": "王总 端午礼盒"
-    }
-  ]
-}
-```
-
-匹配逻辑很简单：
-
-- `processNames`：窗口进程名要匹配，比如 `WeChat`。
-- `titleIncludes`：窗口标题必须包含这些词。
-- `titleAnyIncludes`：窗口标题包含其中任意一个词即可。
-- `titleEquals`：窗口标题必须完全相等。
-
-如果没有匹配到账号或客户，会照样写快照，但后端诊断会把它判为不安全，发送队列不会通过。
-
-工作台 `多账号控制` 面板会显示观察器状态：
-
-- 最后一次观察是多久前。
-- 当前前台进程名。
-- 是否识别到微信窗口。
-- 是否匹配到微信账号。
-- 置信度、是否 dry-run、是否自动扫描。
-- `采集当前窗口` 按钮会让后端运行一次观察器，写入快照文件后立即扫描入库。
-
-也可以直接调用接口查看：
-
-```http
-GET /api/wechat/window-observer/status
-```
-
-也可以直接触发一次采集：
-
-```http
-POST /api/wechat/window-observer/capture-once
-```
-
-## 发送执行审计演示
-
-`发送安全队列` 里新增 `执行干跑发送`：
-
-1. 系统先用最近一次微信窗口快照做发送前校验，并要求快照足够新。
-2. 校验失败时，任务会被拦截，并生成一条失败尝试记录。
-3. 校验通过时，系统会创建一条 `dry_run` 发送尝试记录，并把任务状态改成 `dry_run`。
-4. 这里不会真实发送微信消息，只记录 payload 摘要、文本长度、图片数量、窗口快照 ID、校验状态和错误原因；商业真实发送要重新排队后使用 `windows_bridge` 并等待回执。
-5. 后续接真实微信发送器时，可以复用同一套发送尝试审计表，便于排查“为什么没发、发给谁、哪个窗口状态下发的”。
-
-如果使用 `windows_bridge` 适配器，任务不会直接变成已发送：
-
-1. 系统写入 outbox 文件，并把任务状态改为 `sending`。
-2. 桥接 worker 必须回传 `attemptId`、微信账号、会话 ID 和 `outboxFileName`。
-3. 后端会校验回执和 pending attempt、outbox 文件是否匹配。
-4. 成功回执匹配后才标记 `sent`；失败回执会标记 `failed` 并转人工。
-5. 处理完回执后，outbox 文件会归档到 `processed`、`failed` 或 `cancelled`，避免重复处理旧发送任务。
-6. `sending` 状态不能直接重新排队，必须等待回执、扫描超时或取消任务。
+1. 企业微信 `open_kfid` 和 `external_userid` 首次入站时会绑定到内部账号、客户和会话。
+2. 人工回复、报价、订单和审核发送都会携带账号、会话、客户三元身份。
+3. 任务创建、执行、重排、取消和人工终态处置都会重新校验身份，防止 A 客户内容进入 B 客户会话。
+4. 企业微信客服 API 接受发送后只代表平台已接收请求；最终仍以同步返回、异步回调和人工审计共同决定。
+5. 所有发送尝试保留 payload 摘要、适配器、操作人、状态、错误分类和审计记录，便于复盘“为什么没发、发给谁、何时进入人工处理”。
 
 ## 安全处理发送队列
 
@@ -854,13 +626,13 @@ POST /api/wechat/send-tasks/process-safe-queue
 处理顺序：
 
 1. 只扫描 `queued` 状态任务。
-2. 每个微信账号只取最前面的一个任务。
-3. 读取该账号最新微信窗口快照。
-4. 校验微信账号、当前聊天对象、最近消息/客户 ID、单账号队列顺序、窗口快照新鲜度。
-5. 校验通过后，交给当前发送适配器。
+2. 每个企业微信账号只取最前面的一个任务。
+3. 校验企业微信账号、会话、客户、人工锁、付款/审核状态和单账号队列顺序。
+4. 校验通过后，交给企业微信官方客服发送适配器。
+5. 发送结果进入 attempt、审计和必要的人工终态处置。
 6. 校验失败时，任务变成 `blocked`，并记录失败原因和发送尝试。
 
-工作台 `发送安全队列` 区域新增 `安全处理队列` 按钮。默认 `dry_run` 适配器只做校验和审计，不会真实操作微信；后续切换 `windows_bridge` 后，也仍然要等待桥接程序回执，不会假装发送成功。
+工作台 `发送安全队列` 区域提供 `安全处理队列` 按钮。备案和真实账号未完成前，本地验收只验证入队、身份、阻断、回调和审计，不会真实发信；真实发送必须等企业微信正式配置和预发布证据通过。
 
 ## 仓库内已验证实现
 
@@ -880,13 +652,12 @@ POST /api/wechat/send-tasks/process-safe-queue
 - 低价值自动处理：低价值设计草稿自动提交，已出图的低价值任务自动进入微信安全发送队列。
 - 低价值持久调度：生产可使用 BullMQ Job Scheduler + Worker 复用同一个 `AutomationService.runOnce`，跨进程全局并发为 1，任务不自动重试，状态接口从 Redis 队列读取持久证据。
 - 知识沉淀模型：本地 JSON 和 Prisma schema 都预留训练样本、知识条目和导入批次。
-- 多微信账号演示数据：微信客服1号和微信客服2号各自绑定独立客户会话。
-- 发送队列安全闸门：账号、聊天对象、最近消息/客户 ID、单账号串行队列校验。
+- 多企业微信账号演示数据：企业微信客服账号各自绑定独立客户会话。
+- 发送队列安全闸门：企业微信账号、会话、客户、人工锁、审核状态和单账号串行队列校验。
 - 发送任务入队绑定校验：任务创建时校验微信账号、会话、客户、设计任务和报价草稿，错绑任务不能进入队列。
 - 安全处理发送队列：按微信账号只处理队首任务，校验通过才执行适配器，失败会拦截并留审计记录。
-- Windows 桥接 outbox/inbox：可列出待桥接任务，接收文件回执并归档，完成发送状态闭环。
-- 微信窗口快照适配层：支持记录账号窗口、当前聊天对象、最近客户标识、离线状态，支持文件接入箱扫描真实识别器快照，并提供 Windows 前台窗口观察器，用最近快照执行发送前校验，且默认拦截超过 30 秒的旧快照。
-- 发送执行审计：支持 dry-run 发送尝试记录、拦截记录、payload 摘要、窗口快照绑定、bridge attempt/outbox 回执绑定和最近尝试展示。
+- 企业微信发送闭环：客服 API 发送、同步返回、异步失败回调、人工终态处置和审计记录共同决定投递状态。
+- 发送执行审计：支持发送尝试记录、拦截记录、payload 摘要、企业微信审计绑定和最近尝试展示。
 - 智能体路由决策：根据客户消息识别场景、预算、价值等级、缺失信息和人工介入条件。
 - 报价/订单草稿：客户选图后生成报价，展示总价、成本、利润、付款状态和跟进人。
 - 客户选图自动报价：低价值任务选图明确后自动生成报价草稿，高价值任务继续转人工审核。
@@ -906,7 +677,7 @@ POST /api/wechat/send-tasks/process-safe-queue
 - 工作台按钮已接入：创建演示任务、提交出图、客户选图、快速确认发送、生成报价、转人工。
 - 一键启动端口：3100、3200、3700。
 - 企业微信生产持久化：`WechatPersistence` 在 `USE_LOCAL_STORE=false` 时使用 Prisma 保存绑定、消息、发送任务、attempt 和审计日志；真实回调/权限/发送仍需预发布账号验收。
-- 个人微信 RPA 生产持久化：认证后的主机注册表账号 ID 是 Prisma `WechatAccount.id`；账号、客户、会话、消息、业务绑定和审计使用事务写入，唯一冲突失败关闭且不回退 LocalStore。主机 endpoint/token、进程、窗口、Windows 会话和配置路径仍只留在本机注册表，不进入业务表、审计明细或绑定接口响应。
+- 个人微信遗留通道默认禁用：当前产品模式只交付企业微信，遗留本机 RPA/桥接不进入默认 API controller、产品验收、预发布证据包或客户操作手册。
 - Windows 安装包流水线：已有固定版本 electron-builder/NSIS、显式白名单、未签名测试包和包内容验证；企业代码签名、目标机安装/卸载和渠道发布仍为 `BLOCKED`。
 - Windows CI：已有最小权限的 GitHub Actions 工作流和本地 release-quality 编排；不注入真实密钥、不执行真实发送。
 - 数据库恢复演练：已有默认零命令的计划模式和显式确认的隔离 rehearsal/sandbox 执行模式；真实数据库演练证据仍为 `BLOCKED`。
@@ -914,9 +685,9 @@ POST /api/wechat/send-tasks/process-safe-queue
 ## 当前真实边界与未完成项
 
 - 设计平台客户端、回调、健康检查和失败恢复契约已实现；真实供应商账号、密钥、网络、回调和文件访问边界仍需预发布验收。
-- 微信 PC 真实运行仍依赖现场版本能稳定暴露 UI Automation 元素，并需要为每个账号配置进程、窗口、Windows 会话和会话绑定；不满足时桥接会阻断。
+- 个人微信、本机 RPA 和 Windows 桥接属于遗留禁用通道；恢复它们必须显式切换 legacy 产品模式并重新走安全评审，不属于当前上线阻塞项。
 - PostgreSQL/Redis 不由应用自动安装。BullMQ/Redis 生产 durable runtime 已实现，并由 scheduler/runtime、readiness、队列状态和故障证据强契约审计；真实 Redis 权限、持久化与故障恢复仍需预发布验收。
 - Agent、路由、训练和会话运营的生产持久化只有在 Prisma 迁移、初始化工具、共享 Prisma 服务以及 list/update/audit 路由契约均为 `PASS` 时才算完成；仅删除 `not implemented` 字符串不算证据。
-- 个人微信 RPA 业务绑定/审计固定走 LocalStore 时属于 `FAIL`；RPA endpoint/token 主机注册表则是有明确理由的本机配置白名单，两者不能混为一谈。
+- 企业微信-only 发布不要求个人微信 RPA 业务绑定或主机注册表证据；完成度审计只保留遗留通道默认禁用的证明。
 - 企业微信客户图片会经官方临时素材下载接口受控拉取，在 `LOCAL_STORAGE_ROOT` 内以确定路径、原子 no-clobber 方式保存并生成 `dhash64:v1`；无效/过期素材进入人工复核，网络、5xx 与限流不会推进同步游标。真实账号下载权限与回调仍需预发布验收。
 - dHash 已支持轻微重编码/像素变化下的受控近似匹配，但对裁剪、大幅编辑或复杂截图不作成功承诺；缺指纹、旧算法、混合算法和歧义一律失败关闭。

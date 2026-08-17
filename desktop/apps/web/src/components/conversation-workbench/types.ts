@@ -18,12 +18,15 @@ export type ConversationWorkbenchAvatar = {
 
 export type ConversationWorkbenchConversation = {
   id: string;
+  wechatAccountId: string;
+  customerId: string;
   title: string;
   subtitle?: string;
   avatar: ConversationWorkbenchAvatar;
   channelLabel: string;
   channelTone: ConversationWorkbenchTone;
   preview: string;
+  draftPreview?: string;
   updatedAtLabel: string;
   unreadCount?: number;
   stateLabel?: string;
@@ -71,6 +74,8 @@ export type ConversationWorkbenchAttachment = {
   name: string;
   kind: "image" | "file";
   detail?: string;
+  href?: string;
+  previewUrl?: string;
 };
 
 export type ConversationWorkbenchMessage = {
@@ -125,6 +130,14 @@ export type ConversationWorkbenchSafetyCheck = {
   tone: "success" | "warning" | "danger";
 };
 
+export type ConversationWorkbenchWorkflowAction = {
+  id: "bundles" | "design" | "quotes" | "orders" | "reviews" | "send" | "training";
+  label: string;
+  detail: string;
+  href: string;
+  icon: "bundle" | "design" | "quote" | "order" | "review" | "send" | "training";
+};
+
 export type ConversationWorkbenchComposerTool = {
   id: "emoji" | "image" | "file" | "note" | "knowledge" | "script" | "customer" | "order" | string;
   label: string;
@@ -139,8 +152,20 @@ export type ConversationWorkbenchComposer = {
   sending?: boolean;
   sendLabel?: string;
   tools: ConversationWorkbenchComposerTool[];
+  attachments?: Array<{
+    id: string;
+    name: string;
+    kind: "image" | "file";
+    detail?: string;
+  }>;
+  attachmentBusy?: boolean;
   feedback?: string;
   feedbackTone?: ConversationWorkbenchTone;
+  queuedTask?: {
+    id: string;
+    href: string;
+    actionLabel: string;
+  };
 };
 
 export type ConversationWorkbenchThread = {
@@ -155,6 +180,7 @@ export type ConversationWorkbenchThread = {
   notices: ConversationWorkbenchNotice[];
   suggestion: ConversationWorkbenchSuggestion;
   safetyChecks: ConversationWorkbenchSafetyCheck[];
+  workflowActions?: ConversationWorkbenchWorkflowAction[];
   composer: ConversationWorkbenchComposer;
   loading?: boolean;
   error?: string;
@@ -255,6 +281,8 @@ export type ConversationWorkbenchActions = {
   onRegenerateSuggestion: () => void;
   onReplyChange: (value: string) => void;
   onComposerTool?: (toolId: string) => void;
+  onAttachFiles?: (files: File[]) => void;
+  onRemoveAttachment?: (assetId: string) => void;
   onSendReply: () => void;
   onEditCustomer?: () => void;
   onAddTag?: () => void;

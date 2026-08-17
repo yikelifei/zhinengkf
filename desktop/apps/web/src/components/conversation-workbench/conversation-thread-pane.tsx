@@ -1,27 +1,31 @@
+"use client";
+
 import {
   AlertTriangle,
   ArrowLeft,
-  CheckCircle2,
   ChevronDown,
   CircleX,
   MoreHorizontal,
+  Image as ImageIcon,
+  Paperclip,
   PanelRightOpen,
   RefreshCw,
-  RotateCcw,
-  Send,
   ShieldCheck,
   Sparkles,
   UserRoundCheck,
 } from "lucide-react";
-import type { FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./conversation-thread-pane.module.css";
+import { ConversationAssistantComposer } from "./conversation-assistant-composer";
+import { ConversationWorkflowRail } from "./conversation-workflow-rail";
 import type {
   ConversationWorkbenchActions,
-  ConversationWorkbenchIncident,
+  ConversationWorkbenchAttachment,
   ConversationWorkbenchMessage,
   ConversationWorkbenchThread,
 } from "./types";
-import { ComposerToolIcon, WorkbenchAvatar, WorkbenchToneTag } from "./workbench-primitives";
+import { WorkbenchAvatar, WorkbenchToneTag } from "./workbench-primitives";
+import { IncidentCard } from "./conversation-thread-incident";
 
 type ConversationThreadPaneProps = {
   thread: ConversationWorkbenchThread | null;
@@ -29,6 +33,7 @@ type ConversationThreadPaneProps = {
   showBackButton?: boolean;
   showContextButton?: boolean;
   showTransferButton?: boolean;
+  variant?: "default" | "wecom";
 };
 
 export function ConversationThreadPane({
@@ -37,10 +42,50 @@ export function ConversationThreadPane({
   showBackButton = true,
   showContextButton = true,
   showTransferButton = true,
+  variant = "default",
 }: ConversationThreadPaneProps) {
+  const timelineRef = useRef<HTMLElement | null>(null);
+  const stickToLatestRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const messageSnapshotRef = useRef({ participantKey: "", latestMessageId: "", messageCount: 0 });
+  const participantKey = thread?.participant.name || "";
+  const latestMessageId = thread?.messages.at(-1)?.id || "";
+  const messageCount = thread?.messages.length || 0;
+
+  useEffect(() => {
+    stickToLatestRef.current = true;
+    setShowJumpToLatest(false);
+    setNewMessageCount(0);
+  }, [participantKey]);
+
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    const previous = messageSnapshotRef.current;
+    const sameParticipant = previous.participantKey === participantKey;
+    const addedMessages = sameParticipant && previous.latestMessageId && previous.latestMessageId !== latestMessageId
+      ? Math.max(1, messageCount - previous.messageCount)
+      : 0;
+    messageSnapshotRef.current = { participantKey, latestMessageId, messageCount };
+    if (!timeline) return;
+    if (!stickToLatestRef.current) {
+      if (addedMessages) {
+        setNewMessageCount((current) => current + addedMessages);
+        setShowJumpToLatest(true);
+      }
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      timeline.scrollTop = timeline.scrollHeight;
+      setShowJumpToLatest(false);
+      setNewMessageCount(0);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [latestMessageId, messageCount, participantKey]);
+
   if (!thread) {
     return (
-      <section className={styles.threadPane} aria-label="会话详情">
+      <section className={styles.threadPane} data-variant={variant} aria-label="会话详情">
         <div className={styles.threadEmpty} role="status">
           <Sparkles size={25} aria-hidden="true" />
           <strong>请选择客户会话</strong>
@@ -56,26 +101,17 @@ export function ConversationThreadPane({
     );
   }
 
-  const composer = thread.composer;
-  const composerDisabled = Boolean(composer.disabled || composer.sending);
-  const composerDisabledReason = composer.sending
-    ? "人工回复正在安全入队，请稍候"
-    : composer.disabled
-      ? composer.placeholder || "当前会话暂不可人工回复"
-      : undefined;
-  const replyEmpty = !composer.value.trim();
-  const sendDisabled = composerDisabled || replyEmpty;
-  const sendDisabledReason = composerDisabledReason || (replyEmpty ? "请先输入人工回复内容" : undefined);
-  const activeSuggestionTab = thread.suggestion.tabs.find((tab) => tab.value === thread.suggestion.activeTab)
-    || thread.suggestion.tabs[0];
-
-  function submitReply(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!composerDisabled && composer.value.trim()) actions.onSendReply();
+  function scrollToLatest() {
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+    stickToLatestRef.current = true;
+    timeline.scrollTo({ top: timeline.scrollHeight, behavior: "smooth" });
+    setShowJumpToLatest(false);
+    setNewMessageCount(0);
   }
 
   return (
-    <section className={styles.threadPane} aria-label={`与 ${thread.participant.name} 的会话`}>
+    <section className={styles.threadPane} data-variant={variant} aria-label={`与 ${thread.participant.name} 的会话`}>
       <header className={styles.threadHeader}>
         {showBackButton ? <button type="button" className={`${styles.iconButton} ${styles.mobileOnly}`} data-action-id="conversations.inbox.open-mobile" onClick={() => actions.onPaneChange("inbox")} aria-label="返回会话列表">
           <ArrowLeft size={17} aria-hidden="true" />
@@ -115,13 +151,26 @@ export function ConversationThreadPane({
         </div>
       </header>
 
-      {thread.safetyNotice ? (
+      {variant === "default" && thread.safetyNotice ? (
         <div className={styles.safetyNotice} role="note">
           <ShieldCheck size={14} aria-hidden="true" />{thread.safetyNotice}
         </div>
       ) : null}
+      {thread.workflowActions?.length ? <ConversationWorkflowRail actions={thread.workflowActions} /> : null}
 
-      <section className={styles.timeline} aria-label="会话消息时间线" aria-busy={thread.loading || undefined}>
+      <section
+        ref={timelineRef}
+        className={styles.timeline}
+        aria-label="会话消息时间线"
+        aria-busy={thread.loading || undefined}
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          const nearLatest = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
+          stickToLatestRef.current = nearLatest;
+          setShowJumpToLatest(!nearLatest);
+          if (nearLatest) setNewMessageCount(0);
+        }}
+      >
         <div className={styles.timelineBar}>
           <span>{thread.timelineLabel || "会话记录"}</span>
           <button
@@ -136,14 +185,14 @@ export function ConversationThreadPane({
           </button>
         </div>
         {thread.error ? <div className={styles.threadError} role="alert">{thread.error}</div> : null}
-        {thread.loading ? <div className={styles.threadLoading} role="status">正在读取消息记录…</div> : null}
+        {thread.loading && !thread.messages.length ? <div className={styles.threadLoading} role="status">正在读取消息记录…</div> : null}
         {!thread.loading && !thread.error && !thread.messages.length ? (
           <div className={styles.threadEmptyCompact} role="status">
             <strong>{thread.emptyTitle || "还没有消息"}</strong>
             <span>{thread.emptyDetail || "客户发送消息后，会显示在这里。"}</span>
           </div>
         ) : null}
-        {!thread.loading && !thread.error ? thread.messages.map((message) => <TimelineMessage message={message} key={message.id} />) : null}
+        {thread.messages.map((message) => <TimelineMessage message={message} key={message.id} />)}
 
         {thread.incidents.map((incident) => (
           <IncidentCard incident={incident} actions={actions} key={incident.id} />
@@ -159,107 +208,24 @@ export function ConversationThreadPane({
             ) : null}
           </div>
         ))}
+        {showJumpToLatest ? (
+          <button
+            type="button"
+            className={styles.jumpToLatest}
+            data-action-id="conversations.timeline.jump-latest"
+            onClick={scrollToLatest}
+            aria-label="回到最新消息"
+          >
+            <ChevronDown size={15} aria-hidden="true" />
+            {newMessageCount ? `${newMessageCount} 条新消息` : "回到最新"}
+          </button>
+        ) : null}
       </section>
 
-      <section className={styles.assistantComposer} aria-label="AI 建议与人工回复">
-        <div className={styles.suggestionTabs} role="status" aria-label="当前回复辅助视图">
-          <span className={styles.activeSuggestionTab}>{activeSuggestionTab?.label || "AI 回复建议"}</span>
-        </div>
-
-        <div className={styles.assistantGrid}>
-          <div className={styles.suggestionPanel}>
-            <div className={styles.subpanelHeader}>
-              <strong>{thread.suggestion.title}</strong>
-              {thread.suggestion.verificationLabel ? <span>{thread.suggestion.verificationLabel}</span> : null}
-            </div>
-            {thread.suggestion.loading ? <p className={styles.mutedCopy} role="status">正在生成建议回复…</p> : null}
-            {thread.suggestion.error ? <p className={styles.inlineError} role="alert">{thread.suggestion.error}</p> : null}
-            {!thread.suggestion.loading && !thread.suggestion.error && thread.suggestion.text ? (
-              <p className={styles.suggestionText}>{thread.suggestion.text}</p>
-            ) : null}
-            {thread.suggestion.sourceDetail ? <small className={styles.sourceDetail}>{thread.suggestion.sourceDetail}</small> : null}
-            <div className={styles.suggestionActions}>
-              <button
-                type="button"
-                data-action-id="conversations.suggestion.use"
-                data-disabled-reason={thread.suggestion.loading ? "正在生成回复建议，请稍候" : !thread.suggestion.text ? "尚无可用的回复建议" : undefined}
-                onClick={actions.onUseSuggestion}
-                disabled={!thread.suggestion.text || thread.suggestion.loading}
-                aria-label={thread.suggestion.useActionLabel || "使用此回复建议"}
-              >
-                <Sparkles size={14} aria-hidden="true" />{thread.suggestion.useActionLabel || "使用此回复"}
-              </button>
-              <button
-                type="button"
-                data-action-id="conversations.suggestion.regenerate"
-                data-disabled-reason={thread.suggestion.loading ? "回复建议正在生成，请稍候" : undefined}
-                onClick={actions.onRegenerateSuggestion}
-                disabled={thread.suggestion.loading}
-                aria-label={thread.suggestion.regenerateActionLabel || "重新生成回复建议"}
-              >
-                <RotateCcw size={14} aria-hidden="true" />{thread.suggestion.regenerateActionLabel || "重新生成"}
-              </button>
-            </div>
-          </div>
-
-          <div className={styles.safetyPanel}>
-            <div className={styles.subpanelHeader}>
-              <strong>发送前安全体检</strong>
-              <button type="button" data-action-id="conversations.safety.refresh" onClick={actions.onRefresh} aria-label="重新检测发送安全状态"><RefreshCw size={13} aria-hidden="true" />重新检测</button>
-            </div>
-            <ul>
-              {thread.safetyChecks.map((check) => (
-                <li className={styles[`text-${check.tone}`]} key={check.id}>
-                  {check.tone === "success" ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
-                  <span>{check.label}</span><b>{check.statusLabel}</b>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-
-        <form className={styles.composer} onSubmit={submitReply}>
-          <textarea
-            data-action-id="conversations.reply.edit"
-            data-disabled-reason={composerDisabledReason}
-            value={thread.composer.value}
-            maxLength={thread.composer.maxLength}
-            placeholder={thread.composer.placeholder || "输入人工回复"}
-            aria-label="输入人工回复"
-            disabled={composerDisabled}
-            onChange={(event) => actions.onReplyChange(event.target.value)}
-          />
-          <div className={styles.composerToolbar}>
-            <div className={styles.composerTools}>
-              {actions.onComposerTool ? thread.composer.tools.map((tool) => (
-                <button type="button" data-action-id={`conversations.composer-tool-${tool.id}.open`} onClick={() => actions.onComposerTool?.(tool.id)} aria-label={tool.label} title={tool.label} key={tool.id}>
-                  <ComposerToolIcon tool={tool} />{tool.iconOnly ? null : <span>{tool.label}</span>}
-                </button>
-              )) : null}
-            </div>
-            <span className={styles.characterCount}>{thread.composer.value.length}/{thread.composer.maxLength}</span>
-            <button
-              type="submit"
-              className={styles.sendButton}
-              data-action-id="conversations.reply.enqueue"
-              data-disabled-reason={sendDisabledReason}
-              disabled={sendDisabled}
-              aria-label="将人工回复提交到安全发送队列"
-            >
-              <Send size={15} aria-hidden="true" />{thread.composer.sending ? "发送中" : thread.composer.sendLabel || "发送"}<ChevronDown size={13} aria-hidden="true" />
-            </button>
-          </div>
-          {thread.composer.feedback ? (
-            <small className={`${styles.composerFeedback} ${styles[`text-${thread.composer.feedbackTone || "neutral"}`]}`} role="status">
-              {thread.composer.feedback}
-            </small>
-          ) : null}
-        </form>
-      </section>
+      <ConversationAssistantComposer thread={thread} actions={actions} variant={variant} />
     </section>
   );
 }
-
 function TimelineMessage({ message }: { message: ConversationWorkbenchMessage }) {
   if (message.direction === "system") {
     return (
@@ -277,12 +243,7 @@ function TimelineMessage({ message }: { message: ConversationWorkbenchMessage })
           {message.text ? <p>{message.text}</p> : null}
           {message.attachments?.length ? (
             <div className={styles.attachmentList}>
-              {message.attachments.map((attachment) => (
-                <span key={attachment.id}>
-                  {attachment.kind === "image" ? <Sparkles size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
-                  <b>{attachment.name}</b>{attachment.detail ? <small>{attachment.detail}</small> : null}
-                </span>
-              ))}
+              {message.attachments.map((attachment) => <TimelineAttachment attachment={attachment} key={attachment.id} />)}
             </div>
           ) : null}
         </div>
@@ -295,21 +256,22 @@ function TimelineMessage({ message }: { message: ConversationWorkbenchMessage })
   );
 }
 
-function IncidentCard({ incident, actions }: { incident: ConversationWorkbenchIncident; actions: ConversationWorkbenchActions }) {
-  return (
-    <article className={`${styles.incidentCard} ${styles[`incident-${incident.tone}`]}`}>
-      <AlertTriangle size={17} aria-hidden="true" />
-      <div>
-        <div className={styles.incidentHeader}>
-          <strong>{incident.title}</strong>{incident.occurredAtLabel ? <time>{incident.occurredAtLabel}</time> : null}
-        </div>
-        <p>{incident.detail}</p>
-        {incident.reason ? <small>原因：{incident.reason}</small> : null}
-      </div>
-      <div className={styles.incidentActions}>
-        {incident.policyActionLabel && actions.onOpenIncidentPolicy ? <button type="button" data-action-id={`conversations.incident-${incident.id}.open-policy`} onClick={() => actions.onOpenIncidentPolicy?.(incident.id)} aria-label={`查看异常处理策略：${incident.title}`}>{incident.policyActionLabel}</button> : null}
-        {incident.retryActionLabel && actions.onRetryIncident ? <button type="button" data-action-id={`conversations.incident-${incident.id}.retry`} data-disabled-reason={incident.retryDisabled ? "当前异常不允许重试" : undefined} onClick={() => actions.onRetryIncident?.(incident.id)} disabled={incident.retryDisabled} aria-label={`重试异常处理：${incident.title}`}>{incident.retryActionLabel}</button> : null}
-      </div>
-    </article>
+function TimelineAttachment({ attachment }: { attachment: ConversationWorkbenchAttachment }) {
+  if (attachment.previewUrl) {
+    return (
+      <a className={styles.imageAttachment} href={attachment.href || attachment.previewUrl} target="_blank" rel="noreferrer" aria-label={`查看图片 ${attachment.name}`}>
+        <img src={attachment.previewUrl} alt={attachment.name} loading="lazy" />
+        <span><b>{attachment.name}</b>{attachment.detail ? <small>{attachment.detail}</small> : null}</span>
+      </a>
+    );
+  }
+  const content = (
+    <>
+      {attachment.kind === "image" ? <ImageIcon size={14} aria-hidden="true" /> : <Paperclip size={14} aria-hidden="true" />}
+      <span><b>{attachment.name}</b>{attachment.detail ? <small>{attachment.detail}</small> : null}</span>
+    </>
   );
+  return attachment.href ? (
+    <a href={attachment.href} target="_blank" rel="noreferrer" aria-label={`打开附件 ${attachment.name}`}>{content}</a>
+  ) : <span>{content}</span>;
 }

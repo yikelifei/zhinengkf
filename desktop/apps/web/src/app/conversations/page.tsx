@@ -1,10 +1,13 @@
-import { ConversationListPage } from "../../features/conversations/conversation-list-page";
+import { ConversationListPage, conversationNavigationFromSearchParams, type ConversationNavigationSearchParams } from "../../features/conversations";
 import { FeatureRouteShell } from "../feature-route-shell";
 
-export default function Page() {
+type PageProps = { searchParams: Promise<ConversationNavigationSearchParams> };
+
+export default async function Page({ searchParams }: PageProps) {
+  const navigation = conversationNavigationFromSearchParams(await searchParams);
   return (
     <FeatureRouteShell routeId="conversations">
-      <ConversationListPage />
+      <ConversationListPage initialNavigation={navigation} />
     </FeatureRouteShell>
   );
 }

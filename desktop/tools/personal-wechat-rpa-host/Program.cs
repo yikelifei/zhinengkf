@@ -65,7 +65,26 @@ if (options.OcrProbe || options.OcrWatch)
     var ocr = provider.GetRequiredService<OCRService>();
     ocr.InitOCREngin(WeAutomation.Config);
     await Task.Delay(TimeSpan.FromSeconds(2));
-    var result = OcrAccountProbe.Find(config, ocr);
+    var pinnedIdentity = AccountsConfigWriter.TryReadLiveIdentity(
+        config.AccountsConfigPath,
+        config.AccountNickname,
+        config.OwnerWxId);
+    var result = pinnedIdentity is null
+        ? OcrAccountProbe.Find(config, ocr)
+        : new OcrProbeResult(
+            true,
+            "pinned_runtime_identity",
+            true,
+            true,
+            pinnedIdentity,
+            Process.GetProcessesByName("Weixin").Length,
+            [new
+            {
+                processId = pinnedIdentity.ProcessId,
+                windowHandle = pinnedIdentity.WindowHandle,
+                windowsSessionId = pinnedIdentity.WindowsSessionId,
+                code = "verified_pinned_runtime_identity",
+            }]);
     if (!result.Ok || result.Target is null)
     {
         WriteJson(result);
@@ -248,7 +267,8 @@ sealed class RpaHost
                 messageType,
                 externalId,
                 createdAt.ToString("O"),
-                attachments));
+                attachments,
+                "uia_accessibility"));
         }
     }
 
@@ -297,7 +317,7 @@ sealed class RpaHost
             var route = context.Request.Url?.AbsolutePath.TrimEnd('/').ToLowerInvariant() ?? "";
             if (context.Request.HttpMethod == "GET" && route == "/health")
             {
-                await RespondAsync(context, 200, new { ok = true, status = "watching", target = _identity });
+                await RespondAsync(context, 200, new { ok = true, status = "watching", sendEnabled = _config.SendEnabled, target = _identity });
                 return;
             }
             if (context.Request.HttpMethod == "POST" && route == "/probe")
@@ -322,6 +342,8 @@ sealed class RpaHost
 
     private async Task<SendResult> SendAsync(JsonElement operation)
     {
+        if (!_config.SendEnabled)
+            return SendResult.Fail("real_send_disabled", "PERSONAL_WECHAT_SEND is not 1");
         await _sendLock.WaitAsync(_token);
         try
         {
@@ -454,7 +476,8 @@ sealed record InboundEvent(
     string MessageType,
     string ExternalId,
     string CreatedAt,
-    List<object> Attachments);
+    List<object> Attachments,
+    string CaptureSource);
 
 sealed record SendResult(
     bool Ok,
@@ -898,6 +921,7 @@ sealed class HostConfig
     public int Port { get; set; } = 3211;
     public bool EnableOcr { get; set; } = true;
     public int ListenIntervalSeconds { get; set; } = 5;
+    public bool SendEnabled { get; set; }
     public string ModelsPath { get; set; } = "";
     public string DownloadPath { get; set; } = "";
     public string CapturePath { get; set; } = "";
@@ -910,6 +934,9 @@ sealed class HostConfig
         var fullPath = Path.GetFullPath(path);
         if (!File.Exists(fullPath)) throw new FileNotFoundException("personal WeChat RPA config not found", fullPath);
         var config = JsonSerializer.Deserialize<HostConfig>(File.ReadAllText(fullPath), JsonDefaults.Options) ?? new HostConfig();
+        config.SendEnabled = StringComparer.Ordinal.Equals(
+            Environment.GetEnvironmentVariable("PERSONAL_WECHAT_SEND")?.Trim(),
+            "1");
         var baseDir = Path.GetDirectoryName(fullPath)!;
         config.ModelsPath = Resolve(config.ModelsPath, baseDir, "models");
         config.DownloadPath = Resolve(config.DownloadPath, baseDir, "downloads");
@@ -1018,6 +1045,58 @@ static class AccountsConfigWriter
 {
     private static readonly object Gate = new();
 
+    public static RuntimeIdentity? TryReadLiveIdentity(string filePath, string accountNickname, string ownerWxId)
+    {
+        lock (Gate)
+        {
+            if (!File.Exists(filePath)) return null;
+            try
+            {
+                var root = JsonNode.Parse(File.ReadAllText(filePath))?.AsObject();
+                var account = (root?["accounts"] as JsonArray)?
+                    .OfType<JsonObject>()
+                    .SingleOrDefault(item =>
+                        StringComparer.Ordinal.Equals(item["accountNickname"]?.GetValue<string>(), accountNickname) &&
+                        StringComparer.Ordinal.Equals(item["ownerWxId"]?.GetValue<string>(), ownerWxId));
+                if (account is null) return null;
+
+                var processId = account["processId"]?.GetValue<int>() ?? 0;
+                var windowHandle = account["windowHandle"]?.GetValue<string>() ?? "";
+                var windowsSessionId = account["windowsSessionId"]?.GetValue<int>() ?? -1;
+                var processName = account["processName"]?.GetValue<string>() ?? "";
+                var executablePath = account["executablePath"]?.GetValue<string>() ?? "";
+                if (processId <= 0 || windowHandle.Length == 0 || windowsSessionId < 0 ||
+                    !StringComparer.OrdinalIgnoreCase.Equals(processName, "Weixin") ||
+                    executablePath.Length == 0)
+                    return null;
+
+                using var process = Process.GetProcessById(processId);
+                process.Refresh();
+                if (process.HasExited || process.SessionId != windowsSessionId ||
+                    !StringComparer.OrdinalIgnoreCase.Equals(process.ProcessName, processName) ||
+                    !StringComparer.OrdinalIgnoreCase.Equals(process.MainModule?.FileName ?? "", executablePath))
+                    return null;
+                var liveHandle = NativeWindowActions.FindWeChatWindow(processId);
+                if (liveHandle == IntPtr.Zero ||
+                    !StringComparer.Ordinal.Equals(liveHandle.ToInt64().ToString(), windowHandle))
+                    return null;
+
+                return new RuntimeIdentity(
+                    accountNickname,
+                    ownerWxId,
+                    processId,
+                    windowHandle,
+                    windowsSessionId,
+                    processName,
+                    executablePath);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
     public static void RefreshIdentity(string filePath, RuntimeIdentity identity)
     {
         lock (Gate)
@@ -1050,12 +1129,20 @@ static class AccountsConfigWriter
             var accounts = root["accounts"] as JsonArray ?? new JsonArray();
             root["accounts"] = accounts;
             var accountId = binding.GetProperty("wechatAccountId").GetString()!;
-            var account = accounts.OfType<JsonObject>().SingleOrDefault(item => item["wechatAccountId"]?.GetValue<string>() == accountId);
+            var physicalAccounts = accounts
+                .OfType<JsonObject>()
+                .Where(item =>
+                    StringComparer.Ordinal.Equals(item["accountNickname"]?.GetValue<string>(), identity.AccountNickname) &&
+                    StringComparer.Ordinal.Equals(item["ownerWxId"]?.GetValue<string>(), identity.OwnerWxId))
+                .ToList();
+            var account = physicalAccounts.SingleOrDefault(item => item["wechatAccountId"]?.GetValue<string>() == accountId)
+                ?? physicalAccounts.FirstOrDefault();
             if (account is null)
             {
                 account = new JsonObject();
                 accounts.Add(account);
             }
+            MergePhysicalAccountBindings(accounts, physicalAccounts, account);
             account["wechatAccountId"] = accountId;
             ApplyIdentity(account, identity);
             var conversations = account["conversations"] as JsonArray ?? new JsonArray();
@@ -1071,6 +1158,27 @@ static class AccountsConfigWriter
             conversation["customerId"] = binding.GetProperty("customerId").GetString();
             conversation["chatTitle"] = chatTitle;
             WriteAtomic(filePath, root);
+        }
+    }
+
+    private static void MergePhysicalAccountBindings(JsonArray accounts, List<JsonObject> physicalAccounts, JsonObject target)
+    {
+        var merged = new JsonArray();
+        var conversationIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var account in physicalAccounts.Prepend(target).Distinct())
+        {
+            if (account["conversations"] is not JsonArray conversations) continue;
+            foreach (var conversation in conversations.OfType<JsonObject>())
+            {
+                var conversationId = conversation["conversationId"]?.GetValue<string>() ?? "";
+                if (conversationId.Length == 0 || !conversationIds.Add(conversationId)) continue;
+                merged.Add(conversation.DeepClone());
+            }
+        }
+        target["conversations"] = merged;
+        foreach (var duplicate in physicalAccounts.Where(item => !ReferenceEquals(item, target)).ToList())
+        {
+            accounts.Remove(duplicate);
         }
     }
 

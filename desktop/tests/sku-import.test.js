@@ -637,6 +637,24 @@ test("summarizes commercial SKU readiness for automation", () => {
   assert.ok(blocked.commercialReadiness.blockers.some((item) => item.includes("礼盒")));
 });
 
+test("separates structurally ready demo SKUs from customer-reply-ready business data", () => {
+  const skus = [
+    { skuCode: "BOX-DEMO", name: "演示礼盒", type: "gift_box", salePrice: 60, costPrice: 30, stock: 80, sceneTags: ["员工福利"], mainImagePath: "C:\\assets\\BOX-DEMO-demo.png", supplier: "供应商", dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+    { skuCode: "ITEM-REAL", name: "真实内搭", type: "item", salePrice: 40, costPrice: 20, stock: 80, sceneTags: ["员工福利"], mainImagePath: "C:\\assets\\item-real.png", supplier: "供应商", dimensions: { lengthCm: 10, widthCm: 8, heightCm: 4 }, weightGram: 300 },
+  ];
+  const result = auditSkuCatalog(skus, {
+    includeDataReadiness: true,
+    changeLogs: [{ skuCode: "ITEM-REAL", source: "import_confirm" }],
+  });
+
+  assert.equal(result.commercialReadiness.canAutoBundle, true);
+  assert.equal(result.dataReadiness.level, "partial");
+  assert.equal(result.dataReadiness.operatorProvidedCount, 1);
+  assert.equal(result.dataReadiness.demoImageCount, 1);
+  assert.equal(result.dataReadiness.customerReplyEligibleCount, 1);
+  assert.equal(result.dataReadiness.customerReplyReady, false);
+});
+
 test("identifies which SKU role limits basic bundle capacity", () => {
   const base = {
     costPrice: 20,

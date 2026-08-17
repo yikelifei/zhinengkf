@@ -15,6 +15,14 @@ require("ts-node").register({
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
+const originalUseLocalStore = appConfig.useLocalStore;
+test.beforeEach(() => {
+  appConfig.useLocalStore = true;
+});
+test.afterEach(() => {
+  appConfig.useLocalStore = originalUseLocalStore;
+});
+
 const VALID_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
   "base64",
@@ -114,6 +122,20 @@ test("quick confirm queues only local design image files", async () => {
         localPath: "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
         downloadUrl: "https://example.test/candidate-1.png",
       },
+      {
+        id: "image_4",
+        imageId: "candidate_4",
+        position: 4,
+        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_4.png",
+        downloadUrl: "https://example.test/candidate-4.png",
+      },
+      {
+        id: "image_3",
+        imageId: "candidate_3",
+        position: 3,
+        localPath: "C:\\storage\\design-jobs\\design_1\\candidate_3.png",
+        downloadUrl: "https://example.test/candidate-3.png",
+      },
     ],
   };
   const localStore = {
@@ -145,8 +167,243 @@ test("quick confirm queues only local design image files", async () => {
   assert.deepEqual(captured[0].imagePaths, [
     "C:\\storage\\design-jobs\\design_1\\candidate_1.png",
     "C:\\storage\\design-jobs\\design_1\\candidate_2.png",
+    "C:\\storage\\design-jobs\\design_1\\candidate_3.png",
+    "C:\\storage\\design-jobs\\design_1\\candidate_4.png",
   ]);
   assert.deepEqual(updatedPatch, { status: "sent", sendTaskId: "send_1" });
+});
+
+test("quick confirm refuses an incomplete local candidate round", async () => {
+  let enqueueCalled = false;
+  const job = {
+    id: "design_incomplete_round",
+    requestId: "request_incomplete_round",
+    status: "quick_confirm",
+    wechatAccountId: "wechat_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    images: [1, 2, 3].map((position) => ({
+      id: `image_${position}`,
+      imageId: `candidate_${position}`,
+      position,
+      localPath: `C:\\storage\\design-jobs\\design_incomplete_round\\candidate_${position}.png`,
+    })),
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    {
+      getDesignJob: () => job,
+      updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+    },
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async () => {
+        enqueueCalled = true;
+        return { id: "unexpected_send" };
+      },
+    },
+    {},
+    {},
+  );
+
+  await assert.rejects(
+    () => service.quickConfirmAndQueueSend(job.id),
+    /exactly 4 candidate images/,
+  );
+  assert.equal(enqueueCalled, false);
+});
+
+test("customer creative images pass multimodal QC before entering the send queue", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "creative-visual-qc-pass-"));
+  const prompts = [];
+  const captured = [];
+  const job = {
+    id: "creative_qc_pass",
+    requestId: "creative_qc_request",
+    status: "quick_confirm",
+    designType: "zhenxi_image",
+    wechatAccountId: "wechat_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    requirements: {
+      customerAgent: { deliverable: "greeting_card", deliverableLabel: "贺卡" },
+      zhenxi: { copyText: "老师，节日快乐", logoMode: "none" },
+    },
+    images: [1, 2, 3, 4].map((position) => ({
+      id: `creative_image_${position}`,
+      imageId: `creative_candidate_${position}`,
+      position,
+      localPath: writeImageFixture(root, "creative_qc_pass", `creative_candidate_${position}`),
+    })),
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    localStore,
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async (payload) => {
+        captured.push(payload);
+        return { id: "creative_send_1", payload };
+      },
+    },
+    {},
+    {},
+    {},
+    {
+      understandImages: async ({ images, prompt }) => {
+        prompts.push(prompt);
+        return { text: JSON.stringify({ pass: true, issues: [], checkedCount: images.length }) };
+      },
+    },
+  );
+
+  const sendTask = await service.quickConfirmAndQueueSend(job.id);
+  assert.equal(sendTask.id, "creative_send_1");
+  assert.equal(captured.length, 1);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /客户只要求的物料：贺卡/);
+  assert.match(prompts[0], /老师，节日快乐/);
+  assert.match(captured[0].textBeforeImages, /贺卡的 4 版效果/);
+});
+
+test("customer creative visual QC is single-flight when automation overlaps", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "creative-visual-qc-single-flight-"));
+  let resolveQc;
+  let visionCalls = 0;
+  let enqueueCalls = 0;
+  const job = {
+    id: "creative_qc_single_flight",
+    requestId: "creative_qc_single_flight_request",
+    status: "quick_confirm",
+    designType: "zhenxi_image",
+    wechatAccountId: "wechat_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    requirements: {
+      customerAgent: { deliverable: "poster", deliverableLabel: "poster" },
+      zhenxi: { copyText: "opening gift", logoMode: "none" },
+    },
+    images: [1, 2, 3, 4].map((position) => ({
+      id: `creative_single_flight_image_${position}`,
+      imageId: `creative_single_flight_candidate_${position}`,
+      position,
+      localPath: writeImageFixture(root, "creative_qc_single_flight", `candidate_${position}`),
+    })),
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    {
+      getDesignJob: () => job,
+      updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+    },
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async (payload) => {
+        enqueueCalls += 1;
+        return { id: "creative_single_flight_send", payload };
+      },
+    },
+    {},
+    {},
+    {},
+    {
+      understandImages: async ({ images }) => {
+        visionCalls += 1;
+        return await new Promise((resolve) => {
+          resolveQc = () => resolve({
+            text: JSON.stringify({ pass: true, issues: [], checkedCount: images.length }),
+          });
+        });
+      },
+    },
+  );
+
+  const first = service.quickConfirmAndQueueSend(job.id);
+  while (visionCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => service.quickConfirmAndQueueSend(job.id),
+    /visual QC is already processing/,
+  );
+  resolveQc();
+  const sendTask = await first;
+
+  assert.equal(sendTask.id, "creative_single_flight_send");
+  assert.equal(visionCalls, 1);
+  assert.equal(enqueueCalls, 1);
+});
+
+test("customer creative images with text errors are handed to a human instead of auto-sent", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "creative-visual-qc-fail-"));
+  let enqueueCalled = false;
+  let manualLockReason = "";
+  const reviewLogs = [];
+  const job = {
+    id: "creative_qc_fail",
+    requestId: "creative_qc_fail_request",
+    status: "quick_confirm",
+    designType: "zhenxi_image",
+    wechatAccountId: "wechat_1",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    requirements: {
+      customerAgent: { deliverable: "hang_tag", deliverableLabel: "吊牌" },
+      zhenxi: { copyText: "感谢一路相伴", logoMode: "provided" },
+    },
+    images: [1, 2, 3, 4].map((position) => ({
+      id: `creative_fail_image_${position}`,
+      imageId: `creative_fail_candidate_${position}`,
+      position,
+      localPath: writeImageFixture(root, "creative_qc_fail", `creative_fail_candidate_${position}`),
+    })),
+  };
+  const localStore = {
+    getDesignJob: () => job,
+    updateDesignJob: (id, patch) => ({ ...job, id, ...patch }),
+    createReviewLog: (payload) => {
+      reviewLogs.push(payload);
+      return payload;
+    },
+  };
+  const service = new DesignJobsService(
+    {},
+    {},
+    localStore,
+    { create: async () => ({}) },
+    {},
+    {
+      enqueueDesignImages: async () => {
+        enqueueCalled = true;
+        return { id: "unexpected_send" };
+      },
+      setConversationManualLock: async (_id, payload) => {
+        manualLockReason = payload.reason;
+        return { blockedSendTasks: [], inFlightSendTasks: [] };
+      },
+    },
+    {},
+    {},
+    {},
+    {
+      understandImages: async () => ({
+        text: JSON.stringify({ pass: false, issues: ["第2张把相伴写成相伴的繁体字"], checkedCount: 4 }),
+      }),
+    },
+  );
+
+  await assert.rejects(() => service.quickConfirmAndQueueSend(job.id), /visual QC failed/);
+  assert.equal(enqueueCalled, false);
+  assert.equal(manualLockReason, "creative_visual_qc_failed");
+  assert.equal(reviewLogs[0].decision, "creative_visual_qc_failed");
 });
 
 test("quick confirm sends only the latest revision round images", async () => {
@@ -183,6 +440,18 @@ test("quick confirm sends only the latest revision round images", async () => {
         position: 102,
         localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_2.png",
       },
+      {
+        id: "revision_image_3",
+        imageId: "r1-candidate_3",
+        position: 103,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_3.png",
+      },
+      {
+        id: "revision_image_4",
+        imageId: "r1-candidate_4",
+        position: 104,
+        localPath: "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_4.png",
+      },
     ],
   };
   const service = new DesignJobsService(
@@ -209,6 +478,8 @@ test("quick confirm sends only the latest revision round images", async () => {
   assert.deepEqual(captured[0].imagePaths, [
     "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_1.png",
     "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_2.png",
+    "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_3.png",
+    "C:\\storage\\design-jobs\\design_revision_send_1\\r1-candidate_4.png",
   ]);
 });
 
@@ -913,17 +1184,16 @@ test("revision callback saves local files with versioned image ids", async (t) =
     requestId: "request_1",
     externalJobId: "external_1",
     status: "completed",
-    images: [
-      {
-        imageId: "candidate_1",
-        downloadUrl: "https://example.test/revision-candidate-1.png",
-        width: 1024,
-        height: 1024,
-      },
-    ],
+    images: [1, 2, 3, 4].map((position) => ({
+      imageId: `candidate_${position}`,
+      downloadUrl: `https://example.test/revision-candidate-${position}.png`,
+      width: 1024,
+      height: 1024,
+    })),
   });
 
   assert.equal(saved[0].imageId, "r1-candidate_1");
+  assert.equal(saved.length, 4);
   assert.equal(upsertedImages[0].imageId, "r1-candidate_1");
   assert.match(upsertedImages[0].localPath, /r1-candidate_1\.png$/);
   assert.equal(updated.images[0].imageId, "r1-candidate_1");
@@ -983,17 +1253,16 @@ test("revision callback does not double-prefix already versioned image ids", asy
     requestId: "request_1",
     externalJobId: "external_1",
     status: "completed",
-    images: [
-      {
-        imageId: "r1-candidate_1",
-        downloadUrl: "https://example.test/revision-candidate-1.png",
-        width: 1024,
-        height: 1024,
-      },
-    ],
+    images: [1, 2, 3, 4].map((position) => ({
+      imageId: `r1-candidate_${position}`,
+      downloadUrl: `https://example.test/revision-candidate-${position}.png`,
+      width: 1024,
+      height: 1024,
+    })),
   });
 
   assert.equal(saved[0].imageId, "r1-candidate_1");
+  assert.equal(saved.length, 4);
   assert.equal(upsertedImages[0].imageId, "r1-candidate_1");
   assert.match(upsertedImages[0].localPath, /r1-candidate_1\.png$/);
   assert.equal(updated.images[0].imageId, "r1-candidate_1");

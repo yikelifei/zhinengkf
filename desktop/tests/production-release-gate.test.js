@@ -8,16 +8,24 @@ const test = require("node:test");
 
 const {
   STATUS,
+  WEB_BUILD_BLOCKED_PATTERN,
   checkDependencyLock,
   checkMigrationInventory,
+  checkReleaseCandidateWorkspace,
   compareVersions,
   computeOverallStatus,
   createReport,
+  createNodeTestShards,
+  HEAVY_NODE_TEST_SHARD_TIMEOUT_MS,
+  HEAVY_NODE_TEST_FILES,
   isLinkedWorktreeLayout,
+  localDesignPlatformEnv,
+  listNodeTestFiles,
   parseGateOptions,
   parseVersion,
   resolveCommandFailureStatus,
   renderMarkdownReport,
+  summarizeNodeShardResults,
   scanSecretEntries,
 } = require("../tools/production-release-gate");
 const {
@@ -38,8 +46,39 @@ function temporaryDirectory(t) {
 test("canonical Node release test runs every test file with deterministic single-file concurrency", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8"));
   const releaseGate = fs.readFileSync(path.resolve(__dirname, "../tools/production-release-gate.js"), "utf8");
-  assert.equal(packageJson.scripts.test, "node --test --test-concurrency=1 tests/*.test.js");
-  assert.match(releaseGate, /runNpmCheck\("tests\.node", "Node 完整测试", \["test"\]\)/);
+  const testRunner = fs.readFileSync(path.resolve(__dirname, "../tools/run-node-tests.js"), "utf8");
+  assert.equal(packageJson.scripts.test, "node tools/run-node-tests.js");
+  assert.match(testRunner, /\["--test", "--test-concurrency=1", \.\.\.testFiles\]/);
+  assert.match(testRunner, /testFiles = args\.length \? args : \["tests\/\*\.test\.js"\]/);
+  assert.match(testRunner, /USE_LOCAL_STORE: "true"/);
+  assert.match(testRunner, /DESIGN_PLATFORM_BASE_URL: "http:\/\/127\.0\.0\.1:3700"/);
+  assert.match(releaseGate, /runNodeTestShards\(results, execution\)/);
+  assert.doesNotMatch(releaseGate, /runNpmCheck\("tests\.node"[\s\S]*\["test"\]\)/);
+  assert.ok(listNodeTestFiles().includes("tests/production-release-gate.test.js"));
+});
+
+test("release Node tests are split into deterministic shards with an aggregate result", () => {
+  assert.deepEqual(createNodeTestShards(["a", "b", "c", "d", "e"], 2), [["a", "b"], ["c", "d"], ["e"]]);
+  assert.deepEqual(
+    createNodeTestShards(["a", "tests/project-completion-audit.test.js", "b", "c"], 2, { heavyFiles: HEAVY_NODE_TEST_FILES }),
+    [["a"], ["tests/project-completion-audit.test.js"], ["b", "c"]],
+  );
+  assert.equal(HEAVY_NODE_TEST_SHARD_TIMEOUT_MS, 600_000);
+  assert.throws(() => createNodeTestShards(["a"], 0), /positive integer/);
+
+  const passed = summarizeNodeShardResults([
+    { id: "tests.node.01", status: STATUS.PASS },
+    { id: "tests.node.02", status: STATUS.PASS },
+  ], 24);
+  assert.equal(passed.status, STATUS.PASS);
+  assert.match(passed.summary, /passed=2 failed=0 blocked=0 files=24/);
+
+  const failed = summarizeNodeShardResults([
+    { id: "tests.node.01", status: STATUS.PASS },
+    { id: "tests.node.02", status: STATUS.FAIL, log: ".runtime/production-release-gate/logs/tests.node.02.log" },
+  ], 24);
+  assert.equal(failed.status, STATUS.FAIL);
+  assert.deepEqual(failed.details, ["tests.node.02 FAIL (.runtime/production-release-gate/logs/tests.node.02.log)"]);
 });
 
 test("version comparison accepts supported Node and Python versions", () => {
@@ -93,11 +132,55 @@ test("isolated release gate defaults to distinct valid ports and allows explicit
   assert.throws(() => parseGateOptions(["--unknown"]), /unsupported argument/i);
 });
 
+test("release gate Node tests force a local design platform origin", () => {
+  assert.deepEqual(localDesignPlatformEnv({ mode: "default", ports: null }), {
+    DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700",
+  });
+  assert.deepEqual(localDesignPlatformEnv({ mode: "isolated-worktree", ports: { web: 31911, api: 32911, mock: 37911 } }), {
+    DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:37911",
+  });
+
+  const releaseGate = fs.readFileSync(path.resolve(__dirname, "../tools/production-release-gate.js"), "utf8");
+  assert.match(releaseGate, /env:\s*localDesignPlatformEnv\(execution\)/);
+});
+
 test("isolated release gate accepts only linked worktree git layouts", () => {
   assert.equal(isLinkedWorktreeLayout("D:/repo/.git/worktrees/wave9", "D:/repo/.git"), true);
   assert.equal(isLinkedWorktreeLayout("D:/repo/.git", "D:/repo/.git"), false);
   assert.equal(isLinkedWorktreeLayout("", "D:/repo/.git"), false);
   assert.equal(isLinkedWorktreeLayout("D:/other/git-dir", "D:/repo/.git"), false);
+});
+
+test("release gate blocks dirty release candidate workspaces without reading diffs", () => {
+  const clean = checkReleaseCandidateWorkspace({
+    repositoryRoot: "C:/fixture",
+    runCommand: () => ({ status: 0, stdout: "" }),
+  });
+  assert.equal(clean.status, STATUS.PASS);
+
+  const dirty = checkReleaseCandidateWorkspace({
+    repositoryRoot: "C:/fixture",
+    runCommand: (_command, args) => {
+      assert.deepEqual(args, ["status", "--porcelain=v1", "--untracked-files=all"]);
+      return {
+        status: 0,
+        stdout: " M desktop/apps/api/src/wechat-work/wechat-work.service.ts\n?? desktop/tests/new-contract.test.js\n",
+      };
+    },
+  });
+  assert.equal(dirty.status, STATUS.BLOCKED);
+  assert.deepEqual(dirty.counts, { statusEntries: 2, modified: 1, untracked: 1 });
+  assert.deepEqual(dirty.details, [
+    "M desktop/apps/api/src/wechat-work/wechat-work.service.ts",
+    "?? desktop/tests/new-contract.test.js",
+  ]);
+  assert.match(dirty.summary, /必须先冻结发布分支或干净工作区/);
+
+  const unreadable = checkReleaseCandidateWorkspace({
+    repositoryRoot: "C:/fixture",
+    runCommand: () => ({ status: 128, stderr: "not a repository" }),
+  });
+  assert.equal(unreadable.status, STATUS.FAIL);
 });
 
 test("web build foreign-owner override fails closed for same-root and unknown owners", () => {
@@ -253,12 +336,50 @@ test("isolated owner safety exit is BLOCKED while compile failures remain FAIL",
   assert.equal(resolveCommandFailureStatus(2, STATUS.FAIL, isolatedMapping), STATUS.BLOCKED);
   assert.equal(resolveCommandFailureStatus(1, STATUS.FAIL, isolatedMapping), STATUS.FAIL);
   assert.equal(resolveCommandFailureStatus(null, STATUS.FAIL, isolatedMapping), STATUS.FAIL);
+  assert.equal(
+    resolveCommandFailureStatus(
+      1,
+      STATUS.FAIL,
+      {},
+      "EPERM: operation not permitted, rename 'node_modules/.prisma/client/query_engine-windows.dll.node.tmp' -> 'query_engine-windows.dll.node'",
+      [{ pattern: /EPERM:[\s\S]*query_engine-windows\.dll\.node/i, status: STATUS.BLOCKED }],
+    ),
+    STATUS.BLOCKED,
+  );
+  assert.equal(
+    resolveCommandFailureStatus(
+      1,
+      STATUS.FAIL,
+      {},
+      "Prisma schema validation failed",
+      [{ pattern: /EPERM:[\s\S]*query_engine-windows\.dll\.node/i, status: STATUS.BLOCKED }],
+    ),
+    STATUS.FAIL,
+  );
+});
+
+test("release gate classifies active desktop web runtime as BLOCKED, not build failure", () => {
+  const output = [
+    "> smart-kefu-desktop@0.1.0 build:web",
+    "[blocked] Web port 3100 is currently used by PID 47072.",
+    "          Stop the desktop services before building web assets:",
+    "          npm.cmd run ports:stop",
+  ].join("\n");
+  assert.equal(
+    resolveCommandFailureStatus(1, STATUS.FAIL, {}, output, [{
+      pattern: WEB_BUILD_BLOCKED_PATTERN,
+      status: STATUS.BLOCKED,
+    }]),
+    STATUS.BLOCKED,
+  );
+  assert.equal(resolveCommandFailureStatus(1, STATUS.FAIL, {}, "TypeScript compilation failed"), STATUS.FAIL);
 });
 
 test("release report discloses default or isolated-worktree execution mode and ports", () => {
   const defaultReport = createReport([{ status: STATUS.PASS }], { mode: "default", ports: null });
   assert.equal(defaultReport.mode, "default");
   assert.equal(defaultReport.ports, null);
+  assert.equal(defaultReport.completed, true);
 
   const isolatedReport = createReport([{ status: STATUS.BLOCKED }], {
     mode: "isolated-worktree",
@@ -270,6 +391,22 @@ test("release report discloses default or isolated-worktree execution mode and p
   assert.match(renderMarkdownReport(isolatedReport), /运行模式：`isolated-worktree`/);
   assert.match(renderMarkdownReport(isolatedReport), /Web=31911, API=32911, Mock=37911/);
   assert.match(renderMarkdownReport(isolatedReport), /owner 安全检查端口：41000/);
+});
+
+test("in-progress release reports stay blocked and explain the incomplete stage", () => {
+  const report = createReport([{ id: "runtime.node", title: "Node", status: STATUS.PASS, summary: "ok" }], {
+    mode: "default",
+    completed: false,
+    currentStage: "running tests.node",
+  });
+  assert.equal(report.completed, false);
+  assert.equal(report.currentStage, "running tests.node");
+  assert.equal(report.status, STATUS.BLOCKED);
+  assert.equal(report.results.some((item) => item.id === "gate.incomplete" && item.status === STATUS.BLOCKED), true);
+  const markdown = renderMarkdownReport(report);
+  assert.match(markdown, /完成状态：阶段性报告，未完成/);
+  assert.match(markdown, /当前阶段：running tests\.node/);
+  assert.match(markdown, /生产发布门禁未完成/);
 });
 
 test("dependency lock check detects drift and accepts synchronized manifests", (t) => {
@@ -367,4 +504,8 @@ test("Python task runner prefers project virtual environments in linked worktree
   assert.match(runner, /git rev-parse --git-common-dir/);
   assert.match(runner, /LINKED_REPO_PYTHON=.*\\.venv\\Scripts\\python\.exe/);
   assert.match(runner, /SMART_KEFU_TASK_TEMP=.*\\desktop\\.runtime\\python-temp/);
+
+  const pytestRunner = fs.readFileSync(path.resolve(__dirname, "..", "..", "scripts", "run_tests.py"), "utf8");
+  assert.match(pytestRunner, /SMART_KEFU_TASK_TEMP/);
+  assert.match(pytestRunner, /--basetemp/);
 });

@@ -49,7 +49,7 @@ test("design job preflight blocks formal generation below first-round output cou
     appConfig.designPlatformCallbackUrl = "";
     appConfig.customerServicePublicBaseUrl = "http://127.0.0.1:3200";
     appConfig.callbackApiKey = "callback-secret";
-    appConfig.defaultOutputCount = 6;
+    appConfig.defaultOutputCount = 4;
 
     const service = new DesignJobsService(
       {},
@@ -68,7 +68,7 @@ test("design job preflight blocks formal generation below first-round output cou
 
     assert.equal(result.ok, false);
     assert.equal(result.outputCount, 3);
-    assert.deepEqual(result.requiredOutputCountRange, { min: 4, max: 6 });
+    assert.deepEqual(result.requiredOutputCountRange, { min: 4, max: 4 });
     assert.equal(outputCountCheck.ok, false);
     assert.equal(outputCountCheck.severity, "error");
     assert.match(outputCountCheck.detail, /至少 4 张/);
@@ -119,7 +119,7 @@ test("design job submit stops before calling platform when output count is below
     appConfig.useLocalStore = true;
     appConfig.designPlatformAdapter = "standard_v1";
     appConfig.designPlatformBaseUrl = "http://127.0.0.1:3700";
-    appConfig.defaultOutputCount = 6;
+    appConfig.defaultOutputCount = 4;
 
     const service = new DesignJobsService(
       {},
@@ -205,7 +205,7 @@ test("standard submit with a missing callback key stops before asset upload or r
     },
     assets: [{ id: "asset-logo", url: "https://example.test/logo.png" }],
     requirements: { useRealSkuImages: true },
-    outputCount: 6,
+    outputCount: 4,
   };
   let uploadCalls = 0;
   let createCalls = 0;
@@ -277,7 +277,7 @@ test("art local preflight does not require the standard callback key", async () 
     bundle: { automation: { ready: true, blockers: [] }, items: [] },
     assets: [],
     requirements: { useRealSkuImages: false },
-    outputCount: 6,
+    outputCount: 4,
   };
   try {
     Object.assign(appConfig, { useLocalStore: true, designPlatformAdapter: "art_image_local", callbackApiKey: "" });
@@ -298,6 +298,49 @@ test("art local preflight does not require the standard callback key", async () 
     );
     const result = await service.preflight(job.id);
     assert.equal(result.checks.some((check) => check.key === "design_platform_callback_auth"), false);
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("Zhenxi release MCP preflight requires MCP health but not an external API key", async () => {
+  const previous = { ...appConfig };
+  const job = {
+    id: "design-zhenxi-mcp-preflight-1",
+    requestId: "request-zhenxi-mcp-preflight-1",
+    customerId: "customer-1",
+    conversationId: "conversation-1",
+    status: "draft",
+    scene: "企业智能客服",
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 20, totalAmount: 4000 },
+    bundle: { automation: { ready: true, blockers: [] }, items: [] },
+    assets: [],
+    requirements: { useRealSkuImages: false },
+    outputCount: 4,
+  };
+  try {
+    Object.assign(appConfig, {
+      useLocalStore: true,
+      designPlatformAdapter: "zhenxi_external",
+      designPlatformApiKey: "",
+      designPlatformAccessToken: "",
+      callbackApiKey: "",
+    });
+    const service = new DesignJobsService(
+      {},
+      { health: async () => ({ reachable: true, transport: "mcp_stdio", target: "installed_release" }) },
+      { getDesignJob: () => job },
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    const result = await service.preflight(job.id);
+    assert.equal(result.ok, true);
+    assert.equal(result.checks.some((check) => check.key === "zhenxi_external_api_key"), false);
+    assert.equal(result.checks.find((check) => check.key === "zhenxi_mcp_release").ok, true);
   } finally {
     Object.assign(appConfig, previous);
   }

@@ -30,6 +30,8 @@ const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.j
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const supervisorStopRequestFile = path.join(runtimeDir, "desktop-supervisor-stop-request");
+const stableStopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const stableStartingLockFile = path.join(stableRuntimeDir, "stable-starting.lock");
 const stableKeepAliveHeartbeatFile = path.join(stableRuntimeDir, "keep-alive.json");
 const stableRuntimeLauncherPidFile = path.join(stableRuntimeDir, "stable-runtime-launcher.pid");
@@ -60,12 +62,17 @@ async function main() {
   }
   setModeEnv();
   if (supervisorChild) {
+    if (supervisorStopRequested()) {
+      appendLog(launcherLog, "[supervisor] supervisor stop request exists; exiting child before startup");
+      return;
+    }
     await runSupervisorLoop();
     return;
   }
 
   assertModeSwitchAllowed();
   stopConflictingDesktopServices();
+  clearSupervisorStopRequests();
   updateMockModeLock();
   updateRealModeLock();
   disableConflictingLauncher();
@@ -381,6 +388,8 @@ function writeSupervisorChildCmd() {
     "setlocal",
     `cd /d ${cmdQuote(process.cwd())}`,
     ...envLines,
+    `if exist ${cmdQuote(supervisorStopRequestFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableStopRequestFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${cmdQuote("tools/desktop-service-supervisor.js")} ${cmdQuote(
       realDesignMode ? "--real-design" : "--mock-design",
     )} ${cmdQuote("--supervisor-child")} >> ${cmdQuote(launcherLog)} 2>>&1`,
@@ -396,6 +405,10 @@ async function runSupervisorLoop() {
   writeActiveLaunchers();
   appendLog(launcherLog, `[supervisor] persistent ${realDesignMode ? "real" : "mock"} supervisor started pid=${process.pid}`);
   for (;;) {
+    if (supervisorStopRequested()) {
+      appendLog(launcherLog, "[supervisor] supervisor stop request exists; exiting loop");
+      return;
+    }
     if (await stableDesktopGuardActive()) {
       appendLog(launcherLog, "[supervisor] stable desktop runtime became active; stopping legacy supervisor loop");
       return;
@@ -411,6 +424,10 @@ async function runSupervisorLoop() {
     });
     closeLogFd(stdout);
     closeLogFd(stderr);
+    if (supervisorStopRequested()) {
+      appendLog(launcherLog, "[supervisor] supervisor stop request exists after child exit; stopping supervision");
+      return;
+    }
     if (result.status === 0) {
       appendLog(launcherLog, `[${new Date().toISOString()}] start-dev-ports exited with 0, continuing supervision`);
       sleep(2000);
@@ -667,14 +684,29 @@ function buildLauncherCmd() {
     ...launcherEnvKeys()
       .filter((key) => process.env[key] !== undefined)
       .map((key) => `set ${cmdSetArg(key, process.env[key])}`),
+    `if exist ${cmdQuote(supervisorStopRequestFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableStopRequestFile)} exit /b 0`,
     ":restart",
+    `if exist ${cmdQuote(supervisorStopRequestFile)} exit /b 0`,
+    `if exist ${cmdQuote(stableStopRequestFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${modeArgs.map(cmdQuote).join(" ")} >> ${cmdQuote(launcherLog)} 2>>&1`,
+    `if exist ${cmdQuote(supervisorStopRequestFile)} exit /b %ERRORLEVEL%`,
+    `if exist ${cmdQuote(stableStopRequestFile)} exit /b %ERRORLEVEL%`,
     `if %ERRORLEVEL% EQU 0 echo [%date% %time%] start-dev-ports exited with 0, continuing supervision >> ${cmdQuote(launcherLog)}`,
     `echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ${cmdQuote(launcherLog)}`,
     "timeout /t 2 /nobreak >nul",
     "goto restart",
   ];
   return `${lines.join("\r\n")}\r\n`;
+}
+
+function supervisorStopRequested() {
+  return fs.existsSync(supervisorStopRequestFile) || fs.existsSync(stableStopRequestFile);
+}
+
+function clearSupervisorStopRequests() {
+  removeIfPossible(supervisorStopRequestFile);
+  removeIfPossible(stableStopRequestFile);
 }
 
 function launcherEnvKeys() {

@@ -1,13 +1,23 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { WechatDispatchService } from "./wechat-dispatch.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
+import { appConfig } from "../shared/app-config";
 import {
   OperatorAccessGuard,
   RequireOperatorCapability,
   TrustedOperator,
 } from "../operator-access/operator-access.guard";
 import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
-import { WechatBridgeAccessGuard, WechatWindowObserverAccessGuard } from "./wechat-runtime-access.guard";
+
+function resolvedSendAdapterName(adapter?: string) {
+  return String(adapter || appConfig.wechatSendAdapter || "dry_run").trim();
+}
+
+function assertEnterpriseWechatOnlySendAdapter(adapter?: string) {
+  if (resolvedSendAdapterName(adapter) === "windows_bridge") {
+    throw new ForbiddenException("windows_bridge is not available; customer messages must use wechat_work_kf");
+  }
+}
 
 @Controller("wechat")
 export class WechatController {
@@ -63,7 +73,7 @@ export class WechatController {
   @UseGuards(OperatorAccessGuard)
   enqueueManualReply(
     @Param("id") id: string,
-    @Body() payload: { text?: string; operator?: string; operationKey?: string } & ExpectedIdentityPayload,
+    @Body() payload: { text?: string; assetIds?: string[]; operator?: string; operationKey?: string } & ExpectedIdentityPayload,
     @TrustedOperator() principal: TrustedOperatorPrincipal,
   ) {
     if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
@@ -74,6 +84,7 @@ export class WechatController {
       conversationId: id,
       customerId: payload.expectedCustomerId,
       text: payload.text,
+      assetIds: payload.assetIds,
       operator: principal.id,
       operationKey: payload.operationKey,
     });
@@ -146,7 +157,25 @@ export class WechatController {
   @RequireOperatorCapability("view_console")
   @UseGuards(OperatorAccessGuard)
   getSendAdapter(@Query("adapter") adapter?: string) {
+    assertEnterpriseWechatOnlySendAdapter(adapter);
     return this.wechat.getSendAdapter(adapter);
+  }
+
+  @Post("conversations/:id/reply-suggestion")
+  @RequireOperatorCapability("reply_conversations")
+  @UseGuards(OperatorAccessGuard)
+  generateConversationReplySuggestion(
+    @Param("id") id: string,
+    @Body() payload: ExpectedIdentityPayload = {},
+  ) {
+    if (!payload.expectedConversationId || payload.expectedConversationId !== id) {
+      throw new BadRequestException("reply suggestion requires matching expectedConversationId");
+    }
+    return this.wechat.generateConversationReplySuggestion({
+      wechatAccountId: payload.expectedWechatAccountId,
+      conversationId: id,
+      customerId: payload.expectedCustomerId,
+    });
   }
 
   @Get("channels/status")
@@ -164,7 +193,7 @@ export class WechatController {
   @RequireOperatorCapability("manage_channels")
   @UseGuards(OperatorAccessGuard)
   processChannelInboundTest(
-    @Param("channel") channel: "personal_wechat" | "work_wechat" | "mini_program",
+    @Param("channel") channel: "work_wechat",
     @Body() payload: {
       wechatAccountId?: string;
       conversationId?: string;
@@ -175,93 +204,8 @@ export class WechatController {
       attachments?: Array<Record<string, unknown>>;
     } & ExpectedIdentityPayload,
   ) {
+    if (channel !== "work_wechat") throw new BadRequestException("only work_wechat is supported");
     return this.wechat.processChannelInboundTest(channel, payload || {});
-  }
-
-  @Get("bridge/outbox")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatBridgeAccessGuard)
-  listBridgeOutbox(
-    @Query("wechatAccountId") wechatAccountId?: string,
-    @Query("conversationId") conversationId?: string,
-    @Query("customerId") customerId?: string,
-  ) {
-    return this.wechat.listBridgeOutbox({ wechatAccountId, conversationId, customerId });
-  }
-
-  @Get("bridge/dispatch")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatBridgeAccessGuard)
-  listBridgeDispatch(
-    @Query("wechatAccountId") wechatAccountId?: string,
-    @Query("conversationId") conversationId?: string,
-    @Query("customerId") customerId?: string,
-  ) {
-    return this.wechat.listBridgeDispatch({ wechatAccountId, conversationId, customerId });
-  }
-
-  @Get("bridge/status")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatBridgeAccessGuard)
-  getBridgeStatus(
-    @Query("wechatAccountId") wechatAccountId?: string,
-    @Query("conversationId") conversationId?: string,
-    @Query("customerId") customerId?: string,
-  ) {
-    return this.wechat.getBridgeStatus({ wechatAccountId, conversationId, customerId });
-  }
-
-  @Post("bridge/inbox/scan")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatBridgeAccessGuard)
-  scanBridgeInbox() {
-    return this.wechat.scanBridgeInbox();
-  }
-
-  @Get("window-snapshots")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatWindowObserverAccessGuard)
-  listWindowSnapshots(
-    @Query("wechatAccountId") wechatAccountId?: string,
-    @Query("conversationId") conversationId?: string,
-    @Query("customerId") customerId?: string,
-  ) {
-    return this.wechat.listWindowSnapshots({ wechatAccountId, conversationId, customerId });
-  }
-
-  @Get("window-observer/status")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatWindowObserverAccessGuard)
-  getWindowObserverStatus() {
-    return this.wechat.getWindowObserverStatus();
-  }
-
-  @Post("window-observer/capture-once")
-  @RequireOperatorCapability("manage_channels")
-  @UseGuards(OperatorAccessGuard)
-  captureWindowObserverOnce() {
-    return this.wechat.captureWindowObserverOnce();
-  }
-
-  @Post("window-snapshots/inbox/scan")
-  @RequireOperatorCapability("view_console")
-  @UseGuards(WechatWindowObserverAccessGuard)
-  scanWindowSnapshotInbox() {
-    return this.wechat.scanWindowSnapshotInbox();
-  }
-
-  @Post("window-snapshots/demo")
-  @RequireOperatorCapability("manage_channels")
-  @UseGuards(OperatorAccessGuard)
-  createDemoWindowSnapshot(
-    @Body()
-    payload: {
-      mode?: "correct" | "wrong_chat" | "offline";
-      wechatAccountId?: string;
-      conversationId?: string;
-    } & ExpectedIdentityPayload,
-  ) {
-    return this.wechat.createDemoWindowSnapshot(payload || {});
   }
 
   @Post("send-tasks/demo")
@@ -350,6 +294,7 @@ export class WechatController {
   processSafeSendQueue(
     @Body() payload: { adapter?: string; limit?: number; wechatAccountId?: string; conversationId?: string; customerId?: string },
   ) {
+    assertEnterpriseWechatOnlySendAdapter(payload?.adapter);
     return this.wechat.processSafeSendQueue(payload || {});
   }
 
@@ -363,29 +308,6 @@ export class WechatController {
     return this.wechat.validateSendTask(id, payload || {});
   }
 
-  @Post("send-tasks/:id/validate-current-window")
-  @RequireOperatorCapability("approve_send")
-  @UseGuards(OperatorAccessGuard)
-  validateWithCurrentWindow(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
-    return this.wechat.validateSendTaskWithCurrentWindow(id, payload || {});
-  }
-
-  @Post("send-tasks/:id/mark-sent")
-  @RequireOperatorCapability("approve_send")
-  @UseGuards(OperatorAccessGuard)
-  markSent(
-    @Param("id") id: string,
-    @Body() payload: { mode?: "correct" | "wrong_chat"; activeWindow?: Record<string, unknown> },
-  ) {
-    return this.wechat.markSentAfterGuard(id, payload || {});
-  }
-
-  @Post("send-tasks/:id/mark-sent-current-window")
-  @RequireOperatorCapability("approve_send")
-  @UseGuards(OperatorAccessGuard)
-  markSentWithCurrentWindow(@Param("id") id: string) {
-    return this.wechat.markSentAfterCurrentWindowGuard(id);
-  }
 
   @Post("send-tasks/:id/execute-dry-run")
   @RequireOperatorCapability("approve_send")
@@ -398,7 +320,15 @@ export class WechatController {
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
   executeSend(@Param("id") id: string, @Body() payload: { adapter?: string } & ExpectedIdentityPayload) {
+    assertEnterpriseWechatOnlySendAdapter(payload?.adapter);
     return this.wechat.executeQueuedSend(id, payload || {});
+  }
+
+  @Post("send-tasks/:id/execute-manual-reply")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  executeManualReply(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
+    return this.wechat.executeManualReplyNow(id, payload || {});
   }
 
   @Post("send-tasks/:id/requeue")
@@ -421,7 +351,7 @@ export class WechatController {
   resolveSendDelivery(
     @Param("id") id: string,
     @Body() payload: {
-      resolution: "confirmed_sent" | "confirmed_not_sent";
+      resolution: "confirmed_sent" | "confirmed_not_sent" | "abandoned_unknown";
       operationKey: string;
       reason?: string;
     } & ExpectedIdentityPayload,
@@ -430,26 +360,4 @@ export class WechatController {
     return this.wechat.resolveUnknownSendDelivery(id, payload, principal.id);
   }
 
-  @Post("send-tasks/:id/bridge-ack")
-  acknowledgeBridgeSend(
-    @Param("id") id: string,
-    @Body() payload: {
-      status: "sent" | "failed";
-      version?: string;
-      protocolVersion?: string;
-      ackToken?: string;
-      bridgeAckToken?: string;
-      taskId?: string;
-      attemptId?: string;
-      wechatAccountId?: string;
-      conversationId?: string;
-      outboxFileName?: string;
-      outboxFile?: string;
-      errorMessage?: string;
-      metadata?: Record<string, unknown>;
-      sentAt?: string;
-    },
-  ) {
-    return this.wechat.acknowledgeBridgeSend(id, payload || { status: "failed" });
-  }
 }

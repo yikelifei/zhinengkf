@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Injectable, Optional } from "@nestjs/common";
 import { appConfig } from "../shared/app-config";
 import { WechatWorkApiClient, WechatWorkApiError } from "../wechat-work/wechat-work-api.client";
-import { resolveWechatWorkImageFile } from "../wechat-work/wechat-work-media";
+import { resolveWechatWorkImageFile, resolveWechatWorkMaterialFile } from "../wechat-work/wechat-work-media";
 
 type AdapterStatus = "started" | "dry_run" | "sent" | "failed";
 
@@ -135,6 +135,7 @@ export class WechatSendAdapterService {
       capabilities: {
         text: true,
         images: supportsImageActions,
+        files: adapter.name === "wechat_work_kf",
         quote: true,
         requiresWindowGuard: adapter.name !== "wechat_work_kf",
         writesOutbox: adapter.name === "windows_bridge",
@@ -155,11 +156,13 @@ export class WechatSendAdapterService {
     msgid: string,
   ) {
     if (!this.wechatWorkApi) throw new Error("wechat work api client is unavailable");
-    const text = String(task?.payload?.textBeforeImages || task?.payload?.text || "").trim();
+    const text = String(task?.payload?.textBeforeImages || task?.payload?.textBeforeFiles || task?.payload?.text || "").trim();
     const rawImagePaths = Array.isArray(task?.payload?.imagePaths) ? task.payload.imagePaths : [];
     const images = rawImagePaths.map((filePath: unknown) => resolveWechatWorkImageFile(filePath));
-    const actionCount = (text ? 1 : 0) + images.length;
-    if (!actionCount) throw new Error("wechat work customer-service send requires text or at least one image");
+    const rawFilePaths = Array.isArray(task?.payload?.filePaths) ? task.payload.filePaths : [];
+    const files = rawFilePaths.map((filePath: unknown) => resolveWechatWorkMaterialFile(filePath));
+    const actionCount = (text ? 1 : 0) + images.length + files.length;
+    if (!actionCount) throw new Error("wechat work customer-service send requires text, image, or material file");
     if (actionCount > 5) throw new Error("wechat work customer-service send exceeds the 5-message limit");
     if (text && Buffer.byteLength(text, "utf8") > 2048) {
       throw new Error("wechat work customer-service text exceeds 2048 bytes");
@@ -210,6 +213,31 @@ export class WechatSendAdapterService {
         messages.push({ type: "image", msgid: apiMsgId, mediaId, fileName: image.fileName });
       } catch (error) {
         throw buildWechatWorkDeliveryError(error, "send_image", acceptedMessageIds, uploadedMediaIds);
+      }
+    }
+
+    for (const file of files) {
+      let mediaId: string;
+      try {
+        const upload = await this.wechatWorkApi.uploadFile({ filePath: file.filePath });
+        mediaId = upload.media_id;
+        uploadedMediaIds.push(mediaId);
+      } catch (error) {
+        throw buildWechatWorkDeliveryError(error, "upload_file", acceptedMessageIds, uploadedMediaIds);
+      }
+      const outboundMsgId = actionMsgId(actionIndex++);
+      try {
+        const response = await this.wechatWorkApi.sendFile({
+          externalUserId: binding.externalUserId,
+          openKfid: binding.openKfid,
+          mediaId,
+          msgid: outboundMsgId,
+        });
+        const apiMsgId = response.msgid || outboundMsgId;
+        acceptedMessageIds.push(apiMsgId);
+        messages.push({ type: "file", msgid: apiMsgId, mediaId, fileName: file.fileName });
+      } catch (error) {
+        throw buildWechatWorkDeliveryError(error, "send_file", acceptedMessageIds, uploadedMediaIds);
       }
     }
 
@@ -523,9 +551,15 @@ function buildWechatWorkDeliveryError(
   uploadedMediaIds: string[],
 ) {
   const explicitApiFailure = error instanceof WechatWorkApiError && typeof error.errcode === "number";
+  // 95001 means the active customer-service session has exhausted its send
+  // count. Retrying the same payload cannot make progress until the customer
+  // sends again, and can otherwise create a burst of duplicate attempts.
+  // 95018 likewise describes a session state that cannot be repaired by an
+  // immediate replay.
+  const retryBlockedByApiCode = explicitApiFailure && [95001, 95018].includes(Number(error.errcode));
   const hasAcceptedMessages = acceptedMessageIds.length > 0;
   const deliveryState = hasAcceptedMessages ? "partial" : explicitApiFailure || stage === "upload_image" ? "failed" : "unknown";
-  const retrySafe = !hasAcceptedMessages && (stage === "upload_image" || explicitApiFailure);
+  const retrySafe = !hasAcceptedMessages && !retryBlockedByApiCode && (stage === "upload_image" || explicitApiFailure);
   return new WechatWorkKfDeliveryError(
     error instanceof Error ? error.message : `wechat work ${stage} failed`,
     {

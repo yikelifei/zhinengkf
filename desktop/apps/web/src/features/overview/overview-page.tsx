@@ -1,32 +1,46 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   OperationsOverview,
   type OverviewAction,
   type OverviewChannel,
   type OverviewConversation,
+  type OverviewLaunchItem,
   type OverviewMetric,
   type OverviewTone,
 } from "../../components/operations-overview";
 import {
-  getAutomationReadiness,
-  getAutomationStatus,
-  getConversationOperationsQueue,
-  getNotifications,
-  getReviewCenter,
-  getWechatChannelStatus,
-  type AutomationReadiness,
-  type AutomationStatus,
-  type ConversationOperationsQueue,
-  type IdentityFilters,
-  type NotificationItem,
-  type ReviewCenter,
-  type WechatChannelStatus,
-} from "../../lib/api";
+  CustomerServiceJourney,
+} from "../../components/customer-service-journey";
+import type { IdentityFilters } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import { automationOverviewPresentation } from "./automation-status-presentation";
+import {
+  buildJourneySteps,
+  channelStatusLabel,
+  conversationStateLabel,
+  conversationTone,
+  deliveryStatusLabel,
+  deliveryTone,
+  formatDateTime,
+  launchOwnerLabel,
+  launchPhaseGroupLabel,
+  launchPhaseLabel,
+  readinessStatusLabel,
+  readinessTone,
+  recommendedJourneyAction,
+} from "./overview-presentation";
+import { useOverviewData } from "./use-overview-data";
 
-export type OverviewDestination = "conversations" | "channels" | "automation" | "reviews" | "notifications";
+export type OverviewDestination =
+  | "conversations"
+  | "channels"
+  | "launch"
+  | "automation"
+  | "reviews"
+  | "notifications"
+  | "delivery";
 
 export type OverviewPageProps = {
   identityFilters?: IdentityFilters;
@@ -34,65 +48,21 @@ export type OverviewPageProps = {
 };
 
 export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps) {
-  const [channelStatus, setChannelStatus] = useState<WechatChannelStatus | null>(null);
-  const [operations, setOperations] = useState<ConversationOperationsQueue | null>(null);
-  const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null);
-  const [automationReadiness, setAutomationReadiness] = useState<AutomationReadiness | null>(null);
-  const [reviewCenter, setReviewCenter] = useState<ReviewCenter | null>(null);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [notificationsLoaded, setNotificationsLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const {
+    channelStatus,
+    operations,
+    automationStatus,
+    automationReadiness,
+    reviewCenter,
+    wechatWorkReadiness,
+    deliveryReadiness,
+    notifications,
+    notificationsLoaded,
+    busy,
+    error,
+    refresh,
+  } = useOverviewData(identityFilters);
   const [notice, setNotice] = useState("");
-  const refreshSequence = useRef(0);
-  const stableIdentityFilters = useMemo<IdentityFilters>(() => ({
-    wechatAccountId: identityFilters?.wechatAccountId,
-    conversationId: identityFilters?.conversationId,
-    customerId: identityFilters?.customerId,
-  }), [identityFilters?.conversationId, identityFilters?.customerId, identityFilters?.wechatAccountId]);
-
-  const refresh = useCallback(async () => {
-    const sequence = ++refreshSequence.current;
-    setBusy(true);
-    setError("");
-    const results = await Promise.allSettled([
-      getWechatChannelStatus(stableIdentityFilters),
-      getConversationOperationsQueue(),
-      getAutomationStatus(),
-      getAutomationReadiness(),
-      getReviewCenter(stableIdentityFilters),
-      getNotifications(false, stableIdentityFilters),
-    ] as const);
-
-    const nextChannelStatus = results[0].status === "fulfilled" ? results[0].value : null;
-    const nextOperations = results[1].status === "fulfilled" ? results[1].value : null;
-    const nextAutomationStatus = results[2].status === "fulfilled" ? results[2].value : null;
-    const nextAutomationReadiness = results[3].status === "fulfilled" ? results[3].value : null;
-    const nextReviewCenter = results[4].status === "fulfilled" ? results[4].value : null;
-    const nextNotifications = results[5].status === "fulfilled" ? results[5].value : [];
-
-    if (sequence !== refreshSequence.current) return;
-
-    setChannelStatus(nextChannelStatus);
-    setOperations(nextOperations);
-    setAutomationStatus(nextAutomationStatus);
-    setAutomationReadiness(nextAutomationReadiness);
-    setReviewCenter(nextReviewCenter);
-    setNotifications(nextNotifications);
-    setNotificationsLoaded(results[5].status === "fulfilled");
-    const failedReads = results.filter((result) => result.status === "rejected").length;
-    if (failedReads) {
-      setError(`总览有 ${failedReads} 项服务读取失败，未读到的状态保持未确认。`);
-    }
-    if (sequence === refreshSequence.current) setBusy(false);
-  }, [stableIdentityFilters]);
-
-  useEffect(() => {
-    void refresh();
-    return () => {
-      refreshSequence.current += 1;
-    };
-  }, [refresh]);
 
   const navigate = useCallback((destination: OverviewDestination, context?: { conversationId?: string }) => {
     if (onNavigate) {
@@ -113,6 +83,19 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
 
   const actions = useMemo<OverviewAction[]>(() => {
     const items: OverviewAction[] = [];
+    if (deliveryReadiness && deliveryReadiness.status !== "ready") {
+      const internalBlockers = deliveryReadiness.blockers.filter((blocker) => !blocker.external).length;
+      const externalBlockers = deliveryReadiness.blockers.length - internalBlockers;
+      items.push({
+        id: "delivery-readiness",
+        label: deliveryReadiness.status === "failed" ? "交付验收存在失败项" : "交付验收未闭环",
+        detail: deliveryReadiness.nextAction
+          || `${internalBlockers} 个内部阻塞，${externalBlockers} 个外部阻塞。`,
+        count: Math.max(deliveryReadiness.blockers.length, 1),
+        tone: deliveryReadiness.status === "failed" || internalBlockers > 0 ? "danger" : "warning",
+        onClick: () => navigate("delivery"),
+      });
+    }
     const channelIssues = channelStatus ? channelStatus.summary.total - channelStatus.summary.ready : 0;
     if (channelIssues) {
       items.push({
@@ -122,6 +105,20 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
         count: channelIssues,
         tone: "danger",
         onClick: () => navigate("channels"),
+      });
+    }
+    const launchPlan = wechatWorkReadiness?.launchPlan;
+    const pendingLaunchItems = launchPlan
+      ? [...launchPlan.duringIcp, ...launchPlan.afterIcp].filter((item) => item.status !== "ready").length
+      : 0;
+    if (wechatWorkReadiness && !wechatWorkReadiness.productionReady) {
+      items.push({
+        id: "launch-plan",
+        label: "企业微信上线计划待推进",
+        detail: launchPlan?.recommendedNextAction || "进入企业微信预检页核对本机配置、备案和外部验收条件。",
+        count: Math.max(pendingLaunchItems, 1),
+        tone: wechatWorkReadiness.status === "blocked" ? "danger" : "warning",
+        onClick: () => navigate("launch"),
       });
     }
     const operationIssues = operations ? operations.summary.overdue + operations.summary.unassigned : 0;
@@ -160,9 +157,18 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       });
     }
     return items;
-  }, [channelStatus, navigate, notifications, operations, reviewCenter]);
+  }, [channelStatus, deliveryReadiness, navigate, notifications, operations, reviewCenter, wechatWorkReadiness]);
 
   const metrics = useMemo<OverviewMetric[]>(() => [
+    {
+      id: "delivery",
+      label: "交付验收",
+      value: deliveryReadiness ? deliveryStatusLabel(deliveryReadiness.status) : "—",
+      detail: deliveryReadiness
+        ? `BLOCKED ${deliveryReadiness.projectAudit.counts.blocked}，FAIL ${deliveryReadiness.projectAudit.counts.fail}`
+        : "交付验收状态未确认",
+      tone: deliveryReadiness ? deliveryTone(deliveryReadiness) : "danger",
+    },
     {
       id: "conversations",
       label: "会话总数",
@@ -191,7 +197,7 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       detail: notificationsLoaded ? "来自当前身份范围" : "通知读取未确认",
       tone: notificationsLoaded ? notifications.some((item) => !item.readAt) ? "warning" : "ready" : "danger",
     },
-  ], [notifications, notificationsLoaded, operations, reviewCenter]);
+  ], [deliveryReadiness, notifications, notificationsLoaded, operations, reviewCenter]);
 
   const conversations = useMemo<OverviewConversation[]>(() => (operations?.records ?? [])
     .slice()
@@ -210,62 +216,69 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       onOpen: () => navigate("conversations", { conversationId: conversation.id }),
     })), [navigate, operations]);
 
-  const automationTone: OverviewTone = !automationReadiness
+  const automationPresentation = automationOverviewPresentation(automationStatus, automationReadiness);
+  const launchPlan = wechatWorkReadiness?.launchPlan;
+  const launchItems = useMemo<OverviewLaunchItem[]>(() => {
+    if (!launchPlan) return [];
+    return [...launchPlan.duringIcp, ...launchPlan.afterIcp]
+      .filter((item) => item.status !== "ready" || launchPlan.currentPhase !== "production_ready")
+      .slice(0, 6)
+      .map((item) => ({
+        id: item.key,
+        title: item.title,
+        detail: item.detail,
+        statusLabel: readinessStatusLabel(item.status),
+        tone: readinessTone(item.status),
+        phaseLabel: launchPhaseGroupLabel(item.phase),
+        ownerLabel: launchOwnerLabel(item.owner),
+        action: item.action,
+      }));
+  }, [launchPlan]);
+  const launchTone: OverviewTone = !wechatWorkReadiness
     ? "danger"
-    : automationReadiness.ready
-      ? automationStatus?.active ? "ready" : "muted"
-      : "danger";
+    : wechatWorkReadiness.productionReady
+      ? "ready"
+      : wechatWorkReadiness.status === "blocked" ? "danger" : "warning";
+  const journeyReviewCount = reviewCenter
+    ? reviewCenter.designJobs.length + reviewCenter.quoteDrafts.length + reviewCenter.orderDrafts.length
+    : null;
+  const journeySteps = useMemo(() => buildJourneySteps({ channelStatus, operations, reviewCenter }), [channelStatus, operations, reviewCenter]);
+  const journeyRecommended = recommendedJourneyAction({
+    busy,
+    channelStatus,
+    operations,
+    reviewCount: journeyReviewCount,
+  });
 
   return (
     <section className={styles.page} aria-labelledby="operations-overview-title">
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
       {notice ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">{notice}</div> : null}
+      <CustomerServiceJourney steps={journeySteps} recommended={journeyRecommended} busy={busy} />
       <OperationsOverview
-        updatedAt={channelStatus?.updatedAt || automationReadiness?.checkedAt}
+        updatedAt={channelStatus?.updatedAt || automationReadiness?.checkedAt || deliveryReadiness?.generatedAt}
         channels={channels}
         channelsLoaded={channelStatus !== null}
         actions={actions}
-        actionsLoaded={channelStatus !== null && operations !== null && reviewCenter !== null && notificationsLoaded}
+        actionsLoaded={channelStatus !== null && operations !== null && reviewCenter !== null && wechatWorkReadiness !== null && deliveryReadiness !== null && notificationsLoaded}
         metrics={metrics}
         conversations={conversations}
         conversationsLoaded={operations !== null}
-        automationLabel={automationStatus?.active ? "周期自动化运行中" : automationStatus ? "周期自动化已停止" : "自动化状态未知"}
-        automationDetail={automationReadiness?.summary || "请先进入自动化运行页核对就绪检查。"}
-        automationTone={automationTone}
+        launchLoaded={wechatWorkReadiness !== null}
+        launchPhaseLabel={launchPlan ? launchPhaseLabel(launchPlan.currentPhase) : "企业微信上线阶段未确认"}
+        launchRecommendedAction={launchPlan?.recommendedNextAction || "刷新总览或进入企业微信预检页确认当前上线条件。"}
+        launchTone={launchTone}
+        launchItems={launchItems}
+        automationLabel={automationPresentation.label}
+        automationDetail={automationPresentation.detail}
+        automationTone={automationPresentation.tone}
         onRefresh={() => void refresh()}
         onOpenConversations={() => navigate("conversations")}
         onOpenChannels={() => navigate("channels")}
+        onOpenLaunchPlan={() => navigate("launch")}
         onRunAutomation={() => navigate("automation")}
         busy={busy}
       />
     </section>
   );
-}
-
-function channelStatusLabel(status: string) {
-  if (status === "ready") return "已就绪";
-  if (status === "needs_runtime") return "缺少运行端";
-  if (status === "needs_send_adapter") return "缺少发送适配器";
-  if (status === "needs_config") return "缺少配置";
-  return status || "未知";
-}
-
-function conversationStateLabel(conversation: ConversationOperationsQueue["records"][number]) {
-  if (conversation.isOverdue) return "SLA 超时";
-  if (conversation.manualLocked) return "人工接管";
-  if (conversation.assignmentState === "unassigned") return "待分配";
-  if (Number(conversation.unreadCount || 0) > 0) return "有新消息";
-  return conversation.assignee || "AI 托管";
-}
-
-function conversationTone(conversation: ConversationOperationsQueue["records"][number]): OverviewTone {
-  if (conversation.isOverdue) return "danger";
-  if (conversation.manualLocked || conversation.assignmentState === "unassigned" || Number(conversation.unreadCount || 0) > 0) return "warning";
-  return "ready";
-}
-
-function formatDateTime(value?: string | null) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
 }

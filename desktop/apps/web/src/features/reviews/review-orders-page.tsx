@@ -2,10 +2,18 @@
 
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
-import { identityExpectation, reviewOrder, type OrderDraft } from "../../lib/api";
+import { getReviewOrder, identityExpectation, isTrustedDesktopSessionError, reviewOrder, type OrderDraft } from "../../lib/api";
 import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import styles from "../governance-pages.module.css";
-import { formatReviewDate, formatReviewMoney, trustedReviewer, useReviewCenter, type ReviewMutationPageProps } from "./review-page-shared";
+import {
+  formatReviewDate,
+  formatReviewMoney,
+  trustedReviewer,
+  useReviewRecord,
+  useTrustedOperator,
+  type ReviewMutationPageProps,
+} from "./review-page-shared";
+import { ReviewHandoffPanel, reviewIdentityHref, reviewOrderHandoff, type ReviewHandoff } from "./review-handoff";
 
 type OrderDecision = "approve_confirmation" | "approve_followup" | "request_followup" | "reject_order";
 type FollowupType = "production" | "delivery";
@@ -24,19 +32,24 @@ const decisions: Array<{ id: OrderDecision; label: string; danger?: boolean }> =
 ];
 
 export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: ReviewMutationPageProps & { reviewId: string }) {
-  const { center, loaded, busy, error, setError, refresh } = useReviewCenter(identityFilters);
+  const { record: activeOrder, loaded, busy, error, sessionBlocked, setError, refresh } = useReviewRecord(getReviewOrder, reviewId, identityFilters);
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState("");
   const [followupType, setFollowupType] = useState<FollowupType | "">("");
   const [notice, setNotice] = useState("");
+  const [actionSessionBlocked, setActionSessionBlocked] = useState(false);
+  const [handoff, setHandoff] = useState<ReviewHandoff | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingOrderReview | null>(null);
   const pendingOperationRef = useRef<PendingClientOperation | null>(null);
-  const operator = trustedReviewer(reviewer);
-  const activeOrder = center?.orderDrafts.find((order) => order.id === reviewId) || null;
+  const trustedOperator = useTrustedOperator(reviewer);
+  const operator = trustedReviewer(reviewer, trustedOperator.status);
+  const reviewSessionBlocked = sessionBlocked || trustedOperator.sessionBlocked || actionSessionBlocked;
 
   const requestReview = (order: OrderDraft, decision: OrderDecision) => {
     setError("");
+    setActionSessionBlocked(false);
     setNotice("");
+    setHandoff(null);
     if (!operator) {
       setError("当前页面未绑定可信操作人，订单审核写操作已禁用。");
       return;
@@ -57,10 +70,9 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
   };
 
   const confirmReview = useCallback(async () => {
-    if (!pendingConfirmation || !center || !operator) return;
-    const order = center.orderDrafts.find((item) => item.id === pendingConfirmation.orderId);
-    if (!order) {
-      setError("订单已经不在当前审核队列，请刷新后重新确认。");
+    if (!pendingConfirmation || !activeOrder || !operator) return;
+    if (activeOrder.id !== pendingConfirmation.orderId) {
+      setError("地址中的订单已变化，请刷新后重新确认。");
       setPendingConfirmation(null);
       return;
     }
@@ -71,40 +83,44 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
     }
     setActionBusy(true);
     setError("");
+    setActionSessionBlocked(false);
     setNotice("");
+    setHandoff(null);
     const operationPayload = {
-      id: order.id,
+      id: activeOrder.id,
       decision: pendingConfirmation.decision,
       followupType: pendingConfirmation.followupType,
       reviewer: operator,
       note: note.trim(),
-      identity: identityExpectation(order),
+      identity: identityExpectation(activeOrder),
     };
     const operation = reserveClientOperation("review-action", operationPayload, pendingOperationRef.current);
     pendingOperationRef.current = operation;
     try {
-      await reviewOrder(order.id, {
+      const response = await reviewOrder(activeOrder.id, {
         operationKey: operation.key,
         decision: pendingConfirmation.decision,
         reviewer: operator,
         note: note.trim(),
         followupType: pendingConfirmation.followupType,
-        ...identityExpectation(order),
+        ...identityExpectation(activeOrder),
       });
       pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
-      setNotice(`订单 ${order.id} 已提交“${orderDecisionLabel(pendingConfirmation.decision)}”审核。`);
+      setHandoff(reviewOrderHandoff(response, activeOrder));
+      setNotice(`订单 ${activeOrder.id} 已提交“${orderDecisionLabel(pendingConfirmation.decision)}”审核。`);
       setPendingConfirmation(null);
       setNote("");
       setFollowupType("");
       await refresh();
     } catch (caught) {
+      setActionSessionBlocked(isTrustedDesktopSessionError(caught));
       setError(caught instanceof Error ? caught.message : "订单审核失败，服务端未确认结果。");
     } finally {
       setActionBusy(false);
     }
-  }, [center, note, operator, pendingConfirmation, refresh, setError]);
+  }, [activeOrder, note, operator, pendingConfirmation, refresh, setError]);
 
-  const disabled = busy || actionBusy;
+  const disabled = busy || actionBusy || trustedOperator.busy;
 
   return (
     <section className={styles.page} aria-labelledby="review-orders-title" aria-busy={disabled}>
@@ -112,17 +128,29 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Reviews</span>
           <h1 id="review-orders-title">订单审核</h1>
-          <p className={styles.description}>本页只处理一项订单审核决策；可能产生发送任务的操作必须二次确认。</p>
+          <p className={styles.description}>本页按地址中的订单 ID 读取单条审核对象，不依赖审核队列截断列表。</p>
         </div>
-        <Link className={styles.button} href="/reviews/orders">返回订单队列</Link>
+        <Link className={styles.button} href={reviewIdentityHref("/reviews/orders", identityFilters)}>返回订单队列</Link>
       </header>
 
-      {!operator ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信操作人，本页保持只读。审核人必须由宿主身份系统传入。</div> : null}
+      {reviewSessionBlocked ? (
+        <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">
+          <strong>需要可信桌面会话</strong>
+          <p>请从臻希智能客服桌面端窗口打开本页；如果已经在桌面端，请刷新页面或重启客服启动器。</p>
+        </div>
+      ) : null}
+      {!operator && !reviewSessionBlocked ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信操作人，本页保持只读。审核人必须由宿主身份系统传入。</div> : null}
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
       {notice ? <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">{notice}</div> : null}
+      <ReviewHandoffPanel handoff={handoff} actionIdPrefix="review-order-handoff" />
 
       <section className={styles.panel} aria-labelledby="order-review-note-title">
-        <header className={styles.panelHeader}><div><h2 id="order-review-note-title">本次审核说明</h2><p>当前操作人：{operator || "未绑定"}</p></div></header>
+        <header className={styles.panelHeader}>
+          <div>
+            <h2 id="order-review-note-title">本次审核说明</h2>
+            <p>当前操作人：{operator || "未绑定"}</p>
+          </div>
+        </header>
         <div className={styles.panelBody}>
           <div className={styles.formGrid}>
             <label className={styles.field}>
@@ -141,48 +169,53 @@ export function ReviewOrdersPage({ identityFilters, reviewer, reviewId }: Review
         </div>
       </section>
 
-      <section className={styles.panel} aria-labelledby="order-review-list-title">
-        <header className={styles.panelHeader}><div><h2 id="order-review-list-title">当前订单</h2><p>订单 ID：{reviewId}</p></div></header>
+      <section className={styles.panel} aria-labelledby="order-review-record-title">
+        <header className={styles.panelHeader}>
+          <div>
+            <h2 id="order-review-record-title">当前订单</h2>
+            <p>订单 ID：{reviewId}</p>
+          </div>
+        </header>
         <div className={styles.panelBody}>
           {activeOrder ? (
-            <div className={styles.recordList}>
-              {[activeOrder].map((order) => (
-                <article className={styles.record} key={order.id}>
-                  <div className={styles.recordHeader}><div><h3>{order.customer?.name || order.id}</h3><p>{order.customerNotes || "未填写客户备注。"}</p></div><span className={styles.badge}>{order.status}</span></div>
-                  <dl className={styles.definitionList}>
-                    <div><dt>订单总额</dt><dd>{formatReviewMoney(order.totalPrice)}</dd></div>
-                    <div><dt>利润</dt><dd>{formatReviewMoney(order.profit)}</dd></div>
-                    <div><dt>数量</dt><dd>{order.quantity}</dd></div>
-                    <div><dt>支付状态</dt><dd>{order.paymentStatus}</dd></div>
-                    <div><dt>微信账号</dt><dd>{order.wechatAccountId}</dd></div>
-                    <div><dt>更新时间</dt><dd>{formatReviewDate(order.updatedAt)}</dd></div>
-                  </dl>
-                  <div className={styles.buttonRow}>
-                    {decisions.map((decision) => (
-                      <button
-                        type="button"
-                        className={decision.danger ? styles.dangerButton : decision.id.startsWith("approve") ? styles.primaryButton : styles.button}
-                        data-action-id={`review-order-${decision.id}-${order.id}`}
-                        aria-label={`对订单${order.id}${decision.label}`}
-                        onClick={() => requestReview(order, decision.id)}
-                        disabled={!operator || disabled || !note.trim() || (decision.id === "approve_followup" && !followupType)}
-                        key={decision.id}
-                      >
-                        {decision.label}
-                      </button>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : <div className={styles.empty}>{loaded
-            ? "读取成功，未找到该订单审核对象，请返回队列重新选择。"
-            : "订单审核队列尚未成功读取，不能确认该订单不存在。"}</div>}
+            <article className={styles.record}>
+              <div className={styles.recordHeader}>
+                <div>
+                  <h3>{activeOrder.customer?.name || activeOrder.id}</h3>
+                  <p>{activeOrder.customerNotes || "未填写客户备注。"}</p>
+                </div>
+                <span className={styles.badge}>{activeOrder.status}</span>
+              </div>
+              <dl className={styles.definitionList}>
+                <div><dt>订单总额</dt><dd>{formatReviewMoney(activeOrder.totalPrice)}</dd></div>
+                <div><dt>利润</dt><dd>{formatReviewMoney(activeOrder.profit)}</dd></div>
+                <div><dt>数量</dt><dd>{activeOrder.quantity}</dd></div>
+                <div><dt>支付状态</dt><dd>{activeOrder.paymentStatus}</dd></div>
+                <div><dt>微信账号</dt><dd>{activeOrder.wechatAccountId || "未绑定"}</dd></div>
+                <div><dt>更新时间</dt><dd>{formatReviewDate(activeOrder.updatedAt)}</dd></div>
+              </dl>
+              <div className={styles.buttonRow}>
+                {decisions.map((decision) => (
+                  <button
+                    type="button"
+                    className={decision.danger ? styles.dangerButton : decision.id.startsWith("approve") ? styles.primaryButton : styles.button}
+                    data-action-id={`review-order-${decision.id}-${activeOrder.id}`}
+                    aria-label={`对订单 ${activeOrder.id} ${decision.label}`}
+                    onClick={() => requestReview(activeOrder, decision.id)}
+                    disabled={!operator || disabled || !note.trim() || (decision.id === "approve_followup" && !followupType)}
+                    key={decision.id}
+                  >
+                    {decision.label}
+                  </button>
+                ))}
+              </div>
+            </article>
+          ) : <div className={styles.empty}>{loaded ? "读取成功，未找到该订单审核对象，请返回队列重新选择。" : busy ? "正在读取订单审核对象。" : "订单审核对象尚未成功读取，已阻止审核操作。"}</div>}
         </div>
       </section>
 
       {pendingConfirmation ? (
-          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="order-review-confirm-title">
+        <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="order-review-confirm-title">
           <strong id="order-review-confirm-title">确认订单审核决策</strong>
           <p>操作人“{operator}”将对订单 {pendingConfirmation.orderId} 执行“{orderDecisionLabel(pendingConfirmation.decision)}”{pendingConfirmation.followupType ? `，跟进类型为${followupTypeLabel(pendingConfirmation.followupType)}` : ""}。</p>
           <p>说明：{note.trim()}</p>

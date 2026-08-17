@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
 import { createDemoPngBase64 } from "../shared/demo-png";
 import { StorageService } from "../storage/storage.service";
 import { BundleRecommendPayload, SkuBatchUpdatePayload, SkuPayload } from "./catalog.types";
@@ -65,15 +67,29 @@ export class CatalogService {
 
   async auditSkus() {
     const skus = await this.listSkus();
-    return auditSkuCatalog(
-      await Promise.all(skus.map((sku) => this.toAuditSku({
+    const [auditSkus, changeLogs] = await Promise.all([
+      Promise.all(skus.map((sku) => this.toAuditSku({
         ...sku,
         costPrice: Number(sku.costPrice),
         salePrice: Number(sku.salePrice),
         sceneTags: Array.isArray(sku.sceneTags) ? sku.sceneTags : [],
         dimensions: sku.dimensions || {},
       }))),
-    );
+      this.listSkuChangeLogsForDataReadiness(skus),
+    ]);
+    return auditSkuCatalog(auditSkus, { includeDataReadiness: true, changeLogs });
+  }
+
+  private async listSkuChangeLogsForDataReadiness(skus: Array<{ skuCode?: string }>) {
+    const skuCodes = [...new Set(skus.map((sku) => String(sku.skuCode || "").trim()).filter(Boolean))];
+    if (!skuCodes.length) return [];
+    if (appConfig.useLocalStore) {
+      return skuCodes.flatMap((skuCode) => this.localStore.listSkuChangeLogs({ skuCode, limit: 200 }));
+    }
+    return this.prisma.skuChangeLog.findMany({
+      where: { skuCode: { in: skuCodes } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
   }
 
   async listSkuChangeLogs(filter: { skuCode?: string; limit?: number } = {}) {
@@ -112,6 +128,7 @@ export class CatalogService {
   }
 
   async createDemoSkuImages() {
+    assertDemoDataMutationAllowed("demo SKU images");
     const skus = await this.listSkus({ includeInactive: true });
     const updated = [];
     for (const sku of skus) {
@@ -125,11 +142,27 @@ export class CatalogService {
           height: sku.type === "gift_box" ? 420 : 520,
         }),
       });
+      let angleImages = this.customDemoSkuAngleImages(sku.angleImages);
+      if (!angleImages.length) {
+        const angleSaved = await this.storage.saveAssetFromBase64({
+          ownerType: "sku",
+          ownerId: sku.skuCode,
+          fileName: `${sku.skuCode}-demo-angle.png`,
+          base64: createDemoPngBase64({
+            label: `${sku.skuCode}-${sku.name}-${sku.type}-angle`,
+            width: 640,
+            height: sku.type === "gift_box" ? 420 : 520,
+          }),
+        });
+        angleImages = [angleSaved.localPath];
+      }
       const merged = {
         ...sku,
         mainImagePath: saved.localPath,
-        angleImages: Array.isArray(sku.angleImages) && sku.angleImages.length ? sku.angleImages : [saved.localPath],
+        imageUrl: saved.localPath,
+        angleImages,
       };
+      await this.syncSkuImageAssets(merged as SkuPayload);
       if (appConfig.useLocalStore) {
         updated.push(
           this.localStore.upsertSku(merged, {
@@ -156,23 +189,46 @@ export class CatalogService {
 
   async upsertSku(payload: SkuPayload) {
     this.assertSkuPayload(payload);
-    if (appConfig.useLocalStore) return this.localStore.upsertSku(payload, { source: "manual_form", operator: "客服工作台" });
-    return this.prisma.$transaction((tx) => this.persistSkuMutation(tx, payload, {
-      source: "manual_form",
-      operator: "客服工作台",
-    }));
+    const normalized = await this.archiveSkuImageReferences(payload);
+    if (appConfig.useLocalStore) {
+      const saved = this.localStore.upsertSku(normalized, { source: "manual_form", operator: "客服工作台" });
+      await this.syncSkuImageAssets(saved as SkuPayload);
+      return saved;
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const saved = await this.persistSkuMutation(tx, normalized, {
+        source: "manual_form",
+        operator: "客服工作台",
+      });
+      await this.syncSkuImageAssets(saved as SkuPayload, tx);
+      return saved;
+    });
   }
 
   async bulkUpsert(rows: SkuPayload[]) {
-    if (appConfig.useLocalStore) return this.localStore.bulkUpsertSkus(rows, { source: "import_confirm", operator: "客服工作台" });
     rows.forEach((row) => this.assertSkuPayload(row));
+    const normalizedRows: SkuPayload[] = [];
+    for (const row of rows) normalizedRows.push(await this.archiveSkuImageReferences(row));
+    if (appConfig.useLocalStore) {
+      const existingBySkuCode = new Map(this.localStore.listSkus({ includeInactive: true }).map((sku) => [String(sku.skuCode), sku]));
+      const importRows = normalizedRows.map((row) => {
+        if (row.isActive !== undefined) return row;
+        const existing = existingBySkuCode.get(row.skuCode);
+        return { ...row, isActive: existing ? existing.isActive !== false : false };
+      });
+      const saved = this.localStore.bulkUpsertSkus(importRows, { source: "import_confirm", operator: "客服工作台" });
+      for (const sku of saved.results || []) await this.syncSkuImageAssets(sku as SkuPayload);
+      return saved;
+    }
     return this.prisma.$transaction(async (tx) => {
       const results = [];
-      for (const row of rows) {
-        results.push(await this.persistSkuMutation(tx, row, {
+      for (const row of normalizedRows) {
+        const saved = await this.persistSkuMutation(tx, row, {
           source: "import_confirm",
           operator: "客服工作台",
-        }));
+        });
+        await this.syncSkuImageAssets(saved as SkuPayload, tx);
+        results.push(saved);
       }
       return { count: results.length, results };
     });
@@ -286,6 +342,8 @@ export class CatalogService {
       budget: payload.budget,
       scene: payload.scene || "",
       maxItems: payload.maxItems || 8,
+      selectedSkuCodes: payload.selectedSkuCodes || [],
+      requireImages: payload.requireImages === true,
     });
   }
 
@@ -316,7 +374,10 @@ export class CatalogService {
   private async persistSkuMutation(tx: any, payload: SkuPayload, context: SkuChangeContext) {
     const current = await tx.sku.findUnique({ where: { skuCode: payload.skuCode } });
     if (!current) {
-      const created = await tx.sku.create({ data: this.toPrismaSku(payload) as any });
+      const creationPayload = context.source === "import_confirm" && payload.isActive === undefined
+        ? { ...payload, isActive: false }
+        : payload;
+      const created = await tx.sku.create({ data: this.toPrismaSku(creationPayload) as any });
       await this.createSkuChangeLog(tx, null, created, {
         ...context,
         action: context.action || "create",
@@ -335,6 +396,29 @@ export class CatalogService {
       action: context.action || "update",
     }, changedFields);
     return updated;
+  }
+
+  private customDemoSkuAngleImages(angleImages: unknown) {
+    const refs = Array.isArray(angleImages)
+      ? angleImages.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    return refs.filter((reference) => this.shouldPreserveDemoSkuImageReference(reference));
+  }
+
+  private isStarterSkuImageReference(reference: string) {
+    return /^https:\/\/app\.zhenxiai\.cloud\/smart-kefu\/starter-skus\//i.test(String(reference || "").trim());
+  }
+
+  private shouldPreserveDemoSkuImageReference(reference: string) {
+    const value = String(reference || "").trim();
+    if (!value || this.isStarterSkuImageReference(value)) return false;
+    if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/")) return true;
+    if (!path.isAbsolute(value)) return false;
+    try {
+      return fsSync.existsSync(value) && fsSync.statSync(value).isFile();
+    } catch {
+      return false;
+    }
   }
 
   private async createSkuChangeLog(
@@ -465,6 +549,153 @@ export class CatalogService {
       ...parsed,
       audit: auditSkuCatalog(await Promise.all((parsed.rows || []).map((sku: Partial<SkuPayload>) => this.toAuditSku(sku)))),
     };
+  }
+
+  private async archiveSkuImageReferences(payload: SkuPayload): Promise<SkuPayload> {
+    const archived: SkuPayload = {
+      ...payload,
+      angleImages: Array.isArray(payload.angleImages) ? [...payload.angleImages] : [],
+    };
+    const cache = new Map<string, string>();
+    archived.mainImagePath = await this.archiveSkuImageReference(
+      payload.mainImagePath,
+      payload.skuCode,
+      "main",
+      0,
+      cache,
+    );
+    archived.angleImages = [];
+    for (const [index, reference] of (payload.angleImages || []).entries()) {
+      const archivedReference = await this.archiveSkuImageReference(reference, payload.skuCode, "angle", index + 1, cache);
+      if (archivedReference) archived.angleImages.push(archivedReference);
+    }
+    return archived;
+  }
+
+  private async archiveSkuImageReference(
+    reference: string | undefined,
+    skuCode: string,
+    role: "main" | "angle",
+    index: number,
+    cache: Map<string, string>,
+  ) {
+    const value = String(reference || "").trim();
+    if (!value) return "";
+    if (!this.shouldArchiveSkuImageReference(value)) return value;
+    const key = path.resolve(value).toLowerCase();
+    const existing = cache.get(key);
+    if (existing) return existing;
+    const saved = await this.storage.saveAssetFromLocalFile({
+      ownerType: "sku",
+      ownerId: skuCode,
+      filePath: value,
+      fileName: this.skuImageArchiveFileName(skuCode, role, index, value),
+    });
+    cache.set(key, saved.localPath);
+    return saved.localPath;
+  }
+
+  private async syncSkuImageAssets(payload: SkuPayload, tx?: any) {
+    const records = await this.buildSkuImageAssetRecords(payload);
+    for (const record of records) {
+      if (appConfig.useLocalStore) {
+        this.localStore.upsertDesignAsset(record);
+        continue;
+      }
+      const normalizedLocalPath = String(record.normalizedLocalPath || "").trim();
+      if (!normalizedLocalPath) continue;
+      const data = {
+        ownerType: record.ownerType,
+        ownerId: record.ownerId,
+        role: record.role,
+        fileName: record.fileName,
+        mimeType: record.mimeType,
+        localPath: record.localPath,
+        normalizedLocalPath,
+        sizeBytes: record.sizeBytes,
+        source: record.source,
+        wechatAccountId: null,
+        conversationId: null,
+        customerId: null,
+      };
+      const client = tx || this.prisma;
+      await client.designAsset.upsert({
+        where: { normalizedLocalPath },
+        create: data,
+        update: data,
+      });
+    }
+  }
+
+  private async buildSkuImageAssetRecords(payload: SkuPayload) {
+    const skuCode = String(payload.skuCode || "").trim();
+    if (!skuCode) return [];
+    const references = [
+      { localPath: payload.mainImagePath, source: "sku_catalog_main" },
+      ...(Array.isArray(payload.angleImages) ? payload.angleImages : []).map((localPath, index) => ({
+        localPath,
+        source: `sku_catalog_angle_${index + 1}`,
+      })),
+    ];
+    const seen = new Set<string>();
+    const records = [];
+    for (const reference of references) {
+      const localPath = String(reference.localPath || "").trim();
+      if (!localPath || !this.isInsideLocalStorage(localPath)) continue;
+      const normalizedLocalPath = this.normalizeLocalAssetPath(localPath);
+      if (!normalizedLocalPath || seen.has(normalizedLocalPath)) continue;
+      let file;
+      try {
+        file = await this.storage.readLocalAsset(localPath);
+      } catch {
+        continue;
+      }
+      seen.add(normalizedLocalPath);
+      records.push({
+        ownerType: "sku",
+        ownerId: skuCode,
+        role: "sku_image",
+        fileName: file.fileName || path.basename(localPath),
+        mimeType: file.mimeType || "application/octet-stream",
+        localPath,
+        normalizedLocalPath,
+        sizeBytes: file.sizeBytes || 0,
+        source: reference.source,
+      });
+    }
+    return records;
+  }
+
+  private normalizeLocalAssetPath(value?: string | null) {
+    let input = String(value || "").trim();
+    if (!input) return "";
+    input = input
+      .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+      .replace(/^\\\\\?\\/i, "")
+      .replace(/\//g, "\\");
+    if (!path.win32.isAbsolute(input)) return "";
+    return path.win32.resolve(input).replace(/[\\]+$/g, "").replace(/\\/g, "/").toLowerCase();
+  }
+
+  private shouldArchiveSkuImageReference(reference: string) {
+    const value = String(reference || "").trim();
+    if (!value) return false;
+    if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/")) return false;
+    if (!path.isAbsolute(value)) return false;
+    return !this.isInsideLocalStorage(value);
+  }
+
+  private isInsideLocalStorage(reference: string) {
+    const root = path.resolve(appConfig.localStorageRoot);
+    const resolved = path.resolve(reference);
+    const relative = path.relative(root, resolved);
+    return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative)) || relative === "";
+  }
+
+  private skuImageArchiveFileName(skuCode: string, role: "main" | "angle", index: number, reference: string) {
+    const originalName = path.basename(reference) || "image";
+    const suffix = role === "main" ? "main" : `angle-${index}`;
+    return `${skuCode}-${suffix}-${originalName}`;
   }
 
   private async inspectImageReference(imagePath?: string) {

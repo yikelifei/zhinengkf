@@ -6,9 +6,11 @@ import { OverviewPage, type OverviewDestination } from "../features/overview";
 const overviewDestinations: Record<OverviewDestination, string> = {
   conversations: "/conversations",
   channels: "/integrations/channels",
+  launch: "/integrations/wechat-work",
   automation: "/automation/runs",
   reviews: "/reviews/inbox",
   notifications: "/notifications",
+  delivery: "/settings/delivery-readiness",
 };
 
 export function OverviewRouteFeature() {

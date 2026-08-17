@@ -1,0 +1,72 @@
+{
+  "verifiedAt": "2026-08-14",
+  "runtime": {
+    "api": "http://127.0.0.1:3200",
+    "webProxy": "http://127.0.0.1:3100",
+    "dataMode": "local-json",
+    "healthOk": true
+  },
+  "chatImportId": "import_ce196abbd21faaf9e6a810ac5e103614",
+  "reviewCounts": {
+    "ready": 21,
+    "review": 21,
+    "rejected": 32,
+    "total": 74
+  },
+  "approvedAuthenticKnowledgeCount": 21,
+  "evaluations": [
+    {
+      "question": "公司20周年庆典给参会人员做伴手礼，大概200份",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "咱们是什么类型的公司，预算多少呢",
+      "topKnowledgeScore": 76,
+      "humanVerbatim": true
+    },
+    {
+      "question": "开业伴手礼",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "预算呢亲\n这边数量要多少套呀",
+      "topKnowledgeScore": 141,
+      "humanVerbatim": true
+    },
+    {
+      "question": "是的我这边先看看样品和方案",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "您先看一下\n您这边预算多少呢\n还有数量",
+      "topKnowledgeScore": 155,
+      "humanVerbatim": true
+    },
+    {
+      "question": "还想要一个伴手礼",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "您数量要多少呢，还有预算",
+      "topKnowledgeScore": 143,
+      "humanVerbatim": true
+    },
+    {
+      "question": "商务一点的",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "这边有预算吗",
+      "topKnowledgeScore": 127,
+      "humanVerbatim": true
+    },
+    {
+      "question": "扩香石这三个不是很好看呢",
+      "agentKey": "pre_sales",
+      "action": "auto_agent",
+      "reply": "想要商务一点的吗",
+      "topKnowledgeScore": 153,
+      "humanVerbatim": true
+    }
+  ],
+  "verification": {
+    "focusedTests": "149/149 passed",
+    "apiBuild": "passed",
+    "enterpriseWechatRealDelivery": "not tested"
+  }
+}

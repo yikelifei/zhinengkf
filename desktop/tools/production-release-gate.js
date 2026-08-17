@@ -3,6 +3,7 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { parsePorcelainStatusEntries } = require("./repository-provenance");
 
 const STATUS = Object.freeze({ PASS: "PASS", BLOCKED: "BLOCKED", FAIL: "FAIL" });
 const STATUS_RANK = Object.freeze({ PASS: 0, BLOCKED: 1, FAIL: 2 });
@@ -11,6 +12,14 @@ const MIN_NODE_VERSION = "20.0.0";
 const MIN_PYTHON_VERSION = "3.10.0";
 const SAFE_DATABASE_URL = "postgresql://release_gate:release_gate@127.0.0.1:1/release_gate?schema=public";
 const DEFAULT_ISOLATED_PORTS = Object.freeze({ web: 31911, api: 32911, mock: 37911 });
+const DEFAULT_GATE_DESIGN_PLATFORM_BASE_URL = "http://127.0.0.1:3700";
+const NODE_TEST_SHARD_SIZE = 12;
+const NODE_TEST_SHARD_TIMEOUT_MS = 120_000;
+const HEAVY_NODE_TEST_SHARD_TIMEOUT_MS = 600_000;
+const HEAVY_NODE_TEST_FILES = Object.freeze(["tests/project-completion-audit.test.js"]);
+const PRISMA_GENERATE_FILE_LOCK_PATTERN = /EPERM:\s*operation not permitted,\s*rename[\s\S]*query_engine-windows\.dll\.node/i;
+const WEB_BUILD_BLOCKED_PATTERN =
+  /\[blocked\]\s*(?:Web port \d+ is currently used by PID|Stable desktop (?:startup|heartbeat) is fresh|Web build is already running)/i;
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repositoryRoot = path.resolve(desktopRoot, "..");
@@ -131,6 +140,47 @@ function checkLinkedWorktree(root = repositoryRoot) {
   return result("mode.linked-worktree", "隔离门禁 linked worktree 边界", STATUS.FAIL, reason);
 }
 
+function checkReleaseCandidateWorkspace(options = {}) {
+  const root = options.repositoryRoot || repositoryRoot;
+  const runCommand = options.runCommand || spawnSync;
+  const checked = runCommand("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+    timeout: 10_000,
+  });
+  if (checked?.error || Number(checked?.status) !== 0) {
+    return result(
+      "release.workspace_clean",
+      "发布候选工作区冻结",
+      STATUS.FAIL,
+      "无法读取 git status，生产发布门禁失败关闭。",
+    );
+  }
+  const entries = parsePorcelainStatusEntries(checked.stdout);
+  if (!entries.length) {
+    return result(
+      "release.workspace_clean",
+      "发布候选工作区冻结",
+      STATUS.PASS,
+      "工作区干净，没有未提交或未跟踪的发布候选改动。",
+    );
+  }
+  const untracked = entries.filter((entry) => entry.status === "??").length;
+  const modified = entries.length - untracked;
+  return result(
+    "release.workspace_clean",
+    "发布候选工作区冻结",
+    STATUS.BLOCKED,
+    `当前工作区仍有 ${entries.length} 个候选改动，必须先冻结发布分支或干净工作区；modified=${modified} untracked=${untracked}。`,
+    {
+      counts: { statusEntries: entries.length, modified, untracked },
+      details: entries.slice(0, 20).map((entry) => `${entry.status} ${entry.path}`),
+    },
+  );
+}
+
 function isolatedPortEnv(ports) {
   return {
     WEB_PORT: String(ports.web),
@@ -139,6 +189,13 @@ function isolatedPortEnv(ports) {
     DESIGN_PLATFORM_ADAPTER: "mock",
     DESIGN_PLATFORM_BASE_URL: `http://127.0.0.1:${ports.mock}`,
   };
+}
+
+function localDesignPlatformEnv(execution = {}) {
+  const baseUrl = execution.ports
+    ? `http://127.0.0.1:${execution.ports.mock}`
+    : DEFAULT_GATE_DESIGN_PLATFORM_BASE_URL;
+  return { DESIGN_PLATFORM_BASE_URL: baseUrl };
 }
 
 function checkDependencyLock(options = {}) {
@@ -423,6 +480,8 @@ function runLoggedCommand({
   env = {},
   failureStatus = STATUS.FAIL,
   failureStatusByExitCode = {},
+  failureStatusByOutput = [],
+  timeoutMs = 0,
 }) {
   const startedAt = Date.now();
   process.stdout.write(`[gate] ${title}...\n`);
@@ -436,6 +495,7 @@ function runLoggedCommand({
     },
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 200,
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
     windowsHide: true,
     shell: false,
   });
@@ -445,6 +505,7 @@ function runLoggedCommand({
   const output = [
     `$ ${commandLabel(command, args)}`,
     `cwd=${cwd}`,
+    ...(timeoutMs ? [`timeoutMs=${timeoutMs}`] : []),
     `exitCode=${executed.status}`,
     `signal=${executed.signal || ""}`,
     "",
@@ -463,9 +524,21 @@ function runLoggedCommand({
     });
   }
 
-  const resolvedFailureStatus = resolveCommandFailureStatus(executed.status, failureStatus, failureStatusByExitCode);
+  const matchedFailureOutput = matchCommandFailureOutput(output, failureStatusByOutput);
+  const resolvedFailureStatus = resolveCommandFailureStatus(
+    executed.status,
+    failureStatus,
+    failureStatusByExitCode,
+    output,
+    failureStatusByOutput,
+  );
   process.stdout.write(`[${resolvedFailureStatus}] ${title} (${Math.ceil(durationMs / 1000)}s)\n`);
-  return result(id, title, resolvedFailureStatus, `命令退出码 ${executed.status ?? "未启动"}，详见隔离日志。`, {
+  const failureSummary = executed.error?.code === "ETIMEDOUT"
+    ? `Command timed out after ${timeoutMs} ms; see isolated log.`
+    : matchedFailureOutput?.summary
+      ? matchedFailureOutput.summary
+    : `命令退出码 ${executed.status ?? "未启动"}，详见隔离日志。`;
+  return result(id, title, resolvedFailureStatus, failureSummary, {
     durationMs,
     log: path.relative(desktopRoot, logFile).replace(/\\/g, "/"),
     output: `${executed.stdout || ""}\n${executed.stderr || ""}`,
@@ -474,6 +547,18 @@ function runLoggedCommand({
 
 function sanitizeResults(results) {
   return results.map(({ output: _output, ...item }) => item);
+}
+
+function appendIncompleteMarker(results, execution = {}) {
+  if (execution.completed !== false) return results;
+  const currentStage = String(execution.currentStage || "").trim();
+  const summary = currentStage
+    ? `发布门禁已写入阶段性证据，当前阶段：${currentStage}；后续阶段尚未完成，不得发布。`
+    : "发布门禁只写入了阶段性证据，后续阶段尚未完成，不得发布。";
+  return [
+    ...results,
+    result("gate.incomplete", "生产发布门禁未完成", STATUS.BLOCKED, summary),
+  ];
 }
 
 function renderMarkdownReport(report) {
@@ -487,6 +572,8 @@ function renderMarkdownReport(report) {
     `- 生成时间：${report.generatedAt}`,
     `- 工作目录：\`desktop\``,
     `- 运行模式：\`${report.mode || "default"}\``,
+    `- 完成状态：${report.completed === false ? "阶段性报告，未完成" : "完整报告"}`,
+    ...(report.currentStage ? [`- 当前阶段：${report.currentStage}`] : []),
     `- 端口范围：${ports}`,
     ...(report.ownerCheckWebPort ? [`- owner 安全检查端口：${report.ownerCheckWebPort}`] : []),
     "- 说明：该门禁不读取真实密钥、不打包、不上传，也不会自动停止占用端口的进程。",
@@ -525,28 +612,60 @@ function renderMarkdownReport(report) {
 }
 
 function createReport(results, execution = {}) {
-  const cleanResults = sanitizeResults(results);
+  const cleanResults = sanitizeResults(appendIncompleteMarker(results, execution));
   return {
     schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     mode: execution.mode || "default",
     ports: execution.ports || null,
     ownerCheckWebPort: execution.ownerCheckWebPort || null,
+    completed: execution.completed !== false,
+    currentStage: execution.currentStage || "",
     status: computeOverallStatus(cleanResults),
     results: cleanResults,
   };
 }
 
-function resolveCommandFailureStatus(exitCode, fallbackStatus, statusByExitCode = {}) {
+function matchCommandFailureOutput(output, statusByOutput = []) {
+  const text = String(output || "");
+  return statusByOutput.find((rule) => {
+    if (!rule?.pattern) return false;
+    if (rule.pattern instanceof RegExp) {
+      rule.pattern.lastIndex = 0;
+      return rule.pattern.test(text);
+    }
+    return text.includes(String(rule.pattern));
+  }) || null;
+}
+
+function resolveCommandFailureStatus(exitCode, fallbackStatus, statusByExitCode = {}, output = "", statusByOutput = []) {
+  const matched = matchCommandFailureOutput(output, statusByOutput);
+  if (matched?.status) return matched.status;
   return statusByExitCode[exitCode] || fallbackStatus;
 }
 
-function writeReport(results, execution = {}) {
-  const report = createReport(results, execution);
+function writeReport(results, execution = {}, progress = {}) {
+  const report = createReport(results, { ...execution, ...progress });
   fs.mkdirSync(reportRoot, { recursive: true });
   fs.writeFileSync(path.join(reportRoot, "latest.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   fs.writeFileSync(path.join(reportRoot, "latest.md"), renderMarkdownReport(report), "utf8");
   return report;
+}
+
+function writeProgressReport(results, execution, currentStage) {
+  return writeReport(results, execution, { completed: false, currentStage });
+}
+
+function recordGateResult(results, execution, item, currentStage = item.id) {
+  results.push(item);
+  writeProgressReport(results, execution, currentStage);
+  return item;
+}
+
+function runGateStep(results, execution, currentStage, action) {
+  writeProgressReport(results, execution, `running ${currentStage}`);
+  const item = action();
+  return recordGateResult(results, execution, item, currentStage);
 }
 
 function checkNodeRuntime() {
@@ -608,6 +727,84 @@ function runNpmCheck(id, title, args, options = {}) {
   return runLoggedCommand({ id, title, command: npm.command, args: npm.args, cwd: desktopRoot, ...options });
 }
 
+function listNodeTestFiles(testDir = path.join(desktopRoot, "tests")) {
+  return fs.readdirSync(testDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.js"))
+    .map((entry) => `tests/${entry.name}`)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function createNodeTestShards(files, shardSize = NODE_TEST_SHARD_SIZE, options = {}) {
+  if (!Number.isInteger(shardSize) || shardSize < 1) throw new Error("Node test shard size must be a positive integer");
+  const heavyFiles = new Set(options.heavyFiles || []);
+  const shards = [];
+  let current = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    if (heavyFiles.has(file)) {
+      if (current.length) {
+        shards.push(current);
+        current = [];
+      }
+      shards.push([file]);
+      continue;
+    }
+    current.push(file);
+    if (current.length >= shardSize) {
+      shards.push(current);
+      current = [];
+    }
+  }
+  if (current.length) shards.push(current);
+  return shards;
+}
+
+function summarizeNodeShardResults(shardResults, totalFiles) {
+  if (!totalFiles) {
+    return result("tests.node", "Node full test summary", STATUS.FAIL, "No Node test files were discovered.");
+  }
+  const status = computeOverallStatus(shardResults);
+  const failed = shardResults.filter((item) => item.status === STATUS.FAIL);
+  const blocked = shardResults.filter((item) => item.status === STATUS.BLOCKED);
+  const passed = shardResults.filter((item) => item.status === STATUS.PASS);
+  const problemDetails = [...failed, ...blocked].map((item) => `${item.id} ${item.status}${item.log ? ` (${item.log})` : ""}`);
+  return result(
+    "tests.node",
+    "Node full test summary",
+    status,
+    `Node test shards passed=${passed.length} failed=${failed.length} blocked=${blocked.length} files=${totalFiles}.`,
+    problemDetails.length ? { details: problemDetails } : {},
+  );
+}
+
+function runNodeTestShards(results, execution, options = {}) {
+  const files = options.files || listNodeTestFiles();
+  const shards = createNodeTestShards(files, options.shardSize || NODE_TEST_SHARD_SIZE, {
+    heavyFiles: options.heavyFiles || HEAVY_NODE_TEST_FILES,
+  });
+  const timeoutMs = options.timeoutMs || Number(process.env.RELEASE_GATE_NODE_SHARD_TIMEOUT_MS || NODE_TEST_SHARD_TIMEOUT_MS);
+  const heavyTimeoutMs = options.heavyTimeoutMs || Number(process.env.RELEASE_GATE_HEAVY_NODE_SHARD_TIMEOUT_MS || HEAVY_NODE_TEST_SHARD_TIMEOUT_MS);
+  const heavyFiles = new Set(options.heavyFiles || HEAVY_NODE_TEST_FILES);
+  const shardResults = [];
+  shards.forEach((shardFiles, index) => {
+    const shardNo = String(index + 1).padStart(2, "0");
+    const id = `tests.node.${shardNo}`;
+    const title = `Node tests shard ${index + 1}/${shards.length}`;
+    const item = runGateStep(results, execution, id, () =>
+      runLoggedCommand({
+        id,
+        title,
+        command: process.execPath,
+        args: ["--test", "--test-concurrency=1", ...shardFiles],
+        cwd: desktopRoot,
+        env: localDesignPlatformEnv(execution),
+        timeoutMs: shardFiles.some((file) => heavyFiles.has(file)) ? heavyTimeoutMs : timeoutMs,
+      }));
+    shardResults.push(item);
+  });
+  return recordGateResult(results, execution, summarizeNodeShardResults(shardResults, files.length), "tests.node");
+}
+
 function main(argv = process.argv.slice(2), env = process.env) {
   const execution = parseGateOptions(argv, env);
   let linkedWorktreeCheck = null;
@@ -623,30 +820,40 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
   fs.mkdirSync(logRoot, { recursive: true });
   const results = linkedWorktreeCheck ? [linkedWorktreeCheck] : [];
-  results.push(checkNodeRuntime());
-  results.push(checkNpmRuntime());
-  results.push(checkPythonRuntime());
-  results.push(checkDependencyLock());
-  results.push(checkMigrationInventory());
-  results.push(checkDesktopAndDocs());
-  results.push(secretScanResult());
+  writeProgressReport(results, execution, "starting");
+  recordGateResult(results, execution, checkReleaseCandidateWorkspace());
+  recordGateResult(results, execution, checkNodeRuntime());
+  recordGateResult(results, execution, checkNpmRuntime());
+  recordGateResult(results, execution, checkPythonRuntime());
+  recordGateResult(results, execution, checkDependencyLock());
+  recordGateResult(results, execution, checkMigrationInventory());
+  recordGateResult(results, execution, checkDesktopAndDocs());
+  recordGateResult(results, execution, secretScanResult());
 
-  const portCheck = runNpmCheck("ports.preflight", "端口冲突预检", ["run", "ports:preflight:mock:free"], {
-    env: execution.ports ? isolatedPortEnv(execution.ports) : {},
-    failureStatus: STATUS.BLOCKED,
-  });
-  results.push(portCheck);
+  const portCheck = runGateStep(results, execution, "ports.preflight", () =>
+    runNpmCheck("ports.preflight", "端口冲突预检", ["run", "ports:preflight:mock:free"], {
+      env: execution.ports ? isolatedPortEnv(execution.ports) : {},
+      failureStatus: STATUS.BLOCKED,
+    }));
 
   const safePrismaEnv = { DATABASE_URL: SAFE_DATABASE_URL };
-  results.push(runNpmCheck("prisma.validate", "Prisma schema 校验", ["run", "prisma:validate"], { env: safePrismaEnv }));
-  results.push(runNpmCheck("prisma.generate", "Prisma Client 生成", ["run", "prisma:generate"], { env: safePrismaEnv }));
-  results.push(
+  runGateStep(results, execution, "prisma.validate", () =>
+    runNpmCheck("prisma.validate", "Prisma schema 校验", ["run", "prisma:validate"], { env: safePrismaEnv }));
+  runGateStep(results, execution, "prisma.generate", () =>
+    runNpmCheck("prisma.generate", "Prisma Client 生成", ["run", "prisma:generate"], {
+      env: safePrismaEnv,
+      failureStatusByOutput: [{
+        pattern: PRISMA_GENERATE_FILE_LOCK_PATTERN,
+        status: STATUS.BLOCKED,
+        summary: "Prisma Client 文件被正在运行的本地服务锁定；停止本地服务后重跑 release gate。",
+      }],
+    }));
+  runGateStep(results, execution, "prisma.migration-sql", () =>
     runNpmCheck("prisma.migration-sql", "Prisma 离线迁移 SQL 生成", ["run", "prisma:migrate:check"], {
       env: safePrismaEnv,
-    }),
-  );
+    }));
 
-  results.push(
+  runGateStep(results, execution, "security.tests", () =>
     runLoggedCommand({
       id: "security.tests",
       title: "关键安全测试",
@@ -659,51 +866,62 @@ function main(argv = process.argv.slice(2), env = process.env) {
         "tests/startup-defaults.test.js",
       ],
       cwd: desktopRoot,
-    }),
-  );
+      env: localDesignPlatformEnv(execution),
+    }));
 
   const pythonTests = batchCommand(path.join(repositoryRoot, "tools", "quality", "run_tests.bat"));
-  results.push(
+  runGateStep(results, execution, "tests.python", () =>
     runLoggedCommand({
       id: "tests.python",
       title: "Python 完整测试",
       command: pythonTests.command,
       args: pythonTests.args,
       cwd: repositoryRoot,
-    }),
-  );
-  results.push(runNpmCheck("tests.node", "Node 完整测试", ["test"]));
-  results.push(runNpmCheck("build.api", "API 生产构建", ["run", "build:api"]));
+    }));
+  runNodeTestShards(results, execution);
+  runGateStep(results, execution, "build.api", () => runNpmCheck("build.api", "API 生产构建", ["run", "build:api"]));
 
   if (portCheck.status === STATUS.PASS) {
     if (execution.mode === "isolated-worktree") {
-      results.push(
+      runGateStep(results, execution, "build.web", () =>
         runNpmCheck("build.web", "Web 生产构建", ["run", "build:web", "--", "--allow-foreign-port-owner"], {
           env: { WEB_PORT: String(execution.ownerCheckWebPort), ALLOW_WEB_BUILD_WITH_FRESH_HEARTBEAT: "0" },
           failureStatusByExitCode: { 2: STATUS.BLOCKED },
-        }),
-      );
+          failureStatusByOutput: [{
+            pattern: WEB_BUILD_BLOCKED_PATTERN,
+            status: STATUS.BLOCKED,
+            summary: "Web build was blocked by an active desktop runtime; stop local services and rerun release gate.",
+          }],
+        }));
     } else {
-      results.push(runNpmCheck("build.web", "Web 生产构建", ["run", "build:web"]));
+      runGateStep(results, execution, "build.web", () => runNpmCheck("build.web", "Web 生产构建", ["run", "build:web"], {
+        failureStatusByOutput: [{
+          pattern: WEB_BUILD_BLOCKED_PATTERN,
+          status: STATUS.BLOCKED,
+          summary: "Web build was blocked by an active desktop runtime; stop local services and rerun release gate.",
+        }],
+      }));
     }
   } else {
-    results.push(
+    recordGateResult(
+      results,
+      execution,
       result("build.web", "Web 生产构建", STATUS.BLOCKED, "端口预检未通过，为避免破坏正在运行的桌面服务，本次未执行 Web 构建。"),
+      "build.web",
     );
   }
 
-  results.push(
+  runGateStep(results, execution, "desktop.syntax", () =>
     runLoggedCommand({
       id: "desktop.syntax",
       title: "Electron 桌面入口语法",
       command: process.execPath,
       args: ["--check", "apps/electron/main.js"],
       cwd: desktopRoot,
-    }),
-  );
+    }));
 
   for (const blocker of externalBlockers) {
-    results.push(result(blocker.id, blocker.title, STATUS.BLOCKED, blocker.summary));
+    recordGateResult(results, execution, result(blocker.id, blocker.title, STATUS.BLOCKED, blocker.summary), blocker.id);
   }
 
   const report = writeReport(results, execution);
@@ -716,20 +934,29 @@ if (require.main === module) main();
 
 module.exports = {
   EXIT_CODE,
+  DEFAULT_GATE_DESIGN_PLATFORM_BASE_URL,
+  HEAVY_NODE_TEST_SHARD_TIMEOUT_MS,
+  HEAVY_NODE_TEST_FILES,
   MIN_NODE_VERSION,
   MIN_PYTHON_VERSION,
   STATUS,
+  WEB_BUILD_BLOCKED_PATTERN,
   checkDependencyLock,
   checkDesktopAndDocs,
   checkMigrationInventory,
+  checkReleaseCandidateWorkspace,
   compareVersions,
   computeOverallStatus,
   createReport,
+  createNodeTestShards,
   isLinkedWorktreeLayout,
+  localDesignPlatformEnv,
+  listNodeTestFiles,
   parseGateOptions,
   parseVersion,
   renderMarkdownReport,
   resolveCommandFailureStatus,
+  summarizeNodeShardResults,
   scanSecretEntries,
   scanTextForSecrets,
 };

@@ -3,12 +3,15 @@
 import { RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { money, SalesEmpty, SalesHeader, SalesNotice } from "./sales-ui";
+import type { IdentityFilters } from "../../lib/api";
+import { SalesRecordVisualStrip } from "./sales-design-visual-summary";
+import { orderJourneyRecommendation, orderStatusLabel } from "./sales-commerce-state";
+import { fulfillmentStatusLabel, money, SalesEmpty, SalesHeader, SalesNotice } from "./sales-ui";
 import styles from "./sales-pages.module.css";
 import { useSalesOrders } from "./use-sales-records";
 
-export function SalesOrdersPage() {
-  const { records, loading, loaded, error, refresh } = useSalesOrders();
+export function SalesOrdersPage({ identityFilters = {} }: { identityFilters?: IdentityFilters }) {
+  const { records, loading, loaded, error, refresh } = useSalesOrders("", identityFilters);
   const [query, setQuery] = useState("");
   const visibleOrders = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("zh-CN");
@@ -19,6 +22,10 @@ export function SalesOrdersPage() {
       order.customer?.name,
       order.status,
       order.paymentStatus,
+      order.productionStatus,
+      fulfillmentStatusLabel(order.productionStatus),
+      order.carrier,
+      order.trackingNo,
       order.owner,
     ].some((value) => String(value || "").toLocaleLowerCase("zh-CN").includes(keyword)));
   }, [query, records]);
@@ -58,7 +65,7 @@ export function SalesOrdersPage() {
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        {loading ? (
+        {loading && !loaded ? (
           <SalesEmpty title="正在读取订单" detail="正在连接销售服务。" busy />
         ) : visibleOrders.length ? (
           <ul className={styles.selectionList}>
@@ -72,7 +79,9 @@ export function SalesOrdersPage() {
                   <span>
                     <strong>{order.customer?.name || order.customerId}</strong>
                     <small>{order.id}</small>
-                    <em>{order.status} · {order.paymentStatus}</em>
+                    <SalesRecordVisualStrip record={order} />
+                    <em>{orderStatusLabel(order.status)} · {order.paymentStatus} · {fulfillmentStatusLabel(order.productionStatus)}</em>
+                    <small>下一步：{orderJourneyRecommendation(order)}</small>
                   </span>
                   <span className={styles.rowMeta}>{money(order.totalPrice)}</span>
                 </Link>

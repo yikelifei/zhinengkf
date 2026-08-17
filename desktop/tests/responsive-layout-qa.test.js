@@ -10,6 +10,7 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const runnerPath = path.join(root, "tools", "run-responsive-layout-qa.js");
 const probePath = path.join(root, "tools", "product-acceptance-layout-probe.js");
+const edgeProbePath = path.join(root, "tools", "product-acceptance-layout-edge-probe.js");
 const runner = require(runnerPath);
 
 test("responsive QA accepts loopback only and exposes both required viewports", () => {
@@ -24,6 +25,7 @@ test("responsive QA accepts loopback only and exposes both required viewports", 
   assert.match(source, /primaryPaneVisible/);
   assert.match(source, /interactionReachable/);
   assert.match(source, /#workbench-mobile-navigation\[role=\"dialog\"\]/);
+  assert.match(source, /smart_kefu_desktop_session/);
 });
 
 test("responsive QA writes explicit BLOCKED JSON and Markdown when the web service is unavailable", () => {
@@ -56,8 +58,31 @@ test("responsive QA writes explicit BLOCKED JSON and Markdown when the web servi
 
 test("responsive QA describes an early Electron stop instead of leaving a blank blocker", () => {
   const source = fs.readFileSync(runnerPath, "utf8");
-  assert.match(source, /Electron renderer stopped before completing both viewports/);
+  assert.match(source, /stopped before completing both viewports/);
   assert.match(source, /Electron renderer did not finish within/);
+  assert.match(source, /runProbeChild/);
+  assert.match(source, /electron-user-data-attempt-\$\{attempt\}/);
+  assert.match(source, /RESPONSIVE_QA_USER_DATA_PATH/);
+  assert.match(source, /product-acceptance-layout-edge-probe\.js/);
+  assert.match(source, /edge-probe\.json/);
+  assert.match(source, /RESPONSIVE_QA_EDGE_ATTEMPT/);
+});
+
+test("responsive QA Edge fallback preserves the required acceptance checks", () => {
+  const edgeSource = fs.readFileSync(edgeProbePath, "utf8");
+  assert.match(edgeSource, /renderer:\s*"Microsoft Edge CDP"/);
+  assert.match(edgeSource, /name:\s*"desktop-1536",\s*width:\s*1536,\s*height:\s*960/);
+  assert.match(edgeSource, /name:\s*"mobile-390",\s*width:\s*390,\s*height:\s*844/);
+  assert.match(edgeSource, /data-section-id=\"send-center\"/);
+  assert.match(edgeSource, /#workbench-mobile-navigation\[role=\"dialog\"\]/);
+  assert.match(edgeSource, /noPageHorizontalOverflow/);
+  assert.match(edgeSource, /Page\.captureScreenshot/);
+  assert.match(edgeSource, /Target\.createTarget/);
+  assert.match(edgeSource, /Target\.attachToTarget/);
+  assert.match(edgeSource, /Network\.setCookie/);
+  assert.match(edgeSource, /smart_kefu_desktop_session/);
+  assert.match(edgeSource, /normalizeDebuggerWebsocketUrl/);
+  assert.match(edgeSource, /version\.webSocketDebuggerUrl/);
 });
 
 test("responsive Markdown records pass, failure and artifact evidence", () => {

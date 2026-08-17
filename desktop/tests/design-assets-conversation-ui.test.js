@@ -1,0 +1,63 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+
+const root = path.resolve(__dirname, "..");
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+
+test("design assets page binds uploads to selected customer conversations", () => {
+  const page = read("apps/web/src/features/design/design-assets-page.tsx");
+  const uploadPanel = read("apps/web/src/features/design/design-assets-upload-panel.tsx");
+  const listPanel = read("apps/web/src/features/design/design-assets-list-panel.tsx");
+  const feature = [page, uploadPanel, listPanel].join("\n");
+  const roleModel = read("apps/web/src/features/design/design-asset-role.ts");
+
+  assert.match(page, /getWechatConversations/);
+  assert.match(page, /selectedConversationId/);
+  assert.match(page, /assetAutoRefreshTick/);
+  assert.match(page, /setAssetAutoRefreshTick\(\(value\) => value \+ 1\)/);
+  assert.match(page, /void refreshAssets\(\);/);
+  assert.match(feature, /conversationLabel\(conversation\)/);
+  assert.match(page, /ownerId: conversation\?\.customerId\?\.trim\(\) \|\| ""/);
+  assert.match(page, /expectedWechatAccountId: identity\.wechatAccountId\.trim\(\)/);
+  assert.match(page, /expectedConversationId: identity\.conversationId\.trim\(\)/);
+  assert.match(page, /expectedCustomerId: identity\.customerId\.trim\(\)/);
+  assert.match(page, /getAssets\("customer", identity\.ownerId/);
+  assert.match(page, /role, setRole\] = useState\("customer_logo"\)/);
+  assert.match(feature, /DESIGN_ASSET_ROLE_OPTIONS/);
+  assert.match(page, /selectedRoleFilter, setSelectedRoleFilter/);
+  assert.match(feature, /filterDesignAssetsByRole\(assets, selectedRoleFilter\)/);
+  assert.match(feature, /assetRoleSummary\(assets\)/);
+  assert.match(feature, /assetRoleLabel\(role\)/);
+  assert.match(feature, /assetRoleLabel\(asset\.role\)/);
+  assert.match(feature, /assetListSummary\(assets\.length, visibleAssets\.length, roleSummary\)/);
+  assert.match(feature, /buildDesignAssetLibraryHealth\(assets\)/);
+  assert.match(feature, /data-asset-health-summary/);
+  assert.match(feature, /data-asset-health-id="asset-total"/);
+  assert.match(feature, /data-asset-health-id="asset-images"/);
+  assert.match(feature, /data-asset-health-id="asset-missing-local"/);
+  assert.match(feature, /data-asset-health-id="asset-duplicate-paths"/);
+  assert.match(feature, /data-asset-health-issues/);
+  assert.match(feature, /duplicateValues\(normalizedPaths\)/);
+  assert.match(feature, /data-asset-preview-state="ready"/);
+  assert.match(feature, /onError=\{\(\) => setFailed\(true\)\}/);
+  assert.match(feature, /localAssetUrl\(asset\.localPath, expected\)/);
+  assert.match(feature, /identityExpectation\(asset\)/);
+  assert.match(feature, /styles\.assetPreviewImage/);
+  assert.match(feature, /本地文件已绑定/);
+  assert.match(feature, /design-assets-use-in-new-job/);
+  assert.match(feature, /\/design\/jobs\/new/);
+  assert.match(feature, /wechatAccountId/);
+  assert.match(feature, /conversationId/);
+  assert.match(feature, /customerId/);
+  assert.match(feature, /params\.set\("assetId", asset\.id\)/);
+  assert.match(feature, /params\.set\("assetRole", asset\.role\)/);
+  assert.match(page, /DesignAssetsUploadPanel/);
+  assert.match(page, /DesignAssetsListPanel/);
+  assert.match(roleModel, /product_image/);
+  assert.match(roleModel, /assetRoleSummary/);
+  assert.doesNotMatch(feature, /客户归属 ID|微信账号 ID<\/span><input|会话 ID<\/span><input|客户 ID<\/span><input/);
+});

@@ -18,6 +18,7 @@ const forceMockDesignMode = args.has("--mock-design");
 const requestedRealDesignMode = args.has("--real-design");
 const realDesignMode = requestedRealDesignMode && !forceMockDesignMode;
 const mockDesignMode = !realDesignMode;
+const legacyPersonalWechatMode = process.env.WECHAT_PRODUCT_MODE === "legacy_personal_wechat";
 
 const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
@@ -136,15 +137,23 @@ async function main() {
   }
 
   printHeader("Startup Load Guards");
-  const snapshotResult = await requestUrlWithRetry(wechatSnapshotsUrl, 3, 500);
-  if (isExpectedStatus(snapshotResult.statusCode, "2xx") && snapshotResult.durationMs <= maxWechatSnapshotLatencyMs) {
-    console.log(`[ok] WeChat window snapshots: HTTP ${snapshotResult.statusCode} latency=${snapshotResult.durationMs}ms`);
+  if (!legacyPersonalWechatMode) {
+    console.log(
+      `[skip] WeChat window snapshots: legacy personal WeChat disabled (WECHAT_PRODUCT_MODE=${
+        process.env.WECHAT_PRODUCT_MODE || "enterprise_wechat_only"
+      })`,
+    );
   } else {
-    hasError = true;
-    const status = snapshotResult.statusCode ? `HTTP ${snapshotResult.statusCode}` : snapshotResult.error || "not reachable";
-    const latency = Number.isFinite(snapshotResult.durationMs) ? ` latency=${snapshotResult.durationMs}ms` : "";
-    console.log(`[fail] WeChat window snapshots: ${status}${latency}`);
-    console.log(`[fix] Run npm.cmd run ports:stop to clear stale workers, then npm.cmd run ports:launch:mock.`);
+    const snapshotResult = await requestUrlWithRetry(wechatSnapshotsUrl, 3, 500);
+    if (isExpectedStatus(snapshotResult.statusCode, "2xx") && snapshotResult.durationMs <= maxWechatSnapshotLatencyMs) {
+      console.log(`[ok] WeChat window snapshots: HTTP ${snapshotResult.statusCode} latency=${snapshotResult.durationMs}ms`);
+    } else {
+      hasError = true;
+      const status = snapshotResult.statusCode ? `HTTP ${snapshotResult.statusCode}` : snapshotResult.error || "not reachable";
+      const latency = Number.isFinite(snapshotResult.durationMs) ? ` latency=${snapshotResult.durationMs}ms` : "";
+      console.log(`[fail] WeChat window snapshots: ${status}${latency}`);
+      console.log(`[fix] Run npm.cmd run ports:stop to clear stale workers, then npm.cmd run ports:launch:mock.`);
+    }
   }
   printWechatWorkerProcesses();
   const supervisors = await waitForKeepAliveSupervisorProcesses(45, 1000);
@@ -511,17 +520,22 @@ function findKeepAliveHeartbeatProcess() {
   const commandLine = getCommandLine(pid);
   const normalizedCommand = normalizePathText(commandLine);
   const modeArg = realDesignMode ? "--real-design" : "--mock-design";
-  if (
-    !normalizedCommand.includes("tools/start-dev-ports.js") ||
-    !normalizedCommand.includes(modeArg) ||
-    !normalizedCommand.includes("--keep-alive")
-  ) {
+  const commandMatches =
+    normalizedCommand.includes("tools/start-dev-ports.js") &&
+    normalizedCommand.includes(modeArg) &&
+    normalizedCommand.includes("--keep-alive");
+  const heartbeatMatches =
+    processIsRunning(pid) &&
+    Array.isArray(heartbeat.args) &&
+    heartbeat.args.includes(modeArg) &&
+    heartbeat.args.includes("--keep-alive");
+  if (!commandMatches && !heartbeatMatches) {
     return [];
   }
   return [
     {
       pid,
-      commandLine,
+      commandLine: commandLine || `heartbeat-owned tools/start-dev-ports.js ${modeArg} --keep-alive`,
     },
   ];
 }
@@ -532,6 +546,26 @@ function readJson(file) {
   } catch {
     return {};
   }
+}
+
+function processIsRunning(pid) {
+  if (!/^\d+$/.test(String(pid || ""))) return false;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const script = [
+    `$p = Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue`,
+    "if ($p) { 'running' }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+  });
+  return result.status === 0 && String(result.stdout || "").includes("running");
 }
 
 function tryParseJson(value) {
@@ -588,8 +622,8 @@ function normalizeBaseUrl(value) {
 
 function printDesignModeFix(isRealDesignMode) {
   if (isRealDesignMode) {
-    console.log("[fix] Real design mode expects the API to use art_image_local and http://127.0.0.1:3000.");
-    console.log("[fix] Run stop_desktop.bat first, then run_desktop.bat after the real design platform is online.");
+    console.log("[fix] Real design mode expects the API to use art_image_local and http://127.0.0.1:3000 by default; use DESIGN_PLATFORM_BASE_URL or ZHENXI_AI_LOCAL_BASE_URL for another Zhenxi AI runtime.");
+    console.log("[fix] Run stop_desktop.bat first, then run_desktop.bat after the Zhenxi AI desktop app is online.");
     return;
   }
   console.log("[fix] Default stable mode expects the local mock design platform on http://127.0.0.1:3700.");

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
+  DESKTOP_WEB_SESSION_FILE_ENV,
   DESKTOP_WEB_SESSION_PROOF_ENV,
   readDesktopWebSessionProof,
   resolveDesktopWebSessionFile,
@@ -28,6 +29,7 @@ if (!fs.existsSync(electronEntry)) {
 const proof = readDesktopWebSessionProof(sessionFile);
 const env = withoutDesktopWebSessionProof(process.env);
 env[DESKTOP_WEB_SESSION_PROOF_ENV] = proof;
+env[DESKTOP_WEB_SESSION_FILE_ENV] = sessionFile;
 env.WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
 const requestedInstanceId = String(process.env.DESKTOP_INSTANCE_ID || "default").trim().toLowerCase();
 const instanceId = /^[a-z0-9][a-z0-9-]{0,31}$/.test(requestedInstanceId)

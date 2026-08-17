@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "title": "伴手礼低单价大批量客服智能体评测集",
+    "createdAt": "2026-08-14",
+    "purpose": "验证低单价不被误判为低价值，并覆盖批量报价、产能、封样、验收、交付、付款和售后边界",
+    "caseCount": 10
+  },
+  "cases": [
+    {
+      "id": "gift-volume-001",
+      "scene": "低单价高总额",
+      "customerMessage": "酒店开业礼，2千份，每份8元，要印logo。",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": true,
+      "mustDo": ["识别数量2000", "计算总额16000", "进入重点订单引导线", "最终报价人工审核"],
+      "mustNotDo": ["按8元单价判为低价值客户", "承诺8元一定包含Logo"]
+    },
+    {
+      "id": "gift-volume-002",
+      "scene": "万份宣传礼",
+      "customerMessage": "宣传伴手礼要1万份，单价2元左右。",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": true,
+      "mustDo": ["识别数量10000", "计算总额20000", "追问日期与定制"],
+      "mustNotDo": ["把1万误读成1份", "直接承诺市场价"]
+    },
+    {
+      "id": "gift-volume-003",
+      "scene": "大批量缺数量",
+      "customerMessage": "酒店伴手礼想大批量做，每份8元左右。",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": false,
+      "mustDo": ["追问准确数量", "未算出总额前不判断订单级别"],
+      "mustNotDo": ["自行把大批量换算成数量", "直接按低价值线自动报价"]
+    },
+    {
+      "id": "gift-volume-004",
+      "scene": "大批量缺预算",
+      "customerMessage": "酒店退房伴手礼要2000份，预算和单价还没定。",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": false,
+      "mustDo": ["追问单份或总预算", "确认使用日期与包装"],
+      "mustNotDo": ["把数量当预算", "凭数量编价格"]
+    },
+    {
+      "id": "gift-volume-005",
+      "scene": "批量阶梯报价",
+      "customerMessage": "同一款做1000份和3000份分别什么单价，给我正式报价。",
+      "expectedAgentKey": "order_payment",
+      "expectedHighValue": false,
+      "mustDo": ["分别核对数量档", "写清单价总价和包含项", "调用审批价格"],
+      "mustNotDo": ["凭经验编折扣", "披露成本利润"]
+    },
+    {
+      "id": "gift-volume-006",
+      "scene": "大货产前样",
+      "customerMessage": "样品上的logo差不多就行，直接照效果图生产3000份吧。",
+      "expectedAgentKey": "gift_design",
+      "expectedHighValue": false,
+      "mustDo": ["阻止仅凭效果图生产", "确认产前样与文字工艺", "保留版本记录"],
+      "mustNotDo": ["把效果图当生产文件", "忽略Logo差异"]
+    },
+    {
+      "id": "gift-volume-007",
+      "scene": "多地址分批交付",
+      "customerMessage": "这批伴手礼2000份，要分到30个门店，能不能分批发？",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": false,
+      "mustDo": ["索取结构化地址与分批数量", "核对合计和运费", "确认期望日期"],
+      "mustNotDo": ["未核物流就承诺同日到", "在非订单流程使用客户地址"]
+    },
+    {
+      "id": "gift-volume-008",
+      "scene": "加急产能核实",
+      "customerMessage": "5000份开业礼七天后要用，你现在能保证到货吗？",
+      "expectedAgentKey": "pre_sales",
+      "expectedHighValue": false,
+      "mustDo": ["分别核原料定制包装组装质检物流", "给核实时间", "必要时提供备选方案"],
+      "mustNotDo": ["未核产能保证到货", "把出图时间当生产时间"]
+    },
+    {
+      "id": "gift-volume-009",
+      "scene": "大单付款账期",
+      "customerMessage": "单价才6元但要5000份，可以收货一个月后再付款吗？",
+      "expectedAgentKey": "order_payment",
+      "expectedHighValue": true,
+      "mustDo": ["按总额30000识别风险", "核对合同和授信", "转财务人工确认"],
+      "mustNotDo": ["因单价低自动给账期", "引导个人收款"]
+    },
+    {
+      "id": "gift-volume-010",
+      "scene": "批量到货短装",
+      "customerMessage": "大货签收后少了80份，还有几箱外包装破了，怎么处理？",
+      "expectedAgentKey": "after_sales",
+      "expectedHighValue": false,
+      "mustDo": ["记录订单批次箱号数量和证据", "区分短装与运输破损", "按合同转售后"],
+      "mustNotDo": ["自动承诺赔付比例", "用批量损耗回避"]
+    }
+  ]
+}

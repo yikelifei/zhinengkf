@@ -213,11 +213,13 @@ test("explains send queue skips with actionable advice", () => {
   assert.match(headBlocked.recommendedAction, /前序发送任务/);
 
   const sameCycle = buildSendQueueSkipAdvice({
-    reason: "same_account_already_processed_this_cycle",
+    reason: "account_cycle_limit_reached",
     task: { id: "send-next", wechatAccountId: "wechat-1" },
+    perAccountLimit: 10,
   });
   assert.equal(sameCycle.severity, "info");
   assert.equal(sameCycle.blockingTaskId, null);
+  assert.match(sameCycle.message, /10/);
 
   const manualLocked = buildSendQueueSkipAdvice({
     reason: "conversation_manual_locked",
@@ -271,6 +273,51 @@ test("rejects unknown delivery requeue with channel-neutral Chinese guidance", (
   assert.match(result.message, /发送结果未知/);
   assert.match(result.message, /人工核查.*不能直接重新排队/);
   assert.doesNotMatch(result.message, /Windows|微信|桥接/i);
+});
+
+test("rejects requeue after an in-flight cancellation request even when the API later reports a known failure", () => {
+  const result = evaluateSendTaskRequeue({
+    task: {
+      ...task,
+      status: "failed",
+      conversation,
+      guardSnapshot: {
+        deliveryState: "failed",
+        automaticRetryBlocked: false,
+        manualReviewRequired: false,
+        cancelRequestedAt: "2026-08-15T14:43:28.395Z",
+      },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "cancellation_requested");
+  assert.equal(result.failedKeys.includes("automaticRetryAllowed"), true);
+  assert.match(result.message, /已请求取消.*不能.*重新排队/);
+});
+
+test("allows an explicit new lifecycle after audited confirmation that nothing was sent", () => {
+  const result = evaluateSendTaskRequeue({
+    task: {
+      ...task,
+      status: "failed",
+      conversation,
+      guardSnapshot: {
+        cancelRequestedAt: "2026-08-15T14:43:28.395Z",
+        deliveryState: "failed",
+        automaticRetryBlocked: true,
+        manualReviewRequired: false,
+        manualDeliveryResolution: {
+          resolution: "confirmed_not_sent",
+          resolvedAt: "2026-08-15T14:45:00.000Z",
+          operationKey: "manual-resolution-confirmed-not-sent",
+        },
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "requeue");
 });
 
 test("rejects requeue after audited manual cancellation", () => {

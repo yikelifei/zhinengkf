@@ -11,6 +11,15 @@ cd desktop
 npm.cmd run staging:readiness
 ```
 
+服务器预发布应使用仓库外的独立配置文件，避免误读开发机配置。`--env-file` 会替代仓库中的两个 `.env` 文件，进程环境变量仍可覆盖文件值：
+
+```powershell
+cd desktop
+npm.cmd run staging:readiness -- --env-file C:\ProgramData\SmartKefu\pre-icp.env
+```
+
+Linux 可传入 `/etc/smart-kefu/pre-icp.env`。备案等待期的完整步骤见 `desktop/docs/PRE_ICP_SERVER_STAGING.md`。
+
 只有显式加入 `--execute` 才会访问预发布环境：
 
 ```powershell

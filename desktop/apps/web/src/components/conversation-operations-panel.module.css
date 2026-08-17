@@ -104,7 +104,7 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 32px;
+  min-height: 44px;
   border-radius: 5px;
   padding: 0 11px;
   font-family: inherit;
@@ -168,6 +168,17 @@
   line-height: 17px;
 }
 
+.warning > span,
+.error > span {
+  min-width: 0;
+}
+
+.warning > button,
+.error > button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .footer {
   display: flex;
   align-items: center;
@@ -213,5 +224,24 @@
 
   .assignButton {
     width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .footer > button,
+  .empty > button,
+  .warning > button,
+  .error > button {
+    width: 100%;
+  }
+
+  .warning,
+  .error {
+    flex-wrap: wrap;
   }
 }

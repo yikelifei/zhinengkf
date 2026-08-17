@@ -1,7 +1,8 @@
 "use strict";
 
 const { classifyScene } = require("./chatTraining");
-const { isHighValueBudget, parseBudget } = require("./budget");
+const { isHighValueBudget, mergeBudgetContext, parseBudget } = require("./budget");
+const { buildBasicCustomerServiceScene, classifyBasicCustomerServiceQuestion } = require("./basicCustomerService");
 
 const SENSITIVE_PATTERNS = [
   /投诉/,
@@ -19,33 +20,87 @@ const SENSITIVE_PATTERNS = [
 
 function evaluateAgentRoute(input = {}, options = {}) {
   const text = String(input.text || "");
-  const classifiedScene = applySceneMemory(classifyScene(text), text, options.sceneMemory || options.routeCorrectionSamples || []);
-  const clarificationResolution = resolveSceneClarification(
-    text,
-    input.clarificationContext || options.clarificationContext,
-    classifiedScene,
-  );
-  const scene = clarificationResolution?.resolvedScene || classifiedScene;
+  const priorSalesContext = input.salesContext || options.salesContext || {};
+  const basicQuestion = classifyBasicCustomerServiceQuestion(text);
+  const classifiedScene = basicQuestion
+    ? buildBasicCustomerServiceScene(basicQuestion)
+    : applySalesConversationContinuity(
+        applySceneMemory(classifyScene(text), text, options.sceneMemory || options.routeCorrectionSamples || []),
+        text,
+        priorSalesContext,
+      );
+  const clarificationResolution = basicQuestion
+    ? null
+    : resolveSceneClarification(
+        text,
+        input.clarificationContext || options.clarificationContext,
+        classifiedScene,
+      );
+  const followupResolution = basicQuestion || clarificationResolution
+    ? null
+    : resolvePendingFieldAnswer(
+        text,
+        input.followupContext || options.followupContext,
+        classifiedScene,
+      );
+  const scene = clarificationResolution?.resolvedScene || followupResolution?.resolvedScene || classifiedScene;
   const sceneDecision = clarificationResolution
     ? buildResolvedSceneDecision(clarificationResolution)
-    : buildSceneDecision(scene);
-  const sceneClarification = clarificationResolution ? null : buildSceneClarification(sceneDecision);
-  const budget = input.budget || (shouldParseBudgetForRoute(text, scene.agentKey) ? parseBudget(text) : null);
+    : followupResolution
+      ? buildResolvedFollowupDecision(followupResolution)
+      : buildSceneDecision(scene);
+  const sceneClarification = clarificationResolution || followupResolution ? null : buildSceneClarification(sceneDecision);
+  const parsedBudget = shouldParseBudgetForRoute(text, scene.agentKey) ? parseBudget(text) : null;
+  const currentUsageScene = extractSalesUsageScene(text);
+  const currentStylePreference = extractSalesStylePreference(text);
+  const priorUsageScene = normalizeUsageContext(input.usageContext || options.usageContext || priorSalesContext);
+  const usageChanged = Boolean(currentUsageScene && priorUsageScene && currentUsageScene !== priorUsageScene);
+  const budgetContext = usageChanged
+    ? null
+    : compatibleBudgetContext(input.budgetContext || options.budgetContext, scene.agentKey);
+  const budget = input.budget || mergeBudgetContext(parsedBudget, budgetContext);
+  const usageScene = currentUsageScene || priorUsageScene;
+  const stylePreference = currentStylePreference
+    || (usageChanged ? null : normalizeStylePreference(input.styleContext || options.styleContext || priorSalesContext));
+  const salesContext = {
+    usageScene: usageScene || null,
+    stylePreference: stylePreference || null,
+    contextReset: usageChanged ? "usage_scene_changed" : null,
+    currentFields: [...new Set([
+      followupResolution?.requestedField,
+      Number(parsedBudget?.quantity || 0) > 0 ? "quantity" : null,
+      Number(parsedBudget?.perUnitAmount || parsedBudget?.totalAmount || 0) > 0 ? "budget" : null,
+      currentUsageScene ? "usage_scene" : null,
+      currentStylePreference ? "style_preference" : null,
+    ].filter(Boolean))],
+    currentField: followupResolution?.requestedField
+      || (currentUsageScene ? "usage_scene" : null)
+      || (currentStylePreference ? "style_preference" : null),
+  };
   const highValue = isHighValueBudget(budget, Number(options.highValueAmountCny || 10000));
   const riskFlags = detectRiskFlags(text);
-  const missing = detectMissingFields(text, scene.agentKey, budget);
-  if (sceneDecision.status === "ambiguous" || sceneDecision.status === "weak") {
+  const missing = basicQuestion ? [] : detectMissingFields(text, scene.agentKey, budget);
+  if (!basicQuestion && (sceneDecision.status === "ambiguous" || sceneDecision.status === "weak")) {
     missing.unshift("scene_clarification");
   }
 
-  const action = decideAction({ highValue, riskFlags, missing, agentKey: scene.agentKey, sceneDecision });
+  const action = decideAction({
+    highValue,
+    riskFlags,
+    missing,
+    agentKey: scene.agentKey,
+    sceneDecision,
+    basicQuestion,
+  });
   const sceneAudit = buildSceneAudit({
     scene,
     sceneDecision,
     sceneClarification,
     clarificationResolution,
+    followupResolution,
     sceneMemory: scene.sceneMemory || null,
     budget,
+    salesContext,
     highValue,
     riskFlags,
     missing,
@@ -70,12 +125,16 @@ function evaluateAgentRoute(input = {}, options = {}) {
     sceneScore: scene.score || 0,
     sceneScores: scene.scores || [],
     matchedKeywords: scene.matchedKeywords || [],
+    basicIntent: basicQuestion?.intent || null,
+    basicAnswer: basicQuestion?.answer || null,
     sceneDecision,
     sceneClarification,
     clarificationResolution,
+    followupResolution,
     sceneMemory: scene.sceneMemory || null,
     sceneAudit,
     budget,
+    salesContext,
     isHighValue: highValue,
     riskFlags,
     missingFields: missing,
@@ -83,8 +142,54 @@ function evaluateAgentRoute(input = {}, options = {}) {
     routingPolicy,
     manualRequired: action === "manual_review",
     confidence: calculateConfidence(scene, budget, missing, riskFlags),
-    suggestedReply: buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }),
+    suggestedReply: basicQuestion?.answer || buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }),
   };
+}
+
+function applySalesConversationContinuity(scene, text, priorSalesContext) {
+  const decision = buildSceneDecision(scene || {});
+  if (decision.status === "clear") return scene;
+  const explicitUsageScene = extractSalesUsageScene(text);
+  if (explicitUsageScene) {
+    const marker = "conversation:explicit_usage_scene";
+    return {
+      scene: "售前转化",
+      agentKey: "pre_sales",
+      hits: 1,
+      score: 24,
+      matchedKeywords: [marker],
+      scores: [{ scene: "售前转化", agentKey: "pre_sales", score: 24, matchedKeywords: [marker] }],
+      conversationContext: { source: "explicit_usage_scene", usageScene: explicitUsageScene },
+    };
+  }
+  const usageScene = normalizeUsageContext(priorSalesContext);
+  const stylePreference = normalizeStylePreference(priorSalesContext);
+  if (!usageScene && !stylePreference) return scene;
+  if (!/还有别的|还有其他|其他款|换一个|换一款|换款|再看看其他|再看别的|这个不喜欢|不太喜欢|简单一点|简约一点|实用一点|氛围感一点|商务一点|大气一点|高级一点|这个呢|哪个好/.test(String(text || ""))) {
+    return scene;
+  }
+  const marker = "conversation:sales_followup";
+  return {
+    scene: "售前转化",
+    agentKey: "pre_sales",
+    hits: 1,
+    score: 24,
+    matchedKeywords: [marker],
+    scores: [{ scene: "售前转化", agentKey: "pre_sales", score: 24, matchedKeywords: [marker] }],
+    conversationContext: {
+      source: "sales_context",
+      usageScene: usageScene || null,
+      stylePreference: stylePreference || null,
+    },
+  };
+}
+
+function compatibleBudgetContext(context, agentKey) {
+  if (!context || typeof context !== "object") return null;
+  const sourceAgentKey = String(context.sourceAgentKey || "").trim();
+  if (!sourceAgentKey || sourceAgentKey === agentKey) return context;
+  const giftAgents = new Set(["gift_design", "pre_sales"]);
+  return giftAgents.has(sourceAgentKey) && giftAgents.has(agentKey) ? context : null;
 }
 
 function applySceneMemory(classifiedScene, text, sceneMemory = []) {
@@ -307,7 +412,7 @@ const SCENE_RESOLUTION_ALIASES = {
   logistics_exception: weightedAliases(["物流", "快递", "发货", "到货", "签收", "派送", "催件", "单号", "没收到"]),
   after_sales: weightedAliases(["售后", "退款", "退货", "换货", "破损", "坏了", "补发", "质量", "少件", "漏发", "赔偿"]),
   size_recommendation: weightedAliases(["尺码", "码数", "身高", "体重", "穿多大", "合身", "偏大", "偏小"]),
-  pre_sales: weightedAliases(["推荐", "商品", "价格", "优惠", "怎么买", "活动", "有货", "多少钱", "介绍", "对比"]),
+  pre_sales: weightedAliases(["售前咨询", "商品咨询", "售前", "推荐", "商品", "价格", "优惠", "怎么买", "活动", "有货", "多少钱", "介绍", "对比"]),
 };
 
 function resolveSceneClarification(text, context, classifiedScene = null) {
@@ -449,6 +554,182 @@ function findPendingSceneClarificationContext(routeEvaluations = [], conversatio
   return latest;
 }
 
+function findPendingFieldQuestionContext(routeEvaluations = [], conversationId) {
+  if (!conversationId || !Array.isArray(routeEvaluations)) return null;
+  const recent = routeEvaluations
+    .filter((route) => route?.conversationId === conversationId)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, 12);
+  if (!recent.length || recent[0].action === "manual_review" || (recent[0].riskFlags || []).length) return null;
+  for (let index = 0; index < recent.length; index += 1) {
+    const route = recent[index];
+    if (route.action === "manual_review" || (route.riskFlags || []).length) break;
+    const question = String(route.suggestedReply || route.replyDraft?.ruleSuggestedReply || "").trim();
+    const requestedField = detectRequestedField(question);
+    if (!requestedField) continue;
+    const newerRoutes = recent.slice(0, index);
+    const superseded = newerRoutes.some((item) => {
+      const salesContext = item?.salesContext || item?.replyDraft?.salesContext || {};
+      return salesContext.contextReset === "usage_scene_changed"
+        || (salesContext.currentFields || []).includes(requestedField);
+    });
+    if (superseded) continue;
+    return {
+      routeId: route.id || null,
+      conversationId,
+      requestedField,
+      question,
+      agentKey: String(route.agentKey || "pre_sales"),
+      scene: String(route.scene || "售前咨询"),
+      createdAt: route.createdAt || null,
+    };
+  }
+  return null;
+}
+
+function detectRequestedField(question) {
+  const text = String(question || "").trim();
+  if (!text) return null;
+  if (/多少份|要多少(?:份|个|套|盒|件)|数量(?:是多少|多少|大概)/.test(text)) return "quantity";
+  if (/预算(?:是多少|多少|大概|呢)|预期价格|单份.{0,14}(?:预算|价位|多少钱|控制在|想控制)|价位|大概多少钱/.test(text)) return "budget";
+  if (/什么场景|什么用途|主要.{0,6}(?:送|用)|送客户还是员工|送给谁|什么活动/.test(text)) return "usage_scene";
+  if (/实用.{0,10}氛围感|氛围感.{0,10}实用|偏.{0,6}(?:实用|氛围|简约|高级|可爱|质感)/.test(text)) return "style_preference";
+  return null;
+}
+
+function resolvePendingFieldAnswer(text, context, classifiedScene) {
+  if (!context?.requestedField) return null;
+  const currentDecision = buildSceneDecision(classifiedScene || {});
+  const isSalesConversationContinuation = (classifiedScene?.matchedKeywords || []).includes("conversation:sales_followup");
+  if (currentDecision.status === "clear" && !isSalesConversationContinuation) return null;
+
+  let answeredField = context.requestedField;
+  let value = extractPendingFieldValue(text, answeredField);
+  if (!value && ["pre_sales", "gift_design"].includes(String(context.agentKey || ""))) {
+    for (const candidate of ["quantity", "budget", "usage_scene", "style_preference"]) {
+      if (candidate === answeredField) continue;
+      const candidateValue = extractPendingFieldValue(text, candidate);
+      if (!candidateValue) continue;
+      answeredField = candidate;
+      value = candidateValue;
+      break;
+    }
+  }
+  if (!value) return null;
+  const agentKey = ["pre_sales", "gift_design"].includes(String(context.agentKey || ""))
+    ? String(context.agentKey)
+    : "pre_sales";
+  const scene = String(context.scene || (agentKey === "gift_design" ? "礼盒设计" : "售前咨询"));
+  const marker = `followup:${answeredField}`;
+  return {
+    type: "customer_field_answer",
+    requestedField: answeredField,
+    expectedField: context.requestedField,
+    value,
+    sourceRouteId: context.routeId || null,
+    sourceQuestion: context.question || "",
+    agentKey,
+    scene,
+    matchedKeywords: [marker],
+    confidence: "high",
+    resolvedScene: {
+      scene,
+      agentKey,
+      hits: 1,
+      score: 24,
+      matchedKeywords: [marker],
+      scores: [{ scene, agentKey, score: 24, matchedKeywords: [marker] }],
+    },
+  };
+}
+
+function extractPendingFieldValue(text, requestedField) {
+  const value = String(text || "").trim();
+  if (!value) return null;
+  if (requestedField === "quantity") {
+    const quantity = Number(parseBudget(value)?.quantity || 0);
+    return quantity > 0 ? { quantity } : null;
+  }
+  if (requestedField === "budget") {
+    const parsed = parseBudget(value);
+    const amount = Number(parsed?.perUnitAmount || parsed?.totalAmount || 0);
+    return amount > 0 ? parsed : null;
+  }
+  if (requestedField === "usage_scene") {
+    const usageScene = extractSalesUsageScene(value);
+    return usageScene ? { usageScene } : null;
+  }
+  if (requestedField === "style_preference") {
+    const stylePreference = extractSalesStylePreference(value);
+    return stylePreference ? { stylePreference } : null;
+  }
+  return null;
+}
+
+function extractSalesUsageScene(value) {
+  const text = String(value || "").replace(/[，。！？、,.!?]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const namedPatterns = [
+    [/教师节.{0,8}(?:送)?老师|送老师.{0,8}教师节/, "教师节送老师"],
+    [/中秋.{0,8}(?:送)?客户|送客户.{0,8}中秋/, "中秋送客户"],
+    [/中秋.{0,8}(?:送)?员工|送员工.{0,8}中秋/, "中秋送员工"],
+    [/员工.{0,6}(?:福利|礼品)|福利.{0,6}员工/, "员工福利"],
+    [/公司.{0,8}(?:周年|年会)|周年庆|年会/, "公司活动"],
+    [/婚礼|结婚|婚庆/, "婚礼伴手礼"],
+    [/开业|开店|开张/, "开业伴手礼"],
+    [/酒店|民宿/, "酒店民宿用礼"],
+    [/瑜伽|普拉提/, "瑜伽普拉提活动"],
+    [/美容院|美业|服装店/, "门店活动"],
+    [/医师节/, "医师节用礼"],
+    [/教师节/, "教师节用礼"],
+    [/中秋/, "中秋用礼"],
+    [/送客户|客户礼|客户拜访/, "送客户"],
+    [/送员工|员工礼/, "送员工"],
+  ];
+  const matched = namedPatterns.find(([pattern]) => pattern.test(text));
+  if (matched) return matched[1];
+  if (/活动|庆典|会议|伴手礼|福利|拜访|送礼|送人/.test(text)) return text.slice(0, 24);
+  return null;
+}
+
+function normalizeUsageContext(value) {
+  if (!value) return null;
+  if (typeof value === "string") return String(value).trim() || null;
+  return String(value.usageScene || "").trim() || null;
+}
+
+function extractSalesStylePreference(value) {
+  const text = String(value || "").replace(/[，。！？、,.!?]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  if (/太可爱|不要.{0,6}可爱|不(?:太)?喜欢.{0,8}可爱|可爱.{0,6}(?:不喜欢|不要)/.test(text)) return "简约";
+  if (/简单|简洁/.test(text)) return "简约";
+  const preferences = ["实用", "氛围感", "简约", "商务", "大气", "高级", "质感", "可爱"];
+  return preferences.find((item) => text.includes(item)) || null;
+}
+
+function normalizeStylePreference(value) {
+  if (!value) return null;
+  if (typeof value === "string") return extractSalesStylePreference(value);
+  return extractSalesStylePreference(value.stylePreference);
+}
+
+function buildResolvedFollowupDecision(resolution) {
+  const resolvedScene = resolution.resolvedScene;
+  const topScene = {
+    scene: resolvedScene.scene,
+    agentKey: resolution.agentKey,
+    score: resolvedScene.score,
+    matchedKeywords: resolution.matchedKeywords || [],
+  };
+  return {
+    status: "clear",
+    reason: "customer_field_answered",
+    topScene,
+    secondaryScene: null,
+    scoreGap: topScene.score,
+  };
+}
+
 function buildSceneClarification(sceneDecision) {
   if (!sceneDecision || sceneDecision.status === "clear") return null;
   const options = [sceneDecision.topScene, sceneDecision.secondaryScene]
@@ -576,11 +857,35 @@ function detectRiskFlags(text) {
     if (pattern.test(text)) flags.push(pattern.source);
   }
   if (/退款|退货|换货/.test(text) && /拒绝|不处理|不给|没人管/.test(text)) flags.push("售后争议");
+  if (/(微信付|微信付款|微信收款|微信款|个人微信|个人银行卡)/.test(text) && /(对公|公户|公司.{0,8}打款|退款|退回|退微信|原路退)/.test(text)) {
+    flags.push("双重支付或退款流程");
+  }
+  if (/(繁体字|错别字|错字|乱码)/.test(text) && /(印刷|直接印|生产|定稿)/.test(text)) {
+    flags.push("错误设计稿生产风险");
+  }
+  if (/(随便|临时).{0,8}(logo|品牌名)|帮我.{0,8}(想|编|做).{0,6}(logo|品牌名)/i.test(text)) {
+    flags.push("虚构品牌素材风险");
+  }
+  if (/(淘宝|外部|网上).{0,12}(照着|一模一样|完全一样)|一模一样/.test(text)) {
+    flags.push("外部图片或仿制风险");
+  }
+  if (/月饼.{0,18}(红酒|茶叶|刀叉|混装)|(红酒|茶叶|刀叉).{0,18}月饼/.test(text)) {
+    flags.push("月饼混装合规风险");
+  }
   return [...new Set(flags)];
 }
 
 function detectMissingFields(text, agentKey, budget) {
   const missing = [];
+  if (agentKey === "pre_sales") {
+    const bulkOrderCue = /大批量|大量|批量|大货|上千|几千|上万|几万/.test(text);
+    if (bulkOrderCue && !budget?.quantity) missing.push("quantity");
+    if ((bulkOrderCue || Number(budget?.quantity || 0) >= 1000)
+      && !budget?.perUnitAmount
+      && !budget?.totalAmount) {
+      missing.push("budget");
+    }
+  }
   if (agentKey === "gift_design") {
     if (!budget?.perUnitAmount && !budget?.totalAmount) missing.push("budget");
     if (!budget?.quantity) missing.push("quantity");
@@ -605,9 +910,17 @@ function detectMissingFields(text, agentKey, budget) {
   return missing;
 }
 
-function decideAction({ highValue, riskFlags, missing, agentKey, sceneDecision }) {
-  if (highValue) return "manual_review";
+function decideAction({ highValue, riskFlags, missing, agentKey, sceneDecision, basicQuestion }) {
   if (riskFlags.length) return "manual_review";
+  if (basicQuestion) return "auto_agent";
+  // A high total value must still block design, quoting, payment and order actions.
+  // A pre-sales answer may safely describe catalog facts and request quote details,
+  // while the final discount/price commitment remains explicitly manual.
+  if (highValue && agentKey !== "pre_sales") return "manual_review";
+  // A high-value pre-sales request may use the guided catalog lane only when
+  // the scene is already clear and no clarification is pending. Otherwise the
+  // deterministic acknowledgement path must run before any model assistance.
+  if (highValue && (sceneDecision?.status !== "clear" || missing.length)) return "manual_review";
   if (sceneDecision?.status === "ambiguous") {
     const keys = [sceneDecision.topScene?.agentKey, sceneDecision.secondaryScene?.agentKey].filter(Boolean);
     if (keys.includes("after_sales") || keys.includes("order_payment")) return "manual_review";
@@ -642,7 +955,7 @@ function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFl
 
   if (scene.agentKey === "gift_design") {
     const budgetText = budget?.perUnitAmount ? `按每份 ${budget.perUnitAmount} 元` : "按您的预算";
-    return `${budgetText}可以做。我先帮您搭一套礼盒组合，再整理几版真实产品摆拍效果图给您挑。同时我会核对 Logo、参考图、用途和礼盒搭配，确保效果图不乱换商品。`;
+    return `${budgetText}可以做。我先帮您搭一套礼盒组合，再整理 4 张真实产品摆拍效果图给您挑。同时我会核对 Logo、参考图、用途和礼盒搭配，确保效果图不乱换商品。`;
   }
 
   if (scene.agentKey === "order_payment") {
@@ -702,7 +1015,11 @@ function buildSceneAudit({
 
   const missingFields = [...new Set(missing || [])];
   const warnings = [];
-  if (highValue) warnings.push("达到高价值客户线，不能自动推进。");
+  if (highValue) warnings.push(
+    action === "auto_agent"
+      ? "达到高价值客户线，只允许自动回复商品库事实；最终优惠、报价和业务动作仍需人工审核。"
+      : "达到高价值客户线，不能自动推进。",
+  );
   if (riskFlags.length) warnings.push(`敏感风险：${riskFlags.join("、")}`);
   if (missingFields.length) warnings.push(`缺少信息：${missingFields.map(fieldLabel).join("、")}`);
   if (sceneClarification?.question) warnings.push("需要先问清场景，避免把 A 场景当成 B 场景回复。");
@@ -773,6 +1090,7 @@ function buildRoutingPolicy({
 }
 
 function routingPolicyLane({ highValue, riskFlags, missingFields, action, sceneDecision }) {
+  if (highValue && action === "auto_agent") return "high_value_guided_reply";
   if (highValue) return "high_value_human";
   if (riskFlags.length) return "risk_human";
   if (action === "manual_review") return "manual_review";
@@ -786,6 +1104,7 @@ function routingPolicyLane({ highValue, riskFlags, missingFields, action, sceneD
 
 function routingPolicyReason({ lane, scene, budget, riskFlags, missingFields }) {
   if (lane === "high_value_human") return `达到高价值线，${scene.scene} 由人工审核后推进。`;
+  if (lane === "high_value_guided_reply") return "达到高价值线，但仅自动回复商品库事实和需求确认；最终优惠与报价仍由人工审核。";
   if (lane === "risk_human") return `命中敏感风险：${riskFlags.join("、")}，需要人工处理。`;
   if (lane === "scene_clarification") return "场景判断还不够稳，先确认客户真正要处理的问题，避免回错会话或回错场景。";
   if (lane === "info_collection") return `已识别为 ${scene.scene}，但还缺少 ${missingFields.map(fieldLabel).join("、")}。`;
@@ -794,7 +1113,7 @@ function routingPolicyReason({ lane, scene, budget, riskFlags, missingFields }) 
     if (budget?.perUnitAmount) parts.push(`单份 ${budget.perUnitAmount} 元`);
     if (budget?.totalAmount) parts.push(`总额 ${budget.totalAmount} 元`);
     const budgetText = parts.length ? `，${parts.join("，")}` : "";
-    return `低价值线内且场景清晰${budgetText}，可交给 ${sceneOptionLabel(scene.agentKey, scene.scene)} 智能体处理。`;
+    return `常规自动处理线内且场景清晰${budgetText}，可交给 ${sceneOptionLabel(scene.agentKey, scene.scene)} 智能体处理。`;
   }
   return "需要人工确认后再继续。";
 }
@@ -805,6 +1124,7 @@ function routingPolicySafeguards({ lane, manualRequired, canQueueAutoReply, scen
   if (canQueueAutoReply) safeguards.push("wechat_send_guard_required");
   if (lane === "scene_clarification" || sceneClarification?.required) safeguards.push("ask_before_answering_uncertain_scene");
   if (lane === "high_value_human") safeguards.push("price_image_and_order_manual_review");
+  if (lane === "high_value_guided_reply") safeguards.push("catalog_facts_only", "final_quote_manual_review");
   return safeguards;
 }
 
@@ -844,6 +1164,7 @@ function sceneAuditSummary({ scene, sceneDecision, clarificationResolution, matc
 }
 
 function sceneAuditNextStep({ scene, sceneClarification, missingFields, highValue, riskFlags, action }) {
+  if (highValue && action === "auto_agent") return "先回复商品库事实并收集报价条件，最终优惠与正式报价转人工审核。";
   if (highValue) return "转人工审核预算、客户价值、图片和报价，再决定是否发送。";
   if (riskFlags.length) return "转人工处理投诉、售后争议或敏感风险，避免自动话术激化问题。";
   if (sceneClarification?.question) return `先发送场景确认问题：${sceneClarification.question}`;
@@ -875,7 +1196,11 @@ module.exports = {
   buildSceneDecision,
   buildSceneClarification,
   findPendingSceneClarificationContext,
+  findPendingFieldQuestionContext,
   resolveSceneClarification,
+  resolvePendingFieldAnswer,
+  extractSalesUsageScene,
+  extractSalesStylePreference,
   buildSceneAudit,
   buildRoutingPolicy,
   shouldParseBudgetForRoute,

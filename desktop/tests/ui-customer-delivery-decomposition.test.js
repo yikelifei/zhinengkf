@@ -32,7 +32,9 @@ test("routing evaluation and side-effecting processing have different URLs and m
   assert.doesNotMatch(evaluateRoute, /mode="process"/);
   assert.match(processRoute, /routeId="routingProcess"/);
   assert.match(processRoute, /mode="process"/);
-  assert.match(feature, /href=\{mode === "evaluate" \? "\/routing\/process" : "\/routing"\}/);
+  assert.match(feature, /routingIdentityHref\(mode === "evaluate" \? "\/routing\/process" : "\/routing", controller\.selectedConversation\)/);
+  assert.match(feature, /conversationId: conversation\.id/);
+  assert.match(processRoute, /initialConversationId=\{identityFilters\.conversationId\}/);
 });
 
 test("send lists navigate to one-task pages and diagnostics mutations are isolated", () => {
@@ -41,9 +43,9 @@ test("send lists navigate to one-task pages and diagnostics mutations are isolat
   const diagnostics = read("apps/web/src/features/send/send-diagnostics-page.tsx");
   const operations = read("apps/web/src/features/send/send-diagnostics-operations-page.tsx");
   assert.match(queue, /SendTaskListItem/);
-  assert.match(queue, /"\/send\/queue\/" \+ encodeURIComponent\(task\.id\)/);
+  assert.match(queue, /scopedSendTaskHref\("\/send\/queue", task\)/);
   assert.match(blocked, /SendTaskListItem/);
-  assert.match(blocked, /"\/send\/blocked\/" \+ encodeURIComponent\(task\.id\)/);
+  assert.match(blocked, /scopedSendTaskHref\("\/send\/blocked", task\)/);
   assert.doesNotMatch(diagnostics, /scanSendOperations|scanBridgeInbox/);
   assert.match(operations, /scanSendOperations/);
   assert.match(operations, /scanBridgeInbox/);
@@ -58,7 +60,9 @@ test("review queues only select records while decision pages bind exactly one ro
   assert.doesNotMatch(queues, /reviewDesignJob|reviewQuote\(|reviewOrder\(/);
   for (const source of [design, quotes, orders]) {
     assert.match(source, /reviewId: string/);
-    assert.match(source, /find\(\([a-z]+(?:Job|Quote|Order)?\) => [a-z]+(?:Job|Quote|Order)?\.id === reviewId\)/);
+    assert.match(source, /useReviewRecord\(/);
+    assert.doesNotMatch(source, /useReviewCenter\(/);
+    assert.doesNotMatch(source, /find\(\([a-z]+(?:Job|Quote|Order)?\) => [a-z]+(?:Job|Quote|Order)?\.id === reviewId\)/);
   }
 });
 

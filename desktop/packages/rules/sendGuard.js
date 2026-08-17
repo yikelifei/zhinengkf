@@ -436,11 +436,23 @@ function evaluateSendTaskRequeue({ task } = {}) {
       failedKeys: ["taskExists"],
     };
   }
-  if (
+  const manuallyConfirmedNotSent =
+    task.guardSnapshot?.manualDeliveryResolution?.resolution === "confirmed_not_sent";
+  if (task.guardSnapshot?.cancelRequestedAt && !manuallyConfirmedNotSent) {
+    return {
+      ok: false,
+      action: "reject_requeue",
+      reason: "cancellation_requested",
+      failedKeys: ["cancellationNotRequested", "automaticRetryAllowed"],
+      message: "该发送任务已请求取消，不能自动或人工直接重新排队。",
+    };
+  }
+  if (!manuallyConfirmedNotSent && (
     task.guardSnapshot?.automaticRetryBlocked === true ||
+    task.guardSnapshot?.manualReviewRequired === true ||
     task.guardSnapshot?.deliveryState === "unknown" ||
     task.guardSnapshot?.wechatWorkDeliveryState === "unknown"
-  ) {
+  )) {
     return {
       ok: false,
       action: "reject_requeue",
@@ -509,7 +521,7 @@ function isManualOperatorSend(task) {
   );
 }
 
-function buildSendQueueSkipAdvice({ reason, task, queueHeadTask } = {}) {
+function buildSendQueueSkipAdvice({ reason, task, queueHeadTask, perAccountLimit } = {}) {
   const taskId = task?.id || "";
   const queueHeadId = queueHeadTask?.id || "";
   if (reason === "not_account_queue_head") {
@@ -532,6 +544,16 @@ function buildSendQueueSkipAdvice({ reason, task, queueHeadTask } = {}) {
       blockingTaskId: null,
       message: "同一轮自动化里，每个微信账号只处理一个发送任务，避免焦点和窗口状态混乱。",
       recommendedAction: "等待下一轮自动化继续处理，或人工点击安全发送队列处理。",
+    };
+  }
+  if (reason === "account_cycle_limit_reached") {
+    const cycleLimit = Math.max(1, Number(perAccountLimit || 1));
+    return {
+      reason,
+      severity: "info",
+      blockingTaskId: null,
+      message: `该账号本轮已处理 ${cycleLimit} 个发送任务，剩余客户将在下一轮继续处理。`,
+      recommendedAction: "无需人工操作；自动化会在下一轮继续按账号内顺序处理。",
     };
   }
   if (reason === "task_no_longer_queued") {

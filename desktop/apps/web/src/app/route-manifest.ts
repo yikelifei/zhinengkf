@@ -1,9 +1,8 @@
 import type { WorkspaceSectionId } from "../components/workbench-shell/types";
 
-export type TrainingWorkbenchView = "import" | "history" | "review" | "batch" | "skills";
-export type WechatWorkbenchView = "channels" | "flow" | "config";
-export type PersonalWechatRouteView = "instances" | "control" | "voice" | "inbound" | "safety";
-export type AccountWorkbenchView = "wechat" | "access";
+export type TrainingWorkbenchView = "overview" | "knowledge" | "import" | "history" | "review" | "batch" | "skills";
+export type WechatWorkbenchView = "channels" | "customers" | "flow" | "config";
+export type AccountWorkbenchView = "wechat" | "access" | "models" | "delivery";
 export type SendWorkbenchView = "queue" | "blocked" | "diagnostics";
 export type ReviewWorkbenchView = "handoff" | "design" | "quote" | "order" | "logs";
 export type SalesWorkbenchView = "overview" | "actions" | "quotes" | "orders";
@@ -14,7 +13,6 @@ export type AutomationWorkbenchView = "automation" | "control" | "issues" | "his
 export type WorkbenchRouteSelection = {
   training?: TrainingWorkbenchView;
   wechat?: WechatWorkbenchView;
-  personalWechat?: PersonalWechatRouteView;
   account?: AccountWorkbenchView;
   send?: SendWorkbenchView;
   review?: ReviewWorkbenchView;
@@ -54,6 +52,15 @@ export const WORKBENCH_ROUTES = {
     responsibility: "筛选并选择需要处理的客户会话。",
     primaryAction: "打开一条会话",
     legacyHash: "conversation-center",
+  },
+  wechatWorkWorkspace: {
+    id: "wechatWorkWorkspace",
+    href: "/integrations/wechat-work/workspace",
+    sectionId: "wecom-workspace",
+    title: "企业微信工作台",
+    responsibility: "在智能客服内读取企业微信官方客服消息、展示真实客户会话并通过官方通道回复。",
+    primaryAction: "处理企业微信会话",
+    legacyHash: "wecom-workspace",
   },
   conversationDetail: {
     id: "conversationDetail",
@@ -150,7 +157,7 @@ export const WORKBENCH_ROUTES = {
     href: "/send/diagnostics",
     sectionId: "send-center",
     title: "发送诊断",
-    responsibility: "核查发送适配器、桥接回执和失败尝试。",
+    responsibility: "核查发送适配器、企业微信发送回执和失败尝试。",
     primaryAction: "扫描回执",
     legacyHash: "send-center:diagnostics",
     initialView: { send: "diagnostics" },
@@ -160,7 +167,7 @@ export const WORKBENCH_ROUTES = {
     href: "/send/diagnostics/operations",
     sectionId: "send-center",
     title: "发送诊断操作",
-    responsibility: "运行桥接回执入库与发送异常扫描。",
+    responsibility: "运行企业微信发送回执入库与发送异常扫描。",
     primaryAction: "扫描发送异常",
     legacyHash: "send-center:diagnostics:operations",
     initialView: { send: "diagnostics" },
@@ -186,13 +193,23 @@ export const WORKBENCH_ROUTES = {
     legacyHash: "wechat-channel-center:channels",
     initialView: { wechat: "channels" },
   },
+  wechatWorkCustomers: {
+    id: "wechatWorkCustomers",
+    href: "/integrations/wechat-work/customers",
+    sectionId: "wechat-channel-center",
+    title: "客户入口",
+    responsibility: "生成企业微信官方客服链接和二维码，并检查长期客户升级服务配置。",
+    primaryAction: "生成客户二维码",
+    legacyHash: "wechat-channel-center:customers",
+    initialView: { wechat: "customers" },
+  },
   wechatWorkFlow: {
     id: "wechatWorkFlow",
     href: "/integrations/wechat-work/flow",
     sectionId: "wechat-channel-center",
-    title: "企业微信流程",
-    responsibility: "核对回调、入站、路由与发送流程。",
-    primaryAction: "检查接入流程",
+    title: "企业微信业务流程",
+    responsibility: "按获客、接待、方案、审核、成交和发送顺序推进客户，并核对底层技术链路。",
+    primaryAction: "执行当前下一步",
     legacyHash: "wechat-channel-center:flow",
     initialView: { wechat: "flow" },
   },
@@ -206,74 +223,14 @@ export const WORKBENCH_ROUTES = {
     legacyHash: "wechat-channel-center:config",
     initialView: { wechat: "config" },
   },
-  personalWechatInstances: {
-    id: "personalWechatInstances",
-    href: "/integrations/personal-wechat/instances",
-    sectionId: "personal-wechat-center",
-    title: "个人微信实例",
-    responsibility: "查看个人微信实例、端点、登录身份与实时状态。",
-    primaryAction: "刷新实例状态",
-    legacyHash: "personal-wechat-center:instances",
-    initialView: { personalWechat: "instances" },
-  },
-  personalWechatInstanceConfig: {
-    id: "personalWechatInstanceConfig",
-    href: "/integrations/personal-wechat/instances/configure",
-    sectionId: "personal-wechat-center",
-    title: "个人微信实例配置",
-    responsibility: "校验并保存一个个人微信本机 RPA 实例。",
-    primaryAction: "保存实例",
-    legacyHash: "personal-wechat-center:instance-config",
-    showInModuleNav: false,
-  },
-  personalWechatControl: {
-    id: "personalWechatControl",
-    href: "/integrations/personal-wechat/control",
-    sectionId: "personal-wechat-center",
-    title: "账号状态与入口",
-    responsibility: "只读查看个人微信账号可用状态，并导航到实例、证据、演练及安全页面。",
-    primaryAction: "刷新账号状态",
-    legacyHash: "personal-wechat-center:control",
-    initialView: { personalWechat: "control" },
-  },
-  personalWechatVoiceAssist: {
-    id: "personalWechatVoiceAssist",
-    href: "/integrations/personal-wechat/voice-assist",
-    sectionId: "personal-wechat-center",
-    title: "语音辅助（未启用）",
-    responsibility: "只读查看语音辅助的启用条件与安全边界；当前未接入控制器、录音或审批动作。",
-    primaryAction: "查看启用条件",
-    legacyHash: "personal-wechat-center:voice",
-    initialView: { personalWechat: "voice" },
-  },
-  personalWechatInbound: {
-    id: "personalWechatInbound",
-    href: "/integrations/personal-wechat/window-inbound",
-    sectionId: "personal-wechat-center",
-    title: "个人微信窗口证据",
-    responsibility: "采集真实微信窗口证据并查看已入库快照。",
-    primaryAction: "采集当前窗口",
-    legacyHash: "personal-wechat-center:inbound",
-    initialView: { personalWechat: "inbound" },
-  },
-  personalWechatInboundDrill: {
-    id: "personalWechatInboundDrill",
-    href: "/integrations/personal-wechat/inbound-drill",
-    sectionId: "personal-wechat-center",
-    title: "个人微信入站演练",
-    responsibility: "提交带完整身份的个人微信受控入站演练。",
-    primaryAction: "提交入站演练",
-    legacyHash: "personal-wechat-center:inbound-drill",
-  },
-  personalWechatSafety: {
-    id: "personalWechatSafety",
-    href: "/integrations/personal-wechat/safety",
-    sectionId: "personal-wechat-center",
-    title: "个人微信发送治理",
-    responsibility: "审阅阻断任务与不确定投递证据。",
-    primaryAction: "刷新安全证据",
-    legacyHash: "personal-wechat-center:safety",
-    initialView: { personalWechat: "safety" },
+  designZhenxiAi: {
+    id: "designZhenxiAi",
+    href: "/design/zhenxi-ai",
+    sectionId: "design-platform-config",
+    title: "臻希 AI",
+    responsibility: "在智能客服桌面端内直接操作臻希 AI，并与独立臻希 AI 桌面端共享同一工作区。",
+    primaryAction: "打开臻希 AI 工作台",
+    legacyHash: "design-platform-config:zhenxi-ai",
   },
   designSettings: {
     id: "designSettings",
@@ -320,6 +277,16 @@ export const WORKBENCH_ROUTES = {
     primaryAction: "查看任务详情",
     legacyHash: "design-center",
   },
+  designJobCreate: {
+    id: "designJobCreate",
+    href: "/design/jobs/new",
+    sectionId: "design-center",
+    title: "新建设计任务",
+    responsibility: "从真实客户会话创建一条设计任务草稿，不直接提交远端出图。",
+    primaryAction: "确认创建任务",
+    legacyHash: "design-center:create",
+    showInModuleNav: false,
+  },
   designJobDetail: {
     id: "designJobDetail",
     href: "/design/jobs/[id]",
@@ -347,6 +314,16 @@ export const WORKBENCH_ROUTES = {
     responsibility: "查询并更新一条设计任务的远端状态。",
     primaryAction: "同步远端状态",
     legacyHash: "design-center:status",
+    showInModuleNav: false,
+  },
+  designJobQuote: {
+    id: "designJobQuote",
+    href: "/design/jobs/[id]/quote",
+    sectionId: "design-center",
+    title: "生成报价草稿",
+    responsibility: "只由一条设计任务生成或返回报价草稿，不发送客户消息。",
+    primaryAction: "确认生成报价",
+    legacyHash: "design-center:quote",
     showInModuleNav: false,
   },
   reviewInbox: {
@@ -579,6 +556,17 @@ export const WORKBENCH_ROUTES = {
     initialView: { sales: "quotes" },
     showInModuleNav: false,
   },
+  salesQuoteVerifyPayment: {
+    id: "salesQuoteVerifyPayment",
+    href: "/sales/quotes/[id]/verify-payment",
+    sectionId: "sales-center",
+    title: "核验付款凭证",
+    responsibility: "只记录一条报价的人工付款核验结果，并按规则推进订单确认。",
+    primaryAction: "确认核验付款",
+    legacyHash: "quote-center:quotes:verify-payment",
+    initialView: { sales: "quotes" },
+    showInModuleNav: false,
+  },
   salesQuoteCreateOrder: {
     id: "salesQuoteCreateOrder",
     href: "/sales/quotes/[id]/create-order",
@@ -615,9 +603,20 @@ export const WORKBENCH_ROUTES = {
     href: "/sales/orders/[id]/edit",
     sectionId: "sales-center",
     title: "编辑订单字段",
-    responsibility: "只保存一条订单的状态、付款状态、负责人和备注。",
+    responsibility: "只保存一条订单的履约状态、生产进度、物流事实、签收事实和客户备注。",
     primaryAction: "确认保存字段",
     legacyHash: "quote-center:orders:edit",
+    initialView: { sales: "orders" },
+    showInModuleNav: false,
+  },
+  salesOrderAfterSales: {
+    id: "salesOrderAfterSales",
+    href: "/sales/orders/[id]/after-sales",
+    sectionId: "sales-center",
+    title: "售后/退款/补发",
+    responsibility: "创建并处理一条订单的售后 case，记录退款流水、补发物流或拒绝原因。",
+    primaryAction: "记录售后处理结论",
+    legacyHash: "quote-center:orders:after-sales",
     initialView: { sales: "orders" },
     showInModuleNav: false,
   },
@@ -721,6 +720,26 @@ export const WORKBENCH_ROUTES = {
     primaryAction: "返回智能体目录",
     legacyHash: "agent-center:detail",
   },
+  trainingOverview: {
+    id: "trainingOverview",
+    href: "/training/overview",
+    sectionId: "training-center",
+    title: "Agent Skill 训练",
+    responsibility: "只读汇总训练样本、质量、Skill 建议和智能客服 Agent 覆盖度。",
+    primaryAction: "刷新训练概览",
+    legacyHash: "training-center",
+    initialView: { training: "overview" },
+  },
+  trainingKnowledge: {
+    id: "trainingKnowledge",
+    href: "/training/knowledge",
+    sectionId: "training-center",
+    title: "知识库运营",
+    responsibility: "按 Agent、来源、标签和状态检索可追溯知识条目，并通过可信复核启用或停用回复检索。",
+    primaryAction: "刷新知识库",
+    legacyHash: "training-center:knowledge",
+    initialView: { training: "knowledge" },
+  },
   trainingImport: {
     id: "trainingImport",
     href: "/training/import",
@@ -775,18 +794,38 @@ export const WORKBENCH_ROUTES = {
     id: "trainingSkills",
     href: "/training/skills",
     sectionId: "training-center",
-    title: "技能建议",
-    responsibility: "审核并应用从真实样本产生的技能建议。",
-    primaryAction: "应用技能建议",
+    title: "Agent Skill 建议",
+    responsibility: "审核并应用从真实样本产生的 Agent Skill 建议。",
+    primaryAction: "应用 Agent Skill",
     legacyHash: "training-center:skills",
     initialView: { training: "skills" },
+  },
+  settingsAiModels: {
+    id: "settingsAiModels",
+    href: "/settings/ai-models",
+    sectionId: "account-center",
+    title: "大模型中心",
+    responsibility: "填写供应商密钥、启停模型，并检查模型路由与配置状态。",
+    primaryAction: "保存并启用模型",
+    legacyHash: "account-center:models",
+    initialView: { account: "models" },
+  },
+  settingsDeliveryReadiness: {
+    id: "settingsDeliveryReadiness",
+    href: "/settings/delivery-readiness",
+    sectionId: "account-center",
+    title: "交付验收",
+    responsibility: "只读汇总项目完成度审计、产品验收报告和外部阻塞项。",
+    primaryAction: "刷新交付状态",
+    legacyHash: "account-center:delivery",
+    initialView: { account: "delivery" },
   },
   settingsAccounts: {
     id: "settingsAccounts",
     href: "/settings/accounts",
     sectionId: "account-center",
     title: "账号设置",
-    responsibility: "管理个人微信实例和本地账号配置。",
+    responsibility: "管理企业微信账号映射和本地账号配置。",
     primaryAction: "保存账号",
     legacyHash: "account-center:wechat",
     initialView: { account: "wechat" },
@@ -812,11 +851,11 @@ export const WORKBENCH_ROUTE_LIST = Object.values(WORKBENCH_ROUTES) as Workbench
 const DEFAULT_ROUTE_BY_SECTION: Record<WorkspaceSectionId, WorkbenchRouteId> = {
   "overview-center": "overview",
   "conversation-center": "conversations",
+  "wecom-workspace": "wechatWorkWorkspace",
   "routing-center": "routing",
   "send-center": "sendQueue",
   "wechat-channel-center": "integrationChannels",
-  "personal-wechat-center": "personalWechatControl",
-  "design-platform-config": "designSettings",
+  "design-platform-config": "designZhenxiAi",
   "asset-center": "designAssets",
   "design-center": "designJobs",
   "review-center": "reviewInbox",
@@ -827,8 +866,8 @@ const DEFAULT_ROUTE_BY_SECTION: Record<WorkspaceSectionId, WorkbenchRouteId> = {
   "quote-center": "salesOverview",
   "notice-center": "notifications",
   "agent-center": "agents",
-  "training-center": "trainingImport",
-  "account-center": "settingsAccess",
+  "training-center": "trainingOverview",
+  "account-center": "settingsDeliveryReadiness",
 };
 
 const SEND_ROUTE_BY_VIEW: Record<SendWorkbenchView, WorkbenchRouteId> = {
@@ -838,15 +877,9 @@ const SEND_ROUTE_BY_VIEW: Record<SendWorkbenchView, WorkbenchRouteId> = {
 };
 const WECHAT_ROUTE_BY_VIEW: Record<WechatWorkbenchView, WorkbenchRouteId> = {
   channels: "wechatWorkChannels",
+  customers: "wechatWorkCustomers",
   flow: "wechatWorkFlow",
   config: "wechatWorkSettings",
-};
-const PERSONAL_WECHAT_ROUTE_BY_VIEW: Record<PersonalWechatRouteView, WorkbenchRouteId> = {
-  instances: "personalWechatInstances",
-  control: "personalWechatControl",
-  voice: "personalWechatVoiceAssist",
-  inbound: "personalWechatInbound",
-  safety: "personalWechatSafety",
 };
 const REVIEW_ROUTE_BY_VIEW: Record<ReviewWorkbenchView, WorkbenchRouteId> = {
   handoff: "reviewInbox",
@@ -879,6 +912,8 @@ const AUTOMATION_ROUTE_BY_VIEW: Record<AutomationWorkbenchView, WorkbenchRouteId
   history: "automationHistory",
 };
 const TRAINING_ROUTE_BY_VIEW: Record<TrainingWorkbenchView, WorkbenchRouteId> = {
+  overview: "trainingOverview",
+  knowledge: "trainingKnowledge",
   import: "trainingImport",
   history: "trainingImportHistory",
   review: "trainingReview",
@@ -888,6 +923,8 @@ const TRAINING_ROUTE_BY_VIEW: Record<TrainingWorkbenchView, WorkbenchRouteId> = 
 const ACCOUNT_ROUTE_BY_VIEW: Record<AccountWorkbenchView, WorkbenchRouteId> = {
   wechat: "settingsAccounts",
   access: "settingsAccess",
+  models: "settingsAiModels",
+  delivery: "settingsDeliveryReadiness",
 };
 
 export function getWorkbenchRoute(routeId: WorkbenchRouteId): WorkbenchRoute {
@@ -905,9 +942,6 @@ export function getWorkbenchRouteForSection(
   let routeId = DEFAULT_ROUTE_BY_SECTION[sectionId];
   if (sectionId === "send-center" && selection.send) routeId = SEND_ROUTE_BY_VIEW[selection.send];
   if (sectionId === "wechat-channel-center" && selection.wechat) routeId = WECHAT_ROUTE_BY_VIEW[selection.wechat];
-  if (sectionId === "personal-wechat-center" && selection.personalWechat) {
-    routeId = PERSONAL_WECHAT_ROUTE_BY_VIEW[selection.personalWechat];
-  }
   if (sectionId === "review-center" && selection.review) routeId = REVIEW_ROUTE_BY_VIEW[selection.review];
   if ((sectionId === "sales-center" || sectionId === "quote-center") && selection.sales) {
     routeId = SALES_ROUTE_BY_VIEW[selection.sales];
@@ -922,7 +956,9 @@ export function getWorkbenchRouteForSection(
 
 export function getWorkbenchRouteFromPathname(pathname: string): WorkbenchRoute | null {
   const normalized = normalizePathname(pathname);
-  return WORKBENCH_ROUTE_LIST.find((route) => matchesRoutePath(route.href, normalized)) || null;
+  const route = WORKBENCH_ROUTE_LIST.find((item) => matchesRoutePath(item.href, normalized)) || null;
+  if (!route) return null;
+  return route;
 }
 
 export function getWorkbenchRouteFromLegacyHash(hash: string): WorkbenchRoute {
@@ -936,7 +972,9 @@ export function getWorkbenchRouteFromLegacyHash(hash: string): WorkbenchRoute {
   normalized = normalized.trim();
   if (!normalized) return WORKBENCH_ROUTES.overview;
   const exactRoute = WORKBENCH_ROUTE_LIST.find((route) => route.legacyHash === normalized);
-  if (exactRoute) return exactRoute;
+  if (exactRoute) {
+    return exactRoute;
+  }
   const sectionId = normalized.split(":", 1)[0] as WorkspaceSectionId;
   const routeId = DEFAULT_ROUTE_BY_SECTION[sectionId];
   return routeId ? getWorkbenchRoute(routeId) : WORKBENCH_ROUTES.overview;

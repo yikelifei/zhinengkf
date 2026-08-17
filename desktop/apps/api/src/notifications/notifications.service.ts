@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
+import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
 import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
 import { deterministicOperationId, isUniqueConstraintError } from "../shared/operation-idempotency";
@@ -12,6 +13,11 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
     private readonly localStore: LocalStoreService,
   ) {}
+
+  createDemo(level: string, title: string, body?: string) {
+    assertDemoDataMutationAllowed("demo notification");
+    return this.create(level, title, body, { source: "demo" });
+  }
 
   create(level: string, title: string, body?: string, target?: Record<string, unknown>) {
     if (appConfig.useLocalStore) return this.localStore.createNotification(level, title, body, target);

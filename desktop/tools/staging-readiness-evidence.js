@@ -14,14 +14,18 @@ const READ_ONLY_ROUTES = Object.freeze([
   "/wechat-work/status",
   "/wechat-work/kf/audit?limit=100",
   "/integrations/design-platform/readiness",
-  "/wechat/channels/status",
-  "/wechat/bridge/status",
+  "/ai/providers/status",
   "/automation/status",
   "/automation/readiness",
+]);
+const LEGACY_PERSONAL_WECHAT_READ_ONLY_ROUTES = Object.freeze([
+  "/wechat/channels/status",
+  "/wechat/bridge/status",
 ]);
 const AUTOMATION_QUEUE_NAME = "low-value-automation";
 const AUTOMATION_SCHEDULER_ID = "low-value-automation-schedule-v1";
 const AUTOMATION_COUNT_KEYS = Object.freeze(["waiting", "active", "delayed", "completed", "failed"]);
+const PRIVATE_DNS_SUFFIX_PATTERN = /(?:^|\.)(?:corp|internal|intranet|lan|localdomain)$/i;
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repositoryRoot = path.resolve(desktopRoot, "..");
@@ -55,6 +59,16 @@ function explicitFalse(value) {
   return ["0", "false", "no", "off"].includes(String(value || "").trim().toLowerCase());
 }
 
+function legacyPersonalWechatEnabled(env) {
+  return String(env?.WECHAT_PRODUCT_MODE || "enterprise_wechat_only").trim() === "legacy_personal_wechat";
+}
+
+function readOnlyRoutesFor(env) {
+  return legacyPersonalWechatEnabled(env)
+    ? [...READ_ONLY_ROUTES, ...LEGACY_PERSONAL_WECHAT_READ_ONLY_ROUTES]
+    : [...READ_ONLY_ROUTES];
+}
+
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
   const parsed = {};
@@ -72,12 +86,38 @@ function parseEnvFile(filePath) {
   return parsed;
 }
 
-function readEffectiveEnvironment(root = repositoryRoot, inherited = process.env) {
-  return {
-    ...parseEnvFile(path.join(root, ".env")),
-    ...parseEnvFile(path.join(root, "desktop", ".env")),
-    ...inherited,
-  };
+function readEffectiveEnvironment(root = repositoryRoot, inherited = process.env, envFile = "") {
+  const fileEnvironment = envFile
+    ? parseEnvFile(path.resolve(envFile))
+    : {
+        ...parseEnvFile(path.join(root, ".env")),
+        ...parseEnvFile(path.join(root, "desktop", ".env")),
+      };
+  return { ...fileEnvironment, ...inherited };
+}
+
+function readJsonObject(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return { present: false, valid: true, value: {} };
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? { present: true, valid: true, value }
+      : { present: true, valid: false, value: {} };
+  } catch {
+    return { present: true, valid: false, value: {} };
+  }
+}
+
+function resolveDesignRuntimeConfig(env, root = desktopRoot) {
+  const runtimeRootValue = String(env.DESKTOP_RUNTIME_DIR || "").trim();
+  const runtimeRoot = runtimeRootValue
+    ? (path.isAbsolute(runtimeRootValue) ? runtimeRootValue : path.resolve(root, runtimeRootValue))
+    : path.join(root, ".runtime");
+  const configValue = String(env.DESIGN_PLATFORM_RUNTIME_CONFIG || "").trim();
+  const configPath = configValue
+    ? (path.isAbsolute(configValue) ? configValue : path.resolve(root, configValue))
+    : path.join(runtimeRoot, "design-platform-config.json");
+  return { configPath, ...readJsonObject(configPath) };
 }
 
 function isLoopbackHost(hostname) {
@@ -87,7 +127,7 @@ function isLoopbackHost(hostname) {
 
 function isPrivateHost(hostname) {
   const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
-  if (isLoopbackHost(host) || host.endsWith(".local") || host.endsWith(".localhost")) return true;
+  if (isLoopbackHost(host) || host.endsWith(".local") || host.endsWith(".localhost") || PRIVATE_DNS_SUFFIX_PATTERN.test(host)) return true;
   if (host.includes(":")) return /^(?:fc|fd|fe[89ab]|0*:0*:0*:0*:0*:0*:0*:1$)/i.test(host);
   const match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!match) return !host.includes(".");
@@ -134,6 +174,21 @@ function inspectUrl(value, policy = {}) {
     return { configured: true, safe: false, reason: "https_required", scheme: parsed.protocol, hostClass };
   }
   return { configured: true, safe: true, reason: "", scheme: parsed.protocol, hostClass };
+}
+
+function isMockDesignPlatformBaseUrl(value, env = {}) {
+  const text = String(value || "").trim();
+  if (!configured(text)) return false;
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return false;
+  }
+  if (!isLoopbackHost(parsed.hostname)) return false;
+  const mockPort = Number(env.MOCK_DESIGN_PLATFORM_PORT || 3700);
+  const actualPort = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
+  return Number.isFinite(mockPort) && mockPort > 0 && actualPort === mockPort;
 }
 
 function inspectDatabaseUrl(value) {
@@ -207,7 +262,11 @@ function staticResults(env, doctorReport, options = {}) {
       ? result("config.doctor", "配置 doctor 证据", STATUS.PASS, "现有脱敏配置 doctor 已完成。", {
           evidence: { overall: doctorReport.overall, components: summarizeDoctor(doctorReport), liveChecksPerformed: false },
         })
-      : result("config.doctor", "配置 doctor 证据", STATUS.FAIL, "配置 doctor 未返回受支持的报告结构。"),
+      : doctorReport
+        ? result("config.doctor", "配置 doctor 证据", STATUS.FAIL, "配置 doctor 未返回受支持的报告结构。")
+        : result("config.doctor", "配置 doctor 证据", STATUS.BLOCKED, "当前发布包未提供配置 doctor 证据，不能据此判定运行时故障。", {
+            blockers: ["configuration doctor evidence unavailable"],
+          }),
   );
 
   const nodeEnv = String(env.NODE_ENV || "").trim().toLowerCase();
@@ -244,14 +303,21 @@ function staticResults(env, doctorReport, options = {}) {
 
   const automation = doctorComponent(doctorReport, "automation_scheduler");
   const automationDetails = automation?.details && typeof automation.details === "object" ? automation.details : {};
+  const automationEnabled = automation
+    ? automationDetails.enabled === true
+    : ["1", "true", "yes", "on"].includes(String(env.LOW_VALUE_AUTOMATION_ENABLED || "").trim().toLowerCase());
+  const automationMode = automation ? automationDetails.mode : String(env.LOW_VALUE_AUTOMATION_MODE || "").trim();
+  const automationDurable = automation ? automationDetails.durable === true : automationMode === "durable";
+  const automationRedisConfigured = automation
+    ? automationDetails.redisUrlConfigured === true
+    : configured(env.LOW_VALUE_AUTOMATION_REDIS_URL);
   const automationBlockers = [];
-  if (!automation) automationBlockers.push("config doctor automation_scheduler result");
-  if (automation?.status !== "ready") automationBlockers.push("config doctor automation_scheduler status=ready");
-  if (automationDetails.enabled !== true) automationBlockers.push("LOW_VALUE_AUTOMATION_ENABLED=1");
-  if (automationDetails.mode !== "durable" || automationDetails.durable !== true) {
+  if (automation && automation.status !== "ready") automationBlockers.push("config doctor automation_scheduler status=ready");
+  if (!automationEnabled) automationBlockers.push("LOW_VALUE_AUTOMATION_ENABLED=1");
+  if (automationMode !== "durable" || !automationDurable) {
     automationBlockers.push("LOW_VALUE_AUTOMATION_MODE=durable");
   }
-  if (automationDetails.redisUrlConfigured !== true) automationBlockers.push("LOW_VALUE_AUTOMATION_REDIS_URL");
+  if (!automationRedisConfigured) automationBlockers.push("LOW_VALUE_AUTOMATION_REDIS_URL");
   results.push(
     result(
       "config.automation_queue",
@@ -261,10 +327,10 @@ function staticResults(env, doctorReport, options = {}) {
       {
         blockers: [...new Set(automationBlockers)],
         evidence: {
-          enabled: automationDetails.enabled === true,
-          mode: automationDetails.mode === "durable" ? "durable" : "other",
-          durable: automationDetails.durable === true,
-          redisUrlConfigured: automationDetails.redisUrlConfigured === true,
+          enabled: automationEnabled,
+          mode: automationMode === "durable" ? "durable" : "other",
+          durable: automationDurable,
+          redisUrlConfigured: automationRedisConfigured,
           liveConnectionChecked: false,
         },
       },
@@ -311,8 +377,11 @@ function staticResults(env, doctorReport, options = {}) {
   );
 
   const designDoctor = doctorComponent(doctorReport, "design_platform");
-  const designAdapter = String(env.DESIGN_PLATFORM_ADAPTER || designDoctor?.details?.adapter || "").trim();
-  const designBase = inspectUrl(env.DESIGN_PLATFORM_BASE_URL, { httpsUnlessLoopback: true });
+  const designRuntime = resolveDesignRuntimeConfig(env, options.desktopRoot || desktopRoot);
+  const designAdapter = String(env.DESIGN_PLATFORM_ADAPTER || designRuntime.value.designPlatformAdapter || designDoctor?.details?.adapter || "").trim();
+  const designBaseValue = env.DESIGN_PLATFORM_BASE_URL || designRuntime.value.designPlatformBaseUrl || "";
+  const designBase = inspectUrl(designBaseValue, { httpsUnlessLoopback: true });
+  const designBaseIsMock = isMockDesignPlatformBaseUrl(designBaseValue, env);
   const designBlockers = [];
   let designStatus = STATUS.PASS;
   if (designAdapter !== "art_image_local") {
@@ -323,45 +392,70 @@ function staticResults(env, doctorReport, options = {}) {
     designBlockers.push(`DESIGN_PLATFORM_BASE_URL: ${designBase.reason}`);
     designStatus = designBase.configured ? STATUS.FAIL : STATUS.BLOCKED;
   }
-  const designCredentialConfigured = [env.DESIGN_PLATFORM_ACCESS_TOKEN, env.DESIGN_PLATFORM_COOKIE, env.DESIGN_PLATFORM_API_KEY].some(configured);
+  if (designBaseIsMock) {
+    designBlockers.push("DESIGN_PLATFORM_BASE_URL must point to Zhenxi AI, not MOCK_DESIGN_PLATFORM_PORT");
+    designStatus = STATUS.FAIL;
+  }
+  if (!designRuntime.valid) {
+    designBlockers.push("DESIGN_PLATFORM_RUNTIME_CONFIG must contain a JSON object");
+    designStatus = STATUS.FAIL;
+  }
+  const designCredentialConfigured = [
+    env.DESIGN_PLATFORM_ACCESS_TOKEN,
+    env.DESIGN_PLATFORM_COOKIE,
+    env.DESIGN_PLATFORM_API_KEY,
+    designRuntime.value.designPlatformAccessToken,
+    designRuntime.value.designPlatformCookie,
+    designRuntime.value.designPlatformApiKey,
+  ].some(configured);
   if (!designCredentialConfigured) {
     designBlockers.push("design platform access credential");
     if (designStatus !== STATUS.FAIL) designStatus = STATUS.BLOCKED;
   }
-  if (!configured(env.DESIGN_PLATFORM_DEVICE_ID)) {
+  const designDeviceConfigured = configured(env.DESIGN_PLATFORM_DEVICE_ID || designRuntime.value.designPlatformDeviceId);
+  if (!designDeviceConfigured) {
     designBlockers.push("DESIGN_PLATFORM_DEVICE_ID");
     if (designStatus !== STATUS.FAIL) designStatus = STATUS.BLOCKED;
   }
   results.push(
     result("config.design_platform", "设计平台生产配置", designStatus, designStatus === STATUS.PASS ? "真实设计适配器、凭据和设备证据已配置。" : "设计平台预发布配置不完整或不安全。", {
       blockers: designBlockers,
-      evidence: { adapter: designAdapter || "missing", baseUrl: { scheme: designBase.scheme, hostClass: designBase.hostClass }, credentialConfigured: designCredentialConfigured, deviceIdConfigured: configured(env.DESIGN_PLATFORM_DEVICE_ID) },
+      evidence: {
+        adapter: designAdapter || "missing",
+        baseUrl: { scheme: designBase.scheme, hostClass: designBase.hostClass, mockPortSelected: designBaseIsMock },
+        credentialConfigured: designCredentialConfigured,
+        deviceIdConfigured: designDeviceConfigured,
+        runtimeConfigPresent: designRuntime.present,
+        runtimeConfigValid: designRuntime.valid,
+      },
     }),
   );
 
-  const accountsConfig = String(env.PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE || ".runtime/personal-wechat-accounts.json").trim();
-  const accountsPath = path.isAbsolute(accountsConfig) ? accountsConfig : path.resolve(options.desktopRoot || desktopRoot, accountsConfig);
-  const personalEndpoint = inspectUrl(env.PERSONAL_WECHAT_RPA_ENDPOINT || "http://127.0.0.1:3211", { loopbackOnly: true });
-  const personalBlockers = [];
-  let personalStatus = STATUS.PASS;
-  if (!fs.existsSync(accountsPath)) {
-    personalBlockers.push("PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE");
-    personalStatus = STATUS.BLOCKED;
+  if (legacyPersonalWechatEnabled(env)) {
+    const accountsConfig = String(env.PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE || ".runtime/personal-wechat-accounts.json").trim();
+    const accountsPath = path.isAbsolute(accountsConfig) ? accountsConfig : path.resolve(options.desktopRoot || desktopRoot, accountsConfig);
+    const personalEndpoint = inspectUrl(env.PERSONAL_WECHAT_RPA_ENDPOINT || "http://127.0.0.1:3211", { loopbackOnly: true });
+    const personalBlockers = [];
+    let personalStatus = STATUS.PASS;
+    if (!fs.existsSync(accountsPath)) {
+      personalBlockers.push("PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE");
+      personalStatus = STATUS.BLOCKED;
+    }
+    if (!personalEndpoint.safe) {
+      personalBlockers.push(`PERSONAL_WECHAT_RPA_ENDPOINT: ${personalEndpoint.reason}`);
+      personalStatus = STATUS.FAIL;
+    }
+    if (String(env.PERSONAL_WECHAT_DRIVER || "windows_uia") === "wechatauto_rpa" && !configured(env.PERSONAL_WECHAT_RPA_TOKEN)) {
+      personalBlockers.push("PERSONAL_WECHAT_RPA_TOKEN");
+      if (personalStatus !== STATUS.FAIL) personalStatus = STATUS.BLOCKED;
+    }
+    results.push(
+      result("config.personal_wechat", "遗留个人微信桥配置", personalStatus, personalStatus === STATUS.PASS ? "遗留账号绑定配置和回环 RPA 策略通过。" : "遗留个人微信本地绑定证据补齐前保持阻塞。", {
+        blockers: personalBlockers,
+        evidence: { accountsConfigPresent: fs.existsSync(accountsPath), driver: String(env.PERSONAL_WECHAT_DRIVER || "windows_uia"), rpaEndpoint: { scheme: personalEndpoint.scheme, hostClass: personalEndpoint.hostClass }, defaultSendAdapterSelected: String(env.WECHAT_SEND_ADAPTER || "").trim() === "windows_bridge", realSendEnabled: String(env.PERSONAL_WECHAT_SEND || "") === "1" },
+      }),
+    );
   }
-  if (!personalEndpoint.safe) {
-    personalBlockers.push(`PERSONAL_WECHAT_RPA_ENDPOINT: ${personalEndpoint.reason}`);
-    personalStatus = STATUS.FAIL;
-  }
-  if (String(env.PERSONAL_WECHAT_DRIVER || "windows_uia") === "wechatauto_rpa" && !configured(env.PERSONAL_WECHAT_RPA_TOKEN)) {
-    personalBlockers.push("PERSONAL_WECHAT_RPA_TOKEN");
-    if (personalStatus !== STATUS.FAIL) personalStatus = STATUS.BLOCKED;
-  }
-  results.push(
-    result("config.personal_wechat", "个人微信桥配置", personalStatus, personalStatus === STATUS.PASS ? "账号绑定配置和回环 RPA 策略通过。" : "个人微信本地绑定证据补齐前保持阻塞。", {
-      blockers: personalBlockers,
-      evidence: { accountsConfigPresent: fs.existsSync(accountsPath), driver: String(env.PERSONAL_WECHAT_DRIVER || "windows_uia"), rpaEndpoint: { scheme: personalEndpoint.scheme, hostClass: personalEndpoint.hostClass }, defaultSendAdapterSelected: String(env.WECHAT_SEND_ADAPTER || "").trim() === "windows_bridge", realSendEnabled: String(env.PERSONAL_WECHAT_SEND || "") === "1" },
-    }),
-  );
 
   const model = doctorComponent(doctorReport, "model_chain");
   results.push(
@@ -373,15 +467,16 @@ function staticResults(env, doctorReport, options = {}) {
   return { results, apiBase, apiUrl };
 }
 
-function notExecutedResults() {
+function notExecutedResults(env = {}) {
   const entries = [
     ["evidence.database_migrations", "预发布数据库迁移证据"],
     ["evidence.api_health", "预发布 API 与 Prisma 模式证据"],
     ["evidence.wechat_work", "企业微信回调与审计证据"],
     ["evidence.design_platform", "设计平台实时就绪证据"],
-    ["evidence.personal_wechat", "个人微信桥就绪证据"],
+    ["evidence.model_chain", "客服大模型运行配置证据"],
     ["evidence.automation_queue", "BullMQ/Redis 持久调度证据"],
   ];
+  if (legacyPersonalWechatEnabled(env)) entries.splice(4, 0, ["evidence.personal_wechat", "遗留个人微信桥就绪证据"]);
   return entries.map(([id, title]) => result(id, title, STATUS.BLOCKED, "尚未执行；请在受控预发布环境显式加入 --execute 重跑。", { blockers: ["explicit --execute approval"] }));
 }
 
@@ -397,11 +492,13 @@ function defaultRunCommand(spec) {
   });
 }
 
-function doctorCommand(root = repositoryRoot) {
-  if (process.platform === "win32") {
-    return { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/c", "call", path.join(root, "config-readiness-doctor.cmd"), "--json"] };
+function doctorCommand(root = repositoryRoot, platform = process.platform, environment = process.env) {
+  if (platform === "win32") {
+    const scriptPath = path.join(root, "config-readiness-doctor.cmd");
+    return { command: environment.ComSpec || "cmd.exe", args: ["/d", "/c", "call", scriptPath, "--json"], scriptPath };
   }
-  return { command: "python", args: [path.join(root, "scripts", "config_readiness_doctor.py"), "--json"] };
+  const scriptPath = path.join(root, "scripts", "config_readiness_doctor.py");
+  return { command: environment.PYTHON || "python3", args: [scriptPath, "--json"], scriptPath };
 }
 
 function parseJsonOutput(output) {
@@ -416,13 +513,16 @@ function parseJsonOutput(output) {
   }
 }
 
-function loadDoctorReport(runCommand = defaultRunCommand, root = repositoryRoot) {
+function loadDoctorReport(runCommand = defaultRunCommand, root = repositoryRoot, env = process.env) {
   const command = doctorCommand(root);
+  if (!fs.existsSync(command.scriptPath)) {
+    return { unavailable: "configuration doctor is not packaged in this runtime release" };
+  }
   const executed = runCommand({
     id: "config-doctor",
     ...command,
     cwd: root,
-    env: { SMART_KEFU_QUIET_EXIT: "1" },
+    env: { ...env, SMART_KEFU_QUIET_EXIT: "1" },
     timeoutMs: 60_000,
   });
   if (executed?.error || ![0, 2].includes(Number(executed?.status))) {
@@ -563,14 +663,15 @@ async function executeReadOnlyEvidence({ env, apiBase, apiUrl, runCommand = defa
   if (!apiUrl.safe) {
     return results.concat([
       result("evidence.api_health", "预发布 API 与 Prisma 模式证据", STATUS.FAIL, "API Base 违反 URL 安全策略，因此未发出任何 API 请求。"),
-      ...notExecutedResults().filter((item) => item.id !== "evidence.database_migrations" && item.id !== "evidence.api_health"),
+      ...notExecutedResults(env).filter((item) => item.id !== "evidence.database_migrations" && item.id !== "evidence.api_health"),
     ]);
   }
 
   const headers = configured(env.INTERNAL_API_TOKEN) ? { "x-internal-api-token": String(env.INTERNAL_API_TOKEN) } : {};
   const responses = {};
   const errors = {};
-  for (const route of READ_ONLY_ROUTES) {
+  const readOnlyRoutes = readOnlyRoutesFor(env);
+  for (const route of readOnlyRoutes) {
     try {
       responses[route] = await fetchJson(joinApiRoute(apiBase, route), { headers, timeoutMs: 20_000, route });
     } catch (error) {
@@ -589,10 +690,13 @@ async function executeReadOnlyEvidence({ env, apiBase, apiUrl, runCommand = defa
 
   const wechat = responses["/wechat-work/status"];
   const audit = responses["/wechat-work/kf/audit?limit=100"];
-  if (!wechat || !Array.isArray(audit)) {
+  const auditRecords = Array.isArray(audit)
+    ? audit
+    : (Array.isArray(audit?.records) ? audit.records : null);
+  if (!wechat || !auditRecords) {
     results.push(blockedExternal("evidence.wechat_work", "企业微信回调与审计证据", "无法读取企业微信状态或脱敏审计证据。", ["/api/wechat-work/status", "/api/wechat-work/kf/audit"]));
   } else {
-    const actions = new Set(audit.map((entry) => String(entry?.action || "")));
+    const actions = new Set(auditRecords.map((entry) => String(entry?.action || "")));
     const callbackEvidence = actions.has("callback_accepted") || actions.has("callback_verification_accepted");
     const inboundEvidence = actions.has("inbound_processed") || actions.has("event_processed");
     const sendQueueEvidence = actions.has("send_queued") || actions.has("send_dispatch_requested");
@@ -622,25 +726,70 @@ async function executeReadOnlyEvidence({ env, apiBase, apiUrl, runCommand = defa
     }));
   }
 
-  const channels = responses["/wechat/channels/status"];
-  const bridge = responses["/wechat/bridge/status"];
-  if (!channels || !bridge) {
-    results.push(blockedExternal("evidence.personal_wechat", "个人微信桥就绪证据", "无法读取个人微信通道或桥状态。", ["/api/wechat/channels/status", "/api/wechat/bridge/status"]));
+  const modelStatus = responses["/ai/providers/status"];
+  if (!modelStatus) {
+    results.push(blockedExternal(
+      "evidence.model_chain",
+      "客服大模型运行配置证据",
+      "无法读取客服大模型只读状态接口。",
+      ["/api/ai/providers/status"],
+    ));
   } else {
-    const personal = Array.isArray(channels.channels) ? channels.channels.find((item) => item?.key === "personal_wechat") : null;
-    const staleDispatchCount = Number(bridge.dispatch?.staleCount || 0);
-    const staleLockCount = Number(bridge.locks?.staleCount || 0);
-    const ignoredOutboxCount = Number(bridge.outbox?.ignoredCount || 0);
+    const providers = Array.isArray(modelStatus.providers) ? modelStatus.providers : [];
+    const enabledProviders = providers.filter((provider) => provider?.enabled === true);
+    const configuredProviders = enabledProviders.filter((provider) => provider?.configured === true);
+    const primary = providers.find((provider) => provider?.name === modelStatus.primary);
+    const fallbackChain = Array.isArray(modelStatus.fallbackChain) ? modelStatus.fallbackChain : [];
     const blockers = [];
-    if (Number(personal?.metrics?.accounts || 0) < 1) blockers.push("at least one personal WeChat account binding");
-    if (bridge.worker?.ok !== true) blockers.push("bridge worker ok=true");
-    if (staleDispatchCount > 0) blockers.push("stale bridge dispatch must be zero");
-    if (staleLockCount > 0) blockers.push("stale bridge locks must be zero");
-    if (ignoredOutboxCount > 0) blockers.push("ignored/uncertain bridge outbox must be reviewed");
-    results.push(result("evidence.personal_wechat", "个人微信桥就绪证据", blockers.length ? STATUS.BLOCKED : STATUS.PASS, blockers.length ? "个人微信状态中仍有未解决的就绪或恢复证据。" : "通道和桥状态就绪，不存在过期或 ignored 恢复项。", {
-      blockers,
-      evidence: { boundAccountCount: Number(personal?.metrics?.accounts || 0), channelDefaultAdapterReady: personal?.ready === true, workerReady: bridge.worker?.ok === true, staleDispatchCount, staleLockCount, ignoredOutboxCount, realSendAttempted: false, autoEnterAttempted: false, ackWritten: false },
-    }));
+    if (modelStatus.enabled !== true) blockers.push("AI engine enabled=true");
+    if (!modelStatus.primary) blockers.push("primary provider selected");
+    if (primary?.enabled !== true) blockers.push("primary provider enabled=true");
+    if (primary?.configured !== true) blockers.push("primary provider configured=true");
+    if (configuredProviders.length < 1) blockers.push("at least one configured provider");
+    if (modelStatus.probe !== false) blockers.push("status request must remain non-probing");
+    results.push(result(
+      "evidence.model_chain",
+      "客服大模型运行配置证据",
+      blockers.length ? STATUS.BLOCKED : STATUS.PASS,
+      blockers.length ? "客服大模型运行配置尚未形成可用链路。" : "客服大模型主提供方和至少一个可用提供方已经配置，检查未调用外部模型。",
+      {
+        blockers,
+        evidence: {
+          engineEnabled: modelStatus.enabled === true,
+          providerCount: providers.length,
+          enabledProviderCount: enabledProviders.length,
+          configuredProviderCount: configuredProviders.length,
+          primarySelected: Boolean(modelStatus.primary),
+          primaryEnabled: primary?.enabled === true,
+          primaryConfigured: primary?.configured === true,
+          fallbackProviderCount: fallbackChain.length,
+          externalModelProbeAttempted: false,
+        },
+      },
+    ));
+  }
+
+  if (legacyPersonalWechatEnabled(env)) {
+    const channels = responses["/wechat/channels/status"];
+    const bridge = responses["/wechat/bridge/status"];
+    if (!channels || !bridge) {
+      results.push(blockedExternal("evidence.personal_wechat", "遗留个人微信桥就绪证据", "无法读取遗留通道或桥状态。", ["/api/wechat/channels/status", "/api/wechat/bridge/status"]));
+    } else {
+      const personal = Array.isArray(channels.channels) ? channels.channels.find((item) => item?.key === "personal_wechat") : null;
+      const staleDispatchCount = Number(bridge.dispatch?.staleCount || 0);
+      const staleLockCount = Number(bridge.locks?.staleCount || 0);
+      const ignoredOutboxCount = Number(bridge.outbox?.ignoredCount || 0);
+      const blockers = [];
+      if (Number(personal?.metrics?.accounts || 0) < 1) blockers.push("at least one legacy account binding");
+      if (bridge.worker?.ok !== true) blockers.push("legacy bridge worker ok=true");
+      if (staleDispatchCount > 0) blockers.push("stale legacy dispatch must be zero");
+      if (staleLockCount > 0) blockers.push("stale legacy locks must be zero");
+      if (ignoredOutboxCount > 0) blockers.push("ignored/uncertain legacy outbox must be reviewed");
+      results.push(result("evidence.personal_wechat", "遗留个人微信桥就绪证据", blockers.length ? STATUS.BLOCKED : STATUS.PASS, blockers.length ? "遗留通道状态中仍有未解决的就绪或恢复证据。" : "遗留通道和桥状态就绪，不存在过期或 ignored 恢复项。", {
+        blockers,
+        evidence: { boundAccountCount: Number(personal?.metrics?.accounts || 0), channelDefaultAdapterReady: personal?.ready === true, workerReady: bridge.worker?.ok === true, staleDispatchCount, staleLockCount, ignoredOutboxCount, realSendAttempted: false, autoEnterAttempted: false, ackWritten: false },
+      }));
+    }
   }
 
   const automationStatus = responses["/automation/status"];
@@ -680,17 +829,27 @@ async function collectStagingReadiness(options = {}) {
     ...(options.repositoryRevision !== undefined ? { repositoryRevision: options.repositoryRevision } : {}),
     ...(options.runGitCommand ? { runCommand: options.runGitCommand } : {}),
   });
-  const env = options.env || readEffectiveEnvironment(root, options.inheritedEnvironment || process.env);
-  const loadedDoctor = options.doctorReport ? { report: options.doctorReport } : loadDoctorReport(options.runCommand || defaultRunCommand, root);
+  const env = options.env || readEffectiveEnvironment(
+    root,
+    options.inheritedEnvironment || process.env,
+    options.envFile || "",
+  );
+  const loadedDoctor = options.doctorReport
+    ? { report: options.doctorReport }
+    : loadDoctorReport(options.runCommand || defaultRunCommand, root, env);
   const doctorReport = loadedDoctor.report || null;
   const staticEvaluation = staticResults(env, doctorReport, { apiBase: options.apiBase, desktopRoot: desktop });
-  if (loadedDoctor.error) {
+  if (loadedDoctor.unavailable) {
+    staticEvaluation.results[0] = result("config.doctor", "配置 doctor 证据", STATUS.BLOCKED, loadedDoctor.unavailable, {
+      blockers: ["configuration doctor evidence unavailable"],
+    });
+  } else if (loadedDoctor.error) {
     staticEvaluation.results[0] = result("config.doctor", "配置 doctor 证据", STATUS.FAIL, loadedDoctor.error);
   }
   const execute = options.execute === true;
   const evidenceResults = execute
     ? await executeReadOnlyEvidence({ env, apiBase: staticEvaluation.apiBase, apiUrl: staticEvaluation.apiUrl, runCommand: options.runCommand || defaultRunCommand, fetchJson: options.fetchJson || defaultFetchJson, desktop })
-    : notExecutedResults();
+    : notExecutedResults(env);
   const results = [...staticEvaluation.results, ...evidenceResults];
   const generatedAt = options.generatedAt || new Date().toISOString();
   const runId = options.runId || `staging-${generatedAt.replace(/[-:.]/g, "").replace("Z", "Z")}-${process.pid}`;
@@ -704,7 +863,7 @@ async function collectStagingReadiness(options = {}) {
     safety: {
       executeExplicitlyEnabled: execute,
       allowedNetworkMethods: execute ? ["GET"] : [],
-      allowedRoutes: execute ? [...READ_ONLY_ROUTES] : [],
+      allowedRoutes: execute ? readOnlyRoutesFor(env) : [],
       databaseCommand: execute ? "prisma migrate status" : null,
       databaseWriteAttempted: false,
       realMessageSendAttempted: false,
@@ -778,13 +937,47 @@ function writeReports(report, root = reportRoot) {
 }
 
 function parseArgs(argv) {
-  const options = { execute: false, apiBase: "", help: false };
+  const options = {
+    execute: false,
+    apiBase: "",
+    envFile: "",
+    doctorReportFile: "",
+    repositoryRevision: "",
+    repositoryRoot: "",
+    desktopRoot: "",
+    reportRoot: "",
+    help: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--execute") options.execute = true;
     else if (arg === "--api-base") {
       options.apiBase = String(argv[++index] || "");
       if (!options.apiBase) throw new Error("--api-base requires a URL");
+    }
+    else if (arg === "--env-file") {
+      options.envFile = String(argv[++index] || "");
+      if (!options.envFile) throw new Error("--env-file requires a path");
+    }
+    else if (arg === "--doctor-report") {
+      options.doctorReportFile = String(argv[++index] || "");
+      if (!options.doctorReportFile) throw new Error("--doctor-report requires a path");
+    }
+    else if (arg === "--repository-revision") {
+      options.repositoryRevision = String(argv[++index] || "");
+      if (!options.repositoryRevision) throw new Error("--repository-revision requires a revision");
+    }
+    else if (arg === "--repository-root") {
+      options.repositoryRoot = String(argv[++index] || "");
+      if (!options.repositoryRoot) throw new Error("--repository-root requires a path");
+    }
+    else if (arg === "--desktop-root") {
+      options.desktopRoot = String(argv[++index] || "");
+      if (!options.desktopRoot) throw new Error("--desktop-root requires a path");
+    }
+    else if (arg === "--report-root") {
+      options.reportRoot = String(argv[++index] || "");
+      if (!options.reportRoot) throw new Error("--report-root requires a path");
     }
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -798,6 +991,12 @@ function printHelp() {
 Options:
   --execute             explicitly run read-only staging checks
   --api-base <url>      existing API base, for example https://staging.example.com/api
+  --env-file <path>     load one explicit environment file instead of repository .env files
+  --doctor-report <path> use an existing secret-free configuration doctor JSON report
+  --repository-revision <sha> bind the report to a 40- or 64-character source revision
+  --repository-root <path> locate repository-level evidence in an extracted release
+  --desktop-root <path> locate Prisma and desktop runtime files in a release
+  --report-root <path>  write reports outside an immutable runtime release
   --help                show this help
 
 Default mode performs local configuration inventory only. --execute adds
@@ -808,8 +1007,15 @@ submits a design job, changes payment state or deploys a migration.`);
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) return printHelp();
-  const report = await collectStagingReadiness(options);
-  const artifacts = writeReports(report);
+  const doctorReport = options.doctorReportFile
+    ? parseJsonOutput(fs.readFileSync(path.resolve(options.doctorReportFile), "utf8"))
+    : undefined;
+  const report = await collectStagingReadiness({
+    ...options,
+    ...(doctorReport ? { doctorReport } : {}),
+    ...(options.repositoryRevision ? { repositoryRevision: options.repositoryRevision } : {}),
+  });
+  const artifacts = writeReports(report, options.reportRoot ? path.resolve(options.reportRoot) : reportRoot);
   console.log(`[staging-readiness] status=${report.status} pass=${report.summary.pass} blocked=${report.summary.blocked} fail=${report.summary.fail}`);
   console.log(`[staging-readiness] report=${artifacts.latestMarkdown}`);
   process.exitCode = EXIT_CODE[report.status];
@@ -824,14 +1030,19 @@ if (require.main === module) {
 
 module.exports = {
   EXIT_CODE,
+  LEGACY_PERSONAL_WECHAT_READ_ONLY_ROUTES,
   READ_ONLY_ROUTES,
   SCHEMA_VERSION,
   STATUS,
   collectStagingReadiness,
   computeOverallStatus,
+  doctorCommand,
   inspectDatabaseUrl,
   inspectUrl,
+  legacyPersonalWechatEnabled,
   parseArgs,
+  readEffectiveEnvironment,
+  readOnlyRoutesFor,
   renderMarkdown,
   staticResults,
   writeReports,

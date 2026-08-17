@@ -7,6 +7,10 @@ const path = require("node:path");
 const test = require("node:test");
 const { GUARDS_METADATA } = require("@nestjs/common/constants");
 const { Reflector } = require("@nestjs/core");
+const { installIsolatedAppConfigEnv } = require("./isolated-app-config-env");
+
+const isolatedConfig = installIsolatedAppConfigEnv("smart-kefu-wechat-inbound-auth-");
+test.after(() => isolatedConfig.cleanup());
 
 require("reflect-metadata");
 require("ts-node").register({
@@ -18,6 +22,7 @@ const { appConfig } = require("../apps/api/src/shared/app-config");
 const { WechatController } = require("../apps/api/src/wechat/wechat.controller");
 const { ConversationOperationsController } = require("../apps/api/src/conversation-ops/conversation-operations.controller");
 const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
+const { WechatWorkAuthorizationController } = require("../apps/api/src/wechat-work/wechat-work-authorization.controller");
 const {
   WECHAT_BRIDGE_TOKEN_HEADER,
   WECHAT_WINDOW_OBSERVER_TOKEN_HEADER,
@@ -48,9 +53,14 @@ test("generic WeChat inbound requires approve_send and the operator guard while 
     assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, callback), undefined, methodName);
     assert.equal((Reflect.getMetadata(GUARDS_METADATA, callback) || []).includes(OperatorAccessGuard), false, methodName);
   }
+  for (const methodName of ["handleAuthorizationRedirect", "verifySuiteCallback", "handleSuiteCallback"]) {
+    const callback = WechatWorkAuthorizationController.prototype[methodName];
+    assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, callback), undefined, methodName);
+    assert.equal((Reflect.getMetadata(GUARDS_METADATA, callback) || []).includes(OperatorAccessGuard), false, methodName);
+  }
 });
 
-test("operator reads and mark-read are guarded while bridge ack keeps its per-dispatch authentication contract", () => {
+test("operator reads and mark-read are guarded while retired personal runtime routes stay absent", () => {
   for (const methodName of [
     "listAccounts",
     "listConversations",
@@ -66,24 +76,22 @@ test("operator reads and mark-read are guarded while bridge ack keeps its per-di
     assert.ok((Reflect.getMetadata(GUARDS_METADATA, method) || []).includes(OperatorAccessGuard), methodName);
   }
 
-  for (const methodName of ["listBridgeOutbox", "listBridgeDispatch", "getBridgeStatus", "scanBridgeInbox"]) {
-    const method = WechatController.prototype[methodName];
-    assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, method), "view_console", methodName);
-    assert.ok((Reflect.getMetadata(GUARDS_METADATA, method) || []).includes(WechatBridgeAccessGuard), methodName);
-  }
-
-  for (const methodName of ["listWindowSnapshots", "getWindowObserverStatus", "scanWindowSnapshotInbox"]) {
-    const method = WechatController.prototype[methodName];
-    assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, method), "view_console", methodName);
-    assert.ok((Reflect.getMetadata(GUARDS_METADATA, method) || []).includes(WechatWindowObserverAccessGuard), methodName);
+  for (const methodName of [
+    "listBridgeOutbox",
+    "listBridgeDispatch",
+    "getBridgeStatus",
+    "scanBridgeInbox",
+    "listWindowSnapshots",
+    "getWindowObserverStatus",
+    "scanWindowSnapshotInbox",
+    "acknowledgeBridgeSend",
+  ]) {
+    assert.equal(WechatController.prototype[methodName], undefined, methodName);
   }
 
   assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, ConversationOperationsController), "view_console");
   assert.ok((Reflect.getMetadata(GUARDS_METADATA, ConversationOperationsController) || []).includes(OperatorAccessGuard));
 
-  const bridgeAck = WechatController.prototype.acknowledgeBridgeSend;
-  assert.equal(Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, bridgeAck), undefined);
-  assert.equal((Reflect.getMetadata(GUARDS_METADATA, bridgeAck) || []).length, 0);
 });
 
 test("anonymous and forged reads cannot call services or mark inbound messages read", () => {
@@ -158,7 +166,7 @@ test("valid internal proof can read and mark exactly once through the existing o
   }
 });
 
-test("bridge and observer sessions rotate per request, remain isolated, and never inherit the operator token", () => {
+test("legacy bridge and observer session helpers remain isolated and never inherit the operator token", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-runtime-auth-"));
   const previousInternal = appConfig.internalApiToken;
   const previousBridgeFile = appConfig.wechatBridgeServiceTokenFile;
@@ -179,8 +187,8 @@ test("bridge and observer sessions rotate per request, remain isolated, and neve
     const operatorGuard = new OperatorAccessGuard(new Reflector(), new OperatorAccessService());
     const bridgeGuard = new WechatBridgeAccessGuard(operatorGuard);
     const observerGuard = new WechatWindowObserverAccessGuard(operatorGuard);
-    const bridgeHandler = WechatController.prototype.listBridgeOutbox;
-    const observerHandler = WechatController.prototype.scanWindowSnapshotInbox;
+    const bridgeHandler = WechatController.prototype.listAccounts;
+    const observerHandler = WechatController.prototype.listAccounts;
 
     assert.equal(bridgeGuard.canActivate(executionContext(bridgeHandler, WechatController, {
       headers: { [WECHAT_BRIDGE_TOKEN_HEADER]: bridgeOne },

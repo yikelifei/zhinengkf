@@ -3,11 +3,14 @@
 
 # Local assistant/editor state
 .claude/
+/codex-plugins/
 
 # Local orchestration/worktree state
 .runtime/
 .runtime-d-repo/
 .tmp_github/
+*runtimepython-temp-codex*/
+desktop/.runtime-c-qa/
 
 # Python
 __pycache__/
@@ -35,6 +38,8 @@ venv/
 data/*.db
 data/*.db-*
 logs/
+/output/
+/outputs/
 !desktop/apps/web/src/app/reviews/logs/
 !desktop/apps/web/src/app/reviews/logs/page.tsx
 *.log
@@ -51,11 +56,13 @@ tools/reports/*
 # Build artifacts
 installer/*.zip
 desktop/node_modules/
+desktop/desktop/node_modules/
 desktop/.next/
 desktop/out/
 desktop/dist/
 desktop/release/
 desktop/.package-provenance.json
+desktop/.package-runtime/
 desktop/.package-cache/
 desktop/apps/**/.next/
 desktop/apps/**/dist/
@@ -66,6 +73,8 @@ desktop/uploads/
 desktop/generated/
 desktop/*.tsbuildinfo
 desktop/.runtime-stable/
+desktop/.env.stage-*.bak
+desktop/training-knowledge-current*.png
 
 # Personal WeChat RPA local .NET build output
 desktop/tools/personal-wechat-rpa-host/bin/

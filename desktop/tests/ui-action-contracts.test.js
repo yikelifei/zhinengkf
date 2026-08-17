@@ -10,6 +10,9 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 
 const overview = read("apps/web/src/components/operations-overview.tsx");
 const thread = read("apps/web/src/components/conversation-workbench/conversation-thread-pane.tsx");
+const composer = read("apps/web/src/components/conversation-workbench/conversation-assistant-composer.tsx");
+const incident = read("apps/web/src/components/conversation-workbench/conversation-thread-incident.tsx");
+const workflow = read("apps/web/src/components/conversation-workbench/conversation-workflow-rail.tsx");
 const types = read("apps/web/src/components/conversation-workbench/types.ts");
 const controller = read("apps/web/src/features/conversations/use-conversations-controller.ts");
 
@@ -19,11 +22,41 @@ function actionIds(source) {
 }
 
 function controls(source) {
-  return source.match(/<(?:button|textarea)\b[\s\S]*?>/g) || [];
+  const matches = [];
+  for (const start of source.matchAll(/<(?:button|textarea)\b/g)) {
+    let quote = "";
+    let braceDepth = 0;
+    let index = start.index;
+    for (; index < source.length; index += 1) {
+      const character = source[index];
+      const previous = source[index - 1];
+      if (quote) {
+        if (character === quote && previous !== "\\") quote = "";
+        continue;
+      }
+      if (character === '"' || character === "'" || character === "`") {
+        quote = character;
+        continue;
+      }
+      if (character === "{") {
+        braceDepth += 1;
+        continue;
+      }
+      if (character === "}") {
+        braceDepth = Math.max(0, braceDepth - 1);
+        continue;
+      }
+      if (character === ">" && braceDepth === 0) {
+        matches.push(source.slice(start.index, index + 1));
+        break;
+      }
+    }
+  }
+  return matches;
 }
 
 test("production overview and conversation controls expose unique semantic action contracts", () => {
-  const ids = [...actionIds(overview), ...actionIds(thread)];
+  const ids = [...actionIds(overview), ...actionIds(thread), ...actionIds(composer), ...actionIds(incident), ...actionIds(workflow)];
   assert.ok(ids.length > 0, "the audited production controls should expose action ids");
   assert.equal(new Set(ids).size, ids.length, "action id expressions must be unique within the rendered workspace");
 
@@ -31,7 +64,7 @@ test("production overview and conversation controls expose unique semantic actio
     assert.match(id, /^(?:overview|conversations)\.[a-z0-9-${}.]+\.[a-z0-9-]+$/, `${id} must follow domain.entity.action`);
   }
 
-  for (const [name, source] of [["overview", overview], ["conversation thread", thread]]) {
+  for (const [name, source] of [["overview", overview], ["conversation thread", `${thread}\n${composer}\n${incident}`]]) {
     for (const control of controls(source)) {
       assert.match(control, /data-action-id=/, `${name} has an interactive control without a stable action id: ${control.slice(0, 140)}`);
       assert.ok(
@@ -49,6 +82,7 @@ test("stable ids distinguish overview entry points and caller-owned row actions"
   for (const id of [
     "overview.workspace.refresh",
     "overview.channels.open-management",
+    "overview.launch-plan.open",
     "overview.automation.open",
     "overview.conversations.open-list",
     "overview.channels.connect-empty",
@@ -75,9 +109,10 @@ test("conversation actions stay capability-backed and the single suggestion titl
     "conversations.suggestion.regenerate",
     "conversations.safety.refresh",
     "conversations.reply.edit",
-    "conversations.reply.enqueue",
+    "conversations.reply.send-now",
+    "conversations.workflow-${action.id}.open",
   ]) {
-    assert.ok(actionIds(thread).includes(id), `${id} must remain stable`);
+    assert.ok(actionIds(`${thread}\n${composer}\n${incident}\n${workflow}`).includes(id), `${id} must remain stable`);
   }
 
   for (const id of [
@@ -86,28 +121,30 @@ test("conversation actions stay capability-backed and the single suggestion titl
     "conversations.incident-${incident.id}.open-policy",
     "conversations.incident-${incident.id}.retry",
   ]) {
-    assert.ok(actionIds(thread).includes(id), `${id} must remain bound to its caller-owned record`);
+    assert.ok(actionIds(`${thread}\n${composer}\n${incident}`).includes(id), `${id} must remain bound to its caller-owned record`);
   }
 
-  const suggestionTitle = thread.match(/<div className=\{styles\.suggestionTabs\}[\s\S]*?<\/div>/)?.[0] || "";
+  const suggestionTitle = composer.match(/<div className=\{styles\.suggestionTabs\}[\s\S]*?<\/div>/)?.[0] || "";
   assert.match(suggestionTitle, /role="status"/);
   assert.match(suggestionTitle, /<span className=\{styles\.activeSuggestionTab\}>/);
   assert.doesNotMatch(suggestionTitle, /<button\b|onClick=|data-action-id=/);
-  assert.doesNotMatch(thread, /onSuggestionTabChange/);
+  assert.doesNotMatch(`${thread}\n${composer}`, /onSuggestionTabChange/);
   assert.doesNotMatch(types, /onSuggestionTabChange/);
   assert.doesNotMatch(controller, /onSuggestionTabChange\s*:/);
 });
 
-test("manual reply submit means guarded queueing, never direct delivery", () => {
-  const submitReply = thread.match(/function submitReply[\s\S]*?\n  }/)?.[0] || "";
+test("manual reply submit uses Enterprise WeChat direct delivery while the thread stays controlled", () => {
+  const submitReply = composer.match(/function submitReply[\s\S]*?\n  }/)?.[0] || "";
   assert.match(submitReply, /event\.preventDefault\(\)/);
-  assert.match(submitReply, /!composerDisabled && composer\.value\.trim\(\)/);
+  assert.match(submitReply, /!sendDisabled/);
   assert.match(submitReply, /actions\.onSendReply\(\)/);
-  assert.match(thread, /data-action-id="conversations\.reply\.enqueue"[\s\S]*?disabled=\{sendDisabled\}[\s\S]*?aria-label="将人工回复提交到安全发送队列"/);
+  assert.match(composer, /data-action-id="conversations\.reply\.send-now"[\s\S]*?disabled=\{sendDisabled\}[\s\S]*?aria-label="核对目标会话并发送人工回复到企业微信"/);
 
   const sendReply = controller.match(/const sendReply = useCallback[\s\S]*?\n  }, \[[^\]]+\]\);/)?.[0] || "";
-  assert.match(sendReply, /api\.queueManualConversationReply\(identity, text, operation\.key, currentOperator\)/);
-  assert.doesNotMatch(sendReply, /executeSendTask|processSafeSendQueue|personalWechatDirectSend/);
+  assert.match(sendReply, /api\.queueManualConversationReply\(identity, text, operation\.key, currentOperator, assetIds\)/);
+  assert.match(sendReply, /api\.executeManualReplyNow\(queued\.task\.id, identity\)/);
+  assert.match(sendReply, /企业微信发送未完成/);
+  assert.doesNotMatch(sendReply, /preparePersonalWechatConversation|captureWindowObserverOnce|personal_wechat|executeSendTask|processSafeSendQueue|personalWechatDirectSend/);
   assert.match(controller, /onSendReply:\s*\(\) => void sendReply\(\)/);
-  assert.doesNotMatch(thread, /queueManualConversationReply|executeSendTask|processSafeSendQueue|\bfetch\s*\(/);
+  assert.doesNotMatch(`${thread}\n${composer}\n${incident}`, /queueManualConversationReply|executeManualReplyNow|executeSendTask|processSafeSendQueue|\bfetch\s*\(/);
 });

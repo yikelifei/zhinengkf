@@ -2,21 +2,15 @@
 
 import { FlaskConical, RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DesignPlatformConfigResponse, DesignPlatformHealth, DesignPlatformReadiness, DesignPlatformSmokeTestResult } from "../../lib/api";
-import { getDesignPlatformConfig, getDesignPlatformHealth, getDesignPlatformReadiness, runDesignPlatformSmokeTest, updateDesignPlatformConfig } from "./api";
+import type { DesignPlatformCandidateProbeResponse, DesignPlatformConfigResponse, DesignPlatformHealth, DesignPlatformReadiness, DesignPlatformSmokeTestResult } from "../../lib/api";
+import { getDesignPlatformCandidates, getDesignPlatformConfig, getDesignPlatformHealth, getDesignPlatformReadiness, runDesignPlatformSmokeTest, updateDesignPlatformConfig } from "./api";
 import { createDesignRequestGuard, runGuardedDesignRequest } from "./design-request-guard";
+import { settingsSaveIntent, type DesignSettingsSaveIntent } from "./design-settings-model";
+import { DesignSettingsStatusPanel } from "./design-settings-status-panel";
 import styles from "./design-pages.module.css";
 import { DesignConfirmation, DesignEmpty, DesignNotice, DesignPageHeader, errorText } from "./design-ui";
 
 const SETTINGS_SCOPE_KEY = "design-settings";
-
-type DesignSettingsSaveIntent = {
-  adapter: string;
-  baseUrl: string;
-  accessToken?: string;
-  cookie?: string;
-  deviceId?: string;
-};
 
 type PendingSettingsConfirmation = {
   generation: number;
@@ -33,8 +27,12 @@ export function DesignSettingsPage() {
   const [readiness, setReadiness] = useState<DesignPlatformReadiness | null>(null);
   const [readinessLoaded, setReadinessLoaded] = useState(false);
   const [readinessError, setReadinessError] = useState("");
+  const [candidates, setCandidates] = useState<DesignPlatformCandidateProbeResponse | null>(null);
+  const [candidatesLoaded, setCandidatesLoaded] = useState(false);
+  const [candidatesError, setCandidatesError] = useState("");
   const [adapter, setAdapter] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [cookie, setCookie] = useState("");
   const [deviceId, setDeviceId] = useState("");
@@ -61,16 +59,17 @@ export function DesignSettingsPage() {
       guard: requestGuard,
       scopeKey: SETTINGS_SCOPE_KEY,
       load: () => Promise.allSettled([
-        getDesignPlatformConfig(), getDesignPlatformHealth(), getDesignPlatformReadiness(),
+        getDesignPlatformConfig(), getDesignPlatformHealth(), getDesignPlatformReadiness(), getDesignPlatformCandidates(),
       ]),
       onStart: () => {
         setBusy("refresh"); setActionError(""); setNotice("");
         setConfig(null); setConfigLoaded(false); setConfigError("");
-        setAdapter(""); setBaseUrl("");
+        setAdapter(""); setBaseUrl(""); setApiKey("");
         setHealth(null); setHealthLoaded(false); setHealthError("");
         setReadiness(null); setReadinessLoaded(false); setReadinessError("");
+        setCandidates(null); setCandidatesLoaded(false); setCandidatesError("");
       },
-      onSuccess: ([configResult, healthResult, readinessResult]) => {
+      onSuccess: ([configResult, healthResult, readinessResult, candidatesResult]) => {
         if (configResult.status === "fulfilled") {
           setConfig(configResult.value); setConfigLoaded(true); setConfigError("");
           setAdapter(configResult.value.config.adapter); setBaseUrl(configResult.value.config.baseUrl);
@@ -88,13 +87,20 @@ export function DesignSettingsPage() {
         } else {
           setReadiness(null); setReadinessLoaded(false); setReadinessError(errorText(readinessResult.reason, "就绪状态读取失败"));
         }
+        if (candidatesResult.status === "fulfilled") {
+          setCandidates(candidatesResult.value); setCandidatesLoaded(true); setCandidatesError("");
+        } else {
+          setCandidates(null); setCandidatesLoaded(false); setCandidatesError(errorText(candidatesResult.reason, "臻希 AI 候选端口读取失败"));
+        }
       },
       onError: (cause) => {
         const message = errorText(cause, "设计平台状态读取失败");
         setConfig(null); setConfigLoaded(false); setConfigError(message);
         setHealth(null); setHealthLoaded(false); setHealthError(message);
-        setReadiness(null); setReadinessLoaded(false); setReadinessError(message);
-      },
+          setReadiness(null); setReadinessLoaded(false); setReadinessError(message);
+          setCandidates(null); setCandidatesLoaded(false); setCandidatesError(message);
+          setApiKey("");
+        },
       onFinally: () => setBusy(""),
     });
   }, [requestGuard]);
@@ -110,7 +116,7 @@ export function DesignSettingsPage() {
   }
 
   function requestConfigurationSave() {
-    const intent = settingsSaveIntent(adapter, baseUrl, accessToken, cookie, deviceId);
+    const intent = settingsSaveIntent(adapter, baseUrl, apiKey, accessToken, cookie, deviceId);
     if (!intent) return;
     const generation = confirmationGenerationRef.current + 1;
     confirmationGenerationRef.current = generation;
@@ -143,7 +149,7 @@ export function DesignSettingsPage() {
             setReadiness(null); setReadinessLoaded(false); setReadinessError("");
           }
           setAdapter(updated.config.adapter); setBaseUrl(updated.config.baseUrl);
-          setAccessToken(""); setCookie(""); setDeviceId("");
+          setApiKey(""); setAccessToken(""); setCookie(""); setDeviceId("");
           setSmoke(null);
           setNotice("设计平台配置已保存；敏感字段已从表单清空。请重新检查健康状态。");
         },
@@ -178,18 +184,33 @@ export function DesignSettingsPage() {
     }
   }
 
-  const error = [configError, healthError, readinessError, actionError].filter(Boolean).join("；");
+  const error = [configError, healthError, readinessError, candidatesError, actionError].filter(Boolean).join("；");
   const controlsDisabled = Boolean(busy);
+  const useZhenxiLocal = (url: string) => {
+    invalidateSaveConfirmation();
+    setAdapter("art_image_local");
+    setBaseUrl(url);
+  };
+  const useZhenxiExternal = (url: string) => {
+    invalidateSaveConfirmation();
+    setAdapter("zhenxi_external");
+    setBaseUrl(url);
+  };
+  const activeAdapter = (adapter || readiness?.adapter || config?.config.adapter || "").trim();
+  const isArtImageLocal = activeAdapter === "art_image_local";
+  const isZhenxiExternal = activeAdapter === "zhenxi_external";
+  const isZhenxiDurable = isArtImageLocal || isZhenxiExternal;
+  const smokeDisabled = controlsDisabled || !readinessLoaded || !readiness?.ok || isZhenxiDurable;
 
   return (
     <section className={styles.page} aria-label="设计平台设置">
       <DesignPageHeader eyebrow="设计平台" title="连接设置" detail="只负责配置、健康检查和正式链路联通测试。" actions={<>
         <button type="button" data-action-id="design-settings-refresh" aria-label="刷新设计平台状态" disabled={controlsDisabled} onClick={() => void refresh()}><RefreshCw size={16} aria-hidden="true" />刷新</button>
-        <button type="button" data-action-id="design-settings-smoke" aria-label="运行设计平台联通测试" disabled={controlsDisabled || !readinessLoaded || !readiness?.ok} onClick={() => void runSmoke()}><FlaskConical size={16} aria-hidden="true" />联通测试</button>
+        <button type="button" data-action-id="design-settings-smoke" aria-label="运行设计平台联通测试" title={isZhenxiDurable ? "臻希 AI 真实生成模式不会用设置页联通测试消耗额度；请通过正式设计任务触发出图。" : undefined} disabled={smokeDisabled} onClick={() => void runSmoke()}><FlaskConical size={16} aria-hidden="true" />{isZhenxiDurable ? "生成保护" : "联通测试"}</button>
       </>} />
       {error ? <DesignNotice tone="danger">{error}</DesignNotice> : null}
       {notice ? <DesignNotice tone="success">{notice}</DesignNotice> : null}
-      {busy === "refresh" && !configLoaded && !healthLoaded && !readinessLoaded ? <DesignEmpty title="正在读取设计平台配置" detail="健康、就绪与配置状态并行读取。" busy /> : (
+      {busy === "refresh" && !configLoaded && !healthLoaded && !readinessLoaded && !candidatesLoaded ? <DesignEmpty title="正在读取设计平台配置" detail="健康、就绪、候选端口与配置状态并行读取。" busy /> : (
         <div className={styles.twoColumn}>
           <div className={styles.stack}>
             <form className={styles.card} onSubmit={(event) => { event.preventDefault(); requestConfigurationSave(); }}>
@@ -197,43 +218,18 @@ export function DesignSettingsPage() {
               <div className={styles.formGrid}>
                 <label><span>适配器</span><input disabled={controlsDisabled} value={adapter} onChange={(event) => { invalidateSaveConfirmation(); setAdapter(event.target.value); }} placeholder="design-platform" /></label>
                 <label><span>服务地址</span><input disabled={controlsDisabled} value={baseUrl} onChange={(event) => { invalidateSaveConfirmation(); setBaseUrl(event.target.value); }} placeholder="https://..." /></label>
-                <label><span>访问令牌（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={accessToken} onChange={(event) => { invalidateSaveConfirmation(); setAccessToken(event.target.value); }} /></label>
+                <label><span>{isZhenxiExternal ? "API 密钥（MCP 模式不需要）" : "API 密钥（可选更新）"}</span><input disabled={controlsDisabled || isZhenxiExternal} type="password" autoComplete="new-password" value={apiKey} onChange={(event) => { invalidateSaveConfirmation(); setApiKey(event.target.value); }} /></label>
+                <label><span>{isZhenxiExternal ? "访问令牌（MCP 复用臻希登录态，不在这里填写）" : "访问令牌（可选更新）"}</span><input disabled={controlsDisabled || isZhenxiExternal} type="password" autoComplete="new-password" value={accessToken} onChange={(event) => { invalidateSaveConfirmation(); setAccessToken(event.target.value); }} /></label>
                 <label><span>会话 Cookie（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={cookie} onChange={(event) => { invalidateSaveConfirmation(); setCookie(event.target.value); }} /></label>
                 <label><span>设备号（可选更新）</span><input disabled={controlsDisabled} type="password" autoComplete="new-password" value={deviceId} onChange={(event) => { invalidateSaveConfirmation(); setDeviceId(event.target.value); }} /></label>
               </div>
               <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="design-settings-save-request" aria-label="准备保存设计平台配置" disabled={controlsDisabled || !adapter.trim() || !baseUrl.trim()}><Save size={16} aria-hidden="true" />保存配置</button></div>
             </form>
           </div>
-          <div className={styles.stack}>
-            <article className={styles.card}><div className={styles.cardHeader}><div><h2>实时状态</h2><p>来自独立健康与就绪接口。</p></div></div>
-              <dl className={styles.factGrid}><div><dt>健康</dt><dd>{healthLoaded && health ? (health.ok ? "正常" : "异常") : "未确认"}</dd></div><div><dt>延迟</dt><dd>{healthLoaded && health ? `${health.latencyMs} ms` : "—"}</dd></div><div><dt>正式提交</dt><dd>{readinessLoaded && readiness ? (readiness.canSubmitFormalGeneration ? "允许" : "不允许") : "未确认"}</dd></div><div><dt>适配器</dt><dd>{readinessLoaded && readiness ? readiness.adapter : configLoaded && config ? config.config.adapter : "未确认"}</dd></div><div><dt>回调签名</dt><dd>{configLoaded && config ? (config.config.hasCallbackApiKey ? "已配置" : "未配置") : "未确认"}</dd></div><div><dt>设备绑定</dt><dd>{configLoaded && config ? (config.config.hasDeviceId ? `已绑定${config.config.deviceIdSuffix ? ` · ${config.config.deviceIdSuffix}` : ""}` : "未绑定") : "未确认"}</dd></div></dl>
-              {configLoaded && config?.config.callbackUrl ? <div className={styles.endpoint}><strong>出图完成回调地址</strong><code>{config.config.callbackUrl}</code><span>真实设计平台完成或失败后 POST 到这里；轮询仍会继续兜底。</span></div> : null}
-              {readinessLoaded && readiness?.checks.length ? <ul className={styles.checkList}>{readiness.checks.map((check) => <li className={check.ok ? styles.ok : styles.bad} key={check.key}><strong>{check.label}</strong><span>{check.detail}</span></li>)}</ul> : <p className={styles.muted}>{readinessLoaded ? "读取成功，未返回就绪检查明细。" : "就绪检查明细尚未成功读取。"}</p>}
-            </article>
-            {smoke ? <article className={styles.card}><div className={styles.cardHeader}><div><h2>最近联通测试</h2><p>{smoke.requestId} · {smoke.status}</p></div></div><dl className={styles.factGrid}><div><dt>候选图</dt><dd>{smoke.candidateCount}</dd></div><div><dt>已保存</dt><dd>{smoke.savedImageCount}</dd></div><div><dt>素材上传</dt><dd>{smoke.assetUploadCount}</dd></div><div><dt>耗时</dt><dd>{smoke.latencyMs} ms</dd></div></dl></article> : null}
-          </div>
+          <DesignSettingsStatusPanel config={config} configLoaded={configLoaded} health={health} healthLoaded={healthLoaded} readiness={readiness} readinessLoaded={readinessLoaded} candidateProbe={candidates} candidatesLoaded={candidatesLoaded} adapter={adapter} baseUrl={baseUrl} controlsDisabled={controlsDisabled} isArtImageLocal={isArtImageLocal} smoke={smoke} onUseLocal={useZhenxiLocal} onUseExternal={useZhenxiExternal} />
         </div>
       )}
       {pendingConfirmation && pendingConfirmation.generation === confirmationGenerationRef.current ? <DesignConfirmation title="确认保存设计平台连接配置？" detail={`将保存适配器 ${pendingConfirmation.intent.adapter} 与服务地址 ${pendingConfirmation.intent.baseUrl}。敏感值不会在页面回显；留空表示不更新对应值。当前 API 不接受操作员身份字段，因此服务端审计能力取决于既有实现。`} confirmLabel="确认保存" confirmActionId="design-settings-save-confirm" cancelActionId="design-settings-save-cancel" busy={Boolean(busy)} onCancel={invalidateSaveConfirmation} onConfirm={() => void saveConfiguration()} /> : null}
     </section>
   );
-}
-
-function settingsSaveIntent(
-  adapter: string,
-  baseUrl: string,
-  accessToken: string,
-  cookie: string,
-  deviceId: string,
-): DesignSettingsSaveIntent | null {
-  const normalizedAdapter = adapter.trim();
-  const normalizedBaseUrl = baseUrl.trim();
-  if (!normalizedAdapter || !normalizedBaseUrl) return null;
-  return {
-    adapter: normalizedAdapter,
-    baseUrl: normalizedBaseUrl,
-    accessToken: accessToken.trim() || undefined,
-    cookie: cookie.trim() || undefined,
-    deviceId: deviceId.trim() || undefined,
-  };
 }

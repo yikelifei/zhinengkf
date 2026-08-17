@@ -1,20 +1,47 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AI_PROVIDER_PRESETS, getAiProviderPreset, presetAsRawConfig } from "./ai-provider-presets";
 
 const yaml = require("js-yaml") as { load(source: string): unknown };
 
 export type AiProviderConfig = {
   name: string;
+  label: string;
+  description: string;
+  region: "china" | "global" | "aggregator" | "custom";
   enabled: boolean;
+  credentialSource: "environment" | "zhenxi_ai_shared" | "invalid";
+  sharedSourceConfigured: boolean;
   apiKey: string;
   baseUrl: string;
   model: string;
+  visionEnabled: boolean;
+  visionModel: string;
+  audioInputEnabled: boolean;
+  audioInputModel: string;
+  transcriptionModel: string;
+  transcriptionEndpoint: string;
   requestFormat: string;
   temperature: number;
   maxTokens: number;
   apiEndpoint: string;
+  routingTier: AiRoutingTier;
+  apiKeyEnv: string;
+  enabledEnv: string;
+  modelEnv: string;
+  docsUrl: string;
+  keyOnlySetup: boolean;
   configured: boolean;
   issues: string[];
+};
+
+export type AiRoutingTier = "economy" | "quality";
+
+export type AiTierRoutingConfig = {
+  enabled: boolean;
+  complexityThreshold: number;
+  economyChain: string[];
+  qualityChain: string[];
 };
 
 export type AiProviderRuntimeConfig = {
@@ -24,6 +51,15 @@ export type AiProviderRuntimeConfig = {
   timeoutSeconds: number;
   maxRetries: number;
   promptKey: string;
+  routing: AiTierRoutingConfig;
+  multimodal: {
+    enabled: boolean;
+    visionChain: string[];
+    transcriptionChain: string[];
+    visionTimeoutSeconds: number;
+    transcriptionTimeoutSeconds: number;
+    videoFrameCount: number;
+  };
   providers: AiProviderConfig[];
   settingsPath: string;
   envPath: string;
@@ -35,8 +71,25 @@ export function loadAiProviderRuntime(options: { settingsPath?: string; env?: No
   const env = { ...readEnvFile(envPath), ...(options.env || process.env) };
   const settings = readYamlObject(settingsPath);
   const engine = isPlainObject(settings.ai_engine) ? settings.ai_engine : {};
+  const rawRouting = isPlainObject(engine.routing) ? engine.routing : {};
+  const rawMultimodal = isPlainObject(engine.multimodal) ? engine.multimodal : {};
   const rawProviders = isPlainObject(engine.providers) ? engine.providers : {};
-  const providers = Object.entries(rawProviders).map(([name, value]) => normalizeProvider(name, value, env));
+  const includeProviderPresets = booleanValue(engine.include_provider_presets, false);
+  const declaredNames = new Set(Object.keys(rawProviders));
+  const providers = [
+    ...Object.entries(rawProviders).map(([name, value]) => {
+      const preset = getAiProviderPreset(name);
+      return normalizeProvider(
+        name,
+        preset ? { ...presetAsRawConfig(preset), ...(isPlainObject(value) ? value : {}) } : value,
+        env,
+        settingsPath,
+      );
+    }),
+    ...(includeProviderPresets ? AI_PROVIDER_PRESETS : [])
+      .filter((preset) => !declaredNames.has(preset.name))
+      .map((preset) => normalizeProvider(preset.name, presetAsRawConfig(preset), env, settingsPath)),
+  ];
 
   return {
     enabled: booleanValue(engine.enabled, true),
@@ -45,6 +98,20 @@ export function loadAiProviderRuntime(options: { settingsPath?: string; env?: No
     timeoutSeconds: boundedNumber(engine.timeout_seconds, 15, 1, 120),
     maxRetries: boundedInteger(engine.max_retries, 2, 0, 5),
     promptKey: text(engine.prompt_key),
+    routing: {
+      enabled: booleanValue(rawRouting.enabled, false),
+      complexityThreshold: boundedInteger(rawRouting.complexity_threshold, 4, 1, 20),
+      economyChain: stringList(rawRouting.economy_chain),
+      qualityChain: stringList(rawRouting.quality_chain),
+    },
+    multimodal: {
+      enabled: booleanValue(rawMultimodal.enabled, true),
+      visionChain: stringList(rawMultimodal.vision_chain),
+      transcriptionChain: stringList(rawMultimodal.transcription_chain),
+      visionTimeoutSeconds: boundedNumber(rawMultimodal.vision_timeout_seconds, 12, 1, 120),
+      transcriptionTimeoutSeconds: boundedNumber(rawMultimodal.transcription_timeout_seconds, 20, 1, 120),
+      videoFrameCount: boundedInteger(rawMultimodal.video_frame_count, 3, 1, 5),
+    },
     providers,
     settingsPath,
     envPath,
@@ -61,33 +128,90 @@ export function resolveAiSettingsPath(explicitPath?: string) {
   return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0] || path.resolve("config/settings.yaml");
 }
 
-function normalizeProvider(name: string, value: unknown, env: NodeJS.ProcessEnv): AiProviderConfig {
+function normalizeProvider(
+  name: string,
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  settingsPath: string,
+): AiProviderConfig {
   const raw = isPlainObject(value) ? value : {};
-  const apiKey = expandEnv(text(raw.api_key), env);
-  const baseUrl = trimTrailingSlash(expandEnv(text(raw.base_url), env));
-  const model = expandEnv(text(raw.model), env);
+  const preset = getAiProviderPreset(name);
+  const credentialSourceValue = text(raw.credential_source) || "environment";
+  const credentialSource = credentialSourceValue === "zhenxi_ai_shared"
+    ? "zhenxi_ai_shared"
+    : credentialSourceValue === "environment"
+      ? "environment"
+      : "invalid";
+  const configuredSharedPath = expandEnv(text(raw.shared_env_path), env);
+  const sharedEnvPath = credentialSource === "zhenxi_ai_shared" && configuredSharedPath
+    ? path.resolve(path.dirname(settingsPath), configuredSharedPath)
+    : "";
+  const sharedSourceConfigured = Boolean(sharedEnvPath && isReadableRegularFile(sharedEnvPath));
+  const providerEnv = sharedSourceConfigured ? { ...env, ...readEnvFile(sharedEnvPath) } : env;
+  const apiKey = expandEnv(text(raw.api_key), providerEnv);
+  const baseUrl = trimTrailingSlash(expandEnv(text(raw.base_url), providerEnv));
+  const model = expandEnv(text(raw.model), providerEnv);
+  const visionEnabled = booleanValue(raw.vision_enabled, false);
+  const visionModel = expandEnv(text(raw.vision_model), providerEnv) || model;
+  const audioInputEnabled = booleanValue(raw.audio_input_enabled, false);
+  const audioInputModel = expandEnv(text(raw.audio_input_model), providerEnv) || visionModel || model;
+  const transcriptionModel = expandEnv(text(raw.transcription_model), providerEnv);
+  const transcriptionEndpoint = text(raw.transcription_endpoint) || "/audio/transcriptions";
   const requestFormat = text(raw.request_format) || "openai";
-  const enabled = booleanValue(raw.enabled, false);
+  const enabledOverride = preset ? env[preset.enabledEnv] : undefined;
+  const enabled = enabledOverride === undefined
+    ? booleanValue(raw.enabled, false)
+    : booleanValue(enabledOverride, false);
+  const routingTier = text(raw.routing_tier) === "quality" ? "quality" : "economy";
   const issues: string[] = [];
   if (!enabled) issues.push("provider_disabled");
+  if (credentialSource === "invalid") issues.push("credential_source_invalid");
+  if (credentialSource === "zhenxi_ai_shared" && !sharedSourceConfigured) issues.push("shared_env_missing");
   if (looksUnset(apiKey)) issues.push("api_key_unset");
   if (looksUnset(baseUrl)) issues.push("base_url_unset");
   else if (!/^https?:\/\//i.test(baseUrl)) issues.push("base_url_invalid");
   if (looksUnset(model)) issues.push("model_unset");
-  if (requestFormat !== "openai") issues.push("request_format_not_openai");
+  if (!SUPPORTED_REQUEST_FORMATS.has(requestFormat)) issues.push("request_format_unsupported");
   return {
     name,
+    label: preset?.label || name,
+    description: preset?.description || "自定义 OpenAI 兼容供应商。",
+    region: preset?.region || "custom",
     enabled,
+    credentialSource,
+    sharedSourceConfigured,
     apiKey,
     baseUrl,
     model,
+    visionEnabled,
+    visionModel,
+    audioInputEnabled,
+    audioInputModel,
+    transcriptionModel,
+    transcriptionEndpoint,
     requestFormat,
     temperature: boundedNumber(raw.temperature, 0.7, 0, 2),
     maxTokens: boundedInteger(raw.max_tokens, 300, 1, 4000),
     apiEndpoint: text(raw.api_endpoint) || "/chat/completions",
+    routingTier,
+    apiKeyEnv: preset?.apiKeyEnv || "",
+    enabledEnv: preset?.enabledEnv || "",
+    modelEnv: preset?.modelEnv || "",
+    docsUrl: preset?.docsUrl || "",
+    keyOnlySetup: Boolean(preset),
     configured: enabled && issues.length === 0,
     issues,
   };
+}
+
+const SUPPORTED_REQUEST_FORMATS = new Set(["openai", "anthropic"]);
+
+function isReadableRegularFile(filePath: string) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function readYamlObject(filePath: string): Record<string, unknown> {

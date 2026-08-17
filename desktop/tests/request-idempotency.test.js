@@ -15,6 +15,7 @@ require("ts-node").register({
 const { DesignJobsService } = require("../apps/api/src/design-jobs/design-jobs.service");
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
+const { OrdersService } = require("../apps/api/src/orders/orders.service");
 const { PrismaOperationsService } = require("../apps/api/src/prisma/prisma-operations.service");
 const { TrainingService } = require("../apps/api/src/training/training.service");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
@@ -34,6 +35,7 @@ const {
 const DESIGN_KEY = "design-job:11111111-1111-4111-8111-111111111111";
 const TRAINING_KEY = "training-import:22222222-2222-4222-8222-222222222222";
 const DEMO_SEND_KEY = "send-demo:55555555-5555-4555-8555-555555555555";
+const ORDER_FULFILLMENT_KEY = "order-fulfillment:66666666-6666-4666-8666-666666666666";
 
 function emptyStoreData(overrides = {}) {
   return {
@@ -54,6 +56,7 @@ function emptyStoreData(overrides = {}) {
     sendAttempts: [],
     quoteDrafts: [],
     orderDrafts: [],
+    paymentEvents: [],
     reviewLogs: [],
     agents: [{ id: "agent-general", key: "general", name: "General" }],
     agentSkills: [],
@@ -261,6 +264,140 @@ test("LocalStore design create resumes interrupted effects without duplicate not
   }
 });
 
+test("LocalStore order fulfillment save replays by operationKey and writes one audit", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const now = new Date().toISOString();
+  const { store, tempDir } = createStore({
+    designJobs: [{
+      id: "design-fulfillment-1",
+      customerId: "customer-1",
+      conversationId: "conversation-1",
+      wechatAccountId: "wechat-1",
+      scene: "employee gift",
+      bundle: { items: [{ skuCode: "SKU-1", name: "Gift", quantity: 1 }] },
+      assetIds: [],
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+    }],
+    designImages: [{
+      id: "image-fulfillment-1",
+      imageId: "image-fulfillment-1",
+      designJobId: "design-fulfillment-1",
+      localPath: "E:/local/sku.png",
+      position: 1,
+      selected: true,
+      createdAt: now,
+      updatedAt: now,
+    }],
+    quoteDrafts: [{
+      id: "quote-fulfillment-1",
+      designJobId: "design-fulfillment-1",
+      customerId: "customer-1",
+      selectedImageId: "image-fulfillment-1",
+      quantity: 1,
+      unitPrice: 100,
+      totalPrice: 100,
+      totalCost: 60,
+      profit: 40,
+      status: "accepted",
+      paymentStatus: "deposit_paid",
+      createdAt: now,
+      updatedAt: now,
+    }],
+    orderDrafts: [{
+      id: "order-fulfillment-1",
+      quoteDraftId: "quote-fulfillment-1",
+      designJobId: "design-fulfillment-1",
+      customerId: "customer-1",
+      conversationId: "conversation-1",
+      wechatAccountId: "wechat-1",
+      selectedImageId: "image-fulfillment-1",
+      quantity: 1,
+      unitPrice: 100,
+      totalPrice: 100,
+      totalCost: 60,
+      profit: 40,
+      profitRate: 0.4,
+      status: "confirmed",
+      paymentStatus: "deposit_paid",
+      productionStatus: "not_started",
+      productionDueAt: "",
+      carrier: "",
+      trackingNo: "",
+      shippedAt: "",
+      deliveredAt: "",
+      customerNotes: "",
+      owner: "operator-1",
+      bundleSnapshot: { items: [{ skuCode: "SKU-1", name: "Gift", quantity: 1 }] },
+      selectedImageSnapshot: { id: "image-fulfillment-1", localPath: "E:/local/sku.png" },
+      createdAt: now,
+      updatedAt: now,
+    }],
+    paymentEvents: [{
+      id: "payment-fulfillment-1",
+      idempotencyKey: "payment-fulfillment-1",
+      quoteDraftId: "quote-fulfillment-1",
+      orderDraftId: "order-fulfillment-1",
+      customerId: "customer-1",
+      conversationId: "conversation-1",
+      wechatAccountId: "wechat-1",
+      paymentStatus: "deposit_paid",
+      amountCny: 100,
+      method: "bank_transfer",
+      proofReference: "proof-fulfillment-1",
+      reviewer: "operator-1",
+      createdAt: now,
+      updatedAt: now,
+    }],
+  });
+  const notifications = new NotificationsService({}, store);
+  const service = new OrdersService({}, store, notifications);
+  const expected = {
+    expectedWechatAccountId: "wechat-1",
+    expectedConversationId: "conversation-1",
+    expectedCustomerId: "customer-1",
+  };
+  const payload = {
+    ...expected,
+    operationKey: ORDER_FULFILLMENT_KEY,
+    status: "processing",
+    productionStatus: "in_production",
+    productionDueAt: "2026-08-03",
+    customerNotes: "Started production",
+    owner: "operator-1",
+  };
+  try {
+    appConfig.useLocalStore = true;
+    const first = await service.updateFulfillment("order-fulfillment-1", payload);
+    const replay = await service.updateFulfillment("order-fulfillment-1", payload);
+
+    assert.equal(first.id, replay.id);
+    assert.equal(replay.status, "processing");
+    assert.equal(replay.productionStatus, "in_production");
+    const reviews = store
+      .listReviewLogs(100)
+      .filter((item) => item.targetId === "order-fulfillment-1" && item.decision === "order_fulfillment_update");
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0].metadata.requestOperation.key, ORDER_FULFILLMENT_KEY);
+    assert.equal(reviews[0].metadata.changedFields.includes("productionStatus"), true);
+    const notices = store
+      .listNotifications({ limit: 100 })
+      .filter((item) => item.target.orderDraftId === "order-fulfillment-1");
+    assert.equal(notices.length, 1);
+    await assert.rejects(
+      service.updateFulfillment("order-fulfillment-1", {
+        ...payload,
+        productionStatus: "quality_check",
+      }),
+      /already used with different identity or payload/,
+    );
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("concurrent LocalStore chat imports create one import, sample and knowledge row", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   const { store, tempDir } = createStore();
@@ -283,7 +420,9 @@ test("concurrent LocalStore chat imports create one import, sample and knowledge
     assert.equal(first.id, replay.id);
     assert.equal(store.listChatImports().length, 1);
     assert.equal(store.listTrainingSamples().length, 1);
-    assert.equal(store.listKnowledgeEntries().length, 1);
+    const importedKnowledge = store.listKnowledgeEntries().filter((entry) => entry.sourceType === "chat_import");
+    assert.equal(importedKnowledge.length, 1);
+    assert.equal(importedKnowledge[0].sourceId, store.listTrainingSamples()[0].id);
     mutateStore(store, (data) => { data.conversations = []; });
     assert.equal(training.importChat(payload).id, first.id);
     mutateStore(store, (data) => {

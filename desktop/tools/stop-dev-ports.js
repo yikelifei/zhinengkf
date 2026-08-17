@@ -8,6 +8,12 @@ const { atomicWritePrivateJson, readPrivateJsonFile, removePrivateRegularFile } 
 const desktopRoot = path.resolve(__dirname, "..");
 const staleDesktopRoots = [
   path.resolve("C:\\Users\\27808\\Desktop\\zhinengkefu_restore_work\\desktop"),
+  path.resolve("E:\\zhinengkefu-ui-versions\\modular\\desktop"),
+  ...pathListEnv("STALE_DESKTOP_ROOTS"),
+];
+const staleRuntimeDirs = [
+  path.resolve("E:\\zhinengkefu-ui-versions\\modular\\.runtime\\ui-versions\\runtime-modular"),
+  ...pathListEnv("STALE_DESKTOP_RUNTIME_DIRS"),
 ];
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
@@ -18,6 +24,8 @@ const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const supervisorStopRequestFile = path.join(runtimeDir, "desktop-supervisor-stop-request");
+const stableRuntimeStopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
 const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
 const stableRuntimeTaskName = "zhinengkefu_stable_runtime";
@@ -26,6 +34,7 @@ const stackStarterMockLockFile = path.join(runtimeDir, "ports-stack-starter-mock
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
 const preserveRealModeLock = process.env.PRESERVE_REAL_MODE_LOCK === "1";
 const preserveMockRepairLock = process.env.PRESERVE_MOCK_REPAIR_LOCK === "1";
+const preserveDesignPlatformConfig = process.env.PRESERVE_DESIGN_PLATFORM_CONFIG === "1";
 const forceProcessSweep = process.env.FORCE_PORTS_SWEEP === "1";
 const skipStackStarterLaunchers = process.env.PORTS_STOP_SKIP_STACK_STARTERS === "1";
 const skipStableServiceWrappers = process.env.PORTS_STOP_SKIP_STABLE_SERVICE_WRAPPERS === "1";
@@ -42,6 +51,7 @@ const managedPorts = [
 main();
 
 function main() {
+  writeStopRequestFiles();
   const records = readPidFile();
   const entries = Object.values(records).filter((record) => record && record.pid);
   const recordedPids = new Set();
@@ -53,6 +63,7 @@ function main() {
   stopManagedWrapperProcesses(stoppedPids, attemptedPids);
   stopManagedKeeperProcesses(stoppedPids, attemptedPids);
   stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
+  stopManagedAcceptanceProcesses(stoppedPids, attemptedPids);
   waitForNoManagedPortOwners(2500);
 
   if (!entries.length) {
@@ -97,6 +108,26 @@ function main() {
   cleanupRuntimeRecords();
 }
 
+function writeStopRequestFiles() {
+  const value = `${new Date().toISOString()}\n`;
+  writeStopRequestPair(runtimeDir, value, { warn: true });
+  for (const targetRuntimeDir of uniquePaths(staleRuntimeDirs)) {
+    writeStopRequestPair(targetRuntimeDir, value, { warn: false });
+  }
+}
+
+function writeStopRequestPair(targetRuntimeDir, value, options = {}) {
+  try {
+    fs.mkdirSync(targetRuntimeDir, { recursive: true });
+    fs.writeFileSync(path.join(targetRuntimeDir, "desktop-supervisor-stop-request"), value, "utf8");
+    fs.writeFileSync(path.join(targetRuntimeDir, "stable-runtime-stop-request"), value, "utf8");
+  } catch (error) {
+    if (options.warn) {
+      console.log(`[warn] could not write desktop supervisor stop request: ${error?.message || String(error)}`);
+    }
+  }
+}
+
 function stopStableScheduledTask() {
   if (process.platform !== "win32") return;
   const schtasks = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "schtasks.exe");
@@ -113,6 +144,7 @@ function hasManagedRuntimeState() {
   if (findManagedKeeperPids().length) return true;
   if (findManagedDirectShellPids().length) return true;
   if (findManagedWechatWorkerPids().length) return true;
+  if (findManagedAcceptancePids().length) return true;
   return false;
 }
 
@@ -126,7 +158,7 @@ function cleanupRuntimeRecords() {
   fs.rmSync(mockModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(realModeLockFile, { force: true });
   if (!preserveRealModeLock) fs.rmSync(preferredDesignModeFile, { force: true });
-  clearRuntimeDesignModeConfig();
+  if (!preserveDesignPlatformConfig) clearRuntimeDesignModeConfig();
   console.log("Launcher records were cleaned.");
 }
 
@@ -190,6 +222,7 @@ function stopManagedProcessSweep(stoppedPids, attemptedPids, recordedPids) {
   stopManagedKeeperProcesses(stoppedPids, attemptedPids);
   stopManagedDirectShellProcesses(stoppedPids, attemptedPids);
   stopManagedWechatWorkerProcesses(stoppedPids, attemptedPids);
+  stopManagedAcceptanceProcesses(stoppedPids, attemptedPids);
   sleep(500);
   stopManagedPortOwners(stoppedPids, attemptedPids, recordedPids);
 }
@@ -274,10 +307,22 @@ function stopManagedWechatWorkerProcesses(stoppedPids, attemptedPids) {
   }
 }
 
+function stopManagedAcceptanceProcesses(stoppedPids, attemptedPids) {
+  for (const pid of findManagedAcceptancePids()) {
+    if (protectedPids.has(pid)) continue;
+    if (attemptedPids.has(pid) || stoppedPids.has(pid)) continue;
+    console.log(`[stop:acceptance] pid=${pid}`);
+    attemptedPids.add(pid);
+    if (stopPid(pid)) stoppedPids.add(pid);
+  }
+}
+
 function findManagedWrapperPids() {
   if (process.platform !== "win32") return [];
   const normalizedRuntime = normalizePathText(runtimeDir);
   const normalizedRoot = normalizePathText(desktopRoot);
+  const normalizedStaleRoots = staleDesktopRoots.map(normalizePathText);
+  const normalizedStaleRuntimes = staleRuntimeDirs.map(normalizePathText);
   const launcherPattern = /(launch|supervise|stable-supervise)-(mock|real)\.cmd/;
   const serviceWrapperPattern = /run-[^" ]+(-worker)?\.cmd/;
   const stableRuntimeWrapperPattern = /(keepalive-stable-desktop|run-stable-service-window|start-stable-desktop(?:-foreground)?)\.cmd/;
@@ -314,12 +359,17 @@ function findManagedWrapperPids() {
       const pid = String(item?.ProcessId || "");
       if (protectedPids.has(pid)) return false;
       const commandLine = normalizePathText(item?.CommandLine || "");
+      const knownRuntimeRoot =
+        commandLine.includes(normalizedRuntime) ||
+        commandLine.includes(normalizedRoot) ||
+        normalizedStaleRoots.some((rootPath) => commandLine.includes(rootPath)) ||
+        normalizedStaleRuntimes.some((rootPath) => commandLine.includes(rootPath));
       if (skipStableServiceWrappers && stableServiceWrapperPattern.test(commandLine)) return false;
       const parentCommandLine = /"?node(?:\.exe)?"?\s+server\.js\b/.test(commandLine)
         ? normalizePathText(getParentCommandLine(pid))
         : "";
       const runtimeWrapper =
-        (commandLine.includes(normalizedRuntime) || commandLine.includes(normalizedRoot)) &&
+        knownRuntimeRoot &&
         (serviceWrapperPattern.test(commandLine) || launcherPattern.test(commandLine) || stableRuntimeWrapperPattern.test(commandLine));
       const projectWebDevWrapper = commandLine.includes(normalizedRoot) && projectWebDevWrapperPattern.test(commandLine);
       const projectWebBuildWrapper = commandLine.includes(normalizedRoot) && projectWebBuildWrapperPattern.test(commandLine);
@@ -414,6 +464,40 @@ function findManagedWechatWorkerPids() {
         commandLine.includes("tools/wechat-bridge-worker.js") ||
         commandLine.includes("tools/start-wechat-safe-workers.js")
       );
+    })
+    .map((item) => String(item.ProcessId || ""))
+    .filter((pid) => /^\d+$/.test(pid));
+}
+
+function findManagedAcceptancePids() {
+  if (process.platform !== "win32") return [];
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"name = 'node.exe' OR name = 'powershell.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (result.status !== 0 || !result.stdout) return [];
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return [];
+  }
+  const roots = [desktopRoot, ...staleDesktopRoots].map(normalizePathText);
+  const processes = Array.isArray(rows) ? rows : [rows];
+  return processes
+    .filter((item) => {
+      const pid = String(item?.ProcessId || "");
+      if (protectedPids.has(pid)) return false;
+      const commandLine = normalizePathText(item?.CommandLine || "");
+      if (!commandLine.includes("tools/run-product-acceptance.js")) return false;
+      return roots.some((rootPath) => commandLine.includes(rootPath)) || commandLine.includes("rc-integrated-local-safe");
     })
     .map((item) => String(item.ProcessId || ""))
     .filter((pid) => /^\d+$/.test(pid));
@@ -799,6 +883,24 @@ function hasManagedAncestor(pid) {
 
 function normalizePathText(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function pathListEnv(name) {
+  return String(process.env[name] || "")
+    .split(path.delimiter)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => path.resolve(value));
+}
+
+function uniquePaths(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = normalizePathText(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function getCommandLine(pid) {

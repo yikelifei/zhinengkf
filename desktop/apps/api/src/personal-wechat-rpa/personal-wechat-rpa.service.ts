@@ -24,6 +24,7 @@ export type PersonalWechatRpaInboundPayload = {
   externalId?: string;
   createdAt?: string;
   attachments?: Array<Record<string, unknown>>;
+  captureSource?: string;
 };
 
 export type PersonalWechatRpaInstanceInput = {
@@ -33,6 +34,12 @@ export type PersonalWechatRpaInstanceInput = {
   accountNickname?: string;
   ownerWxId?: string;
   enabled?: boolean;
+};
+
+export type PersonalWechatRpaConversationIdentity = {
+  wechatAccountId?: string;
+  conversationId?: string;
+  customerId?: string;
 };
 
 type StoredRpaInstance = {
@@ -174,6 +181,67 @@ export class PersonalWechatRpaService {
     };
   }
 
+  async prepareConversation(payload: PersonalWechatRpaConversationIdentity) {
+    const identity = {
+      wechatAccountId: String(payload?.wechatAccountId || "").trim(),
+      conversationId: String(payload?.conversationId || "").trim(),
+      customerId: String(payload?.customerId || "").trim(),
+    };
+    if (!identity.wechatAccountId || !identity.conversationId || !identity.customerId) {
+      throw new BadRequestException("wechatAccountId, conversationId and customerId are required");
+    }
+
+    const binding = await this.persistence.findBindingByIdentity(identity);
+    if (!binding) throw new NotFoundException("personal WeChat RPA conversation binding was not found");
+    const state = this.readRegistryState();
+    const parsed = parseRegistryDocument(state.document);
+    if (state.readError || parsed.errors.length > 0) {
+      throw new BadRequestException(state.readError || parsed.errors.join("; "));
+    }
+    const instance = parsed.active.find((item) => item.wechatAccountId === identity.wechatAccountId);
+    if (!instance) throw new BadRequestException("personal WeChat RPA instance is not active");
+    if (
+      instance.accountNickname !== String(binding.accountNickname || "") ||
+      instance.ownerWxId !== String(binding.ownerWxId || "")
+    ) {
+      throw new BadRequestException("personal WeChat RPA instance identity does not match the conversation binding");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${instance.endpoint}/open-chat`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-personal-wechat-rpa-token": instance.token,
+        },
+        body: JSON.stringify({ chatTitle: binding.chatTitle }),
+        signal: AbortSignal.timeout(12_000),
+      });
+    } catch (error) {
+      throw new BadRequestException(
+        `personal WeChat RPA could not open the bound chat: ${error instanceof Error ? error.message : "request failed"}`,
+      );
+    }
+
+    const result = await response.json().catch(() => ({} as Record<string, unknown>));
+    if (!response.ok || result?.ok !== true) {
+      throw new BadRequestException(
+        `personal WeChat RPA refused to open the bound chat: ${String(result?.errorMessage || result?.code || response.status)}`,
+      );
+    }
+    if (String(result?.chatTitle || "") !== String(binding.chatTitle || "")) {
+      throw new BadRequestException("personal WeChat RPA opened a different chat");
+    }
+    return {
+      ok: true,
+      identity,
+      chatTitle: String(result.chatTitle || ""),
+      recentMessage: String(result.recentMessage || ""),
+      captureSource: "ocr_verified_bubble",
+    };
+  }
+
   async processInbound(payload: PersonalWechatRpaInboundPayload, token?: string) {
     const identity = this.assertToken(token, payload?.accountNickname);
     this.assertProductionIdentity(identity);
@@ -236,6 +304,7 @@ export class PersonalWechatRpaService {
         externalId: normalized.externalId,
         createdAt: normalized.createdAt,
         attachments: sanitizeInboundOperationAttachments(normalized.attachments),
+        captureSource: normalized.captureSource,
       },
       claimToken,
       leaseExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
@@ -268,6 +337,7 @@ export class PersonalWechatRpaService {
         text: normalized.message,
         externalId: normalized.externalId,
         attachments: normalized.attachments,
+        inboundCaptureSource: normalized.captureSource,
         createdAt: normalized.createdAt,
         inboundOperationId: reservation.operation.id,
         inboundClaimToken: claimToken,
@@ -346,6 +416,7 @@ export class PersonalWechatRpaService {
       throw new BadRequestException("attachments must contain only business reference objects");
     }
     const attachments = sanitizeInboundOperationAttachments(payload.attachments);
+    const captureSource = String(payload.captureSource || "legacy_unverified").trim().toLowerCase();
     const createdAtText = String(payload.createdAt || "").trim() || new Date().toISOString();
 
     if (!identity.accountNickname) throw new BadRequestException("personal WeChat RPA account nickname is not configured");
@@ -367,6 +438,9 @@ export class PersonalWechatRpaService {
     if (!new Set(["text", "image", "file", "video", "voice", "link", "unknown"]).has(messageType)) {
       throw new BadRequestException("unsupported messageType");
     }
+    if (!new Set(["uia_accessibility", "ocr_verified_bubble", "legacy_unverified"]).has(captureSource)) {
+      throw new BadRequestException("unsupported captureSource");
+    }
 
     const ignored = senderName === "我" || senderName === accountNickname || senderName === "系统";
     return {
@@ -380,6 +454,7 @@ export class PersonalWechatRpaService {
       externalId,
       createdAt,
       attachments,
+      captureSource,
       ignored,
       reason: ignored ? "self_or_system_message" : null,
     };

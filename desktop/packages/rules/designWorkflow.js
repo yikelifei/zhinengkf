@@ -19,8 +19,31 @@ const DESIGN_STATUSES = Object.freeze({
   CANCELLED: "cancelled",
 });
 
+const CUSTOMER_DESIGN_CANDIDATE_COUNT = 4;
+
 function validateDesignRequest(request) {
   const missing = [];
+  const designType = String(request?.designType || "");
+  const isZhenxiImage = designType === "zhenxi_image";
+  const isZhenxiCopy = designType.startsWith("zhenxi_copy_");
+  if (isZhenxiImage || isZhenxiCopy) {
+    if (!designType) missing.push("designType");
+    if (!request?.customerText && !request?.scene) missing.push("customerText");
+    const hasUsableBundleImage = isZhenxiImage
+      && inspectBundleReferences(request?.bundle || {}).some((item) => item.ok);
+    const validatesProductSourcesSeparately = isZhenxiImage
+      && String(request?.requirements?.zhenxi?.visualContentMode || "") === "real_product";
+    if (
+      isZhenxiImage
+      && request?.requirements?.useRealSkuImages !== false
+      && !request?.assets?.length
+      && !hasUsableBundleImage
+      && !validatesProductSourcesSeparately
+    ) {
+      missing.push("assets");
+    }
+    return { ok: missing.length === 0, missing };
+  }
   if (!request?.budget?.perUnitAmount && !request?.budget?.totalAmount) missing.push("budget");
   if (!request?.bundle?.items?.length) missing.push("bundle");
   if (!request?.designType) missing.push("designType");
@@ -38,13 +61,20 @@ function nextStatusAfterDesignCompleted({ isHighValue, budget, highValueAmountCn
   return DESIGN_STATUSES.SENT;
 }
 
-function buildWaitingMessage({ customerName = "", scene = "", outputCount = 6 }) {
+function buildWaitingMessage({ customerName = "", scene = "", outputCount = CUSTOMER_DESIGN_CANDIDATE_COUNT }) {
   const name = customerName ? `${customerName}，` : "";
   const sceneText = scene ? `按您这个${scene}用途` : "按您刚才的需求";
   return `${name}我先${sceneText}把礼盒搭配效果图做几版出来，预计会有${outputCount}张，出来后我发您挑。`;
 }
 
-function inspectDesignOutputCount(value, { min = 4, max = 6, fallback = 6 } = {}) {
+function inspectDesignOutputCount(
+  value,
+  {
+    min = CUSTOMER_DESIGN_CANDIDATE_COUNT,
+    max = CUSTOMER_DESIGN_CANDIDATE_COUNT,
+    fallback = CUSTOMER_DESIGN_CANDIDATE_COUNT,
+  } = {},
+) {
   const raw = value === undefined || value === null || value === "" ? fallback : value;
   const numeric = Number(raw);
   const isInteger = Number.isInteger(numeric);
@@ -85,7 +115,7 @@ function inspectDesignOutputCount(value, { min = 4, max = 6, fallback = 6 } = {}
     min,
     max,
     reason: "output_count_ready",
-    detail: `正式首轮将生成 ${requested} 张候选图`,
+    detail: `每轮固定生成 ${requested} 张候选图供顾客挑选`,
   };
 }
 
@@ -450,6 +480,7 @@ function nestedValue(value, pathParts) {
 }
 
 module.exports = {
+  CUSTOMER_DESIGN_CANDIDATE_COUNT,
   DESIGN_STATUSES,
   validateDesignRequest,
   nextStatusAfterDesignCompleted,

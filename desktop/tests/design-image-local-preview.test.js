@@ -272,7 +272,7 @@ test("web image tiles prefer the scoped design-image local preview endpoint", ()
   assert.match(apiSource, /\/design-jobs\/\$\{encodeURIComponent\(jobId\)\}\/images\/\$\{encodeURIComponent\(imageKey\)\}\/local-file/);
   assert.match(pageSource, /designImagePreviewSrc\(selected, image\)/);
   assert.match(pageSource, /<img src=\{src\}/);
-  assert.match(modelSource, /function designImagePreviewSrc[\s\S]*localDesignImageUrl\(job\.id, image, identityExpectation\(job\)\) \|\| image\.downloadUrl/);
+  assert.match(modelSource, /function designImagePreviewSrc[\s\S]*localDesignImageUrl\(job\.id, image, identityExpectation\(job\)\) \|\| safeRenderableImageSrc\(image\.downloadUrl\)/);
   assert.match(controllerSource, /@Get\(":id\/images\/:imageId\/local-file"\)/);
   assert.match(controllerSource, /@Get\(":id\/images\/:imageId\/local-file-status"\)/);
   assert.match(controllerSource, /@Post\(":id\/images\/:imageId\/repair-local-file"\)/);

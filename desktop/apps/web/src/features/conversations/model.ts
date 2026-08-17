@@ -10,7 +10,10 @@ import type {
   ConversationIdentity,
   ConversationOperations,
   ConversationTimelineItem,
+  AiProviderStatus,
+  IdentityExpectation,
 } from "../../lib/api";
+import { identityExpectation, localAssetByIdUrl } from "../../lib/api";
 
 export type ConversationListFilters = {
   search: string;
@@ -25,6 +28,8 @@ export type ConversationSuggestionState = {
   sourceText: string;
   loading: boolean;
   error: string;
+  knowledgeMatches?: Array<{ title: string; score?: number }>;
+  appliedSkills?: string[];
 };
 
 export const DEFAULT_CONVERSATION_FILTERS: ConversationListFilters = {
@@ -50,6 +55,16 @@ export function conversationIdentity(conversation: Conversation): ConversationId
   };
 }
 
+export function hasCompleteConversationIdentity(
+  conversation: Pick<Conversation, "id" | "wechatAccountId" | "customerId">,
+) {
+  return Boolean(
+    String(conversation.id || "").trim()
+    && String(conversation.wechatAccountId || "").trim()
+    && String(conversation.customerId || "").trim(),
+  );
+}
+
 export function filterAndSortConversations(
   conversations: Conversation[],
   operationsById: Map<string, ConversationOperations>,
@@ -59,6 +74,9 @@ export function filterAndSortConversations(
   const visible = conversations.filter((conversation) => {
     const operations = operationsById.get(conversation.id);
     const searchable = [
+      conversation.id,
+      conversation.customerId,
+      conversation.wechatAccountId,
       conversation.title,
       conversation.customer?.name,
       conversation.customer?.wechatId,
@@ -114,11 +132,13 @@ export function toWorkbenchConversation(
         : "neutral";
   return {
     id: conversation.id,
+    wechatAccountId: conversation.wechatAccountId,
+    customerId: conversation.customerId,
     title,
     subtitle: conversation.wechatAccount?.displayName || conversation.wechatAccountId,
-    avatar: { fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
+    avatar: { imageUrl: conversation.customer?.avatarUrl || undefined, fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
     channelLabel: channelLabel(conversation),
-    channelTone: normalizeChannel(conversation) === "personal_wechat" ? "success" : "brand",
+    channelTone: "brand",
     preview: conversation.lastMessagePreview || "暂无消息摘要",
     updatedAtLabel: conversation.lastMessageAt ? formatDateTime(conversation.lastMessageAt) : "",
     unreadCount: Number(conversation.unreadCount || 0),
@@ -134,48 +154,74 @@ export function toWorkbenchThread(input: {
   timelineError: string;
   replyText: string;
   replyBusy: boolean;
+  replyAttachments: Array<{ id: string; fileName: string; mimeType: string; sizeBytes?: number }>;
+  attachmentBusy: boolean;
   replyFeedback: string;
+  queuedReplyTaskId: string;
   canReply: boolean;
   suggestion: ConversationSuggestionState;
+  aiProviderStatus?: AiProviderStatus | null;
+  aiProviderError?: string;
 }): ConversationWorkbenchThread {
   const { conversation, suggestion } = input;
+  const identityComplete = hasCompleteConversationIdentity(conversation);
+  const aiReadiness = aiSuggestionReadiness(input.aiProviderStatus, input.aiProviderError);
+  const knowledgeMatches = suggestion.knowledgeMatches || [];
+  const appliedSkills = suggestion.appliedSkills || [];
+  const knowledgeEvidence = knowledgeMatches.length
+    ? `知识命中：${knowledgeMatches.slice(0, 3).map((item) => item.title).join("、")}`
+    : "未命中已审核知识条目";
+  const skillEvidence = appliedSkills.length
+    ? `Skill：${appliedSkills.slice(0, 3).join("、")}`
+    : "未应用 Agent Skill";
   const title = conversation.customer?.name || conversation.title || "未命名客户";
-  const personal = normalizeChannel(conversation) === "personal_wechat";
+  const attachmentIdentity = identityExpectation({
+    wechatAccountId: conversation.wechatAccountId,
+    conversationId: conversation.id,
+    customerId: conversation.customerId,
+  });
   const permissionNotice = input.canReply
     ? []
-    : [{ id: "reply-permission", tone: "danger" as const, text: "当前操作员没有回复会话权限", detail: "人工回复和接管操作保持禁用。" }];
+    : [{
+        id: "reply-permission",
+        tone: "danger" as const,
+        text: identityComplete ? "当前操作员没有回复会话权限" : "当前会话身份不完整",
+        detail: identityComplete
+          ? "人工回复和接管操作保持禁用。"
+          : "缺少账号、会话或客户身份，已禁用人工回复与接管；请先重新同步官方会话。",
+      }];
   return {
     participant: {
       name: title,
-      avatar: { fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
+      avatar: { imageUrl: conversation.customer?.avatarUrl || undefined, fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
       accountLabel: conversation.wechatAccount?.displayName || conversation.wechatAccountId,
       channelLabel: channelLabel(conversation),
-      channelTone: personal ? "success" : "brand",
+      channelTone: "brand",
       onlineLabel: conversation.wechatAccount ? (conversation.wechatAccount.isActive ? "在线" : "离线") : "状态待核验",
       online: Boolean(conversation.wechatAccount?.isActive),
     },
     serviceStatusLabel: conversation.manualLocked ? "人工服务中" : "自动处理可用",
     serviceStatusTone: conversation.manualLocked ? "warning" : "success",
     manualTakeoverLabel: conversation.manualLocked ? "已人工接管" : undefined,
-    safetyNotice: personal
-      ? "个人微信回复只会进入安全发送队列；账号与聊天窗口由发送端再次核验。"
-      : "企业微信回复只会进入后端发送队列；最终发送结果以服务端状态为准。",
+    safetyNotice: "企业微信回复会先进入后端安全发送队列；最终发送结果以官方客服通道回执和服务端状态为准。",
     timelineLabel: "完整会话记录",
-    messages: input.timeline.map((item) => toWorkbenchMessage(item, title)),
+    messages: input.timeline.map((item) => toWorkbenchMessage(item, title, conversation.customer?.avatarUrl, attachmentIdentity)),
     incidents: [],
     notices: [
       ...(conversation.manualLocked
-        ? [{ id: "manual-lock", tone: "warning" as const, text: "当前会话已由人工接管", detail: "自动处理暂停；人工回复仍需通过安全队列。" }]
+        ? [{ id: "manual-lock", tone: "warning" as const, text: "当前会话已由人工接管", detail: "自动处理暂停；人工回复将通过企业微信安全发送队列处理。" }]
         : []),
       ...permissionNotice,
     ],
     suggestion: {
       activeTab: "ai",
-      tabs: [{ value: "ai", label: "AI 回复建议" }],
-      title: "仅生成建议，不自动发送",
-      verificationLabel: suggestion.text ? "待人工确认" : "按需生成",
+      tabs: [{ value: "ai", label: aiReadiness.tabLabel }],
+      title: aiReadiness.title,
+      verificationLabel: suggestion.text ? `知识 ${knowledgeMatches.length} · Skill ${appliedSkills.length}` : aiReadiness.idleLabel,
       text: suggestion.text || undefined,
-      sourceDetail: suggestion.sourceText ? `依据最近客户消息：${suggestion.sourceText.slice(0, 100)}` : undefined,
+      sourceDetail: suggestion.sourceText
+        ? `${aiReadiness.detail}；${knowledgeEvidence}；${skillEvidence}；依据最近客户消息：${suggestion.sourceText.slice(0, 100)}`
+        : `${aiReadiness.detail}；${knowledgeEvidence}；${skillEvidence}`,
       loading: suggestion.loading,
       error: suggestion.error || undefined,
       useActionLabel: "填入回复框",
@@ -185,8 +231,8 @@ export function toWorkbenchThread(input: {
       {
         id: "identity",
         label: "客户与账号身份",
-        statusLabel: conversation.customerId && conversation.wechatAccountId ? "已绑定" : "缺少身份",
-        tone: conversation.customerId && conversation.wechatAccountId ? "success" : "danger",
+        statusLabel: identityComplete ? "已绑定" : "缺少身份",
+        tone: identityComplete ? "success" : "danger",
       },
       {
         id: "delivery",
@@ -201,16 +247,41 @@ export function toWorkbenchThread(input: {
         tone: input.replyText.trim() ? "success" : "warning",
       },
     ],
+    workflowActions: [
+      { id: "bundles", label: "AI 搭品", detail: "按当前客户需求搭配", href: conversationIdentityHref("/catalog/bundles", conversation), icon: "bundle" },
+      { id: "design", label: "新建设计", detail: "绑定当前会话", href: conversationIdentityHref("/design/jobs/new", conversation), icon: "design" },
+      { id: "reviews", label: "人工审核", detail: "筛选当前客户待审", href: conversationIdentityHref("/reviews/inbox", conversation), icon: "review" },
+      { id: "quotes", label: "查看报价", detail: "筛选当前客户", href: conversationIdentityHref("/sales/quotes", conversation), icon: "quote" },
+      { id: "orders", label: "跟进订单", detail: "筛选当前客户", href: conversationIdentityHref("/sales/orders", conversation), icon: "order" },
+      { id: "send", label: "发送队列", detail: "筛选当前会话任务", href: conversationIdentityHref("/send/queue", conversation), icon: "send" },
+      { id: "training", label: "沉淀训练", detail: "导入当前会话", href: conversationIdentityHref("/training/import", conversation), icon: "training" },
+    ],
     composer: {
       value: input.replyText,
-      placeholder: input.canReply ? "输入人工回复（提交后进入安全发送队列）" : "当前没有回复会话权限",
+      placeholder: input.attachmentBusy
+        ? "附件正在安全上传…"
+        : input.canReply ? "输入人工回复（通过企业微信安全队列发送）" : "当前没有回复会话权限",
       maxLength: 2000,
-      disabled: !input.canReply,
+      disabled: !input.canReply || input.attachmentBusy,
       sending: input.replyBusy,
-      sendLabel: "入队发送",
+      sendLabel: "发送到企业微信",
       tools: [],
+      attachments: input.replyAttachments.map((asset) => ({
+        id: asset.id,
+        name: asset.fileName,
+        kind: asset.mimeType.startsWith("image/") ? "image" : "file",
+        detail: formatAttachmentSize(asset.sizeBytes),
+      })),
+      attachmentBusy: input.attachmentBusy,
       feedback: input.replyFeedback || undefined,
       feedbackTone: feedbackTone(input.replyFeedback),
+      queuedTask: input.queuedReplyTaskId
+        ? {
+            id: input.queuedReplyTaskId,
+            href: `/send/queue/${encodeURIComponent(input.queuedReplyTaskId)}`,
+            actionLabel: "查看发送结果",
+          }
+        : undefined,
     },
     loading: input.timelineLoading,
     error: input.timelineError || undefined,
@@ -224,15 +295,14 @@ export function toWorkbenchContext(
   operations: ConversationOperations | undefined,
 ): ConversationWorkbenchContext {
   const title = conversation.customer?.name || conversation.title || "未命名客户";
-  const personal = normalizeChannel(conversation) === "personal_wechat";
   return {
     customer: {
       name: title,
-      avatar: { fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
+      avatar: { imageUrl: conversation.customer?.avatarUrl || undefined, fallback: title.slice(0, 1) || "客", alt: `${title}头像` },
       wechatId: conversation.customer?.wechatId || conversation.customerId,
       source: conversation.customer?.source || channelLabel(conversation),
-      relationLabel: personal ? "个人微信" : "企业微信",
-      relationTone: personal ? "success" : "brand",
+      relationLabel: "企业微信",
+      relationTone: "brand",
     },
     tags: conversation.customer?.tags || [],
     notes: conversation.customer?.notes || undefined,
@@ -272,17 +342,59 @@ export function toWorkbenchContext(
 
 export function channelLabel(conversation: Conversation) {
   const channel = normalizeChannel(conversation);
-  if (channel === "personal_wechat") return "个人微信";
   if (channel === "work_wechat") return "企业微信";
   return conversation.channel || "微信";
 }
 
+function formatAttachmentSize(sizeBytes?: number) {
+  const bytes = Number(sizeBytes || 0);
+  if (!bytes) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function normalizeChannel(conversation: Conversation) {
-  if (conversation.channel === "personal_wechat" || conversation.customer?.source === "personal_wechat") {
-    return "personal_wechat";
-  }
   if (["work_wechat", "wechat_work", "wecom", "wechat_kf"].includes(conversation.channel)) return "work_wechat";
   return conversation.channel || "wechat";
+}
+
+function conversationIdentityHref(path: string, conversation: Conversation) {
+  const params = new URLSearchParams();
+  params.set("wechatAccountId", conversation.wechatAccountId);
+  params.set("conversationId", conversation.id);
+  params.set("customerId", conversation.customerId);
+  return `${path}?${params.toString()}`;
+}
+
+function aiSuggestionReadiness(status?: AiProviderStatus | null, error?: string) {
+  if (error) {
+    return {
+      tabLabel: "规则建议",
+      title: "模型状态未知，当前只作为规则建议",
+      readyLabel: "模型状态读取失败",
+      idleLabel: "模型状态读取失败",
+      detail: `AI 状态读取失败：${error}`,
+    };
+  }
+  const configured = status?.providers.filter((provider) => provider.configured) || [];
+  if (status?.enabled && configured.length) {
+    const primary = configured.find((provider) => provider.isPrimary) || configured[0];
+    return {
+      tabLabel: "AI/规则建议",
+      title: "模型配置可用，发送前仍需人工确认",
+      readyLabel: `${primary.name} ${primary.model || "模型"} 可用`,
+      idleLabel: "模型配置可用",
+      detail: `AI 引擎已配置 ${configured.length}/${status.providers.length} 个供应商；当前建议仍需人工核对`,
+    };
+  }
+  const issue = status?.providers.flatMap((provider) => provider.issues).find(Boolean);
+  return {
+    tabLabel: "规则建议",
+    title: "模型未接通，当前使用规则建议",
+    readyLabel: "规则建议，模型未接通",
+    idleLabel: "模型未接通",
+    detail: issue ? `AI 供应商未就绪：${issue}` : "AI 供应商未配置；可在大模型中心完成配置",
+  };
 }
 
 export function formatDateTime(value: string) {
@@ -297,7 +409,12 @@ export function formatDateTime(value: string) {
   });
 }
 
-function toWorkbenchMessage(item: ConversationTimelineItem, customerName: string): ConversationWorkbenchMessage {
+function toWorkbenchMessage(
+  item: ConversationTimelineItem,
+  customerName: string,
+  customerAvatarUrl?: string | null,
+  attachmentIdentity: IdentityExpectation = {},
+): ConversationWorkbenchMessage {
   const failed = ["failed", "blocked", "uncertain"].includes(item.status);
   const delivered = item.status === "sent" || Boolean(item.readAt);
   return {
@@ -305,6 +422,7 @@ function toWorkbenchMessage(item: ConversationTimelineItem, customerName: string
     direction: item.direction,
     senderName: item.direction === "inbound" ? customerName : "客服工作台",
     avatar: {
+      imageUrl: item.direction === "inbound" ? customerAvatarUrl || undefined : undefined,
       fallback: item.direction === "inbound" ? customerName.slice(0, 1) || "客" : "服",
       alt: item.direction === "inbound" ? "客户头像" : "客服头像",
     },
@@ -312,12 +430,17 @@ function toWorkbenchMessage(item: ConversationTimelineItem, customerName: string
     createdAtLabel: formatDateTime(item.createdAt),
     statusLabel: item.direction === "outbound" ? sendStatusLabel(item.status) : item.readAt ? "已读" : "未读",
     statusTone: failed ? "danger" : delivered ? "success" : "neutral",
-    attachments: item.attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      kind: attachment.kind,
-      detail: attachment.mimeType || attachment.status,
-    })),
+    attachments: item.attachments.map((attachment) => {
+      const assetUrl = localAssetByIdUrl(attachment.assetId, attachmentIdentity);
+      return {
+        id: attachment.id,
+        name: attachment.name,
+        kind: attachment.kind,
+        detail: attachment.mimeType || attachment.status,
+        href: assetUrl || undefined,
+        previewUrl: attachment.kind === "image" && assetUrl ? assetUrl : undefined,
+      };
+    }),
   };
 }
 

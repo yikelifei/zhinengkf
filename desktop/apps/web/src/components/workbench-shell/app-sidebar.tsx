@@ -104,6 +104,7 @@ export function AppSidebar({
         {onCollapsedChange ? (
           <button
             type="button"
+            data-action-id="workbench-sidebar-collapse-toggle"
             className={styles.collapseButton}
             aria-label={collapsed ? "展开导航栏" : "收起导航栏"}
             aria-controls="workbench-desktop-navigation"
@@ -142,6 +143,7 @@ export function AppSidebar({
         })}
         <button
           type="button"
+          data-action-id="workbench-mobile-navigation-toggle"
           ref={mobileTriggerRef}
           className={mobileNavigationOpen ? styles.mobileNavActive : undefined}
           aria-expanded={mobileNavigationOpen}
@@ -157,6 +159,7 @@ export function AppSidebar({
         <div className={styles.mobileDrawerLayer}>
           <button
             type="button"
+            data-action-id="workbench-mobile-navigation-dismiss-backdrop"
             className={styles.mobileDrawerBackdrop}
             aria-label="关闭全部功能"
             onClick={() => {
@@ -179,6 +182,7 @@ export function AppSidebar({
               </div>
               <button
                 type="button"
+                data-action-id="workbench-mobile-navigation-close"
                 aria-label="关闭全部功能"
                 onClick={() => {
                   setMobileNavigationOpen(false);

@@ -32,6 +32,7 @@ export class TrainingController {
       name?: string;
       source?: string;
       channel?: "wechat" | "xiaohongshu" | "douyin" | "manual";
+      reviewMode?: "required" | "score_based";
       agentId?: string;
       customerId?: string;
       conversationId?: string;
@@ -67,6 +68,17 @@ export class TrainingController {
     });
   }
 
+  @Get("samples/:id")
+  getSample(
+    @Param("id") id: string,
+    @Query("agentId") agentId?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.training.getSample(id, { agentId, wechatAccountId, conversationId, customerId });
+  }
+
   @Get("overview")
   getOverview(
     @Query("agentId") agentId?: string,
@@ -84,6 +96,139 @@ export class TrainingController {
     });
   }
 
+  @Get("knowledge")
+  listKnowledgeEntries(
+    @Query("agentId") agentId?: string,
+    @Query("includeReview") includeReview?: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.training.listKnowledgeEntries({
+      agentId,
+      includeReview: includeReview === "1" || includeReview === "true",
+      wechatAccountId,
+      conversationId,
+      customerId,
+    });
+  }
+
+  @Get("conversation-learning")
+  getConversationLearning(
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.training.getConversationLearning({
+      wechatAccountId,
+      conversationId,
+      customerId,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Post("conversation-learning/:conversationId/outcome")
+  @RequireOperatorCapability("manage_training")
+  confirmConversationOutcome(
+    @Param("conversationId") conversationId: string,
+    @Body()
+    payload: {
+      operationKey: string;
+      outcome: "won" | "lost" | "ongoing";
+      reasonCode?: string;
+      note?: string;
+      reviewer?: string;
+      wechatAccountId?: string;
+      customerId?: string;
+      expectedWechatAccountId?: string;
+      expectedConversationId?: string;
+      expectedCustomerId?: string;
+    },
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || ({} as any);
+    return this.training.confirmConversationOutcome(conversationId, { ...trustedPayload, reviewer: principal.id });
+  }
+
+  @Post("rag/preview")
+  previewRag(
+    @Body()
+    payload: {
+      query: string;
+      agentId?: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+    },
+  ) {
+    return this.training.previewRag(payload || { query: "" });
+  }
+
+  @Get("knowledge/import-fields")
+  getKnowledgeImportFields() {
+    return this.training.getKnowledgeImportFields();
+  }
+
+  @Get("knowledge/import-template")
+  getKnowledgeImportTemplate() {
+    return this.training.getKnowledgeImportTemplate();
+  }
+
+  @Post("knowledge/import-preview")
+  previewKnowledgeImport(
+    @Body()
+    payload: {
+      operationKey?: string;
+      source?: string;
+      text: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+    },
+  ) {
+    return this.training.previewKnowledgeImport(payload || { text: "" });
+  }
+
+  @Post("knowledge/import")
+  @RequireOperatorCapability("manage_training")
+  importKnowledge(
+    @Body()
+    payload: {
+      operationKey?: string;
+      source?: string;
+      text: string;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+    },
+  ) {
+    return this.training.importKnowledge(payload);
+  }
+
+  @Post("knowledge/:id/review")
+  @RequireOperatorCapability("manage_training")
+  reviewKnowledgeEntry(
+    @Param("id") id: string,
+    @Body()
+    payload: {
+      status: "ready" | "review" | "rejected";
+      operationKey?: string;
+      reviewer?: string;
+      note?: string;
+      agentId?: string;
+      agentKey?: string;
+      title?: string;
+      content?: string;
+      tags?: string[] | string;
+      qualityScore?: number;
+    } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    const { reviewer: _untrustedReviewer, ...trustedPayload } = payload || {};
+    return this.training.reviewKnowledgeEntry(id, { ...trustedPayload, reviewer: principal.id });
+  }
+
   @Post("samples/:id/review")
   @RequireOperatorCapability("manage_training")
   reviewSample(
@@ -91,6 +236,7 @@ export class TrainingController {
     @Body()
     payload: {
       status: "ready" | "review" | "rejected";
+      operationKey?: string;
       reviewer?: string;
       note?: string;
       agentId?: string;
@@ -114,6 +260,7 @@ export class TrainingController {
     payload: {
       sampleIds?: string[];
       status?: "ready" | "review" | "rejected";
+      operationKey?: string;
       reviewer?: string;
       note?: string;
       expectedBySampleId?: Record<string, ExpectedIdentityPayload>;

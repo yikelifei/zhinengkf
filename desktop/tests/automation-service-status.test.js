@@ -10,10 +10,16 @@ require("ts-node").register({
 });
 
 const { AutomationService } = require("../apps/api/src/automation/automation.service");
+const { appConfig } = require("../apps/api/src/shared/app-config");
 
 function createService(overrides = {}) {
   const designJobs = {
     pollActiveResults: async () => ({ scanned: 0 }),
+    runCustomerToolAutomation: async () => ({
+      zhenxiCopy: { completed: [], skipped: [], failed: [], outcomeUnknown: [] },
+      autoSubmit: { submitted: [], skipped: [], failed: [] },
+      imageSend: { queued: [], skipped: [], failed: [] },
+    }),
     runLowValueAutomation: async () => ({ autoSubmit: { submitted: [] } }),
     scanTimeouts: async () => ({ scanned: 0 }),
     ...(overrides.designJobs || {}),
@@ -42,7 +48,21 @@ function createService(overrides = {}) {
     health: async () => ({ ok: true }),
     ...(overrides.designPlatform || {}),
   };
-  return new AutomationService(designJobs, orders, wechatDispatch, overrides.store, catalog, designPlatform);
+  return new AutomationService(
+    designJobs,
+    orders,
+    wechatDispatch,
+    overrides.store,
+    catalog,
+    designPlatform,
+    overrides.wechatWork,
+  );
+}
+
+function isProcessLowValueSendQueueEnabled() {
+  const raw = process.env.LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE;
+  if (raw === undefined || raw === "") return true;
+  return !["0", "false", "no", "off"].includes(String(raw).toLowerCase());
 }
 
 test("automation status exposes next scheduled run while active", () => {
@@ -83,7 +103,10 @@ test("automation run records last run and clears running marker", async () => {
   assert.equal(typeof run.steps[0].durationMs, "number");
 });
 
-test("manual automation run forwards selected conversation identity to each side-effect step", async () => {
+test("manual automation run forwards selected conversation identity to each side-effect step", async (t) => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
   const calls = [];
   const selectedIdentity = {
     wechatAccountId: "wechat_demo_1",
@@ -96,9 +119,17 @@ test("manual automation run forwards selected conversation identity to each side
         calls.push(["pollActiveResults", filter]);
         return { scanned: 0 };
       },
-      runLowValueAutomation: async (filter) => {
-        calls.push(["runLowValueAutomation", filter]);
+      runLowValueAutomation: async (filter, options) => {
+        calls.push(["runLowValueAutomation", filter, options]);
         return { autoSubmit: { submitted: [] } };
+      },
+      runCustomerToolAutomation: async (filter) => {
+        calls.push(["runCustomerToolAutomation", filter]);
+        return {
+          zhenxiCopy: { completed: [], skipped: [], failed: [], outcomeUnknown: [] },
+          autoSubmit: { submitted: [], skipped: [], failed: [] },
+          imageSend: { queued: [], skipped: [], failed: [] },
+        };
       },
       scanTimeouts: async (filter) => {
         calls.push(["scanTimeouts", filter]);
@@ -138,19 +169,124 @@ test("manual automation run forwards selected conversation identity to each side
     assert.equal(payload.conversationId, selectedIdentity.conversationId, `${step} should receive conversation`);
     assert.equal(payload.customerId, selectedIdentity.customerId, `${step} should receive customer`);
   }
+  const expectedCallOrder = [
+    "scanTimeouts",
+    "processSafeSendQueue",
+    "runCustomerToolAutomation",
+    ...(isProcessLowValueSendQueueEnabled() ? ["processSafeSendQueue"] : []),
+    "pollActiveResults",
+    "runLowValueAutomation",
+    "scanLowValueAutoOrderDrafts",
+    "scanLowValueOrderConfirmations",
+    "scanLowValueOrderFollowups",
+    "scanSendOperations",
+  ];
+  if (isProcessLowValueSendQueueEnabled()) expectedCallOrder.push("processSafeSendQueue");
   assert.deepEqual(
     calls.map(([step]) => step),
-    [
-      "scanTimeouts",
-      "pollActiveResults",
-      "runLowValueAutomation",
-      "scanLowValueAutoOrderDrafts",
-      "scanLowValueOrderConfirmations",
-      "scanLowValueOrderFollowups",
-      "scanSendOperations",
-      "processSafeSendQueue",
-    ],
+    expectedCallOrder,
   );
+  assert.deepEqual(calls.find(([step]) => step === "runLowValueAutomation")[2], {
+    includeCustomerTools: false,
+  });
+  if (isProcessLowValueSendQueueEnabled()) {
+    assert.equal(calls[1][1].inboundReplyOnly, true);
+    assert.equal(calls[1][1].automationOnly, true);
+    assert.equal(calls[3][1].customerToolOnly, true);
+    assert.equal(calls[3][1].automationOnly, true);
+    assert.equal(calls.at(-1)[1].inboundReplyOnly, undefined);
+  }
+});
+
+test("automation yields to HTTP and timer work between synchronous persistence-heavy steps", async () => {
+  let timerObserved = false;
+  const service = createService({
+    designJobs: {
+      scanTimeouts: async () => ({ scanned: 0 }),
+      pollActiveResults: async () => {
+        assert.equal(timerObserved, true);
+        return { scanned: 0 };
+      },
+    },
+  });
+  setImmediate(() => {
+    timerObserved = true;
+  });
+
+  await service.runOnce("manual");
+  assert.equal(timerObserved, true);
+});
+
+test("interval automation keeps inbound replies frequent while throttling heavy full sweeps", async () => {
+  let fullSweepCalls = 0;
+  let inboundQueueCalls = 0;
+  const service = createService({
+    designJobs: {
+      runLowValueAutomation: async () => {
+        fullSweepCalls += 1;
+        return { autoSubmit: { submitted: [] } };
+      },
+    },
+    wechatDispatch: {
+      processSafeSendQueue: async (params) => {
+        if (params.inboundReplyOnly) inboundQueueCalls += 1;
+        return { processed: [] };
+      },
+    },
+  });
+
+  const first = await service.runOnce("interval");
+  const second = await service.runOnce("interval");
+
+  assert.equal(first.results.cadence.fullSweep, true);
+  assert.equal(second.results.cadence.fullSweep, false);
+  assert.equal(second.results.cadence.reason, "interval_quick_lane");
+  assert.equal(fullSweepCalls, 1);
+  assert.equal(inboundQueueCalls, 2);
+});
+
+test("automation run polls official WeCom inbound sync before processing the send queue", async () => {
+  const previousEnabled = appConfig.wechatWorkAutoSyncEnabled;
+  const previousLimit = appConfig.wechatWorkAutoSyncLimit;
+  const previousAccountsPerRun = appConfig.wechatWorkAutoSyncAccountsPerRun;
+  const previousOpenKfid = appConfig.wechatWorkOpenKfid;
+  const calls = [];
+  appConfig.wechatWorkAutoSyncEnabled = true;
+  appConfig.wechatWorkAutoSyncLimit = 37;
+  appConfig.wechatWorkAutoSyncAccountsPerRun = 1;
+  appConfig.wechatWorkOpenKfid = "wk_employee_test";
+  try {
+    const service = createService({
+      wechatWork: {
+        syncAllCustomerServiceAccounts: async (payload) => {
+          calls.push(["syncWechatWorkInbound", payload]);
+          return { ok: true, accountCount: 2, synchronizedAccountCount: 2, receivedCount: 1, processedCount: 1 };
+        },
+      },
+      wechatDispatch: {
+        processSafeSendQueue: async () => {
+          calls.push(["processSafeSendQueue"]);
+          return { processed: [] };
+        },
+      },
+    });
+
+    const run = await service.runOnce("interval");
+
+    assert.deepEqual(calls[0], [
+      "syncWechatWorkInbound",
+      { limit: 37, maxAccounts: 1 },
+    ]);
+    assert.equal(run.results.syncWechatWorkInbound.processedCount, 1);
+    if (isProcessLowValueSendQueueEnabled()) {
+      assert.equal(calls.at(-1)[0], "processSafeSendQueue");
+    }
+  } finally {
+    appConfig.wechatWorkAutoSyncEnabled = previousEnabled;
+    appConfig.wechatWorkAutoSyncLimit = previousLimit;
+    appConfig.wechatWorkAutoSyncAccountsPerRun = previousAccountsPerRun;
+    appConfig.wechatWorkOpenKfid = previousOpenKfid;
+  }
 });
 
 test("automation run records identity audit for low value side effects", async () => {
@@ -184,18 +320,20 @@ test("automation run records identity audit for low value side effects", async (
           ],
         },
       }),
-      processSafeSendQueue: async () => ({
-        processed: [
-          {
-            taskId: "send_1",
-            sendTask: {
-              wechatAccountId: "wechat_demo_1",
-              conversationId: "conversation_demo_1",
-              customerId: "customer_demo_1",
-            },
+      processSafeSendQueue: async (params) => (params.inboundReplyOnly || params.customerToolOnly)
+        ? { processed: [] }
+        : {
+            processed: [
+              {
+                taskId: "send_1",
+                sendTask: {
+                  wechatAccountId: "wechat_demo_1",
+                  conversationId: "conversation_demo_1",
+                  customerId: "customer_demo_1",
+                },
+              },
+            ],
           },
-        ],
-      }),
     },
   });
 
@@ -206,7 +344,11 @@ test("automation run records identity audit for low value side effects", async (
   assert.equal(run.identityAudit.identities[0].wechatAccountId, "wechat_demo_1");
   assert.equal(run.identityAudit.identities[0].conversationId, "conversation_demo_1");
   assert.equal(run.identityAudit.identities[0].customerId, "customer_demo_1");
-  assert.deepEqual(run.identityAudit.identities[0].steps, ["lowValueAutomation", "processLowValueSendQueue", "scanSendOperations"]);
+  const expectedIdentitySteps = ["lowValueAutomation", "scanSendOperations"];
+  if (isProcessLowValueSendQueueEnabled()) {
+    expectedIdentitySteps.splice(1, 0, "processLowValueSendQueue");
+  }
+  assert.deepEqual(run.identityAudit.identities[0].steps, expectedIdentitySteps);
   assert.deepEqual(run.identityAudit.warnings, []);
 });
 
@@ -398,18 +540,21 @@ test("automation run summarizes low value stage progress and next action", async
         bridgeDispatchExpired: 0,
         alerted: 0,
       }),
-      processSafeSendQueue: async () => ({
-        processed: [{ taskId: "send_image_1", sendTask: { wechatAccountId: "wechat_1", conversationId: "conversation_1" } }],
-        blocked: [{ taskId: "send_blocked_1", reason: "window_guard_failed" }],
-        failed: [],
-      }),
+      processSafeSendQueue: async (params) => (params.inboundReplyOnly || params.customerToolOnly)
+        ? { processed: [], blocked: [], failed: [] }
+        : {
+            processed: [{ taskId: "send_image_1", sendTask: { wechatAccountId: "wechat_1", conversationId: "conversation_1" } }],
+            blocked: [{ taskId: "send_blocked_1", reason: "window_guard_failed" }],
+            failed: [],
+          },
     },
   });
 
   const run = await service.runOnce("manual");
 
-  assert.equal(run.stageSummary.progressed, 9);
-  assert.equal(run.stageSummary.blocked, 4);
+  const lowValueSendQueueEnabled = isProcessLowValueSendQueueEnabled();
+  assert.equal(run.stageSummary.progressed, lowValueSendQueueEnabled ? 9 : 8);
+  assert.equal(run.stageSummary.blocked, lowValueSendQueueEnabled ? 4 : 3);
   assert.equal(run.stageSummary.failed, 2);
   assert.equal(run.stageSummary.nextAction, "先处理失败步骤，再重新跑一轮低价值自动化。");
   assert.deepEqual(
@@ -421,7 +566,7 @@ test("automation run summarizes low value stage progress and next action", async
       ["order", 1, 0, 0, "ok"],
       ["orderConfirmation", 1, 0, 0, "ok"],
       ["orderFollowup", 0, 1, 0, "warning"],
-      ["safeSend", 2, 2, 1, "error"],
+      ["safeSend", lowValueSendQueueEnabled ? 2 : 1, lowValueSendQueueEnabled ? 2 : 1, 1, "error"],
       ["timeout", 2, 0, 1, "error"],
     ],
   );
@@ -458,8 +603,9 @@ test("automation run next action prioritizes manual send attention", async () =>
   assert.equal(run.skipSummary.reasons[0].reason, "manual_send_attention_required");
   assert.equal(
     run.stageSummary.nextAction,
-    "先打开订单和发送中心，核对失败/拦截原因；确认客户、微信窗口和付款状态后，由人工重排或继续人工跟进。",
+    "先打开订单和发送中心，核对失败/拦截原因；确认客户身份、企业微信发送任务和付款状态后，由人工重排或继续人工跟进。",
   );
+  assert.doesNotMatch(run.stageSummary.nextAction, /微信窗口|个人微信|微信客户端/);
 });
 
 test("automation skipped run includes stage summary for blocked readiness", async () => {
@@ -601,9 +747,14 @@ test("automation run clears running marker when history persistence fails", asyn
   assert.equal(run.errors.some((error) => error.step === "persistAutomationRun"), true);
 });
 
-test("automation run is skipped before side effects when readiness has blockers", async () => {
+test("catalog readiness blockers still allow isolated inbound replies and customer tools", async (t) => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
   let lowValueRan = false;
+  let customerToolRan = false;
   let timeoutScanRan = false;
+  const sendQueueCalls = [];
   const service = createService({
     designJobs: {
       scanTimeouts: async () => {
@@ -614,6 +765,14 @@ test("automation run is skipped before side effects when readiness has blockers"
         lowValueRan = true;
         return { autoSubmit: { submitted: [] } };
       },
+      runCustomerToolAutomation: async () => {
+        customerToolRan = true;
+        return {
+          zhenxiCopy: { completed: [], skipped: [], failed: [], outcomeUnknown: [] },
+          autoSubmit: { submitted: [], skipped: [], failed: [] },
+          imageSend: { queued: [], skipped: [], failed: [] },
+        };
+      },
     },
     catalog: {
       auditSkus: async () => ({
@@ -622,6 +781,12 @@ test("automation run is skipped before side effects when readiness has blockers"
         catalogStructureIssueCount: 1,
         blockingRepairCount: 2,
       }),
+    },
+    wechatDispatch: {
+      processSafeSendQueue: async (params) => {
+        sendQueueCalls.push(params);
+        return { processed: [] };
+      },
     },
   });
 
@@ -632,16 +797,52 @@ test("automation run is skipped before side effects when readiness has blockers"
   assert.equal(run.reason, "automation_readiness_blocked");
   assert.equal(run.skipSummary.total, 1);
   assert.equal(run.skipSummary.reasons[0].reason, "automation_readiness_blocked");
-  assert.equal(run.steps.length, 1);
+  assert.equal(run.steps.length, isProcessLowValueSendQueueEnabled() ? 4 : 3);
   assert.equal(run.steps[0].step, "scanTimeouts");
   assert.equal(run.steps[0].status, "completed");
+  assert.equal(run.steps[1].step, "processInboundReplyQueue");
+  assert.equal(run.steps[1].status, "completed");
+  assert.equal(sendQueueCalls.length, isProcessLowValueSendQueueEnabled() ? 2 : 1);
+  assert.equal(sendQueueCalls[0].automationOnly, true);
+  assert.equal(sendQueueCalls[0].inboundReplyOnly, true);
   assert.equal(timeoutScanRan, true);
+  assert.equal(customerToolRan, true);
   assert.equal(lowValueRan, false);
   assert.equal(run.results.scanTimeouts.timedOut, 1);
   assert.equal(run.results.readiness.ready, false);
   assert.equal(run.results.readiness.blockers.some((item) => item.key === "sku_catalog"), true);
   assert.equal(status.runCount, 0);
   assert.equal(status.lastRun, run);
+});
+
+test("customer tool lane fails closed while the design platform is unhealthy", async (t) => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
+  let customerToolRan = false;
+  const service = createService({
+    designJobs: {
+      runCustomerToolAutomation: async () => {
+        customerToolRan = true;
+        return {};
+      },
+    },
+    designPlatform: {
+      health: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+    },
+  });
+
+  const first = await service.runOnce("interval");
+  const second = await service.runOnce("interval");
+
+  assert.equal(customerToolRan, false);
+  assert.equal(first.results.customerToolReadiness.ready, false);
+  assert.equal(first.results.customerToolReadiness.designPlatformHealthy, false);
+  assert.equal(first.results.customerToolReadiness.errorMessage, "connect ECONNREFUSED");
+  assert.equal(second.results.cadence.reason, "interval_quick_lane");
+  assert.equal(second.steps.some((step) => step.step === "customerToolAutomation"), false);
 });
 
 test("automation step timing records failures without stopping later steps", async () => {
@@ -693,11 +894,41 @@ test("automation readiness allows running with manual lock warnings", async () =
   assert.equal(readiness.summary, "可以运行，但建议先处理提醒项。");
   assert.deepEqual(
     readiness.checks.map((item) => item.label),
-    ["低价值自动化开关", "商品库可自动搭配", "设计平台在线", "人工接管隔离", "安全发送队列"],
+    ["低价值自动化开关", "商品库可自动搭配", "设计平台在线", "臻希 AI 客户设计", "人工接管隔离", "安全发送队列"],
   );
   assert.equal(readiness.checks.find((item) => item.key === "manual_locks").detail, "1 个会话人工接管中，自动化会跳过它们。");
   assert.equal(readiness.checks.find((item) => item.key === "manual_locks").action, "人工处理完成后再解除对应会话锁。");
-  assert.equal(readiness.checks.find((item) => item.key === "send_queue").detail, "待处理发送任务 1 个，每轮最多处理 10 个。");
+  assert.equal(
+    readiness.checks.find((item) => item.key === "send_queue").detail,
+    `待处理发送任务 1 个，每轮最多处理 ${appConfig.lowValueAutomationSendQueueLimit} 个。`,
+  );
+  assert.equal(
+    readiness.checks.find((item) => item.key === "send_queue").action,
+    undefined,
+  );
+});
+
+test("automation operator guidance stays Enterprise WeChat oriented", async () => {
+  const service = createService({
+    store: {
+      listAutomationRuns: () => [],
+      listSendTasks: () => Array.from({ length: 40 }, (_, index) => ({ id: `send_${index}`, status: "queued" })),
+      listConversations: () => [],
+      listQuoteDrafts: () => [],
+      listOrderDrafts: () => [],
+    },
+  });
+
+  const run = await service.runOnce("manual");
+  const readiness = await service.readiness();
+  const sourceText = [
+    run.stageSummary.nextAction,
+    ...run.stageSummary.stages.flatMap((stage) => [stage.detail, stage.action]),
+    ...readiness.checks.flatMap((check) => [check.detail, check.action || ""]),
+  ].join("\n");
+
+  assert.match(sourceText, /企业微信发送/);
+  assert.doesNotMatch(sourceText, /微信窗口|个人微信|微信客户端/);
 });
 
 test("automation readiness blocks when sku catalog cannot support automation", async () => {

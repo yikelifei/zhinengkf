@@ -26,10 +26,11 @@ const {
   buildDesktopApiUpstreamHeaders,
   canonicalDesktopProxyPath,
   evaluateDesktopSessionProof,
+  evaluateLocalBrowserApiAccess,
   isForbiddenWebProxyIngress,
   requiresDesktopSessionProof,
 } = require("../apps/web/src/lib/desktop-session-proof");
-const { PackagedServiceManager, buildApiServiceEnvironment } = require("../apps/electron/packaged-runtime");
+const { PackagedServiceManager, buildApiServiceEnvironment, buildWebServiceEnvironment } = require("../apps/electron/packaged-runtime");
 const {
   READINESS_CHALLENGE_HEADER,
   createApiReadinessProof,
@@ -121,6 +122,9 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
   assert.match(proofHelper, /headers\.delete\(internalApiTokenHeader\);\s*headers\.delete\(READINESS_CHALLENGE_HEADER\);\s*headers\.set\(internalApiTokenHeader, internalApiToken\);/);
   assert.match(route, /http:\/\/127\.0\.0\.1:\$\{apiPort\}/);
   assert.match(route, /export const POST = proxyDesktopApi/);
+  assert.match(route, /advertisedBodyExceedsLimit\(request\.headers\.get\("content-length"\)\)/);
+  assert.match(route, /body\.byteLength > MAX_DESKTOP_API_JSON_BODY_BYTES/);
+  assert.match(route, /jsonError\(413, "desktop_api_body_too_large"/);
   assert.doesNotMatch(route, /NEXT_PUBLIC|console\.(?:log|error)|token\s*:/);
   assert.doesNotMatch(nextConfig, /rewrites|destination:\s*`http:\/\/127\.0\.0\.1/);
   assert.match(apiClient, /const API_BASE = "\/api";/);
@@ -133,6 +137,21 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
     assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /INTERNAL_API_TOKEN|x-internal-api-token/i, filePath);
     assert.doesNotMatch(fs.readFileSync(filePath, "utf8"), /desktop-session-proof/, filePath);
   }
+});
+
+test("desktop API and proxy share a base64-aware image request limit", () => {
+  const limits = require("../packages/runtime/desktop-request-limits");
+  const apiMain = read("apps/api/src/main.ts");
+  const route = read("apps/web/src/app/api/[...path]/route.ts");
+
+  assert.equal(limits.MAX_STORED_IMAGE_BYTES, 20 * 1024 * 1024);
+  assert.equal(limits.MAX_BASE64_IMAGE_BYTES, 4 * Math.ceil(limits.MAX_STORED_IMAGE_BYTES / 3));
+  assert.equal(
+    limits.MAX_DESKTOP_API_JSON_BODY_BYTES,
+    limits.MAX_BASE64_IMAGE_BYTES + limits.DESKTOP_API_JSON_OVERHEAD_BYTES,
+  );
+  assert.match(apiMain, /new FastifyAdapter\(\{ bodyLimit: MAX_DESKTOP_API_JSON_BODY_BYTES \}\)/);
+  assert.match(route, /packages\/runtime\/desktop-request-limits/);
 });
 
 test("desktop proxy requires a verified Electron proof for every method and strips ambient authority upstream", () => {
@@ -150,16 +169,53 @@ test("desktop proxy requires a verified Electron proof for every method and stri
     evaluateDesktopSessionProof(`${DESKTOP_SESSION_COOKIE}=${proof}; ${DESKTOP_SESSION_COOKIE}=${proof}`, proof).allowed,
     false,
   );
+  assert.deepEqual(
+    evaluateLocalBrowserApiAccess("http://127.0.0.1:3100/api/health", new Headers({ host: "127.0.0.1:3100" }), {
+      allowLocalBrowserWebApi: "1",
+      nodeEnv: "production",
+    }),
+    { allowed: true, reason: "local_browser_api_allowed" },
+  );
+  assert.deepEqual(
+    evaluateLocalBrowserApiAccess("http://localhost:3100/api/health", new Headers({ host: "localhost:3100" }), {
+      nodeEnv: "development",
+    }),
+    { allowed: true, reason: "local_browser_api_allowed" },
+  );
+  assert.equal(
+    evaluateLocalBrowserApiAccess("http://127.0.0.1:3100/api/health", new Headers({ host: "127.0.0.1:3100" }), {
+      allowLocalBrowserWebApi: "0",
+      nodeEnv: "production",
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    evaluateLocalBrowserApiAccess("http://127.0.0.1:3100/api/health", new Headers({ host: "evil.example" }), {
+      allowLocalBrowserWebApi: "1",
+      nodeEnv: "production",
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    evaluateLocalBrowserApiAccess(
+      "http://127.0.0.1:3100/api/health",
+      new Headers({ host: "127.0.0.1:3100", origin: "https://evil.example" }),
+      { allowLocalBrowserWebApi: "1", nodeEnv: "production" },
+    ).allowed,
+    false,
+  );
 
   const upstream = buildDesktopApiUpstreamHeaders(
     new Headers({
       cookie: `${DESKTOP_SESSION_COOKIE}=${proof}; ordinary=also-removed`,
+      expect: "100-continue",
       "x-internal-api-token": "attacker",
       "x-request-id": "request-1",
     }),
     "a".repeat(64),
   );
   assert.equal(upstream.get("cookie"), null);
+  assert.equal(upstream.get("expect"), null);
   assert.equal(upstream.get("x-internal-api-token"), "a".repeat(64));
   assert.equal(upstream.get(READINESS_CHALLENGE_HEADER), null);
   assert.equal(upstream.get("x-request-id"), "request-1");
@@ -219,6 +275,16 @@ test("packaged runtime keeps desktop proof independent and out of the API enviro
     token,
   });
   assert.equal(Object.keys(env).some((key) => key.toUpperCase() === "DESKTOP_WEB_SESSION_PROOF"), false);
+  assert.equal(Object.keys(env).some((key) => key.toUpperCase() === "ALLOW_LOCAL_BROWSER_WEB_API"), false);
+  const webEnv = buildWebServiceEnvironment({
+    resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
+    appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
+    userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
+    baseEnv: { PATH: "safe", ALLOW_LOCAL_BROWSER_WEB_API: "1" },
+    token,
+    webSessionProof: "b".repeat(64),
+  });
+  assert.equal(webEnv.ALLOW_LOCAL_BROWSER_WEB_API, "0");
   const manager = new PackagedServiceManager({
     resourcesPath: "resources",
     appPath: "app.asar",
@@ -244,19 +310,28 @@ test("stable and port-stack launchers scope tokens and filter wrapper files", ()
   const starter = read("tools/ports-stack-starter.js");
   const supervisor = read("tools/desktop-service-supervisor.js");
   const dev = read("tools/start-dev-ports.js");
+  const serviceEnvironment = read("packages/runtime/service-environment.js");
   assert.match(stable, /const internalApiToken = ensureInternalApiToken\(\)/);
   assert.match(stable, /renderWindowsWrapperEnvironment\(spec\.name, serviceEnv/);
   assert.match(stable, /env: serviceEnv\(spec\.port \|\| ports\.api, spec\.name, spec\.env\)/);
   assert.match(stable, /createDesktopWebSession\(runtimeDir/);
   assert.match(stable, /desktopWebSessionServiceEnv\(internalEnv, serviceName, desktopWebSession\.proof\)/);
+  assert.match(stable, /ALLOW_LOCAL_BROWSER_WEB_API: process\.env\.ALLOW_LOCAL_BROWSER_WEB_API === "0" \? "0" : "1"/);
   assert.match(stableElectron, /readDesktopWebSessionProof\(sessionFile\)/);
   assert.match(stableElectron, /env\[DESKTOP_WEB_SESSION_PROOF_ENV\] = proof/);
   assert.match(stableElectron, /--user-data-dir=\$\{userDataDir\}/);
   assert.match(starter, /INTERNAL_API_TOKEN: internalApiToken/);
   assert.match(supervisor, /process\.env\.INTERNAL_API_TOKEN = ensureInternalApiToken\(\)/);
+  assert.match(dev, /createDesktopWebSession\(runtimeDir/);
+  assert.match(dev, /desktopWebSessionServiceEnv\(internalEnv, service\?\.name, desktopWebSession\.proof\)/);
+  assert.match(dev, /ALLOW_LOCAL_BROWSER_WEB_API: process\.env\.ALLOW_LOCAL_BROWSER_WEB_API === "0" \? "0" : "1"/);
+  assert.match(dev, /smart_kefu_desktop_session=\$\{proof\}/);
   assert.match(dev, /internalApiServiceEnv\([\s\S]*?service\?\.name, internalApiToken\)/);
   assert.match(dev, /selectServiceEnvironment\(/);
   assert.match(dev, /withoutInternalApiToken\(\{[\s\S]*?FORCE_WEB_CLEAN_BUILD/);
+  assert.match(serviceEnvironment, /const RUNTIME_KEYS = \[[\s\S]*?"ALLOW_LOCAL_BROWSER_WEB_API"/);
+  assert.match(serviceEnvironment, /web: \[\.\.\.RUNTIME_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF"\]/);
+  assert.match(serviceEnvironment, /const WRAPPER_KEYS = new Set\(\[\.\.\.OS_ENV_KEYS, \.\.\.RUNTIME_KEYS,\s+"ALLOW_LOCAL_BROWSER_WEB_API"/);
 
   const wrapperSection = dev.slice(dev.indexOf("function buildWindowsServiceWrapper"), dev.indexOf("function serviceCwd"));
   assert.doesNotMatch(wrapperSection, /INTERNAL_API_TOKEN/);
@@ -267,31 +342,26 @@ test("stable and port-stack launchers scope tokens and filter wrapper files", ()
   assert.doesNotMatch(stableWrapperSection, /INTERNAL_API_TOKEN/);
 });
 
-test("API bootstrap keeps dedicated callbacks public while generic inbound requires a trusted operator", () => {
+test("API bootstrap keeps only dedicated Enterprise WeChat callbacks public while generic inbound requires a trusted operator", () => {
   const main = read("apps/api/src/main.ts");
-  const personal = read("apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller.ts");
+  const appModule = read("apps/api/src/app.module.ts");
   const wechat = read("apps/api/src/wechat/wechat.controller.ts");
+  const wechatWork = read("apps/api/src/wechat-work/wechat-work.controller.ts");
   assert.match(main, /registerLocalOriginPolicy\(app, appConfig\.webPort\)/);
   assert.doesNotMatch(main, /enableCors\(\{\s*origin:\s*true/);
 
-  const personalInbound = methodSection(personal, '@Post("inbound")', "processInbound");
-  assert.doesNotMatch(personalInbound, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
-  const bridgeAck = methodSection(wechat, '@Post("send-tasks/:id/bridge-ack")', "acknowledgeBridgeSend");
-  assert.doesNotMatch(bridgeAck, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/);
-  assert.doesNotMatch(bridgeAck, /WechatBridgeAccessGuard|WechatWindowObserverAccessGuard/);
-  for (const [decorator, method, guard] of [
-    ['@Get("bridge/outbox")', "listBridgeOutbox", "WechatBridgeAccessGuard"],
-    ['@Get("bridge/dispatch")', "listBridgeDispatch", "WechatBridgeAccessGuard"],
-    ['@Get("bridge/status")', "getBridgeStatus", "WechatBridgeAccessGuard"],
-    ['@Post("bridge/inbox/scan")', "scanBridgeInbox", "WechatBridgeAccessGuard"],
-    ['@Get("window-snapshots")', "listWindowSnapshots", "WechatWindowObserverAccessGuard"],
-    ['@Get("window-observer/status")', "getWindowObserverStatus", "WechatWindowObserverAccessGuard"],
-    ['@Post("window-snapshots/inbox/scan")', "scanWindowSnapshotInbox", "WechatWindowObserverAccessGuard"],
+  for (const [decorator, method] of [
+    ['@Get("callback")', "verifyCallback"],
+    ['@Post("callback")', "handleCallback"],
   ]) {
-    const section = methodSection(wechat, decorator, method);
-    assert.match(section, /@RequireOperatorCapability\("view_console"\)/, method);
-    assert.match(section, new RegExp(`@UseGuards\\(${guard}\\)`), method);
+    const section = methodSection(wechatWork, decorator, method);
+    assert.doesNotMatch(section, /RequireOperatorCapability|UseGuards\(OperatorAccessGuard\)/, method);
   }
+  assert.doesNotMatch(appModule, /PersonalWechatRpaController/);
+  assert.doesNotMatch(
+    wechat,
+    /@(?:Get|Post)\("(?:bridge|window-snapshots|window-observer|send-tasks\/:id\/bridge-ack)/,
+  );
   const inbound = methodSection(wechat, '@Post("inbound/messages")', "processInboundMessage");
   assert.match(inbound, /@RequireOperatorCapability\("approve_send"\)/);
   assert.match(inbound, /@UseGuards\(OperatorAccessGuard\)/);

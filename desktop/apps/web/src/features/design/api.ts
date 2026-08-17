@@ -1,7 +1,10 @@
 import {
   getAssets,
+  getSkus,
+  createDesignJob,
   getDesignJobs,
   getDesignPlatformConfig,
+  getDesignPlatformCandidates,
   getDesignPlatformHealth,
   getDesignPlatformReadiness,
   getDesignJobExecutions,
@@ -9,19 +12,26 @@ import {
   loginDesignPlatform,
   pollDesignJob,
   preflightDesignJob,
+  createQuote,
   redeemDesignPlatformActivation,
   repairLocalDesignImage,
   resolveDesignExecutionRefund,
   resolveUnknownDesignExecution,
   runDesignPlatformSmokeTest,
+  selectDesignImage,
   submitDesignJob,
+  recommendBundle,
   updateDesignPlatformConfig,
   uploadAsset,
+  type IdentityFilters,
 } from "../../lib/api";
 
 export {
   getAssets,
+  getSkus,
+  createDesignJob,
   getDesignPlatformConfig,
+  getDesignPlatformCandidates,
   getDesignPlatformHealth,
   getDesignPlatformReadiness,
   getDesignJobExecutions,
@@ -29,18 +39,21 @@ export {
   loginDesignPlatform,
   pollDesignJob,
   preflightDesignJob,
+  createQuote,
   redeemDesignPlatformActivation,
   repairLocalDesignImage,
   resolveDesignExecutionRefund,
   resolveUnknownDesignExecution,
   runDesignPlatformSmokeTest,
+  selectDesignImage,
   submitDesignJob,
+  recommendBundle,
   updateDesignPlatformConfig,
   uploadAsset,
 };
 
-export async function getVerifiedDesignJobs() {
-  const records = await getDesignJobs();
+export async function getVerifiedDesignJobs(filters: IdentityFilters = {}) {
+  const records = await getDesignJobs(filters);
   const embeddedFallback = records.some((record) =>
     record.id.startsWith("demo-design-") && record.requestId.startsWith("demo-request-"),
   );

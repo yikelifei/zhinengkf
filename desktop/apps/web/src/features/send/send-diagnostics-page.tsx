@@ -63,10 +63,10 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
     if (results[0].status === "fulfilled") setTasks(results[0].value); else errors.push(errorMessage(results[0].reason, "发送任务读取失败"));
     if (results[1].status === "fulfilled") setAttempts(results[1].value); else errors.push(errorMessage(results[1].reason, "发送尝试读取失败"));
     if (results[2].status === "fulfilled") setAdapter(results[2].value); else errors.push(errorMessage(results[2].reason, "发送适配器读取失败"));
-    if (results[3].status === "fulfilled") setBridgeStatus(results[3].value); else errors.push(errorMessage(results[3].reason, "桥接状态读取失败"));
-    if (results[4].status === "fulfilled") setBridgeOutbox(results[4].value); else errors.push(errorMessage(results[4].reason, "桥接发件箱读取失败"));
-    if (results[5].status === "fulfilled") setObserver(results[5].value); else errors.push(errorMessage(results[5].reason, "窗口观察器读取失败"));
-    if (results[6].status === "fulfilled") setSnapshots(results[6].value); else errors.push(errorMessage(results[6].reason, "窗口快照读取失败"));
+    if (results[3].status === "fulfilled") setBridgeStatus(results[3].value); else errors.push(errorMessage(results[3].reason, "发送链路状态读取失败"));
+    if (results[4].status === "fulfilled") setBridgeOutbox(results[4].value); else errors.push(errorMessage(results[4].reason, "发送发件箱读取失败"));
+    if (results[5].status === "fulfilled") setObserver(results[5].value); else errors.push(errorMessage(results[5].reason, "身份校验观察器读取失败"));
+    if (results[6].status === "fulfilled") setSnapshots(results[6].value); else errors.push(errorMessage(results[6].reason, "身份校验快照读取失败"));
     setError(errors.join("；"));
     setBusy(false);
   }, [accountFilter, conversationFilter, customerFilter]);
@@ -83,7 +83,7 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
     <SendPageFrame
       id="send-diagnostics-page"
       title="发送运行诊断"
-      description="只查看真实适配器、桥接、窗口和回执证据；运行操作已移到独立页面。"
+      description="只查看真实发送适配器、发送任务、回执和身份校验证据；运行操作已移到独立页面。"
       icon={<Activity size={20} />}
       busy={busy}
       actions={(
@@ -104,14 +104,14 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
       {error ? <SendNotice tone="error" title="部分诊断来源不可用">{error}</SendNotice> : null}
       {uncertainTasks ? (
         <SendNotice tone="warning" title={`${uncertainTasks} 个任务投递状态不确定`}>
-          不确定任务必须先核对桥接回执；队列页和拦截页不会提供自动重试、取消或再次执行。
+          不确定任务必须先核对企业微信发送回执；队列页和拦截页不会提供自动重试、取消或再次执行。
         </SendNotice>
       ) : null}
 
       <dl className={styles.metricGrid} aria-label="发送运行诊断摘要">
         <Metric label="发送任务" value={tasks.length} />
         <Metric label="异常尝试" value={failedAttempts} />
-        <Metric label="桥接待发" value={bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} />
+        <Metric label="待发任务" value={bridgeStatus?.outbox.pendingCount ?? bridgeOutbox?.pending.length ?? 0} />
         <Metric label="不确定投递" value={uncertainTasks} />
       </dl>
 
@@ -123,11 +123,11 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
           detail={adapter?.description || "未取得发送适配器配置。"}
           rows={[
             ["适配器", adapter?.label || adapter?.name || "未连接"],
-            ["窗口守卫", adapter?.capabilities?.requiresWindowGuard ? "必须" : "未声明"],
+            ["发送前身份校验", adapter?.capabilities?.requiresWindowGuard ? "必须" : "未声明"],
           ]}
         />
         <RuntimeCard
-          title="桥接 Worker"
+          title="发送 Worker"
           status={bridgeStatus?.worker?.ok ? "运行正常" : "需检查"}
           ok={Boolean(bridgeStatus?.worker?.ok)}
           detail={bridgeStatus?.worker?.errorMessage || bridgeStatus?.worker?.message || "等待真实 Worker 状态。"}
@@ -139,7 +139,7 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
           ]}
         />
         <RuntimeCard
-          title="窗口观察器"
+          title="身份校验观察器"
           status={observer?.ok ? "运行正常" : "需检查"}
           ok={Boolean(observer?.ok)}
           detail={observer?.errorMessage || observer?.message || "等待真实观察器状态。"}
@@ -151,7 +151,7 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
           ]}
         />
         <RuntimeCard
-          title="桥接发件箱"
+          title="发送发件箱"
           status={(bridgeStatus?.outbox.pendingCount ?? 0) > 0 ? "等待 Worker 处理" : "当前无待发"}
           ok={(bridgeStatus?.locks.staleCount ?? 0) === 0 && (bridgeStatus?.dispatch?.staleCount ?? 0) === 0}
           detail="只展示真实发件箱、调度和锁状态，不生成故障记录。"
@@ -179,7 +179,7 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
           ) : <SendEmpty title="暂无发送尝试" detail="真实发送任务执行后会在这里显示审计记录。" />}
         </section>
         <section className={styles.runtimeCard} aria-labelledby="recent-window-evidence-title">
-          <header className={styles.runtimeHeader}><div><h2 id="recent-window-evidence-title">最近窗口证据</h2><p>发送前身份校验使用的真实快照。</p></div></header>
+          <header className={styles.runtimeHeader}><div><h2 id="recent-window-evidence-title">最近身份校验证据</h2><p>发送前身份校验使用的真实快照。</p></div></header>
           {snapshots.length ? (
             <ul className={styles.runtimeList}>
               {snapshots.slice(0, 10).map((snapshot) => (
@@ -189,7 +189,7 @@ export function SendDiagnosticsPage({ filters = {} }: SendDiagnosticsPageProps) 
                 </li>
               ))}
             </ul>
-          ) : <SendEmpty title="暂无窗口证据" detail="采集当前真实微信窗口后再进行任务校验。" />}
+          ) : <SendEmpty title="暂无身份校验证据" detail="发送前采集到的身份快照会显示在这里。" />}
         </section>
       </div>
     </SendPageFrame>

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { appConfig } from "../shared/app-config";
@@ -11,10 +11,17 @@ const {
   canonicalSkillName,
   classifySkillSuggestionQuality,
   compileAgentSkillSuggestions,
+  buildKnowledgeImportTemplateCsv,
+  getKnowledgeImportFieldGuide,
   isTrainingSampleNeedingAttention,
   isSkillSuggestionSafeToApply,
+  parseKnowledgeImportText,
   parseChatTranscript,
   summarizeTrainingSamples,
+  buildAgentReplyDraft,
+  analyzeConversationConversion,
+  buildConversationLearningInsight,
+  evaluateAgentRoute,
 } = rules;
 
 type ChatImportPayload = {
@@ -29,14 +36,44 @@ type ChatImportPayload = {
   text: string;
 };
 
+type KnowledgeImportPayload = IdentityFilter & {
+  operationKey?: string;
+  source?: string;
+  text: string;
+};
+
+type KnowledgeImportPreviewPayload = IdentityFilter & {
+  operationKey?: string;
+  source?: string;
+  text: string;
+};
+
 type IdentityFilter = {
   wechatAccountId?: string;
   conversationId?: string;
   customerId?: string;
 };
 
+type RagPreviewPayload = IdentityFilter & {
+  query: string;
+  agentId?: string;
+};
+
+type ConversationLearningQuery = IdentityFilter & {
+  limit?: number;
+};
+
+type ConversationOutcomePayload = ExpectedIdentityPayload & IdentityFilter & {
+  operationKey: string;
+  outcome: "won" | "lost" | "ongoing";
+  reasonCode?: string;
+  note?: string;
+  reviewer?: string;
+};
+
 type TrainingSampleReviewPayload = ExpectedIdentityPayload & {
   status: "ready" | "review" | "rejected";
+  operationKey?: string;
   reviewer?: string;
   note?: string;
   agentId?: string;
@@ -48,9 +85,23 @@ type TrainingSampleReviewPayload = ExpectedIdentityPayload & {
   skillHints?: string[] | string;
 };
 
+type KnowledgeEntryReviewPayload = ExpectedIdentityPayload & {
+  status: "ready" | "review" | "rejected";
+  operationKey?: string;
+  reviewer?: string;
+  note?: string;
+  agentId?: string;
+  agentKey?: string;
+  title?: string;
+  content?: string;
+  tags?: string[] | string;
+  qualityScore?: number;
+};
+
 type TrainingSampleBatchReviewPayload = {
   sampleIds?: string[];
   status?: "ready" | "review" | "rejected";
+  operationKey?: string;
   reviewer?: string;
   note?: string;
   expectedBySampleId?: Record<string, ExpectedIdentityPayload>;
@@ -141,12 +192,239 @@ export class TrainingService {
     return limit ? samples.slice(0, limit) : samples;
   }
 
+  async getSample(id: string, filters: IdentityFilter & { agentId?: string } = {}) {
+    const sample = appConfig.useLocalStore
+      ? this.localStore.listTrainingSamples(filters).find((item: any) => item.id === id)
+      : await this.requirePrisma().getTrainingSample(id, filters);
+    if (!sample) throw new NotFoundException(`training sample not found: ${id}`);
+    return sample;
+  }
+
   getOverview(options: { agentId?: string; minScore?: number; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
     if (!appConfig.useLocalStore) return this.getOverviewPrisma(options);
     const samples = this.localStore.listTrainingSamples(options);
     const agents = this.localStore.listAgents();
     const suggestions = this.listSkillSuggestions(options);
-    return summarizeTrainingSamples(samples, agents, suggestions);
+    const knowledgeEntries = this.localStore.listKnowledgeEntries({ ...options, includeReview: true });
+    return withKnowledgeSummary(summarizeTrainingSamples(samples, agents, suggestions), knowledgeEntries, agents);
+  }
+
+  listKnowledgeEntries(options: { agentId?: string; includeReview?: boolean } & IdentityFilter = {}) {
+    if (appConfig.useLocalStore) return this.localStore.listKnowledgeEntries(options);
+    return this.requirePrisma().listKnowledgeEntries(options);
+  }
+
+  async getConversationLearning(options: ConversationLearningQuery = {}) {
+    const limit = Math.max(1, Math.min(Math.floor(Number(options.limit || 50)), 100));
+    const bundles = await Promise.resolve(
+      appConfig.useLocalStore
+        ? this.localStore.listConversationLearningBundles(options, limit)
+        : this.requirePrisma().listConversationLearningBundles(options, limit),
+    );
+    const conversations = bundles.map((bundle: any) => {
+      const feedback = analyzeConversationConversion({
+        conversation: bundle.conversation,
+        messages: bundle.messages,
+        routes: bundle.routes,
+        quotes: bundle.quotes,
+        orders: bundle.orders,
+      });
+      const learningInsights = (Array.isArray(bundle.routes) ? bundle.routes : []).map((route: any) => (
+        route.learningInsight || buildConversationLearningInsight({
+          text: route.text || "",
+          route,
+          observedAt: route.createdAt,
+        })
+      ));
+      return {
+        conversation: bundle.conversation,
+        feedback,
+        learningInsights: learningInsights.slice(-20).reverse(),
+        learningObservationCount: learningInsights.length,
+        reviewRequiredCount: learningInsights.filter((item: any) => item?.learningPolicy?.status === "review_required").length,
+      };
+    });
+    const reasons = new Map<string, { code: string; label: string; count: number }>();
+    for (const item of conversations) {
+      if (item.feedback.outcome === "won") continue;
+      const reason = item.feedback.primaryReason;
+      const current = reasons.get(reason.code) || { code: reason.code, label: reason.label, count: 0 };
+      current.count += 1;
+      reasons.set(reason.code, current);
+    }
+    return {
+      schema: "conversation_learning_dashboard_v1",
+      generatedAt: new Date().toISOString(),
+      summary: {
+        conversationCount: conversations.length,
+        wonCount: conversations.filter((item: any) => item.feedback.outcome === "won").length,
+        lostCount: conversations.filter((item: any) => item.feedback.outcome === "lost").length,
+        ongoingCount: conversations.filter((item: any) => item.feedback.outcome === "ongoing").length,
+        stalledCount: conversations.filter((item: any) => item.feedback.state === "stalled").length,
+        learningObservationCount: conversations.reduce((sum: number, item: any) => sum + item.learningObservationCount, 0),
+        reviewRequiredCount: conversations.reduce((sum: number, item: any) => sum + item.reviewRequiredCount, 0),
+        topReasons: [...reasons.values()].sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-CN")),
+      },
+      conversations,
+      learningPolicy: {
+        everyInboundCreatesObservation: true,
+        silenceIsNotLoss: true,
+        autoPromoteToKnowledge: false,
+        reviewRequiredBeforeKnowledgeOrSkill: true,
+      },
+    };
+  }
+
+  async confirmConversationOutcome(conversationId: string, payload: ConversationOutcomePayload) {
+    if (!payload?.operationKey) throw new BadRequestException("operationKey is required");
+    const trustedPayload = {
+      ...payload,
+      expectedConversationId: payload.expectedConversationId || conversationId,
+    };
+    const result = await Promise.resolve(
+      appConfig.useLocalStore
+        ? this.localStore.confirmConversationOutcome(conversationId, trustedPayload)
+        : this.requirePrisma().confirmConversationOutcome(conversationId, trustedPayload),
+    );
+    const dashboard = await this.getConversationLearning({
+      wechatAccountId: payload.expectedWechatAccountId || payload.wechatAccountId,
+      conversationId,
+      customerId: payload.expectedCustomerId || payload.customerId,
+      limit: 1,
+    });
+    return { ...result, feedback: dashboard.conversations[0]?.feedback || null };
+  }
+
+  async previewRag(payload: RagPreviewPayload) {
+    const query = String(payload?.query || "").trim();
+    if (!query) throw new BadRequestException("query is required");
+    if (query.length > 500) throw new BadRequestException("query cannot exceed 500 characters");
+    const route = evaluateAgentRoute({ text: query });
+    const agents = await Promise.resolve(
+      appConfig.useLocalStore ? this.localStore.listAgents() : this.requirePrisma().listAgents(),
+    );
+    const agent = payload.agentId
+      ? agents.find((item: any) => item.id === payload.agentId)
+      : agents.find((item: any) => item.key === route.agentKey);
+    const identity = {
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+    };
+    const [knowledgeEntries, skills] = await Promise.all([
+      Promise.resolve(this.listKnowledgeEntries({ agentId: agent?.id, includeReview: false, ...identity })),
+      Promise.resolve(appConfig.useLocalStore
+        ? this.localStore.listAgentSkills(agent?.id, identity)
+        : this.requirePrisma().listAgentSkills(agent?.id, identity)),
+    ]);
+    const draft = buildAgentReplyDraft(route, {
+      agentId: agent?.id,
+      ...identity,
+      knowledgeEntries,
+      skills,
+    });
+    return {
+      query,
+      route: {
+        scene: route.scene,
+        agentKey: route.agentKey,
+        agentId: agent?.id || null,
+        agentName: agent?.name || null,
+        action: route.action,
+        confidence: route.confidence,
+        riskFlags: route.riskFlags || [],
+      },
+      reply: draft.suggestedReply,
+      appliedSkills: draft.appliedSkills,
+      knowledgeMatches: draft.knowledgeMatches,
+      rag: draft.rag,
+      styleProfile: draft.replyDraft?.styleProfile,
+      safetyChecks: draft.replyDraft?.safetyChecks || [],
+    };
+  }
+
+  getKnowledgeImportFields() {
+    return getKnowledgeImportFieldGuide();
+  }
+
+  getKnowledgeImportTemplate() {
+    return {
+      fileName: "knowledge-import-template.csv",
+      mimeType: "text/csv;charset=utf-8",
+      dataBase64: Buffer.from(buildKnowledgeImportTemplateCsv(), "utf8").toString("base64"),
+      fields: getKnowledgeImportFieldGuide(),
+    };
+  }
+
+  previewKnowledgeImport(payload: string | KnowledgeImportPreviewPayload) {
+    const request = typeof payload === "string" ? { text: payload } : payload || { text: "" };
+    const parsed = parseKnowledgeImportText(request.text || "");
+    if ((!parsed.ok || !parsed.rows.length) && request.operationKey) {
+      const history = this.recordKnowledgeImportFailure(parsed, request, "preview_failed");
+      return { ...parsed, history };
+    }
+    return parsed;
+  }
+
+  importKnowledge(payload: KnowledgeImportPayload) {
+    const parsed = parseKnowledgeImportText(payload.text || "");
+    if (!parsed.ok || !parsed.rows.length) {
+      const history = payload.operationKey
+        ? this.recordKnowledgeImportFailure(parsed, payload, "parse_failed")
+        : null;
+      return {
+        ...parsed,
+        saved: { count: 0, results: [], skipped: parsed.errors || [], ...(history ? { reviewLog: history, failed: true } : {}) },
+      };
+    }
+    const context = {
+      operationKey: payload.operationKey ? normalizeOperationKey(payload.operationKey, "knowledge import operationKey") : undefined,
+      source: payload.source || "manual_knowledge_import",
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+    };
+    const saved = appConfig.useLocalStore
+      ? this.localStore.importKnowledgeEntries(parsed.rows, context)
+      : this.requirePrisma().importKnowledgeEntries(parsed.rows, context);
+    return {
+      ...parsed,
+      saved,
+    };
+  }
+
+  private recordKnowledgeImportFailure(parsed: any, payload: KnowledgeImportPreviewPayload, phase: "preview_failed" | "parse_failed") {
+    const context = {
+      operationKey: payload.operationKey ? normalizeOperationKey(payload.operationKey, "knowledge import operationKey") : undefined,
+      source: payload.source || "manual_knowledge_import",
+      wechatAccountId: payload.wechatAccountId,
+      conversationId: payload.conversationId,
+      customerId: payload.customerId,
+      phase,
+    };
+    return appConfig.useLocalStore
+      ? this.localStore.recordKnowledgeImportFailure(parsed, context)
+      : this.requirePrisma().recordKnowledgeImportFailure(parsed, context);
+  }
+
+  async reviewKnowledgeEntry(id: string, payload: KnowledgeEntryReviewPayload) {
+    const result = appConfig.useLocalStore
+      ? this.reviewKnowledgeEntryLocal(id, payload || {})
+      : await this.requirePrisma().reviewKnowledgeEntry(id, payload || {});
+    const entry = result.knowledgeEntry || {};
+    const statusLabel = entry.status === "ready" ? "已启用" : entry.status === "rejected" ? "已停用" : "待复核";
+    await this.notifications.create(
+      entry.status === "rejected" ? "warning" : "info",
+      "知识条目复核状态已更新",
+      `知识“${String(entry.title || "").slice(0, 24)}”${statusLabel}。`,
+      {
+        source: "knowledge_entry_review",
+        knowledgeEntryId: entry.id,
+        status: entry.status,
+        ...reviewNotificationEffect(result.reviewLog),
+      },
+    );
+    return result;
   }
 
   importChat(payload: ChatImportPayload) {
@@ -169,7 +447,12 @@ export class TrainingService {
       result.sample.status === "rejected" ? "warning" : "info",
       "训练样本状态已更新",
       `样本「${String(result.sample.customerText || "").slice(0, 24)}」${statusLabel}。`,
-      { source: "training_sample_review", trainingSampleId: result.sample.id, status: result.sample.status },
+      {
+        source: "training_sample_review",
+        trainingSampleId: result.sample.id,
+        status: result.sample.status,
+        ...reviewNotificationEffect(result.reviewLog),
+      },
     );
     return result;
   }
@@ -181,8 +464,11 @@ export class TrainingService {
     if (sampleIds.length > MAX_BATCH_REVIEW_SAMPLES) {
       throw new BadRequestException(`sampleIds cannot exceed ${MAX_BATCH_REVIEW_SAMPLES} per batch`);
     }
-    const reviewPayload: { status: "ready" | "review" | "rejected"; reviewer: string; note: string } = {
+    const reviewPayload: { status: "ready" | "review" | "rejected"; operationKey?: string; reviewer: string; note: string } = {
       status,
+      ...(payload.operationKey
+        ? { operationKey: normalizeOperationKey(payload.operationKey, "training sample batch review operationKey") }
+        : {}),
       reviewer: payload.reviewer || "人工客服",
       note: payload.note || trainingSampleBatchReviewNote(status, sampleIds.length),
     };
@@ -205,6 +491,7 @@ export class TrainingService {
         status,
         count: results.length,
         sampleIds,
+        ...batchReviewNotificationEffect(reviewPayload.operationKey),
       },
     );
     return {
@@ -302,12 +589,13 @@ export class TrainingService {
   }
 
   private async getOverviewPrisma(options: { agentId?: string; minScore?: number } & IdentityFilter = {}) {
-    const [samples, agents, suggestions] = await Promise.all([
+    const [samples, agents, suggestions, knowledgeEntries] = await Promise.all([
       this.requirePrisma().listTrainingSamples(options),
       this.requirePrisma().listAgents(options),
       this.listSkillSuggestionsPrisma(options),
+      this.requirePrisma().listKnowledgeEntries({ ...options, includeReview: true }),
     ]);
-    return summarizeTrainingSamples(samples, agents, suggestions);
+    return withKnowledgeSummary(summarizeTrainingSamples(samples, agents, suggestions), knowledgeEntries, agents);
   }
 
   private async reviewSamplePrisma(id: string, payload: TrainingSampleReviewPayload) {
@@ -317,14 +605,27 @@ export class TrainingService {
       result.sample.status === "rejected" ? "warning" : "info",
       "训练样本状态已更新",
       `样本「${String(result.sample.customerText || "").slice(0, 24)}」${statusLabel}。`,
-      { source: "training_sample_review", trainingSampleId: result.sample.id, status: result.sample.status, ...sampleIdentity(result.sample) },
+      {
+        source: "training_sample_review",
+        trainingSampleId: result.sample.id,
+        status: result.sample.status,
+        ...sampleIdentity(result.sample),
+        ...reviewNotificationEffect(result.reviewLog),
+      },
     );
     return result;
   }
 
+  private reviewKnowledgeEntryLocal(id: string, payload: KnowledgeEntryReviewPayload) {
+    const entry = this.localStore.listKnowledgeEntries({ includeReview: true }).find((item: any) => item.id === id);
+    if (!entry) throw new Error(`knowledge entry not found: ${id}`);
+    assertExpectedIdentity(entry, payload, "knowledge entry");
+    return this.localStore.reviewKnowledgeEntry(id, payload || {});
+  }
+
   private async batchReviewSamplesPrisma(
     sampleIds: string[],
-    reviewPayload: { status: "ready" | "review" | "rejected"; reviewer: string; note: string },
+    reviewPayload: { status: "ready" | "review" | "rejected"; operationKey?: string; reviewer: string; note: string },
     expectedBySampleId: Record<string, ExpectedIdentityPayload>,
   ) {
     const results = await this.requirePrisma().reviewTrainingSamplesBatch(sampleIds, reviewPayload, expectedBySampleId);
@@ -332,7 +633,13 @@ export class TrainingService {
       reviewPayload.status === "rejected" ? "warning" : "info",
       "训练样本批量状态已更新",
       `已${trainingSampleBatchReviewVerb(reviewPayload.status)} ${results.length} 条训练样本。`,
-      { source: "training_sample_batch_review", status: reviewPayload.status, count: results.length, sampleIds },
+      {
+        source: "training_sample_batch_review",
+        status: reviewPayload.status,
+        count: results.length,
+        sampleIds,
+        ...batchReviewNotificationEffect(reviewPayload.operationKey),
+      },
     );
     return {
       updated: results.length,
@@ -385,6 +692,54 @@ export class TrainingService {
     if (!this.prismaOperations) throw new Error("PrismaOperationsService is required when USE_LOCAL_STORE=false");
     return this.prismaOperations;
   }
+}
+
+function withKnowledgeSummary(overview: any, knowledgeEntries: any[] = [], agents: any[] = []) {
+  const rows = Array.isArray(knowledgeEntries) ? knowledgeEntries : [];
+  const agentMap = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, agent]));
+  const buckets = new Map<string, any>();
+  for (const entry of rows) {
+    const agentId = entry?.agentId || "agent_general";
+    const agent = agentMap.get(agentId) || {};
+    if (!buckets.has(agentId)) {
+      buckets.set(agentId, {
+        agentId,
+        agentKey: agent.key || entry?.agentKey || "general",
+        name: agent.name || entry?.agentKey || "通用 Agent",
+        count: 0,
+        starterCount: 0,
+        topTitles: [],
+      });
+    }
+    const bucket = buckets.get(agentId);
+    bucket.count += 1;
+    if (entry?.sourceType === "starter_knowledge") bucket.starterCount += 1;
+    if (bucket.topTitles.length < 3 && entry?.title) bucket.topTitles.push(String(entry.title));
+  }
+  return {
+    ...overview,
+    knowledgeEntryCount: rows.length,
+    starterKnowledgeEntryCount: rows.filter((entry) => entry?.sourceType === "starter_knowledge").length,
+    knowledgeByAgent: [...buckets.values()].sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name))),
+    topKnowledgeEntries: rows.slice(0, 8).map((entry) => ({
+      id: entry.id,
+      agentId: entry.agentId || null,
+      title: entry.title || "",
+      sourceType: entry.sourceType || "",
+      qualityScore: Number(entry.qualityScore || 0),
+      tags: Array.isArray(entry.tags) ? entry.tags.slice(0, 6) : [],
+    })),
+  };
+}
+
+function reviewNotificationEffect(reviewLog: any) {
+  const reviewEffectKey = String(reviewLog?.metadata?.effectKey || reviewLog?.id || "").trim();
+  return reviewEffectKey ? { effectKey: `${reviewEffectKey}:notification` } : {};
+}
+
+function batchReviewNotificationEffect(operationKey?: string) {
+  const key = String(operationKey || "").trim();
+  return key ? { effectKey: `training-sample-batch-review:${key}:notification` } : {};
 }
 
 function sampleIdentity(sample: any) {

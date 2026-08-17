@@ -41,4 +41,6 @@ export type BundleRecommendPayload = {
   };
   scene?: string;
   maxItems?: number;
+  selectedSkuCodes?: string[];
+  requireImages?: boolean;
 };

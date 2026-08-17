@@ -11,10 +11,11 @@ export type RoutingFeaturePageProps = {
   api?: RoutingFeatureApi;
   className?: string;
   mode?: "evaluate" | "process";
+  initialConversationId?: string;
 };
 
-export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: RoutingFeaturePageProps) {
-  const controller = useRoutingController(api);
+export function RoutingFeaturePage({ api, className = "", mode = "evaluate", initialConversationId = "" }: RoutingFeaturePageProps) {
+  const controller = useRoutingController(api, initialConversationId);
 
   if (controller.accessPhase === "loading") {
     return <RoutingState className={className} title="正在确认路由判断权限" detail="权限确认后才会读取真实会话。" busy />;
@@ -55,7 +56,7 @@ export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: R
           <p>{mode === "evaluate" ? "只返回场景、价值层级和处理动作，不写入客户消息。" : "写入一条客户消息并执行服务端路由计划。"}</p>
         </div>
         <div className={styles.headerActions}>
-          <Link className={styles.secondaryLink} href={mode === "evaluate" ? "/routing/process" : "/routing"}>
+          <Link className={styles.secondaryLink} href={routingIdentityHref(mode === "evaluate" ? "/routing/process" : "/routing", controller.selectedConversation)}>
             {mode === "evaluate" ? "前往消息处理" : "返回只读评估"}
           </Link>
           <button
@@ -105,7 +106,7 @@ export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: R
               rows={6}
               aria-label="输入要判断的客户消息"
               placeholder="粘贴或输入客户的原始消息"
-              disabled={Boolean(controller.busy)}
+              disabled={Boolean(controller.busy) || !controller.canEvaluate}
               onChange={(event) => controller.setMessageText(event.target.value)}
             />
             <small>{controller.messageText.length}/5000</small>
@@ -140,7 +141,9 @@ export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: R
             <div>
               <strong>处理客户消息</strong>
               <p>会写入客户消息，并可能创建任务、报价、订单或发送任务。</p>
-              {!controller.canProcess ? <small>当前操作员没有回复会话权限，此操作已禁用。</small> : null}
+              {!controller.conversationsLoaded
+                ? <small>会话列表未成功读取；为避免使用过期身份，本操作保持禁用。</small>
+                : !controller.canProcess ? <small>此操作同时需要回复会话与审批发送权限；任一权限缺失都会保持禁用。</small> : null}
             </div>
             <button
               type="button"
@@ -170,6 +173,7 @@ export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: R
             <p id="routing-process-confirm-detail">
               这不是预览：消息会写入所选会话，并由服务端执行路由计划。任务、报价、订单或发送队列等副作用以返回结果为准。
             </p>
+            <p>本次操作标识：{controller.processExternalId || "尚未生成"}。响应中断时再次确认会复用该标识，避免重复写入。</p>
           </div>
           <div className={styles.confirmationActions}>
             <button
@@ -208,6 +212,16 @@ export function RoutingFeaturePage({ api, className = "", mode = "evaluate" }: R
       )}
     </section>
   );
+}
+
+function routingIdentityHref(pathname: string, conversation: ReturnType<typeof useRoutingController>["selectedConversation"]) {
+  if (!conversation) return pathname;
+  const params = new URLSearchParams({
+    conversationId: conversation.id,
+    wechatAccountId: conversation.wechatAccountId,
+  });
+  if (conversation.customerId) params.set("customerId", conversation.customerId);
+  return `${pathname}?${params.toString()}`;
 }
 
 function RouteResult({

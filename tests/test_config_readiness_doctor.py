@@ -75,6 +75,44 @@ ai_engine:
         assert secret not in payload
 
 
+def test_doctor_uses_the_explicit_ai_engine_settings_path(tmp_path):
+    _write_project(tmp_path, "ai_engine:\n  enabled: true\n  providers: {}\n")
+    explicit_settings = tmp_path / "shared-ai-settings.yaml"
+    explicit_settings.write_text(
+        """
+ai_engine:
+  enabled: true
+  primary: production_provider
+  providers:
+    production_provider:
+      enabled: true
+      api_key: ${PRODUCTION_PROVIDER_KEY}
+      base_url: ${PRODUCTION_PROVIDER_BASE}
+      model: ${PRODUCTION_PROVIDER_MODEL}
+      request_format: openai
+""".lstrip(),
+        encoding="utf-8",
+    )
+    secret = "production-provider-secret-sentinel"
+
+    report = build_report(
+        tmp_path,
+        {
+            "AI_ENGINE_SETTINGS_PATH": str(explicit_settings),
+            "PRODUCTION_PROVIDER_KEY": secret,
+            "PRODUCTION_PROVIDER_BASE": "https://provider.invalid/v1",
+            "PRODUCTION_PROVIDER_MODEL": "production-model",
+        },
+    )
+    model_chain = _component(report, "model_chain")
+    payload = json.dumps(report, ensure_ascii=False)
+
+    assert model_chain["status"] == "ready"
+    assert model_chain["details"]["attemptOrder"] == ["production_provider"]
+    assert report["sources"]["settingsYaml"]["explicitPathConfigured"] is True
+    assert secret not in payload
+
+
 def test_doctor_lists_real_missing_configuration_for_all_blocked_components(tmp_path):
     _write_project(
         tmp_path,
@@ -92,6 +130,7 @@ ai_engine:
         "USE_LOCAL_STORE": "false",
         "DESIGN_PLATFORM_ADAPTER": "art_image_local",
         "NODE_ENV": "production",
+        "WECHAT_PRODUCT_MODE": "legacy_personal_wechat",
     }
 
     report = build_report(tmp_path, environment)
@@ -104,6 +143,41 @@ ai_engine:
     assert "WECHAT_WORK_CORP_ID" in _component(report, "wechat_work_customer_service")["missing"]
     assert "DESIGN_PLATFORM_DEVICE_ID" in _component(report, "design_platform")["missing"]
     assert "at least one enabled AI provider with api_key, base_url and model" in _component(report, "model_chain")["missing"]
+
+
+def test_doctor_treats_personal_wechat_as_disabled_in_enterprise_only_mode(tmp_path):
+    _write_project(tmp_path, "ai_engine:\n  enabled: false\n  providers: {}\n")
+
+    report = build_report(tmp_path, {"WECHAT_PRODUCT_MODE": "enterprise_wechat_only"})
+    personal = _component(report, "personal_wechat_bridge")
+
+    assert personal["status"] == "ready"
+    assert personal["missing"] == []
+    assert personal["details"]["productMode"] == "enterprise_wechat_only"
+    assert personal["details"]["productionEnabled"] is False
+    assert personal["details"]["sendEnabled"] is False
+
+
+def test_doctor_requires_wechat_customer_service_fields_not_app_agent_fields(tmp_path):
+    _write_project(tmp_path, "ai_engine:\n  enabled: false\n  providers: {}\n")
+    aes_key = base64.b64encode(b"a" * 32).decode("ascii").rstrip("=")
+
+    report = build_report(
+        tmp_path,
+        {
+            "WECHAT_WORK_CORP_ID": "corp-id",
+            "WECHAT_WORK_SECRET": "wecom-secret-sentinel",
+            "WECHAT_WORK_TOKEN": "wecom-token-sentinel",
+            "WECHAT_WORK_ENCODING_AES_KEY": aes_key,
+            "WECHAT_WORK_OPEN_KFID": "wkf-id",
+        },
+    )
+    wechat = _component(report, "wechat_work_customer_service")
+
+    assert wechat["status"] == "ready"
+    assert wechat["missing"] == []
+    assert "agentId" not in wechat["details"]["configured"]
+    assert "defaultConversation" not in wechat["details"]["configured"]
 
 
 def test_doctor_only_reports_presence_for_runtime_design_credentials(tmp_path):

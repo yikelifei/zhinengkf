@@ -66,6 +66,43 @@ export function SalesEmpty({
   );
 }
 
+export function SalesMessagePreview({
+  title = "客户消息预览",
+  message,
+  warnings = [],
+  loading = false,
+  error = "",
+}: {
+  title?: string;
+  message?: string;
+  warnings?: string[];
+  loading?: boolean;
+  error?: string;
+}) {
+  const content = String(message || "").trim();
+  return (
+    <div className={styles.messagePreview} role="status" aria-busy={loading || undefined}>
+      <strong>{title}</strong>
+      {loading ? (
+        <p>正在生成客户消息预览...</p>
+      ) : error ? (
+        <p className={styles.messagePreviewError}>{error}</p>
+      ) : content ? (
+        <p>{content}</p>
+      ) : (
+        <p>暂无可发送的客户消息预览。</p>
+      )}
+      {warnings.length ? (
+        <ul className={styles.messagePreviewWarnings} aria-label="消息预览风险提醒">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function SalesConfirmation({
   title,
   detail,
@@ -137,6 +174,24 @@ export function money(value: number) {
   return Number.isFinite(value)
     ? `¥${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`
     : "—";
+}
+
+export function fulfillmentStatusLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    not_started: "未开始生产",
+    in_production: "生产中",
+    quality_check: "质检中",
+    ready_to_ship: "待发货",
+    shipped: "已发货",
+    delivered: "已签收",
+    blocked: "生产受阻",
+  };
+  return labels[String(value || "")] || "未记录";
+}
+
+export function textOrDash(value?: string | null) {
+  const text = String(value || "").trim();
+  return text || "—";
 }
 
 export function hasCompleteIdentity(expected: IdentityExpectation) {

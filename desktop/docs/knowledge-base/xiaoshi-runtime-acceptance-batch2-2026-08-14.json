@@ -1,0 +1,103 @@
+{
+  "verifiedAt": "2026-08-14T10:13:12.939Z",
+  "source": {
+    "path": "E:\\微信聊天文档\\wechat_kb_小石_20260814094610586_7133e7\\客户对话",
+    "files": 222,
+    "bytes": 50464028,
+    "validChatSessions": 8,
+    "sourceMessages": 1090,
+    "parsedDialogueMessages": 1057,
+    "customerMessages": 387,
+    "serviceMessages": 670,
+    "dialoguePairs": 261,
+    "attachments": 203,
+    "excludedSystemMessages": 33
+  },
+  "curation": {
+    "selected": 30,
+    "ready": 11,
+    "review": 19,
+    "excludedFromSelectedSet": 231,
+    "exactDuplicatesAgainstBatch1": 0,
+    "replyTextRewritten": false,
+    "agentCounts": {
+      "pre_sales": 25,
+      "gift_design": 4,
+      "logistics_exception": 1
+    }
+  },
+  "chatImportId": "import_636b93689c91d9d64bb72450625e4ab8",
+  "runtime": {
+    "api": "http://127.0.0.1:3200",
+    "webProxy": "http://127.0.0.1:3100",
+    "dataMode": "local-json",
+    "localStorePath": "E:\\zhinengkefu\\desktop\\.runtime-stable\\local-store.json",
+    "healthOk": true,
+    "batch2StatusCounts": {
+      "ready": 11,
+      "review": 19,
+      "total": 30
+    },
+    "readyBatch2KnowledgeCount": 11,
+    "reviewEntriesExcludedFromDefaultRetrieval": true
+  },
+  "evaluations": [
+    {
+      "question": "价格能优惠吗",
+      "reply": "您什么时候需要呢，咱这边是哪里的",
+      "topKnowledgeScore": 183,
+      "exactHumanReply": true
+    },
+    {
+      "question": "这款怎么卖的",
+      "reply": "您要多少份呀",
+      "topKnowledgeScore": 170,
+      "exactHumanReply": true
+    },
+    {
+      "question": "再便宜点",
+      "reply": "多少份",
+      "topKnowledgeScore": 173,
+      "exactHumanReply": true
+    },
+    {
+      "question": "好贵，我再看看吧",
+      "reply": "咱这边预算多少，礼品可以调整",
+      "topKnowledgeScore": 68,
+      "exactHumanReply": true
+    },
+    {
+      "question": "不定了，班费有点拮据",
+      "reply": "好呢\n以后有需要再来找我哈",
+      "topKnowledgeScore": 174,
+      "exactHumanReply": true
+    },
+    {
+      "question": "要这种袋子，里面的东西可以更换一下吗",
+      "reply": "您要多少呀",
+      "topKnowledgeScore": 164,
+      "exactHumanReply": true
+    },
+    {
+      "question": "这个做一份多少钱啊，有漫威主题吗，宝宝百日宴",
+      "reply": "您要多少呀",
+      "topKnowledgeScore": 79,
+      "exactHumanReply": true
+    },
+    {
+      "question": "不想要这款笔记本，太可爱了",
+      "reply": "哦哦要简单款哈",
+      "topKnowledgeScore": 74,
+      "exactHumanReply": true
+    }
+  ],
+  "verification": {
+    "focusedTests": "54/54 passed",
+    "broaderCustomerServiceTests": "155/155 passed with USE_LOCAL_STORE=true",
+    "initialBroaderRun": "140/154 passed; 14 pre-existing training-service tests entered database mode because USE_LOCAL_STORE=false",
+    "apiBuild": "passed",
+    "runtimeEvaluation": "8/8 exact approved human replies",
+    "privacyChecks": "passed for generated batch-two artifacts",
+    "enterpriseWechatRealDelivery": "not tested"
+  }
+}

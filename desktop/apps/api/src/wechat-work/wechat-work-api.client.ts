@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import fs from "node:fs";
 import { appConfig } from "../shared/app-config";
 import { MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES } from "./wechat-work-inbound-media";
-import { resolveWechatWorkImageFile } from "./wechat-work-media";
+import { resolveWechatWorkImageFile, resolveWechatWorkMaterialFile } from "./wechat-work-media";
+import { WechatWorkAuthorizationService } from "./wechat-work-authorization.service";
 
 export type WechatWorkKfMessage = {
   msgid?: string;
@@ -31,6 +32,33 @@ export type WechatWorkSyncResponse = {
   next_cursor?: string;
   has_more?: number;
   msg_list?: WechatWorkKfMessage[];
+};
+
+export type WechatWorkCustomerProfile = {
+  external_userid: string;
+  nickname?: string;
+  avatar?: string;
+  gender?: number;
+  unionid?: string;
+};
+
+export type WechatWorkUpgradeServiceConfig = {
+  errcode?: number;
+  errmsg?: string;
+  member_range?: {
+    userid_list?: string[];
+    department_id_list?: number[];
+  };
+  groupchat_range?: {
+    chat_id_list?: string[];
+  };
+};
+
+export type WechatWorkCustomerServiceAccount = {
+  open_kfid?: string;
+  name?: string;
+  avatar?: string;
+  manage_privilege?: boolean;
 };
 
 export class WechatWorkApiError extends Error {
@@ -67,24 +95,150 @@ export class WechatWorkApiError extends Error {
 export class WechatWorkApiClient {
   private accessTokenCache: { token: string; expiresAt: number } | null = null;
 
-  async syncMessages(payload: { token: string; cursor?: string; limit?: number; openKfid?: string }) {
-    return this.withAccessToken("sync_msg", (accessToken) =>
-      this.postJson<WechatWorkSyncResponse>(
-        `/cgi-bin/kf/sync_msg?access_token=${encodeURIComponent(accessToken)}`,
+  constructor(@Optional() private readonly authorization?: WechatWorkAuthorizationService) {}
+
+  async syncMessages(payload: { token?: string; cursor?: string; limit?: number; openKfid?: string }) {
+    const token = String(payload.token || "").trim();
+    return this.withAccessToken("sync_msg", async (accessToken) => {
+      const pathAndQuery = `/cgi-bin/kf/sync_msg?access_token=${encodeURIComponent(accessToken)}`;
+      const body = {
+        cursor: String(payload.cursor || ""),
+        limit: clampLimit(payload.limit),
+        voice_format: 0,
+        ...(payload.openKfid ? { open_kfid: payload.openKfid } : {}),
+      };
+      try {
+        return await this.postJson<WechatWorkSyncResponse>(
+          pathAndQuery,
+          { ...(token ? { token } : {}), ...body },
+          "sync_msg",
+        );
+      } catch (error) {
+        if (!token || !(error instanceof WechatWorkApiError) || error.errcode !== 95012) throw error;
+        return this.postJson<WechatWorkSyncResponse>(pathAndQuery, body, "sync_msg");
+      }
+    });
+  }
+
+  async getCustomerProfiles(externalUserIds: string[]) {
+    const ids = [...new Set(
+      externalUserIds
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    )];
+    if (!ids.length) throw new BadRequestException("externalUserIds is required");
+    if (ids.length > 100) throw new BadRequestException("externalUserIds exceeds 100 customers");
+    return this.withAccessToken("customer_batchget", (accessToken) =>
+      this.postJson<{
+        errcode?: number;
+        errmsg?: string;
+        customer_list?: WechatWorkCustomerProfile[];
+        invalid_external_userid?: string[];
+      }>(
+        `/cgi-bin/kf/customer/batchget?access_token=${encodeURIComponent(accessToken)}`,
         {
-          token: requiredText(payload.token, "token"),
-          cursor: String(payload.cursor || ""),
-          limit: clampLimit(payload.limit),
-          voice_format: 0,
-          ...(payload.openKfid ? { open_kfid: payload.openKfid } : {}),
+          external_userid_list: ids,
+          need_enter_session_context: 0,
         },
-        "sync_msg",
+        "customer_batchget",
       ),
     );
   }
 
-  async downloadMedia(payload: { mediaId: string }) {
+  async createCustomerContactWay(payload: { openKfid: string; scene: string }) {
+    const scene = requiredText(payload.scene, "scene");
+    if (!/^[0-9A-Za-z_-]{1,32}$/.test(scene)) {
+      throw new BadRequestException("scene must be 1-32 characters using letters, numbers, underscore, or hyphen");
+    }
+    return this.withAccessToken("add_contact_way", (accessToken) =>
+      this.postJson<{ errcode?: number; errmsg?: string; url?: string }>(
+        `/cgi-bin/kf/add_contact_way?access_token=${encodeURIComponent(accessToken)}`,
+        {
+          open_kfid: requiredText(payload.openKfid, "openKfid"),
+          scene,
+        },
+        "add_contact_way",
+      ),
+    );
+  }
+
+  async listCustomerServiceAccounts() {
+    return this.withAccessToken("account_list", (accessToken) =>
+      this.getJson<{
+        errcode?: number;
+        errmsg?: string;
+        account_list?: WechatWorkCustomerServiceAccount[];
+      }>(
+        `/cgi-bin/kf/account/list?access_token=${encodeURIComponent(accessToken)}&offset=0&limit=100`,
+        "account_list",
+      ),
+    );
+  }
+
+  async listCustomerServiceAccountsWithSecret(secretValue: string) {
+    const corpId = requiredText(appConfig.wechatWorkCorpId, "WECHAT_WORK_CORP_ID");
+    const secret = requiredText(secretValue, "微信客服 Secret");
+    const tokenUrl = `${appConfig.wechatWorkApiBaseUrl}/cgi-bin/gettoken?corpid=${encodeURIComponent(corpId)}&corpsecret=${encodeURIComponent(secret)}`;
+    let response: Response;
+    try {
+      response = await fetch(tokenUrl);
+    } catch {
+      throw new WechatWorkApiError("gettoken", "企业微信凭证验证网络连接失败");
+    }
+    const tokenResponse = await readJson(response, "gettoken");
+    if (!response.ok || Number(tokenResponse.errcode || 0) !== 0 || !tokenResponse.access_token) {
+      throw new WechatWorkApiError("gettoken", `企业微信拒绝了当前 CorpID 与 Secret：${tokenResponse.errmsg || response.status}`, {
+        errcode: finiteNumber(tokenResponse.errcode),
+        httpStatus: response.status,
+      });
+    }
+    return this.getJson<{
+      errcode?: number;
+      errmsg?: string;
+      account_list?: WechatWorkCustomerServiceAccount[];
+    }>(
+      `/cgi-bin/kf/account/list?access_token=${encodeURIComponent(String(tokenResponse.access_token))}&offset=0&limit=100`,
+      "account_list",
+    );
+  }
+
+  async getUpgradeServiceConfig() {
+    return this.withAccessToken("get_upgrade_service_config", (accessToken) =>
+      this.getJson<WechatWorkUpgradeServiceConfig>(
+        `/cgi-bin/kf/customer/get_upgrade_service_config?access_token=${encodeURIComponent(accessToken)}`,
+        "get_upgrade_service_config",
+      ),
+    );
+  }
+
+  async upgradeCustomerToMember(payload: {
+    openKfid: string;
+    externalUserId: string;
+    memberUserId: string;
+    wording: string;
+  }) {
+    return this.withAccessToken("upgrade_service", (accessToken) =>
+      this.postJson<{ errcode?: number; errmsg?: string }>(
+        `/cgi-bin/kf/customer/upgrade_service?access_token=${encodeURIComponent(accessToken)}`,
+        {
+          open_kfid: requiredText(payload.openKfid, "openKfid"),
+          external_userid: requiredText(payload.externalUserId, "externalUserId"),
+          type: 1,
+          member: {
+            userid: requiredText(payload.memberUserId, "memberUserId"),
+            wording: requiredText(payload.wording, "wording"),
+          },
+        },
+        "upgrade_service",
+      ),
+    );
+  }
+
+  async downloadMedia(payload: { mediaId: string; maxBytes?: number }) {
     const mediaId = requiredText(payload.mediaId, "mediaId");
+    const maxBytes = Number.isFinite(Number(payload.maxBytes))
+      ? Math.max(1, Math.min(200 * 1024 * 1024, Math.floor(Number(payload.maxBytes))))
+      : MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES;
     let tokenRefreshed = false;
     let transientAttempt = 0;
 
@@ -116,7 +270,7 @@ export class WechatWorkApiClient {
 
       let bytes: Buffer;
       try {
-        bytes = await readLimitedBytes(response, MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES);
+        bytes = await readLimitedBytes(response, maxBytes);
       } catch (error) {
         if (error instanceof WechatWorkApiError && error.disposition === "permanent") throw error;
         transientAttempt += 1;
@@ -220,6 +374,59 @@ export class WechatWorkApiClient {
 
   clearAccessToken() {
     this.accessTokenCache = null;
+    this.authorization?.clearCorpAccessToken();
+  }
+
+  async uploadFile(payload: { filePath: string }) {
+    const file = resolveWechatWorkMaterialFile(payload.filePath);
+    return this.withAccessToken("media_upload", async (accessToken) => {
+      const form = new FormData();
+      const bytes = fs.readFileSync(file.filePath);
+      form.append("media", new Blob([new Uint8Array(bytes)], { type: file.contentType }), file.fileName);
+      let response: Response;
+      try {
+        response = await fetch(
+          `${appConfig.wechatWorkApiBaseUrl}/cgi-bin/media/upload?access_token=${encodeURIComponent(accessToken)}&type=file`,
+          { method: "POST", body: form },
+        );
+      } catch (error) {
+        throw new WechatWorkApiError(
+          "media_upload",
+          error instanceof Error ? error.message : "wechat work file media_upload network error",
+        );
+      }
+      const data = await readJson(response, "media_upload");
+      if (!response.ok || Number(data.errcode || 0) !== 0 || !data.media_id) {
+        throw new WechatWorkApiError("media_upload", `wechat work file media_upload failed: ${data.errmsg || response.status}`, {
+          errcode: finiteNumber(data.errcode),
+          httpStatus: response.status,
+          response: data,
+        });
+      }
+      return {
+        errcode: Number(data.errcode || 0),
+        errmsg: String(data.errmsg || ""),
+        type: String(data.type || "file"),
+        media_id: String(data.media_id),
+        created_at: data.created_at == null ? undefined : String(data.created_at),
+      };
+    });
+  }
+
+  async sendFile(payload: { externalUserId: string; openKfid: string; mediaId: string; msgid: string }) {
+    return this.withAccessToken("send_msg", (accessToken) =>
+      this.postJson<{ errcode?: number; errmsg?: string; msgid?: string }>(
+        `/cgi-bin/kf/send_msg?access_token=${encodeURIComponent(accessToken)}`,
+        {
+          touser: requiredText(payload.externalUserId, "externalUserId"),
+          open_kfid: requiredText(payload.openKfid, "openKfid"),
+          msgid: requiredText(payload.msgid, "msgid"),
+          msgtype: "file",
+          file: { media_id: requiredText(payload.mediaId, "mediaId") },
+        },
+        "send_msg",
+      ),
+    );
   }
 
   private async withAccessToken<T>(operation: string, action: (accessToken: string) => Promise<T>) {
@@ -234,6 +441,11 @@ export class WechatWorkApiClient {
   private async getAccessToken() {
     const now = Date.now();
     if (this.accessTokenCache && this.accessTokenCache.expiresAt > now + 60_000) return this.accessTokenCache.token;
+    if (this.authorization?.hasActiveAuthorization()) {
+      const token = await this.authorization.getPrimaryAuthorizedCorpAccessToken();
+      this.accessTokenCache = { token, expiresAt: now + 60 * 60 * 1000 };
+      return token;
+    }
     const corpId = requiredText(appConfig.wechatWorkCorpId, "WECHAT_WORK_CORP_ID");
     const secret = requiredText(appConfig.wechatWorkSecret, "WECHAT_WORK_SECRET");
     const url = `${appConfig.wechatWorkApiBaseUrl}/cgi-bin/gettoken?corpid=${encodeURIComponent(corpId)}&corpsecret=${encodeURIComponent(secret)}`;
@@ -283,6 +495,27 @@ export class WechatWorkApiClient {
     }
     return data;
   }
+
+  private async getJson<T extends Record<string, unknown>>(
+    pathAndQuery: string,
+    operation: string,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${appConfig.wechatWorkApiBaseUrl}${pathAndQuery}`, { method: "GET" });
+    } catch (error) {
+      throw new WechatWorkApiError(operation, error instanceof Error ? error.message : `wechat work ${operation} network error`);
+    }
+    const data = (await readJson(response, operation)) as T;
+    if (!response.ok || Number(data.errcode || 0) !== 0) {
+      throw new WechatWorkApiError(operation, `wechat work ${operation} failed: ${data.errmsg || response.status}`, {
+        errcode: finiteNumber(data.errcode),
+        httpStatus: response.status,
+        response: data,
+      });
+    }
+    return data;
+  }
 }
 
 async function readJson(response: Response, operation: string): Promise<Record<string, any>> {
@@ -313,10 +546,13 @@ function finiteNumber(value: unknown) {
 }
 
 async function readLimitedBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  const limitLabel = Number.isInteger(maxBytes / (1024 * 1024))
+    ? `${maxBytes / (1024 * 1024)} MB`
+    : `${maxBytes} bytes`;
   const declared = Number(response.headers.get("content-length") || 0);
   if (Number.isFinite(declared) && declared > maxBytes) {
     await discardResponse(response);
-    throw new WechatWorkApiError("media_get", "wechat work image exceeds the 2 MB inbound limit", {
+    throw new WechatWorkApiError("media_get", `wechat work media exceeds the ${limitLabel} inbound limit`, {
       httpStatus: response.status,
       disposition: "permanent",
     });
@@ -333,7 +569,7 @@ async function readLimitedBytes(response: Response, maxBytes: number): Promise<B
       size += chunk.length;
       if (size > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new WechatWorkApiError("media_get", "wechat work image exceeds the 2 MB inbound limit", {
+        throw new WechatWorkApiError("media_get", `wechat work media exceeds the ${limitLabel} inbound limit`, {
           httpStatus: response.status,
           disposition: "permanent",
         });

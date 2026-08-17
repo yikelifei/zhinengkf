@@ -18,6 +18,11 @@ test("modular shell leaves the feature page as the single visible title owner", 
   assert.match(shellTypes, /topbar\?: AppTopbarProps/);
   assert.match(shellView, /topbar \? <AppTopbar/);
   assert.match(css, /\.moduleNavigation[\s\S]*flex-wrap: nowrap[\s\S]*overflow-x: auto/);
+  assert.match(shell, /moduleNavigationRef/);
+  assert.match(shell, /activeModuleLinkRef/);
+  assert.match(shell, /navigation\.scrollWidth <= navigation\.clientWidth/);
+  assert.match(shell, /navigation\.scrollTo\(\{ left: Math\.max\(0, centeredLeft\), behavior: "auto" \}\)/);
+  assert.match(shell, /ref=\{active \? activeModuleLinkRef : undefined\}/);
 });
 
 test("overview has one page title and no duplicate quick-action surface", () => {
@@ -56,10 +61,19 @@ test("training import, history, queue, detail, and batch pages load only their o
 test("agent directory links to one-agent detail instead of expanding every skill list", () => {
   const list = read("apps/web/src/features/agents/agents-page.tsx");
   const detail = read("apps/web/src/features/agents/agent-detail-page.tsx");
-  assert.match(list, /href=\{`\/agents\/\$\{encodeURIComponent\(agent\.id\)\}`\}/);
+  assert.match(list, /href=\{trainingHref\(`\/agents\/\$\{encodeURIComponent\(agent\.id\)\}`, identityFilters\)\}/);
   assert.doesNotMatch(list, /agent\.skills\.map/);
   assert.match(detail, /agent\.skills\.map/);
+  assert.match(detail, /Agent Skill 指令/);
+  assert.match(detail, /Skill 指令正文/);
+  assert.match(detail, /skill\.description \|\| "服务端未提供 Skill 指令正文。"/);
   assert.match(detail, /!agent[\s\S]*未回退展示其他记录/);
+  assert.match(detail, /trainingScope = agent \? \{ \.\.\.identityFilters, agentId: agent\.id \} : identityFilters/);
+  assert.match(detail, /trainingHref\("\/training\/overview", trainingScope\)/);
+  assert.match(detail, /trainingHref\("\/training\/import", trainingScope\)/);
+  assert.match(detail, /trainingHref\("\/training\/review", trainingScope\)/);
+  assert.match(detail, /trainingHref\("\/training\/skills", trainingScope\)/);
+  assert.match(detail, /data-action-id="agent-detail-open-training-skills"/);
 });
 
 test("responsibility documents list the focused workflow URLs and no longer describe them as redirects", () => {
@@ -68,8 +82,6 @@ test("responsibility documents list the focused workflow URLs and no longer desc
   const focusedRoutes = [
     "/integrations/wechat-work/flow",
     "/integrations/wechat-work/settings",
-    "/integrations/personal-wechat/instances/configure",
-    "/integrations/personal-wechat/inbound-drill",
     "/design/jobs/[id]/submit",
     "/design/jobs/[id]/status",
     "/catalog/products/[skuCode]",

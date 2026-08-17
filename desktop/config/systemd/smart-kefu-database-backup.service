@@ -1,0 +1,28 @@
+[Unit]
+Description=Smart Kefu verified PostgreSQL backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=smartkefu
+Group=smartkefu
+Environment=ENV_FILE=/opt/smart-kefu/shared/runtime.env
+Environment=BACKUP_ROOT=/opt/smart-kefu/shared/backups/daily
+Environment=RETENTION_DAYS=14
+ExecStart=/opt/smart-kefu/shared/tooling/server-postgres-backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/smart-kefu/shared/backups
+
+[Install]
+WantedBy=multi-user.target

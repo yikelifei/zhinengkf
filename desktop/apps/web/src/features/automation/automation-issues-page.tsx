@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useMemo } from "react";
 import {
-  getAutomationReadiness,
-  getAutomationStatus,
   type AutomationReadiness,
   type AutomationRun,
   type AutomationStatus,
+  type IdentityFilters,
 } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import { automationRunIssueHref } from "./automation-identity-navigation";
+import { automationIssueHref } from "./automation-issue-routing";
+import { useAutomationOperations } from "./use-automation-operations";
 
 type AutomationIssue = {
   id: string;
@@ -17,34 +20,11 @@ type AutomationIssue = {
   action: string;
   tone: "warning" | "error";
   source: string;
+  href: string;
 };
 
-export function AutomationIssuesPage() {
-  const [status, setStatus] = useState<AutomationStatus | null>(null);
-  const [readiness, setReadiness] = useState<AutomationReadiness | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const refresh = useCallback(async () => {
-    setBusy(true);
-    setError("");
-    const [statusResult, readinessResult] = await Promise.allSettled([
-      getAutomationStatus(),
-      getAutomationReadiness(),
-    ]);
-    const nextStatus = statusResult.status === "fulfilled" ? statusResult.value : null;
-    const nextReadiness = readinessResult.status === "fulfilled" ? readinessResult.value : null;
-    setStatus(nextStatus);
-    setReadiness(nextReadiness);
-    if (!nextStatus || !nextReadiness) {
-      setError("无法确认完整自动化状态，问题中心已停止给出可运行结论。");
-    }
-    setBusy(false);
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+export function AutomationIssuesPage({ identityFilters }: { identityFilters?: IdentityFilters }) {
+  const { status, readiness, busy, error, readState, refresh } = useAutomationOperations({ identityFilters });
 
   const issues = useMemo(() => collectIssues(readiness, status), [readiness, status]);
 
@@ -69,12 +49,13 @@ export function AutomationIssuesPage() {
       </header>
 
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
+      {readState === "stale" ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">当前问题清单来自上次完整读取；可继续排查，但不能据此认定阻断已解除。</div> : null}
 
       <section className={styles.summaryGrid} aria-label="自动化问题摘要">
         <div className={styles.summaryCard}><span>阻断</span><strong>{readiness?.blockers.length ?? "—"}</strong></div>
         <div className={styles.summaryCard}><span>警告</span><strong>{readiness?.warnings.length ?? "—"}</strong></div>
         <div className={styles.summaryCard}><span>运行错误</span><strong>{countRunErrors(status)}</strong></div>
-        <div className={styles.summaryCard}><span>结论</span><strong>{readiness?.ready ? "无阻断" : readiness ? "需处理" : "未知"}</strong></div>
+        <div className={styles.summaryCard}><span>结论</span><strong>{readState === "ready" ? (readiness?.ready ? "无阻断" : "需处理") : "未知"}</strong></div>
       </section>
 
       <section className={styles.panel} aria-labelledby="automation-issue-list-title">
@@ -93,11 +74,12 @@ export function AutomationIssuesPage() {
                     </span>
                   </div>
                   <div className={styles.recordMeta}><span>来源：{issue.source}</span><span>下一步：{issue.action}</span></div>
+                  <div className={styles.buttonRow}><Link className={styles.button} href={issue.href} data-action-id={`automation-issue-open-${issue.id}`}>前往处理</Link></div>
                 </article>
               ))}
             </div>
           ) : (
-            <div className={styles.empty}>{readiness?.ready ? "当前没有服务端报告的自动化问题。" : "尚未取得可核验的问题数据。"}</div>
+            <div className={styles.empty}>{readState === "ready" && readiness?.ready ? "当前没有服务端报告的自动化问题。" : "尚未取得可核验的问题数据。"}</div>
           )}
         </div>
       </section>
@@ -114,6 +96,7 @@ function collectIssues(readiness: AutomationReadiness | null, status: Automation
         action: check.action || "按服务端检查说明处理后刷新",
         tone: check.severity === "error" ? "error" as const : "warning" as const,
         source: "就绪检查",
+        href: automationIssueHref(check.key, `${check.label} ${check.detail} ${check.action || ""}`),
       }))
     : undefined;
   const runIssues = status?.recentRuns?.flatMap((run, runIndex) => collectRunIssues(run, runIndex));
@@ -128,6 +111,7 @@ function collectRunIssues(run: AutomationRun, runIndex: number): AutomationIssue
     action: "核对对应服务与数据后，再由运行页人工确认重试",
     tone: "error" as const,
     source: formatRunSource(run),
+    href: automationRunIssueHref(automationIssueHref(entry.step, `${entry.step} ${entry.errorMessage}`), run),
   }));
   if (run.skipped && !errors.length) {
     errors.push({
@@ -137,6 +121,7 @@ function collectRunIssues(run: AutomationRun, runIndex: number): AutomationIssue
       action: "检查运行状态与并发任务",
       tone: "warning",
       source: formatRunSource(run),
+      href: "/automation/runs",
     });
   }
   return errors;

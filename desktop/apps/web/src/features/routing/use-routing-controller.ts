@@ -8,6 +8,7 @@ import type {
   OperatorCapability,
   RouteEvaluation,
 } from "../../lib/api";
+import { createClientOperationKey } from "../../lib/client-operation-key";
 import { routingFeatureApi, type RoutingFeatureApi } from "./api";
 
 type AccessPhase = "loading" | "ready" | "denied" | "error";
@@ -18,12 +19,13 @@ function capabilityAllowed(status: OperatorAccessStatus, capability: OperatorCap
   return status.enforcementReady && status.capabilities.includes(capability);
 }
 
-export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi) {
+export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi, initialConversationId = "") {
   const [accessPhase, setAccessPhase] = useState<AccessPhase>("loading");
   const [accessStatus, setAccessStatus] = useState<OperatorAccessStatus | null>(null);
   const [accessError, setAccessError] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationsError, setConversationsError] = useState("");
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [selectedConversationId, setSelectedConversationIdState] = useState("");
   const [messageText, setMessageTextState] = useState("");
   const [busy, setBusy] = useState<RoutingBusy>("");
@@ -33,6 +35,7 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
   const [processResult, setProcessResult] = useState<InboundProcessResult | null>(null);
   const [resultKind, setResultKind] = useState<RoutingResultKind>(null);
   const [processConfirmationOpen, setProcessConfirmationOpen] = useState(false);
+  const [processExternalId, setProcessExternalId] = useState("");
   const refreshSequence = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -40,14 +43,17 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     setAccessPhase("loading");
     setAccessError("");
     setConversationsError("");
+    setConversationsLoaded(false);
+    setConversations([]);
+    setSelectedConversationIdState("");
+    setProcessConfirmationOpen(false);
+    setProcessExternalId("");
     try {
       const status = await api.getOperatorAccessStatus();
       if (sequence !== refreshSequence.current) return;
       setAccessStatus(status);
       if (!capabilityAllowed(status, "view_console")) {
         setAccessPhase("denied");
-        setConversations([]);
-        setSelectedConversationIdState("");
         return;
       }
       setAccessPhase("ready");
@@ -55,9 +61,8 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
         const records = await api.getWechatConversations();
         if (sequence !== refreshSequence.current) return;
         setConversations(records);
-        setSelectedConversationIdState((current) =>
-          current && records.some((conversation) => conversation.id === current) ? current : "",
-        );
+        setConversationsLoaded(true);
+        setSelectedConversationIdState(records.some((conversation) => conversation.id === initialConversationId) ? initialConversationId : "");
       } catch (error) {
         if (sequence === refreshSequence.current) setConversationsError(errorMessage(error, "会话列表读取失败"));
       }
@@ -67,7 +72,7 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
       setAccessPhase("error");
       setAccessError(errorMessage(error, "无法确认当前操作员权限"));
     }
-  }, [api]);
+  }, [api, initialConversationId]);
 
   useEffect(() => {
     void refresh();
@@ -80,7 +85,13 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     () => conversations.find((conversation) => conversation.id === selectedConversationId) || null,
     [conversations, selectedConversationId],
   );
-  const canProcess = Boolean(accessStatus && capabilityAllowed(accessStatus, "reply_conversations"));
+  const canProcess = Boolean(
+    conversationsLoaded
+      && accessStatus
+      && capabilityAllowed(accessStatus, "reply_conversations")
+      && capabilityAllowed(accessStatus, "approve_send"),
+  );
+  const canEvaluate = conversationsLoaded;
 
   const clearResult = useCallback(() => {
     setRoute(null);
@@ -89,6 +100,7 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     setActionNotice("");
     setActionError("");
     setProcessConfirmationOpen(false);
+    setProcessExternalId("");
   }, []);
 
   const setSelectedConversationId = useCallback((conversationId: string) => {
@@ -102,6 +114,10 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
   }, [clearResult]);
 
   const validateInput = useCallback(() => {
+    if (!conversationsLoaded) {
+      setActionError("会话列表尚未成功读取；为避免使用过期身份，路由评估与消息处理均已阻止。");
+      return null;
+    }
     if (!selectedConversation) {
       setActionError("请先明确选择要判断的客户会话；系统不会默认使用第一个客户。");
       return null;
@@ -112,7 +128,7 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
       return null;
     }
     return { conversation: selectedConversation, text };
-  }, [messageText, selectedConversation]);
+  }, [conversationsLoaded, messageText, selectedConversation]);
 
   const evaluateOnly = useCallback(async () => {
     const input = validateInput();
@@ -144,16 +160,17 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     const input = validateInput();
     if (!input || busy) return;
     if (!canProcess) {
-      setActionError("当前操作员没有 reply_conversations 权限，不能处理客户消息。");
+      setActionError("当前操作员必须同时具备 reply_conversations 与 approve_send 权限，才能写入并处理客户消息。");
       return;
     }
     setActionError("");
+    setProcessExternalId((current) => current || createClientOperationKey("routing-inbound"));
     setProcessConfirmationOpen(true);
   }, [busy, canProcess, validateInput]);
 
   const confirmProcessing = useCallback(async () => {
     const input = validateInput();
-    if (!input || busy || !canProcess) return;
+    if (!input || busy || !canProcess || !processExternalId) return;
     const { conversation, text } = input;
     setProcessConfirmationOpen(false);
     setBusy("process");
@@ -165,20 +182,22 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
         wechatAccountId: conversation.wechatAccountId,
         customerId: conversation.customerId,
         text,
+        externalId: processExternalId,
       });
       setRoute(result.route);
       setProcessResult(result);
       setResultKind("processed");
-      setActionNotice(`客户消息已处理，服务端计划为 ${result.plan.type}。`);
+      setActionNotice(`服务端已保存该客户消息并返回 ${result.plan.type} 计划；后续任务与发送结果仍以对应责任页的服务端记录为准。`);
+      setProcessExternalId("");
     } catch (error) {
       setRoute(null);
       setProcessResult(null);
       setResultKind(null);
-      setActionError(errorMessage(error, "客户消息处理失败"));
+      setActionError(errorMessage(error, "客户消息处理结果未确认；再次确认会复用同一操作标识，请勿改文案后盲目重试"));
     } finally {
       setBusy("");
     }
-  }, [api, busy, canProcess, validateInput]);
+  }, [api, busy, canProcess, processExternalId, validateInput]);
 
   const permissionDetail = accessStatus
     ? [accessStatus.notice, ...accessStatus.blockers.map((blocker) => blocker.message), ...accessStatus.requiredNextSteps]
@@ -192,6 +211,7 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     permissionDetail,
     conversations,
     conversationsError,
+    conversationsLoaded,
     selectedConversation,
     selectedConversationId,
     setSelectedConversationId,
@@ -199,12 +219,14 @@ export function useRoutingController(api: RoutingFeatureApi = routingFeatureApi)
     setMessageText,
     busy,
     canProcess,
+    canEvaluate,
     actionError,
     actionNotice,
     route,
     processResult,
     resultKind,
     processConfirmationOpen,
+    processExternalId,
     setProcessConfirmationOpen,
     refresh,
     evaluateOnly,

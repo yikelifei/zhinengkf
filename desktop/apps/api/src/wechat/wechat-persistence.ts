@@ -369,10 +369,22 @@ export class WechatPersistence {
 
   async getRecentMessage(conversationId: string) {
     if (this.isLocal) return this.localStore.getRecentMessage(conversationId);
-    const message = await this.prisma.message.findFirst({
-      where: { conversationId },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    });
+    const [candidates, rpaAudits] = await Promise.all([
+      this.prisma.message.findMany({
+        where: { conversationId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 100,
+      }),
+      (this.prisma as any).personalWechatRpaAuditLog.findMany({
+        where: { conversationId, messageId: { not: null } },
+        select: { messageId: true },
+        take: 500,
+      }),
+    ]);
+    const rpaMessageIds = new Set<string>(
+      rpaAudits.map((item: any) => String(item.messageId || "")).filter(Boolean),
+    );
+    const message = candidates.find((item: any) => isTrustedTimelineMessage(item, rpaMessageIds)) || null;
     if (!message) return null;
     const conversation = await this.getConversation(conversationId);
     return this.hydrateMessage(message, conversation);
@@ -382,7 +394,7 @@ export class WechatPersistence {
     if (this.isLocal) return this.localStore.listConversationTimeline(filter as any);
     const conversation = await this.requireConversationIdentity(filter, "message history");
     const limit = Math.max(1, Math.min(Number(filter.limit || 300), 500));
-    const [messages, tasks] = await Promise.all([
+    const [messages, tasks, rpaAudits] = await Promise.all([
       (this.prisma as any).message.findMany({
         where: { conversationId: conversation.id },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -393,9 +405,27 @@ export class WechatPersistence {
         orderBy: [{ queuedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
         take: limit,
       }),
+      (this.prisma as any).personalWechatRpaAuditLog.findMany({
+        where: { conversationId: conversation.id, messageId: { not: null } },
+        select: { messageId: true },
+        take: Math.max(limit, 500),
+      }),
     ]);
+    const rpaMessageIds = new Set<string>(
+      rpaAudits.map((item: any) => String(item.messageId || "")).filter(Boolean),
+    );
+    const taskAssetIds = [
+      ...new Set(
+        tasks.flatMap((task: any) => Array.isArray(task?.payload?.assetIds) ? task.payload.assetIds.map(String) : []),
+      ),
+    ];
+    const timelineAssets = taskAssetIds.length
+      ? await (this.prisma as any).designAsset.findMany({ where: { id: { in: taskAssetIds } } })
+      : [];
     return [
-      ...messages.map((message: any) => ({
+      ...messages
+        .filter((message: any) => isTrustedTimelineMessage(message, rpaMessageIds))
+        .map((message: any) => ({
         ...message,
         source: "message",
         customerId: conversation.customerId,
@@ -403,7 +433,9 @@ export class WechatPersistence {
         status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
         attachments: this.timelineAttachments(message.attachments, message.readAt ? "read" : "received"),
       })),
-      ...tasks.map((task: any) => ({
+      ...tasks
+        .filter((task: any) => !isSyntheticTimelineText(task.payload?.text || task.payload?.textBeforeImages || task.payload?.textBeforeFiles))
+        .map((task: any) => ({
         id: `send-task:${task.id}`,
         source: "send_task",
         sendTaskId: task.id,
@@ -411,13 +443,8 @@ export class WechatPersistence {
         customerId: conversation.customerId,
         wechatAccountId: conversation.wechatAccountId,
         direction: "outbound",
-        text: String(task.payload?.text || task.payload?.textBeforeImages || ""),
-        attachments: this.timelineAttachments(
-          Array.isArray(task.payload?.imagePaths)
-            ? task.payload.imagePaths.map((localPath: string) => ({ localPath, kind: "image" }))
-            : [],
-          task.status || "queued",
-        ),
+        text: String(task.payload?.text || task.payload?.textBeforeImages || task.payload?.textBeforeFiles || ""),
+        attachments: this.timelineTaskAttachments(task, timelineAssets),
         status: task.status || "queued",
         errorMessage: task.errorMessage || "",
         createdAt: task.queuedAt || task.createdAt,
@@ -544,6 +571,19 @@ export class WechatPersistence {
   async getRouteEvaluation(id: string) {
     if (this.isLocal) return this.localStore.getRouteEvaluation(id);
     return (this.prisma as any).routeEvaluation.findUnique({ where: { id } });
+  }
+
+  async listRouteEvaluations(filter: IdentityFilter = {}) {
+    if (this.isLocal) return this.localStore.listRouteEvaluations(filter);
+    return (this.prisma as any).routeEvaluation.findMany({
+      where: {
+        ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+        ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
+      },
+      include: { agent: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
   }
 
   async getNotification(id: string) {
@@ -946,7 +986,34 @@ export class WechatPersistence {
     return rows.length;
   }
 
-  async upsertWechatWorkBinding(payload: { openKfid: string; externalUserId: string; sendTime?: number }) {
+  async upsertWechatWorkAccount(payload: { openKfid: string; name?: string; avatar?: string }) {
+    if (this.isLocal) return this.localStore.upsertWechatWorkAccount(payload);
+    const openKfid = String(payload.openKfid || "").trim();
+    if (!openKfid) throw new BadRequestException("wechat work account requires openKfid");
+    const officialName = String(payload.name || "").trim();
+    const accountId = deterministicOperationId("wwacct", this.wechatWorkCanonicalKey("account", openKfid));
+    const displayName = officialName || `企业微信客服 ${shortExternalId(openKfid)}`;
+    return (this.prisma as any).wechatAccount.upsert({
+      where: { id: accountId },
+      create: {
+        id: accountId,
+        displayName,
+        alias: shortExternalId(openKfid),
+        isActive: true,
+      },
+      update: {
+        ...(officialName ? { displayName: officialName } : {}),
+        isActive: true,
+      },
+    });
+  }
+
+  async upsertWechatWorkBinding(payload: {
+    openKfid: string;
+    externalUserId: string;
+    sendTime?: number;
+    customerProfile?: { nickname?: string; avatar?: string };
+  }) {
     if (this.isLocal) return this.localStore.upsertWechatWorkBinding(payload);
     const openKfid = String(payload.openKfid || "").trim();
     const externalUserId = String(payload.externalUserId || "").trim();
@@ -959,7 +1026,12 @@ export class WechatPersistence {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         return await prisma.$transaction((tx: any) =>
-          this.upsertCanonicalWechatWorkBinding(tx, { openKfid, externalUserId, lastInboundAt }),
+          this.upsertCanonicalWechatWorkBinding(tx, {
+            openKfid,
+            externalUserId,
+            lastInboundAt,
+            customerProfile: payload.customerProfile,
+          }),
         );
       } catch (error) {
         if (!isUniqueConstraintError(error)) throw error;
@@ -971,9 +1043,16 @@ export class WechatPersistence {
 
   private async upsertCanonicalWechatWorkBinding(
     tx: any,
-    payload: { openKfid: string; externalUserId: string; lastInboundAt: Date | null },
+    payload: {
+      openKfid: string;
+      externalUserId: string;
+      lastInboundAt: Date | null;
+      customerProfile?: { nickname?: string; avatar?: string };
+    },
   ) {
     const { openKfid, externalUserId, lastInboundAt } = payload;
+    const profileName = String(payload.customerProfile?.nickname || "").trim();
+    const profileAvatar = String(payload.customerProfile?.avatar || "").trim();
     const include = { wechatAccount: true, customer: true, conversation: true };
     const [existing, accountHistory, customerHistory] = await Promise.all([
       tx.wechatWorkBinding.findUnique({
@@ -995,7 +1074,31 @@ export class WechatPersistence {
 
     if (existing) {
       this.assertCanonicalWechatWorkBinding(existing, { openKfid, externalUserId, accountId, customerId });
-      if (!lastInboundAt) return existing;
+      if (profileName || profileAvatar) {
+        const previousName = String(existing.customer?.name || "");
+        await tx.customer.update({
+          where: { id: customerId },
+          data: {
+            ...(profileName ? { name: profileName } : {}),
+            ...(profileAvatar ? { avatarUrl: profileAvatar } : {}),
+          },
+        });
+        if (profileName && (
+          existing.conversation?.title === previousName
+          || isWechatWorkPlaceholderName(existing.conversation?.title)
+        )) {
+          await tx.conversation.update({
+            where: { id: existing.conversationId },
+            data: { title: profileName },
+          });
+        }
+      }
+      if (!lastInboundAt) {
+        if (!profileName && !profileAvatar) return existing;
+        const profiled = await tx.wechatWorkBinding.findUnique({ where: { id: existing.id }, include });
+        if (!profiled) throw new BadRequestException("wechat work canonical binding disappeared during profile refresh");
+        return profiled;
+      }
       await tx.wechatWorkBinding.updateMany({
         where: {
           id: existing.id,
@@ -1033,7 +1136,8 @@ export class WechatPersistence {
       customer = await tx.customer.create({
         data: {
           id: customerId,
-          name: `企业微信客户 ${shortExternalId(externalUserId)}`,
+          name: profileName || `企业微信客户 ${shortExternalId(externalUserId)}`,
+          avatarUrl: profileAvatar || null,
           source: "wechat_work_kf",
           tags: ["企业微信客服"],
         },
@@ -1207,6 +1311,43 @@ export class WechatPersistence {
       ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}),
       ...record,
     }));
+  }
+
+  async upsertWechatWorkAudit(payload: Record<string, unknown>) {
+    if (this.isLocal) return this.localStore.upsertWechatWorkAudit(payload);
+    const recordId = String(payload.id || "").trim();
+    if (!recordId) return this.recordWechatWorkAudit(payload);
+    const knownKeys = new Set([
+      "id", "action", "status", "msgid", "callbackId", "event", "openKfid", "externalUserId",
+      "wechatAccountId", "customerId", "conversationId", "messageId", "sendTaskId", "sendAttemptId",
+      "errorMessage", "createdAt",
+    ]);
+    const metadata = Object.fromEntries(Object.entries(payload).filter(([key]) => !knownKeys.has(key)));
+    const data = {
+      action: String(payload.action || "unknown"),
+      status: String(payload.status || "unknown"),
+      ...this.auditScalarFields(payload),
+      metadata: Object.keys(metadata).length ? this.jsonOrNull(metadata) : undefined,
+    };
+    return (this.prisma as any).wechatWorkAuditLog.upsert({
+      where: { id: recordId },
+      create: {
+        id: recordId,
+        ...data,
+        ...(payload.createdAt ? { createdAt: new Date(String(payload.createdAt)) } : {}),
+      },
+      update: data,
+    });
+  }
+
+  async getWechatWorkAuditLog(id: string) {
+    if (this.isLocal) return this.localStore.getWechatWorkAuditLog(id);
+    const record = await (this.prisma as any).wechatWorkAuditLog.findUnique({ where: { id } });
+    if (!record) return null;
+    return {
+      ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}),
+      ...record,
+    };
   }
 
   async hasWechatWorkAuditMsgId(msgid: string) {
@@ -1537,6 +1678,35 @@ export class WechatPersistence {
     );
   }
 
+  private timelineTaskAttachments(task: any, designAssets: any[]) {
+    const imagePaths = Array.isArray(task?.payload?.imagePaths) ? task.payload.imagePaths : [];
+    const filePaths = Array.isArray(task?.payload?.filePaths) ? task.payload.filePaths : [];
+    const assetIds = Array.isArray(task?.payload?.assetIds) ? task.payload.assetIds.map(String) : [];
+    const assetsById = new Map(designAssets.map((asset: any) => [String(asset?.id || ""), asset]));
+    const orderedAssets = assetIds.map((assetId: string) => assetsById.get(assetId)).filter(Boolean) as any[];
+    const imageAssets = orderedAssets.filter((asset: any) => ["image/jpeg", "image/png"].includes(String(asset?.mimeType || "").toLowerCase()));
+    const fileAssets = orderedAssets.filter((asset: any) => !imageAssets.includes(asset));
+    return this.timelineAttachments(
+      [
+        ...imagePaths.map((localPath: string, index: number) => ({
+          localPath,
+          kind: "image",
+          assetId: imageAssets[index]?.id,
+          name: imageAssets[index]?.fileName,
+          mimeType: imageAssets[index]?.mimeType,
+        })),
+        ...filePaths.map((localPath: string, index: number) => ({
+          localPath,
+          kind: "file",
+          assetId: fileAssets[index]?.id,
+          name: fileAssets[index]?.fileName,
+          mimeType: fileAssets[index]?.mimeType,
+        })),
+      ],
+      task?.status || "queued",
+    );
+  }
+
   private auditScalarFields(payload: Record<string, unknown>) {
     const result: Record<string, string | null> = {};
     for (const key of [
@@ -1554,4 +1724,21 @@ export class WechatPersistence {
 function shortExternalId(value: string) {
   const normalized = String(value || "").trim();
   return normalized.length <= 12 ? normalized : `${normalized.slice(0, 6)}…${normalized.slice(-4)}`;
+}
+
+function isWechatWorkPlaceholderName(value: unknown) {
+  return /^企业微信客户(?:\s|$)/.test(String(value || "").trim());
+}
+
+const TRUSTED_RPA_TIMELINE_SOURCES = new Set(["uia_accessibility", "ocr_verified_bubble"]);
+
+function isTrustedTimelineMessage(message: any, rpaMessageIds: Set<string>) {
+  if (isSyntheticTimelineText(message?.text)) return false;
+  if (message?.direction !== "inbound" || !rpaMessageIds.has(String(message?.id || ""))) return true;
+  return TRUSTED_RPA_TIMELINE_SOURCES.has(String(message?.metadata?.inboundCaptureSource || ""));
+}
+
+function isSyntheticTimelineText(value: unknown) {
+  const text = String(value || "").trim();
+  return text === "你的回复内容" || /^RPA入站测试(?:-|$)/i.test(text);
 }

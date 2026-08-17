@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { IdentityFilters } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import { automationIdentityHref } from "./automation-identity-navigation";
 import { useAutomationOperations } from "./use-automation-operations";
 
 export type AutomationRunsPageProps = {
@@ -35,13 +36,13 @@ export function AutomationRunsPage({ identityFilters, allowGlobalRun = false }: 
       </section>
 
       <nav className={styles.taskList} aria-label="自动化责任页面">
-        <Link className={styles.taskLink} href="/automation/control">
+        <Link className={styles.taskLink} href={automationIdentityHref("/automation/control", identityFilters)}>
           <span><strong>运行控制</strong><small>启动、停止或人工执行一次，并在提交前再次确认。</small></span><b>进入</b>
         </Link>
-        <Link className={styles.taskLink} href="/automation/history">
+        <Link className={styles.taskLink} href={automationIdentityHref("/automation/history", identityFilters)}>
           <span><strong>运行历史</strong><small>查看服务端返回的运行结果、耗时、推进与阻断。</small></span><b>进入</b>
         </Link>
-        <Link className={styles.taskLink} href="/automation/issues">
+        <Link className={styles.taskLink} href={automationIdentityHref("/automation/issues", identityFilters)}>
           <span><strong>阻断问题</strong><small>定位身份、商品、设计和发送链路中的待处理问题。</small></span><b>进入</b>
         </Link>
       </nav>

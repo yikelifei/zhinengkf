@@ -376,6 +376,20 @@
   line-height: 1.5;
 }
 
+.businessContext {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+}
+
+.businessContext p {
+  margin: 4px 0 0;
+}
+
 .confirmation {
   display: grid;
   gap: 14px;
@@ -483,7 +497,8 @@
   .panelHeader,
   .taskHeader,
   .confirmationHeader,
-  .runtimeHeader {
+  .runtimeHeader,
+  .businessContext {
     align-items: stretch;
     flex-direction: column;
   }
@@ -498,6 +513,8 @@
   .headerActions button,
   .toolbar button,
   .buttonRow button,
+  .buttonRow .primaryLink,
+  .buttonRow .secondaryLink,
   .taskActions button {
     width: 100%;
   }

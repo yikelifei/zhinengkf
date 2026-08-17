@@ -80,6 +80,34 @@ export class StorageService {
     return { localPath, sizeBytes: buffer.length, mimeType: content.mimeType };
   }
 
+  async saveAssetFromLocalFile(params: {
+    ownerType: string;
+    ownerId: string;
+    filePath: string;
+    fileName?: string;
+  }): Promise<{ localPath: string; sizeBytes: number; mimeType: string }> {
+    const sourcePath = normalizeLocalSourcePath(params.filePath);
+    let canonicalPath: string;
+    try {
+      canonicalPath = await fs.realpath(sourcePath);
+    } catch {
+      throw new NotFoundException("source image file not found");
+    }
+    const stat = await fs.stat(canonicalPath);
+    if (!stat.isFile()) throw new BadRequestException("source image path must be a file");
+    assertAssetByteLength(stat.size);
+    const buffer = await fs.readFile(canonicalPath);
+    const claimedName = params.fileName || path.basename(canonicalPath);
+    const content = await inspectSafeAssetContent(buffer, claimedName, {
+      allowPdf: false,
+      allowText: false,
+      requireExtension: Boolean(path.extname(claimedName)),
+    });
+    const localPath = await this.assetPath(params.ownerType, params.ownerId, claimedName || `image${content.extension}`);
+    await fs.writeFile(localPath, buffer);
+    return { localPath, sizeBytes: buffer.length, mimeType: content.mimeType };
+  }
+
   async readLocalAsset(localPath: string): Promise<{
     stream: Readable;
     mimeType: string;
@@ -168,6 +196,7 @@ function designImageDownloadOptions(): SafeDownloadOptions {
     maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES,
     maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES,
     headersForUrl: designPlatformDownloadHeaders,
+    allowLoopbackOrigins: acceptanceLoopbackDesignDownloadOrigins(),
   };
 }
 
@@ -194,6 +223,16 @@ function normalizeAssetUrl(url: string): string {
   return parsed.toString();
 }
 
+function normalizeLocalSourcePath(filePath: string): string {
+  const value = String(filePath || "").trim();
+  if (!value) throw new BadRequestException("source image path is required");
+  if (/^https?:\/\//i.test(value) || value.startsWith("data:")) {
+    throw new BadRequestException("source image path must be a local file");
+  }
+  if (!path.isAbsolute(value)) throw new BadRequestException("source image path must be absolute");
+  return path.resolve(value);
+}
+
 function designPlatformDownloadHeaders(sourceUrl: string): Record<string, string> {
   if (!isDesignPlatformUrl(sourceUrl)) return {};
   const headers: Record<string, string> = {};
@@ -202,6 +241,22 @@ function designPlatformDownloadHeaders(sourceUrl: string): Record<string, string
   if (appConfig.designPlatformCookie) headers.Cookie = appConfig.designPlatformCookie;
   if (appConfig.designPlatformDeviceId) headers["x-art-device-id"] = appConfig.designPlatformDeviceId;
   return headers;
+}
+
+function acceptanceLoopbackDesignDownloadOrigins(): string[] {
+  if (!appConfig.acceptanceAllowLoopbackDesignDownloads) return [];
+  try {
+    const baseUrl = new URL(appConfig.designPlatformBaseUrl);
+    if (!isLoopbackHostname(baseUrl.hostname)) return [];
+    return [baseUrl.origin];
+  } catch {
+    return [];
+  }
+}
+
+function isLoopbackHostname(value: string): boolean {
+  const hostname = String(value || "").trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "::1" || /^127\./.test(hostname);
 }
 
 function isDesignPlatformUrl(sourceUrl: string): boolean {

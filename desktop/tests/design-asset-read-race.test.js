@@ -300,12 +300,17 @@ test("dispose blocks every in-flight upload continuation and activate supports S
 
 test("design assets page wires identity changes, upload refresh, and unmount into the shared operation guard", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "../apps/web/src/features/design/design-assets-page.tsx"), "utf8");
+  const uploadPanel = fs.readFileSync(
+    path.resolve(__dirname, "../apps/web/src/features/design/design-assets-upload-panel.tsx"),
+    "utf8",
+  );
+  const feature = `${page}\n${uploadPanel}`;
 
   assert.match(page, /runGuardedDesignAssetMutation\(\{/);
   assert.match(page, /assetOperationGuard\.activate\(\)/);
   assert.match(page, /return \(\) => assetOperationGuard\.dispose\(\)/);
   assert.match(page, /assetOperationGuard\.invalidate\(identity\)/);
   assert.match(page, /function invalidateAssetOperations/);
-  assert.match(page, /disabled=\{Boolean\(busy\)\}/);
+  assert.match(feature, /disabled=\{Boolean\(busy\)\}/);
   assert.doesNotMatch(page, /await refreshAssets\(\)/);
 });

@@ -74,6 +74,81 @@ test("stale lock takeover never lets the old owner remove the new owner's lock",
   assert.equal(fs.existsSync(lockPath), false);
 });
 
+test("local store atomic write retries transient Windows rename locks", () => {
+  appConfig.useLocalStore = true;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-store-rename-retry-"));
+  const filePath = path.join(tempDir, "local-store.json");
+  const store = createStore(filePath);
+  const originalRenameSync = fs.renameSync;
+  let injected = false;
+  try {
+    fs.renameSync = (source, destination) => {
+      const sourceText = String(source);
+      const destinationText = String(destination);
+      if (!injected && sourceText.includes(".local-store.json.") && destinationText.endsWith("local-store.json")) {
+        injected = true;
+        const error = new Error("transient file lock");
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalRenameSync(source, destination);
+    };
+    const task = store.createSendTask({
+      ...identity,
+      operationKey: "local-store-rename-retry-send-task",
+      status: "queued",
+      payload: { kind: "text", text: "rename retry should preserve queued task" },
+      guardSnapshot: {
+        requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+        policy: "single-account-serial-queue",
+      },
+    });
+    assert.equal(injected, true);
+    assert.equal(task.status, "queued");
+    assert.equal(createStore(filePath).getSendTask(task.id).payload.text, "rename retry should preserve queued task");
+    assert.equal(fs.readdirSync(tempDir).some((fileName) => fileName.endsWith(".tmp")), false);
+  } finally {
+    fs.renameSync = originalRenameSync;
+  }
+});
+
+test("local store repairs raw null-byte corruption only when the complete JSON becomes valid", () => {
+  appConfig.useLocalStore = true;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-store-null-byte-recovery-"));
+  const filePath = path.join(tempDir, "local-store.json");
+  const originalAccounts = createStore(filePath).listWechatAccounts();
+  const validContents = fs.readFileSync(filePath, "utf8");
+  const marker = '"customers"';
+  assert.equal(validContents.includes(marker), true);
+  const corruptContents = validContents.replace(marker, `\0${marker}`);
+  fs.writeFileSync(filePath, corruptContents, "utf8");
+
+  const recoveredAccounts = createStore(filePath).listWechatAccounts();
+
+  assert.deepEqual(recoveredAccounts, originalAccounts);
+  const recoveredContents = fs.readFileSync(filePath, "utf8");
+  assert.equal(recoveredContents.includes("\0"), false);
+  assert.doesNotThrow(() => JSON.parse(recoveredContents));
+  const backups = fs.readdirSync(tempDir).filter((name) =>
+    name.startsWith("local-store.json.before-null-byte-repair-") && name.endsWith(".bak"),
+  );
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(tempDir, backups[0]), "utf8"), corruptContents);
+});
+
+test("local store refuses malformed JSON that null-byte removal cannot fully repair", () => {
+  appConfig.useLocalStore = true;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-store-invalid-json-"));
+  const filePath = path.join(tempDir, "local-store.json");
+  fs.writeFileSync(filePath, '{"wechatAccounts": [\0}', "utf8");
+
+  assert.throws(() => createStore(filePath).listWechatAccounts(), SyntaxError);
+  assert.equal(
+    fs.readdirSync(tempDir).some((name) => name.startsWith("local-store.json.before-null-byte-repair-")),
+    false,
+  );
+});
+
 test("two LocalStore instances fence owner A after owner B reclaims the inbound lease", () => {
   appConfig.useLocalStore = true;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-store-stale-writer-"));

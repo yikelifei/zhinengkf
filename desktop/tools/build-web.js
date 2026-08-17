@@ -18,6 +18,15 @@ const stableStartingLockFile = path.join(root, ".runtime-stable", "stable-starti
 const stableRuntimeLauncherPidFile = path.join(root, ".runtime-stable", "stable-runtime-launcher.pid");
 const nextDir = path.join(root, "apps", "web", ".next");
 const nextLockFile = path.join(root, "apps", "web", ".next", "lock");
+const nextEnvFile = path.join(root, "apps", "web", "next-env.d.ts");
+const nextEnvProductionTypes =
+  '/// <reference types="next" />\n' +
+  '/// <reference types="next/image-types/global" />\n' +
+  '/// <reference types="next/navigation-types/compat/navigation" />\n' +
+  'import "./.next/types/routes.d.ts";\n' +
+  "\n" +
+  "// NOTE: This file should not be edited\n" +
+  "// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.\n";
 
 if (require.main === module) main();
 
@@ -82,7 +91,7 @@ function main() {
     resetNextBuildState();
   }
   if (standaloneServerExists() && productionBuildReady() && !webBuildIsStale()) {
-    run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
+    syncStandaloneAssets();
     buildDiagnostic("after existing standalone sync");
     return;
   }
@@ -95,8 +104,20 @@ function main() {
   }
   runNextBuild();
   buildDiagnostic("after next build");
-  run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
+  syncStandaloneAssets();
   buildDiagnostic("after standalone sync");
+}
+
+function syncStandaloneAssets() {
+  run(process.execPath, ["tools/sync-web-standalone-assets.js"]);
+  restoreNextEnvTypes();
+}
+
+function restoreNextEnvTypes() {
+  if (!fs.existsSync(nextEnvFile)) return;
+  const current = fs.readFileSync(nextEnvFile, "utf8");
+  if (current === nextEnvProductionTypes) return;
+  fs.writeFileSync(nextEnvFile, nextEnvProductionTypes, "utf8");
 }
 
 function acquireBuildLock() {

@@ -75,6 +75,10 @@ function setup() {
       },
     },
     designAsset: {
+      async findUnique(query) {
+        state.assetQueries.push(query);
+        return state.assets.find((asset) => asset.id === query.where.id) || null;
+      },
       async findMany(query) {
         state.assetQueries.push(query);
         if (query.where?.normalizedLocalPath) {
@@ -184,11 +188,14 @@ test("Prisma customer upload and list validate exact conversation/account/custom
     const uploaded = await fixture.service.upload({
       ownerType: "customer",
       ownerId: "customer-1",
+      role: "customer_logo",
       fileName: "Uploaded.png",
       base64: Buffer.from("x").toString("base64"),
       ...identity(),
     });
     assert.equal(uploaded.normalizedLocalPath, normalizeWindows(uploaded.localPath));
+    assert.equal(uploaded.role, "customer_logo");
+    assert.equal(fixture.state.creates[0].role, "customer_logo");
     assert.deepEqual(
       fixture.state.conversationQueries[0].where,
       { id: "conversation-1", wechatAccountId: "account-1" },
@@ -252,11 +259,42 @@ test("asset migration nulls every ambiguous legacy key before a Prisma-compatibl
     __dirname,
     "../prisma/migrations/20260719230000_catalog_asset_prisma_parity/migration.sql",
   ), "utf8");
+  const roleMigration = fs.readFileSync(path.resolve(
+    __dirname,
+    "../prisma/migrations/20260726161000_design_asset_role/migration.sql",
+  ), "utf8");
   const schema = fs.readFileSync(path.resolve(__dirname, "../prisma/schema.prisma"), "utf8");
+  const service = fs.readFileSync(path.resolve(__dirname, "../apps/api/src/assets/assets.service.ts"), "utf8");
   assert.match(migration, /ADD COLUMN "normalizedLocalPath" TEXT/);
   assert.match(migration, /count\(\*\) OVER \(PARTITION BY normalized_path\)/);
   assert.match(migration, /classified\.normalized_count > 1 THEN NULL/);
   assert.match(migration, /CREATE UNIQUE INDEX "DesignAsset_normalizedLocalPath_key"/);
   assert.doesNotMatch(migration, /DesignAsset_normalizedLocalPath_key"[\s\S]*\bWHERE\b/);
   assert.match(schema, /normalizedLocalPath\s+String\?\s+@unique/);
+  assert.match(schema, /role\s+String\?/);
+  assert.match(roleMigration, /ADD COLUMN "role" TEXT/);
+  assert.match(service, /role: record\.role/);
+});
+
+test("asset-id preview requires the exact persisted conversation identity", async () => {
+  const previousLocal = appConfig.useLocalStore;
+  const previousRoot = appConfig.localStorageRoot;
+  appConfig.useLocalStore = false;
+  try {
+    const fixture = setup();
+    appConfig.localStorageRoot = fixture.root;
+    await fixture.service.readLocalAssetById("asset-1", identity());
+    await assert.rejects(
+      fixture.service.readLocalAssetById("asset-1", identity({ expectedConversationId: "conversation-other" })),
+      /identity mismatch/,
+    );
+    await assert.rejects(
+      fixture.service.readLocalAssetById("asset-1", {}),
+      /requires conversation identity/,
+    );
+    assert.equal(fixture.state.storageReads.length, 1);
+  } finally {
+    appConfig.useLocalStore = previousLocal;
+    appConfig.localStorageRoot = previousRoot;
+  }
 });

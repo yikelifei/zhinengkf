@@ -409,7 +409,7 @@ test("failed revision callback retries with the same revision instruction", asyn
   }
 });
 
-test("empty revision callback retries with the same revision instruction", async () => {
+test("revision callback with fewer than four candidates retries before saving images", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   appConfig.useLocalStore = true;
 
@@ -443,6 +443,8 @@ test("empty revision callback retries with the same revision instruction", async
     externalJobId: "revision_empty_original",
   };
   const submittedPayloads = [];
+  let storageCalled = false;
+  const notices = [];
 
   const localStore = {
     getDesignJob: () => designJob,
@@ -463,7 +465,12 @@ test("empty revision callback retries with the same revision instruction", async
     getDesignJobResults: async () => ({
       externalJobId: "revision_empty_original",
       status: "completed",
-      images: [],
+      images: [1, 2, 3].map((position) => ({
+        imageId: `candidate_${position}`,
+        downloadUrl: `https://example.test/revision-${position}.png`,
+        width: 1024,
+        height: 1024,
+      })),
     }),
     createDesignJob: async (payload) => {
       submittedPayloads.push(payload);
@@ -471,11 +478,29 @@ test("empty revision callback retries with the same revision instruction", async
     },
   };
   const notifications = {
-    create: async () => ({ id: "notice-1" }),
+    create: async (level, title, body, metadata) => {
+      const notice = { id: "notice-1", level, title, body, metadata };
+      notices.push(notice);
+      return notice;
+    },
   };
 
   try {
-    const service = new DesignJobsService({}, designPlatform, localStore, notifications, {}, {}, {}, {});
+    const service = new DesignJobsService(
+      {},
+      designPlatform,
+      localStore,
+      notifications,
+      {
+        saveDesignImage: async () => {
+          storageCalled = true;
+          throw new Error("candidate count must be checked before storage");
+        },
+      },
+      {},
+      {},
+      {},
+    );
     service.assertDesignPlatformPreflight = async () => ({ ok: true });
     service.scheduleResultPoll = () => {};
 
@@ -489,6 +514,11 @@ test("empty revision callback retries with the same revision instruction", async
     assert.equal(revision.externalJobId, "revision_empty_retry");
     assert.equal(submittedPayloads[0].revision.instruction, "背景换成浅色，礼盒放中间");
     assert.equal(submittedPayloads[0].revision.selectedImageId, "image-2");
+    assert.equal(storageCalled, false);
+    assert.equal(
+      notices.some((notice) => notice.metadata?.returnedImageCount === 3 && notice.metadata?.requiredImageCount === 4),
+      true,
+    );
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }

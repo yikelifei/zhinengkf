@@ -3,12 +3,15 @@
 import { RefreshCw, Search } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import type { IdentityFilters } from "../../lib/api";
+import { SalesRecordVisualStrip } from "./sales-design-visual-summary";
+import { quoteJourneyRecommendation, quoteStatusLabel } from "./sales-commerce-state";
 import { money, SalesEmpty, SalesHeader, SalesNotice } from "./sales-ui";
 import styles from "./sales-pages.module.css";
 import { useSalesQuotes } from "./use-sales-records";
 
-export function SalesQuotesPage() {
-  const { records, loading, loaded, error, refresh } = useSalesQuotes();
+export function SalesQuotesPage({ identityFilters = {} }: { identityFilters?: IdentityFilters }) {
+  const { records, loading, loaded, error, refresh } = useSalesQuotes("", identityFilters);
   const [query, setQuery] = useState("");
   const visibleQuotes = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase("zh-CN");
@@ -58,7 +61,7 @@ export function SalesQuotesPage() {
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        {loading ? (
+        {loading && !loaded ? (
           <SalesEmpty title="正在读取报价" detail="正在连接销售服务。" busy />
         ) : visibleQuotes.length ? (
           <ul className={styles.selectionList}>
@@ -72,7 +75,9 @@ export function SalesQuotesPage() {
                   <span>
                     <strong>{quote.customer?.name || quote.customerId}</strong>
                     <small>{quote.id}</small>
-                    <em>{quote.status} · {quote.paymentStatus}</em>
+                    <SalesRecordVisualStrip record={quote} />
+                    <em>{quoteStatusLabel(quote.status)} · {quote.paymentStatus}</em>
+                    <small>下一步：{quoteJourneyRecommendation(quote)}</small>
                   </span>
                   <span className={styles.rowMeta}>{money(quote.totalPrice)}</span>
                 </Link>

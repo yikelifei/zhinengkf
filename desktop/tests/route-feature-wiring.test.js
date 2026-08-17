@@ -37,21 +37,19 @@ const featureByRouteId = {
   sendDiagnosticOperations: "SendDiagnosticsOperationsPage",
   integrationChannels: "ChannelsStatusPage",
   wechatWorkChannels: "WechatWorkPreflightPage",
+  wechatWorkCustomers: "WechatWorkCustomerEntryPage",
   wechatWorkFlow: "WechatWorkFlowPage",
   wechatWorkSettings: "WechatWorkConfigurationPage",
-  personalWechatInstances: "PersonalWechatInstancesPage",
-  personalWechatInstanceConfig: "PersonalWechatInstanceConfigPage",
-  personalWechatControl: "PersonalWechatControlPage",
-  personalWechatVoiceAssist: "PersonalWechatVoiceAssistPage",
-  personalWechatInbound: "WindowEvidencePage",
-  personalWechatInboundDrill: "PersonalWechatInboundDrillPage",
-  personalWechatSafety: "PersonalWechatSafetyPage",
+  wechatWorkWorkspace: "WechatWorkWorkspacePage",
   designSettings: "DesignSettingsPage",
+  designZhenxiAi: "DesignZhenxiWorkspacePage",
   designActivation: "DesignActivationPage",
   designAccount: "DesignAccountPage",
   designAssets: "DesignAssetsPage",
   designJobs: "DesignJobsPage",
+  designJobCreate: "DesignJobCreatePage",
   designJobDetail: "DesignJobDetailPage",
+  designJobQuote: "DesignJobQuotePage",
   designJobSubmit: "DesignJobSubmitPage",
   designJobStatus: "DesignJobStatusPage",
   reviewInbox: "ReviewInboxPage",
@@ -74,10 +72,12 @@ const featureByRouteId = {
   salesQuotes: "SalesQuotesPage",
   salesQuoteDetail: "SalesQuoteDetailPage",
   salesQuoteSend: "SalesQuoteActionPage",
+  salesQuoteVerifyPayment: "SalesQuotePaymentPage",
   salesQuoteCreateOrder: "SalesQuoteActionPage",
   salesOrders: "SalesOrdersPage",
   salesOrderDetail: "SalesOrderDetailPage",
   salesOrderEdit: "SalesOrderEditPage",
+  salesOrderAfterSales: "SalesOrderAfterSalesPage",
   salesOrderConfirmation: "SalesOrderMessagePage",
   salesOrderProduction: "SalesOrderMessagePage",
   salesOrderDelivery: "SalesOrderMessagePage",
@@ -88,12 +88,16 @@ const featureByRouteId = {
   automationIssues: "AutomationIssuesPage",
   agents: "AgentsPage",
   agentDetail: "AgentDetailPage",
+  trainingOverview: "TrainingOverviewPage",
+  trainingKnowledge: "TrainingKnowledgePage",
   trainingImport: "TrainingImportPage",
   trainingImportHistory: "TrainingImportHistoryPage",
   trainingReview: "TrainingReviewQueuePage",
   trainingReviewBatch: "TrainingReviewPage",
   trainingReviewDetail: "TrainingReviewDetailPage",
   trainingSkills: "TrainingSkillsPage",
+  settingsAiModels: "AiModelsPage",
+  settingsDeliveryReadiness: "DeliveryReadinessPage",
   settingsAccess: "AccessPage",
 };
 
@@ -155,10 +159,15 @@ test("entity and query selections reach the owning feature instead of only chang
   assert.match(read("apps/web/src/app/training/review/[id]/page.tsx"), /TrainingReviewDetailPage key=\{id\} sampleId=\{id\}/);
   assert.match(read("apps/web/src/app/send/queue/[id]/page.tsx"), /SendQueuePage key=\{id\} initialTaskId=\{id\}/);
   assert.match(read("apps/web/src/app/send/blocked/[id]/page.tsx"), /SendBlockedPage key=\{id\} initialTaskId=\{id\}/);
-  assert.match(read("apps/web/src/app/reviews/design/[id]/page.tsx"), /ReviewDesignPage key=\{id\} reviewId=\{id\}/);
-  assert.match(read("apps/web/src/app/reviews/quotes/[id]/page.tsx"), /ReviewQuotesPage key=\{id\} reviewId=\{id\}/);
-  assert.match(read("apps/web/src/app/reviews/orders/[id]/page.tsx"), /ReviewOrdersPage key=\{id\} reviewId=\{id\}/);
-  assert.match(read("apps/web/src/app/integrations/personal-wechat/instances/configure/page.tsx"), /accountId=\{initialAccountId\}/);
+  assert.match(read("apps/web/src/app/reviews/design/[id]/page.tsx"), /ReviewDesignPage key=\{id\} reviewId=\{id\} identityFilters=\{identityFilters\}/);
+  assert.match(read("apps/web/src/app/reviews/quotes/[id]/page.tsx"), /ReviewQuotesPage key=\{id\} reviewId=\{id\} identityFilters=\{identityFilters\}/);
+  assert.match(read("apps/web/src/app/reviews/orders/[id]/page.tsx"), /ReviewOrdersPage key=\{id\} reviewId=\{id\} identityFilters=\{identityFilters\}/);
+  assert.match(read("apps/web/src/app/catalog/bundles/page.tsx"), /CatalogBundlesPage initialIdentityFilters=\{identityFilters\}/);
+  assert.match(read("apps/web/src/app/design/assets/page.tsx"), /DesignAssetsPage initialIdentityFilters=\{identityFilters\}/);
+  assert.equal(
+    fs.existsSync(path.join(appRoot, "integrations/personal-wechat/instances/configure/page.tsx")),
+    false,
+  );
 });
 
 test("overview actions are connected to real routes by a small client adapter", () => {
@@ -166,9 +175,11 @@ test("overview actions are connected to real routes by a small client adapter", 
   for (const destination of [
     "/conversations",
     "/integrations/channels",
+    "/integrations/wechat-work",
     "/automation/runs",
     "/reviews/inbox",
     "/notifications",
+    "/settings/delivery-readiness",
   ]) assert.ok(overviewAdapter.includes(destination), `missing overview destination: ${destination}`);
   assert.match(overviewAdapter, /router\.push/);
   assert.match(overviewAdapter, /encodeURIComponent\(context\.conversationId\)/);

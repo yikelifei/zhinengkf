@@ -1,0 +1,73 @@
+{
+  "title": "小石客服 Skill 与 RAG v1 运行验收",
+  "verifiedAt": "2026-08-15T18:35:00+08:00",
+  "scope": "本地稳定桌面服务、知识库审核链路、只读 RAG 预览与客服核心回归；不包含企业微信真实发送",
+  "profile": {
+    "id": "xiaoshi_v1",
+    "skillCount": 5,
+    "approvedSanitizedHumanReplies": 32,
+    "evidenceBatches": 2,
+    "styleRule": "先接住客户当前问题，一轮通常只推进一个关键缺口"
+  },
+  "knowledgeBase": {
+    "sopSourceId": "xiaoshi_skill_sop_v1",
+    "imported": 8,
+    "ready": 8,
+    "review": 0,
+    "reviewPolicy": "先导入为 review，再逐条通过正式复核接口标记 ready",
+    "dynamicFactPolicy": "价格、库存、交期、运费、付款、赠品和赔付必须来自当前业务系统或人工确认"
+  },
+  "rag": {
+    "strategy": "hybrid_bm25_chargram_signal_rerank_v1",
+    "components": [
+      "BM25",
+      "中文二元与三元片段余弦相似度",
+      "伴手礼业务信号",
+      "质量与来源重排",
+      "重复回复去重"
+    ],
+    "thresholds": {
+      "high": 78,
+      "medium": 55,
+      "minimum": 32
+    },
+    "reviewedHumanVerbatimPolicy": "得分不低于 55 且通过安全检查时原样返回，禁止模型二次改写",
+    "vectorDatabaseDeployed": false,
+    "boundary": "v1 是无需外部 embedding 的本地混合 RAG，不宣称已部署稠密向量数据库"
+  },
+  "runtime": {
+    "health": "ok",
+    "dataMode": "local-json",
+    "ragPreviewEndpoint": "POST /api/training/rag/preview",
+    "previewQuery": "好贵，我再看看吧",
+    "previewReply": "咱这边预算多少，礼品可以调整",
+    "previewDecision": "use_reviewed_verbatim",
+    "previewTopScore": 90,
+    "previewCandidateCountAfterSopImport": 39,
+    "previewTopSource": "chat_import",
+    "previewTopHumanVerbatim": true,
+    "batch2RepresentativeQuestions": 8,
+    "batch2ExactHumanReplies": 8,
+    "allExactHumanReplies": true
+  },
+  "verification": {
+    "customerServiceAndRagTests": {
+      "passed": 197,
+      "failed": 0
+    },
+    "localSafeEndToEnd": {
+      "passed": 14,
+      "failed": 0,
+      "blocked": 0,
+      "skippedExternal": 2,
+      "report": "E:\\zhinengkefu\\desktop\\.runtime\\acceptance\\e2e-20260815T103423Z-43796\\product-acceptance-report.json"
+    },
+    "apiBuild": "passed",
+    "webProductionBuild": "passed",
+    "webTypeScript": "passed",
+    "nextPagesGenerated": 57,
+    "stableRuntimeRestarted": true,
+    "enterpriseWechatRealDeliveryTested": false
+  },
+  "productionBoundary": "本次验证证明本地检索、回复决策、审核隔离和预览界面有效；不能替代企业微信回调、发送接口和客户手机收件证据。"
+}

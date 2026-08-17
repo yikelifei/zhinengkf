@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import axios from "axios";
 import {
   BadRequestException,
   Body,
@@ -7,11 +8,13 @@ import {
   Headers,
   NotFoundException,
   Post,
+  Query,
   ServiceUnavailableException,
   UnauthorizedException,
   UseGuards,
 } from "@nestjs/common";
 import { DesignJobsService } from "../../design-jobs/design-jobs.service";
+import { isTrustedInternalZhenxiWorkspaceHealth } from "./design-platform-readiness";
 import {
   appConfig,
   getDesignPlatformRuntimeConfigSummary,
@@ -24,6 +27,39 @@ import { DesignPlatformCallbackPayload } from "./design-platform.types";
 import { OperatorAccessGuard, RequireOperatorCapability } from "../../operator-access/operator-access.guard";
 
 const { evaluateArtImageLocalHealthReadiness, evaluateDesignPlatformActivationStatus } = rules;
+
+function isZhenxiDurableAdapter(adapter = appConfig.designPlatformAdapter) {
+  return adapter === "art_image_local" || adapter === "zhenxi_external";
+}
+
+function hasBoundZhenxiExternalApiKey() {
+  try {
+    const baseOrigin = new URL(appConfig.designPlatformBaseUrl).origin;
+    return Boolean(
+      (appConfig.designPlatformApiKey && appConfig.designPlatformApiKeyOrigin === baseOrigin) ||
+      (appConfig.designPlatformAccessToken && appConfig.designPlatformAccessTokenOrigin === baseOrigin),
+    );
+  } catch {
+    return false;
+  }
+}
+
+type DesignPlatformCandidateProbeRequest = (
+  url: string,
+  timeoutMs: number,
+) => Promise<{ statusCode: number; data: unknown }>;
+
+type DesignPlatformCandidateProbe = {
+  baseUrl: string;
+  ok: boolean;
+  selected: boolean;
+  latencyMs: number;
+  statusCode?: number;
+  service?: string;
+  status?: string;
+  version?: string;
+  errorMessage?: string;
+};
 
 @Controller("integrations/design-platform")
 export class DesignPlatformController {
@@ -58,14 +94,16 @@ export class DesignPlatformController {
   @Get("readiness")
   @RequireOperatorCapability("view_console")
   @UseGuards(OperatorAccessGuard)
-  async readiness() {
+  async readiness(@Query("deviceId") deviceIdQuery?: string) {
     const startedAt = Date.now();
+    const explicitDeviceId = stringOrUndefined(deviceIdQuery)?.trim() || "";
     const checks: Array<{
       key: string;
       label: string;
       ok: boolean;
       severity: "info" | "warning" | "error";
       detail: string;
+      action?: string;
     }> = [];
     let healthData: unknown = null;
 
@@ -85,6 +123,7 @@ export class DesignPlatformController {
         ok: false,
         severity: "error",
         detail: error instanceof Error ? error.message : "设计平台健康检查失败",
+        action: "打开 /design/settings，确认适配器为 art_image_local，并选择当前可连通的臻希 AI 本地端口。",
       });
     }
 
@@ -94,46 +133,87 @@ export class DesignPlatformController {
         checks.push(...artImageHealth.checks);
       }
 
-      try {
-        const auth = await this.designPlatform.getArtImageLocalAuthSession();
+      if (isTrustedInternalZhenxiWorkspaceHealth(healthData)) {
         checks.push({
           key: "art_image_auth_session",
-          label: "设计平台登录态",
-          ok: auth.authenticated,
-          severity: "error",
-          detail: auth.authenticated
-            ? formatAuthSessionUser(auth)
-            : "设计平台未登录，或客服平台没有拿到设计平台登录凭证。请先登录设计平台，或配置 DESIGN_PLATFORM_COOKIE / DESIGN_PLATFORM_ACCESS_TOKEN。",
+          label: "臻希 AI 本地内部会话",
+          ok: true,
+          severity: "info",
+          detail: "复用本机臻希 AI 内部工作台会话，不保存或重复登录账号密码。",
         });
-      } catch (error) {
         checks.push({
-          key: "art_image_auth_session",
-          label: "设计平台登录态",
-          ok: false,
-          severity: "error",
-          detail: error instanceof Error ? error.message : "设计平台登录态检查失败",
+          key: "art_image_activation",
+          label: "臻希 AI 本机设备绑定",
+          ok: true,
+          severity: "info",
+          detail: "生成请求在臻希 AI 已绑定的本机进程内执行，不创建第二个设备绑定。",
         });
-      }
+      } else {
+        try {
+          const auth = await this.designPlatform.getArtImageLocalAuthSession(explicitDeviceId);
+          checks.push({
+            key: "art_image_auth_session",
+            label: "设计平台登录态",
+            ok: auth.authenticated,
+            severity: "error",
+            detail: auth.authenticated
+              ? formatAuthSessionUser(auth)
+              : "设计平台未登录，或客服平台没有拿到设计平台登录凭证。请先登录设计平台，或配置 DESIGN_PLATFORM_COOKIE / DESIGN_PLATFORM_ACCESS_TOKEN。",
+            action: auth.authenticated
+              ? undefined
+              : "先到 /design/activation 完成设备激活，再到 /design/account 登录臻希 AI 账号。",
+          });
+        } catch (error) {
+          checks.push({
+            key: "art_image_auth_session",
+            label: "设计平台登录态",
+            ok: false,
+            severity: "error",
+            detail: error instanceof Error ? error.message : "设计平台登录态检查失败",
+            action: "到 /design/account 重新登录臻希 AI；如果仍失败，先回 /design/activation 确认设备 ID 已激活。",
+          });
+        }
 
-      try {
-        const activationStatus = await this.designPlatform.getArtImageLocalActivationStatus();
-        const activation = evaluateDesignPlatformActivationStatus(activationStatus);
-        checks.push({
-          key: "art_image_activation",
-          label: "设计平台设备激活",
-          ok: Boolean(activation.ok),
-          severity: "error",
-          detail: String(activation.detail || activation.reason || "设计平台设备激活状态未知"),
-        });
-      } catch (error) {
-        checks.push({
-          key: "art_image_activation",
-          label: "设计平台设备激活",
-          ok: false,
-          severity: "error",
-          detail: error instanceof Error ? error.message : "设计平台设备激活检查失败",
-        });
+        try {
+          const activationStatus = await this.designPlatform.getArtImageLocalActivationStatus(explicitDeviceId);
+          const activation = evaluateDesignPlatformActivationStatus(activationStatus);
+          checks.push({
+            key: "art_image_activation",
+            label: "设计平台设备激活",
+            ok: Boolean(activation.ok),
+            severity: "error",
+            detail: String(activation.detail || activation.reason || "设计平台设备激活状态未知"),
+            action: activation.ok
+              ? undefined
+              : "到 /design/activation 使用臻希 AI 管理员激活码激活当前客服设备。",
+          });
+        } catch (error) {
+          checks.push({
+            key: "art_image_activation",
+            label: "设计平台设备激活",
+            ok: false,
+            severity: "error",
+            detail: error instanceof Error ? error.message : "设计平台设备激活检查失败",
+            action: "到 /design/activation 重新填写设备 ID 并激活；确认臻希 AI 本地服务仍在当前端口。",
+          });
+        }
       }
+    } else if (appConfig.designPlatformAdapter === "zhenxi_external") {
+      const mcpReady = isRecord(healthData)
+        && healthData.transport === "mcp_stdio"
+        && healthData.reachable === true;
+      checks.push({
+        key: "zhenxi_mcp_release",
+        label: "臻希 AI 成品软件 MCP",
+        ok: mcpReady,
+        severity: "error",
+        detail: mcpReady
+          ? "智能客服已通过内置 MCP 连接本机臻希 AI 成品软件；生成顺序为先文案、后图片。"
+          : "智能客服没有通过内置 MCP 连接到臻希 AI 成品软件。",
+        action: mcpReady
+          ? undefined
+          : "先启动并登录臻希 AI 成品软件，再确认智能客服已启用 ZHENXI_MCP_ENABLED。",
+      });
     } else {
       checks.push({
         key: "mock_adapter",
@@ -150,11 +230,14 @@ export class DesignPlatformController {
         detail: hasIndependentDesignPlatformCallbackApiKey()
           ? "standard_v1 回调已配置独立密钥。"
           : "standard_v1 必须配置独立的 DESIGN_PLATFORM_CALLBACK_API_KEY，且不得复用内部/API/登录凭据。",
+        action: hasIndependentDesignPlatformCallbackApiKey()
+          ? undefined
+          : "为 standard_v1 配置独立 DESIGN_PLATFORM_CALLBACK_API_KEY；art_image_local 本地臻希模式不需要 callback。",
       });
     }
 
     const failed = checks.filter((check) => !check.ok && check.severity === "error");
-    const nextSteps = Array.from(new Set(failed.map((check) => check.detail).filter(Boolean)));
+    const nextSteps = Array.from(new Set(failed.map((check) => check.action || check.detail).filter(Boolean)));
     return {
       ok: failed.length === 0,
       canSubmitFormalGeneration: failed.length === 0,
@@ -172,6 +255,7 @@ export class DesignPlatformController {
         callbackUrl:
           appConfig.designPlatformCallbackUrl ||
           `${appConfig.customerServicePublicBaseUrl}/api/integrations/design-platform/callback`,
+        zhenxiAi: appConfig.zhenxiAi,
       },
       data: healthData,
     };
@@ -187,6 +271,13 @@ export class DesignPlatformController {
     };
   }
 
+  @Get("candidates")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  async candidates() {
+    return probeDesignPlatformCandidates();
+  }
+
   @Post("config")
   @RequireOperatorCapability("manage_design_executions")
   @UseGuards(OperatorAccessGuard)
@@ -195,6 +286,7 @@ export class DesignPlatformController {
       const config = updateDesignPlatformRuntimeConfig({
         adapter: stringOrUndefined(payload.adapter),
         baseUrl: stringOrUndefined(payload.baseUrl),
+        apiKey: stringOrUndefined(payload.apiKey),
         accessToken: stringOrUndefined(payload.accessToken),
         cookie: stringOrUndefined(payload.cookie),
         deviceId: stringOrUndefined(payload.deviceId),
@@ -233,7 +325,7 @@ export class DesignPlatformController {
         ok: true,
         config,
         user: sanitizeLoginUser(login.user),
-        readiness: await this.readiness(),
+        readiness: await this.readiness(login.deviceId),
       };
     } catch (error) {
       throw new BadRequestException(publicLoginErrorMessage(error));
@@ -262,7 +354,7 @@ export class DesignPlatformController {
         ok: true,
         activation,
         config,
-        readiness: await this.readiness(),
+        readiness: await this.readiness(deviceId),
       };
     } catch (error) {
       throw new BadRequestException(publicLoginErrorMessage(error));
@@ -281,8 +373,8 @@ export class DesignPlatformController {
     @Headers("authorization") authorization: string | undefined,
     @Body() payload: DesignPlatformCallbackPayload,
   ) {
-    if (appConfig.designPlatformAdapter === "art_image_local") {
-      throw new NotFoundException("design platform callback is disabled for art_image_local");
+    if (isZhenxiDurableAdapter()) {
+      throw new NotFoundException(`design platform callback is disabled for ${appConfig.designPlatformAdapter}`);
     }
     const callbackApiKey = String(appConfig.callbackApiKey || "").trim();
     if (!hasIndependentDesignPlatformCallbackApiKey()) {
@@ -305,6 +397,138 @@ export function callbackAuthorizationMatches(authorization: string | undefined, 
 
 export function sanitizePublicDesignPlatformHealth(value: unknown) {
   return { upstreamOk: isRecord(value) && typeof value.ok === "boolean" ? value.ok : true };
+}
+
+export { isTrustedInternalZhenxiWorkspaceHealth } from "./design-platform-readiness";
+
+export async function probeDesignPlatformCandidates(options: {
+  candidateBaseUrls?: string[];
+  selectedBaseUrl?: string;
+  timeoutMs?: number;
+  requestHealth?: DesignPlatformCandidateProbeRequest;
+} = {}) {
+  const selectedBaseUrl = normalizeCandidateOrigin(options.selectedBaseUrl || appConfig.designPlatformBaseUrl) || "";
+  const candidateBaseUrls = trustedDesignPlatformCandidateBaseUrls([
+    ...(options.candidateBaseUrls || appConfig.zhenxiAi.localCandidateBaseUrls || []),
+    selectedBaseUrl,
+  ]);
+  const timeoutMs = Math.max(300, Math.min(Number(options.timeoutMs || appConfig.designPlatformTimeoutMs || 1200), 3000));
+  const requestHealth = options.requestHealth || requestDesignPlatformCandidateHealth;
+  const candidates = await Promise.all(
+    candidateBaseUrls.map((baseUrl) => probeOneDesignPlatformCandidate(baseUrl, selectedBaseUrl, timeoutMs, requestHealth)),
+  );
+  const recommendedBaseUrl = candidates.find((candidate) => candidate.ok)?.baseUrl || "";
+  return {
+    ok: candidates.some((candidate) => candidate.ok),
+    adapter: appConfig.designPlatformAdapter,
+    selectedBaseUrl,
+    recommendedBaseUrl,
+    candidateCount: candidates.length,
+    candidates,
+  };
+}
+
+async function probeOneDesignPlatformCandidate(
+  baseUrl: string,
+  selectedBaseUrl: string,
+  timeoutMs: number,
+  requestHealth: DesignPlatformCandidateProbeRequest,
+): Promise<DesignPlatformCandidateProbe> {
+  const startedAt = Date.now();
+  try {
+    const response = await requestHealth(`${baseUrl}/api/health`, timeoutMs);
+    const health = unwrapCandidateHealth(response.data);
+    const ok =
+      response.statusCode >= 200 &&
+      response.statusCode < 300 &&
+      health.service === "zhenxi-ai" &&
+      (health.status === "ok" || health.ok === true);
+    return {
+      baseUrl,
+      ok,
+      selected: baseUrl === selectedBaseUrl,
+      latencyMs: Date.now() - startedAt,
+      statusCode: response.statusCode,
+      service: health.service,
+      status: health.status,
+      version: health.version,
+      errorMessage: ok ? undefined : "未确认这是可用的臻希 AI 本地服务",
+    };
+  } catch (error) {
+    return {
+      baseUrl,
+      ok: false,
+      selected: baseUrl === selectedBaseUrl,
+      latencyMs: Date.now() - startedAt,
+      errorMessage: safeCandidateProbeError(error),
+    };
+  }
+}
+
+async function requestDesignPlatformCandidateHealth(url: string, timeoutMs: number) {
+  const response = await axios.get(url, {
+    timeout: timeoutMs,
+    maxRedirects: 0,
+    proxy: false,
+    validateStatus: () => true,
+  });
+  return { statusCode: response.status, data: response.data };
+}
+
+function unwrapCandidateHealth(value: unknown) {
+  const root = isRecord(value) ? value : {};
+  const data = isRecord(root.data) ? root.data : root;
+  return {
+    ok: typeof root.ok === "boolean" ? root.ok : typeof data.ok === "boolean" ? data.ok : undefined,
+    service: stringOrUndefined(data.service) || stringOrUndefined(root.service) || "",
+    status: stringOrUndefined(data.status) || stringOrUndefined(root.status) || "",
+    version: stringOrUndefined(data.version) || stringOrUndefined(root.version) || "",
+  };
+}
+
+function trustedDesignPlatformCandidateBaseUrls(values: string[]) {
+  const seen = new Set<string>();
+  const trusted: string[] = [];
+  for (const value of values) {
+    const origin = normalizeCandidateOrigin(value);
+    if (!origin || seen.has(origin)) continue;
+    seen.add(origin);
+    trusted.push(origin);
+  }
+  return trusted;
+}
+
+function normalizeCandidateOrigin(value: string | undefined) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash) return "";
+    if (!isLoopbackCandidateHost(parsed.hostname)) return "";
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackCandidateHost(hostname: string) {
+  const host = hostname.toLowerCase();
+  if (host === "::1" || host === "[::1]") return true;
+  if (!/^127(?:\.\d{1,3}){3}$/.test(host)) return false;
+  return host
+    .split(".")
+    .slice(1)
+    .every((part) => Number(part) >= 0 && Number(part) <= 255);
+}
+
+function safeCandidateProbeError(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    if (error.code === "ECONNREFUSED") return "未启动或端口未监听";
+    if (error.code === "ECONNABORTED" || String(error.message || "").includes("timeout")) return "探测超时";
+    return error.response?.status ? `HTTP ${error.response.status}` : "健康检查请求失败";
+  }
+  return error instanceof Error && error.message ? error.message : "健康检查请求失败";
 }
 
 function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {

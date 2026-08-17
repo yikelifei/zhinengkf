@@ -49,7 +49,7 @@ test("conversation timeline requires and enforces account customer conversation 
   assert.equal(timeline.some((item) => item.text.includes("企业伴手礼")), false);
 });
 
-test("timeline merges inbound attachments and queued outbound tasks without claiming sent", async () => {
+test("timeline shows inbound attachments and queued outbound tasks immediately", async () => {
   const { localStore, service } = setup();
   localStore.createMessage({
     ...primaryIdentity,
@@ -67,12 +67,23 @@ test("timeline merges inbound attachments and queued outbound tasks without clai
     operator: "客服甲",
     operationKey: "conversation-attachment-reply-1",
   });
-  const timeline = await service.listConversationTimeline(primaryIdentity);
-  const inbound = timeline.find((item) => item.externalId === "external-attachment-1");
-  const outbound = timeline.find((item) => item.sendTaskId === reply.task.id);
+  const queuedTimeline = await service.listConversationTimeline(primaryIdentity);
+  const inbound = queuedTimeline.find((item) => item.externalId === "external-attachment-1");
   assert.deepEqual(inbound.attachments.map((item) => item.kind), ["image", "file"]);
+  const queuedOutbound = queuedTimeline.find((item) => item.sendTaskId === reply.task.id);
+  assert.equal(queuedOutbound.direction, "outbound");
+  assert.equal(queuedOutbound.status, "queued");
+  assert.equal(queuedOutbound.text, reply.task.payload.text);
+
+  localStore.updateSendTask(reply.task.id, {
+    status: "sent",
+    sentAt: new Date().toISOString(),
+    errorMessage: "",
+  });
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const outbound = timeline.find((item) => item.sendTaskId === reply.task.id);
   assert.equal(outbound.direction, "outbound");
-  assert.equal(outbound.status, "queued");
+  assert.equal(outbound.status, "sent");
   assert.equal(outbound.text, "收到，我先核对附件。");
   assert.equal(timeline.every((item, index) => index === 0 || timeline[index - 1].createdAt <= item.createdAt), true);
 });
@@ -109,6 +120,83 @@ test("external inbound replay is idempotent within the conversation", () => {
     () => localStore.createMessage({ ...payload, text: "同一外部事件被替换为不同内容" }),
     /inbound message create operationKey was already used with different identity or payload/,
   );
+});
+
+test("production-ready customer poster creates a grounded four-image Zhenxi job without gift-box fields", async () => {
+  const { localStore, service } = setup();
+  const result = await service.processInboundMessage({
+    ...primaryIdentity,
+    externalId: "zhenxi-poster-inbound-1",
+    text: "帮我做一套七夕活动海报设计，画面只包含文案“七夕有礼”，尺寸1080x1440，不要添加品牌和联系方式",
+  });
+  assert.equal(result.plan.reason, "customer_creative_ready");
+  assert.equal(result.designJob.designType, "zhenxi_image");
+  assert.equal(result.designJob.outputCount, 4);
+  assert.deepEqual(result.designJob.budget, {});
+  assert.equal(result.designJob.requirements.zhenxi.size, "1080x1440");
+  assert.equal(result.designJob.requirements.zhenxi.ratio, "3:4");
+  assert.equal(result.designJob.requirements.zhenxi.copyText, "七夕有礼");
+  assert.equal(result.designJob.requirements.zhenxi.visualContentMode, "graphic_only");
+  assert.equal(result.designJob.requirements.zhenxi.exactCopyOnly, true);
+  assert.equal(result.designJob.requirements.zhenxi.forbidInventedProducts, true);
+  assert.equal(result.designJob.requirements.useRealSkuImages, false);
+  assert.equal(localStore.listDesignJobs().filter((job) => job.requestId === result.designJob.requestId).length, 1);
+});
+
+test("explicit video script request creates a durable Zhenxi copy job", async () => {
+  const { service } = setup();
+  const result = await service.processInboundMessage({
+    ...primaryIdentity,
+    externalId: "zhenxi-video-script-inbound-1",
+    text: "帮我写一份30秒新品介绍短视频口播脚本",
+  });
+  assert.equal(result.plan.type, "create_zhenxi_copy_job");
+  assert.equal(result.designJob.designType, "zhenxi_copy_video_script");
+  assert.equal(result.designJob.outputCount, 1);
+  assert.equal(result.designJob.requirements.zhenxi.module, "video_script");
+});
+
+test("customer creative conversation resumes on the next turn and creates only requested jobs", async () => {
+  const { localStore, service } = setup();
+  const pending = await service.processInboundMessage({
+    ...primaryIdentity,
+    externalId: "creative-card-pending-1",
+    text: "帮我做一张教师节贺卡",
+  });
+  assert.equal(pending.plan.reason, "creative_materials_required");
+  assert.equal(pending.designJob, null);
+  assert.deepEqual(pending.route.replyDraft.customerToolPlan.requestedDeliverables, ["greeting_card"]);
+
+  const ready = await service.processInboundMessage({
+    ...primaryIdentity,
+    externalId: "creative-card-ready-1",
+    text: "文案写“老师，节日快乐”，不放logo，尺寸90x54mm",
+  });
+  assert.equal(ready.plan.reason, "customer_creative_ready");
+  assert.equal(ready.designJobs.length, 1);
+  assert.equal(ready.designJob.designType, "zhenxi_image");
+  assert.equal(ready.designJob.requirements.customerAgent.deliverable, "greeting_card");
+  assert.equal(ready.designJob.requirements.zhenxi.copyText, "老师，节日快乐");
+  assert.equal(ready.designJob.requirements.zhenxi.logoMode, "none");
+  assert.equal(ready.designJob.requirements.zhenxi.physicalSize, "90×54mm");
+  assert.equal(localStore.listDesignJobs().filter((job) => job.requirements?.customerAgent?.planId === pending.route.replyDraft.customerToolPlan.planId).length, 1);
+});
+
+test("one customer turn can fan out into separate card and tag design jobs", async () => {
+  const { service } = setup();
+  const result = await service.processInboundMessage({
+    ...primaryIdentity,
+    externalId: "creative-multi-ready-1",
+    text: "请做贺卡和吊牌，文案是“感谢一路相伴”，不放logo，尺寸90x54mm",
+  });
+  assert.equal(result.plan.reason, "customer_creative_ready");
+  assert.equal(result.designJobs.length, 2);
+  assert.deepEqual(
+    result.designJobs.map((job) => job.requirements.customerAgent.deliverable),
+    ["greeting_card", "hang_tag"],
+  );
+  assert.ok(result.designJobs.every((job) => job.outputCount === 4));
+  assert.ok(result.designJobs.every((job) => job.requirements.customerAgent.deliverable !== "belly_band"));
 });
 
 test("out-of-order LocalStore inbound messages never move conversation lastMessageAt backwards", () => {
@@ -542,7 +630,7 @@ test("manual reply uses safe queue while automation stays blocked by manual take
   );
   await assert.rejects(
     () => service.enqueueManualReply({ ...primaryIdentity, text: "   ", operationKey: "conversation-empty-reply-1" }),
-    /text is required/,
+    /text or attachment is required/,
   );
   await assert.rejects(
     () => service.enqueueManualReply({
@@ -554,11 +642,19 @@ test("manual reply uses safe queue while automation stays blocked by manual take
   );
   const boundary = await service.enqueueManualReply({
     ...primaryIdentity,
-    text: "界".repeat(2000),
+    text: "a".repeat(2000),
     operator: "客服甲",
     operationKey: "conversation-boundary-reply-1",
   });
   assert.equal(boundary.task.payload.text.length, 2000);
+  await assert.rejects(
+    () => service.enqueueManualReply({
+      ...primaryIdentity,
+      text: "界".repeat(683),
+      operationKey: "conversation-utf8-oversized-reply-1",
+    }),
+    /exceeds 2048 UTF-8 bytes/,
+  );
   const result = await service.enqueueManualReply({
     ...primaryIdentity,
     text: "人工接管后的可信回复",
@@ -579,6 +675,81 @@ test("manual reply uses safe queue while automation stays blocked by manual take
   assert.equal(guarded.guardSnapshot.status, "blocked");
   assert.equal(guarded.guardSnapshot.failedKeys.includes("windowSnapshotMissing"), true);
   assert.equal(guarded.guardSnapshot.activeWindow, null);
+});
+
+test("manual reply attachments stay customer-bound and appear in the queued timeline", async () => {
+  const { localStore, service, tempDir } = setup();
+  const storageRoot = path.join(tempDir, "storage");
+  appConfig.localStorageRoot = storageRoot;
+  const customerDir = path.join(storageRoot, "assets", "customer", primaryIdentity.customerId);
+  fs.mkdirSync(customerDir, { recursive: true });
+  const imagePath = path.join(customerDir, "reply.png");
+  const filePath = path.join(customerDir, "reply.txt");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]));
+  fs.writeFileSync(filePath, "safe reply material", "utf8");
+  const identityFields = {
+    wechatAccountId: primaryIdentity.wechatAccountId,
+    conversationId: primaryIdentity.conversationId,
+    customerId: primaryIdentity.customerId,
+  };
+  const image = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: primaryIdentity.customerId,
+    role: "manual_reply_attachment",
+    fileName: "reply.png",
+    mimeType: "image/png",
+    localPath: imagePath,
+    sizeBytes: 9,
+    ...identityFields,
+  });
+  const file = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: primaryIdentity.customerId,
+    role: "manual_reply_attachment",
+    fileName: "reply.txt",
+    mimeType: "text/plain",
+    localPath: filePath,
+    sizeBytes: fs.statSync(filePath).size,
+    ...identityFields,
+  });
+
+  const queued = await service.enqueueManualReply({
+    ...primaryIdentity,
+    text: "请查收",
+    assetIds: [image.id, file.id],
+    operator: "客服甲",
+    operationKey: "conversation-manual-attachments-1",
+  });
+  assert.equal(queued.task.payload.source, "manual_reply");
+  assert.equal(queued.task.payload.manualReply, true);
+  assert.equal(queued.task.payload.imagePaths.length, 1);
+  assert.equal(queued.task.payload.filePaths.length, 1);
+  assert.deepEqual(queued.task.payload.assetIds, [image.id, file.id]);
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const outbound = timeline.find((item) => item.sendTaskId === queued.task.id);
+  assert.deepEqual(outbound.attachments.map((attachment) => attachment.kind), ["image", "file"]);
+  assert.deepEqual(outbound.attachments.map((attachment) => attachment.assetId), [image.id, file.id]);
+
+  const foreign = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: "customer_demo_2",
+    role: "manual_reply_attachment",
+    fileName: "foreign.txt",
+    mimeType: "text/plain",
+    localPath: filePath,
+    sizeBytes: fs.statSync(filePath).size,
+    wechatAccountId: "wechat_demo_2",
+    conversationId: "conversation_demo_2",
+    customerId: "customer_demo_2",
+  });
+  await assert.rejects(
+    () => service.enqueueManualReply({
+      ...primaryIdentity,
+      assetIds: [foreign.id],
+      operationKey: "conversation-manual-foreign-attachment-1",
+    }),
+    /identity mismatch|does not match|must belong/,
+  );
 });
 
 test("inbound service rejects a customer id from another conversation", async () => {

@@ -9,10 +9,15 @@ require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "C
 
 const {
   createNotificationConfirmationGuard,
+  notificationReadState,
   notificationScopeKey,
   runLatestNotificationOperation,
 } = require("../apps/web/src/features/notifications/notification-operation-guard");
 const { reconcileMarkedNotification } = require("../apps/web/src/features/notifications/use-notifications-controller");
+const {
+  agentDirectoryReadState,
+  agentDirectoryScopeKey,
+} = require("../apps/web/src/features/agents/agent-directory-read-state");
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
@@ -25,6 +30,27 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("notification read state keeps same-scope cache and blocks cross-scope leakage", () => {
+  assert.equal(notificationReadState({ busy: false, currentScopeKey: "scope-a", loadedScopeKey: "", staleScopeKey: "" }), "unknown");
+  assert.equal(notificationReadState({ busy: true, currentScopeKey: "scope-a", loadedScopeKey: "", staleScopeKey: "" }), "loading");
+  assert.equal(notificationReadState({ busy: false, currentScopeKey: "scope-a", loadedScopeKey: "scope-a", staleScopeKey: "" }), "ready");
+  assert.equal(notificationReadState({ busy: false, currentScopeKey: "scope-a", loadedScopeKey: "scope-a", staleScopeKey: "scope-a" }), "stale");
+  assert.equal(notificationReadState({ busy: false, currentScopeKey: "scope-b", loadedScopeKey: "scope-a", staleScopeKey: "scope-a" }), "unknown");
+  assert.equal(notificationReadState({ busy: true, currentScopeKey: "scope-b", loadedScopeKey: "scope-a", staleScopeKey: "scope-a" }), "loading");
+});
+
+test("agent directory keeps same-scope trusted results but never leaks them across identity scope", () => {
+  const firstScope = agentDirectoryScopeKey({ wechatAccountId: "account-a", customerId: "customer-a" });
+  const secondScope = agentDirectoryScopeKey({ wechatAccountId: "account-b", customerId: "customer-b" });
+  assert.notEqual(firstScope, secondScope);
+  assert.equal(agentDirectoryReadState({ busy: false, currentScopeKey: firstScope, loadedScopeKey: "", staleScopeKey: "" }), "unknown");
+  assert.equal(agentDirectoryReadState({ busy: true, currentScopeKey: firstScope, loadedScopeKey: "", staleScopeKey: "" }), "loading");
+  assert.equal(agentDirectoryReadState({ busy: false, currentScopeKey: firstScope, loadedScopeKey: firstScope, staleScopeKey: "" }), "ready");
+  assert.equal(agentDirectoryReadState({ busy: false, currentScopeKey: firstScope, loadedScopeKey: firstScope, staleScopeKey: firstScope }), "stale");
+  assert.equal(agentDirectoryReadState({ busy: false, currentScopeKey: secondScope, loadedScopeKey: firstScope, staleScopeKey: firstScope }), "unknown");
+  assert.equal(agentDirectoryReadState({ busy: true, currentScopeKey: secondScope, loadedScopeKey: firstScope, staleScopeKey: firstScope }), "loading");
+});
 
 test("stale notification mutation cannot overwrite a newer filter result or clear its busy state", async () => {
   let sequence = 0;
@@ -103,6 +129,7 @@ test("notification scope changes invalidate bulk confirmation across an A-B-A tr
   const controller = read("apps/web/src/features/notifications/use-notifications-controller.ts");
   assert.match(controller, /loadedScopeKey === scopeKey/);
   assert.match(controller, /scopeLoaded \? notifications : \[\]/);
+  assert.match(controller, /notificationReadState\(\{ busy, currentScopeKey: scopeKey, loadedScopeKey, staleScopeKey \}\)/);
   assert.match(controller, /expectedScopeKey !== scopeKey/);
   assert.match(controller, /reconcileMarkedNotification\(current, updated, unreadOnly\)/);
   const page = read("apps/web/src/features/notifications/notifications-page.tsx");
@@ -126,7 +153,14 @@ test("design catalog and sales shared reads fence stale responses and unmount cl
     assert.match(source, /sequence !== requestSequence\.current/);
     assert.match(source, /return \(\) => \{ requestSequence\.current \+= 1; \}/);
     assert.match(source, /setLoaded\(true\)/);
-    assert.match(source, /setLoaded\(false\)/);
+    if (relativePath.includes("catalog/use-catalog-records")) {
+      assert.match(source, /setLoaded\(hasTrustedRecords\)/);
+      assert.match(source, /setLoaded\(hasTrustedAudit\)/);
+      assert.match(source, /setStale\(hasTrustedRecords\)/);
+      assert.match(source, /setStale\(hasTrustedAudit\)/);
+    } else {
+      assert.match(source, /setLoaded\(false\)/);
+    }
   }
 });
 
@@ -138,7 +172,7 @@ test("failed shared reads render unknown truth instead of empty or missing claim
     ["apps/web/src/features/design/design-job-status-page.tsx", /读取成功；请返回任务列表/, /已阻止远端状态同步/],
     ["apps/web/src/features/catalog/catalog-products-page.tsx", /读取成功，当前没有商品/, /商品列表状态未确认/],
     ["apps/web/src/features/catalog/catalog-product-detail-page.tsx", /读取成功；请返回商品列表/, /不能据此认定商品不存在/],
-    ["apps/web/src/features/catalog/catalog-product-editor-page.tsx", /读取成功；请返回商品列表/, /已阻止编辑保存/],
+    ["apps/web/src/features/catalog/catalog-product-editor-page.tsx", /读取成功；请返回商品列表/, /已阻止(?:新增或)?编辑保存/],
     ["apps/web/src/features/catalog/catalog-repair-page.tsx", /读取成功，当前没有修复任务/, /修复队列状态未确认/],
     ["apps/web/src/features/catalog/catalog-repair-detail-page.tsx", /读取成功；它可能已完成/, /已阻止修复提交/],
     ["apps/web/src/features/catalog/catalog-audit-page.tsx", /读取成功，但没有审计结果/, /商品审计状态未确认/],

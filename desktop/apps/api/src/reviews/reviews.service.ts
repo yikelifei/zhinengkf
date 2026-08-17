@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { DesignJobsService } from "../design-jobs/design-jobs.service";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -8,6 +8,16 @@ import { QuotesService } from "../quotes/quotes.service";
 import { rules } from "../shared/rules";
 import { appConfig } from "../shared/app-config";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
+import {
+  assertExactOperationReplay,
+  createOperationFingerprint,
+  deterministicOperationId,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+  type RequestOperationMetadata,
+} from "../shared/operation-idempotency";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 
 const { isHighValueBudget, quoteNeedsPaymentProofReview } = rules;
@@ -18,6 +28,16 @@ type ReviewPayload = ExpectedIdentityPayload & {
   reviewer?: string;
   note?: string;
   followupType?: "production" | "delivery";
+};
+
+type ReviewOperation = {
+  effectKey: string;
+  logId: string;
+  operation: RequestOperationMetadata;
+  metadata: {
+    effectKey: string;
+    requestOperation: RequestOperationMetadata;
+  };
 };
 
 @Injectable()
@@ -89,6 +109,42 @@ export class ReviewsService {
     return { designJobs, quoteDrafts, orderDrafts, logs: logs.filter((log: any) => matchesReviewLogIdentity(log, filter)).slice(0, 80) };
   }
 
+  async getDesignJob(id: string, expected: ExpectedIdentityPayload = {}) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({
+          where: { id },
+          include: { customer: true, conversation: true, images: true, assets: true },
+        });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, expected, "design job");
+    return job;
+  }
+
+  async getQuote(id: string, expected: ExpectedIdentityPayload = {}) {
+    return this.quotes.getById(id, expected);
+  }
+
+  async getOrder(id: string, expected: ExpectedIdentityPayload = {}) {
+    if (this.orders) return this.orders.getById(id, expected);
+    const order = appConfig.useLocalStore
+      ? this.localStore.getOrderDraft(id)
+      : await (this.prisma as any).orderDraft.findUnique({
+          where: { id },
+          include: {
+            customer: true,
+            conversation: true,
+            wechatAccount: true,
+            designJob: true,
+            quoteDraft: { include: { designJob: true, customer: true, selectedImage: true } },
+            selectedImage: true,
+          },
+        });
+    if (!order) throw new NotFoundException(`order draft not found: ${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
+    return order;
+  }
+
   async reviewDesignJob(id: string, payload: ReviewPayload) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -103,6 +159,11 @@ export class ReviewsService {
       conversationId: job.conversationId,
       customerId: job.customerId,
     };
+    const reviewOperation = this.buildReviewOperation("design_job", id, decision, payload);
+    const replayedLog = await this.findReviewReplay(reviewOperation, "design job review");
+    if (replayedLog) {
+      return { result: { designJob: job }, log: replayedLog, notification: null, replayed: true };
+    }
     let result: any;
     let notification: any = null;
 
@@ -192,6 +253,7 @@ export class ReviewsService {
       afterStatus,
       metadata: {
         ...designJobTarget,
+        ...reviewOperation?.metadata,
       },
     });
     return { result, log, notification };
@@ -212,6 +274,11 @@ export class ReviewsService {
       conversationId: quote.designJob?.conversationId,
       customerId: quote.customerId || quote.designJob?.customerId,
     };
+    const reviewOperation = this.buildReviewOperation("quote", id, decision, payload);
+    const replayedLog = await this.findReviewReplay(reviewOperation, "quote review");
+    if (replayedLog) {
+      return { result: { quote }, log: replayedLog, notification: null, replayed: true };
+    }
     let result: any;
     let notification: any = null;
     let customerNotes: string;
@@ -262,6 +329,7 @@ export class ReviewsService {
       afterStatus: resultQuote.status,
       metadata: {
         ...quoteTarget,
+        ...reviewOperation?.metadata,
         sendTaskId: result?.sendTask?.id,
       },
     });
@@ -287,6 +355,19 @@ export class ReviewsService {
 
     const beforeStatus = order.status;
     const decision = payload.decision || "request_followup";
+    const orderTarget = {
+      orderDraftId: id,
+      quoteDraftId: order.quoteDraftId || order.quoteDraft?.id,
+      designJobId: order.designJobId || order.designJob?.id || order.quoteDraft?.designJobId || order.quoteDraft?.designJob?.id,
+      wechatAccountId: order.wechatAccountId,
+      conversationId: order.conversationId,
+      customerId: order.customerId,
+    };
+    const reviewOperation = this.buildReviewOperation("order_draft", id, decision, payload);
+    const replayedLog = await this.findReviewReplay(reviewOperation, "order review");
+    if (replayedLog) {
+      return { result: { orderDraft: order }, log: replayedLog, notification: null, replayed: true };
+    }
     assertHighValueOrderHasCompleteIdentity(order, decision);
     assertHighValueOrderApprovalReady(order, decision);
     const reviewer = payload.reviewer || "人工客服";
@@ -372,18 +453,76 @@ export class ReviewsService {
       beforeStatus,
       afterStatus: resultOrder?.status || beforeStatus,
       metadata: {
-        orderDraftId: id,
-        quoteDraftId: order.quoteDraftId || order.quoteDraft?.id,
-        designJobId: order.designJobId || order.designJob?.id || order.quoteDraft?.designJobId || order.quoteDraft?.designJob?.id,
+        ...orderTarget,
+        ...reviewOperation?.metadata,
         sendTaskId: result?.sendTask?.id,
         followupType: payload.followupType,
-        wechatAccountId: order.wechatAccountId,
-        conversationId: order.conversationId,
-        customerId: order.customerId,
         source: "manual_order_review",
       },
     });
     return { result, log, notification: result?.notification || notification || null };
+  }
+
+  private buildReviewOperation(targetType: string, targetId: string, decision: string, payload: ReviewPayload): ReviewOperation | null {
+    if (!payload.operationKey) return null;
+    const operationKey = normalizeOperationKey(payload.operationKey, `${targetType} review operationKey`);
+    const operation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "manual-review",
+        { targetType, targetId },
+        {
+          decision,
+          reviewer: payload.reviewer || "",
+          note: payload.note || "",
+          followupType: payload.followupType || null,
+          expectedWechatAccountId: payload.expectedWechatAccountId || null,
+          expectedConversationId: payload.expectedConversationId || null,
+          expectedCustomerId: payload.expectedCustomerId || null,
+        },
+      ),
+    );
+    const effectKey = `manual-review:${targetType}:${targetId}:${operationKey}`;
+    return {
+      effectKey,
+      logId: deterministicOperationId("review", effectKey),
+      operation,
+      metadata: {
+        effectKey,
+        requestOperation: operation,
+      },
+    };
+  }
+
+  private async findReviewReplay(reviewOperation: ReviewOperation | null, label: string) {
+    if (!reviewOperation) return null;
+    const existing = await this.findReviewLogByOperation(reviewOperation);
+    if (!existing) return null;
+    assertExactOperationReplay(
+      readRequestOperationMetadata(existing.metadata),
+      reviewOperation.operation,
+      label,
+    );
+    return existing;
+  }
+
+  private async findReviewLogByOperation(reviewOperation: ReviewOperation) {
+    if (appConfig.useLocalStore) {
+      const store = this.localStore as any;
+      if (typeof store.getReviewLog === "function") {
+        const byId = store.getReviewLog(reviewOperation.logId);
+        if (byId) return byId;
+      }
+      if (typeof store.listReviewLogs === "function") {
+        return store
+          .listReviewLogs({ limit: 300 })
+          .find((log: any) => String(log?.metadata?.effectKey || "") === reviewOperation.effectKey) || null;
+      }
+      return null;
+    }
+
+    const prisma = this.prisma as any;
+    return prisma.reviewLog.findUnique({ where: { id: reviewOperation.logId } });
   }
 
   private async updateReviewedOrder(id: string, data: { owner?: string; customerNotes?: string; status?: string }) {
@@ -417,7 +556,29 @@ export class ReviewsService {
   }) {
     if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
     const prisma = this.prisma as any;
-    return prisma.reviewLog.create({ data: payload });
+    const effectKey = String(payload.metadata?.effectKey || "").trim();
+    const expectedOperation = readRequestOperationMetadata(payload.metadata);
+    const logId = effectKey ? deterministicOperationId("review", effectKey) : "";
+    if (logId) {
+      const existing = await prisma.reviewLog.findUnique({ where: { id: logId } });
+      if (existing) {
+        if (expectedOperation) {
+          assertExactOperationReplay(readRequestOperationMetadata(existing.metadata), expectedOperation, "review log create");
+        }
+        return existing;
+      }
+    }
+    try {
+      return await prisma.reviewLog.create({ data: logId ? { id: logId, ...payload } : payload });
+    } catch (error) {
+      if (!logId || !isUniqueConstraintError(error)) throw error;
+      const existing = await prisma.reviewLog.findUnique({ where: { id: logId } });
+      if (!existing) throw error;
+      if (expectedOperation) {
+        assertExactOperationReplay(readRequestOperationMetadata(existing.metadata), expectedOperation, "review log create");
+      }
+      return existing;
+    }
   }
 }
 

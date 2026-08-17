@@ -10,7 +10,16 @@ require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "C
 
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { PersonalWechatRpaService } = require("../apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service");
+const { appConfig } = require("../apps/api/src/shared/app-config");
 const { executeBoundWechatActions } = require("../tools/personal-wechat-bridge");
+
+const originalUseLocalStore = appConfig.useLocalStore;
+test.beforeEach(() => {
+  appConfig.useLocalStore = true;
+});
+test.afterEach(() => {
+  appConfig.useLocalStore = originalUseLocalStore;
+});
 
 function setup(options = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "personal-wechat-rpa-api-"));
@@ -44,7 +53,11 @@ function setup(options = {}) {
       }
       this.calls.push(payload);
       return {
-        message: localStore.createMessage({ ...payload, direction: "inbound" }),
+        message: localStore.createMessage({
+          ...payload,
+          direction: "inbound",
+          metadata: { inboundCaptureSource: payload.inboundCaptureSource },
+        }),
         sendTask: { id: `task-${this.calls.length}` },
       };
     },
@@ -63,6 +76,7 @@ function inbound(overrides = {}) {
     senderName: "测试客户A",
     message: "我想做一套礼盒",
     messageType: "text",
+    captureSource: "uia_accessibility",
     externalId: "rpa-message-1",
     createdAt: "2026-07-15T10:00:00.000Z",
     attachments: [],
@@ -84,6 +98,27 @@ test("RPA inbound creates an exact account/chat binding and deduplicates externa
   assert.equal(dispatch.calls.length, 1);
   assert.equal(localStore.listPersonalWechatRpaBindings().length, 1);
   assert.equal(localStore.findMessageByExternalId(first.binding.conversationId, "rpa-message-1").text, "我想做一套礼盒");
+  assert.equal(dispatch.calls[0].inboundCaptureSource, "uia_accessibility");
+});
+
+test("conversation timeline hides legacy unverified RPA OCR rows and keeps verified rows", async () => {
+  const { localStore, service } = setup();
+  const trusted = await service.processInbound(inbound({
+    externalId: "verified-rpa-message",
+    message: "这是可信气泡消息",
+    captureSource: "ocr_verified_bubble",
+  }), "test-rpa-token");
+  await service.processInbound(inbound({
+    externalId: "legacy-rpa-noise",
+    message: "星期一17:33",
+    captureSource: "legacy_unverified",
+  }), "test-rpa-token");
+  const timeline = localStore.listConversationTimeline({
+    wechatAccountId: trusted.binding.wechatAccountId,
+    conversationId: trusted.binding.conversationId,
+    customerId: trusted.binding.customerId,
+  });
+  assert.deepEqual(timeline.map((item) => item.text), ["这是可信气泡消息"]);
 });
 
 test("RPA reservation and dispatch use only syntax-validated attachment business fields", async () => {

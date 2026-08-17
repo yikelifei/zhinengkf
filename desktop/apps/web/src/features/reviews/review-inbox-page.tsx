@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type IdentityFilters } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import { reviewIdentityHref } from "./review-handoff";
 import { useReviewCenter } from "./review-page-shared";
 
 export type ReviewInboxPageProps = {
@@ -10,8 +11,9 @@ export type ReviewInboxPageProps = {
 };
 
 export function ReviewInboxPage({ identityFilters }: ReviewInboxPageProps) {
-  const { center, loaded, busy, error, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, sessionBlocked, refresh } = useReviewCenter(identityFilters);
   const total = center ? center.designJobs.length + center.quoteDrafts.length + center.orderDrafts.length : 0;
+  const scopedHref = (href: string) => reviewIdentityHref(href, identityFilters);
 
   return (
     <section className={styles.page} aria-labelledby="review-inbox-title" aria-busy={busy}>
@@ -33,6 +35,12 @@ export function ReviewInboxPage({ identityFilters }: ReviewInboxPageProps) {
         </button>
       </header>
 
+      {sessionBlocked ? (
+        <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">
+          <strong>需要可信桌面会话</strong>
+          <p>请从臻希智能客服桌面端窗口打开审核收件箱；如果已经在桌面端，请刷新页面或重启客服启动器。</p>
+        </div>
+      ) : null}
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
       {!busy && !loaded ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">审核收件箱尚未成功读取，队列数量保持未确认。</div> : null}
 
@@ -44,10 +52,10 @@ export function ReviewInboxPage({ identityFilters }: ReviewInboxPageProps) {
       </section>
 
       <section className={styles.recordList} aria-label="审核责任页入口">
-        <ReviewQueueLink href="/reviews/design" title="设计审核" count={center?.designJobs.length} detail="检查图稿、修改要求与发送资格。" />
-        <ReviewQueueLink href="/reviews/quotes" title="报价审核" count={center?.quoteDrafts.length} detail="检查金额、利润与跟进判断。" />
-        <ReviewQueueLink href="/reviews/orders" title="订单审核" count={center?.orderDrafts.length} detail="检查确认消息与生产、交付跟进。" />
-        <ReviewQueueLink href="/reviews/logs" title="审核记录" count={center?.logs.length} detail="只读查看服务端审核轨迹。" />
+        <ReviewQueueLink href={scopedHref("/reviews/design")} title="设计审核" count={center?.designJobs.length} detail="检查图稿、修改要求与发送资格。" />
+        <ReviewQueueLink href={scopedHref("/reviews/quotes")} title="报价审核" count={center?.quoteDrafts.length} detail="检查金额、利润与跟进判断。" />
+        <ReviewQueueLink href={scopedHref("/reviews/orders")} title="订单审核" count={center?.orderDrafts.length} detail="检查确认消息与生产、交付跟进。" />
+        <ReviewQueueLink href={scopedHref("/reviews/logs")} title="审核记录" count={center?.logs.length} detail="只读查看服务端审核轨迹。" />
       </section>
     </section>
   );

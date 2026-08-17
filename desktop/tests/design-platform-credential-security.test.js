@@ -57,6 +57,167 @@ test("Axios boundary sends each credential only to its explicitly bound origin",
   }
 });
 
+test("art image local health infers local-generate availability with OPTIONS only", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "art_image_local",
+      designPlatformBaseUrl: "http://127.0.0.1:3000",
+      designPlatformAccessToken: "access-secret",
+      designPlatformAccessTokenOrigin: "http://127.0.0.1:3000",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "session=cookie-secret",
+      designPlatformCookieOrigin: "http://127.0.0.1:3000",
+      designPlatformDeviceId: "device-secret",
+      designPlatformDeviceIdOrigin: "http://127.0.0.1:3000",
+    });
+    const client = DesignPlatformClient.createForTesting(artImageHealthProbeAdapter(seen));
+
+    const result = await client.health();
+
+    assert.equal(result.localDemo.localGenerateEnabled, true);
+    assert.deepEqual(
+      seen.map((config) => `${String(config.method || "get").toUpperCase()} ${config.url}`),
+      ["GET api/health", "OPTIONS api/local-generate"],
+    );
+    assert.equal(seen.some((config) => String(config.method || "").toUpperCase() === "POST"), false);
+    assert.equal(header(seen[1], "authorization"), "Bearer access-secret");
+    assert.equal(header(seen[1], "cookie"), "session=cookie-secret");
+    assert.equal(header(seen[1], "x-art-device-id"), "device-secret");
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("art image local public health probe remains credential-free", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "art_image_local",
+      designPlatformBaseUrl: "http://127.0.0.1:3000",
+      designPlatformAccessToken: "access-secret",
+      designPlatformAccessTokenOrigin: "http://127.0.0.1:3000",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "session=cookie-secret",
+      designPlatformCookieOrigin: "http://127.0.0.1:3000",
+      designPlatformDeviceId: "device-secret",
+      designPlatformDeviceIdOrigin: "http://127.0.0.1:3000",
+    });
+    const client = DesignPlatformClient.createForTesting(artImageHealthProbeAdapter(seen));
+
+    const result = await client.publicHealth();
+
+    assert.equal(result.localDemo.localGenerateEnabled, true);
+    assert.deepEqual(
+      seen.map((config) => `${String(config.method || "get").toUpperCase()} ${config.url}`),
+      ["GET api/health", "OPTIONS api/local-generate"],
+    );
+    for (const config of seen) {
+      assert.equal(header(config, "authorization"), undefined);
+      assert.equal(header(config, "cookie"), undefined);
+      assert.equal(header(config, "x-art-device-id"), undefined);
+    }
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("Zhenxi external generation refuses a direct API fallback when MCP is unavailable", async () => {
+  const previous = snapshotConfig();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "zhenxi-external-multipart-"));
+  const imagePath = path.join(tempDir, "reference.jpg");
+  const seen = [];
+  try {
+    fs.writeFileSync(imagePath, Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0xff, 0xd9]));
+    Object.assign(appConfig, {
+      designPlatformAdapter: "zhenxi_external",
+      designPlatformBaseUrl: "http://127.0.0.1:31870",
+      designPlatformApiKey: "external-secret",
+      designPlatformApiKeyOrigin: "http://127.0.0.1:31870",
+      designPlatformAccessToken: "login-token-that-must-not-be-used",
+      designPlatformAccessTokenOrigin: "http://127.0.0.1:31870",
+      designPlatformCookie: "session=cookie-that-must-not-be-used",
+      designPlatformCookieOrigin: "http://127.0.0.1:31870",
+      designPlatformDeviceId: "device-that-must-not-be-used",
+      designPlatformDeviceIdOrigin: "http://127.0.0.1:31870",
+      designPlatformImageSize: "1024x1024",
+      designPlatformImageRatio: "1:1",
+      defaultOutputCount: 2,
+    });
+    const client = DesignPlatformClient.createForTesting(async (config) => {
+      seen.push(config);
+      return {
+        data: { ok: true, data: { images: [{ status: "success", url: "/generated/zhenxi-output.png" }] } },
+        status: 201,
+        statusText: "Created",
+        headers: {},
+        config,
+        request: {},
+      };
+    });
+
+    const outcome = await client.executeDurableGeneration(
+      {
+        requestId: "request-1",
+        outputCount: 2,
+        requirements: { useRealSkuImages: false },
+        assets: [{ localPath: imagePath, fileName: "reference.jpg", mimeType: "image/jpeg" }],
+        bundle: {},
+      },
+      "zhenxi_request_1",
+    );
+
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.errorCode, "ZHENXI_MCP_DISABLED");
+    assert.match(String(outcome.errorMessage || ""), /direct external API fallback is prohibited/);
+    assert.equal(seen.length, 0);
+  } finally {
+    Object.assign(appConfig, previous);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Zhenxi external credentials can reuse a same-origin access token as the API key", () => {
+  const previous = snapshotConfig();
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "zhenxi_external",
+      designPlatformBaseUrl: "http://127.0.0.1:31870",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformAccessToken: "same-as-art-external-key",
+      designPlatformAccessTokenOrigin: "http://127.0.0.1:31870",
+      designPlatformCookie: "session=must-not-be-used",
+      designPlatformCookieOrigin: "http://127.0.0.1:31870",
+      designPlatformDeviceId: "device-must-not-be-used",
+      designPlatformDeviceIdOrigin: "http://127.0.0.1:31870",
+    });
+
+    const sameOrigin = designPlatformCredentialsForTarget(
+      "http://127.0.0.1:31870",
+      "api/external/v1/images/generate",
+    );
+    assert.deepEqual(sameOrigin, {
+      authorization: "Bearer same-as-art-external-key",
+      cookie: "",
+      deviceId: "",
+    });
+
+    appConfig.designPlatformAccessTokenOrigin = "http://127.0.0.1:31871";
+    const staleOrigin = designPlatformCredentialsForTarget(
+      "http://127.0.0.1:31870",
+      "api/external/v1/images/generate",
+    );
+    assert.deepEqual(staleOrigin, { authorization: "", cookie: "", deviceId: "" });
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
 test("first login preserves its explicit same-origin device id and rejects absolute requests", async () => {
   const previous = snapshotConfig();
   const seen = [];
@@ -86,6 +247,42 @@ test("first login preserves its explicit same-origin device id and rejects absol
 
     assert.equal(header(seen[0], "x-art-device-id"), "first-device");
     assert.equal(seen.length, 1);
+  } finally {
+    Object.assign(appConfig, previous);
+  }
+});
+
+test("Zhenxi account mutations use the trusted server client without browser origin headers", async () => {
+  const previous = snapshotConfig();
+  const seen = [];
+  try {
+    Object.assign(appConfig, {
+      designPlatformAdapter: "art_image_local",
+      designPlatformBaseUrl: "http://127.0.0.1:3300",
+      designPlatformAccessToken: "",
+      designPlatformAccessTokenOrigin: "",
+      designPlatformApiKey: "",
+      designPlatformApiKeyOrigin: "",
+      designPlatformCookie: "",
+      designPlatformCookieOrigin: "",
+      designPlatformDeviceId: "",
+      designPlatformDeviceIdOrigin: "",
+    });
+    const client = DesignPlatformClient.createForTesting(captureAdapter(seen, {
+      ok: true,
+      data: { accessToken: "login-token", user: { id: "user-1" } },
+    }));
+
+    await client.loginArtImageLocal({ email: "test@example.com", password: "secret", deviceId: "device-1" });
+    await client.redeemArtImageLocalActivation({ code: "activation-code", deviceId: "device-1" });
+
+    assert.deepEqual(seen.map((config) => config.url), ["api/auth/login", "api/activation/redeem"]);
+    for (const config of seen) {
+      assert.equal(header(config, "x-art-client"), "zhenxi-ai");
+      assert.equal(header(config, "x-art-device-id"), "device-1");
+      assert.equal(header(config, "origin"), undefined);
+      assert.equal(header(config, "referer"), undefined);
+    }
   } finally {
     Object.assign(appConfig, previous);
   }
@@ -353,6 +550,8 @@ test("login, activation and ordinary API POST reject 307/308 without following s
 test("restart never binds an environment API key to a runtime-only base URL", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "design-platform-restart-security-"));
   const configPath = path.join(tempDir, "design-platform-config.json");
+  const envPath = path.join(tempDir, ".env");
+  fs.writeFileSync(envPath, "");
   fs.writeFileSync(
     configPath,
     JSON.stringify({ designPlatformAdapter: "standard_v1", designPlatformBaseUrl: "https://design.example" }),
@@ -362,6 +561,7 @@ test("restart never binds an environment API key to a runtime-only base URL", ()
     "process.stdout.write(JSON.stringify({ apiKeyOrigin: appConfig.designPlatformApiKeyOrigin, summary: getDesignPlatformRuntimeConfigSummary() }));",
   ].join("");
   const env = { ...process.env };
+  delete env.DESIGN_PLATFORM_ADAPTER;
   delete env.DESIGN_PLATFORM_BASE_URL;
   delete env.DESIGN_PLATFORM_ACCESS_TOKEN;
   delete env.DESIGN_PLATFORM_COOKIE;
@@ -369,6 +569,7 @@ test("restart never binds an environment API key to a runtime-only base URL", ()
   env.DESIGN_PLATFORM_API_KEY = "static-api-key";
   env.DESIGN_PLATFORM_ALLOWED_ORIGINS = "https://design.example";
   env.DESIGN_PLATFORM_RUNTIME_CONFIG = configPath;
+  env.DESKTOP_ENV_FILE = envPath;
   const child = spawnSync(process.execPath, ["-r", "ts-node/register", "-e", script], {
     cwd: path.resolve(__dirname, ".."),
     env,
@@ -389,6 +590,34 @@ function captureAdapter(seen, data) {
   return async (config) => {
     seen.push(config);
     return { data, status: 200, statusText: "OK", headers: {}, config, request: {} };
+  };
+}
+
+function artImageHealthProbeAdapter(seen) {
+  return async (config) => {
+    seen.push(config);
+    const method = String(config.method || "get").toUpperCase();
+    if (config.url === "api/health" && method === "GET") {
+      return {
+        data: { ok: true, data: { status: "ok", service: "zhenxi-ai", runtime: { channel: "internal" } } },
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        config,
+        request: {},
+      };
+    }
+    if (config.url === "api/local-generate" && method === "OPTIONS") {
+      return {
+        data: null,
+        status: 204,
+        statusText: "No Content",
+        headers: { Allow: "OPTIONS, POST" },
+        config,
+        request: {},
+      };
+    }
+    throw new Error(`unexpected design platform request: ${method} ${config.url}`);
   };
 }
 

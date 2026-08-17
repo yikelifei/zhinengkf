@@ -54,7 +54,15 @@ function buildOrderConfirmationCustomerMessage(input = {}) {
 }
 
 function cleanText(value) {
-  return String(value || "").trim();
+  const text = String(value || "").trim();
+  return isUnreadableText(text) ? "" : text;
+}
+
+function isUnreadableText(value) {
+  if (!value) return false;
+  if (value.includes("\uFFFD")) return true;
+  const questionMarks = value.match(/\?/g)?.length || 0;
+  return questionMarks >= 3 && questionMarks >= Math.ceil(value.length / 2);
 }
 
 function toNumber(value, fallback) {

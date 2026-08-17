@@ -24,9 +24,19 @@ const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
 function renderBundlesWithState(stateValues) {
-  const originals = { useEffect: React.useEffect, useRef: React.useRef, useState: React.useState };
+  const originals = {
+    useCallback: React.useCallback,
+    useEffect: React.useEffect,
+    useMemo: React.useMemo,
+    useRef: React.useRef,
+    useState: React.useState,
+  };
   let stateIndex = 0;
-  React.useState = () => [stateValues[stateIndex++], () => {}];
+  const catalogDefaults = [[], false, "", true];
+  const values = [...stateValues, ...catalogDefaults];
+  React.useCallback = (callback) => callback;
+  React.useMemo = (factory) => factory();
+  React.useState = (initialValue) => [stateIndex < values.length ? values[stateIndex++] : initialValue, () => {}];
   React.useRef = (initialValue) => ({ current: initialValue });
   React.useEffect = () => {};
   try {
@@ -58,9 +68,10 @@ test("entity detail routes are read-only and link to explicit action pages", () 
   assert.match(quoteDetail, /\/create-order/);
   assert.doesNotMatch(orderDetail, /updateOrderDraft|queueOrderConfirmation|queueOrderFollowup/);
   for (const target of ["/edit", "/messages/confirmation", "/messages/production", "/messages/delivery"]) assert.ok(orderDetail.includes(target));
-  assert.doesNotMatch(designDetail, /preflightDesignJob|submitDesignJob|pollDesignJob/);
+  assert.doesNotMatch(designDetail, /preflightDesignJob|submitDesignJob|pollDesignJob|createQuote/);
   assert.match(designDetail, /\/submit/);
   assert.match(designDetail, /\/status/);
+  assert.match(designDetail, /\/quote/);
   assert.doesNotMatch(productDetail, /upsertSku/);
   assert.match(productDetail, /\/catalog\/editor\?sku=/);
 });
@@ -76,6 +87,7 @@ test("each write URL selects exactly one explicit commerce action", () => {
   const repair = read("apps/web/src/features/catalog/catalog-repair-detail-page.tsx");
   const submit = read("apps/web/src/features/design/design-job-submit-page.tsx");
   const status = read("apps/web/src/features/design/design-job-status-page.tsx");
+  const quote = read("apps/web/src/features/design/design-job-quote-page.tsx");
   assert.match(editor, /upsertSku/);
   assert.doesNotMatch(editor, /batchUpdateSkus|getSkuCatalogAudit/);
   assert.match(repair, /batchUpdateSkus/);
@@ -85,6 +97,9 @@ test("each write URL selects exactly one explicit commerce action", () => {
   assert.doesNotMatch(submit, /pollDesignJob/);
   assert.match(status, /pollDesignJob/);
   assert.doesNotMatch(status, /preflightDesignJob|submitDesignJob/);
+  assert.match(quote, /createQuote/);
+  assert.match(quote, /reserveClientOperation\(\s*"quote-create"/);
+  assert.doesNotMatch(quote, /preflightDesignJob|submitDesignJob|pollDesignJob|queueQuoteSend/);
 });
 
 test("catalog import and audit remain separate workflows", () => {
@@ -110,6 +125,10 @@ test("catalog write forms bind mutable inputs to the active request", () => {
   assert.match(editor, /saveSequence = useRef\(0\)/);
   assert.match(editor, /editorIdentityRef\.current !== requestIdentity/);
   assert.ok((editor.match(/disabled=\{busy\}/g) || []).length >= 13);
+  assert.match(editor, /imageReady/);
+  assert.match(editor, /mainImagePath: requestDraft\.mainImagePath\?\.trim\(\)/);
+  assert.match(editor, /angleImages: \(requestDraft\.angleImages \|\| \[\]\)\.map/);
+  assert.match(editor, /parseImageList/);
 
   const repair = read("apps/web/src/features/catalog/catalog-repair-detail-page.tsx");
   assert.match(repair, /repairSequence = useRef\(0\)/);
@@ -129,6 +148,7 @@ test("catalog bundle SSR hides stale intent results and distinguishes failed att
     perUnitAmount: "200",
     totalAmount: "10000",
     maxItems: "6",
+    selectedSkuCodes: [],
   };
   const intentKey = bundleIntentFingerprint(draft);
   const failure = renderBundlesWithState([
@@ -137,6 +157,7 @@ test("catalog bundle SSR hides stale intent results and distinguishes failed att
     draft.perUnitAmount,
     draft.totalAmount,
     draft.maxItems,
+    draft.selectedSkuCodes,
     { status: "error", intentKey, message: "组合推荐失败：timeout", attempted: true },
   ]);
   assert.match(failure, /组合推荐失败/);
@@ -156,6 +177,7 @@ test("catalog bundle SSR hides stale intent results and distinguishes failed att
     draft.perUnitAmount,
     draft.totalAmount,
     draft.maxItems,
+    draft.selectedSkuCodes,
     { status: "success", intentKey, result: staleResult },
   ]);
   assert.match(changed, /尚未计算组合/);

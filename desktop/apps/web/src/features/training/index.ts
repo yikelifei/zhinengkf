@@ -1,3 +1,5 @@
+export { TrainingOverviewPage } from "./training-overview-page";
+export { TrainingKnowledgePage } from "./training-knowledge-page";
 export { TrainingImportPage } from "./training-import-page";
 export { TrainingImportHistoryPage } from "./training-import-history-page";
 export { TrainingReviewPage } from "./training-review-page";

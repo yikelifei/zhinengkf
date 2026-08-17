@@ -507,6 +507,11 @@ function waitForProcessExit(pid, timeoutMs = 10_000) {
 async function terminateProcessTree(child) {
   const pid = Number(child?.pid);
   if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return;
+  try { child.kill(); } catch {}
+  try {
+    await waitForProcessExit(pid, process.platform === "win32" ? 3000 : 1000);
+    return;
+  } catch {}
   if (process.platform === "win32") {
     const taskkill = trustedWindowsSystemTool("taskkill.exe");
     if (!taskkill) throw new Error("trusted Windows taskkill is unavailable");
@@ -517,8 +522,16 @@ async function terminateProcessTree(child) {
       timeout: 30_000,
     });
     if (result.error?.code === "ETIMEDOUT") throw new Error(`timed out terminating process tree: ${pid}`);
-    if (result.error || (result.status !== 0 && processExists(pid))) {
-      throw new Error(`failed to terminate process tree: ${pid}`);
+    if (result.error || result.status !== 0) {
+      try {
+        await waitForProcessExit(pid, 15000);
+        return;
+      } catch {}
+      if (processExists(pid)) {
+        const detail = String(result.error?.message || result.stderr || result.stdout || "").trim();
+        throw new Error(`failed to terminate process tree: ${pid}${detail ? `: ${detail}` : ""}`);
+      }
+      return;
     }
   } else {
     try { child.kill("SIGKILL"); } catch {}

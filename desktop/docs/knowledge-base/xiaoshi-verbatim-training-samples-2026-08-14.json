@@ -1,0 +1,1994 @@
+{
+  "meta": {
+    "title": "小石客服脱敏原话训练集",
+    "createdAt": "2026-08-14T09:30:16.369Z",
+    "sampleCount": 74,
+    "sourceSessionCount": 23,
+    "sourceTurnPairCount": 946,
+    "sourceType": "sanitized_verbatim_wechat_dialogue",
+    "reviewMode": "required",
+    "statement": "客服回复来自原聊天相邻消息，不改写为标准答案。"
+  },
+  "styleEvidence": {
+    "serviceReplyLengthAverage": 8.2,
+    "serviceReplyLengthMedian": 5,
+    "serviceQuestionRate": 0.0907,
+    "shortAcknowledgementRate": 0.1249,
+    "attachmentOnlyRate": 0.2198,
+    "warmthMarkerCounts": {
+      "咱们": 40,
+      "这边": 103,
+      "可以的": 41,
+      "好滴": 18,
+      "好的": 106,
+      "嗯呢": 37,
+      "稍等": 41,
+      "哈哈": 4,
+      "亲": 96,
+      "漂亮": 1
+    },
+    "commonServiceMessages": [
+      {
+        "text": "[附件]",
+        "count": 526
+      },
+      {
+        "text": "好的",
+        "count": 63
+      },
+      {
+        "text": "[引用附件]",
+        "count": 39
+      },
+      {
+        "text": "嗯呢",
+        "count": 24
+      },
+      {
+        "text": "可以的",
+        "count": 21
+      },
+      {
+        "text": "[附件] pdf]",
+        "count": 17
+      },
+      {
+        "text": "可以",
+        "count": 14
+      },
+      {
+        "text": "稍等",
+        "count": 13
+      },
+      {
+        "text": "好",
+        "count": 13
+      },
+      {
+        "text": "[捂脸]",
+        "count": 12
+      },
+      {
+        "text": "好滴",
+        "count": 12
+      },
+      {
+        "text": "对的",
+        "count": 11
+      },
+      {
+        "text": "是的",
+        "count": 11
+      },
+      {
+        "text": "[愉快]",
+        "count": 11
+      },
+      {
+        "text": "你好亲，看到您后台留言了，咱这边喜欢哪一款可以截图发我哦，或者您说一下使用的活动主题，和预算，我给您推荐～",
+        "count": 9
+      },
+      {
+        "text": "[呲牙]",
+        "count": 8
+      },
+      {
+        "text": "有的",
+        "count": 8
+      },
+      {
+        "text": "[附件] pptx]",
+        "count": 7
+      },
+      {
+        "text": "您预算多少",
+        "count": 4
+      },
+      {
+        "text": "好的亲",
+        "count": 4
+      },
+      {
+        "text": "是的亲",
+        "count": 4
+      },
+      {
+        "text": "[嘿哈]",
+        "count": 4
+      },
+      {
+        "text": "可以滴",
+        "count": 4
+      },
+      {
+        "text": "你好亲",
+        "count": 3
+      },
+      {
+        "text": "好的稍等",
+        "count": 3
+      },
+      {
+        "text": "我看看",
+        "count": 3
+      },
+      {
+        "text": "[语音/视频通话] [通话记录]",
+        "count": 3
+      },
+      {
+        "text": "截图发我一下哈",
+        "count": 3
+      },
+      {
+        "text": "对",
+        "count": 3
+      },
+      {
+        "text": "恩恩",
+        "count": 3
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "xiaoshi_verbatim_001",
+      "sourceRef": {
+        "session": "xiaoshi_session_011",
+        "lineStart": 8,
+        "lineEnd": 10
+      },
+      "customerMessages": [
+        "好的 我看看"
+      ],
+      "humanReplyMessages": [
+        "咱这边是什么活动用的",
+        "然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些"
+      ],
+      "customerText": "好的 我看看",
+      "humanReply": "咱这边是什么活动用的\n然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 100,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_002",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 4,
+        "lineEnd": 8
+      },
+      "customerMessages": [
+        "是的",
+        "有中秋礼品方案吗",
+        "月饼之类的礼盒"
+      ],
+      "humanReplyMessages": [
+        "咱这边是现打算做中秋的方案吗",
+        "我看您问的是商务礼盒"
+      ],
+      "customerText": "是的\n有中秋礼品方案吗\n月饼之类的礼盒",
+      "humanReply": "咱这边是现打算做中秋的方案吗\n我看您问的是商务礼盒",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 100,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_003",
+      "sourceRef": {
+        "session": "xiaoshi_session_002",
+        "lineStart": 3,
+        "lineEnd": 4
+      },
+      "customerMessages": [
+        "公司20周年庆典给参会人员的伴手礼 200份左右"
+      ],
+      "humanReplyMessages": [
+        "咱们是什么类型的公司，预算多少呢"
+      ],
+      "customerText": "公司20周年庆典给参会人员的伴手礼 200份左右",
+      "humanReply": "咱们是什么类型的公司，预算多少呢",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_004",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 18,
+        "lineEnd": 22
+      },
+      "customerMessages": [
+        "我们只有50的预算"
+      ],
+      "humanReplyMessages": [
+        "包含定制卡片 logo",
+        "可以要帽子 本子 小风扇",
+        "包包",
+        "[附件]"
+      ],
+      "customerText": "我们只有50的预算",
+      "humanReply": "包含定制卡片 logo\n可以要帽子 本子 小风扇\n包包\n[附件]",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_005",
+      "sourceRef": {
+        "session": "xiaoshi_session_009",
+        "lineStart": 8,
+        "lineEnd": 11
+      },
+      "customerMessages": [
+        "开业",
+        "伴手礼"
+      ],
+      "humanReplyMessages": [
+        "预算呢亲",
+        "这边数量要多少套呀"
+      ],
+      "customerText": "开业\n伴手礼",
+      "humanReply": "预算呢亲\n这边数量要多少套呀",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_006",
+      "sourceRef": {
+        "session": "xiaoshi_session_009",
+        "lineStart": 388,
+        "lineEnd": 398
+      },
+      "customerMessages": [
+        "葡萄，发圈，香薰",
+        "这个呢"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "我找一下香薰",
+        "[附件]",
+        "这几样可以",
+        "可以做",
+        "那就定这款吧",
+        "您把logo发我一下"
+      ],
+      "customerText": "葡萄，发圈，香薰\n这个呢",
+      "humanReply": "[附件]\n[附件]\n[附件]\n我找一下香薰\n[附件]\n这几样可以\n可以做\n那就定这款吧\n您把logo发我一下",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_007",
+      "sourceRef": {
+        "session": "xiaoshi_session_011",
+        "lineStart": 12,
+        "lineEnd": 15
+      },
+      "customerMessages": [
+        "准备筹备开业礼的"
+      ],
+      "humanReplyMessages": [
+        "[附件] pdf]",
+        "[附件] pdf]",
+        "你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的"
+      ],
+      "customerText": "准备筹备开业礼的",
+      "humanReply": "[附件] pdf]\n[附件] pdf]\n你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_008",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 242,
+        "lineEnd": 246
+      },
+      "customerMessages": [
+        "不只是糖果",
+        "是有其他搭配的那种"
+      ],
+      "humanReplyMessages": [
+        "这边可以根据您的预算和需求配",
+        "可以呀",
+        "伴手礼都很灵活的"
+      ],
+      "customerText": "不只是糖果\n是有其他搭配的那种",
+      "humanReply": "这边可以根据您的预算和需求配\n可以呀\n伴手礼都很灵活的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_009",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 442,
+        "lineEnd": 445
+      },
+      "customerMessages": [
+        "hello 我来问一下婚礼宾客的伴手礼",
+        "要看起来大气一点"
+      ],
+      "humanReplyMessages": [
+        "在的",
+        "多少预算，里面打算放什么呢"
+      ],
+      "customerText": "hello 我来问一下婚礼宾客的伴手礼\n要看起来大气一点",
+      "humanReply": "在的\n多少预算，里面打算放什么呢",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_010",
+      "sourceRef": {
+        "session": "xiaoshi_session_019",
+        "lineStart": 12,
+        "lineEnd": 13
+      },
+      "customerMessages": [
+        "还想要一个伴手礼"
+      ],
+      "humanReplyMessages": [
+        "您数量要多少呢，还有预算"
+      ],
+      "customerText": "还想要一个伴手礼",
+      "humanReply": "您数量要多少呢，还有预算",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_011",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 54,
+        "lineEnd": 59
+      },
+      "customerMessages": [
+        "[引用附件]",
+        "[引用消息] 好的 - 朱礼纪礼品定制: 这些可以到时候调整一下搭配把预算控制在一百以内"
+      ],
+      "humanReplyMessages": [
+        "[呲牙]",
+        "这个在咱们预算内的",
+        "也可以给咱定制腰封",
+        "logo"
+      ],
+      "customerText": "[引用附件]\n[引用消息] 好的 - 朱礼纪礼品定制: 这些可以到时候调整一下搭配把预算控制在一百以内",
+      "humanReply": "[呲牙]\n这个在咱们预算内的\n也可以给咱定制腰封\nlogo",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_012",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 19,
+        "lineEnd": 22
+      },
+      "customerMessages": [
+        "是的我这边先看看样品和方案"
+      ],
+      "humanReplyMessages": [
+        "您先看一下",
+        "您这边预算多少呢",
+        "还有数量"
+      ],
+      "customerText": "是的我这边先看看样品和方案",
+      "humanReply": "您先看一下\n您这边预算多少呢\n还有数量",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_013",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 304,
+        "lineEnd": 309
+      },
+      "customerMessages": [
+        "那我这种搭配好的大货是还要再晚一点才会有吗"
+      ],
+      "humanReplyMessages": [
+        "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出",
+        "除非单独定制",
+        "一般这种礼盒有内衬的，都是搭配好的",
+        "不需要内衬的比较好做，时间快一点",
+        "单独做内衬，要选好单品重新量尺寸，做礼盒"
+      ],
+      "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+      "humanReply": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出\n除非单独定制\n一般这种礼盒有内衬的，都是搭配好的\n不需要内衬的比较好做，时间快一点\n单独做内衬，要选好单品重新量尺寸，做礼盒",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_014",
+      "sourceRef": {
+        "session": "xiaoshi_session_022",
+        "lineStart": 3,
+        "lineEnd": 5
+      },
+      "customerMessages": [
+        "那个包什么价格"
+      ],
+      "humanReplyMessages": [
+        "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下",
+        "可以截图给我看一下~"
+      ],
+      "customerText": "那个包什么价格",
+      "humanReply": "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下\n可以截图给我看一下~",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_015",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 129,
+        "lineEnd": 136
+      },
+      "customerMessages": [
+        "[附件]",
+        "这个是我们logo",
+        "跨境物流公司做欧盟海外仓的"
+      ],
+      "humanReplyMessages": [
+        "好的稍等出一下效果图",
+        "还有这种",
+        "[附件]",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "[附件]\n这个是我们logo\n跨境物流公司做欧盟海外仓的",
+      "humanReply": "好的稍等出一下效果图\n还有这种\n[附件]\n[附件]\n[附件]",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_016",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 50,
+        "lineEnd": 51
+      },
+      "customerMessages": [
+        "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的"
+      ],
+      "humanReplyMessages": [
+        "您这边是哪里的，需要定制logo吗"
+      ],
+      "customerText": "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的",
+      "humanReply": "您这边是哪里的，需要定制logo吗",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 94,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_017",
+      "sourceRef": {
+        "session": "xiaoshi_session_014",
+        "lineStart": 14,
+        "lineEnd": 16
+      },
+      "customerMessages": [
+        "只要包包和笔记本呢？"
+      ],
+      "humanReplyMessages": [
+        "多少套呀发哪里，需要定制吊牌和腰封吗",
+        "这边要合算运费"
+      ],
+      "customerText": "只要包包和笔记本呢？",
+      "humanReply": "多少套呀发哪里，需要定制吊牌和腰封吗\n这边要合算运费",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 90,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_018",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 197,
+        "lineEnd": 200
+      },
+      "customerMessages": [
+        "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户"
+      ],
+      "humanReplyMessages": [
+        "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户",
+      "humanReply": "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]\n[附件]\n[附件]",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 90,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_019",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 615,
+        "lineEnd": 619
+      },
+      "customerMessages": [
+        "哇塞价格也不错 在预算内",
+        "能定制logo吗"
+      ],
+      "humanReplyMessages": [
+        "嗯呢，因为咱们是老乡lei",
+        "对的",
+        "能在礼袋外面做"
+      ],
+      "customerText": "哇塞价格也不错 在预算内\n能定制logo吗",
+      "humanReply": "嗯呢，因为咱们是老乡lei\n对的\n能在礼袋外面做",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 90,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_020",
+      "sourceRef": {
+        "session": "xiaoshi_session_002",
+        "lineStart": 25,
+        "lineEnd": 30
+      },
+      "customerMessages": [
+        "[应用消息] 被一眼相中秒通过的商务礼品方案来啦 - @青茉礼伴手礼 的笔记 159人分享",
+        "这套是多少钱",
+        "还有你可以定制冰箱贴",
+        "吗？"
+      ],
+      "humanReplyMessages": [
+        "冰箱贴可以定制",
+        "这个超预算哈"
+      ],
+      "customerText": "[应用消息] 被一眼相中秒通过的商务礼品方案来啦 - @青茉礼伴手礼 的笔记 159人分享\n这套是多少钱\n还有你可以定制冰箱贴\n吗？",
+      "humanReply": "冰箱贴可以定制\n这个超预算哈",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 88,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_021",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 694,
+        "lineEnd": 699
+      },
+      "customerMessages": [
+        "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计",
+        "要加我们logo",
+        "[附件]",
+        "这个是我们logo"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "logo定制大货可以做"
+      ],
+      "customerText": "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计\n要加我们logo\n[附件]\n这个是我们logo",
+      "humanReply": "好的\nlogo定制大货可以做",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 88,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_022",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 744,
+        "lineEnd": 747
+      },
+      "customerMessages": [
+        "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子",
+        "我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了"
+      ],
+      "humanReplyMessages": [
+        "一样的logo位置不同",
+        "可以"
+      ],
+      "customerText": "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子\n我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了",
+      "humanReply": "一样的logo位置不同\n可以",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 88,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_023",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 295,
+        "lineEnd": 296
+      },
+      "customerMessages": [
+        "我滴妈呀[捂脸][捂脸]"
+      ],
+      "humanReplyMessages": [
+        "定制logo是可以的"
+      ],
+      "customerText": "我滴妈呀[捂脸][捂脸]",
+      "humanReply": "定制logo是可以的",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 88,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_024",
+      "sourceRef": {
+        "session": "xiaoshi_session_005",
+        "lineStart": 74,
+        "lineEnd": 81
+      },
+      "customerMessages": [
+        "没有没有"
+      ],
+      "humanReplyMessages": [
+        "就是您要的这几样",
+        "我现在肯定也是能卖多少卖多少",
+        "您考虑一下",
+        "预算低可以放三样",
+        "[附件]",
+        "您看一下",
+        "卖您的不贵"
+      ],
+      "customerText": "没有没有",
+      "humanReply": "就是您要的这几样\n我现在肯定也是能卖多少卖多少\n您考虑一下\n预算低可以放三样\n[附件]\n您看一下\n卖您的不贵",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 86,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_025",
+      "sourceRef": {
+        "session": "xiaoshi_session_009",
+        "lineStart": 404,
+        "lineEnd": 409
+      },
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "得等一会了，要找厂里同事拍一下",
+        "安排人去拍了哈",
+        "[附件]",
+        "您看下",
+        "样品间的葡萄串时间有点久了，给您发的都是新的"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "得等一会了，要找厂里同事拍一下\n安排人去拍了哈\n[附件]\n您看下\n样品间的葡萄串时间有点久了，给您发的都是新的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 86,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_026",
+      "sourceRef": {
+        "session": "xiaoshi_session_002",
+        "lineStart": 156,
+        "lineEnd": 158
+      },
+      "customerMessages": [
+        "缓两天不急，领导出差了"
+      ],
+      "humanReplyMessages": [
+        "嗷嗷好滴",
+        "哈喽亲，咱们领导回来了嘛"
+      ],
+      "customerText": "缓两天不急，领导出差了",
+      "humanReply": "嗷嗷好滴\n哈喽亲，咱们领导回来了嘛",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_027",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 170,
+        "lineEnd": 174
+      },
+      "customerMessages": [
+        "我拉你进群，家委会家长有疑问",
+        "哈哈哈"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "[呲牙]",
+        "您好亲，这边什么时候付款呢"
+      ],
+      "customerText": "我拉你进群，家委会家长有疑问\n哈哈哈",
+      "humanReply": "好的\n[呲牙]\n您好亲，这边什么时候付款呢",
+      "scene": "下单支付",
+      "agentKey": "order_payment",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_028",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 197,
+        "lineEnd": 204
+      },
+      "customerMessages": [
+        "是定制的",
+        "图片款",
+        "[附件]",
+        "一模一样的"
+      ],
+      "humanReplyMessages": [
+        "他说的是散发的价格",
+        "你看看",
+        "不是包装好的",
+        "而且只能做背包的吊卡"
+      ],
+      "customerText": "是定制的\n图片款\n[附件]\n一模一样的",
+      "humanReply": "他说的是散发的价格\n你看看\n不是包装好的\n而且只能做背包的吊卡",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_029",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 461,
+        "lineEnd": 472
+      },
+      "customerMessages": [
+        "不太行",
+        "纸盒最好还是"
+      ],
+      "humanReplyMessages": [
+        "有的",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这种风吕敷挺适合婚礼的"
+      ],
+      "customerText": "不太行\n纸盒最好还是",
+      "humanReply": "有的\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n这种风吕敷挺适合婚礼的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_030",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 489,
+        "lineEnd": 497
+      },
+      "customerMessages": [
+        "喜糖我们另外放的",
+        "这个大小单个大概多少钱呢"
+      ],
+      "humanReplyMessages": [
+        "也要根据具体放的东西",
+        "椭圆盒子有19cm长度",
+        "和24cm",
+        "图片是24cm",
+        "可以发一对陶瓷杯碟",
+        "香皂，香薰",
+        "或者放个葡萄皂"
+      ],
+      "customerText": "喜糖我们另外放的\n这个大小单个大概多少钱呢",
+      "humanReply": "也要根据具体放的东西\n椭圆盒子有19cm长度\n和24cm\n图片是24cm\n可以发一对陶瓷杯碟\n香皂，香薰\n或者放个葡萄皂",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_031",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 149,
+        "lineEnd": 151
+      },
+      "customerMessages": [
+        "看看周一能不能收到样品"
+      ],
+      "humanReplyMessages": [
+        "样品可以先用我们这边之前做的腰封",
+        "到时候大货再定制就快一点"
+      ],
+      "customerText": "看看周一能不能收到样品",
+      "humanReply": "样品可以先用我们这边之前做的腰封\n到时候大货再定制就快一点",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_032",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 253,
+        "lineEnd": 260
+      },
+      "customerMessages": [
+        "我们这些也是选品之后定下的"
+      ],
+      "humanReplyMessages": [
+        "可以的",
+        "可以给您找一下这种",
+        "今年有点早了",
+        "有合适的我发您",
+        "[附件]",
+        "[附件]",
+        "这种到时候出新款我给您发"
+      ],
+      "customerText": "我们这些也是选品之后定下的",
+      "humanReply": "可以的\n可以给您找一下这种\n今年有点早了\n有合适的我发您\n[附件]\n[附件]\n这种到时候出新款我给您发",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_033",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 297,
+        "lineEnd": 302
+      },
+      "customerMessages": [
+        "[引用消息] 158和168的盒子 搭配两个月饼 其他的可以按照类似产品搭配吗 - mimimo: [引用附件]"
+      ],
+      "humanReplyMessages": [
+        "可以",
+        "因为我给你看的都是搭配好的那种现货",
+        "你说的这种要重新做内衬",
+        "费用会高很多，周期要半个月",
+        "[引用附件]"
+      ],
+      "customerText": "[引用消息] 158和168的盒子 搭配两个月饼 其他的可以按照类似产品搭配吗 - mimimo: [引用附件]",
+      "humanReply": "可以\n因为我给你看的都是搭配好的那种现货\n你说的这种要重新做内衬\n费用会高很多，周期要半个月\n[引用附件]",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_034",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 771,
+        "lineEnd": 776
+      },
+      "customerMessages": [
+        "反正是样品先让他们看看闻闻",
+        "不行可以换味道吧哈哈",
+        "曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图",
+        "这是我们的slogan"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈"
+      ],
+      "customerText": "反正是样品先让他们看看闻闻\n不行可以换味道吧哈哈\n曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图\n这是我们的slogan",
+      "humanReply": "好的\n[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_035",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 925,
+        "lineEnd": 930
+      },
+      "customerMessages": [
+        "50-60左右",
+        "你发的这些不像送客户的 像婚礼的伴手礼",
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "我们有商务礼",
+        "[附件] pptx]",
+        "[附件] pdf]"
+      ],
+      "customerText": "50-60左右\n你发的这些不像送客户的 像婚礼的伴手礼\n[附件]",
+      "humanReply": "我们有商务礼\n[附件] pptx]\n[附件] pdf]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_036",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 150,
+        "lineEnd": 154
+      },
+      "customerMessages": [
+        "可以呀",
+        "这个价格不错"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "比较优惠了",
+        "第一次合作"
+      ],
+      "customerText": "可以呀\n这个价格不错",
+      "humanReply": "嗯呢\n比较优惠了\n第一次合作",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_037",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 399,
+        "lineEnd": 404
+      },
+      "customerMessages": [
+        "[引用消息] 嗯这个价格感觉也挺不错滴 - 朱礼纪礼品定制: [引用附件]",
+        "那个小的多少钱"
+      ],
+      "humanReplyMessages": [
+        "毛毡包的性价比不错",
+        "[附件]",
+        "57 杯垫*2 希罗韦香薰 桂花茶 陶瓷杯",
+        "15*15盒子"
+      ],
+      "customerText": "[引用消息] 嗯这个价格感觉也挺不错滴 - 朱礼纪礼品定制: [引用附件]\n那个小的多少钱",
+      "humanReply": "毛毡包的性价比不错\n[附件]\n57 杯垫*2 希罗韦香薰 桂花茶 陶瓷杯\n15*15盒子",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_038",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 409,
+        "lineEnd": 425
+      },
+      "customerMessages": [
+        "还有别的新款不",
+        "嗯嗯 就是要找大的",
+        "[引用附件]"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "对",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这些就要贵一点"
+      ],
+      "customerText": "还有别的新款不\n嗯嗯 就是要找大的\n[引用附件]",
+      "humanReply": "[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n对\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]\n这些就要贵一点",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_039",
+      "sourceRef": {
+        "session": "xiaoshi_session_009",
+        "lineStart": 425,
+        "lineEnd": 433
+      },
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "礼盒吗",
+        "[附件]",
+        "护手霜 木梳 香皂 发圈",
+        "这个是大肠发圈蓝色的",
+        "[引用消息] 这个香皂我可以给你配个小的葡萄皂 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "这个样的",
+        "换掉那个方块的香皂"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "礼盒吗\n[附件]\n护手霜 木梳 香皂 发圈\n这个是大肠发圈蓝色的\n[引用消息] 这个香皂我可以给你配个小的葡萄皂 - 朱礼纪礼品定制: [引用附件]\n[附件]\n这个样的\n换掉那个方块的香皂",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 82,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_040",
+      "sourceRef": {
+        "session": "xiaoshi_session_013",
+        "lineStart": 87,
+        "lineEnd": 88
+      },
+      "customerMessages": [
+        "可以的"
+      ],
+      "humanReplyMessages": [
+        "[引用消息] 什么 - 7+瑜伽普拉提·女子塑形杨店长: 茶包不要30好吗？"
+      ],
+      "customerText": "可以的",
+      "humanReply": "[引用消息] 什么 - 7+瑜伽普拉提·女子塑形杨店长: 茶包不要30好吗？",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 82,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_041",
+      "sourceRef": {
+        "session": "xiaoshi_session_016",
+        "lineStart": 12,
+        "lineEnd": 21
+      },
+      "customerMessages": [
+        "都有些啥"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "您看一下这是明细哈",
+        "[引用消息] 艾草锤 香薰挂件 粽子和茶叶 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "可以看看这套活动价39",
+        "您好亲，咱这边伴手礼还要吗"
+      ],
+      "customerText": "都有些啥",
+      "humanReply": "[附件]\n[附件]\n[附件]\n[附件]\n您看一下这是明细哈\n[引用消息] 艾草锤 香薰挂件 粽子和茶叶 - 朱礼纪礼品定制: [引用附件]\n[附件]\n可以看看这套活动价39\n您好亲，咱这边伴手礼还要吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 82,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_042",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 922,
+        "lineEnd": 923
+      },
+      "customerMessages": [
+        "大一点的才好送客户呀"
+      ],
+      "humanReplyMessages": [
+        "这个伴手礼的预算呢"
+      ],
+      "customerText": "大一点的才好送客户呀",
+      "humanReply": "这个伴手礼的预算呢",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 82,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_043",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 28,
+        "lineEnd": 30
+      },
+      "customerMessages": [
+        "是的"
+      ],
+      "humanReplyMessages": [
+        "稍等下午我给您看看",
+        "咱这边要寄样品哈"
+      ],
+      "customerText": "是的",
+      "humanReply": "稍等下午我给您看看\n咱这边要寄样品哈",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 80,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_044",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 337,
+        "lineEnd": 341
+      },
+      "customerMessages": [
+        "好",
+        "有了吗"
+      ],
+      "humanReplyMessages": [
+        "这种杜邦袋",
+        "[附件]",
+        "要贵一些可以加logo"
+      ],
+      "customerText": "好\n有了吗",
+      "humanReply": "这种杜邦袋\n[附件]\n要贵一些可以加logo",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 80,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_045",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 133,
+        "lineEnd": 136
+      },
+      "customerMessages": [
+        "好的，定制小标签放好的吗"
+      ],
+      "humanReplyMessages": [
+        "对的",
+        "那个是卡片腰封",
+        "我们定制哈了放进去"
+      ],
+      "customerText": "好的，定制小标签放好的吗",
+      "humanReply": "对的\n那个是卡片腰封\n我们定制哈了放进去",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_046",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 359,
+        "lineEnd": 362
+      },
+      "customerMessages": [
+        "哈哈，我也不知道还能不能相信你",
+        "哎，你看着配吧"
+      ],
+      "humanReplyMessages": [
+        "恩恩",
+        "伴手礼行业我们都是搭配的"
+      ],
+      "customerText": "哈哈，我也不知道还能不能相信你\n哎，你看着配吧",
+      "humanReply": "恩恩\n伴手礼行业我们都是搭配的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_047",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 412,
+        "lineEnd": 414
+      },
+      "customerMessages": [
+        "发票按昨天统一的那个开，这个是单独给我转的账，不算"
+      ],
+      "humanReplyMessages": [
+        "按照3540开哈",
+        "您把开票信息发我一下"
+      ],
+      "customerText": "发票按昨天统一的那个开，这个是单独给我转的账，不算",
+      "humanReply": "按照3540开哈\n您把开票信息发我一下",
+      "scene": "下单支付",
+      "agentKey": "order_payment",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_048",
+      "sourceRef": {
+        "session": "xiaoshi_session_011",
+        "lineStart": 177,
+        "lineEnd": 179
+      },
+      "customerMessages": [
+        "价格没优惠吗"
+      ],
+      "humanReplyMessages": [
+        "咱们一般20份包邮",
+        "报价是十份起订量"
+      ],
+      "customerText": "价格没优惠吗",
+      "humanReply": "咱们一般20份包邮\n报价是十份起订量",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_049",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 415,
+        "lineEnd": 420
+      },
+      "customerMessages": [
+        "对",
+        "只要丝带好了",
+        "挂件不要了",
+        "这样是分别多少钱一个？"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "明天我去查一下"
+      ],
+      "customerText": "对\n只要丝带好了\n挂件不要了\n这样是分别多少钱一个？",
+      "humanReply": "好的\n明天我去查一下",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_050",
+      "sourceRef": {
+        "session": "xiaoshi_session_013",
+        "lineStart": 73,
+        "lineEnd": 76
+      },
+      "customerMessages": [
+        "好的 那就先寄个样品给我",
+        "麻烦了"
+      ],
+      "humanReplyMessages": [
+        "24+10=34",
+        "您发一下收货信息"
+      ],
+      "customerText": "好的 那就先寄个样品给我\n麻烦了",
+      "humanReply": "24+10=34\n您发一下收货信息",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_051",
+      "sourceRef": {
+        "session": "xiaoshi_session_013",
+        "lineStart": 22,
+        "lineEnd": 25
+      },
+      "customerMessages": [
+        "嘿嘿 22预算还有其他适合的款式吗"
+      ],
+      "humanReplyMessages": [
+        "这个散发您自己组合可以给您21",
+        "有的",
+        "[附件]"
+      ],
+      "customerText": "嘿嘿 22预算还有其他适合的款式吗",
+      "humanReply": "这个散发您自己组合可以给您21\n有的\n[附件]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_052",
+      "sourceRef": {
+        "session": "xiaoshi_session_016",
+        "lineStart": 83,
+        "lineEnd": 91
+      },
+      "customerMessages": [
+        "我用这个27的清单换成这个紫色的包装",
+        "你给我算便宜一点28一份",
+        "我们先初期合作，后期我们合作愉快长期",
+        "你那个气垫梳我感觉应该梳的不舒服",
+        "OK的话我就下单",
+        "[语音/视频通话] [通话记录]",
+        "[语音/视频通话] [通话记录]",
+        "要确定好，确定不了我要赶紧找其他的看下怎么给客户做伴手礼，时间紧迫"
+      ],
+      "humanReplyMessages": [
+        "最低紫色包装和内搭32"
+      ],
+      "customerText": "我用这个27的清单换成这个紫色的包装\n你给我算便宜一点28一份\n我们先初期合作，后期我们合作愉快长期\n你那个气垫梳我感觉应该梳的不舒服\nOK的话我就下单\n[语音/视频通话] [通话记录]\n[语音/视频通话] [通话记录]\n要确定好，确定不了我要赶紧找其他的看下怎么给客户做伴手礼，时间紧迫",
+      "humanReply": "最低紫色包装和内搭32",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_053",
+      "sourceRef": {
+        "session": "xiaoshi_session_019",
+        "lineStart": 70,
+        "lineEnd": 72
+      },
+      "customerMessages": [
+        "价格没优惠了",
+        "就想要皂"
+      ],
+      "humanReplyMessages": [
+        "艾草锤已经很便宜了，14.9"
+      ],
+      "customerText": "价格没优惠了\n就想要皂",
+      "humanReply": "艾草锤已经很便宜了，14.9",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_054",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 123,
+        "lineEnd": 125
+      },
+      "customerMessages": [
+        "好",
+        "那寄样品的时候有月饼吧"
+      ],
+      "humanReplyMessages": [
+        "可以寄，我要问一下厂家现在有没有货"
+      ],
+      "customerText": "好\n那寄样品的时候有月饼吧",
+      "humanReply": "可以寄，我要问一下厂家现在有没有货",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_055",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 202,
+        "lineEnd": 204
+      },
+      "customerMessages": [
+        "这种还可以 就是颜色有没有亮一点的 然后不要杯子"
+      ],
+      "humanReplyMessages": [
+        "有一款绿色的",
+        "我去样品间给你拍一下"
+      ],
+      "customerText": "这种还可以 就是颜色有没有亮一点的 然后不要杯子",
+      "humanReply": "有一款绿色的\n我去样品间给你拍一下",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_056",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 226,
+        "lineEnd": 230
+      },
+      "customerMessages": [
+        "只是杯子不要 然后包装需要换礼盒 颜色可能需要亮一点喜庆一点的"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "还有这种竹篮",
+        "[附件]",
+        "可以做腰封"
+      ],
+      "customerText": "只是杯子不要 然后包装需要换礼盒 颜色可能需要亮一点喜庆一点的",
+      "humanReply": "[附件]\n还有这种竹篮\n[附件]\n可以做腰封",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_057",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 281,
+        "lineEnd": 284
+      },
+      "customerMessages": [
+        "[引用附件]"
+      ],
+      "humanReplyMessages": [
+        "需要单独设计内衬了",
+        "换盒子",
+        "定制盒子"
+      ],
+      "customerText": "[引用附件]",
+      "humanReply": "需要单独设计内衬了\n换盒子\n定制盒子",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_058",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 621,
+        "lineEnd": 627
+      },
+      "customerMessages": [
+        "[引用消息] [让我看看]老乡你太得劲了 - 朱礼纪礼品定制: 嗯呢，因为咱们是老乡lei",
+        "好啊好啊哈哈哈哈",
+        "可以的话 能先寄样品不"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "可以",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "[引用消息] [让我看看]老乡你太得劲了 - 朱礼纪礼品定制: 嗯呢，因为咱们是老乡lei\n好啊好啊哈哈哈哈\n可以的话 能先寄样品不",
+      "humanReply": "[附件]\n可以\n[附件]\n[附件]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_059",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 689,
+        "lineEnd": 692
+      },
+      "customerMessages": [
+        "可以先发套样品来看看",
+        "我们看过之后样品ok的话",
+        "就大批量定"
+      ],
+      "humanReplyMessages": [
+        "好的您这边发一下收货信息"
+      ],
+      "customerText": "可以先发套样品来看看\n我们看过之后样品ok的话\n就大批量定",
+      "humanReply": "好的您这边发一下收货信息",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_060",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 759,
+        "lineEnd": 763
+      },
+      "customerMessages": [
+        "你推荐哪个味道呢",
+        "这个我也不知道咋选哈哈"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "檀香和雪松",
+        "比较适合大众"
+      ],
+      "customerText": "你推荐哪个味道呢\n这个我也不知道咋选哈哈",
+      "humanReply": "[附件]\n檀香和雪松\n比较适合大众",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_061",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 913,
+        "lineEnd": 916
+      },
+      "customerMessages": [
+        "是啊就是伴手礼呢",
+        "发来看看"
+      ],
+      "humanReplyMessages": [
+        "[附件] pptx]",
+        "[附件] pptx]"
+      ],
+      "customerText": "是啊就是伴手礼呢\n发来看看",
+      "humanReply": "[附件] pptx]\n[附件] pptx]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_062",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 967,
+        "lineEnd": 970
+      },
+      "customerMessages": [
+        "行",
+        "那就没问题了"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "发货单号给一下哈"
+      ],
+      "customerText": "行\n那就没问题了",
+      "humanReply": "好的\n发货单号给一下哈",
+      "scene": "物流异常",
+      "agentKey": "logistics_exception",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_063",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 187,
+        "lineEnd": 190
+      },
+      "customerMessages": [
+        "有点丑啊哈哈哈哈",
+        "没有礼盒包装吗"
+      ],
+      "humanReplyMessages": [
+        "礼盒需要500份以上定制",
+        "球拍基本上都是配球包"
+      ],
+      "customerText": "有点丑啊哈哈哈哈\n没有礼盒包装吗",
+      "humanReply": "礼盒需要500份以上定制\n球拍基本上都是配球包",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_064",
+      "sourceRef": {
+        "session": "xiaoshi_session_005",
+        "lineStart": 7,
+        "lineEnd": 10
+      },
+      "customerMessages": [
+        "还能优惠吗？",
+        "我们需要49套，包里面的东西可以自由搭配吗？"
+      ],
+      "humanReplyMessages": [
+        "可以的",
+        "您预算多少"
+      ],
+      "customerText": "还能优惠吗？\n我们需要49套，包里面的东西可以自由搭配吗？",
+      "humanReply": "可以的\n您预算多少",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_065",
+      "sourceRef": {
+        "session": "xiaoshi_session_012",
+        "lineStart": 139,
+        "lineEnd": 141
+      },
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "不写我们毕业了吗",
+        "47套包包 帽子➕水杯腰封"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "不写我们毕业了吗\n47套包包 帽子➕水杯腰封",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_066",
+      "sourceRef": {
+        "session": "xiaoshi_session_016",
+        "lineStart": 154,
+        "lineEnd": 155
+      },
+      "customerMessages": [
+        "你紫色外包装的白色卡片能打伊尚两个字吗"
+      ],
+      "humanReplyMessages": [
+        "你发一下logo"
+      ],
+      "customerText": "你紫色外包装的白色卡片能打伊尚两个字吗",
+      "humanReply": "你发一下logo",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_067",
+      "sourceRef": {
+        "session": "xiaoshi_session_020",
+        "lineStart": 82,
+        "lineEnd": 87
+      },
+      "customerMessages": [
+        "可以呀"
+      ],
+      "humanReplyMessages": [
+        "好滴下午我找找看",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这种月饼我们可以美观一点放到月饼盒子里"
+      ],
+      "customerText": "可以呀",
+      "humanReply": "好滴下午我找找看\n[附件]\n[附件]\n[附件]\n这种月饼我们可以美观一点放到月饼盒子里",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_068",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 564,
+        "lineEnd": 566
+      },
+      "customerMessages": [
+        "可以呀"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "有出新款我发你"
+      ],
+      "customerText": "可以呀",
+      "humanReply": "嗯呢\n有出新款我发你",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_069",
+      "sourceRef": {
+        "session": "xiaoshi_session_008",
+        "lineStart": 12,
+        "lineEnd": 13
+      },
+      "customerMessages": [
+        "43份"
+      ],
+      "humanReplyMessages": [
+        "每份预算呢亲"
+      ],
+      "customerText": "43份",
+      "humanReply": "每份预算呢亲",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 74,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_070",
+      "sourceRef": {
+        "session": "xiaoshi_session_021",
+        "lineStart": 7,
+        "lineEnd": 8
+      },
+      "customerMessages": [
+        "商务一点的"
+      ],
+      "humanReplyMessages": [
+        "这边有预算吗"
+      ],
+      "customerText": "商务一点的",
+      "humanReply": "这边有预算吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 74,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_071",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 270,
+        "lineEnd": 272
+      },
+      "customerMessages": [
+        "另一份多少钱"
+      ],
+      "humanReplyMessages": [
+        "哪款",
+        "您要哪一个呢"
+      ],
+      "customerText": "另一份多少钱",
+      "humanReply": "哪款\n您要哪一个呢",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 72,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_072",
+      "sourceRef": {
+        "session": "xiaoshi_session_006",
+        "lineStart": 42,
+        "lineEnd": 43
+      },
+      "customerMessages": [
+        "那如果，包包+帽子+冰袖，相当于旅行套装，下来多少钱"
+      ],
+      "humanReplyMessages": [
+        "要定制卡片吗"
+      ],
+      "customerText": "那如果，包包+帽子+冰袖，相当于旅行套装，下来多少钱",
+      "humanReply": "要定制卡片吗",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 72,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_073",
+      "sourceRef": {
+        "session": "xiaoshi_session_009",
+        "lineStart": 22,
+        "lineEnd": 25
+      },
+      "customerMessages": [
+        "打卡送的伴手礼",
+        "开业伴手礼"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "两种价格是吗"
+      ],
+      "customerText": "打卡送的伴手礼\n开业伴手礼",
+      "humanReply": "嗯呢\n两种价格是吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 72,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_verbatim_074",
+      "sourceRef": {
+        "session": "xiaoshi_session_023",
+        "lineStart": 107,
+        "lineEnd": 108
+      },
+      "customerMessages": [
+        "扩香石这三个不是很好看呢"
+      ],
+      "humanReplyMessages": [
+        "想要商务一点的吗"
+      ],
+      "customerText": "扩香石这三个不是很好看呢",
+      "humanReply": "想要商务一点的吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 72,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Only privacy and one-off fact filtering; no ideal-reply rewrite.",
+      "status": "review"
+    }
+  ]
+}

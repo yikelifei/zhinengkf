@@ -22,8 +22,6 @@ const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
 const windowsProcessQueryTimeoutMs = numberEnv("WINDOWS_PROCESS_QUERY_TIMEOUT_MS", 3000);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const desktopWebSessionFile = resolveDesktopWebSessionFile(runtimeDir);
-const wechatBridgeWorkerStatusFile = path.join(runtimeDir, "wechat-bridge-worker-status.json");
-const wechatWindowObserverStatusFile = path.join(runtimeDir, "wechat-window-observer-status.json");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(desktopRoot, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const nextCliPath = path.join(desktopRoot, "node_modules", "next", "dist", "bin", "next");
@@ -93,11 +91,6 @@ async function collectReport() {
   }
   checks.push(checkWebRuntimeOwner(portOwners.get(webPort) || []));
   checks.push(checkKeepAliveHeartbeat(portOwners));
-  checks.push(checkWechatWorkerStatus("WeChat bridge worker", wechatBridgeWorkerStatusFile, "tools/wechat-bridge-worker.js", (status) => {
-    const mode = String(status.mode || "");
-    return mode === "noop" || mode === "dispatch";
-  }));
-  checks.push(checkWechatWorkerStatus("WeChat window observer", wechatWindowObserverStatusFile, "tools/wechat-window-observer.js"));
 
   for (const [label, url, isOk] of endpoints) {
     const result = await requestJson(url, 3000);
@@ -151,9 +144,9 @@ function printReport(report) {
   }
   console.log(report.ok ? "[doctor] stable desktop stack is healthy." : "[doctor] stable desktop stack is not healthy.");
   if (!report.ok) {
-    console.log("[doctor] easiest fix: run C:\\Users\\27808\\Desktop\\zhinengkefu\\repair-stable-desktop.cmd and keep that window open.");
-    console.log("[doctor] next step: run C:\\Users\\27808\\Desktop\\zhinengkefu\\start-stable-desktop-foreground.cmd and keep that window open.");
-    console.log("[doctor] if ports are occupied by old services, run C:\\Users\\27808\\Desktop\\zhinengkefu\\stop-stable-desktop.cmd first.");
+    console.log(`[doctor] easiest fix: run ${path.join(report.desktopRoot, "repair-stable-desktop.cmd")}; repair continues in the background and no command window needs to stay open.`);
+    console.log(`[doctor] if repair still fails, inspect the logs below; use ${path.join(report.desktopRoot, "start-stable-desktop-foreground.cmd")} only for foreground diagnostics.`);
+    console.log(`[doctor] to stop the managed runtime, run ${path.join(report.desktopRoot, "stop-stable-desktop.cmd")}.`);
     console.log(`[doctor] logs: ${path.join(report.runtimeDir, "logs")}`);
   }
 }

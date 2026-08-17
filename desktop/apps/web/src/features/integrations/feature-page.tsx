@@ -52,7 +52,7 @@ export function FeatureNotice({
       <Icon size={18} aria-hidden="true" />
       <div>
         <strong>{title}</strong>
-        {children ? <p>{children}</p> : null}
+        {children ? <div className={styles.noticeBody}>{children}</div> : null}
       </div>
     </div>
   );

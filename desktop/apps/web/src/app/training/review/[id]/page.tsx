@@ -1,13 +1,15 @@
 import { TrainingReviewDetailPage } from "../../../../features/training/training-review-detail-page";
 import { FeatureRouteShell } from "../../../feature-route-shell";
+import { identityFiltersFromSearchParams, type IdentitySearchParams } from "../../../identity-search-params";
 
-type PageProps = { params: Promise<{ id: string }> };
+type PageProps = { params: Promise<{ id: string }>; searchParams: IdentitySearchParams };
 
-export default async function Page({ params }: PageProps) {
+export default async function Page({ params, searchParams }: PageProps) {
   const { id } = await params;
+  const identityFilters = await identityFiltersFromSearchParams(searchParams);
   return (
     <FeatureRouteShell routeId="trainingReviewDetail">
-      <TrainingReviewDetailPage key={id} sampleId={id} />
+      <TrainingReviewDetailPage key={id} sampleId={id} identityFilters={identityFilters} />
     </FeatureRouteShell>
   );
 }

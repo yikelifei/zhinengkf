@@ -358,6 +358,22 @@
   gap: 7px;
 }
 
+.handoffPanel {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--governance-surface);
+}
+
+.handoffPanel h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
 .recordMeta span,
 .tag,
 .badge {
@@ -567,6 +583,22 @@
   overflow-wrap: anywhere;
 }
 
+.compactList {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--governance-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.compactList li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 760px) {
   .page {
     padding: 12px 10px 16px;
@@ -636,8 +668,19 @@
   }
 
   .buttonRow > button,
+  .buttonRow > a,
   .confirmation .buttonRow > button {
     width: 100%;
+  }
+
+  .trainingOverviewActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .trainingOverviewActions > :last-child {
+    grid-column: 1 / -1;
   }
 }
 

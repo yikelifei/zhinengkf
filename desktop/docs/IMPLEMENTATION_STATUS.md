@@ -17,18 +17,18 @@
 - Windows electron-builder/NSIS 构建、显式文件白名单、未签名测试包和包内容验证工具。
 - Windows GitHub Actions 最小权限质量工作流与本地 release-quality 编排。
 - PostgreSQL 恢复演练工具：默认计划模式零命令；执行模式要求独立 rehearsal/sandbox 目标和绑定库名的确认短语。
-- 生产发布门禁、预发布只读证据工具和本完成度真值审计。
+- 生产发布门禁、预发布只读证据工具、Windows 打包只读预检、交付 handoff 包和本完成度真值审计。
 - 生产安装包由 Electron 主进程在内存中生成独立 `DESKTOP_WEB_SESSION_PROOF`，只传给 Web 子进程，并在专属 Electron partition 写入 `HttpOnly`、`SameSite=Strict`、`Path=/api` Cookie；Next `/api/*` catch-all 的所有方法都必须恒定时间验证该证明，证明 Cookie 和来访内部令牌不会转发给 API，设计平台 callback 永不经 Web 代理。
 - `standard_v1` 远端地址只允许 `DESIGN_PLATFORM_BASE_URL` 明确配置的 origin 或 `DESIGN_PLATFORM_ALLOWED_ORIGINS` 中的精确 HTTPS origin；access token、cookie、API key 和 device id 分别绑定 origin，切换 origin 不会自动重绑旧凭据。standard_v1 回调必须使用与内部令牌、平台 API key、登录 token/cookie 独立的回调密钥，并在 readiness/preflight 前失败关闭。
-- 个人微信 RPA 的账号绑定、客户/会话关联与业务审计通过 `PersonalWechatRpaPersistence` 统一读写；`USE_LOCAL_STORE=false` 时使用 Prisma 事务和账号范围游标，生产路径不回退到 LocalStore。RPA endpoint/token、Windows 登录会话和主机进程注册表仍按设计保存在受控本机，不进入业务持久化适配器。
+- 个人微信 RPA 代码仅作为遗留兼容模块保留，产品默认不展示、不启动、不作为生产接入通道；企业微信是当前唯一对外微信通道。若未来重新启用，`PersonalWechatRpaPersistence` 必须在 `USE_LOCAL_STORE=false` 时走 Prisma 绑定与审计路径，不能回退成本机 LocalStore 作为生产通道。
 
 ## 仓库内未完成或必须继续审计
 
-- 松散浏览器、独立 stable/dev Web 服务不是生产产品的可信桌面会话路径；若 Web 与 Electron 不是由同一父环境显式提供同一个 `DESKTOP_WEB_SESSION_PROOF`，所有 Web `/api/*` 请求会返回 403。仓库没有隐藏的 dev 绕过，也不会把证明写进普通 runtime 文件。生产受支持路径是 packaged Electron 内存证明链路。
+- 生产产品的可信桌面会话路径仍是 packaged Electron 内存证明链路；打包版会强制关闭 `ALLOW_LOCAL_BROWSER_WEB_API`，若 Web 与 Electron 不是由同一父环境显式提供同一个 `DESKTOP_WEB_SESSION_PROOF`，生产 Web `/api/*` 请求会返回 403。本地 stable/dev 启动默认打开仅限 `http://127.0.0.1` / `http://localhost` 的浏览器开发通道，方便普通浏览器调试，且不转发证明 Cookie、来访内部令牌或 callback 入口。
 
 - Agent、路由、训练和会话运营只有在 Prisma 迁移、初始化工具、`PrismaOperationsService` 以及各服务的 list/update/audit 路由契约全部存在时才会通过审计；仅删除 `not implemented` 报错字符串不算完成。
 - 会话运营分配、优先级、SLA 与运营审计若仍固定走 LocalStore 会记为 `FAIL`；生产实现必须同时提供 list/update/audit 的 Prisma 路由。
-- 个人微信 RPA 业务持久化仍由完成度审计持续约束：若生产路径重新直接调用 LocalStore，或缺少绑定/审计 Prisma 模型、迁移与事务适配器，会记为 `FAIL`。仅 RPA endpoint/token 与 Windows 主机/登录会话注册表属于本机配置白名单；该白名单不覆盖账号绑定、客户/会话关联或业务审计。
+- 个人微信 RPA 若未来重新启用，必须另走显式产品决策、合规审查和独立验收；当前完成度审计不再把它作为上线前置能力。
 - 自动化本地/interval 兼容模式可以保留 LocalStore `recentRuns`，但生产 durable 能力只有在 BullMQ/Redis scheduler/runtime、readiness、队列状态和故障证据契约全部存在时才会通过审计。
 - dHash 只覆盖已验证的轻微重编码/像素变化近似匹配，不承诺任意裁剪、大幅编辑或复杂截图；同分、第二名差距不足、缺失/混合/旧算法全部转人工。
 - 素材读取会先用 `realpath` 解析真实存在的 Windows 路径，覆盖大小写、斜杠、点段、扩展前缀及文件系统可解析的 8.3 别名。Windows trailing-dot/space 和禁用 8.3 的卷仍需目标机验收；迁移回填与运行时规范化不一致、无法解析或历史回填歧义的客户素材都不会被自动授权。
@@ -40,7 +40,6 @@
 - 预发布 PostgreSQL 迁移、隔离数据库备份/恢复演练、Redis 权限/持久化/故障证据。
 - 企业微信公开 HTTPS 回调、Token/AESKey、客服账号权限与受控真实收发。
 - 真实设计平台账号、密钥、网络、回调和文件访问边界。
-- 个人微信目标版本、登录账号、Windows 会话、UI Automation 元素和人工接管验收。
 
 ## 状态解释
 

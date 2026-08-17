@@ -15,6 +15,7 @@ export const verifyApiReadinessProof: (token: unknown, challenge: unknown, proof
 const REQUEST_HEADERS_TO_REMOVE = [
   "connection",
   "content-length",
+  "expect",
   "host",
   "keep-alive",
   "proxy-authenticate",
@@ -49,6 +50,42 @@ export function isForbiddenWebProxyIngress(path: string) {
 export function requiresDesktopSessionProof(method: string) {
   void method;
   return true;
+}
+
+export function evaluateLocalBrowserApiAccess(
+  requestUrl: string,
+  requestHeaders: Headers,
+  options: { allowLocalBrowserWebApi?: unknown; nodeEnv?: unknown },
+) {
+  if (!localBrowserApiAccessEnabled(options)) {
+    return { allowed: false, reason: "local_browser_api_disabled" } as const;
+  }
+  let url: URL;
+  try {
+    url = new URL(requestUrl);
+  } catch {
+    return { allowed: false, reason: "local_browser_api_invalid_url" } as const;
+  }
+  if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname)) {
+    return { allowed: false, reason: "local_browser_api_url_not_allowed" } as const;
+  }
+  const host = requestHeaders.get("host");
+  if (host && !isLoopbackHostHeader(host)) {
+    return { allowed: false, reason: "local_browser_api_host_not_allowed" } as const;
+  }
+  const forwardedHost = requestHeaders.get("x-forwarded-host");
+  if (forwardedHost && !isLoopbackHostHeader(forwardedHost)) {
+    return { allowed: false, reason: "local_browser_api_forwarded_host_not_allowed" } as const;
+  }
+  const forwardedFor = requestHeaders.get("x-forwarded-for");
+  if (forwardedFor && !forwardedFor.split(",").every((value) => isLoopbackHostname(value.trim()))) {
+    return { allowed: false, reason: "local_browser_api_forwarded_for_not_allowed" } as const;
+  }
+  const origin = requestHeaders.get("origin");
+  if (origin && !isAllowedLocalBrowserOrigin(origin, url.port)) {
+    return { allowed: false, reason: "local_browser_api_origin_not_allowed" } as const;
+  }
+  return { allowed: true, reason: "local_browser_api_allowed" } as const;
 }
 
 export function canonicalDesktopProxyPath(segments: unknown) {
@@ -98,4 +135,40 @@ function desktopSessionCookieValues(cookieHeader: string | null) {
       if (separator < 0 || part.slice(0, separator).trim() !== DESKTOP_SESSION_COOKIE) return [];
       return [part.slice(separator + 1).trim()];
     });
+}
+
+function localBrowserApiAccessEnabled(options: { allowLocalBrowserWebApi?: unknown; nodeEnv?: unknown }) {
+  const explicit = String(options.allowLocalBrowserWebApi || "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(explicit)) return true;
+  if (["0", "false", "no", "off"].includes(explicit)) return false;
+  return String(options.nodeEnv || "").trim().toLowerCase() === "development";
+}
+
+function isAllowedLocalBrowserOrigin(origin: string, requestPort: string) {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname)) return false;
+  return !requestPort || !url.port || url.port === requestPort;
+}
+
+function isLoopbackHostHeader(value: string) {
+  return isLoopbackHostname(hostHeaderHostname(value));
+}
+
+function hostHeaderHostname(value: string) {
+  const host = String(value || "").trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end > 0 ? host.slice(1, end) : host;
+  }
+  return host.split(":")[0] || host;
+}
+
+function isLoopbackHostname(value: string) {
+  const hostname = String(value || "").trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }

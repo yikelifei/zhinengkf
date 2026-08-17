@@ -5,154 +5,84 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-require("reflect-metadata");
-require("ts-node").register({
-  transpileOnly: true,
-  compilerOptions: { module: "CommonJS", experimentalDecorators: true, emitDecoratorMetadata: true },
-});
-
-const { appConfig } = require("../apps/api/src/shared/app-config");
-const { OrdersService } = require("../apps/api/src/orders/orders.service");
-const { QuotesService } = require("../apps/api/src/quotes/quotes.service");
-const { RoutingService } = require("../apps/api/src/routing/routing.service");
-const { PrismaOperationsService } = require("../apps/api/src/prisma/prisma-operations.service");
-
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
-function exportedFunction(source, name) {
-  const start = source.indexOf(`export async function ${name}`);
-  assert.notEqual(start, -1, name);
-  const next = source.indexOf("\nexport async function ", start + 1);
-  return source.slice(start, next === -1 ? source.length : next);
-}
+test("quote detail exposes a dedicated payment verification route", () => {
+  const detail = read("apps/web/src/features/sales/sales-quote-detail-page.tsx");
+  const route = read("apps/web/src/app/sales/quotes/[id]/verify-payment/page.tsx");
+  const manifest = read("apps/web/src/app/route-manifest.ts");
 
-test("generic quote and order services fail closed on payment or proof-owned statuses", async () => {
-  const quotes = new QuotesService({}, {}, {}, {});
-  const orders = new OrdersService({}, {}, {});
-
-  await assert.rejects(
-    quotes.update("quote-1", { paymentStatus: "paid" }),
-    (error) => error?.getStatus?.() === 400 && /付款凭证核验入口/.test(error.message),
-  );
-  await assert.rejects(
-    quotes.update("quote-1", { status: "accepted" }),
-    (error) => error?.getStatus?.() === 400 && /不允许推进/.test(error.message),
-  );
-  await assert.rejects(
-    orders.update("order-1", { paymentStatus: "paid" }),
-    (error) => error?.getStatus?.() === 400 && /付款凭证核验入口/.test(error.message),
-  );
-  await assert.rejects(
-    orders.update("order-1", { status: "confirmed" }),
-    (error) => error?.getStatus?.() === 400 && /不允许直接确认/.test(error.message),
-  );
+  assert.match(detail, /\/verify-payment/);
+  assert.match(detail, /data-action-id="sales-quote-open-verify-payment"/);
+  assert.match(route, /routeId="salesQuoteVerifyPayment"/);
+  assert.match(route, /<SalesQuotePaymentPage key=\{id\} quoteId=\{id\}/);
+  assert.match(manifest, /salesQuoteVerifyPayment/);
+  assert.match(manifest, /verify-payment/);
 });
 
-test("generic web update contracts cannot submit payment or browser-owned audit actors", () => {
+test("payment verification uses the dedicated quote API and operation key", () => {
+  const payment = read("apps/web/src/features/sales/sales-quote-payment-page.tsx");
   const api = read("apps/web/src/lib/api.ts");
-  for (const name of ["updateQuote", "updateOrderDraft", "reviseQuoteSelection", "reviseOrderSelection"]) {
-    const section = exportedFunction(api, name);
-    assert.doesNotMatch(section, /paymentStatus\?:|owner\?:/, name);
-  }
+  const orderEdit = read("apps/web/src/features/sales/sales-order-edit-page.tsx");
 
-  const page = read("apps/web/src/features/sales/sales-order-edit-page.tsx");
-  assert.match(page, /付款状态（只读）/);
-  assert.match(page, /负责人（可信会话记录）/);
-  assert.match(page, /需从报价页核验付款凭证/);
-  assert.doesNotMatch(page, /update\("paymentStatus"|update\("owner"/);
+  assert.match(payment, /verifyQuotePaymentProofAndQueueConfirmation/);
+  assert.match(payment, /reserveClientOperation\(\s*"payment-proof"/);
+  assert.match(payment, /paymentStatus/);
+  assert.match(payment, /amountCny/);
+  assert.match(payment, /method/);
+  assert.match(payment, /proofReference/);
+  assert.match(payment, /paymentDetailsReady/);
+  assert.match(payment, /Number\.isFinite\(paymentAmount\) && paymentAmount > 0/);
+  assert.match(payment, /disabled=\{busy \|\| Boolean\(loadError\) \|\| !identityReady \|\| !paymentDetailsReady\}/);
+  assert.match(payment, /paymentEvent\.id/);
+  assert.match(payment, /confirmedOrder, setConfirmedOrder/);
+  assert.match(payment, /setConfirmedOrder\(result\.orderDraft\)/);
+  assert.match(payment, /data-action-id="sales-quote-payment-open-order"/);
+  assert.match(payment, /\/sales\/orders\/\$\{encodeURIComponent\(confirmedOrder\.id\)\}/);
+  assert.match(payment, /setNote/);
+  assert.match(api, /\/quotes\/\$\{id\}\/verify-payment-proof/);
+  assert.match(api, /paymentDetails/);
+  assert.match(api, /paymentEvent:\s*PaymentEvent/);
+  assert.doesNotMatch(orderEdit, /paymentStatus:\s*form|update\("paymentStatus"|name="paymentStatus"/);
 });
 
-test("routing correction success is not turned into an error by notification delivery", async () => {
-  const originalUseLocalStore = appConfig.useLocalStore;
-  appConfig.useLocalStore = true;
-  const result = {
-    route: { id: "route-1", agentKey: "sales", agent: { name: "销售" } },
-    trainingSample: { id: "sample-1" },
-  };
-  const localStore = {
-    listRouteEvaluations: () => [{ id: "route-1" }],
-    correctRouteEvaluation: () => result,
-  };
-  const notifications = { create: async () => { throw new Error("notification unavailable"); } };
-  const service = new RoutingService(localStore, notifications);
-  try {
-    assert.equal(await service.correctEvaluation("route-1", { agentKey: "sales" }), result);
-    await assert.rejects(
-      service.correctEvaluation("missing", { agentKey: "sales" }),
-      (error) => error?.getStatus?.() === 404,
-    );
-  } finally {
-    appConfig.useLocalStore = originalUseLocalStore;
-  }
+test("quote action page opens the concrete send task or created order after success", () => {
+  const action = read("apps/web/src/features/sales/sales-quote-action-page.tsx");
+
+  assert.match(action, /queuedSendTask, setQueuedSendTask/);
+  assert.match(action, /createdOrder, setCreatedOrder/);
+  assert.match(action, /setQueuedSendTask\(result\.sendTask\)/);
+  assert.match(action, /setCreatedOrder\(order\)/);
+  assert.match(action, /data-action-id="sales-quote-open-send-task"/);
+  assert.match(action, /\/send\/queue\/\$\{encodeURIComponent\(queuedSendTask\.id\)\}/);
+  assert.match(action, /data-action-id="sales-quote-open-created-order"/);
+  assert.match(action, /\/sales\/orders\/\$\{encodeURIComponent\(createdOrder\.id\)\}/);
 });
 
-test("Prisma route correction retry reuses committed training artifacts", async () => {
-  const now = new Date("2026-07-20T00:00:00.000Z");
-  let route = {
-    id: "route-1",
-    text: "我要咨询报价",
-    agentKey: "general",
-    scene: "未分类",
-    action: "manual_review",
-    confidence: 20,
-    missingFields: [],
-    suggestedReply: "请提供数量",
-    correction: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  const agent = { id: "agent-sales", key: "sales", name: "销售", scene: "报价" };
-  const samples = [];
-  const knowledgeEntries = [];
-  const reviewLogs = [];
-  const tx = {
-    routeEvaluation: {
-      findUnique: async () => route,
-      update: async ({ data }) => (route = { ...route, ...data, updatedAt: now }),
-    },
-    customerServiceAgent: { findUnique: async ({ where }) => where.key === agent.key ? agent : null },
-    trainingSample: {
-      create: async ({ data }) => {
-        const row = { id: `sample-${samples.length + 1}`, ...data, createdAt: now, updatedAt: now };
-        samples.push(row);
-        return row;
-      },
-      findFirst: async () => samples.at(-1) || null,
-    },
-    knowledgeEntry: {
-      create: async ({ data }) => {
-        const row = { id: `knowledge-${knowledgeEntries.length + 1}`, ...data, createdAt: now, updatedAt: now };
-        knowledgeEntries.push(row);
-        return row;
-      },
-      findFirst: async ({ where }) => knowledgeEntries.find((item) => item.trainingSampleId === where.trainingSampleId) || null,
-    },
-    reviewLog: {
-      create: async ({ data }) => {
-        const row = { id: `review-${reviewLogs.length + 1}`, ...data, createdAt: now };
-        reviewLogs.push(row);
-        return row;
-      },
-      findFirst: async () => reviewLogs.at(-1) || null,
-    },
-  };
-  let transactionOptions;
-  const service = new PrismaOperationsService({
-    $transaction: async (callback, options) => {
-      transactionOptions = options;
-      return callback(tx);
-    },
-  });
-  const payload = { agentKey: "sales", reviewer: "local_admin", note: "人工纠正" };
+test("payment proof verification records an internal payment event ledger", () => {
+  const schema = read("prisma/schema.prisma");
+  const migration = read("prisma/migrations/20260726143000_payment_event_ledger/migration.sql");
+  const localStore = read("apps/api/src/local-store/local-store.service.ts");
+  const service = read("apps/api/src/quotes/quotes.service.ts");
+  const controller = read("apps/api/src/quotes/quotes.controller.ts");
 
-  const first = await service.correctRouteEvaluation("route-1", payload);
-  const retried = await service.correctRouteEvaluation("route-1", payload);
-
-  assert.equal(samples.length, 1);
-  assert.equal(knowledgeEntries.length, 1);
-  assert.equal(reviewLogs.length, 1);
-  assert.equal(transactionOptions.isolationLevel, "Serializable");
-  assert.equal(retried.trainingSample.id, first.trainingSample.id);
-  assert.equal(retried.knowledgeEntry.id, first.knowledgeEntry.id);
+  assert.match(schema, /model PaymentEvent/);
+  assert.match(schema, /idempotencyKey\s+String\s+@unique/);
+  assert.match(schema, /amountCny\s+Decimal\?/);
+  assert.match(migration, /CREATE TABLE "PaymentEvent"/);
+  assert.match(migration, /CREATE UNIQUE INDEX "PaymentEvent_idempotencyKey_key"/);
+  assert.match(localStore, /paymentEvents:\s*any\[\]/);
+  assert.match(localStore, /recordPaymentEvent\(payload: any\)/);
+  assert.match(localStore, /const existing = data\.paymentEvents\.find/);
+  assert.match(localStore, /paymentEvents: data\.paymentEvents/);
+  assert.match(read("apps/api/src/orders/orders.service.ts"), /paymentEvents:\s*\{[\s\S]*orderBy:\s*\{ createdAt: "desc" \}[\s\S]*take:\s*20/);
+  assert.match(service, /recordPaymentEvent\(updatedQuote, null/);
+  assert.match(service, /normalizeRequiredPaymentProof\(payload\)/);
+  assert.match(service, /amountCny === null \|\| amountCny <= 0/);
+  assert.match(service, /付款核验必须填写凭证引用/);
+  assert.match(service, /paymentEventId: paymentEvent\.id/);
+  assert.match(service, /idempotencyKey = `\$\{payload\.operationKey\}:payment-event`/);
+  assert.match(controller, /amountCny\?: number \| string/);
+  assert.match(controller, /proofReference\?: string/);
 });

@@ -4,6 +4,8 @@ import { DesignJobsService } from "./design-jobs.service";
 import {
   CreateDesignJobPayload,
   CreateDesignRevisionPayload,
+  ForwardExistingDesignImagesPayload,
+  RecoverCompletedDesignExecutionPayload,
   ResolveDesignExecutionRefundPayload,
   ResolveUnknownDesignExecutionPayload,
   SelectDesignImagePayload,
@@ -139,6 +141,18 @@ export class DesignJobsController {
     return this.designJobs.resolveUnknownExecution(id, executionId, trustedBody, principal.id);
   }
 
+  @Post(":id/executions/:executionId/recover-completed")
+  @RequireOperatorCapability("manage_design_executions")
+  @UseGuards(OperatorAccessGuard)
+  recoverCompletedExecution(
+    @Param("id") id: string,
+    @Param("executionId") executionId: string,
+    @Body() body: RecoverCompletedDesignExecutionPayload & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    return this.designJobs.recoverCompletedExecution(id, executionId, body, principal.id);
+  }
+
   @Post(":id/executions/:executionId/resolve-refund")
   @RequireOperatorCapability("manage_design_executions")
   @UseGuards(OperatorAccessGuard)
@@ -242,6 +256,32 @@ export class DesignJobsController {
       releaseManualLock: true,
       reviewer: `${principal.displayName} [${principal.id}]`,
       releaseReason: "manual_quick_confirm_send",
+    });
+  }
+
+  @Post(":id/forward-existing-images")
+  @RequireOperatorCapability("approve_send")
+  forwardExistingImages(
+    @Param("id") id: string,
+    @Body() body: ForwardExistingDesignImagesPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    return this.designJobs.forwardExistingImages(id, {
+      ...body,
+      reviewer: `${principal.displayName} [${principal.id}]`,
+    });
+  }
+
+  @Post(":id/retry-visual-qc")
+  @RequireOperatorCapability("approve_send")
+  retryVisualQc(
+    @Param("id") id: string,
+    @Body() body: ExpectedIdentityPayload & { operationKey?: string } = {},
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    return this.designJobs.retryCustomerCreativeVisualQc(id, {
+      ...(body || {}),
+      reviewer: principal.id,
     });
   }
 

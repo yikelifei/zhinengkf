@@ -5,81 +5,27 @@ import {
   Bot,
   ChevronRight,
   CircleCheck,
-  CircleDot,
-  Clock3,
   Gauge,
   MessageCircle,
   Radio,
   RefreshCw,
+  Rocket,
 } from "lucide-react";
+import {
+  formatOverviewTime,
+  toneIcon,
+  type OperationsOverviewProps,
+} from "./operations-overview-model";
 import styles from "./operations-overview.module.css";
 
-export type OverviewTone = "ready" | "warning" | "danger" | "muted";
-
-export type OverviewChannel = {
-  id: string;
-  label: string;
-  detail: string;
-  statusLabel: string;
-  tone: OverviewTone;
-  metrics?: string;
-};
-
-export type OverviewAction = {
-  id: string;
-  label: string;
-  detail: string;
-  count?: number;
-  tone: OverviewTone;
-  onClick: () => void;
-};
-
-export type OverviewMetric = {
-  id: string;
-  label: string;
-  value: string;
-  detail: string;
-  tone?: OverviewTone;
-};
-
-export type OverviewConversation = {
-  id: string;
-  customer: string;
-  channel: string;
-  account: string;
-  state: string;
-  stateTone: OverviewTone;
-  preview: string;
-  updatedAt: string;
-  unreadCount: number;
-  onOpen: () => void;
-};
-
-export type OperationsOverviewProps = {
-  updatedAt?: string;
-  channels: OverviewChannel[];
-  channelsLoaded: boolean;
-  actions: OverviewAction[];
-  actionsLoaded: boolean;
-  metrics: OverviewMetric[];
-  conversations: OverviewConversation[];
-  conversationsLoaded: boolean;
-  automationLabel: string;
-  automationDetail: string;
-  automationTone: OverviewTone;
-  onRefresh: () => void;
-  onOpenConversations: () => void;
-  onOpenChannels: () => void;
-  onRunAutomation: () => void;
-  busy?: boolean;
-};
-
-const toneIcon = {
-  ready: CircleCheck,
-  warning: Clock3,
-  danger: AlertTriangle,
-  muted: CircleDot,
-} as const;
+export type {
+  OverviewAction,
+  OverviewChannel,
+  OverviewConversation,
+  OverviewLaunchItem,
+  OverviewMetric,
+  OverviewTone,
+} from "./operations-overview-model";
 
 export function OperationsOverview({
   updatedAt,
@@ -90,12 +36,18 @@ export function OperationsOverview({
   metrics,
   conversations,
   conversationsLoaded,
+  launchLoaded,
+  launchPhaseLabel,
+  launchRecommendedAction,
+  launchTone,
+  launchItems,
   automationLabel,
   automationDetail,
   automationTone,
   onRefresh,
   onOpenConversations,
   onOpenChannels,
+  onOpenLaunchPlan,
   onRunAutomation,
   busy = false,
 }: OperationsOverviewProps) {
@@ -213,6 +165,67 @@ export function OperationsOverview({
           </div>
         </article>
       </div>
+
+      <article className={`${styles.panel} ${styles.launchPanel}`} aria-labelledby="overview-launch-title">
+        <div className={styles.panelHeader}>
+          <div>
+            <Rocket size={16} aria-hidden="true" />
+            <h3 id="overview-launch-title">上线计划</h3>
+          </div>
+          <button
+            type="button"
+            className={styles.linkButton}
+            data-action-id="overview.launch-plan.open"
+            data-disabled-reason={busy ? "运营数据正在刷新，请稍候" : undefined}
+            onClick={onOpenLaunchPlan}
+            disabled={busy}
+            aria-label="打开企业微信上线预检"
+          >
+            企业微信预检<ChevronRight size={15} aria-hidden="true" />
+          </button>
+        </div>
+        {launchLoaded ? (
+          <div className={styles.launchBody}>
+            <div className={styles.launchSummary}>
+              <span className={`${styles.launchIcon} ${styles[launchTone]}`}>
+                <Rocket size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>{launchPhaseLabel}</strong>
+                <small>{launchRecommendedAction}</small>
+              </div>
+            </div>
+            {launchItems.length ? (
+              <div className={styles.launchList} aria-label="企业微信上线计划">
+                {launchItems.map((item) => {
+                  const ToneIcon = toneIcon[item.tone];
+                  return (
+                    <div className={styles.launchRow} key={item.id}>
+                      <span className={`${styles.actionIcon} ${styles[item.tone]}`}>
+                        <ToneIcon size={15} aria-hidden="true" />
+                      </span>
+                      <span className={styles.launchCopy}>
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                        <small>{item.action}</small>
+                      </span>
+                      <span className={styles.launchMeta}>{item.phaseLabel}</span>
+                      <span className={styles.launchMeta}>{item.ownerLabel}</span>
+                      <span className={`${styles.state} ${styles[item.tone]}`}>{item.statusLabel}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={styles.inlineSuccess}>
+                <CircleCheck size={17} aria-hidden="true" />上线计划没有待处理项。
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className={styles.inlineEmpty}>企业微信上线计划尚未成功读取，当前阶段未确认。</div>
+        )}
+      </article>
 
       <div className={styles.insightGrid}>
         <article className={`${styles.panel} ${styles.metricPanel}`} aria-labelledby="overview-metrics-title">
@@ -344,16 +357,4 @@ export function OperationsOverview({
       </article>
     </section>
   );
-}
-
-function formatOverviewTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
 }

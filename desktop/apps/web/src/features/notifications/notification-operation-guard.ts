@@ -80,3 +80,22 @@ export function notificationScopeKey(
     String(filters?.customerId || "").trim(),
   ]);
 }
+
+export type NotificationReadState = "loading" | "ready" | "stale" | "unknown";
+
+export function notificationReadState({
+  busy,
+  currentScopeKey,
+  loadedScopeKey,
+  staleScopeKey,
+}: {
+  busy: boolean;
+  currentScopeKey: string;
+  loadedScopeKey: string;
+  staleScopeKey: string;
+}): NotificationReadState {
+  if (loadedScopeKey === currentScopeKey && currentScopeKey) {
+    return staleScopeKey === currentScopeKey ? "stale" : "ready";
+  }
+  return busy ? "loading" : "unknown";
+}

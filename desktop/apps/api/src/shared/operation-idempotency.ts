@@ -68,6 +68,7 @@ export function createChatImportOperationFingerprint(payload: Record<string, unk
       name: normalizedOptionalString(payload.name),
       source: normalizedOptionalString(payload.source) || "manual_text",
       channel: normalizedOptionalString(payload.channel) || "wechat",
+      reviewMode: normalizedOptionalString(payload.reviewMode) || "score_based",
       agentId: normalizedOptionalString(payload.agentId),
       text: String(payload.text || "").replace(/\r\n?/g, "\n").trim(),
     },

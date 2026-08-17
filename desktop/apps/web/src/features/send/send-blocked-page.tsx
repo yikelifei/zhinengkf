@@ -24,6 +24,8 @@ import {
   canResolveUnknownDelivery,
   isBlockedSendTask,
   operationBlockReason,
+  scopedIdentityHref,
+  scopedSendTaskHref,
 } from "./send-policy";
 import { SendConfirmation, SendTaskCard } from "./send-task-card";
 import { SendTaskListItem } from "./send-task-list-item";
@@ -169,7 +171,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       busy={busy || operationBusy}
       actions={(
         <>
-          {initialTaskId ? <Link className={styles.secondaryLink} href="/send/blocked">返回列表</Link> : null}
+          {initialTaskId ? <Link className={styles.secondaryLink} href={scopedIdentityHref("/send/blocked", filters)}>返回列表</Link> : null}
           <button
             type="button"
             data-action-id="send.blocked.refresh"
@@ -228,7 +230,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
           <div className={styles.taskList}>
             {blockedTasks.map((task) => {
               if (!initialTaskId) {
-                return <SendTaskListItem key={task.id} task={task} href={"/send/blocked/" + encodeURIComponent(task.id)} />;
+                return <SendTaskListItem key={task.id} task={task} href={scopedSendTaskHref("/send/blocked", task)} />;
               }
               const canRequeue = canRequeueSendTask(task);
               const canCancel = canCancelSendTask(task);

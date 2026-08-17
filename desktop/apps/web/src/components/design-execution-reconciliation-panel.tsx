@@ -117,6 +117,7 @@ export function DesignExecutionReconciliationPanel({
         </div>
         <button
           type="button"
+          data-action-id="design-execution-reconciliation-refresh"
           disabled={loading || Boolean(submittingId)}
           onClick={() => { void onRefresh().catch(() => undefined); }}
         >
@@ -169,6 +170,7 @@ export function DesignExecutionReconciliationPanel({
                   <button
                     className={styles.resolveButton}
                     type="button"
+                    data-action-id={`design-execution-reconciliation-open-${execution.id}`}
                     disabled={loading || !accessLoaded || !canManageExecutions || Boolean(submittingId)}
                     onClick={() => {
                       setActionError("");
@@ -203,8 +205,8 @@ export function DesignExecutionReconciliationPanel({
             <p>该动作会写入可信操作员身份；页面不会提交 reviewer 字段，也不会自动重试或生成。</p>
             {pendingBlockedReason ? <p id="execution-resolution-confirm-status" role="alert">{pendingBlockedReason}</p> : null}
             <div className={styles.confirmActions}>
-              <button type="button" disabled={Boolean(submittingId)} onClick={() => setPending(null)}>返回检查</button>
-              <button className={styles.dangerButton} type="button" disabled={Boolean(submittingId) || Boolean(pendingBlockedReason)} onClick={() => void confirmResolution()}>
+              <button type="button" data-action-id="design-execution-reconciliation-cancel" disabled={Boolean(submittingId)} onClick={() => setPending(null)}>返回检查</button>
+              <button className={styles.dangerButton} type="button" data-action-id="design-execution-reconciliation-confirm" disabled={Boolean(submittingId) || Boolean(pendingBlockedReason)} onClick={() => void confirmResolution()}>
                 {submittingId ? "正在提交" : pendingBlockedReason ? "确认已失效" : "确认已核对并提交"}
               </button>
             </div>

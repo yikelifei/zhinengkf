@@ -21,6 +21,7 @@ const productionRoutes = [
   "/conversations/[id]",
   "/conversations/[id]/context",
   "/conversations/[id]/assignment",
+  "/integrations/wechat-work/workspace",
   "/routing",
   "/routing/process",
   "/send/queue",
@@ -31,21 +32,17 @@ const productionRoutes = [
   "/send/diagnostics/operations",
   "/integrations/channels",
   "/integrations/wechat-work",
+  "/integrations/wechat-work/customers",
   "/integrations/wechat-work/flow",
   "/integrations/wechat-work/settings",
-  "/integrations/personal-wechat/instances",
-  "/integrations/personal-wechat/instances/configure",
-  "/integrations/personal-wechat/control",
-  "/integrations/personal-wechat/voice-assist",
-  "/integrations/personal-wechat/window-inbound",
-  "/integrations/personal-wechat/inbound-drill",
-  "/integrations/personal-wechat/safety",
   "/design/settings",
   "/design/assets",
   "/design/jobs",
+  "/design/jobs/new",
   "/design/jobs/[id]",
   "/design/jobs/[id]/submit",
   "/design/jobs/[id]/status",
+  "/design/jobs/[id]/quote",
   "/catalog/products",
   "/catalog/products/[skuCode]",
   "/catalog/repair",
@@ -71,9 +68,12 @@ const productionRoutes = [
   "/automation/issues",
   "/notifications",
   "/agents",
+  "/training/overview",
   "/training/import",
   "/training/review",
   "/training/skills",
+  "/settings/delivery-readiness",
+  "/settings/ai-models",
   "/reviews/inbox",
   "/reviews/design",
   "/reviews/design/[id]",
@@ -88,16 +88,16 @@ const productionRoutes = [
 const redirectedManifestRoutes = new Map([
   ["/catalog/preview", "/catalog/import"],
   ["/sales/overview", "/sales/quotes"],
-  ["/settings/accounts", "/integrations/personal-wechat/instances"],
+  ["/settings/accounts", "/integrations/wechat-work/settings"],
 ]);
 
 const sectionIds = [
   "overview-center",
   "conversation-center",
+  "wecom-workspace",
   "routing-center",
   "send-center",
   "wechat-channel-center",
-  "personal-wechat-center",
   "design-platform-config",
   "asset-center",
   "design-center",
@@ -112,7 +112,7 @@ const sectionIds = [
   "account-center",
 ];
 
-test("typed route manifest covers every production URL and all 18 active workbench sections", () => {
+test("typed route manifest covers every production URL and active workbench sections", () => {
   const routeList = routes.WORKBENCH_ROUTE_LIST;
   const hrefs = routeList.map((route) => route.href);
   const sections = new Set(routeList.map((route) => route.sectionId));
@@ -125,6 +125,26 @@ test("typed route manifest covers every production URL and all 18 active workben
     assert.ok(route.title.trim(), `${route.id} must have a title`);
     assert.ok(route.responsibility.trim(), `${route.id} must define one responsibility`);
     assert.ok(route.primaryAction.trim(), `${route.id} must define one primary action`);
+  }
+});
+
+test("responsibility documents cover every active production route", () => {
+  const documents = [
+    ["docs/UI_ACCEPTANCE_MATRIX.md", read("docs/UI_ACCEPTANCE_MATRIX.md")],
+    ["docs/UI_MODULE_MAP.md", read("docs/UI_MODULE_MAP.md")],
+  ];
+  const activeRoutes = routes.WORKBENCH_ROUTE_LIST.filter((route) => {
+    const routePath = route.href.slice(1).split("/").join(path.sep);
+    const source = fs.readFileSync(path.join(appRoot, routePath, "page.tsx"), "utf8");
+    return !/redirect\(/.test(source);
+  });
+
+  assert.ok(activeRoutes.length >= 70, "active production routes should include the full product surface");
+  for (const [name, source] of documents) {
+    const missing = activeRoutes
+      .filter((route) => !source.includes(`\`${route.href}\``))
+      .map((route) => route.href);
+    assert.deepEqual(missing, [], `${name} missing active production routes`);
   }
 });
 
@@ -151,28 +171,13 @@ test("sales, automation, and notifications own separate navigation sections", ()
   assert.deepEqual(moduleRouteIds("notice-center"), ["notifications"]);
 });
 
-test("personal WeChat operations stay on independent module pages", () => {
-  const moduleRouteIds = routes.WORKBENCH_ROUTE_LIST
-    .filter((route) => (
-      route.sectionId === "personal-wechat-center"
-      && !route.href.includes("[")
-      && route.showInModuleNav !== false
-    ))
-    .map((route) => route.id);
+test("personal WeChat routes and manifest entries are removed", () => {
+  const manifest = read("apps/web/src/app/route-manifest.ts");
+  const legacyRoutes = routes.WORKBENCH_ROUTE_LIST.filter((route) => route.sectionId === "personal-wechat-center");
 
-  assert.deepEqual(moduleRouteIds, [
-    "personalWechatInstances",
-    "personalWechatControl",
-    "personalWechatVoiceAssist",
-    "personalWechatInbound",
-    "personalWechatInboundDrill",
-    "personalWechatSafety",
-  ]);
-  assert.equal(routes.WORKBENCH_ROUTES.personalWechatVoiceAssist.initialView.personalWechat, "voice");
-  assert.equal(
-    routes.getWorkbenchRouteFromLegacyHash("#personal-wechat-center:voice").id,
-    "personalWechatVoiceAssist",
-  );
+  assert.deepEqual(legacyRoutes, []);
+  assert.doesNotMatch(manifest, /personalWechat|personal-wechat/);
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#personal-wechat-center:voice").id, "overview");
 });
 
 test("legacy quote and automation hashes keep resolving after section separation", () => {
@@ -187,22 +192,24 @@ test("legacy quote and automation hashes keep resolving after section separation
 test("pathname resolver handles exact routes, entity detail routes, trailing slashes, and unknown paths", () => {
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview").id, "overview");
   assert.equal(routes.getWorkbenchRouteFromPathname("/overview/").id, "overview");
-  assert.equal(
-    routes.getWorkbenchRouteFromPathname("/integrations/personal-wechat/voice-assist").id,
-    "personalWechatVoiceAssist",
-  );
+  assert.equal(routes.getWorkbenchRouteFromPathname("/integrations/personal-wechat/voice-assist"), null);
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id?from=notification").id, "conversationDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/context").id, "conversationContext");
   assert.equal(routes.getWorkbenchRouteFromPathname("/conversations/demo-id/assignment").id, "conversationAssignment");
   assert.equal(routes.getWorkbenchRouteFromPathname("/send/queue/task-42").id, "sendQueueTask");
   assert.equal(routes.getWorkbenchRouteFromPathname("/reviews/design/job-42").id, "reviewDesignDecision");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/new").id, "designJobCreate");
   assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42").id, "designJobDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42/submit").id, "designJobSubmit");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/design/jobs/job-42/quote").id, "designJobQuote");
   assert.equal(routes.getWorkbenchRouteFromPathname("/catalog/products/SKU-42").id, "catalogProductDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/quotes/quote-42").id, "salesQuoteDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/quotes/quote-42/send").id, "salesQuoteSend");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/orders/order-42").id, "salesOrderDetail");
   assert.equal(routes.getWorkbenchRouteFromPathname("/sales/orders/order-42/messages/delivery").id, "salesOrderDelivery");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/settings/delivery-readiness").id, "settingsDeliveryReadiness");
+  assert.equal(routes.getWorkbenchRouteFromPathname("/settings/ai-models").id, "settingsAiModels");
+  assert.equal(routes.getWorkbenchRouteFromLegacyHash("#training-center").id, "trainingOverview");
   assert.equal(routes.getWorkbenchRouteFromPathname("/unknown/module"), null);
   assert.equal(routes.getWorkbenchRouteFromLegacyHash("#%E0%A4%A").id, "overview");
 });

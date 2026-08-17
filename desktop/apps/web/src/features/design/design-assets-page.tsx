@@ -1,21 +1,39 @@
 "use client";
 
-import { RefreshCw, Upload } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { DesignAsset } from "../../lib/api";
+import { getWechatConversations, type Conversation, type DesignAsset, type IdentityFilters } from "../../lib/api";
 import { getAssets, uploadAsset } from "./api";
-import { createDesignAssetOperationGuard, runGuardedDesignAssetMutation, runGuardedDesignAssetRead, type DesignAssetReadIdentity } from "./design-asset-read-guard";
+import type { DesignAssetRoleFilter } from "./design-asset-role";
+import { DesignAssetsListPanel } from "./design-assets-list-panel";
+import {
+  conversationIdentityHref,
+  conversationLabel,
+  fileBase64,
+  hasAssetIdentityScope,
+  isAssetIdentityReady,
+} from "./design-assets-page-utils";
+import { DesignAssetUploadConfirmation, DesignAssetsUploadPanel } from "./design-assets-upload-panel";
+import {
+  createDesignAssetOperationGuard,
+  runGuardedDesignAssetMutation,
+  runGuardedDesignAssetRead,
+  type DesignAssetReadIdentity,
+} from "./design-asset-read-guard";
 import styles from "./design-pages.module.css";
-import { DesignConfirmation, DesignEmpty, DesignNotice, DesignPageHeader, errorText, formatDesignDate } from "./design-ui";
+import { DesignNotice, DesignPageHeader, errorText } from "./design-ui";
 
-export function DesignAssetsPage() {
+export function DesignAssetsPage({ initialIdentityFilters = {} }: { initialIdentityFilters?: IdentityFilters } = {}) {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
+  const [selectedConversationId, setSelectedConversationId] = useState("");
   const [assets, setAssets] = useState<DesignAsset[]>([]);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
-  const [ownerId, setOwnerId] = useState("");
-  const [wechatAccountId, setWechatAccountId] = useState("");
-  const [conversationId, setConversationId] = useState("");
-  const [customerId, setCustomerId] = useState("");
-  const [role, setRole] = useState("logo");
+  const [assetAutoRefreshTick, setAssetAutoRefreshTick] = useState(0);
+  const [role, setRole] = useState("customer_logo");
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState<DesignAssetRoleFilter>("all");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState<"" | "refresh" | "upload">("");
   const [error, setError] = useState("");
@@ -26,35 +44,82 @@ export function DesignAssetsPage() {
     assetOperationGuardRef.current = createDesignAssetOperationGuard({ ownerId: "", wechatAccountId: "", conversationId: "", customerId: "" });
   }
   const assetOperationGuard = assetOperationGuardRef.current;
+  const selectedConversation = conversations.find((item) => item.id === selectedConversationId) || null;
+  const identity = assetReadIdentity(selectedConversation);
+  const identityReady = Boolean(identity.ownerId && identity.wechatAccountId && identity.conversationId && identity.customerId);
 
   useEffect(() => {
     assetOperationGuard.activate();
+    void refreshConversations();
     return () => assetOperationGuard.dispose();
   }, [assetOperationGuard]);
 
-  const identityReady = Boolean(wechatAccountId.trim() && conversationId.trim() && customerId.trim());
-
-  function assetReadIdentity(overrides: Partial<DesignAssetReadIdentity> = {}): DesignAssetReadIdentity {
-    return { ownerId, wechatAccountId, conversationId, customerId, ...overrides };
-  }
+  useEffect(() => {
+    if (!assetAutoRefreshTick || !selectedConversation || !identityReady) return;
+    void refreshAssets();
+  }, [assetAutoRefreshTick, selectedConversationId]);
 
   function invalidateAssetOperations(identity: DesignAssetReadIdentity) {
     assetOperationGuard.invalidate(identity);
     setAssets([]);
     setAssetsLoaded(false);
+    setSelectedRoleFilter("all");
     setBusy("");
     setError("");
     setNotice("");
     setPendingConfirmation(false);
   }
 
+  function selectConversation(nextConversationId: string, source = conversations) {
+    const nextConversation = source.find((item) => item.id === nextConversationId) || null;
+    const nextIdentity = assetReadIdentity(nextConversation);
+    setSelectedConversationId(nextConversationId);
+    invalidateAssetOperations(nextIdentity);
+    if (isAssetIdentityReady(nextIdentity)) {
+      setAssetAutoRefreshTick((value) => value + 1);
+    }
+  }
+
+  async function refreshConversations() {
+    setConversationsLoading(true);
+    setConversationsLoaded(false);
+    setError("");
+    try {
+      const records = await getWechatConversations();
+      setConversations(records);
+      setConversationsLoaded(true);
+      const preferredConversation = initialAssetConversation(records, initialIdentityFilters);
+      const identityScoped = hasAssetIdentityScope(initialIdentityFilters);
+      const nextConversationId = records.some((item) => item.id === selectedConversationId)
+        ? selectedConversationId
+        : identityScoped
+          ? preferredConversation?.id || ""
+          : records[0]?.id || "";
+      selectConversation(nextConversationId, records);
+      if (identityScoped && !preferredConversation) {
+        setError("当前企微客户身份未能匹配，已阻止把素材上传到其他客户。请返回原会话重试。");
+      }
+    } catch (cause) {
+      setConversations([]);
+      setConversationsLoaded(false);
+      selectConversation("", []);
+      setError(errorText(cause, "会话读取失败"));
+    } finally {
+      setConversationsLoading(false);
+    }
+  }
+
   async function refreshAssets() {
-    if (!ownerId.trim()) { setError("请先填写客户归属 ID。"); return; }
-    const identity = assetReadIdentity();
+    if (!selectedConversation) { setError("请先选择客户会话。"); return; }
+    if (!identityReady) { setError("所选会话缺少企业微信账号、会话或客户身份。"); return; }
     await runGuardedDesignAssetRead({
       guard: assetOperationGuard,
       identity,
-      load: () => getAssets("customer", ownerId.trim(), { wechatAccountId: wechatAccountId.trim() || undefined, conversationId: conversationId.trim() || undefined, customerId: customerId.trim() || undefined }),
+      load: () => getAssets("customer", identity.ownerId, {
+        wechatAccountId: identity.wechatAccountId,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+      }),
       onStart: () => { setBusy("refresh"); setError(""); setNotice(""); setAssets([]); setAssetsLoaded(false); },
       onSuccess: (records) => { setAssets(records); setAssetsLoaded(true); },
       onError: (cause) => { setAssets([]); setAssetsLoaded(false); setError(errorText(cause, "素材读取失败")); },
@@ -63,16 +128,30 @@ export function DesignAssetsPage() {
   }
 
   async function confirmUpload() {
-    if (!file || !ownerId.trim() || !identityReady) return;
-    const identity = assetReadIdentity();
+    if (!file || !selectedConversation || !identityReady) return;
     const selectedFile = file;
     const selectedRole = role;
     await runGuardedDesignAssetMutation({
       guard: assetOperationGuard,
       identity,
       prepare: () => fileBase64(selectedFile),
-      mutate: (base64) => uploadAsset({ ownerType: "customer", ownerId: identity.ownerId.trim(), role: selectedRole, fileName: selectedFile.name, mimeType: selectedFile.type || "application/octet-stream", source: "operator_upload", base64, expectedWechatAccountId: identity.wechatAccountId.trim(), expectedConversationId: identity.conversationId.trim(), expectedCustomerId: identity.customerId.trim() }),
-      refresh: () => getAssets("customer", identity.ownerId.trim(), { wechatAccountId: identity.wechatAccountId.trim() || undefined, conversationId: identity.conversationId.trim() || undefined, customerId: identity.customerId.trim() || undefined }),
+      mutate: (base64) => uploadAsset({
+        ownerType: "customer",
+        ownerId: identity.ownerId.trim(),
+        role: selectedRole,
+        fileName: selectedFile.name,
+        mimeType: selectedFile.type || "application/octet-stream",
+        source: "operator_upload",
+        base64,
+        expectedWechatAccountId: identity.wechatAccountId.trim(),
+        expectedConversationId: identity.conversationId.trim(),
+        expectedCustomerId: identity.customerId.trim(),
+      }),
+      refresh: () => getAssets("customer", identity.ownerId.trim(), {
+        wechatAccountId: identity.wechatAccountId.trim(),
+        conversationId: identity.conversationId.trim(),
+        customerId: identity.customerId.trim(),
+      }),
       onStart: () => { setPendingConfirmation(false); setBusy("upload"); setError(""); setNotice(""); },
       onMutationSuccess: () => { setFile(null); setBusy("refresh"); },
       onRefreshSuccess: (records) => { setAssets(records); setAssetsLoaded(true); },
@@ -85,21 +164,78 @@ export function DesignAssetsPage() {
 
   return (
     <section className={styles.page} aria-label="设计素材管理">
-      <DesignPageHeader eyebrow="设计平台" title="客户素材" detail="只负责按客户身份读取和上传 Logo、参考图与附件。" actions={<button type="button" data-action-id="design-assets-refresh" aria-label="刷新客户素材" disabled={Boolean(busy) || !ownerId.trim()} onClick={() => void refreshAssets()}><RefreshCw size={16} aria-hidden="true" />刷新素材</button>} />
-      {error ? <DesignNotice tone="danger">{error}</DesignNotice> : null}{notice ? <DesignNotice tone="success">{notice}</DesignNotice> : null}
+      <DesignPageHeader
+        eyebrow="设计平台"
+        title="客户素材"
+        detail="按真实客户会话读取和上传 Logo、参考图与附件。"
+        actions={(
+          <>
+            <button type="button" data-action-id="design-assets-refresh-conversations" aria-label="刷新客户会话" disabled={conversationsLoading || Boolean(busy)} onClick={() => void refreshConversations()}><RefreshCw size={16} aria-hidden="true" />刷新会话</button>
+            <button type="button" data-action-id="design-assets-refresh" aria-label="刷新客户素材" disabled={Boolean(busy) || !identityReady} onClick={() => void refreshAssets()}><RefreshCw size={16} aria-hidden="true" />刷新素材</button>
+          </>
+        )}
+      />
+      {error ? <DesignNotice tone="danger">{error}</DesignNotice> : null}
+      {notice ? <DesignNotice tone="success">{notice}</DesignNotice> : null}
       <div className={styles.twoColumn}>
-        <form className={styles.card} onSubmit={(event) => { event.preventDefault(); if (!identityReady) { setError("上传前必须补齐微信账号、会话和客户三项身份。"); return; } if (!file) { setError("请先选择要上传的文件。"); return; } setPendingConfirmation(true); }}>
-          <div className={styles.cardHeader}><div><h2>素材归属与上传</h2><p>写操作严格携带三项 expected identity。</p></div></div>
-          <div className={styles.formGrid}><label><span>客户归属 ID</span><input value={ownerId} disabled={Boolean(busy)} onChange={(event) => { const next = event.target.value; invalidateAssetOperations(assetReadIdentity({ ownerId: next })); setOwnerId(next); }} /></label><label><span>微信账号 ID</span><input value={wechatAccountId} disabled={Boolean(busy)} onChange={(event) => { const next = event.target.value; invalidateAssetOperations(assetReadIdentity({ wechatAccountId: next })); setWechatAccountId(next); }} /></label><label><span>会话 ID</span><input value={conversationId} disabled={Boolean(busy)} onChange={(event) => { const next = event.target.value; invalidateAssetOperations(assetReadIdentity({ conversationId: next })); setConversationId(next); }} /></label><label><span>客户 ID</span><input value={customerId} disabled={Boolean(busy)} onChange={(event) => { const next = event.target.value; invalidateAssetOperations(assetReadIdentity({ customerId: next })); setCustomerId(next); }} /></label><label><span>素材角色</span><select value={role} disabled={Boolean(busy)} onChange={(event) => setRole(event.target.value)}><option value="logo">客户 Logo</option><option value="reference">参考图</option><option value="attachment">附件</option></select></label><label><span>选择文件</span><input type="file" accept="image/*,.pdf" disabled={Boolean(busy)} onChange={(event) => setFile(event.target.files?.[0] || null)} /></label></div>
-          <div className={styles.formActions}><button type="submit" className={styles.primaryButton} data-action-id="design-assets-upload-request" aria-label="准备上传客户素材" disabled={Boolean(busy)}><Upload size={16} aria-hidden="true" />上传素材</button></div>
-        </form>
-        <section className={styles.card} aria-label="客户素材列表"><div className={styles.cardHeader}><div><h2>已登记素材</h2><p>{assetsLoaded ? `${assets.length} 个记录` : "读取未确认"}</p></div></div>{busy === "refresh" ? <DesignEmpty title="正在读取素材" detail="只读取当前客户归属。" busy /> : assetsLoaded && assets.length ? <ul className={styles.recordList}>{assets.map((asset) => <li key={asset.id}><div><strong>{asset.fileName}</strong><span>{asset.role || "未标注角色"} · {asset.mimeType}</span></div><small>{formatDesignDate(asset.createdAt)} · {asset.sizeBytes ? `${Math.ceil(asset.sizeBytes / 1024)} KB` : "大小未知"}</small></li>)}</ul> : assetsLoaded ? <DesignEmpty title="当前客户尚无素材" detail="读取成功；可以选择文件上传并绑定到当前客户身份。" /> : <DesignEmpty title="素材状态未确认" detail={ownerId.trim() ? "尚未成功读取当前客户素材，请刷新后再试。" : "填写客户归属 ID 后刷新素材。"} />}</section>
+        <DesignAssetsUploadPanel
+          conversations={conversations}
+          conversationsLoading={conversationsLoading}
+          conversationsLoaded={conversationsLoaded}
+          selectedConversationId={selectedConversationId}
+          selectedConversation={selectedConversation}
+          identity={identity}
+          identityReady={identityReady}
+          role={role}
+          file={file}
+          busy={busy}
+          conversationLabel={conversationLabel}
+          onFileChange={setFile}
+          onRoleChange={setRole}
+          onSelectConversation={selectConversation}
+          onValidationError={setError}
+          onUploadRequest={() => setPendingConfirmation(true)}
+        />
+        <DesignAssetsListPanel
+          assets={assets}
+          assetsLoaded={assetsLoaded}
+          busy={busy}
+          identityReady={identityReady}
+          selectedRoleFilter={selectedRoleFilter}
+          onRoleFilterChange={setSelectedRoleFilter}
+        />
       </div>
-      {pendingConfirmation ? <DesignConfirmation title="确认上传并绑定这份素材？" detail={`文件 ${file?.name || ""} 将绑定到账号 ${wechatAccountId}、会话 ${conversationId}、客户 ${customerId}。`} confirmLabel="确认上传" confirmActionId="design-assets-upload-confirm" cancelActionId="design-assets-upload-cancel" busy={busy === "upload"} onCancel={() => setPendingConfirmation(false)} onConfirm={() => void confirmUpload()} /> : null}
+      {selectedConversation ? (
+        <Link className={styles.backLink} href={conversationIdentityHref("/catalog/bundles", selectedConversation)} data-action-id="design-assets-back-bundles">
+          返回当前客户 AI 搭品
+        </Link>
+      ) : null}
+      <DesignAssetUploadConfirmation
+        pending={pendingConfirmation}
+        role={role}
+        file={file}
+        identity={identity}
+        busy={busy}
+        onCancel={() => setPendingConfirmation(false)}
+        onConfirm={() => void confirmUpload()}
+      />
     </section>
   );
 }
 
-function fileBase64(file: File) {
-  return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error("文件读取失败")); reader.onload = () => resolve(String(reader.result || "").replace(/^data:[^;]+;base64,/, "")); reader.readAsDataURL(file); });
+export function initialAssetConversation(rows: Conversation[], filters: IdentityFilters) {
+  return rows.find((conversation) =>
+    (!filters.wechatAccountId || conversation.wechatAccountId === filters.wechatAccountId)
+    && (!filters.conversationId || conversation.id === filters.conversationId)
+    && (!filters.customerId || conversation.customerId === filters.customerId),
+  );
+}
+
+function assetReadIdentity(conversation: Conversation | null): DesignAssetReadIdentity {
+  return {
+    ownerId: conversation?.customerId?.trim() || "",
+    wechatAccountId: conversation?.wechatAccountId?.trim() || "",
+    conversationId: conversation?.id?.trim() || "",
+    customerId: conversation?.customerId?.trim() || "",
+  };
 }

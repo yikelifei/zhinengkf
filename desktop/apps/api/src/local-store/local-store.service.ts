@@ -7,6 +7,7 @@ import {
   assertExactOperationReplay,
   assertStoredOperationIdentityReplay,
   createChatImportOperationFingerprint,
+  createOperationFingerprint,
   createInboundMessageOperationFingerprint,
   createSendTaskOperationFingerprint,
   deterministicOperationId,
@@ -27,7 +28,10 @@ const {
   isSceneClarificationReply,
   isTrainingSampleReady,
   latestCandidateRound,
+  normalizeBundleSnapshot,
+  normalizeDesignImageSnapshot,
   normalizeTrainingSampleStatus,
+  buildConversationLearningInsight,
   trainingSampleReviewNote,
   validateDesignAssetBinding,
   validateDesignJobIdentity,
@@ -56,6 +60,7 @@ type StoreData = {
   sendAttempts: any[];
   quoteDrafts: any[];
   orderDrafts: any[];
+  paymentEvents: any[];
   reviewLogs: any[];
   agents: any[];
   agentSkills: any[];
@@ -87,6 +92,9 @@ const DESIGN_CALLBACK_CLAIM_LEASE_MS = 15 * 60 * 1000;
 const LOCAL_STORE_LOCK_STALE_MS = Math.max(5_000, localStoreNumberEnv("LOCAL_STORE_LOCK_STALE_MS", 30_000));
 const LOCAL_STORE_LOCK_WAIT_MS = localStoreNumberEnv("LOCAL_STORE_LOCK_WAIT_MS", 3_000);
 const LOCAL_STORE_LOCK_RETRY_MS = 20;
+const LOCAL_STORE_WRITE_RENAME_WAIT_MS = localStoreNumberEnv("LOCAL_STORE_WRITE_RENAME_WAIT_MS", 1_000);
+const LOCAL_STORE_WRITE_RENAME_RETRY_MS = 25;
+const INBOUND_LEASE_RENEWAL_WRITE_THRESHOLD_MS = 5_000;
 
 class LocalStoreConcurrentWriteError extends ConflictException {
   constructor(message = "local store changed before the transaction could commit") {
@@ -249,6 +257,49 @@ export class LocalStoreService {
   private readonly readFingerprints = new WeakMap<StoreData, string>();
   private storeLockDepth = 0;
   private storeLockOwnershipCheck: (() => void) | null = null;
+  private readSnapshotDepth = 0;
+  private readSnapshotData: StoreData | null = null;
+  private readSnapshotFilePath = "";
+  private writeTransactionData: StoreData | null = null;
+  private writeTransactionDirty = false;
+
+  withReadSnapshot<T>(operation: () => T): T {
+    if (this.readSnapshotDepth > 0) return operation();
+    const data = this.read();
+    this.readSnapshotDepth = 1;
+    this.readSnapshotData = data;
+    this.readSnapshotFilePath = this.filePath;
+    try {
+      return operation();
+    } finally {
+      this.readSnapshotDepth = 0;
+      this.readSnapshotData = null;
+      this.readSnapshotFilePath = "";
+    }
+  }
+
+  withWriteTransaction<T>(operation: () => T): T {
+    if (this.writeTransactionData) return operation();
+    if (this.readSnapshotDepth > 0) {
+      throw new InternalServerErrorException("local store write transaction cannot start inside a read snapshot");
+    }
+    return this.withStoreLock(() => {
+      const data = this.read();
+      this.writeTransactionData = data;
+      this.writeTransactionDirty = false;
+      try {
+        const result = operation();
+        if (result && typeof (result as any).then === "function") {
+          throw new InternalServerErrorException("local store write transaction must be synchronous");
+        }
+        if (this.writeTransactionDirty) this.writeWhileLocked(data);
+        return result;
+      } finally {
+        this.writeTransactionData = null;
+        this.writeTransactionDirty = false;
+      }
+    });
+  }
 
   listSkus(options: { includeInactive?: boolean } = {}) {
     return this.read().skus.filter((sku) => options.includeInactive || sku.isActive !== false);
@@ -409,6 +460,60 @@ export class LocalStoreService {
     return record;
   }
 
+  upsertDesignAsset(payload: any) {
+    const data = this.read();
+    const normalizedLocalPath = String(payload.normalizedLocalPath || "").trim() || null;
+    const existingIndex = data.designAssets.findIndex((asset) =>
+      normalizedLocalPath
+        ? asset.normalizedLocalPath === normalizedLocalPath
+        : asset.ownerType === payload.ownerType &&
+          asset.ownerId === payload.ownerId &&
+          asset.role === (payload.role || "reference") &&
+          asset.localPath === payload.localPath,
+    );
+    if (existingIndex < 0) {
+      const now = new Date().toISOString();
+      const record: any = {
+        id: id("asset"),
+        ownerType: payload.ownerType,
+        ownerId: payload.ownerId,
+        role: payload.role || "reference",
+        fileName: payload.fileName,
+        mimeType: payload.mimeType || "application/octet-stream",
+        localPath: payload.localPath,
+        normalizedLocalPath,
+        sizeBytes: payload.sizeBytes || 0,
+        source: payload.source || "manual_upload",
+        wechatAccountId: payload.wechatAccountId || null,
+        conversationId: payload.conversationId || null,
+        customerId: payload.customerId || (payload.ownerType === "customer" ? payload.ownerId : null),
+        createdAt: now,
+      };
+      data.designAssets.push(record);
+      this.write(data);
+      return record;
+    }
+    const current = data.designAssets[existingIndex];
+    const updated = {
+      ...current,
+      ownerType: payload.ownerType,
+      ownerId: payload.ownerId,
+      role: payload.role || current.role || "reference",
+      fileName: payload.fileName || current.fileName,
+      mimeType: payload.mimeType || current.mimeType || "application/octet-stream",
+      localPath: payload.localPath || current.localPath,
+      normalizedLocalPath,
+      sizeBytes: payload.sizeBytes || current.sizeBytes || 0,
+      source: payload.source || current.source || "manual_upload",
+      wechatAccountId: payload.wechatAccountId || current.wechatAccountId || null,
+      conversationId: payload.conversationId || current.conversationId || null,
+      customerId: payload.customerId || current.customerId || (payload.ownerType === "customer" ? payload.ownerId : null),
+    };
+    data.designAssets[existingIndex] = updated;
+    this.write(data);
+    return updated;
+  }
+
   attachDesignAssetsToJob(designJobId: string, assetIds: string[]) {
     const data = this.read();
     const index = data.designJobs.findIndex((item) => item.id === designJobId || item.requestId === designJobId);
@@ -534,7 +639,63 @@ export class LocalStoreService {
     );
   }
 
-  upsertWechatWorkBinding(payload: { openKfid: string; externalUserId: string; sendTime?: number }) {
+  upsertWechatWorkAccount(payload: { openKfid: string; name?: string; avatar?: string }) {
+    const openKfid = String(payload.openKfid || "").trim();
+    if (!openKfid) throw new Error("wechat work account requires openKfid");
+    const officialName = String(payload.name || "").trim();
+    const officialAvatar = String(payload.avatar || "").trim();
+    const data = this.read();
+    const now = new Date().toISOString();
+    let account = data.wechatAccounts.find((item) => item.wechatWork?.openKfid === openKfid) || null;
+    if (!account) {
+      account = {
+        id: id("wechat_work"),
+        displayName: officialName || `企业微信客服 ${shortExternalId(openKfid)}`,
+        alias: shortExternalId(openKfid),
+        platform: "wechat_work_kf",
+        isActive: true,
+        avatarUrl: officialAvatar || null,
+        wechatWork: { openKfid, name: officialName || null, avatar: officialAvatar || null },
+        createdAt: now,
+        updatedAt: now,
+      };
+      data.wechatAccounts.push(account);
+    } else {
+      const nextDisplayName = officialName || account.displayName || `企业微信客服 ${shortExternalId(openKfid)}`;
+      const nextAlias = account.alias || shortExternalId(openKfid);
+      const nextAvatarUrl = officialAvatar || account.avatarUrl || null;
+      const nextWechatWork = {
+        ...(account.wechatWork || {}),
+        openKfid,
+        ...(officialName ? { name: officialName } : {}),
+        ...(officialAvatar ? { avatar: officialAvatar } : {}),
+      };
+      const changed =
+        account.displayName !== nextDisplayName
+        || account.alias !== nextAlias
+        || account.platform !== "wechat_work_kf"
+        || account.isActive !== true
+        || account.avatarUrl !== nextAvatarUrl
+        || JSON.stringify(account.wechatWork || {}) !== JSON.stringify(nextWechatWork);
+      if (!changed) return account;
+      account.displayName = nextDisplayName;
+      account.alias = nextAlias;
+      account.platform = "wechat_work_kf";
+      account.isActive = true;
+      account.avatarUrl = nextAvatarUrl;
+      account.wechatWork = nextWechatWork;
+      account.updatedAt = now;
+    }
+    this.write(data);
+    return account;
+  }
+
+  upsertWechatWorkBinding(payload: {
+    openKfid: string;
+    externalUserId: string;
+    sendTime?: number;
+    customerProfile?: { nickname?: string; avatar?: string };
+  }) {
     const openKfid = String(payload.openKfid || "").trim();
     const externalUserId = String(payload.externalUserId || "").trim();
     if (!openKfid || !externalUserId) throw new Error("wechat work binding requires openKfid and externalUserId");
@@ -572,18 +733,34 @@ export class LocalStoreService {
       ? data.customers.find((item) => item.id === current.customerId) || null
       : null;
     customer ||= data.customers.find((item) => item.wechatWorkExternalUserId === externalUserId) || null;
+    const profileName = String(payload.customerProfile?.nickname || "").trim();
+    const profileAvatar = String(payload.customerProfile?.avatar || "").trim();
     if (!customer) {
       customer = {
         id: id("customer"),
-        name: `企业微信客户 ${shortExternalId(externalUserId)}`,
+        name: profileName || `企业微信客户 ${shortExternalId(externalUserId)}`,
         wechatId: null,
         source: "wechat_work_kf",
         wechatWorkExternalUserId: externalUserId,
+        avatarUrl: profileAvatar || null,
         tags: ["企业微信客服"],
         createdAt: now,
         updatedAt: now,
       };
       data.customers.push(customer);
+    } else if (profileName || profileAvatar) {
+      const previousName = String(customer.name || "");
+      customer.name = profileName || customer.name;
+      customer.avatarUrl = profileAvatar || customer.avatarUrl || null;
+      customer.updatedAt = now;
+      const linkedConversation = data.conversations.find((item) => item.id === current?.conversationId);
+      if (linkedConversation && profileName && (
+        linkedConversation.title === previousName
+        || isWechatWorkPlaceholderName(linkedConversation.title)
+      )) {
+        linkedConversation.title = profileName;
+        linkedConversation.updatedAt = now;
+      }
     }
 
     const externalChatId = `wechat_work_kf:${openKfid}:${externalUserId}`;
@@ -684,9 +861,13 @@ export class LocalStoreService {
     };
     data.wechatWorkAuditLogs.push(record);
     if (data.wechatWorkAuditLogs.length > 2000) {
-      data.wechatWorkAuditLogs = data.wechatWorkAuditLogs
+      const permanentCustomerEntries = data.wechatWorkAuditLogs
+        .filter((item) => item.action === "customer_entry_generated" && item.status === "processed");
+      const recentRecords = data.wechatWorkAuditLogs
+        .filter((item) => !permanentCustomerEntries.includes(item))
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-        .slice(0, 2000);
+        .slice(0, Math.max(0, 2000 - permanentCustomerEntries.length));
+      data.wechatWorkAuditLogs = [...permanentCustomerEntries, ...recentRecords];
     }
     this.write(data);
     return record;
@@ -1324,6 +1505,9 @@ export class LocalStoreService {
     if (!nextLease || Date.parse(nextLease) <= now) {
       throw new BadRequestException("inbound operation lease renewal must expire in the future");
     }
+    if (Date.parse(String(current.leaseExpiresAt)) >= Date.parse(nextLease) - INBOUND_LEASE_RENEWAL_WRITE_THRESHOLD_MS) {
+      return current;
+    }
     const operation = { ...current, leaseExpiresAt: nextLease, updatedAt: new Date(now).toISOString() };
     data.inboundMessageOperations[index] = operation;
     this.write(data);
@@ -1578,8 +1762,14 @@ export class LocalStoreService {
     const data = this.read();
     const identity = this.requireCompleteConversationIdentity(data, filter, "message history");
     const limit = Math.max(1, Math.min(Number(filter.limit || 300), 500));
+    const rpaMessageIds = new Set(
+      data.personalWechatRpaAuditLogs
+        .filter((item) => item.messageId)
+        .map((item) => String(item.messageId)),
+    );
     const messages = data.messages
       .filter((message) => message.conversationId === identity.conversationId)
+      .filter((message) => isTrustedConversationMessage(message, rpaMessageIds))
       .map((message) => ({
         ...message,
         source: "message",
@@ -1590,6 +1780,7 @@ export class LocalStoreService {
       }));
     const outbound = data.sendTasks
       .filter((task) => task.conversationId === identity.conversationId)
+      .filter((task) => !isSyntheticConversationText(task.payload?.text || task.payload?.textBeforeImages))
       .map((task) => ({
         id: `send-task:${task.id}`,
         source: "send_task",
@@ -1599,7 +1790,7 @@ export class LocalStoreService {
         wechatAccountId: identity.wechatAccountId,
         direction: "outbound",
         text: String(task.payload?.text || task.payload?.textBeforeImages || ""),
-        attachments: timelineTaskAttachments(task),
+        attachments: timelineTaskAttachments(task, data.designAssets),
         status: task.status || "queued",
         errorMessage: task.errorMessage || "",
         createdAt: task.queuedAt || task.createdAt,
@@ -2145,7 +2336,7 @@ export class LocalStoreService {
       externalJobId: String(payload.externalJobId),
       requestId: String(payload.requestId),
       scopeKey: String(payload.scopeKey),
-      adapter: "art_image_local",
+      adapter: String(payload.adapter || "art_image_local"),
       designJobId: job.id,
       designRevisionId: revision?.id || null,
       attemptNo: Number(payload.attemptNo),
@@ -2744,6 +2935,21 @@ export class LocalStoreService {
       status,
       sceneCheck: reviewedSceneCheck,
     });
+    const reviewOperation = buildLocalReviewOperation(
+      "training-sample-review",
+      sampleId,
+      payload,
+      "training sample review operationKey",
+    );
+    const existingReviewLog = reviewOperation ? findLocalReviewLogByEffectKey(data, reviewOperation.effectKey) : null;
+    if (existingReviewLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingReviewLog.metadata),
+        reviewOperation!.operation,
+        "training sample review",
+      );
+      return { sample: this.decorateTrainingSample(data.trainingSamples[index]), reviewLog: existingReviewLog };
+    }
     const sample = {
       ...before,
       ...patch,
@@ -2771,11 +2977,16 @@ export class LocalStoreService {
       entry.content = `客户：${sample.customerText}\n客服：${sample.idealReply}`;
       entry.tags = [sample.scene, sample.agentKey, ...(sample.skillHints || [])].filter(Boolean);
       entry.qualityScore = sample.score;
+      entry.status = status;
+      entry.reviewer = reviewer;
+      entry.reviewNote = note;
+      entry.reviewedAt = now;
+      entry.reviewHistory = appendKnowledgeReviewHistory(entry.reviewHistory, { status, reviewer, note, reviewedAt: now });
       entry.updatedAt = now;
     }
 
     const log = {
-      id: id("review"),
+      id: reviewOperation ? deterministicOperationId("review", reviewOperation.effectKey) : id("review"),
       targetType: "training_sample",
       targetId: sample.id,
       decision: status === "ready" ? "approve_training_sample" : status === "rejected" ? "reject_training_sample" : "mark_training_sample_review",
@@ -2789,6 +3000,7 @@ export class LocalStoreService {
         scene: sample.scene,
         sourceType: sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : "manual"),
         changedFields,
+        ...(reviewOperation ? { effectKey: reviewOperation.effectKey, requestOperation: reviewOperation.operation } : {}),
       },
       createdAt: now,
     };
@@ -2798,18 +3010,245 @@ export class LocalStoreService {
     return { sample: this.decorateTrainingSample(sample), reviewLog: log };
   }
 
-  listKnowledgeEntries(filter: string | ({ agentId?: string } & IdentityListFilter) = {}) {
+  listKnowledgeEntries(filter: string | ({ agentId?: string; includeReview?: boolean } & IdentityListFilter) = {}) {
     const data = this.read();
     const options = typeof filter === "string" ? { agentId: filter } : filter;
+    const includeReview = Boolean(options.includeReview);
     return data.knowledgeEntries
       .filter((entry) => {
         const sample = entry.sourceId ? data.trainingSamples.find((item) => item.id === entry.sourceId) : null;
-        return !sample || isTrainingSampleReady(sample);
+        return includeReview || !sample || isTrainingSampleReady(sample);
       })
+      .filter((entry) => includeReview || normalizeKnowledgeEntryStatus(entry, data) === "ready")
       .filter((entry) => !localStoreIsSceneClarificationKnowledgeEntry(data, entry))
       .filter((entry) => !options.agentId || entry.agentId === options.agentId)
-      .filter((entry) => this.matchesIdentityFilter(entry, options))
+      .filter((entry) => this.matchesKnowledgeIdentityFilter(entry, options))
       .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0));
+  }
+
+  getWechatWorkAuditLog(idValue: string) {
+    const recordId = String(idValue || "").trim();
+    if (!recordId) return null;
+    return this.read().wechatWorkAuditLogs.find((item) => item.id === recordId) || null;
+  }
+
+  reviewKnowledgeEntry(entryId: string, payload: any = {}) {
+    const data = this.read();
+    const index = data.knowledgeEntries.findIndex((entry) => entry.id === entryId);
+    if (index < 0) throw new NotFoundException(`knowledge entry not found: ${entryId}`);
+    const before = data.knowledgeEntries[index];
+    const status = normalizeKnowledgeReviewStatus(payload.status);
+    const now = new Date().toISOString();
+    const reviewer = String(payload.reviewer || "operator").trim() || "operator";
+    const note = String(payload.note || knowledgeReviewNote(status)).trim();
+    const agent = payload.agentId || payload.agentKey ? resolveKnowledgeReviewAgent(data, payload) : null;
+    if ((payload.agentId || payload.agentKey) && !agent) {
+      throw new BadRequestException(`knowledge entry agent not found: ${payload.agentId || payload.agentKey}`);
+    }
+    const reviewOperation = buildLocalReviewOperation(
+      "knowledge-entry-review",
+      entryId,
+      payload,
+      "knowledge entry review operationKey",
+    );
+    const existingReviewLog = reviewOperation ? findLocalReviewLogByEffectKey(data, reviewOperation.effectKey) : null;
+    if (existingReviewLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingReviewLog.metadata),
+        reviewOperation!.operation,
+        "knowledge entry review",
+      );
+      return { knowledgeEntry: data.knowledgeEntries[index], reviewLog: existingReviewLog };
+    }
+    const existingAgent = before.agentId ? data.agents.find((item) => item.id === before.agentId) : null;
+    const effectiveAgent = agent || existingAgent || null;
+    const updated = {
+      ...before,
+      ...(agent ? { agentId: agent.id } : {}),
+      ...(payload.title !== undefined ? { title: String(payload.title || "").trim() || before.title } : {}),
+      ...(payload.content !== undefined ? { content: String(payload.content || "").trim() || before.content } : {}),
+      ...(payload.tags !== undefined ? { tags: normalizeKnowledgeImportTags(payload.tags, effectiveAgent?.key) } : {}),
+      ...(payload.qualityScore !== undefined ? { qualityScore: clampKnowledgeScore(payload.qualityScore, before.qualityScore) } : {}),
+      status,
+      reviewer,
+      reviewNote: note,
+      reviewedAt: now,
+      reviewHistory: appendKnowledgeReviewHistory(before.reviewHistory, { status, reviewer, note, reviewedAt: now }),
+      updatedAt: now,
+    };
+    assertKnowledgeEntryReadyForReview(updated, status);
+    data.knowledgeEntries[index] = updated;
+    const log = {
+      id: reviewOperation ? deterministicOperationId("review", reviewOperation.effectKey) : id("review"),
+      targetType: "knowledge_entry",
+      targetId: updated.id,
+      decision: status === "ready" ? "approve_knowledge_entry" : status === "rejected" ? "reject_knowledge_entry" : "mark_knowledge_entry_review",
+      reviewer,
+      note,
+      beforeStatus: normalizeKnowledgeEntryStatus(before, data),
+      afterStatus: status,
+      metadata: {
+        source: "knowledge_entry_review",
+        sourceType: updated.sourceType,
+        sourceId: updated.sourceId,
+        agentId: updated.agentId,
+        customerId: updated.customerId,
+        conversationId: updated.conversationId,
+        wechatAccountId: updated.wechatAccountId,
+        ...(reviewOperation ? { effectKey: reviewOperation.effectKey, requestOperation: reviewOperation.operation } : {}),
+      },
+      createdAt: now,
+    };
+    data.reviewLogs.push(log);
+    this.write(data);
+    return { knowledgeEntry: updated, reviewLog: log };
+  }
+
+  importKnowledgeEntries(rows: any[] = [], context: any = {}) {
+    const data = this.read();
+    const now = new Date().toISOString();
+    const identity = this.validateOptionalConversationBinding(data, context, "knowledge import");
+    const source = String(context.source || "manual_knowledge_import").trim() || "manual_knowledge_import";
+    const operationKey = context.operationKey ? normalizeOperationKey(context.operationKey, "knowledge import operationKey") : "";
+    const importOperation = operationKey
+      ? buildLocalKnowledgeImportOperation(operationKey, identity, source, rows)
+      : null;
+    const existingImportLog = importOperation ? findLocalReviewLogByEffectKey(data, importOperation.effectKey) : null;
+    if (existingImportLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingImportLog.metadata),
+        importOperation!.operation,
+        "knowledge import",
+      );
+      const importedIds = Array.isArray(existingImportLog.metadata?.knowledgeEntryIds)
+        ? existingImportLog.metadata.knowledgeEntryIds.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const replayedResults = importedIds
+        .map((entryId: string) => data.knowledgeEntries.find((entry) => entry.id === entryId))
+        .filter(Boolean);
+      return {
+        count: replayedResults.length,
+        results: replayedResults,
+        skipped: Array.isArray(existingImportLog.metadata?.skipped) ? existingImportLog.metadata.skipped : [],
+        reviewLog: existingImportLog,
+        failed: String(existingImportLog.afterStatus || "") === "failed",
+      };
+    }
+    const results: any[] = [];
+    const skipped: any[] = [];
+    for (const [index, row] of (Array.isArray(rows) ? rows : []).entries()) {
+      const agent = resolveKnowledgeImportAgent(data, row);
+      if ((row.agentId || row.agentKey) && !agent) {
+        skipped.push({ index, title: row.title, reason: "agent_not_found" });
+        continue;
+      }
+      const entryId = operationKey ? deterministicOperationId("knowledge_manual", operationKey, index) : id("knowledge");
+      const existingIndex = data.knowledgeEntries.findIndex((entry) => entry.id === entryId);
+      let entry = {
+        id: entryId,
+        agentId: agent?.id || null,
+        sourceType: "manual_knowledge_import",
+        sourceId: source,
+        customerId: identity.customerId,
+        conversationId: identity.conversationId,
+        wechatAccountId: identity.wechatAccountId,
+        identityBinding: identity.binding,
+        title: String(row.title || "").trim(),
+        content: String(row.content || "").trim(),
+        tags: normalizeKnowledgeImportTags(row.tags, agent?.key),
+        qualityScore: Number.isFinite(Number(row.qualityScore)) ? Math.max(0, Math.min(100, Math.round(Number(row.qualityScore)))) : 70,
+        status: "review",
+        reviewer: null,
+        reviewNote: "manual knowledge import requires human review before reply use",
+        reviewedAt: null,
+        reviewHistory: [],
+        createdAt: existingIndex >= 0 ? data.knowledgeEntries[existingIndex].createdAt || now : now,
+        updatedAt: now,
+      };
+      if (existingIndex >= 0) entry = preserveKnowledgeImportReviewState(data.knowledgeEntries[existingIndex], entry);
+      if (existingIndex >= 0) data.knowledgeEntries[existingIndex] = entry;
+      else data.knowledgeEntries.push(entry);
+      results.push(entry);
+    }
+    let reviewLog: any = null;
+    if (results.length || skipped.length) {
+      const failed = results.length === 0;
+      reviewLog = {
+        id: importOperation ? deterministicOperationId("review", importOperation.effectKey) : id("review"),
+        targetType: "knowledge_import",
+        targetId: operationKey || results[0]?.id || `failed:${source}:${now}`,
+        decision: failed ? "import_manual_knowledge_failed" : "import_manual_knowledge",
+        reviewer: "operator",
+        note: failed
+          ? `Manual knowledge import from ${source} did not save any entries; fix skipped rows and retry.`
+          : `Imported ${results.length} manual knowledge entries from ${source}; low score entries still need review before skill application.`,
+        beforeStatus: "",
+        afterStatus: failed ? "failed" : "imported",
+        metadata: {
+          source,
+          count: results.length,
+          skippedCount: skipped.length,
+          skipped,
+          ...(failed ? { failure: { phase: "write_failed", reason: "no_importable_rows" } } : {}),
+          knowledgeEntryIds: results.map((entry) => entry.id),
+          customerId: identity.customerId,
+          conversationId: identity.conversationId,
+          wechatAccountId: identity.wechatAccountId,
+          ...(importOperation ? { effectKey: importOperation.effectKey, requestOperation: importOperation.operation } : {}),
+        },
+        createdAt: now,
+      };
+      data.reviewLogs.push(reviewLog);
+    }
+    this.write(data);
+    return { count: results.length, results, skipped, ...(reviewLog ? { reviewLog, failed: results.length === 0 } : {}) };
+  }
+
+  recordKnowledgeImportFailure(parsed: any = {}, context: any = {}) {
+    const data = this.read();
+    const now = new Date().toISOString();
+    const identity = this.validateOptionalConversationBinding(data, context, "knowledge import failure");
+    const source = String(context.source || "manual_knowledge_import").trim() || "manual_knowledge_import";
+    const operationKey = context.operationKey ? normalizeOperationKey(context.operationKey, "knowledge import operationKey") : "";
+    const importOperation = operationKey
+      ? buildLocalKnowledgeImportFailureOperation(operationKey, identity, source, parsed, context.phase || "parse_failed")
+      : null;
+    const existingImportLog = importOperation ? findLocalReviewLogByEffectKey(data, importOperation.effectKey) : null;
+    if (existingImportLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingImportLog.metadata),
+        importOperation!.operation,
+        "knowledge import failure",
+      );
+      return existingImportLog;
+    }
+    const failure = normalizeKnowledgeImportFailure(parsed, context.phase || "parse_failed");
+    const log = {
+      id: importOperation ? deterministicOperationId("review", importOperation.effectKey) : id("review"),
+      targetType: "knowledge_import",
+      targetId: operationKey || `failed:${source}:${now}`,
+      decision: "import_manual_knowledge_failed",
+      reviewer: "operator",
+      note: `Manual knowledge import from ${source} failed before saving entries; fix the source file and retry.`,
+      beforeStatus: "",
+      afterStatus: "failed",
+      metadata: {
+        source,
+        count: 0,
+        skippedCount: failure.errors.length,
+        skipped: failure.errors,
+        failure,
+        knowledgeEntryIds: [],
+        customerId: identity.customerId,
+        conversationId: identity.conversationId,
+        wechatAccountId: identity.wechatAccountId,
+        ...(importOperation ? { effectKey: importOperation.effectKey, requestOperation: importOperation.operation } : {}),
+      },
+      createdAt: now,
+    };
+    data.reviewLogs.push(log);
+    this.write(data);
+    return log;
   }
 
   listRouteEvaluations(filter: IdentityListFilter = {}) {
@@ -2880,6 +3319,13 @@ export class LocalStoreService {
       appliedSkills: result.appliedSkills || [],
       knowledgeMatches: result.knowledgeMatches || [],
       replyDraft: result.replyDraft || null,
+      learningInsight: result.learningInsight || buildConversationLearningInsight({
+        text: payload.text || "",
+        route: result,
+        messageId: payload.messageId || null,
+        observedAt: now,
+      }),
+      conversionAssessment: result.conversionAssessment || null,
       createdAt: now,
       updatedAt: now,
     };
@@ -3028,6 +3474,11 @@ export class LocalStoreService {
       content: `客户：${sample.customerText}\n正确场景：${scene}\n正确 Agent：${agent.name || agent.key}\n备注：${note}`,
       tags: [scene, agent.key, "场景纠正", ...sample.skillHints],
       qualityScore: sample.score,
+      status: "ready",
+      reviewer,
+      reviewNote: note,
+      reviewedAt: now,
+      reviewHistory: [{ status: "ready", reviewer, note, reviewedAt: now }],
       createdAt: now,
       updatedAt: now,
     };
@@ -3124,6 +3575,7 @@ export class LocalStoreService {
     data.chatImports.push(record);
 
     const importedSamples: any[] = [];
+    const reviewRequired = String(payload?.reviewMode || "score_based") === "required";
     for (const [pairIndex, pair] of (parsed.pairs || []).entries()) {
       const customerText = String(pair.customerText || pair.question || "").trim();
       const idealReply = String(pair.idealReply || pair.agentReply || pair.answer || "").trim();
@@ -3148,7 +3600,7 @@ export class LocalStoreService {
         customerText,
         idealReply,
         score,
-        status: score >= 70 ? "ready" : "review",
+        status: reviewRequired ? "review" : score >= 70 ? "ready" : "review",
         skillHints: inferSkillHints(pair),
         sourceType: "chat_import",
         sourceLineStart: pair.sourceLineStart,
@@ -3171,6 +3623,8 @@ export class LocalStoreService {
         content: `客户：${sample.customerText}\n客服：${sample.idealReply}`,
         tags: [sample.scene, sample.agentKey, ...sample.skillHints],
         qualityScore: sample.score,
+        status: sample.status,
+        reviewNote: reviewRequired ? "chat import requires human review before reply use" : null,
         createdAt: now,
         updatedAt: now,
       });
@@ -3460,17 +3914,87 @@ export class LocalStoreService {
       ? payload.payload.imagePaths.filter(Boolean).map((item: any) => String(item))
       : [];
     if (!imagePaths.length) return;
-    if (!payload.designJobId) throw new Error("send task image binding invalid: designJobId is required for image payload");
-    const normalizedExpectedPaths = new Set(
-      data.designImages
-        .filter((image) => image.designJobId === payload.designJobId)
-        .map((image) => normalizePathKey(image.localPath))
-        .filter(Boolean),
-    );
-    const invalidPaths = imagePaths.filter((imagePath) => !normalizedExpectedPaths.has(normalizePathKey(imagePath)));
-    if (invalidPaths.length) {
+    const sourceImagePaths: string[] = Array.isArray(payload.payload?.sourceImagePaths)
+      ? payload.payload.sourceImagePaths.filter(Boolean).map((item: any) => String(item))
+      : imagePaths;
+    if (sourceImagePaths.length !== imagePaths.length) {
+      throw new Error("send task image binding invalid: source and send image counts differ");
+    }
+    const isManualAttachmentReply = payload.payload?.source === "manual_reply"
+      && payload.payload?.manualReply === true
+      && payload.guardSnapshot?.manualReply === true;
+    let normalizedExpectedPaths: Set<string>;
+    if (isManualAttachmentReply) {
+      const assetIds = Array.isArray(payload.payload?.assetIds)
+        ? [...new Set(payload.payload.assetIds.map((item: any) => String(item || "").trim()).filter(Boolean))]
+        : [];
+      const assets = assetIds.map((assetId) => data.designAssets.find((asset) => asset.id === assetId) || null);
+      if (!assetIds.length || assets.some((asset) => !asset)) {
+        throw new Error("send task image binding invalid: manual reply assets are missing");
+      }
+      if (assets.some((asset: any) =>
+        asset.ownerType !== "customer"
+        || asset.ownerId !== payload.customerId
+        || asset.customerId !== payload.customerId
+        || asset.conversationId !== payload.conversationId
+        || asset.wechatAccountId !== payload.wechatAccountId
+      )) {
+        throw new Error("send task image binding invalid: manual reply asset identity mismatch");
+      }
+      normalizedExpectedPaths = new Set(assets.map((asset: any) => normalizePathKey(asset.localPath)).filter(Boolean));
+      const filePaths = Array.isArray(payload.payload?.filePaths) ? payload.payload.filePaths.map(String) : [];
+      if (filePaths.some((filePath: string) => !normalizedExpectedPaths.has(normalizePathKey(filePath)))) {
+        throw new Error("send task file binding invalid: file paths do not belong to manual reply assets");
+      }
+    } else {
+      if (!payload.designJobId) throw new Error("send task image binding invalid: designJobId is required for image payload");
+      normalizedExpectedPaths = new Set(
+        data.designImages
+          .filter((image) => image.designJobId === payload.designJobId)
+          .map((image) => normalizePathKey(image.localPath))
+          .filter(Boolean),
+      );
+    }
+    const invalidSourcePaths = sourceImagePaths.filter((imagePath) => !normalizedExpectedPaths.has(normalizePathKey(imagePath)));
+    if (invalidSourcePaths.length) {
       throw new Error(`send task image binding invalid: image paths do not belong to design job`);
     }
+    const proofs = Array.isArray(payload.guardSnapshot?.imageOptimization)
+      ? payload.guardSnapshot.imageOptimization
+      : [];
+    imagePaths.forEach((imagePath, index) => {
+      const sourcePath = sourceImagePaths[index];
+      if (normalizePathKey(imagePath) === normalizePathKey(sourcePath)) return;
+      const proof = proofs[index];
+      const derivedDirectory = path.resolve(path.dirname(sourcePath), ".wechat-work-send");
+      const resolvedImagePath = path.resolve(imagePath);
+      const relative = path.relative(derivedDirectory, resolvedImagePath);
+      if (
+        !proof
+        || proof.optimized !== true
+        || Number(proof.position) !== index + 1
+        || normalizePathKey(proof.sourcePath) !== normalizePathKey(sourcePath)
+        || normalizePathKey(proof.sendPath) !== normalizePathKey(imagePath)
+        || !/^[a-f0-9]{64}$/i.test(String(proof.fingerprint || ""))
+        || !relative
+        || relative.startsWith("..")
+        || path.isAbsolute(relative)
+        || !fs.existsSync(resolvedImagePath)
+        || !fs.lstatSync(resolvedImagePath).isFile()
+      ) {
+        throw new Error("send task image binding invalid: optimized image proof is invalid");
+      }
+      const realDerivedDirectory = fs.realpathSync(derivedDirectory);
+      const realImagePath = fs.realpathSync(resolvedImagePath);
+      const realRelative = path.relative(realDerivedDirectory, realImagePath);
+      if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+        throw new Error("send task image binding invalid: optimized image escaped its design job");
+      }
+      const fingerprint = createHash("sha256").update(fs.readFileSync(realImagePath)).digest("hex");
+      if (fingerprint !== String(proof.fingerprint).toLowerCase()) {
+        throw new Error("send task image binding invalid: optimized image fingerprint changed");
+      }
+    });
   }
 
   private validateStoredOrderDraftBinding(data: StoreData, orderDraft: any) {
@@ -3618,8 +4142,14 @@ export class LocalStoreService {
 
   getRecentMessage(conversationId: string) {
     const data = this.read();
+    const rpaMessageIds = new Set(
+      data.personalWechatRpaAuditLogs
+        .filter((item) => item.messageId)
+        .map((item) => String(item.messageId)),
+    );
     const message = data.messages
       .filter((item) => item.conversationId === conversationId)
+      .filter((item) => isTrustedConversationMessage(item, rpaMessageIds))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
     if (!message) return null;
     const conversation = data.conversations.find((item) => item.id === message.conversationId);
@@ -3826,6 +4356,171 @@ export class LocalStoreService {
     return this.hydrateOrderDraft(data, data.orderDrafts[index]);
   }
 
+  listPaymentEvents(filter: IdentityListFilter & { quoteDraftId?: string; orderDraftId?: string } = {}) {
+    const data = this.read();
+    return data.paymentEvents
+      .map((event) => this.hydratePaymentEvent(data, event))
+      .filter((event) => this.matchesIdentityFilter(event, filter))
+      .filter((event) => !filter.quoteDraftId || event.quoteDraftId === filter.quoteDraftId)
+      .filter((event) => !filter.orderDraftId || event.orderDraftId === filter.orderDraftId)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  listConversationLearningBundles(filter: IdentityListFilter = {}, limit = 50) {
+    const data = this.read();
+    if (filter.conversationId) {
+      this.requireCompleteConversationIdentity(data, {
+        wechatAccountId: String(filter.wechatAccountId || ""),
+        conversationId: String(filter.conversationId || ""),
+        customerId: String(filter.customerId || ""),
+      }, "conversation learning");
+    }
+    const safeLimit = Math.max(1, Math.min(Math.floor(Number(limit || 50)), 100));
+    const conversations = data.conversations
+      .filter((conversation) => !filter.wechatAccountId || conversation.wechatAccountId === filter.wechatAccountId)
+      .filter((conversation) => !filter.conversationId || conversation.id === filter.conversationId)
+      .filter((conversation) => !filter.customerId || conversation.customerId === filter.customerId)
+      .sort((left, right) => String(right.lastMessageAt || right.updatedAt || "").localeCompare(String(left.lastMessageAt || left.updatedAt || "")))
+      .slice(0, safeLimit);
+    return conversations.map((conversation) => {
+      const designJobIds = new Set(
+        data.designJobs.filter((job) => job.conversationId === conversation.id).map((job) => job.id),
+      );
+      return {
+        conversation: this.hydrateConversation(data, conversation),
+        messages: data.messages
+          .filter((message) => message.conversationId === conversation.id)
+          .filter((message) => ["inbound", "outbound"].includes(String(message.direction || "")))
+          .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")))
+          .slice(-500),
+        routes: data.routeEvaluations
+          .filter((route) => route.conversationId === conversation.id)
+          .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || ""))),
+        quotes: data.quoteDrafts
+          .filter((quote) => designJobIds.has(quote.designJobId))
+          .map((quote) => this.hydrateQuoteDraft(data, quote)),
+        orders: data.orderDrafts
+          .filter((order) => order.conversationId === conversation.id)
+          .map((order) => this.hydrateOrderDraft(data, order)),
+      };
+    });
+  }
+
+  confirmConversationOutcome(conversationId: string, payload: any = {}) {
+    const data = this.read();
+    const identity = this.requireCompleteConversationIdentity(data, {
+      wechatAccountId: String(payload.expectedWechatAccountId || payload.wechatAccountId || ""),
+      conversationId,
+      customerId: String(payload.expectedCustomerId || payload.customerId || ""),
+    }, "conversation outcome confirmation");
+    if (payload.expectedConversationId && payload.expectedConversationId !== conversationId) {
+      throw new BadRequestException("conversation outcome confirmation identity mismatch: conversationId");
+    }
+    const outcome = normalizeConversationOutcome(payload.outcome);
+    const reviewOperation = buildLocalReviewOperation(
+      "conversation-outcome",
+      conversationId,
+      payload,
+      "conversation outcome operationKey",
+    );
+    if (!reviewOperation) throw new BadRequestException("conversation outcome operationKey is required");
+    const existingReviewLog = findLocalReviewLogByEffectKey(data, reviewOperation.effectKey);
+    const route = data.routeEvaluations
+      .filter((item) => item.conversationId === conversationId)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))[0];
+    if (!route) throw new NotFoundException(`conversation route evaluation not found: ${conversationId}`);
+    if (existingReviewLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingReviewLog.metadata),
+        reviewOperation.operation,
+        "conversation outcome confirmation",
+      );
+      return { route, reviewLog: existingReviewLog, confirmedOutcome: route.conversionAssessment?.confirmedOutcome || null };
+    }
+    const now = new Date().toISOString();
+    const confirmedOutcome = {
+      outcome,
+      reasonCode: String(payload.reasonCode || "").trim() || null,
+      note: String(payload.note || "").trim() || null,
+      reviewer: String(payload.reviewer || "operator").trim() || "operator",
+      confirmedAt: now,
+    };
+    route.conversionAssessment = {
+      ...(route.conversionAssessment || {}),
+      schema: "conversion_assessment_confirmation_v1",
+      confirmedOutcome,
+    };
+    route.updatedAt = now;
+    const reviewLog = {
+      id: deterministicOperationId("review", reviewOperation.effectKey),
+      targetType: "conversation",
+      targetId: conversationId,
+      decision: "confirm_conversion_outcome",
+      reviewer: confirmedOutcome.reviewer,
+      note: confirmedOutcome.note,
+      beforeStatus: "unconfirmed",
+      afterStatus: outcome,
+      metadata: {
+        effectKey: reviewOperation.effectKey,
+        requestOperation: reviewOperation.operation,
+        routeEvaluationId: route.id,
+        reasonCode: confirmedOutcome.reasonCode,
+        wechatAccountId: identity.wechatAccountId,
+        conversationId: identity.conversationId,
+        customerId: identity.customerId,
+      },
+      createdAt: now,
+    };
+    data.reviewLogs.push(reviewLog);
+    this.write(data);
+    return { route, reviewLog, confirmedOutcome };
+  }
+
+  recordPaymentEvent(payload: any) {
+    const data = this.read();
+    const idempotencyKey = String(payload?.idempotencyKey || "").trim();
+    if (!idempotencyKey) throw new BadRequestException("payment event requires an idempotency key");
+    const existing = data.paymentEvents.find((event) => event.idempotencyKey === idempotencyKey);
+    if (existing) {
+      assertLocalPaymentEventReplay(existing, payload);
+      return this.hydratePaymentEvent(data, existing);
+    }
+
+    const quote = data.quoteDrafts.find((item) => item.id === payload.quoteDraftId);
+    if (!quote) throw new BadRequestException(`payment event quote not found: ${payload.quoteDraftId}`);
+    const order = payload.orderDraftId
+      ? data.orderDrafts.find((item) => item.id === payload.orderDraftId)
+      : data.orderDrafts.find((item) => item.quoteDraftId === quote.id) || null;
+    if (payload.orderDraftId && !order) throw new BadRequestException(`payment event order not found: ${payload.orderDraftId}`);
+    if (order && order.quoteDraftId !== quote.id) throw new BadRequestException("payment event order does not belong to quote");
+
+    const now = new Date().toISOString();
+    const record = {
+      id: id("payment_event"),
+      quoteDraftId: quote.id,
+      orderDraftId: order?.id || null,
+      customerId: String(payload.customerId || order?.customerId || quote.customerId || ""),
+      conversationId: cleanOptionalString(payload.conversationId || order?.conversationId || quote.designJob?.conversationId),
+      wechatAccountId: cleanOptionalString(payload.wechatAccountId || order?.wechatAccountId || quote.designJob?.wechatAccountId),
+      paymentStatus: payload.paymentStatus,
+      amountCny: normalizePaymentEventAmount(payload.amountCny),
+      method: cleanOptionalString(payload.method),
+      proofReference: cleanOptionalString(payload.proofReference),
+      reviewer: cleanOptionalString(payload.reviewer),
+      note: cleanOptionalString(payload.note),
+      source: cleanOptionalString(payload.source) || "manual_payment_proof",
+      idempotencyKey,
+      createdAt: now,
+    };
+    if (!["deposit_paid", "paid", "refunded"].includes(String(record.paymentStatus || ""))) {
+      throw new BadRequestException("payment event only records verified deposit, full payment, or refund");
+    }
+    if (!record.customerId) throw new BadRequestException("payment event requires a customer identity");
+    data.paymentEvents.push(record);
+    this.write(data);
+    return this.hydratePaymentEvent(data, record);
+  }
+
   listReviewLogs(filter: (IdentityListFilter & { limit?: number }) | number = 100) {
     const options = typeof filter === "number" ? { limit: filter } : filter;
     return this.read()
@@ -3833,6 +4528,11 @@ export class LocalStoreService {
       .filter((log) => this.matchesIdentityFilter(log, options))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .slice(0, Math.max(1, Math.min(Number(options.limit || 100), 300)));
+  }
+
+  getReviewLog(id: string) {
+    const data = this.read();
+    return data.reviewLogs.find((log) => log.id === id) || null;
   }
 
   createReviewLog(payload: any) {
@@ -3848,6 +4548,47 @@ export class LocalStoreService {
     data.reviewLogs.push(record);
     this.write(data);
     return record;
+  }
+
+  upsertWechatWorkAudit(payload: Record<string, unknown>) {
+    const recordId = String(payload.id || "").trim();
+    if (!recordId) return this.recordWechatWorkAudit(payload);
+    const data = this.read();
+    const existingIndex = data.wechatWorkAuditLogs.findIndex((item) => item.id === recordId);
+    const existing = existingIndex >= 0 ? data.wechatWorkAuditLogs[existingIndex] : null;
+    const record = {
+      ...(existing || {}),
+      ...payload,
+      id: recordId,
+      createdAt: existing?.createdAt || payload.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (existingIndex >= 0) {
+      data.wechatWorkAuditLogs[existingIndex] = record;
+    } else {
+      data.wechatWorkAuditLogs.push(record);
+    }
+    this.write(data);
+    return record;
+  }
+
+  updateReviewLog(id: string, patch: any) {
+    const data = this.read();
+    const index = data.reviewLogs.findIndex((log) => log.id === id);
+    if (index < 0) throw new NotFoundException(`review log not found: ${id}`);
+    const current = data.reviewLogs[index];
+    const next = {
+      ...current,
+      ...patch,
+      id: current.id,
+      targetType: current.targetType,
+      targetId: current.targetId,
+      createdAt: current.createdAt,
+      metadata: patch?.metadata === undefined ? current.metadata : patch.metadata,
+    };
+    data.reviewLogs[index] = next;
+    this.write(data);
+    return next;
   }
 
   private buildReviewLogRecord(data: StoreData, payload: any, now: string) {
@@ -3951,6 +4692,20 @@ export class LocalStoreService {
     if (expectedWechatAccountId && identity.wechatAccountId !== expectedWechatAccountId) return false;
     if (expectedConversationId && identity.conversationId !== expectedConversationId) return false;
     if (expectedCustomerId && identity.customerId !== expectedCustomerId) return false;
+    return true;
+  }
+
+  private matchesKnowledgeIdentityFilter(record: any, filter: IdentityListFilter = {}) {
+    const expectedWechatAccountId = String(filter.wechatAccountId || "").trim();
+    const expectedConversationId = String(filter.conversationId || "").trim();
+    const expectedCustomerId = String(filter.customerId || "").trim();
+    if (!expectedWechatAccountId && !expectedConversationId && !expectedCustomerId) return true;
+    if (sharedIdentityFields([record]) === null) return false;
+    const identity = this.recordIdentity(record);
+    if (!identity.wechatAccountId && !identity.conversationId && !identity.customerId) return true;
+    if (identity.wechatAccountId && identity.wechatAccountId !== expectedWechatAccountId) return false;
+    if (identity.conversationId && identity.conversationId !== expectedConversationId) return false;
+    if (identity.customerId && identity.customerId !== expectedCustomerId) return false;
     return true;
   }
 
@@ -4096,6 +4851,7 @@ export class LocalStoreService {
   private hydrateDesignJob(data: StoreData, job: any) {
     return {
       ...job,
+      bundle: this.bundleSnapshotWithSkuImages(data, job.bundle),
       customer: data.customers.find((item) => item.id === job.customerId) || null,
       conversation: data.conversations.find((item) => item.id === job.conversationId) || null,
       wechatAccount: data.wechatAccounts.find((item) => item.id === job.wechatAccountId) || null,
@@ -4157,11 +4913,18 @@ export class LocalStoreService {
     const profit = Number(quote.profit || 0);
     return {
       ...quote,
+      owner: readableTextOrFallback(quote.owner, "人工客服"),
+      customerNotes: readableTextOrFallback(quote.customerNotes, "历史备注不可读，请人工复核。"),
       profitRate: totalPrice > 0 ? round(profit / totalPrice) : 0,
+      bundleSnapshot: normalizeBundleSnapshot(this.bundleSnapshotWithSkuImages(data, quote.bundleSnapshot || designJob?.bundle)),
+      selectedImageSnapshot: normalizeDesignImageSnapshot(quote.selectedImageSnapshot || selectedImage),
       customer: data.customers.find((item) => item.id === quote.customerId) || null,
       designJob: designJob ? this.hydrateDesignJob(data, designJob) : null,
       selectedImage,
       sendTask: sendTask ? this.hydrateSendTask(data, sendTask) : null,
+      paymentEvents: data.paymentEvents
+        .filter((event) => event.quoteDraftId === quote.id)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
     };
   }
 
@@ -4182,7 +4945,11 @@ export class LocalStoreService {
     const profit = Number(order.profit || 0);
     return {
       ...order,
+      owner: readableTextOrFallback(order.owner, "人工客服"),
+      customerNotes: readableTextOrFallback(order.customerNotes, "历史备注不可读，请人工复核。"),
       profitRate: order.profitRate ?? (totalPrice > 0 ? round(profit / totalPrice) : 0),
+      bundleSnapshot: normalizeBundleSnapshot(this.bundleSnapshotWithSkuImages(data, order.bundleSnapshot || designJob?.bundle || quoteDraft?.bundleSnapshot)),
+      selectedImageSnapshot: normalizeDesignImageSnapshot(order.selectedImageSnapshot || selectedImage),
       quoteDraft: quoteDraft ? this.hydrateQuoteDraft(data, quoteDraft) : null,
       customer: data.customers.find((item) => item.id === order.customerId) || null,
       conversation: data.conversations.find((item) => item.id === order.conversationId) || null,
@@ -4200,6 +4967,46 @@ export class LocalStoreService {
         : null,
       deliveryFollowupSendTaskId: deliveryFollowupSendTask?.id || null,
       deliveryFollowupSendTask: deliveryFollowupSendTask ? this.hydrateSendTask(data, deliveryFollowupSendTask) : null,
+      paymentEvents: data.paymentEvents
+        .filter((event) => event.orderDraftId === order.id || event.quoteDraftId === order.quoteDraftId)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+    };
+  }
+
+  private bundleSnapshotWithSkuImages(data: StoreData, bundle: any) {
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return bundle;
+    const next: Record<string, unknown> = { ...bundle };
+    if (Array.isArray(bundle.items)) {
+      next.items = bundle.items.map((item: any) => this.bundleItemWithSkuImages(data, item));
+    }
+    if (bundle.giftBox && typeof bundle.giftBox === "object" && !Array.isArray(bundle.giftBox)) {
+      next.giftBox = this.bundleItemWithSkuImages(data, bundle.giftBox);
+    }
+    return next;
+  }
+
+  private bundleItemWithSkuImages(data: StoreData, item: any) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const skuCode = String(item.skuCode || "").trim();
+    if (!skuCode) return item;
+    const sku = data.skus.find((candidate) => String(candidate?.skuCode || "").trim() === skuCode);
+    if (!sku) return item;
+    const next: Record<string, unknown> = { ...item };
+    for (const field of ["name", "type", "category", "mainImagePath", "mainImageUrl", "imagePath", "imageUrl", "downloadUrl", "publicUrl", "url", "localPath"]) {
+      const shouldReplaceUnreadableName = field === "name" && isUnreadableText(next[field]);
+      if ((!hasNonEmptyText(next[field]) || shouldReplaceUnreadableName) && hasNonEmptyText(sku[field])) next[field] = sku[field];
+    }
+    for (const field of ["angleImages", "imageUrls", "imagePaths", "gallery"]) {
+      if (!hasNonEmptyArray(next[field]) && hasNonEmptyArray(sku[field])) next[field] = sku[field];
+    }
+    return next;
+  }
+
+  private hydratePaymentEvent(data: StoreData, event: any) {
+    return {
+      ...event,
+      quoteDraft: data.quoteDrafts.find((item) => item.id === event.quoteDraftId) || null,
+      orderDraft: data.orderDrafts.find((item) => item.id === event.orderDraftId) || null,
     };
   }
 
@@ -4261,16 +5068,70 @@ export class LocalStoreService {
   }
 
   private read(): StoreData {
+    if (this.writeTransactionData) return this.writeTransactionData;
+    if (
+      this.readSnapshotDepth > 0
+      && this.readSnapshotData
+      && this.readSnapshotFilePath === this.filePath
+    ) return this.readSnapshotData;
     this.ensure();
-    const contents = fs.readFileSync(this.filePath, "utf8");
-    const data = JSON.parse(contents) as StoreData;
+    let contents = fs.readFileSync(this.filePath, "utf8");
+    let data: StoreData;
+    try {
+      data = JSON.parse(contents) as StoreData;
+    } catch {
+      const recovered = this.recoverNullByteCorruption();
+      contents = recovered.contents;
+      data = recovered.data;
+    }
     const normalized = normalizeData(data);
     this.readFingerprints.set(normalized.data, localStoreContentsFingerprint(contents));
     if (normalized.changed) this.write(normalized.data);
     return normalized.data;
   }
 
+  private recoverNullByteCorruption() {
+    return this.withStoreLock(() => {
+      this.storeLockOwnershipCheck?.();
+      const corruptContents = fs.readFileSync(this.filePath, "utf8");
+      try {
+        return {
+          contents: corruptContents,
+          data: JSON.parse(corruptContents) as StoreData,
+        };
+      } catch (parseError) {
+        if (!corruptContents.includes("\0")) throw parseError;
+
+        const repairedContents = corruptContents.replace(/\0/g, "");
+        let repairedData: StoreData;
+        try {
+          repairedData = JSON.parse(repairedContents) as StoreData;
+        } catch {
+          throw parseError;
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const backupPath = `${this.filePath}.before-null-byte-repair-${timestamp}-${randomUUID()}.bak`;
+        writeFileAtomic(backupPath, corruptContents);
+        this.storeLockOwnershipCheck?.();
+        writeFileAtomic(this.filePath, repairedContents);
+        console.warn(`[local-store] repaired raw null-byte corruption; backup=${backupPath}`);
+        return { contents: repairedContents, data: repairedData };
+      }
+    });
+  }
+
   private write(data: StoreData) {
+    if (this.writeTransactionData) {
+      if (data !== this.writeTransactionData) {
+        throw new InternalServerErrorException("local store write transaction received a foreign snapshot");
+      }
+      this.writeTransactionDirty = true;
+      return;
+    }
+    if (this.readSnapshotDepth > 0) {
+      throw new InternalServerErrorException("local store read snapshot cannot perform writes");
+    }
     return this.withStoreLock(() => this.writeWhileLocked(data));
   }
 
@@ -4288,7 +5149,7 @@ export class LocalStoreService {
     } else if (expectedFingerprint) {
       throw new LocalStoreConcurrentWriteError("local store disappeared before the transaction could commit");
     }
-    const contents = `${JSON.stringify(data, null, 2)}\n`;
+    const contents = `${JSON.stringify(data)}\n`;
     this.storeLockOwnershipCheck?.();
     writeFileAtomic(this.filePath, contents);
     this.readFingerprints.set(data, localStoreContentsFingerprint(contents));
@@ -4364,7 +5225,7 @@ export function acquireLocalStoreLock(filePath: string) {
       throw new LocalStoreConcurrentWriteError("local store transaction lock timed out");
     }
     const waitMs = Math.max(1, Math.min(LOCAL_STORE_LOCK_RETRY_MS, deadline - Date.now()));
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    localStoreSleepSync(waitMs);
   }
 }
 
@@ -4522,12 +5383,31 @@ function normalizeTimelineAttachments(value: unknown, fallbackStatus: string) {
   });
 }
 
-function timelineTaskAttachments(task: any) {
+function timelineTaskAttachments(task: any, designAssets: any[] = []) {
   const imagePaths = Array.isArray(task?.payload?.imagePaths) ? task.payload.imagePaths : [];
+  const filePaths = Array.isArray(task?.payload?.filePaths) ? task.payload.filePaths : [];
   const attachments = Array.isArray(task?.payload?.attachments) ? task.payload.attachments : [];
+  const assetIds = Array.isArray(task?.payload?.assetIds) ? task.payload.assetIds.map(String) : [];
+  const assetsById = new Map(designAssets.map((asset: any) => [String(asset?.id || ""), asset]));
+  const orderedAssets = assetIds.map((assetId: string) => assetsById.get(assetId)).filter(Boolean) as any[];
+  const imageAssets = orderedAssets.filter((asset: any) => ["image/jpeg", "image/png"].includes(String(asset?.mimeType || "").toLowerCase()));
+  const fileAssets = orderedAssets.filter((asset: any) => !imageAssets.includes(asset));
   return normalizeTimelineAttachments(
     [
-      ...imagePaths.map((filePath: unknown) => ({ kind: "image", path: String(filePath || "") })),
+      ...imagePaths.map((filePath: unknown, index: number) => ({
+        kind: "image",
+        path: String(filePath || ""),
+        assetId: imageAssets[index]?.id,
+        name: imageAssets[index]?.fileName,
+        mimeType: imageAssets[index]?.mimeType,
+      })),
+      ...filePaths.map((filePath: unknown, index: number) => ({
+        kind: "file",
+        path: String(filePath || ""),
+        assetId: fileAssets[index]?.id,
+        name: fileAssets[index]?.fileName,
+        mimeType: fileAssets[index]?.mimeType,
+      })),
       ...attachments,
     ],
     String(task?.status || "queued"),
@@ -4549,11 +5429,41 @@ function writeFileAtomic(filePath: string, contents: string) {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tempPath, resolved);
+    renameAtomicTempFile(tempPath, resolved);
   } catch (error) {
-    fs.rmSync(tempPath, { force: true });
+    removeAtomicTempFile(tempPath);
     throw error;
   }
+}
+
+function renameAtomicTempFile(tempPath: string, resolved: string) {
+  const deadline = Date.now() + LOCAL_STORE_WRITE_RENAME_WAIT_MS;
+  while (true) {
+    try {
+      fs.renameSync(tempPath, resolved);
+      return;
+    } catch (error: any) {
+      if (!localStoreAtomicRenameRetryable(error) || Date.now() >= deadline) throw error;
+      const waitMs = Math.max(1, Math.min(LOCAL_STORE_WRITE_RENAME_RETRY_MS, deadline - Date.now()));
+      localStoreSleepSync(waitMs);
+    }
+  }
+}
+
+function localStoreAtomicRenameRetryable(error: any) {
+  return ["EPERM", "EACCES", "EBUSY"].includes(String(error?.code || ""));
+}
+
+function removeAtomicTempFile(tempPath: string) {
+  try {
+    fs.rmSync(tempPath, { force: true });
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+function localStoreSleepSync(waitMs: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
 }
 
 function bestEffortFsync(fd: number) {
@@ -4605,6 +5515,27 @@ function pickSkuSnapshot(value: Record<string, unknown>) {
 
 function sameValue(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function hasNonEmptyText(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isUnreadableText(value: unknown) {
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  if (!text) return false;
+  if (text.includes("\uFFFD")) return true;
+  const questionMarks = text.match(/\?/g)?.length || 0;
+  return questionMarks >= 3 && questionMarks >= Math.ceil(text.length / 2);
+}
+
+function readableTextOrFallback(value: unknown, fallback: string) {
+  return isUnreadableText(value) ? fallback : value;
+}
+
+function hasNonEmptyArray(value: unknown) {
+  return Array.isArray(value) && value.some((item) => hasNonEmptyText(item) || (item && typeof item === "object"));
 }
 
 function normalizeAssetIds(value: any): string[] {
@@ -4664,6 +5595,204 @@ function inferSkillHints(pair: any) {
   if (/退款|退货|换货|补发/.test(text)) hints.push("售后方案");
   if (/亲|您|帮您|这边|建议|麻烦/.test(text)) hints.push("高情商话术");
   return [...new Set(hints)];
+}
+
+function resolveKnowledgeImportAgent(data: StoreData, row: any) {
+  const agentId = String(row?.agentId || "").trim();
+  const agentKey = String(row?.agentKey || "").trim();
+  if (agentId) return data.agents.find((agent) => agent.id === agentId) || null;
+  if (agentKey) return data.agents.find((agent) => agent.key === agentKey || agent.id === agentKey) || null;
+  return null;
+}
+
+function resolveKnowledgeReviewAgent(data: StoreData, row: any) {
+  return resolveKnowledgeImportAgent(data, row);
+}
+
+function normalizeKnowledgeReviewStatus(value: unknown) {
+  const status = String(value || "").trim();
+  if (status === "ready" || status === "review" || status === "rejected") return status;
+  throw new BadRequestException("knowledge status must be one of ready, review, rejected");
+}
+
+function normalizeKnowledgeEntryStatus(entry: any, data?: StoreData) {
+  const explicit = String(entry?.status || "").trim();
+  if (explicit === "ready" || explicit === "review" || explicit === "rejected") return explicit;
+  if (entry?.sourceType === "starter_knowledge") return "ready";
+  const sampleId = entry?.trainingSampleId || entry?.sourceId;
+  const sample = sampleId && data ? data.trainingSamples.find((item) => item.id === sampleId) : null;
+  if (sample) return isTrainingSampleReady(sample) ? "ready" : String(sample.status || "review");
+  if (entry?.sourceType === "chat_import" || entry?.sourceType === "route_correction") return "ready";
+  return "review";
+}
+
+function knowledgeReviewNote(status: string) {
+  if (status === "ready") return "knowledge entry approved for reply retrieval";
+  if (status === "rejected") return "knowledge entry disabled from reply retrieval";
+  return "knowledge entry kept in review";
+}
+
+function normalizeConversationOutcome(value: unknown) {
+  const outcome = String(value || "").trim().toLowerCase();
+  if (outcome === "won" || outcome === "lost" || outcome === "ongoing") return outcome;
+  throw new BadRequestException("outcome must be one of won, lost, ongoing");
+}
+
+function appendKnowledgeReviewHistory(value: unknown, item: Record<string, unknown>) {
+  const history = Array.isArray(value) ? value : [];
+  return [...history, item].slice(-50);
+}
+
+function buildLocalReviewOperation(scope: string, targetId: string, payload: any, label: string) {
+  if (!payload?.operationKey) return null;
+  const operationKey = normalizeOperationKey(payload.operationKey, label);
+  const effectKey = `${scope}:${operationKey}:${targetId}`;
+  const { operationKey: _operationKey, ...reviewPayload } = payload || {};
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        scope,
+        {
+          targetId,
+          expectedWechatAccountId: reviewPayload.expectedWechatAccountId || null,
+          expectedConversationId: reviewPayload.expectedConversationId || null,
+          expectedCustomerId: reviewPayload.expectedCustomerId || null,
+        },
+        reviewPayload,
+      ),
+    ),
+  };
+}
+
+function buildLocalKnowledgeImportOperation(operationKey: string, identity: any, source: string, rows: any[] = []) {
+  const effectKey = `knowledge-import:${operationKey}`;
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "knowledge-import",
+        {
+          source,
+          customerId: identity?.customerId || null,
+          conversationId: identity?.conversationId || null,
+          wechatAccountId: identity?.wechatAccountId || null,
+        },
+        {
+          rows: normalizeKnowledgeImportOperationRows(rows),
+        },
+      ),
+    ),
+  };
+}
+
+function buildLocalKnowledgeImportFailureOperation(operationKey: string, identity: any, source: string, parsed: any, phase: string) {
+  const effectKey = `knowledge-import:${operationKey}`;
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "knowledge-import",
+        {
+          source,
+          customerId: identity?.customerId || null,
+          conversationId: identity?.conversationId || null,
+          wechatAccountId: identity?.wechatAccountId || null,
+        },
+        {
+          failure: normalizeKnowledgeImportFailure(parsed, phase),
+        },
+      ),
+    ),
+  };
+}
+
+function normalizeKnowledgeImportFailure(parsed: any = {}, phase = "parse_failed") {
+  return {
+    phase: String(phase || "parse_failed"),
+    ok: Boolean(parsed?.ok),
+    importedCount: Number(parsed?.importedCount || 0),
+    skippedCount: Number(parsed?.skippedCount || 0),
+    errors: normalizeKnowledgeImportErrors(parsed?.errors),
+    missingRequiredFields: normalizeKnowledgeImportFields(parsed?.missingRequiredFields),
+    blockers: Array.isArray(parsed?.acceptance?.blockers)
+      ? parsed.acceptance.blockers.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 20)
+      : [],
+  };
+}
+
+function normalizeKnowledgeImportErrors(value: any) {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, 50)
+    .map((item) => ({
+      line: Number.isFinite(Number(item?.line)) ? Number(item.line) : null,
+      message: String(item?.message || item || "").trim(),
+    }))
+    .filter((item) => item.message);
+}
+
+function normalizeKnowledgeImportFields(value: any) {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, 20)
+    .map((item) => typeof item === "string" ? item : String(item?.field || item?.label || "").trim())
+    .filter(Boolean);
+}
+
+function normalizeKnowledgeImportOperationRows(rows: any[] = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    agentId: String(row?.agentId || "").trim() || null,
+    agentKey: String(row?.agentKey || "").trim() || null,
+    title: String(row?.title || "").trim(),
+    content: String(row?.content || "").trim(),
+    tags: normalizeKnowledgeImportTags(row?.tags),
+    qualityScore: Number.isFinite(Number(row?.qualityScore)) ? Math.max(0, Math.min(100, Math.round(Number(row.qualityScore)))) : null,
+  }));
+}
+
+function findLocalReviewLogByEffectKey(data: StoreData, effectKey: string) {
+  const expectedId = deterministicOperationId("review", effectKey);
+  return data.reviewLogs.find((log) => log.id === expectedId || String(log?.metadata?.effectKey || "") === effectKey) || null;
+}
+
+function preserveKnowledgeImportReviewState(existing: any, incoming: any) {
+  return {
+    ...incoming,
+    status: existing?.status ?? incoming.status,
+    reviewer: existing?.reviewer ?? incoming.reviewer,
+    reviewNote: existing?.reviewNote ?? incoming.reviewNote,
+    reviewedAt: existing?.reviewedAt ?? incoming.reviewedAt,
+    reviewHistory: Array.isArray(existing?.reviewHistory) ? existing.reviewHistory : incoming.reviewHistory,
+  };
+}
+
+function clampKnowledgeScore(value: unknown, fallback: unknown) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return Number.isFinite(Number(fallback)) ? Number(fallback) : 70;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function assertKnowledgeEntryReadyForReview(entry: any, status: string) {
+  if (status !== "ready") return;
+  const blockers: string[] = [];
+  if (!String(entry?.agentId || "").trim()) blockers.push("missing_agent");
+  if (!String(entry?.title || "").trim()) blockers.push("missing_title");
+  if (String(entry?.content || "").trim().length < 20) blockers.push("short_content");
+  if (Number(entry?.qualityScore || 0) < 60) blockers.push("low_quality_score");
+  if (!normalizeKnowledgeImportTags(entry?.tags).length) blockers.push("missing_tags");
+  if (blockers.length) {
+    throw new BadRequestException(`knowledge entry cannot be marked ready: ${blockers.join(", ")}`);
+  }
+}
+
+function normalizeKnowledgeImportTags(value: any, agentKey?: string) {
+  const tags = Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean)
+    : String(value || "").split(/[,、;；|]/).map((item) => item.trim()).filter(Boolean);
+  if (agentKey) tags.push(agentKey);
+  return [...new Set(tags)];
 }
 
 function isSceneClarificationDerivedBusinessSkill(data: StoreData, skill: any) {
@@ -4812,6 +5941,7 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "sendAttempts",
     "quoteDrafts",
     "orderDrafts",
+    "paymentEvents",
     "reviewLogs",
     "agents",
     "agentSkills",
@@ -4854,9 +5984,54 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     applyMultiAccountSeed(normalized, now);
     changed = true;
   }
+  changed = syncDemoSkuCatalog(normalized, now) || changed;
+  changed = syncStarterKnowledgeBase(normalized, now) || changed;
   changed = pruneWechatWindowSnapshots(normalized) || changed;
 
   return { data: normalized, changed };
+}
+
+function normalizePaymentEventAmount(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException("payment event amount must be a non-negative number");
+  return Math.round(amount * 100) / 100;
+}
+
+function assertLocalPaymentEventReplay(existing: Record<string, unknown>, incoming: Record<string, unknown>) {
+  const stored = localPaymentEventReplaySnapshot(existing);
+  const requested = localPaymentEventReplaySnapshot(incoming);
+  const storedFingerprint = createOperationFingerprint("local-payment-event-replay", {}, stored);
+  const requestedFingerprint = createOperationFingerprint("local-payment-event-replay", {}, requested);
+  if (storedFingerprint === requestedFingerprint) return;
+  throw new ConflictException({
+    code: "OPERATION_KEY_REUSED",
+    message: "payment event operationKey was already used with different payment proof details",
+  });
+}
+
+function localPaymentEventReplaySnapshot(event: Record<string, unknown>) {
+  return {
+    quoteDraftId: cleanOptionalString(event.quoteDraftId),
+    orderDraftId: cleanOptionalString(event.orderDraftId),
+    customerId: cleanOptionalString(event.customerId),
+    conversationId: cleanOptionalString(event.conversationId),
+    wechatAccountId: cleanOptionalString(event.wechatAccountId),
+    paymentStatus: cleanOptionalString(event.paymentStatus),
+    amountCny: normalizePaymentEventAmount(event.amountCny),
+    method: cleanOptionalString(event.method),
+    proofReference: cleanOptionalString(event.proofReference),
+    reviewer: cleanOptionalString(event.reviewer),
+    note: cleanOptionalString(event.note),
+    source: cleanOptionalString(event.source) || "manual_payment_proof",
+    idempotencyKey: cleanOptionalString(event.idempotencyKey),
+  };
+}
+
+function cleanOptionalString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
 }
 
 function pruneWechatWindowSnapshots(data: StoreData) {
@@ -4931,6 +6106,522 @@ function syncSeedAgentConfig(data: StoreData, seeded: ReturnType<typeof seedAgen
   return changed;
 }
 
+const DEMO_SKU_CODES = new Set([
+  "BOX-A",
+  "TEA-A",
+  "TEA-B",
+  "CARD-A",
+  "BOX-C",
+  "TEA-D",
+  "CARD-C",
+  "BOX-REAL-1",
+  "TEA-REAL-1",
+  "CARD-REAL-MANUAL",
+  "OPS-REAL-1",
+  "PREVIEW-ONLY-1",
+  "IMG-REAL-1",
+]);
+
+function demoSkuImageUrl(skuCode: string) {
+  return `https://app.zhenxiai.cloud/smart-kefu/starter-skus/${String(skuCode || "").toLowerCase()}.png`;
+}
+
+function buildDemoSkuCatalog(now: string) {
+  return [
+    {
+      id: "sku_box_a",
+      skuCode: "BOX-A",
+      name: "红金礼盒A",
+      type: "gift_box",
+      category: "礼盒",
+      sceneTags: ["员工福利", "节日礼赠", "客户拜访"],
+      costPrice: 18,
+      salePrice: 40,
+      stock: 150,
+      dimensions: { lengthCm: 32, widthCm: 24, heightCm: 9 },
+      weightGram: 420,
+      material: "特种纸板+烫金",
+      supplier: "杭州礼盒厂",
+      leadTimeDays: 3,
+      mainImagePath: demoSkuImageUrl("BOX-A"),
+      imageUrl: demoSkuImageUrl("BOX-A"),
+      angleImages: [demoSkuImageUrl("BOX-A")],
+      matchingRules: {},
+      replacementSkuCodes: [],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_box_c",
+      skuCode: "BOX-C",
+      name: "商务礼盒C",
+      type: "gift_box",
+      category: "礼盒",
+      sceneTags: ["员工福利", "节日礼赠", "客户拜访"],
+      costPrice: 42,
+      salePrice: 85,
+      stock: 90,
+      dimensions: { lengthCm: 34, widthCm: 24, heightCm: 10 },
+      weightGram: 620,
+      material: "硬质灰板+哑膜",
+      supplier: "杭州礼盒厂",
+      leadTimeDays: 5,
+      mainImagePath: demoSkuImageUrl("BOX-C"),
+      imageUrl: demoSkuImageUrl("BOX-C"),
+      angleImages: [demoSkuImageUrl("BOX-C"), `${demoSkuImageUrl("BOX-C").replace(".png", "-open.png")}`],
+      matchingRules: { preferWith: ["TEA-D", "CARD-C"] },
+      replacementSkuCodes: ["BOX-REAL-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_box_real_1",
+      skuCode: "BOX-REAL-1",
+      name: "红金商务礼盒",
+      type: "gift_box",
+      category: "礼盒",
+      sceneTags: ["员工福利", "客户拜访", "企业礼赠"],
+      costPrice: 42,
+      salePrice: 88,
+      stock: 80,
+      dimensions: { lengthCm: 30, widthCm: 22, heightCm: 9 },
+      weightGram: 650,
+      material: "特种纸板+红金烫印",
+      supplier: "杭州礼盒厂",
+      leadTimeDays: 5,
+      mainImagePath: demoSkuImageUrl("BOX-REAL-1"),
+      imageUrl: demoSkuImageUrl("BOX-REAL-1"),
+      angleImages: [demoSkuImageUrl("BOX-REAL-1"), `${demoSkuImageUrl("BOX-REAL-1").replace(".png", "-side.png")}`],
+      matchingRules: { preferWith: ["TEA-REAL-1", "CARD-REAL-MANUAL"] },
+      replacementSkuCodes: ["BOX-C", "IMG-REAL-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_img_real_1",
+      skuCode: "IMG-REAL-1",
+      name: "深蓝商务礼盒",
+      type: "gift_box",
+      category: "礼盒",
+      sceneTags: ["客户拜访", "企业礼赠"],
+      costPrice: 40,
+      salePrice: 98,
+      stock: 55,
+      dimensions: { lengthCm: 30, widthCm: 22, heightCm: 9 },
+      weightGram: 650,
+      material: "硬质礼盒+深蓝特种纸",
+      supplier: "图片验证供应商",
+      leadTimeDays: 4,
+      mainImagePath: demoSkuImageUrl("IMG-REAL-1"),
+      imageUrl: demoSkuImageUrl("IMG-REAL-1"),
+      angleImages: [demoSkuImageUrl("IMG-REAL-1"), `${demoSkuImageUrl("IMG-REAL-1").replace(".png", "-open.png")}`],
+      matchingRules: { preferWith: ["OPS-REAL-1", "CARD-REAL-MANUAL"] },
+      replacementSkuCodes: ["BOX-REAL-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_tea_a",
+      skuCode: "TEA-A",
+      name: "茶叶礼品A",
+      type: "item",
+      category: "内搭",
+      sceneTags: ["员工福利", "节日礼赠"],
+      costPrice: 58,
+      salePrice: 118,
+      stock: 80,
+      dimensions: { lengthCm: 16, widthCm: 9, heightCm: 6 },
+      weightGram: 280,
+      material: "罐装绿茶",
+      supplier: "安吉茶礼供应商",
+      leadTimeDays: 5,
+      mainImagePath: demoSkuImageUrl("TEA-A"),
+      imageUrl: demoSkuImageUrl("TEA-A"),
+      angleImages: [demoSkuImageUrl("TEA-A")],
+      matchingRules: { preferWith: ["CARD-A"] },
+      replacementSkuCodes: ["TEA-B"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_tea_b",
+      skuCode: "TEA-B",
+      name: "茶叶礼品B",
+      type: "item",
+      category: "内搭",
+      sceneTags: ["员工福利", "客户拜访"],
+      costPrice: 20,
+      salePrice: 45,
+      stock: 220,
+      dimensions: { lengthCm: 14, widthCm: 8, heightCm: 5 },
+      weightGram: 180,
+      material: "袋泡茶礼",
+      supplier: "安吉茶礼供应商",
+      leadTimeDays: 3,
+      mainImagePath: demoSkuImageUrl("TEA-B"),
+      imageUrl: demoSkuImageUrl("TEA-B"),
+      angleImages: [demoSkuImageUrl("TEA-B")],
+      matchingRules: { preferWith: ["CARD-A"] },
+      replacementSkuCodes: [],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_tea_d",
+      skuCode: "TEA-D",
+      name: "红茶D",
+      type: "item",
+      category: "茶叶",
+      sceneTags: ["员工福利", "节日礼赠"],
+      costPrice: 50,
+      salePrice: 90,
+      stock: 120,
+      dimensions: { lengthCm: 15, widthCm: 9, heightCm: 7 },
+      weightGram: 260,
+      material: "罐装红茶",
+      supplier: "福建茶业供应商",
+      leadTimeDays: 4,
+      mainImagePath: demoSkuImageUrl("TEA-D"),
+      imageUrl: demoSkuImageUrl("TEA-D"),
+      angleImages: [demoSkuImageUrl("TEA-D"), `${demoSkuImageUrl("TEA-D").replace(".png", "-detail.png")}`],
+      matchingRules: { preferWith: ["BOX-C", "CARD-C"] },
+      replacementSkuCodes: ["TEA-A", "TEA-REAL-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_tea_real_1",
+      skuCode: "TEA-REAL-1",
+      name: "乌龙茶礼罐",
+      type: "item",
+      category: "茶叶",
+      sceneTags: ["员工福利", "客户拜访", "企业礼赠"],
+      costPrice: 55,
+      salePrice: 120,
+      stock: 90,
+      dimensions: { lengthCm: 12, widthCm: 8, heightCm: 18 },
+      weightGram: 300,
+      material: "罐装乌龙茶",
+      supplier: "福建茶业供应商",
+      leadTimeDays: 3,
+      mainImagePath: demoSkuImageUrl("TEA-REAL-1"),
+      imageUrl: demoSkuImageUrl("TEA-REAL-1"),
+      angleImages: [demoSkuImageUrl("TEA-REAL-1"), `${demoSkuImageUrl("TEA-REAL-1").replace(".png", "-detail.png")}`],
+      matchingRules: { preferWith: ["BOX-REAL-1", "CARD-REAL-MANUAL"] },
+      replacementSkuCodes: ["TEA-A", "TEA-D"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_ops_real_1",
+      skuCode: "OPS-REAL-1",
+      name: "混合坚果礼罐",
+      type: "item",
+      category: "坚果",
+      sceneTags: ["员工福利", "客户拜访", "企业礼赠"],
+      costPrice: 30,
+      salePrice: 72,
+      stock: 160,
+      dimensions: { lengthCm: 12, widthCm: 12, heightCm: 16 },
+      weightGram: 420,
+      material: "混合坚果礼罐",
+      supplier: "杭州坚果供应商",
+      leadTimeDays: 3,
+      mainImagePath: demoSkuImageUrl("OPS-REAL-1"),
+      imageUrl: demoSkuImageUrl("OPS-REAL-1"),
+      angleImages: [demoSkuImageUrl("OPS-REAL-1"), `${demoSkuImageUrl("OPS-REAL-1").replace(".png", "-side.png")}`],
+      matchingRules: { preferWith: ["IMG-REAL-1", "CARD-REAL-MANUAL"] },
+      replacementSkuCodes: ["TEA-B", "PREVIEW-ONLY-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_preview_only_1",
+      skuCode: "PREVIEW-ONLY-1",
+      name: "茶点小食礼罐",
+      type: "item",
+      category: "茶点",
+      sceneTags: ["员工福利", "节日礼赠"],
+      costPrice: 12,
+      salePrice: 29,
+      stock: 180,
+      dimensions: { lengthCm: 10, widthCm: 10, heightCm: 8 },
+      weightGram: 260,
+      material: "烘焙小食礼罐",
+      supplier: "杭州茶点供应商",
+      leadTimeDays: 3,
+      mainImagePath: demoSkuImageUrl("PREVIEW-ONLY-1"),
+      imageUrl: demoSkuImageUrl("PREVIEW-ONLY-1"),
+      angleImages: [demoSkuImageUrl("PREVIEW-ONLY-1"), `${demoSkuImageUrl("PREVIEW-ONLY-1").replace(".png", "-detail.png")}`],
+      matchingRules: { preferWith: ["BOX-A", "CARD-A"] },
+      replacementSkuCodes: ["TEA-B", "OPS-REAL-1"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_card_a",
+      skuCode: "CARD-A",
+      name: "定制贺卡A",
+      type: "accessory",
+      category: "贺卡",
+      sceneTags: ["员工福利", "节日礼赠", "客户拜访"],
+      costPrice: 2,
+      salePrice: 8,
+      stock: 500,
+      dimensions: { lengthCm: 12, widthCm: 8, heightCm: 0.2 },
+      weightGram: 15,
+      material: "特种纸",
+      supplier: "杭州礼盒厂",
+      leadTimeDays: 2,
+      mainImagePath: demoSkuImageUrl("CARD-A"),
+      imageUrl: demoSkuImageUrl("CARD-A"),
+      angleImages: [demoSkuImageUrl("CARD-A")],
+      matchingRules: {},
+      replacementSkuCodes: [],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_card_c",
+      skuCode: "CARD-C",
+      name: "祝福卡C",
+      type: "accessory",
+      category: "贺卡",
+      sceneTags: ["员工福利", "节日礼赠", "客户拜访"],
+      costPrice: 2,
+      salePrice: 8,
+      stock: 800,
+      dimensions: { lengthCm: 12, widthCm: 8, heightCm: 0.2 },
+      weightGram: 15,
+      material: "特种纸",
+      supplier: "杭州礼盒厂",
+      leadTimeDays: 2,
+      mainImagePath: demoSkuImageUrl("CARD-C"),
+      imageUrl: demoSkuImageUrl("CARD-C"),
+      angleImages: [demoSkuImageUrl("CARD-C")],
+      matchingRules: { preferWith: ["BOX-C", "TEA-D"] },
+      replacementSkuCodes: ["CARD-A", "CARD-REAL-MANUAL"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "sku_card_real_manual",
+      skuCode: "CARD-REAL-MANUAL",
+      name: "手写感谢卡",
+      type: "accessory",
+      category: "贺卡",
+      sceneTags: ["客户拜访", "员工福利", "企业礼赠"],
+      costPrice: 4,
+      salePrice: 15,
+      stock: 600,
+      dimensions: { lengthCm: 15, widthCm: 10, heightCm: 0.2 },
+      weightGram: 25,
+      material: "棉感卡纸+烫金",
+      supplier: "本地印刷厂",
+      leadTimeDays: 2,
+      mainImagePath: demoSkuImageUrl("CARD-REAL-MANUAL"),
+      imageUrl: demoSkuImageUrl("CARD-REAL-MANUAL"),
+      angleImages: [demoSkuImageUrl("CARD-REAL-MANUAL"), `${demoSkuImageUrl("CARD-REAL-MANUAL").replace(".png", "-back.png")}`],
+      matchingRules: { preferWith: ["BOX-REAL-1", "TEA-REAL-1"] },
+      replacementSkuCodes: ["CARD-A", "CARD-C"],
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
+function syncDemoSkuCatalog(data: StoreData, now: string) {
+  if (!Array.isArray(data.skus) || !data.skus.some((sku) => DEMO_SKU_CODES.has(String(sku?.skuCode || "")))) {
+    return false;
+  }
+
+  let changed = false;
+  const demoSkus = buildDemoSkuCatalog(now);
+  for (const demoSku of demoSkus) {
+    const index = data.skus.findIndex((sku) => sku.skuCode === demoSku.skuCode);
+    if (index < 0) {
+      data.skus.push(demoSku);
+      changed = true;
+      continue;
+    }
+
+    const current = data.skus[index];
+    const next = mergeDemoSku(current, demoSku);
+
+    if (!sameValue(current, next)) {
+      data.skus[index] = { ...next, updatedAt: now };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function mergeDemoSku(current: any, demoSku: any) {
+  const next = {
+    ...current,
+    ...demoSku,
+    id: current.id || demoSku.id,
+    createdAt: current.createdAt || demoSku.createdAt,
+    updatedAt: current.updatedAt || demoSku.updatedAt,
+  };
+  const mainImagePath = preservedCustomSkuImageReference(current.mainImagePath, demoSku.mainImagePath);
+  if (mainImagePath) next.mainImagePath = mainImagePath;
+  const imageUrl = preservedCustomSkuImageReference(current.imageUrl, demoSku.imageUrl);
+  if (imageUrl) next.imageUrl = imageUrl;
+  const angleImages = preservedCustomSkuAngleImages(current.angleImages);
+  if (angleImages) next.angleImages = angleImages;
+  return next;
+}
+
+function preservedCustomSkuAngleImages(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const refs = value.map((item) => String(item || "").trim()).filter(Boolean);
+  const preserved = refs.filter((reference) => shouldPreserveCustomSkuImageReference(reference));
+  return preserved.length ? preserved : null;
+}
+
+function preservedCustomSkuImageReference(current: unknown, fallback: unknown) {
+  const value = String(current || "").trim();
+  if (!value || value === String(fallback || "").trim()) return "";
+  return shouldPreserveCustomSkuImageReference(value) ? value : "";
+}
+
+function shouldPreserveCustomSkuImageReference(value: unknown) {
+  const reference = String(value || "").trim();
+  if (!reference || isStarterSkuImageUrl(reference)) return false;
+  if (isSafeLocalSkuImageReference(reference)) return true;
+  if (/^https?:\/\//i.test(reference) || /^data:image\//i.test(reference) || reference.startsWith("/")) return true;
+  if (!path.isAbsolute(reference)) return false;
+  try {
+    return fs.existsSync(reference) && fs.statSync(reference).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isSafeLocalSkuImageReference(value: string) {
+  return (
+    /^storage\/[A-Za-z0-9._/-]+\.(?:png|jpe?g|webp|gif|avif)$/i.test(value)
+    && !value.includes("..")
+    && !value.includes("//")
+  );
+}
+
+function isStarterSkuImageUrl(value: string) {
+  return /^https:\/\/app\.zhenxiai\.cloud\/smart-kefu\/starter-skus\//i.test(String(value || "").trim());
+}
+
+function buildStarterKnowledgeEntries(now: string) {
+  return [
+    starterKnowledge("knowledge_starter_pre_sales_quote", "agent_pre_sales", "报价与预算澄清 SOP", [
+      "客户只问价格时，先确认用途、数量、单盒预算、交付时间和是否需要企业 Logo 定制。",
+      "低预算客户优先推荐 BOX-A + TEA-B + CARD-A 的组合；高预算或客户拜访场景优先推荐红金商务礼盒、乌龙茶礼罐和手写感谢卡。",
+      "自动报价只能基于商品库中启用、库存充足、成本价和售价完整的 SKU；高价值订单需要人工复核后发送。",
+    ], ["报价", "预算", "商品推荐"], now),
+    starterKnowledge("knowledge_starter_design_material", "agent_gift_design", "臻希 AI 出图素材 SOP", [
+      "所有生成图片任务必须调用臻希 AI，不允许接入其它图片生成后端。",
+      "提交设计前必须收齐商品 SKU、客户 Logo 或品牌素材、主色、用途、预算和输出数量。",
+      "缺真实商品图时不得进入正式自动出图，只能提示运营在商品库补图或使用本地 smoke/demo 图片做内部测试。",
+    ], ["臻希AI", "出图", "素材"], now),
+    starterKnowledge("knowledge_starter_review_policy", "agent_general", "人工审核与自动化边界", [
+      "企业微信是唯一外部微信生产渠道；个人微信 RPA 只能作为本地人工确认辅助，默认关闭。",
+      "金额高、客户身份不明确、素材缺失、报价异常、发货异常和售后争议都必须进入人工审核。",
+      "自动发送前必须通过发送队列守卫，缺少适配器、身份凭证或人工确认时保持阻断。",
+    ], ["审核", "企微", "自动化边界"], now),
+    starterKnowledge("knowledge_starter_order_payment", "agent_order_payment", "下单支付核对 SOP", [
+      "客户确认方案后，先复述 SKU 组合、数量、总价、交付时间、收货信息和发票需求。",
+      "收款前不得承诺已排产；付款凭证和订单金额不一致时进入人工复核。",
+      "订单变更需要记录变更前后字段，避免报价、出图和发货数据错位。",
+    ], ["订单", "支付", "复核"], now),
+    starterKnowledge("knowledge_starter_delivery", "agent_logistics_exception", "发货与物流异常 SOP", [
+      "催发货先核对订单状态、预计交期、供应商交付节点和快递单号。",
+      "物流超过 24 小时无更新时建立跟进任务；破损、少件、错发需要收集照片和包裹面单。",
+      "无法确认原因时只承诺正在核实，不得编造物流状态。",
+    ], ["发货", "物流", "异常"], now),
+    starterKnowledge("knowledge_starter_after_sales", "agent_after_sales", "售后补发退款 SOP", [
+      "售后先判断类型：破损、少件、错发、质量问题、退款退货或客户主观不满意。",
+      "破损少件优先补发；质量争议和退款退货需要人工复核订单、照片和责任归属。",
+      "安抚话术要先承认问题和给处理时效，再说明所需凭证。",
+    ], ["售后", "补发", "退款"], now),
+  ];
+}
+
+function starterKnowledge(idValue: string, agentId: string, title: string, paragraphs: string[], tags: string[], now: string) {
+  return {
+    id: idValue,
+    agentId,
+    sourceType: "starter_knowledge",
+    sourceId: null,
+    title,
+    content: paragraphs.join("\n"),
+    tags,
+    qualityScore: 96,
+    status: "ready",
+    reviewer: "system",
+    reviewNote: "starter knowledge is bundled product SOP",
+    reviewedAt: now,
+    reviewHistory: [{ status: "ready", reviewer: "system", note: "starter knowledge is bundled product SOP", reviewedAt: now }],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function syncStarterKnowledgeBase(data: StoreData, now: string) {
+  const starterSeedPresent =
+    data.knowledgeEntries.some((entry) => entry?.sourceType === "starter_knowledge") ||
+    data.skus.some((sku) => DEMO_SKU_CODES.has(String(sku?.skuCode || ""))) ||
+    data.wechatAccounts.some((account) => String(account?.id || "").startsWith("wechat_demo_"));
+  if (!starterSeedPresent) return false;
+
+  let changed = false;
+  for (const starter of buildStarterKnowledgeEntries(now)) {
+    const index = data.knowledgeEntries.findIndex((entry) => entry.id === starter.id);
+    if (index < 0) {
+      data.knowledgeEntries.push(starter);
+      changed = true;
+      continue;
+    }
+    const current = data.knowledgeEntries[index];
+    const next = {
+      ...current,
+      ...starter,
+      createdAt: current.createdAt || starter.createdAt,
+      updatedAt: current.updatedAt || starter.updatedAt,
+      reviewedAt: current.reviewedAt || starter.reviewedAt,
+      reviewHistory: Array.isArray(current.reviewHistory) && current.reviewHistory.length
+        ? current.reviewHistory
+        : starter.reviewHistory,
+    };
+    if (!sameValue(current, next)) {
+      const reviewHistory = Array.isArray(current.reviewHistory) ? current.reviewHistory : [];
+      data.knowledgeEntries[index] = {
+        ...next,
+        reviewedAt: now,
+        reviewHistory: [
+          ...reviewHistory,
+          { status: "ready", reviewer: "system", note: "starter knowledge bundle updated", reviewedAt: now },
+        ],
+        updatedAt: now,
+      };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function seedData(): StoreData {
   const now = new Date().toISOString();
   const wechatAccount = { id: "wechat_demo_1", displayName: "微信客服1号", alias: "demo", isActive: true, createdAt: now, updatedAt: now };
@@ -4959,13 +6650,9 @@ function seedData(): StoreData {
     createdAt: now,
     updatedAt: now,
   };
-  const skus = [
-    { id: "sku_box_a", skuCode: "BOX-A", name: "红金礼盒A", type: "gift_box", category: "礼盒", sceneTags: ["员工福利", "节日礼赠"], costPrice: 30, salePrice: 60, stock: 120, dimensions: { width: 320, height: 90, depth: 240 }, replacementSkuCodes: [], isActive: true, createdAt: now, updatedAt: now },
-    { id: "sku_tea_a", skuCode: "TEA-A", name: "茶叶礼品A", type: "item", category: "内搭", sceneTags: ["员工福利"], costPrice: 65, salePrice: 110, stock: 42, dimensions: { width: 90, height: 160, depth: 60 }, replacementSkuCodes: ["TEA-B"], isActive: true, createdAt: now, updatedAt: now },
-    { id: "sku_tea_b", skuCode: "TEA-B", name: "茶叶礼品B", type: "item", category: "内搭", sceneTags: ["员工福利"], costPrice: 60, salePrice: 105, stock: 80, dimensions: { width: 90, height: 160, depth: 60 }, replacementSkuCodes: [], isActive: true, createdAt: now, updatedAt: now },
-    { id: "sku_card_a", skuCode: "CARD-A", name: "定制贺卡A", type: "accessory", category: "贺卡", sceneTags: ["节日礼赠", "客户拜访"], costPrice: 5, salePrice: 20, stock: 500, dimensions: { width: 120, height: 80 }, replacementSkuCodes: [], isActive: true, createdAt: now, updatedAt: now },
-  ];
+  const skus = buildDemoSkuCatalog(now);
   const agentConfig = seedAgentConfig(now);
+  const knowledgeEntries = buildStarterKnowledgeEntries(now);
   return {
     wechatAccounts: [wechatAccount, wechatAccount2],
     customers: [customer, customer2],
@@ -4988,12 +6675,13 @@ function seedData(): StoreData {
     sendAttempts: [],
     quoteDrafts: [],
     orderDrafts: [],
+    paymentEvents: [],
     reviewLogs: [],
     agents: agentConfig.agents,
     agentSkills: agentConfig.agentSkills,
     chatImports: [],
     trainingSamples: [],
-    knowledgeEntries: [],
+    knowledgeEntries,
     routeEvaluations: [],
     automationRuns: [],
     wechatWorkBindings: [],
@@ -5100,14 +6788,31 @@ function mergeLocalRefundResolution(value: unknown, resolution: string, reviewer
   };
 }
 
+const TRUSTED_RPA_CAPTURE_SOURCES = new Set(["uia_accessibility", "ocr_verified_bubble"]);
+
+function isTrustedConversationMessage(message: any, rpaMessageIds: Set<string>) {
+  if (isSyntheticConversationText(message?.text)) return false;
+  if (message?.direction !== "inbound" || !rpaMessageIds.has(String(message?.id || ""))) return true;
+  return TRUSTED_RPA_CAPTURE_SOURCES.has(String(message?.metadata?.inboundCaptureSource || ""));
+}
+
+function isWechatWorkPlaceholderName(value: unknown) {
+  return /^企业微信客户(?:\s|$)/.test(String(value || "").trim());
+}
+
+function isSyntheticConversationText(value: unknown) {
+  const text = String(value || "").trim();
+  return text === "你的回复内容" || /^RPA入站测试(?:-|$)/i.test(text);
+}
+
 export function seedAgentConfig(now: string) {
   const agents = [
     {
       id: "agent_pre_sales",
       key: "pre_sales",
-      name: "售前转化 Agent",
+      name: "小石售前 Agent",
       scene: "售前咨询、商品推荐、价格解释",
-      description: "识别客户需求和预算，用自然话术推动客户确认方案。",
+      description: "依据小石真人样本识别需求、数量、预算与偏好，用微信短句推进客户确认方案。",
       valueLevel: "low_auto_high_review",
       enabled: true,
       sortOrder: 10,
@@ -5191,6 +6896,11 @@ export function seedAgentConfig(now: string) {
   const skillSeeds = [
     ["agent_pre_sales", "需求澄清", "先问用途、预算、数量和交期，不急着推商品。"],
     ["agent_pre_sales", "转化推进", "在客户意向明确时给出下一步确认动作。"],
+    ["agent_pre_sales", "小石式单点追问", "根据客户已经给出的信息，只补问当前最关键的一项；短问短答，不把用途、预算、数量和交期一次问完。"],
+    ["agent_pre_sales", "小石式价格异议承接", "客户询价或觉得贵时，先问数量或预算，再说明礼品可以调整；不承诺最低价。"],
+    ["agent_pre_sales", "小石式搭配变更确认", "客户要删除或更换礼盒内容时，先确认保留项、数量或预期价格，再重新核价。"],
+    ["agent_pre_sales", "小石式偏好翻译", "把太可爱、不喜欢、不好看等否定表达转成简单、商务、大气等正向偏好。"],
+    ["agent_pre_sales", "小石式柔和收口", "客户明确不做、再看看或预算暂时不合适时，简短收口并保留以后再联系的空间。"],
     ["agent_gift_design", "预算澄清", "识别每份预算或总预算加数量，并折算单份预算。"],
     ["agent_gift_design", "设计需求确认", "收集 Logo、参考图、文案、风格、礼盒搭配和出图数量。"],
     ["agent_gift_design", "高价值转人工", "总额或单份金额达到阈值时要求人工审核报价和图片。"],

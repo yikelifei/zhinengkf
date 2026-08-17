@@ -18,6 +18,7 @@ export function AutomationHistoryPage({ identityFilters }: { identityFilters?: I
       </header>
 
       {automation.error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{automation.error}</div> : null}
+      {automation.readState === "stale" ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">当前展示上次完整读取的运行记录；最新状态未确认，请勿据此重复执行。</div> : null}
 
       {automation.recentRuns.length ? (
         <div className={styles.recordList} aria-label="最近自动化运行记录">
@@ -36,7 +37,9 @@ export function AutomationHistoryPage({ identityFilters }: { identityFilters?: I
             </article>
           ))}
         </div>
-      ) : <div className={styles.empty}>服务端尚未返回运行记录。</div>}
+      ) : <div className={styles.empty}>{automation.readState === "ready" && automation.status
+        ? "状态读取成功，当前没有服务端运行记录。"
+        : "自动化状态尚未成功读取，不能据此认定没有运行记录。"}</div>}
     </section>
   );
 }

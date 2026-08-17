@@ -1,0 +1,4146 @@
+{
+  "meta": {
+    "title": "微信客服对话结构化分析（匿名化训练准备）",
+    "createdAt": "2026-08-14T09:29:06.715Z",
+    "inputRoot": "E:\\微信聊天文档\\wechat_kb_小石_20260814085838093_a0c4de\\客户对话",
+    "sessionCount": 23,
+    "sourceMetadataCount": 23,
+    "contentAnonymizedCount": 23,
+    "mixedSessionCount": 0
+  },
+  "totals": {
+    "sourceMessageCount": 3853,
+    "parsedMessageCount": 3804,
+    "customerMessageCount": 1411,
+    "serviceMessageCount": 2393,
+    "turnPairCount": 946,
+    "trainingCandidateCount": 74,
+    "excludedSystemMessageCount": 49,
+    "attachmentCount": 729
+  },
+  "style": {
+    "serviceReplyLengthAverage": 8.2,
+    "serviceReplyLengthMedian": 5,
+    "serviceQuestionRate": 0.0907,
+    "shortAcknowledgementRate": 0.1249,
+    "attachmentOnlyRate": 0.2198,
+    "warmthMarkerCounts": {
+      "咱们": 40,
+      "这边": 103,
+      "可以的": 41,
+      "好滴": 18,
+      "好的": 106,
+      "嗯呢": 37,
+      "稍等": 41,
+      "哈哈": 4,
+      "亲": 96,
+      "漂亮": 1
+    },
+    "commonServiceMessages": [
+      {
+        "text": "[附件]",
+        "count": 526
+      },
+      {
+        "text": "好的",
+        "count": 63
+      },
+      {
+        "text": "[引用附件]",
+        "count": 39
+      },
+      {
+        "text": "嗯呢",
+        "count": 24
+      },
+      {
+        "text": "可以的",
+        "count": 21
+      },
+      {
+        "text": "[附件] pdf]",
+        "count": 17
+      },
+      {
+        "text": "可以",
+        "count": 14
+      },
+      {
+        "text": "稍等",
+        "count": 13
+      },
+      {
+        "text": "好",
+        "count": 13
+      },
+      {
+        "text": "[捂脸]",
+        "count": 12
+      },
+      {
+        "text": "好滴",
+        "count": 12
+      },
+      {
+        "text": "对的",
+        "count": 11
+      },
+      {
+        "text": "是的",
+        "count": 11
+      },
+      {
+        "text": "[愉快]",
+        "count": 11
+      },
+      {
+        "text": "你好亲，看到您后台留言了，咱这边喜欢哪一款可以截图发我哦，或者您说一下使用的活动主题，和预算，我给您推荐～",
+        "count": 9
+      },
+      {
+        "text": "[呲牙]",
+        "count": 8
+      },
+      {
+        "text": "有的",
+        "count": 8
+      },
+      {
+        "text": "[附件] pptx]",
+        "count": 7
+      },
+      {
+        "text": "您预算多少",
+        "count": 4
+      },
+      {
+        "text": "好的亲",
+        "count": 4
+      },
+      {
+        "text": "是的亲",
+        "count": 4
+      },
+      {
+        "text": "[嘿哈]",
+        "count": 4
+      },
+      {
+        "text": "可以滴",
+        "count": 4
+      },
+      {
+        "text": "你好亲",
+        "count": 3
+      },
+      {
+        "text": "好的稍等",
+        "count": 3
+      },
+      {
+        "text": "我看看",
+        "count": 3
+      },
+      {
+        "text": "[语音/视频通话] [通话记录]",
+        "count": 3
+      },
+      {
+        "text": "截图发我一下哈",
+        "count": 3
+      },
+      {
+        "text": "对",
+        "count": 3
+      },
+      {
+        "text": "恩恩",
+        "count": 3
+      }
+    ]
+  },
+  "sceneCounts": {
+    "general:未分类": 561,
+    "pre_sales:售前转化": 188,
+    "gift_design:礼盒设计": 96,
+    "order_payment:下单支付": 54,
+    "logistics_exception:物流异常": 38,
+    "after_sales:售后安抚": 9
+  },
+  "riskCounts": {
+    "scene_unmatched": 561,
+    "scene_weak": 211,
+    "low_information_pair": 196,
+    "one_off_commercial_fact": 98,
+    "short_acknowledgement": 98,
+    "attachment_only": 29,
+    "commercial_reasoning_requires_review": 21,
+    "one_off_lead_time": 20,
+    "address_or_contact_details": 20,
+    "payment_channel_requires_review": 14,
+    "over_familiar_tone": 13,
+    "scene_ambiguous": 11,
+    "policy_requires_review": 11,
+    "contact_collection_requires_review": 10,
+    "unverified_business_claim": 3,
+    "external_platform_instruction": 2,
+    "absolute_or_unverified_promise": 2
+  },
+  "riskExamples": {
+    "scene_unmatched": [
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "是的",
+        "serviceText": "多少数量呢 ，什么时候用",
+        "flags": [
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "10套 但是6月份要的多；15号之前",
+        "serviceText": "可以的亲我发您看看",
+        "flags": [
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "送会员客户",
+        "serviceText": "[附件]；[引用消息] 咱是南京的哈 - 丸碧科技护肤体验中心（派华新都）: 15号之前；没问题；[附件]",
+        "flags": [
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "[引用附件]",
+        "serviceText": "10套[金额]；里面有一个保温杯",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "还有什么",
+        "serviceText": "保温杯，遮阳帽 防晒口罩 小风扇",
+        "flags": [
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "scene_weak": [
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "最近；我要的少",
+        "serviceText": "多好套呀；最近是哪天呢，我看下快递，",
+        "flags": [
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "好",
+        "serviceText": "[附件] pdf]；[附件] pdf]；开业还是送会员客户的呢",
+        "flags": [
+          "scene_weak",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "哦[捂脸]",
+        "serviceText": "这边有预算低一点的；[引用附件]",
+        "flags": [
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "建筑公司，一份预算30左右",
+        "serviceText": "好的，时间不急吧；我给咱找找",
+        "flags": [
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "还要另外定制40份给自己员工；这40份可以预算高一点[呲牙]",
+        "serviceText": "这个是[金额]滴",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_weak"
+        ]
+      }
+    ],
+    "low_information_pair": [
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "好",
+        "serviceText": "[附件] pdf]；[附件] pdf]；开业还是送会员客户的呢",
+        "flags": [
+          "scene_weak",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "不是 我说你这10套多少钱",
+        "serviceText": "[金额]",
+        "flags": [
+          "one_off_commercial_fact",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "就是要这种毛毡袋，袋子可以重复利用，的",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "对",
+        "serviceText": "您选一下；[附件]",
+        "flags": [
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "好",
+        "serviceText": "这三样哈；有没有冰箱贴模板做多大的",
+        "flags": [
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      }
+    ],
+    "one_off_commercial_fact": [
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "[引用附件]",
+        "serviceText": "10套[金额]；里面有一个保温杯",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "可以的",
+        "serviceText": "[金额]哈",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "不是 我说你这10套多少钱",
+        "serviceText": "[金额]",
+        "flags": [
+          "one_off_commercial_fact",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "[附件]",
+        "serviceText": "原价45，200份，[金额]",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "还要另外定制40份给自己员工；这40份可以预算高一点[呲牙]",
+        "serviceText": "这个是[金额]滴",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_weak"
+        ]
+      }
+    ],
+    "short_acknowledgement": [
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "[附件]",
+        "serviceText": "稍等",
+        "flags": [
+          "short_acknowledgement",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "这个是我们的logo，可以帮我们设计一下；我们是20周年庆典",
+        "serviceText": "好",
+        "flags": [
+          "short_acknowledgement",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_003",
+        "customerText": "那我再看看，谢谢",
+        "serviceText": "好的",
+        "flags": [
+          "short_acknowledgement",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "不贵；那就58",
+        "serviceText": "好",
+        "flags": [
+          "short_acknowledgement",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "哦哦",
+        "serviceText": "嗯呢",
+        "flags": [
+          "short_acknowledgement",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      }
+    ],
+    "attachment_only": [
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "就是要这种毛毡袋，袋子可以重复利用，的",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "50左右吧",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "风扇去掉",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "[非文本消息 type=1]",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "不要梳子",
+        "serviceText": "[附件]",
+        "flags": [
+          "attachment_only",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      }
+    ],
+    "commercial_reasoning_requires_review": [
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "不是几十米吗？[破涕为笑]",
+        "serviceText": "这个有闹钟，成本就不低；我可以给你看看别的",
+        "flags": [
+          "commercial_reasoning_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "一套多少钱；[引用附件]",
+        "serviceText": "这种我们做不了；它应该是个人的工作室做的；帮我你问了一下；这种定制40个人大概要一个人四五十；成本比较高",
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "包包-水杯-风扇-本子，4样价格下不来吗？",
+        "serviceText": "因为书包 风扇肯定价格成本要高一些；这样确实到不了",
+        "flags": [
+          "commercial_reasoning_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "现在风扇好便宜的",
+        "serviceText": "400ml；换便宜的，书包和杯子加一起成本您算一下还有运费和人工；您好亲，咱们毕业季礼品确定了嘛；还有这种哈[金额]；[附件]",
+        "flags": [
+          "one_off_commercial_fact",
+          "commercial_reasoning_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "我们需要52套",
+        "serviceText": "加上成本运费不止这些",
+        "flags": [
+          "commercial_reasoning_requires_review"
+        ]
+      }
+    ],
+    "one_off_lead_time": [
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "最快什么时候发货",
+        "serviceText": "我们装好4-5天发货；[引用消息] 我算了一下不够本[捂脸] - 胡冰: 55给我们吧；或者你换个杯子还行",
+        "flags": [
+          "one_off_lead_time"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "亲，这些都是现货吗；25号用，最迟几号确定下单",
+        "serviceText": "不是现货；4-5天发货；就这两天吧",
+        "flags": [
+          "one_off_lead_time",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "知道",
+        "serviceText": "因为现在我们装好发货大概要4-5天今天放假工厂；所以这边可以安排散发；时间是来得及的",
+        "flags": [
+          "one_off_lead_time",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "可以的",
+        "serviceText": "5天发货；嗯呢；[附件]",
+        "flags": [
+          "one_off_lead_time",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "六月底",
+        "serviceText": "稍后发您；可以的，咱这边4-5天发出",
+        "flags": [
+          "one_off_lead_time",
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "address_or_contact_details": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "[附件]",
+        "serviceText": "[地址]楼 [手机号]徐女士；好的",
+        "flags": [
+          "contact_collection_requires_review",
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "散发自己装？",
+        "serviceText": "对的这个只需要装进去；封套贴一下就行；[地址]",
+        "flags": [
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "[地址]，华碧霞[手机号]",
+        "serviceText": "好的",
+        "flags": [
+          "short_acknowledgement",
+          "address_or_contact_details",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "给我邮寄一套我看看；[地址][手机号][收件人]",
+        "serviceText": "咱们样品也是3-4天发哈；都是新货；您看时间来得及不",
+        "flags": [
+          "one_off_lead_time",
+          "address_or_contact_details"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "好的👌；6个；[附件]；[地址][手机号]",
+        "serviceText": "亲咱这边10套起发呢",
+        "flags": [
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "payment_channel_requires_review": [
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "笔记本，帽子，水杯，还有风扇",
+        "serviceText": "你把这边数量和收货信息发一下，我把收款码给你；[附件]",
+        "flags": [
+          "payment_channel_requires_review",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "好的，我下午给你答复；在哪下单",
+        "serviceText": "这边给您一个付款码；[附件]",
+        "flags": [
+          "payment_channel_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "怎么支付？",
+        "serviceText": "我发您收款码；您这边什么时候用呢",
+        "flags": [
+          "payment_channel_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "[引用消息] 订这个先拿10份吧 - Linda: [引用附件]",
+        "serviceText": "[地址]中大天地西区二楼麦当劳 源美颂（辰壹店铺旁） 刘 [手机号]；转账 石；[金额计算]",
+        "flags": [
+          "one_off_commercial_fact",
+          "payment_channel_requires_review",
+          "contact_collection_requires_review",
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_013",
+        "customerText": "我可以不要",
+        "serviceText": "转账吧",
+        "flags": [
+          "payment_channel_requires_review",
+          "scene_unmatched",
+          "low_information_pair"
+        ]
+      }
+    ],
+    "over_familiar_tone": [
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "所以上次和你说除了是老师以外也想看看婚礼能不能在你们这边做[呲牙]",
+        "serviceText": "俄罗斯农庄威化饼干；香港玛莎曲奇；[附件]；焦糖饼干 盒装；焦糖饼干 袋装；味滋源焦糖饼干；焦糖饼干；[附件]；润喉糖；桂花糕；糖袋（个）；唯口爱布丁果冻；[附件]；生日面 小包；生日面 小袋；生日面；喜面；[附件]；不二家 果冻；奇趣综合果仁；棉花糖；白桃糖；[附件]；布丁果冻；皇冠丹麦曲奇饼干；皮卡宝贝果冻布町；[附件]；布丁果冻；布丁果冻；糖盒；[附件]；法式蝴蝶酥；太古屋东京都牛轧糖；太古屋东京都牛轧糖；[附件]；美乐蒂牛奶饼干；威化饼干；棉花糖；比利时焦糖饼干；[附件]；玛莎京都坚果脆 大盒；抱抱桶单品价格；瑞卡弗饼干；北海道巧克力夹心酥；卷心酥饼干；贝蒂兔牛轧糖；好事花生；台湾手工蛋卷；比得免曲奇饼干；比得免曲奇饼干；黑芝麻丸；凤凰卷；比利时风味饼干；核桃仁；Loacker意大利进口莱家威化；味滋源桃酥；莱家红色纸盒（空盒；莱家10g榛子味威化；饼干；步步糕；瓜子；火锅底料；腊肠；洽洽每日坚果；辣条；西湖风情糕；状元糕；本真五红汤；可以的",
+        "flags": [
+          "over_familiar_tone",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "[引用消息] 是打算这俩里面选一个 - vvvvvictoriaa: 祖马龙身体乳和欧舒丹护手霜",
+        "serviceText": "好滴；美女，祖玛珑的合适一点哈；75ml的祖玛珑身体乳",
+        "flags": [
+          "over_familiar_tone",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_015",
+        "customerText": "端午主题",
+        "serviceText": "咱预算多少亲爱的",
+        "flags": [
+          "over_familiar_tone",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_017",
+        "customerText": "毕业季送老师，送学生的分别有什么样的",
+        "serviceText": "咱预算多少亲爱的",
+        "flags": [
+          "over_familiar_tone",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "你好",
+        "serviceText": "你好漂亮呀！；是专业模特吗",
+        "flags": [
+          "over_familiar_tone",
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "scene_ambiguous": [
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "一套多少钱；[引用附件]",
+        "serviceText": "这种我们做不了；它应该是个人的工作室做的；帮我你问了一下；这种定制40个人大概要一个人四五十；成本比较高",
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "这水杯是玻璃的？有没好一点的；本子有好看一点的吗；[引用附件]",
+        "serviceText": "不是玻璃的；您预算多少；咱这边要定制腰封卡片吗；就是书包杯子的腰封；去掉一些可以优惠一些；最低价就是[金额]一份，包邮",
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_ambiguous"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "好的话，我再介绍其他班给你呢",
+        "serviceText": "[苦涩]我也很想你可以给我介绍，因为这个封套的钱成本就不少啦；公司出单有要求滴；因为毕业季来的顾客都是四五十份；基本上我们都是报的团购价格",
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "亲，你这个挺贵的；[附件]",
+        "serviceText": "亲这几样成本好几样我确实不够，我没说瞎话；有的产品看着差不多；但是品质部一样；有图片吗我看看；如果时间来得及，可以给您发一下样品；您感受一下品质",
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "有没有橙色；好 看看其他礼盒款也行",
+        "serviceText": "嗯呢；[附件]；[引用消息] 这个是刚买的样品 - 朱礼纪礼品定制: [引用附件]；这个成本会高一些",
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ]
+      }
+    ],
+    "policy_requires_review": [
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "问一下，如果我定了份数太多了，最后发了还有多余的能退吗；[附件]",
+        "serviceText": "这个好像不大行[敲打]；一般定制产品除了质量问题一般不退货；您这次要多少呀",
+        "flags": [
+          "policy_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_013",
+        "customerText": "可以先寄个样品不",
+        "serviceText": "这个寄样品你什么时候用呀；这个太便宜了一般不寄样品；要是那种几十的可以",
+        "flags": [
+          "policy_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "好的好的 谢谢你啦[愉快][愉快][呲牙]",
+        "serviceText": "嗯呢不客气，这边需要付一个样品费[金额]；如果后期有大货可以抵扣费用；[愉快]",
+        "flags": [
+          "one_off_commercial_fact",
+          "policy_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "样品费 算是押金吗",
+        "serviceText": "就是订货后优惠减掉；相当于样品送您；不是押金哈；如果后期您这边确定好了，我们这套样品的钱，可以从货款里面扣除的",
+        "flags": [
+          "policy_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "有啥样是可以这两天寄的吗；不过我们都是寄过来之后然后可以的话就留下 不可以就退回的",
+        "serviceText": "[附件]；这几款；退回来回运费自理就可以",
+        "flags": [
+          "policy_requires_review",
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "contact_collection_requires_review": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "[附件]",
+        "serviceText": "[地址]楼 [手机号]徐女士；好的",
+        "flags": [
+          "contact_collection_requires_review",
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "好的",
+        "serviceText": "您给我一个收货地址",
+        "flags": [
+          "contact_collection_requires_review",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "好了",
+        "serviceText": "您回复一下确认明细，然后发我一下手机号，那边是虚拟号；这样我们发货好给您发快递",
+        "flags": [
+          "contact_collection_requires_review"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "这个定20盒",
+        "serviceText": "在的亲；这款哈；[附件]；什么时间用呀；还是4-5天发货哦；[地址][手机号]；还是这个地址嘛；[金额计算]",
+        "flags": [
+          "one_off_commercial_fact",
+          "contact_collection_requires_review",
+          "one_off_lead_time",
+          "address_or_contact_details",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "[引用消息] 订这个先拿10份吧 - Linda: [引用附件]",
+        "serviceText": "[地址]中大天地西区二楼麦当劳 源美颂（辰壹店铺旁） 刘 [手机号]；转账 石；[金额计算]",
+        "flags": [
+          "one_off_commercial_fact",
+          "payment_channel_requires_review",
+          "contact_collection_requires_review",
+          "address_or_contact_details",
+          "scene_unmatched"
+        ]
+      }
+    ],
+    "unverified_business_claim": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "你们报价都不统一，我买的也不少，你就要价高。我是刷到了，就问问，随便一问都比你报的低",
+        "serviceText": "我说过了全网就我们家一家做的；散发需要分多个快递；里面的腰封定制都没有",
+        "flags": [
+          "absolute_or_unverified_promise",
+          "unverified_business_claim"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "44；[附件]",
+        "serviceText": "[附件]；这款我没报价哈您看看聊天记录；这个价格全网你去找一圈；还会回来找我的；这个包装贵一点",
+        "flags": [
+          "unverified_business_claim",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "你们做过婚礼宾客那种大批量的伴手礼吗",
+        "serviceText": "糖果类的吗；可以的；几万份商务我们都接过；我们是工厂",
+        "flags": [
+          "unverified_business_claim"
+        ]
+      }
+    ],
+    "external_platform_instruction": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "安全吗；哈哈哈",
+        "serviceText": "不放心可以走淘宝；到时候下单的时候给你链接；拍下改价",
+        "flags": [
+          "external_platform_instruction",
+          "scene_weak"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "[非文本消息 type=1]",
+        "serviceText": "【淘宝】99%买家好评 [链接] HU071 「小红书轻奢伴手礼美业护士节开业店庆送礼员工福利礼品定制礼盒」 点击链接直接打开 或者 淘宝搜索直接打开；拍下后改价哈",
+        "flags": [
+          "external_platform_instruction"
+        ]
+      }
+    ],
+    "absolute_or_unverified_promise": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "你们报价都不统一，我买的也不少，你就要价高。我是刷到了，就问问，随便一问都比你报的低",
+        "serviceText": "我说过了全网就我们家一家做的；散发需要分多个快递；里面的腰封定制都没有",
+        "flags": [
+          "absolute_or_unverified_promise",
+          "unverified_business_claim"
+        ]
+      },
+      {
+        "sessionId": "xiaoshi_session_018",
+        "customerText": "还有少吗",
+        "serviceText": "帆布材质，要加上挂件和运费；最便宜拉哈",
+        "flags": [
+          "absolute_or_unverified_promise",
+          "scene_unmatched"
+        ]
+      }
+    ]
+  },
+  "logicExamples": {
+    "need_discovery": [
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "好的 我看看",
+        "serviceText": "咱这边是什么活动用的；然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些",
+        "candidateScore": 100,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "公司20周年庆典给参会人员的伴手礼 200份左右",
+        "serviceText": "咱们是什么类型的公司，预算多少呢",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我们只有50的预算",
+        "serviceText": "包含定制卡片 logo；可以要帽子 本子 小风扇；包包；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "开业；伴手礼",
+        "serviceText": "预算呢亲；这边数量要多少套呀",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "准备筹备开业礼的",
+        "serviceText": "[附件] pdf]；[附件] pdf]；你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "不只是糖果；是有其他搭配的那种",
+        "serviceText": "这边可以根据您的预算和需求配；可以呀；伴手礼都很灵活的",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "hello 我来问一下婚礼宾客的伴手礼；要看起来大气一点",
+        "serviceText": "在的；多少预算，里面打算放什么呢",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_019",
+        "customerText": "还想要一个伴手礼",
+        "serviceText": "您数量要多少呢，还有预算",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的我这边先看看样品和方案",
+        "serviceText": "您先看一下；您这边预算多少呢；还有数量",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "[引用附件]",
+        "serviceText": "[呲牙]；这个在咱们预算内的；也可以给咱定制腰封；logo",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_007",
+        "customerText": "小学毕业伴手礼；[附件]；这款多少",
+        "serviceText": "您好亲这款[金额]；咱这边什么时候用；预算多少呢",
+        "candidateScore": 93,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "[附件]；您好这里面搭配的是什么；价格多少",
+        "serviceText": "[金额]哈亲；您好亲，咱这边预算多少呢；是什么活动用的呀",
+        "candidateScore": 93,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      }
+    ],
+    "recommendation": [
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "好的 我看看",
+        "serviceText": "咱这边是什么活动用的；然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些",
+        "candidateScore": 100,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "准备筹备开业礼的",
+        "serviceText": "[附件] pdf]；[附件] pdf]；你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "不只是糖果；是有其他搭配的那种",
+        "serviceText": "这边可以根据您的预算和需求配；可以呀；伴手礼都很灵活的",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的我这边先看看样品和方案",
+        "serviceText": "您先看一下；您这边预算多少呢；还有数量",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+        "serviceText": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_022",
+        "customerText": "那个包什么价格",
+        "serviceText": "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下；可以截图给我看一下~",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "[附件]；您好这里面搭配的是什么；价格多少",
+        "serviceText": "[金额]哈亲；您好亲，咱这边预算多少呢；是什么活动用的呀",
+        "candidateScore": 93,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "没有没有",
+        "serviceText": "就是您要的这几样；我现在肯定也是能卖多少卖多少；您考虑一下；预算低可以放三样；[附件]；您看一下；卖您的不贵",
+        "candidateScore": 86,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "[引用消息] 158和168的盒子 搭配两个月饼 其他的可以按照类似产品搭配吗 - mimimo: [引用附件]",
+        "serviceText": "可以；因为我给你看的都是搭配好的那种现货；你说的这种要重新做内衬；费用会高很多，周期要半个月；[引用附件]",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "反正是样品先让他们看看闻闻；不行可以换味道吧哈哈；曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图；这是我们的slogan",
+        "serviceText": "好的；[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_016",
+        "customerText": "都有些啥",
+        "serviceText": "[附件]；您看一下这是明细哈；[引用消息] 艾草锤 香薰挂件 粽子和茶叶 - 朱礼纪礼品定制: [引用附件]；[附件]；可以看看这套活动价39；您好亲，咱这边伴手礼还要吗",
+        "candidateScore": 82,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "不超100都还好",
+        "serviceText": "可以的稍等我给你重新搭配一下；你喜欢什么样的包装",
+        "candidateScore": 79,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      }
+    ],
+    "design_confirmation": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我们只有50的预算",
+        "serviceText": "包含定制卡片 logo；可以要帽子 本子 小风扇；包包；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "葡萄，发圈，香薰；这个呢",
+        "serviceText": "[附件]；我找一下香薰；[附件]；这几样可以；可以做；那就定这款吧；您把logo发我一下",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "[引用附件]",
+        "serviceText": "[呲牙]；这个在咱们预算内的；也可以给咱定制腰封；logo",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+        "serviceText": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的",
+        "serviceText": "您这边是哪里的，需要定制logo吗",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[附件]；这个是我们logo；跨境物流公司做欧盟海外仓的",
+        "serviceText": "好的稍等出一下效果图；还有这种；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_014",
+        "customerText": "只要包包和笔记本呢？",
+        "serviceText": "多少套呀发哪里，需要定制吊牌和腰封吗；这边要合算运费",
+        "candidateScore": 90,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "哇塞价格也不错 在预算内；能定制logo吗",
+        "serviceText": "嗯呢，因为咱们是老乡lei；对的；能在礼袋外面做",
+        "candidateScore": 90,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "我滴妈呀[捂脸][捂脸]",
+        "serviceText": "定制logo是可以的",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计；要加我们logo；[附件]；这个是我们logo",
+        "serviceText": "好的；logo定制大货可以做",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子；我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了",
+        "serviceText": "一样的logo位置不同；可以",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "[附件]；17可以吗；亲",
+        "serviceText": "这款是活动款亲，不够本呀；活动款都是不将价格的；讲；最低就[金额]，；就赚点打包费；这个袋子颜色我可以给你颜色一半一半；这两个款式我们的卡片可以给你免费定制；之前设计费是[金额]；卡片给你加上logo；[附件]；[语音/视频通话] [通话记录]；亲，这个葡萄皂+眼罩+香薰挂件能给您做到35；[附件]；这个挂件；[附件]；眼罩",
+        "candidateScore": 87,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      }
+    ],
+    "sample_policy": [
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的我这边先看看样品和方案",
+        "serviceText": "您先看一下；您这边预算多少呢；还有数量",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+        "serviceText": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计；要加我们logo；[附件]；这个是我们logo",
+        "serviceText": "好的；logo定制大货可以做",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子；我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了",
+        "serviceText": "一样的logo位置不同；可以",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "[附件]",
+        "serviceText": "得等一会了，要找厂里同事拍一下；安排人去拍了哈；[附件]；您看下；样品间的葡萄串时间有点久了，给您发的都是新的",
+        "candidateScore": 86,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "看看周一能不能收到样品",
+        "serviceText": "样品可以先用我们这边之前做的腰封；到时候大货再定制就快一点",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "反正是样品先让他们看看闻闻；不行可以换味道吧哈哈；曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图；这是我们的slogan",
+        "serviceText": "好的；[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "啥意思呀 就是样品定制不了logo是吗",
+        "serviceText": "是滴；一般样品都不给做logo.",
+        "candidateScore": 81,
+        "flags": [
+          "policy_requires_review"
+        ],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "给我邮寄一套我看看；[地址][手机号][收件人]",
+        "serviceText": "咱们样品也是3-4天发哈；都是新货；您看时间来得及不",
+        "candidateScore": 80,
+        "flags": [
+          "one_off_lead_time",
+          "address_or_contact_details"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的",
+        "serviceText": "稍等下午我给您看看；咱这边要寄样品哈",
+        "candidateScore": 80,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "有没有翻盖的",
+        "serviceText": "稍等；[附件]；翻盖需要定制；现在中秋的礼品样品都还在出，所以来说样品没有很多；[附件]；这是之前给腾讯做的拜师礼；可以用这款框子加上中秋腰封就可以；[引用消息] 类似于这种 - 朱礼纪礼品定制: [引用附件]；搭配笔记本 本子 和手机支架+月饼",
+        "candidateScore": 79,
+        "flags": [
+          "scene_ambiguous"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "亲，你这个挺贵的；[附件]",
+        "serviceText": "亲这几样成本好几样我确实不够，我没说瞎话；有的产品看着差不多；但是品质部一样；有图片吗我看看；如果时间来得及，可以给您发一下样品；您感受一下品质",
+        "candidateScore": 78,
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      }
+    ],
+    "price_objection": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我们只有50的预算",
+        "serviceText": "包含定制卡片 logo；可以要帽子 本子 小风扇；包包；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "[引用附件]",
+        "serviceText": "[呲牙]；这个在咱们预算内的；也可以给咱定制腰封；logo",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+        "serviceText": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的",
+        "serviceText": "您这边是哪里的，需要定制logo吗",
+        "candidateScore": 94,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "水杯，风扇，书包，班级定制多少钱",
+        "serviceText": "稍等；[附件]；只要书包 水杯 和风扇吗；这套原价[金额]；咱这边要多少套",
+        "candidateScore": 93,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_014",
+        "customerText": "只要包包和笔记本呢？",
+        "serviceText": "多少套呀发哪里，需要定制吊牌和腰封吗；这边要合算运费",
+        "candidateScore": 90,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户",
+        "serviceText": "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]；[附件]",
+        "candidateScore": 90,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "哇塞价格也不错 在预算内；能定制logo吗",
+        "serviceText": "嗯呢，因为咱们是老乡lei；对的；能在礼袋外面做",
+        "candidateScore": 90,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "[应用消息] 被一眼相中秒通过的商务礼品方案来啦 - @青茉礼伴手礼 的笔记 159人分享；这套是多少钱；还有你可以定制冰箱贴；吗？",
+        "serviceText": "冰箱贴可以定制；这个超预算哈",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "我滴妈呀[捂脸][捂脸]",
+        "serviceText": "定制logo是可以的",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计；要加我们logo；[附件]；这个是我们logo",
+        "serviceText": "好的；logo定制大货可以做",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子；我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了",
+        "serviceText": "一样的logo位置不同；可以",
+        "candidateScore": 88,
+        "flags": [],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      }
+    ],
+    "delivery_timing": [
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "给我邮寄一套我看看；[地址][手机号][收件人]",
+        "serviceText": "咱们样品也是3-4天发哈；都是新货；您看时间来得及不",
+        "candidateScore": 80,
+        "flags": [
+          "one_off_lead_time",
+          "address_or_contact_details"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "好了",
+        "serviceText": "您回复一下确认明细，然后发我一下手机号，那边是虚拟号；这样我们发货好给您发快递",
+        "candidateScore": 79,
+        "flags": [
+          "contact_collection_requires_review"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "亲，你这个挺贵的；[附件]",
+        "serviceText": "亲这几样成本好几样我确实不够，我没说瞎话；有的产品看着差不多；但是品质部一样；有图片吗我看看；如果时间来得及，可以给您发一下样品；您感受一下品质",
+        "candidateScore": 78,
+        "flags": [
+          "commercial_reasoning_requires_review",
+          "scene_ambiguous"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "行；那就没问题了",
+        "serviceText": "好的；发货单号给一下哈",
+        "candidateScore": 78,
+        "flags": [],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "最快什么时候发货",
+        "serviceText": "我们装好4-5天发货；[引用消息] 我算了一下不够本[捂脸] - 胡冰: 55给我们吧；或者你换个杯子还行",
+        "candidateScore": 77,
+        "flags": [
+          "one_off_lead_time"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_019",
+        "customerText": "16号收到；17号沙龙",
+        "serviceText": "不能跟您保证时间因为快递也会有误差；艾草锤可以",
+        "candidateScore": 73,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "包装很好看[強]；哈喽 快递送达了；可以退押金吗；[附件] ChEKB2RlZmF1bHQSBuWTiOWWvQ==]",
+        "serviceText": "稍等；单号发一下；这边我们放假了；我们确认收货给退款",
+        "candidateScore": 72,
+        "flags": [
+          "policy_requires_review",
+          "scene_ambiguous"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "好呢",
+        "serviceText": "halo，咱前几天说的两款礼品方案，咱们公司商量的怎么样呀",
+        "candidateScore": 71,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_021",
+        "customerText": "好的",
+        "serviceText": "嗯呢；您这边是哪里的呀；什么时间用呢",
+        "candidateScore": 71,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "你们报价都不统一，我买的也不少，你就要价高。我是刷到了，就问问，随便一问都比你报的低",
+        "serviceText": "我说过了全网就我们家一家做的；散发需要分多个快递；里面的腰封定制都没有",
+        "candidateScore": 70,
+        "flags": [
+          "absolute_or_unverified_promise",
+          "unverified_business_claim"
+        ],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "发货了不",
+        "serviceText": "还没有亲；回来单号发你哈",
+        "candidateScore": 70,
+        "flags": [],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_001",
+        "customerText": "最近；我要的少",
+        "serviceText": "多好套呀；最近是哪天呢，我看下快递，",
+        "candidateScore": 69,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      }
+    ],
+    "order_confirmation": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我拉你进群，家委会家长有疑问；哈哈哈",
+        "serviceText": "好的；[呲牙]；您好亲，这边什么时候付款呢",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "给我邮寄一套我看看；[地址][手机号][收件人]",
+        "serviceText": "咱们样品也是3-4天发哈；都是新货；您看时间来得及不",
+        "candidateScore": 80,
+        "flags": [
+          "one_off_lead_time",
+          "address_or_contact_details"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_008",
+        "customerText": "好了",
+        "serviceText": "您回复一下确认明细，然后发我一下手机号，那边是虚拟号；这样我们发货好给您发快递",
+        "candidateScore": 79,
+        "flags": [
+          "contact_collection_requires_review"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "[附件]；能不能和工厂说一声换顶白色的啦；其他的没问题了；我自己的不想要蓝色的[破涕为笑]",
+        "serviceText": "这个地址我给你单独送一个吧，一般采购了就不好改了",
+        "candidateScore": 79,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_016",
+        "customerText": "我用这个27的清单换成这个紫色的包装；你给我算便宜一点28一份；我们先初期合作，后期我们合作愉快长期；你那个气垫梳我感觉应该梳的不舒服；OK的话我就下单；[语音/视频通话] [通话记录]；[语音/视频通话] [通话记录]；要确定好，确定不了我要赶紧找其他的看下怎么给客户做伴手礼，时间紧迫",
+        "serviceText": "最低紫色包装和内搭32",
+        "candidateScore": 78,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "就今天下午选一下套餐呗 然后寄样品 我发你地址到付；OKOK确实需要；[附件]",
+        "serviceText": "好滴；[嘿哈]；您喜欢的款式也需要调整的需求可以发给我；[引用消息] [金额] 小胖墩保温杯 眼罩二合一u型枕 数据线 小风扇 无线车载吸尘器家用便携式 - 朱礼纪礼品定制: [引用附件]；[引用消息] 86：套 U型枕 咖啡杯 手机支架 笔记本 签字笔 - 朱礼纪礼品定制: [引用附件]；[引用消息] [金额] 无线鼠标 充电宝 手机支架 笔记本 - 朱礼纪礼品定制: [引用附件]",
+        "candidateScore": 77,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "可以",
+        "serviceText": "这套[金额]，包含定制腰封，含税运；您地址哪里",
+        "candidateScore": 73,
+        "flags": [
+          "one_off_commercial_fact"
+        ],
+        "agentKey": "gift_design",
+        "scene": "礼盒设计"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "嗯嗯；1700？",
+        "serviceText": "好可以的，[捂脸]；您发下地址吧",
+        "candidateScore": 73,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_015",
+        "customerText": "[附件]",
+        "serviceText": "好的；稍等发订单；[附件]",
+        "candidateScore": 73,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_014",
+        "customerText": "OK👌🏻；怎么下单",
+        "serviceText": "稍等；我发您一个码；36*20=[金额]；您地址收货信息发一下",
+        "candidateScore": 72,
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_weak"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "还没定",
+        "serviceText": "哈喽亲；今天打扰您；这边毕业季的礼品时间也快到了；怕耽误您用，今天来问一下这边礼品给您下单不",
+        "candidateScore": 71,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "好的，我下午给你答复；在哪下单",
+        "serviceText": "这边给您一个付款码；[附件]",
+        "candidateScore": 71,
+        "flags": [
+          "payment_channel_requires_review"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      }
+    ],
+    "follow_up": [
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "没有没有",
+        "serviceText": "就是您要的这几样；我现在肯定也是能卖多少卖多少；您考虑一下；预算低可以放三样；[附件]；您看一下；卖您的不贵",
+        "candidateScore": 86,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "缓两天不急，领导出差了",
+        "serviceText": "嗷嗷好滴；哈喽亲，咱们领导回来了嘛",
+        "candidateScore": 84,
+        "flags": [],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "好吧😞；那我再去说一下看看呢；你等我消息哈",
+        "serviceText": "好呢；可以跟老板说下，定制和运费都包含，因为定制一般都要加钱；公司需要纳税都有成本的",
+        "candidateScore": 83,
+        "flags": [
+          "commercial_reasoning_requires_review"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_004",
+        "customerText": "现在风扇好便宜的",
+        "serviceText": "400ml；换便宜的，书包和杯子加一起成本您算一下还有运费和人工；您好亲，咱们毕业季礼品确定了嘛；还有这种哈[金额]；[附件]",
+        "candidateScore": 76,
+        "flags": [
+          "one_off_commercial_fact",
+          "commercial_reasoning_requires_review"
+        ],
+        "agentKey": "order_payment",
+        "scene": "下单支付"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "可以",
+        "serviceText": "晚些发您；时间确定了嘛亲",
+        "candidateScore": 71,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "那我再看看吧",
+        "serviceText": "好的；你把水杯换一个本子也可以；这样四样差不多也得六十多",
+        "candidateScore": 69,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_005",
+        "customerText": "亲爱的老板，给我们优惠一下呗；55给我们吧",
+        "serviceText": "包 本子 杯子 风扇 帽子？",
+        "candidateScore": 69,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "好 我思考一下",
+        "serviceText": "好滴；有这种海蓝之谜的镜子；[附件]；比较上档次，也不算很贵；可以考虑一下",
+        "candidateScore": 69,
+        "flags": [
+          "scene_weak"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "对",
+        "serviceText": "老板说要求了吗；商务一点还是在美观一些",
+        "candidateScore": 69,
+        "flags": [
+          "low_information_pair"
+        ],
+        "agentKey": "pre_sales",
+        "scene": "售前转化"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "嘿嘿嘿好滴；我拿给老板们看看哈；他们也都是山东的哈哈",
+        "serviceText": "嗯呢是吗哈哈哈那太好了",
+        "candidateScore": 69,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "笔记本和杯子上也都有哈",
+        "serviceText": "对的；您好亲，咱们毕业季礼品确定了嘛；还有这种哈[金额]；[附件]",
+        "candidateScore": 68,
+        "flags": [
+          "one_off_commercial_fact",
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "[发抖]",
+        "serviceText": "我最近再看看吧亲；因为你的婚期还有段时间",
+        "candidateScore": 65,
+        "flags": [
+          "scene_unmatched"
+        ],
+        "agentKey": "general",
+        "scene": "未分类"
+      }
+    ],
+    "after_sales": [
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "问一下，如果我定了份数太多了，最后发了还有多余的能退吗；[附件]",
+        "serviceText": "这个好像不大行[敲打]；一般定制产品除了质量问题一般不退货；您这次要多少呀",
+        "candidateScore": 77,
+        "flags": [
+          "policy_requires_review"
+        ],
+        "agentKey": "after_sales",
+        "scene": "售后安抚"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "包装很好看[強]；哈喽 快递送达了；可以退押金吗；[附件] ChEKB2RlZmF1bHQSBuWTiOWWvQ==]",
+        "serviceText": "稍等；单号发一下；这边我们放假了；我们确认收货给退款",
+        "candidateScore": 72,
+        "flags": [
+          "policy_requires_review",
+          "scene_ambiguous"
+        ],
+        "agentKey": "logistics_exception",
+        "scene": "物流异常"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "好滴；那如果就是样品我们这边不满意的话可以全额退款吗；[附件] ChEKB2RlZmF1bHQSBuW/g+W/gw==]",
+        "serviceText": "可以的，退款的话，需要自行承担一个运费",
+        "candidateScore": 71,
+        "flags": [
+          "policy_requires_review"
+        ],
+        "agentKey": "after_sales",
+        "scene": "售后安抚"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "老乡这个样品我们还是需要退货；[快哭了]；太小了主要是",
+        "serviceText": "稍等；[地址][手机号]；.这个地址；发货单号给一下；运费自理哈；收到货无问题给退款",
+        "candidateScore": 58,
+        "flags": [
+          "contact_collection_requires_review",
+          "policy_requires_review",
+          "address_or_contact_details",
+          "scene_ambiguous"
+        ],
+        "agentKey": "after_sales",
+        "scene": "售后安抚"
+      }
+    ]
+  },
+  "privacyScan": {
+    "phone": 0,
+    "email": 0,
+    "idCard": 0,
+    "bankCard": 0,
+    "url": 0,
+    "wechatId": 0,
+    "addressLike": 13
+  },
+  "sessions": [
+    {
+      "sessionId": "xiaoshi_session_001",
+      "messageCount": 54,
+      "turnCount": 23,
+      "pairCount": 11,
+      "attachmentCount": 14,
+      "sourceMessageCount": 55,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_002",
+      "messageCount": 123,
+      "turnCount": 71,
+      "pairCount": 35,
+      "attachmentCount": 17,
+      "sourceMessageCount": 125,
+      "excludedSystemMessageCount": 2,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_003",
+      "messageCount": 52,
+      "turnCount": 25,
+      "pairCount": 12,
+      "attachmentCount": 17,
+      "sourceMessageCount": 58,
+      "excludedSystemMessageCount": 6,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_004",
+      "messageCount": 54,
+      "turnCount": 20,
+      "pairCount": 10,
+      "attachmentCount": 7,
+      "sourceMessageCount": 55,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_005",
+      "messageCount": 90,
+      "turnCount": 49,
+      "pairCount": 24,
+      "attachmentCount": 10,
+      "sourceMessageCount": 91,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_006",
+      "messageCount": 325,
+      "turnCount": 179,
+      "pairCount": 89,
+      "attachmentCount": 62,
+      "sourceMessageCount": 328,
+      "excludedSystemMessageCount": 3,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_007",
+      "messageCount": 98,
+      "turnCount": 53,
+      "pairCount": 26,
+      "attachmentCount": 6,
+      "sourceMessageCount": 99,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_008",
+      "messageCount": 80,
+      "turnCount": 49,
+      "pairCount": 24,
+      "attachmentCount": 5,
+      "sourceMessageCount": 81,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_009",
+      "messageCount": 408,
+      "turnCount": 178,
+      "pairCount": 89,
+      "attachmentCount": 140,
+      "sourceMessageCount": 413,
+      "excludedSystemMessageCount": 5,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_010",
+      "messageCount": 6,
+      "turnCount": 4,
+      "pairCount": 2,
+      "attachmentCount": 3,
+      "sourceMessageCount": 6,
+      "excludedSystemMessageCount": 0,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_011",
+      "messageCount": 154,
+      "turnCount": 91,
+      "pairCount": 45,
+      "attachmentCount": 24,
+      "sourceMessageCount": 160,
+      "excludedSystemMessageCount": 6,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_012",
+      "messageCount": 519,
+      "turnCount": 249,
+      "pairCount": 124,
+      "attachmentCount": 89,
+      "sourceMessageCount": 520,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_013",
+      "messageCount": 79,
+      "turnCount": 47,
+      "pairCount": 23,
+      "attachmentCount": 12,
+      "sourceMessageCount": 80,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_014",
+      "messageCount": 47,
+      "turnCount": 27,
+      "pairCount": 13,
+      "attachmentCount": 7,
+      "sourceMessageCount": 48,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_015",
+      "messageCount": 92,
+      "turnCount": 45,
+      "pairCount": 22,
+      "attachmentCount": 29,
+      "sourceMessageCount": 93,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_016",
+      "messageCount": 136,
+      "turnCount": 72,
+      "pairCount": 35,
+      "attachmentCount": 23,
+      "sourceMessageCount": 137,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_017",
+      "messageCount": 42,
+      "turnCount": 11,
+      "pairCount": 5,
+      "attachmentCount": 20,
+      "sourceMessageCount": 43,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_018",
+      "messageCount": 38,
+      "turnCount": 23,
+      "pairCount": 11,
+      "attachmentCount": 5,
+      "sourceMessageCount": 39,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_019",
+      "messageCount": 112,
+      "turnCount": 59,
+      "pairCount": 29,
+      "attachmentCount": 12,
+      "sourceMessageCount": 113,
+      "excludedSystemMessageCount": 1,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_020",
+      "messageCount": 360,
+      "turnCount": 161,
+      "pairCount": 80,
+      "attachmentCount": 76,
+      "sourceMessageCount": 364,
+      "excludedSystemMessageCount": 4,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_021",
+      "messageCount": 107,
+      "turnCount": 55,
+      "pairCount": 27,
+      "attachmentCount": 17,
+      "sourceMessageCount": 109,
+      "excludedSystemMessageCount": 2,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_022",
+      "messageCount": 19,
+      "turnCount": 11,
+      "pairCount": 5,
+      "attachmentCount": 3,
+      "sourceMessageCount": 21,
+      "excludedSystemMessageCount": 2,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    },
+    {
+      "sessionId": "xiaoshi_session_023",
+      "messageCount": 809,
+      "turnCount": 411,
+      "pairCount": 205,
+      "attachmentCount": 131,
+      "sourceMessageCount": 815,
+      "excludedSystemMessageCount": 6,
+      "contentAnonymized": true,
+      "mixedWithOtherCustomers": false
+    }
+  ],
+  "representativePairs": {
+    "general:未分类": [],
+    "pre_sales:售前转化": [
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "好的 我看看",
+        "serviceText": "咱这边是什么活动用的；然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些",
+        "candidateScore": 100,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的；有中秋礼品方案吗；月饼之类的礼盒",
+        "serviceText": "咱这边是现打算做中秋的方案吗；我看您问的是商务礼盒",
+        "candidateScore": 100,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_011",
+        "customerText": "准备筹备开业礼的",
+        "serviceText": "[附件] pdf]；[附件] pdf]；你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_022",
+        "customerText": "那个包什么价格",
+        "serviceText": "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下；可以截图给我看一下~",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "不只是糖果；是有其他搭配的那种",
+        "serviceText": "这边可以根据您的预算和需求配；可以呀；伴手礼都很灵活的",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "是的我这边先看看样品和方案",
+        "serviceText": "您先看一下；您这边预算多少呢；还有数量",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_002",
+        "customerText": "公司20周年庆典给参会人员的伴手礼 200份左右",
+        "serviceText": "咱们是什么类型的公司，预算多少呢",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_012",
+        "customerText": "hello 我来问一下婚礼宾客的伴手礼；要看起来大气一点",
+        "serviceText": "在的；多少预算，里面打算放什么呢",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      }
+    ],
+    "gift_design:礼盒设计": [
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+        "serviceText": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_009",
+        "customerText": "葡萄，发圈，香薰；这个呢",
+        "serviceText": "[附件]；我找一下香薰；[附件]；这几样可以；可以做；那就定这款吧；您把logo发我一下",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我们只有50的预算",
+        "serviceText": "包含定制卡片 logo；可以要帽子 本子 小风扇；包包；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "[引用附件]",
+        "serviceText": "[呲牙]；这个在咱们预算内的；也可以给咱定制腰封；logo",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[附件]；这个是我们logo；跨境物流公司做欧盟海外仓的",
+        "serviceText": "好的稍等出一下效果图；还有这种；[附件]",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的",
+        "serviceText": "您这边是哪里的，需要定制logo吗",
+        "candidateScore": 94,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_020",
+        "customerText": "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户",
+        "serviceText": "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]；[附件]",
+        "candidateScore": 90,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_014",
+        "customerText": "只要包包和笔记本呢？",
+        "serviceText": "多少套呀发哪里，需要定制吊牌和腰封吗；这边要合算运费",
+        "candidateScore": 90,
+        "flags": [],
+        "sceneCheck": "clear"
+      }
+    ],
+    "order_payment:下单支付": [
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "我拉你进群，家委会家长有疑问；哈哈哈",
+        "serviceText": "好的；[呲牙]；您好亲，这边什么时候付款呢",
+        "candidateScore": 84,
+        "flags": [],
+        "sceneCheck": "clear"
+      },
+      {
+        "sessionId": "xiaoshi_session_006",
+        "customerText": "发票按昨天统一的那个开，这个是单独给我转的账，不算",
+        "serviceText": "按照3540开哈；您把开票信息发我一下",
+        "candidateScore": 78,
+        "flags": [],
+        "sceneCheck": "clear"
+      }
+    ],
+    "logistics_exception:物流异常": [
+      {
+        "sessionId": "xiaoshi_session_023",
+        "customerText": "行；那就没问题了",
+        "serviceText": "好的；发货单号给一下哈",
+        "candidateScore": 78,
+        "flags": [],
+        "sceneCheck": "clear"
+      }
+    ],
+    "after_sales:售后安抚": []
+  },
+  "trainingCandidates": [
+    {
+      "id": "xiaoshi_session_011:2",
+      "sessionId": "xiaoshi_session_011",
+      "customerMessages": [
+        "好的 我看看"
+      ],
+      "humanReplyMessages": [
+        "咱这边是什么活动用的",
+        "然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些"
+      ],
+      "customerText": "好的 我看看",
+      "humanReply": "咱这边是什么活动用的；然后大概的预算是多少呢？这样的话，我可以推荐得更准确一些",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 100,
+      "flags": [],
+      "sourceLineStart": 8,
+      "sourceLineEnd": 10,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:1",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "是的",
+        "有中秋礼品方案吗",
+        "月饼之类的礼盒"
+      ],
+      "humanReplyMessages": [
+        "咱这边是现打算做中秋的方案吗",
+        "我看您问的是商务礼盒"
+      ],
+      "customerText": "是的；有中秋礼品方案吗；月饼之类的礼盒",
+      "humanReply": "咱这边是现打算做中秋的方案吗；我看您问的是商务礼盒",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 100,
+      "flags": [],
+      "sourceLineStart": 4,
+      "sourceLineEnd": 8,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_002:1",
+      "sessionId": "xiaoshi_session_002",
+      "customerMessages": [
+        "公司20周年庆典给参会人员的伴手礼 200份左右"
+      ],
+      "humanReplyMessages": [
+        "咱们是什么类型的公司，预算多少呢"
+      ],
+      "customerText": "公司20周年庆典给参会人员的伴手礼 200份左右",
+      "humanReply": "咱们是什么类型的公司，预算多少呢",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 3,
+      "sourceLineEnd": 4,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:4",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "我们只有50的预算"
+      ],
+      "humanReplyMessages": [
+        "包含定制卡片 logo",
+        "可以要帽子 本子 小风扇",
+        "包包",
+        "[附件]"
+      ],
+      "customerText": "我们只有50的预算",
+      "humanReply": "包含定制卡片 logo；可以要帽子 本子 小风扇；包包；[附件]",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 18,
+      "sourceLineEnd": 22,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_009:2",
+      "sessionId": "xiaoshi_session_009",
+      "customerMessages": [
+        "开业",
+        "伴手礼"
+      ],
+      "humanReplyMessages": [
+        "预算呢亲",
+        "这边数量要多少套呀"
+      ],
+      "customerText": "开业；伴手礼",
+      "humanReply": "预算呢亲；这边数量要多少套呀",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 8,
+      "sourceLineEnd": 11,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_009:72",
+      "sessionId": "xiaoshi_session_009",
+      "customerMessages": [
+        "葡萄，发圈，香薰",
+        "这个呢"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "我找一下香薰",
+        "[附件]",
+        "这几样可以",
+        "可以做",
+        "那就定这款吧",
+        "您把logo发我一下"
+      ],
+      "customerText": "葡萄，发圈，香薰；这个呢",
+      "humanReply": "[附件]；我找一下香薰；[附件]；这几样可以；可以做；那就定这款吧；您把logo发我一下",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 388,
+      "sourceLineEnd": 398,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_011:3",
+      "sessionId": "xiaoshi_session_011",
+      "customerMessages": [
+        "准备筹备开业礼的"
+      ],
+      "humanReplyMessages": [
+        "[附件] pdf]",
+        "[附件] pdf]",
+        "你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的"
+      ],
+      "customerText": "准备筹备开业礼的",
+      "humanReply": "[附件] pdf]；[附件] pdf]；你可以看一下，这是我们这边给美业开业的一些伴手礼。右边是一些明细和预算，你可以挑一下。然后里面的产品是可以调换的",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 12,
+      "sourceLineEnd": 15,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:56",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "不只是糖果",
+        "是有其他搭配的那种"
+      ],
+      "humanReplyMessages": [
+        "这边可以根据您的预算和需求配",
+        "可以呀",
+        "伴手礼都很灵活的"
+      ],
+      "customerText": "不只是糖果；是有其他搭配的那种",
+      "humanReply": "这边可以根据您的预算和需求配；可以呀；伴手礼都很灵活的",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 242,
+      "sourceLineEnd": 246,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:84",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "hello 我来问一下婚礼宾客的伴手礼",
+        "要看起来大气一点"
+      ],
+      "humanReplyMessages": [
+        "在的",
+        "多少预算，里面打算放什么呢"
+      ],
+      "customerText": "hello 我来问一下婚礼宾客的伴手礼；要看起来大气一点",
+      "humanReply": "在的；多少预算，里面打算放什么呢",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 442,
+      "sourceLineEnd": 445,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_019:3",
+      "sessionId": "xiaoshi_session_019",
+      "customerMessages": [
+        "还想要一个伴手礼"
+      ],
+      "humanReplyMessages": [
+        "您数量要多少呢，还有预算"
+      ],
+      "customerText": "还想要一个伴手礼",
+      "humanReply": "您数量要多少呢，还有预算",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 12,
+      "sourceLineEnd": 13,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:11",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "[引用附件]",
+        "[引用消息] 好的 - 朱礼纪礼品定制: 这些可以到时候调整一下搭配把预算控制在一百以内"
+      ],
+      "humanReplyMessages": [
+        "[呲牙]",
+        "这个在咱们预算内的",
+        "也可以给咱定制腰封",
+        "logo"
+      ],
+      "customerText": "[引用附件]",
+      "humanReply": "[呲牙]；这个在咱们预算内的；也可以给咱定制腰封；logo",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 54,
+      "sourceLineEnd": 59,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:4",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "是的我这边先看看样品和方案"
+      ],
+      "humanReplyMessages": [
+        "您先看一下",
+        "您这边预算多少呢",
+        "还有数量"
+      ],
+      "customerText": "是的我这边先看看样品和方案",
+      "humanReply": "您先看一下；您这边预算多少呢；还有数量",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 19,
+      "sourceLineEnd": 22,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:56",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "那我这种搭配好的大货是还要再晚一点才会有吗"
+      ],
+      "humanReplyMessages": [
+        "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出",
+        "除非单独定制",
+        "一般这种礼盒有内衬的，都是搭配好的",
+        "不需要内衬的比较好做，时间快一点",
+        "单独做内衬，要选好单品重新量尺寸，做礼盒"
+      ],
+      "customerText": "那我这种搭配好的大货是还要再晚一点才会有吗",
+      "humanReply": "是的，现在市面上的礼品公司都还在搭配新品，还没这么快出；除非单独定制；一般这种礼盒有内衬的，都是搭配好的；不需要内衬的比较好做，时间快一点；单独做内衬，要选好单品重新量尺寸，做礼盒",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 304,
+      "sourceLineEnd": 309,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_022:1",
+      "sessionId": "xiaoshi_session_022",
+      "customerMessages": [
+        "那个包什么价格"
+      ],
+      "humanReplyMessages": [
+        "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下",
+        "可以截图给我看一下~"
+      ],
+      "customerText": "那个包什么价格",
+      "humanReply": "这边需要伴手礼哈，喜欢哪一款，还是我给您推荐一下；可以截图给我看一下~",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 3,
+      "sourceLineEnd": 5,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:26",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[附件]",
+        "这个是我们logo",
+        "跨境物流公司做欧盟海外仓的"
+      ],
+      "humanReplyMessages": [
+        "好的稍等出一下效果图",
+        "还有这种",
+        "[附件]",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "[附件]；这个是我们logo；跨境物流公司做欧盟海外仓的",
+      "humanReply": "好的稍等出一下效果图；还有这种；[附件]",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 129,
+      "sourceLineEnd": 136,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:8",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的"
+      ],
+      "humanReplyMessages": [
+        "您这边是哪里的，需要定制logo吗"
+      ],
+      "customerText": "[引用消息] 这套多少呢 - 朱礼纪礼品定制: 这套国礼茶具也是可以的",
+      "humanReply": "您这边是哪里的，需要定制logo吗",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 94,
+      "flags": [],
+      "sourceLineStart": 50,
+      "sourceLineEnd": 51,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_014:2",
+      "sessionId": "xiaoshi_session_014",
+      "customerMessages": [
+        "只要包包和笔记本呢？"
+      ],
+      "humanReplyMessages": [
+        "多少套呀发哪里，需要定制吊牌和腰封吗",
+        "这边要合算运费"
+      ],
+      "customerText": "只要包包和笔记本呢？",
+      "humanReply": "多少套呀发哪里，需要定制吊牌和腰封吗；这边要合算运费",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 90,
+      "flags": [],
+      "sourceLineStart": 14,
+      "sourceLineEnd": 16,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:38",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户"
+      ],
+      "humanReplyMessages": [
+        "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "不要这种袋子的 我们中秋好像都是送礼盒的 会送客户",
+      "humanReply": "[引用消息] 这种呢 - 朱礼纪礼品定制: [引用附件]；[附件]",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 90,
+      "flags": [],
+      "sourceLineStart": 197,
+      "sourceLineEnd": 200,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:122",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "哇塞价格也不错 在预算内",
+        "能定制logo吗"
+      ],
+      "humanReplyMessages": [
+        "嗯呢，因为咱们是老乡lei",
+        "对的",
+        "能在礼袋外面做"
+      ],
+      "customerText": "哇塞价格也不错 在预算内；能定制logo吗",
+      "humanReply": "嗯呢，因为咱们是老乡lei；对的；能在礼袋外面做",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 90,
+      "flags": [],
+      "sourceLineStart": 615,
+      "sourceLineEnd": 619,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_002:7",
+      "sessionId": "xiaoshi_session_002",
+      "customerMessages": [
+        "[应用消息] 被一眼相中秒通过的商务礼品方案来啦 - @青茉礼伴手礼 的笔记 159人分享",
+        "这套是多少钱",
+        "还有你可以定制冰箱贴",
+        "吗？"
+      ],
+      "humanReplyMessages": [
+        "冰箱贴可以定制",
+        "这个超预算哈"
+      ],
+      "customerText": "[应用消息] 被一眼相中秒通过的商务礼品方案来啦 - @青茉礼伴手礼 的笔记 159人分享；这套是多少钱；还有你可以定制冰箱贴；吗？",
+      "humanReply": "冰箱贴可以定制；这个超预算哈",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 88,
+      "flags": [],
+      "sourceLineStart": 25,
+      "sourceLineEnd": 30,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:137",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计",
+        "要加我们logo",
+        "[附件]",
+        "这个是我们logo"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "logo定制大货可以做"
+      ],
+      "customerText": "[引用消息] 这个需要的 - 朱礼纪礼品定制: 可以的话咱这边可以出设计；要加我们logo；[附件]；这个是我们logo",
+      "humanReply": "好的；logo定制大货可以做",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 88,
+      "flags": [],
+      "sourceLineStart": 694,
+      "sourceLineEnd": 699,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:147",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子",
+        "我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了"
+      ],
+      "humanReplyMessages": [
+        "一样的logo位置不同",
+        "可以"
+      ],
+      "customerText": "[引用消息] 不一样的盒子吗 - 朱礼纪礼品定制: 订大货的话，就是这种盒子；我们那个logo你们可以改个颜色的 就是跟盒子相近的颜色就可以啊 不然太突兀了",
+      "humanReply": "一样的logo位置不同；可以",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 88,
+      "flags": [],
+      "sourceLineStart": 744,
+      "sourceLineEnd": 747,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:60",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "我滴妈呀[捂脸][捂脸]"
+      ],
+      "humanReplyMessages": [
+        "定制logo是可以的"
+      ],
+      "customerText": "我滴妈呀[捂脸][捂脸]",
+      "humanReply": "定制logo是可以的",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 88,
+      "flags": [],
+      "sourceLineStart": 295,
+      "sourceLineEnd": 296,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_005:16",
+      "sessionId": "xiaoshi_session_005",
+      "customerMessages": [
+        "没有没有"
+      ],
+      "humanReplyMessages": [
+        "就是您要的这几样",
+        "我现在肯定也是能卖多少卖多少",
+        "您考虑一下",
+        "预算低可以放三样",
+        "[附件]",
+        "您看一下",
+        "卖您的不贵"
+      ],
+      "customerText": "没有没有",
+      "humanReply": "就是您要的这几样；我现在肯定也是能卖多少卖多少；您考虑一下；预算低可以放三样；[附件]；您看一下；卖您的不贵",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 86,
+      "flags": [],
+      "sourceLineStart": 74,
+      "sourceLineEnd": 81,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_009:74",
+      "sessionId": "xiaoshi_session_009",
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "得等一会了，要找厂里同事拍一下",
+        "安排人去拍了哈",
+        "[附件]",
+        "您看下",
+        "样品间的葡萄串时间有点久了，给您发的都是新的"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "得等一会了，要找厂里同事拍一下；安排人去拍了哈；[附件]；您看下；样品间的葡萄串时间有点久了，给您发的都是新的",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 86,
+      "flags": [],
+      "sourceLineStart": 404,
+      "sourceLineEnd": 409,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_002:35",
+      "sessionId": "xiaoshi_session_002",
+      "customerMessages": [
+        "缓两天不急，领导出差了"
+      ],
+      "humanReplyMessages": [
+        "嗷嗷好滴",
+        "哈喽亲，咱们领导回来了嘛"
+      ],
+      "customerText": "缓两天不急，领导出差了",
+      "humanReply": "嗷嗷好滴；哈喽亲，咱们领导回来了嘛",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 156,
+      "sourceLineEnd": 158,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:36",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "我拉你进群，家委会家长有疑问",
+        "哈哈哈"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "[呲牙]",
+        "您好亲，这边什么时候付款呢"
+      ],
+      "customerText": "我拉你进群，家委会家长有疑问；哈哈哈",
+      "humanReply": "好的；[呲牙]；您好亲，这边什么时候付款呢",
+      "agentKey": "order_payment",
+      "scene": "下单支付",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 170,
+      "sourceLineEnd": 174,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:43",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "是定制的",
+        "图片款",
+        "[附件]",
+        "一模一样的"
+      ],
+      "humanReplyMessages": [
+        "他说的是散发的价格",
+        "你看看",
+        "不是包装好的",
+        "而且只能做背包的吊卡"
+      ],
+      "customerText": "是定制的；图片款；[附件]；一模一样的",
+      "humanReply": "他说的是散发的价格；你看看；不是包装好的；而且只能做背包的吊卡",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 197,
+      "sourceLineEnd": 204,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:88",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "不太行",
+        "纸盒最好还是"
+      ],
+      "humanReplyMessages": [
+        "有的",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这种风吕敷挺适合婚礼的"
+      ],
+      "customerText": "不太行；纸盒最好还是",
+      "humanReply": "有的；[附件]；这种风吕敷挺适合婚礼的",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 461,
+      "sourceLineEnd": 472,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:92",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "喜糖我们另外放的",
+        "这个大小单个大概多少钱呢"
+      ],
+      "humanReplyMessages": [
+        "也要根据具体放的东西",
+        "椭圆盒子有19cm长度",
+        "和24cm",
+        "图片是24cm",
+        "可以发一对陶瓷杯碟",
+        "香皂，香薰",
+        "或者放个葡萄皂"
+      ],
+      "customerText": "喜糖我们另外放的；这个大小单个大概多少钱呢",
+      "humanReply": "也要根据具体放的东西；椭圆盒子有19cm长度；和24cm；图片是24cm；可以发一对陶瓷杯碟；香皂，香薰；或者放个葡萄皂",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 489,
+      "sourceLineEnd": 497,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:28",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "看看周一能不能收到样品"
+      ],
+      "humanReplyMessages": [
+        "样品可以先用我们这边之前做的腰封",
+        "到时候大货再定制就快一点"
+      ],
+      "customerText": "看看周一能不能收到样品",
+      "humanReply": "样品可以先用我们这边之前做的腰封；到时候大货再定制就快一点",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 149,
+      "sourceLineEnd": 151,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:47",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "我们这些也是选品之后定下的"
+      ],
+      "humanReplyMessages": [
+        "可以的",
+        "可以给您找一下这种",
+        "今年有点早了",
+        "有合适的我发您",
+        "[附件]",
+        "[附件]",
+        "这种到时候出新款我给您发"
+      ],
+      "customerText": "我们这些也是选品之后定下的",
+      "humanReply": "可以的；可以给您找一下这种；今年有点早了；有合适的我发您；[附件]；这种到时候出新款我给您发",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 253,
+      "sourceLineEnd": 260,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:55",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "[引用消息] 158和168的盒子 搭配两个月饼 其他的可以按照类似产品搭配吗 - mimimo: [引用附件]"
+      ],
+      "humanReplyMessages": [
+        "可以",
+        "因为我给你看的都是搭配好的那种现货",
+        "你说的这种要重新做内衬",
+        "费用会高很多，周期要半个月",
+        "[引用附件]"
+      ],
+      "customerText": "[引用消息] 158和168的盒子 搭配两个月饼 其他的可以按照类似产品搭配吗 - mimimo: [引用附件]",
+      "humanReply": "可以；因为我给你看的都是搭配好的那种现货；你说的这种要重新做内衬；费用会高很多，周期要半个月；[引用附件]",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 297,
+      "sourceLineEnd": 302,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:153",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "反正是样品先让他们看看闻闻",
+        "不行可以换味道吧哈哈",
+        "曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图",
+        "这是我们的slogan"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈"
+      ],
+      "customerText": "反正是样品先让他们看看闻闻；不行可以换味道吧哈哈；曼尼卡姆欧盟海外仓-助力商家开拓欧盟新版图；这是我们的slogan",
+      "humanReply": "好的；[引用消息] 大货可以换 - Q歪歪^: 不行可以换味道吧哈哈",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 771,
+      "sourceLineEnd": 776,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:186",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "50-60左右",
+        "你发的这些不像送客户的 像婚礼的伴手礼",
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "我们有商务礼",
+        "[附件] pptx]",
+        "[附件] pdf]"
+      ],
+      "customerText": "50-60左右；你发的这些不像送客户的 像婚礼的伴手礼；[附件]",
+      "humanReply": "我们有商务礼；[附件] pptx]；[附件] pdf]",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 925,
+      "sourceLineEnd": 930,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:29",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "可以呀",
+        "这个价格不错"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "比较优惠了",
+        "第一次合作"
+      ],
+      "customerText": "可以呀；这个价格不错",
+      "humanReply": "嗯呢；比较优惠了；第一次合作",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 150,
+      "sourceLineEnd": 154,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:77",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[引用消息] 嗯这个价格感觉也挺不错滴 - 朱礼纪礼品定制: [引用附件]",
+        "那个小的多少钱"
+      ],
+      "humanReplyMessages": [
+        "毛毡包的性价比不错",
+        "[附件]",
+        "57 杯垫*2 希罗韦香薰 桂花茶 陶瓷杯",
+        "15*15盒子"
+      ],
+      "customerText": "[引用消息] 嗯这个价格感觉也挺不错滴 - 朱礼纪礼品定制: [引用附件]；那个小的多少钱",
+      "humanReply": "毛毡包的性价比不错；[附件]；57 杯垫*2 希罗韦香薰 桂花茶 陶瓷杯；15*15盒子",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 399,
+      "sourceLineEnd": 404,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:79",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "还有别的新款不",
+        "嗯嗯 就是要找大的",
+        "[引用附件]"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "对",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这些就要贵一点"
+      ],
+      "customerText": "还有别的新款不；嗯嗯 就是要找大的；[引用附件]",
+      "humanReply": "[附件]；对；[附件]；这些就要贵一点",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 84,
+      "flags": [],
+      "sourceLineStart": 409,
+      "sourceLineEnd": 425,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_009:77",
+      "sessionId": "xiaoshi_session_009",
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "礼盒吗",
+        "[附件]",
+        "护手霜 木梳 香皂 发圈",
+        "这个是大肠发圈蓝色的",
+        "[引用消息] 这个香皂我可以给你配个小的葡萄皂 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "这个样的",
+        "换掉那个方块的香皂"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "礼盒吗；[附件]；护手霜 木梳 香皂 发圈；这个是大肠发圈蓝色的；[引用消息] 这个香皂我可以给你配个小的葡萄皂 - 朱礼纪礼品定制: [引用附件]；[附件]；这个样的；换掉那个方块的香皂",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 82,
+      "flags": [],
+      "sourceLineStart": 425,
+      "sourceLineEnd": 433,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_013:20",
+      "sessionId": "xiaoshi_session_013",
+      "customerMessages": [
+        "可以的"
+      ],
+      "humanReplyMessages": [
+        "[引用消息] 什么 - 7+瑜伽普拉提·女子塑形杨店长: 茶包不要30好吗？"
+      ],
+      "customerText": "可以的",
+      "humanReply": "[引用消息] 什么 - 7+瑜伽普拉提·女子塑形杨店长: 茶包不要30好吗？",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 82,
+      "flags": [],
+      "sourceLineStart": 87,
+      "sourceLineEnd": 88,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_016:3",
+      "sessionId": "xiaoshi_session_016",
+      "customerMessages": [
+        "都有些啥"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "您看一下这是明细哈",
+        "[引用消息] 艾草锤 香薰挂件 粽子和茶叶 - 朱礼纪礼品定制: [引用附件]",
+        "[附件]",
+        "可以看看这套活动价39",
+        "您好亲，咱这边伴手礼还要吗"
+      ],
+      "customerText": "都有些啥",
+      "humanReply": "[附件]；您看一下这是明细哈；[引用消息] 艾草锤 香薰挂件 粽子和茶叶 - 朱礼纪礼品定制: [引用附件]；[附件]；可以看看这套活动价39；您好亲，咱这边伴手礼还要吗",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 82,
+      "flags": [],
+      "sourceLineStart": 12,
+      "sourceLineEnd": 21,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:185",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "大一点的才好送客户呀"
+      ],
+      "humanReplyMessages": [
+        "这个伴手礼的预算呢"
+      ],
+      "customerText": "大一点的才好送客户呀",
+      "humanReply": "这个伴手礼的预算呢",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 82,
+      "flags": [],
+      "sourceLineStart": 922,
+      "sourceLineEnd": 923,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:6",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "是的"
+      ],
+      "humanReplyMessages": [
+        "稍等下午我给您看看",
+        "咱这边要寄样品哈"
+      ],
+      "customerText": "是的",
+      "humanReply": "稍等下午我给您看看；咱这边要寄样品哈",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 80,
+      "flags": [],
+      "sourceLineStart": 28,
+      "sourceLineEnd": 30,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:69",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "好",
+        "有了吗"
+      ],
+      "humanReplyMessages": [
+        "这种杜邦袋",
+        "[附件]",
+        "要贵一些可以加logo"
+      ],
+      "customerText": "好；有了吗",
+      "humanReply": "这种杜邦袋；[附件]；要贵一些可以加logo",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 80,
+      "flags": [],
+      "sourceLineStart": 337,
+      "sourceLineEnd": 341,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:28",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "好的，定制小标签放好的吗"
+      ],
+      "humanReplyMessages": [
+        "对的",
+        "那个是卡片腰封",
+        "我们定制哈了放进去"
+      ],
+      "customerText": "好的，定制小标签放好的吗",
+      "humanReply": "对的；那个是卡片腰封；我们定制哈了放进去",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 133,
+      "sourceLineEnd": 136,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:76",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "哈哈，我也不知道还能不能相信你",
+        "哎，你看着配吧"
+      ],
+      "humanReplyMessages": [
+        "恩恩",
+        "伴手礼行业我们都是搭配的"
+      ],
+      "customerText": "哈哈，我也不知道还能不能相信你；哎，你看着配吧",
+      "humanReply": "恩恩；伴手礼行业我们都是搭配的",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 359,
+      "sourceLineEnd": 362,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:89",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "发票按昨天统一的那个开，这个是单独给我转的账，不算"
+      ],
+      "humanReplyMessages": [
+        "按照3540开哈",
+        "您把开票信息发我一下"
+      ],
+      "customerText": "发票按昨天统一的那个开，这个是单独给我转的账，不算",
+      "humanReply": "按照3540开哈；您把开票信息发我一下",
+      "agentKey": "order_payment",
+      "scene": "下单支付",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 412,
+      "sourceLineEnd": 414,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_011:40",
+      "sessionId": "xiaoshi_session_011",
+      "customerMessages": [
+        "价格没优惠吗"
+      ],
+      "humanReplyMessages": [
+        "咱们一般20份包邮",
+        "报价是十份起订量"
+      ],
+      "customerText": "价格没优惠吗",
+      "humanReply": "咱们一般20份包邮；报价是十份起订量",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 177,
+      "sourceLineEnd": 179,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:77",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "对",
+        "只要丝带好了",
+        "挂件不要了",
+        "这样是分别多少钱一个？"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "明天我去查一下"
+      ],
+      "customerText": "对；只要丝带好了；挂件不要了；这样是分别多少钱一个？",
+      "humanReply": "好的；明天我去查一下",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 415,
+      "sourceLineEnd": 420,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_013:17",
+      "sessionId": "xiaoshi_session_013",
+      "customerMessages": [
+        "好的 那就先寄个样品给我",
+        "麻烦了"
+      ],
+      "humanReplyMessages": [
+        "24+10=34",
+        "您发一下收货信息"
+      ],
+      "customerText": "好的 那就先寄个样品给我；麻烦了",
+      "humanReply": "24+10=34；您发一下收货信息",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 73,
+      "sourceLineEnd": 76,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_013:6",
+      "sessionId": "xiaoshi_session_013",
+      "customerMessages": [
+        "嘿嘿 22预算还有其他适合的款式吗"
+      ],
+      "humanReplyMessages": [
+        "这个散发您自己组合可以给您21",
+        "有的",
+        "[附件]"
+      ],
+      "customerText": "嘿嘿 22预算还有其他适合的款式吗",
+      "humanReply": "这个散发您自己组合可以给您21；有的；[附件]",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 22,
+      "sourceLineEnd": 25,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_016:18",
+      "sessionId": "xiaoshi_session_016",
+      "customerMessages": [
+        "我用这个27的清单换成这个紫色的包装",
+        "你给我算便宜一点28一份",
+        "我们先初期合作，后期我们合作愉快长期",
+        "你那个气垫梳我感觉应该梳的不舒服",
+        "OK的话我就下单",
+        "[语音/视频通话] [通话记录]",
+        "[语音/视频通话] [通话记录]",
+        "要确定好，确定不了我要赶紧找其他的看下怎么给客户做伴手礼，时间紧迫"
+      ],
+      "humanReplyMessages": [
+        "最低紫色包装和内搭32"
+      ],
+      "customerText": "我用这个27的清单换成这个紫色的包装；你给我算便宜一点28一份；我们先初期合作，后期我们合作愉快长期；你那个气垫梳我感觉应该梳的不舒服；OK的话我就下单；[语音/视频通话] [通话记录]；[语音/视频通话] [通话记录]；要确定好，确定不了我要赶紧找其他的看下怎么给客户做伴手礼，时间紧迫",
+      "humanReply": "最低紫色包装和内搭32",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 83,
+      "sourceLineEnd": 91,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_019:16",
+      "sessionId": "xiaoshi_session_019",
+      "customerMessages": [
+        "价格没优惠了",
+        "就想要皂"
+      ],
+      "humanReplyMessages": [
+        "艾草锤已经很便宜了，14.9"
+      ],
+      "customerText": "价格没优惠了；就想要皂",
+      "humanReply": "艾草锤已经很便宜了，14.9",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 70,
+      "sourceLineEnd": 72,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:22",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "好",
+        "那寄样品的时候有月饼吧"
+      ],
+      "humanReplyMessages": [
+        "可以寄，我要问一下厂家现在有没有货"
+      ],
+      "customerText": "好；那寄样品的时候有月饼吧",
+      "humanReply": "可以寄，我要问一下厂家现在有没有货",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 123,
+      "sourceLineEnd": 125,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:39",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "这种还可以 就是颜色有没有亮一点的 然后不要杯子"
+      ],
+      "humanReplyMessages": [
+        "有一款绿色的",
+        "我去样品间给你拍一下"
+      ],
+      "customerText": "这种还可以 就是颜色有没有亮一点的 然后不要杯子",
+      "humanReply": "有一款绿色的；我去样品间给你拍一下",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 202,
+      "sourceLineEnd": 204,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:43",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "只是杯子不要 然后包装需要换礼盒 颜色可能需要亮一点喜庆一点的"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "还有这种竹篮",
+        "[附件]",
+        "可以做腰封"
+      ],
+      "customerText": "只是杯子不要 然后包装需要换礼盒 颜色可能需要亮一点喜庆一点的",
+      "humanReply": "[附件]；还有这种竹篮；[附件]；可以做腰封",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 226,
+      "sourceLineEnd": 230,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:52",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "[引用附件]"
+      ],
+      "humanReplyMessages": [
+        "需要单独设计内衬了",
+        "换盒子",
+        "定制盒子"
+      ],
+      "customerText": "[引用附件]",
+      "humanReply": "需要单独设计内衬了；换盒子；定制盒子",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 281,
+      "sourceLineEnd": 284,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:123",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "[引用消息] [让我看看]老乡你太得劲了 - 朱礼纪礼品定制: 嗯呢，因为咱们是老乡lei",
+        "好啊好啊哈哈哈哈",
+        "可以的话 能先寄样品不"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "可以",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "[引用消息] [让我看看]老乡你太得劲了 - 朱礼纪礼品定制: 嗯呢，因为咱们是老乡lei；好啊好啊哈哈哈哈；可以的话 能先寄样品不",
+      "humanReply": "[附件]；可以；[附件]",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 621,
+      "sourceLineEnd": 627,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:136",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "可以先发套样品来看看",
+        "我们看过之后样品ok的话",
+        "就大批量定"
+      ],
+      "humanReplyMessages": [
+        "好的您这边发一下收货信息"
+      ],
+      "customerText": "可以先发套样品来看看；我们看过之后样品ok的话；就大批量定",
+      "humanReply": "好的您这边发一下收货信息",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 689,
+      "sourceLineEnd": 692,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:150",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "你推荐哪个味道呢",
+        "这个我也不知道咋选哈哈"
+      ],
+      "humanReplyMessages": [
+        "[附件]",
+        "檀香和雪松",
+        "比较适合大众"
+      ],
+      "customerText": "你推荐哪个味道呢；这个我也不知道咋选哈哈",
+      "humanReply": "[附件]；檀香和雪松；比较适合大众",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 759,
+      "sourceLineEnd": 763,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:183",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "是啊就是伴手礼呢",
+        "发来看看"
+      ],
+      "humanReplyMessages": [
+        "[附件] pptx]",
+        "[附件] pptx]"
+      ],
+      "customerText": "是啊就是伴手礼呢；发来看看",
+      "humanReply": "[附件] pptx]；[附件] pptx]",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 913,
+      "sourceLineEnd": 916,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:194",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "行",
+        "那就没问题了"
+      ],
+      "humanReplyMessages": [
+        "好的",
+        "发货单号给一下哈"
+      ],
+      "customerText": "行；那就没问题了",
+      "humanReply": "好的；发货单号给一下哈",
+      "agentKey": "logistics_exception",
+      "scene": "物流异常",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 967,
+      "sourceLineEnd": 970,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:35",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "有点丑啊哈哈哈哈",
+        "没有礼盒包装吗"
+      ],
+      "humanReplyMessages": [
+        "礼盒需要500份以上定制",
+        "球拍基本上都是配球包"
+      ],
+      "customerText": "有点丑啊哈哈哈哈；没有礼盒包装吗",
+      "humanReply": "礼盒需要500份以上定制；球拍基本上都是配球包",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 78,
+      "flags": [],
+      "sourceLineStart": 187,
+      "sourceLineEnd": 190,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_005:2",
+      "sessionId": "xiaoshi_session_005",
+      "customerMessages": [
+        "还能优惠吗？",
+        "我们需要49套，包里面的东西可以自由搭配吗？"
+      ],
+      "humanReplyMessages": [
+        "可以的",
+        "您预算多少"
+      ],
+      "customerText": "还能优惠吗？；我们需要49套，包里面的东西可以自由搭配吗？",
+      "humanReply": "可以的；您预算多少",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 76,
+      "flags": [],
+      "sourceLineStart": 7,
+      "sourceLineEnd": 10,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_012:32",
+      "sessionId": "xiaoshi_session_012",
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "不写我们毕业了吗",
+        "47套包包 帽子➕水杯腰封"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "不写我们毕业了吗；47套包包 帽子➕水杯腰封",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 76,
+      "flags": [],
+      "sourceLineStart": 139,
+      "sourceLineEnd": 141,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_016:31",
+      "sessionId": "xiaoshi_session_016",
+      "customerMessages": [
+        "你紫色外包装的白色卡片能打伊尚两个字吗"
+      ],
+      "humanReplyMessages": [
+        "你发一下logo"
+      ],
+      "customerText": "你紫色外包装的白色卡片能打伊尚两个字吗",
+      "humanReply": "你发一下logo",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 76,
+      "flags": [],
+      "sourceLineStart": 154,
+      "sourceLineEnd": 155,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_020:15",
+      "sessionId": "xiaoshi_session_020",
+      "customerMessages": [
+        "可以呀"
+      ],
+      "humanReplyMessages": [
+        "好滴下午我找找看",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "这种月饼我们可以美观一点放到月饼盒子里"
+      ],
+      "customerText": "可以呀",
+      "humanReply": "好滴下午我找找看；[附件]；这种月饼我们可以美观一点放到月饼盒子里",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 76,
+      "flags": [],
+      "sourceLineStart": 82,
+      "sourceLineEnd": 87,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:112",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "可以呀"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "有出新款我发你"
+      ],
+      "customerText": "可以呀",
+      "humanReply": "嗯呢；有出新款我发你",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 76,
+      "flags": [],
+      "sourceLineStart": 564,
+      "sourceLineEnd": 566,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_008:2",
+      "sessionId": "xiaoshi_session_008",
+      "customerMessages": [
+        "43份"
+      ],
+      "humanReplyMessages": [
+        "每份预算呢亲"
+      ],
+      "customerText": "43份",
+      "humanReply": "每份预算呢亲",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 74,
+      "flags": [],
+      "sourceLineStart": 12,
+      "sourceLineEnd": 13,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_021:2",
+      "sessionId": "xiaoshi_session_021",
+      "customerMessages": [
+        "商务一点的"
+      ],
+      "humanReplyMessages": [
+        "这边有预算吗"
+      ],
+      "customerText": "商务一点的",
+      "humanReply": "这边有预算吗",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 74,
+      "flags": [],
+      "sourceLineStart": 7,
+      "sourceLineEnd": 8,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:55",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "另一份多少钱"
+      ],
+      "humanReplyMessages": [
+        "哪款",
+        "您要哪一个呢"
+      ],
+      "customerText": "另一份多少钱",
+      "humanReply": "哪款；您要哪一个呢",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 72,
+      "flags": [],
+      "sourceLineStart": 270,
+      "sourceLineEnd": 272,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_006:9",
+      "sessionId": "xiaoshi_session_006",
+      "customerMessages": [
+        "那如果，包包+帽子+冰袖，相当于旅行套装，下来多少钱"
+      ],
+      "humanReplyMessages": [
+        "要定制卡片吗"
+      ],
+      "customerText": "那如果，包包+帽子+冰袖，相当于旅行套装，下来多少钱",
+      "humanReply": "要定制卡片吗",
+      "agentKey": "gift_design",
+      "scene": "礼盒设计",
+      "sceneCheck": "clear",
+      "candidateScore": 72,
+      "flags": [],
+      "sourceLineStart": 42,
+      "sourceLineEnd": 43,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_009:6",
+      "sessionId": "xiaoshi_session_009",
+      "customerMessages": [
+        "打卡送的伴手礼",
+        "开业伴手礼"
+      ],
+      "humanReplyMessages": [
+        "嗯呢",
+        "两种价格是吗"
+      ],
+      "customerText": "打卡送的伴手礼；开业伴手礼",
+      "humanReply": "嗯呢；两种价格是吗",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 72,
+      "flags": [],
+      "sourceLineStart": 22,
+      "sourceLineEnd": 25,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    },
+    {
+      "id": "xiaoshi_session_023:21",
+      "sessionId": "xiaoshi_session_023",
+      "customerMessages": [
+        "扩香石这三个不是很好看呢"
+      ],
+      "humanReplyMessages": [
+        "想要商务一点的吗"
+      ],
+      "customerText": "扩香石这三个不是很好看呢",
+      "humanReply": "想要商务一点的吗",
+      "agentKey": "pre_sales",
+      "scene": "售前转化",
+      "sceneCheck": "clear",
+      "candidateScore": 72,
+      "flags": [],
+      "sourceLineStart": 107,
+      "sourceLineEnd": 108,
+      "authenticity": "sanitized_verbatim",
+      "status": "review"
+    }
+  ],
+  "guardrails": [
+    "分析结果中的手机号、证件号、银行卡号、邮箱、网址和微信号已替换为占位符。",
+    "附件文件名和本地路径不进入训练示例。",
+    "短确认、只发图片、一次性价格和高亲密称呼不自动作为可训练答案。",
+    "代表性回答仍需人工复核后才能标记 ready。"
+  ]
+}

@@ -26,25 +26,22 @@ test("workbench shell exports modular sidebar, topbar, shell, navigation, and sh
   assert.match(types, /className\?: string;/);
 });
 
-test("default navigation uses the seven required groups and only existing page section IDs", () => {
+test("default navigation uses four operator-journey groups and only existing page section IDs", () => {
   const groupLabels = [...navigation.matchAll(/\r?\n\s+label: "([^"]+)",\r?\n\s+items:/g)].map((match) => match[1]);
   assert.deepEqual(groupLabels, [
-    "工作台",
-    "消息",
-    "微信接入",
-    "设计中心",
-    "商品与订单",
-    "自动化与训练",
-    "系统管理",
+    "今日工作",
+    "方案与成交",
+    "运营与提效",
+    "能力与配置",
   ]);
 
   const expectedIds = [
     "overview-center",
     "conversation-center",
+    "wecom-workspace",
     "routing-center",
     "send-center",
     "wechat-channel-center",
-    "personal-wechat-center",
     "design-platform-config",
     "asset-center",
     "design-center",
@@ -60,11 +57,14 @@ test("default navigation uses the seven required groups and only existing page s
   ];
   for (const id of expectedIds) assert.match(navigation, new RegExp(`id: "${id}"`));
 
+  assert.doesNotMatch(navigation, /id: "personal-wechat-center"/);
   assert.match(navigation, /id: "sales-center"[\s\S]*?label: "销售管理"/);
+  assert.match(navigation, /id: "catalog-center"[\s\S]*?WORKBENCH_ROUTES\.catalogBundles\.href[\s\S]*?label: "AI 搭品"/);
+  assert.match(navigation, /id: "training-center"[\s\S]*?WORKBENCH_ROUTES\.trainingKnowledge\.href[\s\S]*?label: "知识库 \/ Skill"/);
   assert.match(navigation, /id: "automation-center"[\s\S]*?label: "自动化管理"/);
   assert.doesNotMatch(navigation, /id: "quote-center"/);
   assert.doesNotMatch(navigation, /customer-center|order-center|after-sales-center|knowledge-center/);
-  assert.doesNotMatch(navigation, /客户管理|订单管理|售后管理|知识库/);
+  assert.doesNotMatch(navigation, /客户管理|订单管理|售后管理/);
 });
 
 test("sidebar stays caller-controlled and provides keyboard-accessible desktop and mobile navigation", () => {
@@ -80,6 +80,10 @@ test("sidebar stays caller-controlled and provides keyboard-accessible desktop a
   assert.match(sidebar, /event\.key !== "Tab"/);
   assert.match(sidebar, /firstMobileItemRef\.current\?\.focus\(\)/);
   assert.match(sidebar, /mobileTriggerRef\.current\?\.focus\(\)/);
+  assert.match(sidebar, /data-action-id="workbench-sidebar-collapse-toggle"/);
+  assert.match(sidebar, /data-action-id="workbench-mobile-navigation-toggle"/);
+  assert.match(sidebar, /data-action-id="workbench-mobile-navigation-dismiss-backdrop"/);
+  assert.match(sidebar, /data-action-id="workbench-mobile-navigation-close"/);
   assert.doesNotMatch(sidebar, /location\.hash|history\.|scrollIntoView/);
   assert.doesNotMatch(sidebar, /aria-controls=\{item\.controlsId\}/);
   assert.doesNotMatch(sidebar, /role="menu"|role="tablist"/);
@@ -92,6 +96,8 @@ test("topbar exposes optional real search, refresh, and text-labelled health sta
   assert.match(topbar, /aria-keyshortcuts="Control\+K Meta\+K"/);
   assert.match(topbar, /onSearchSubmit\?\.\(internalSearchValue\)/);
   assert.match(topbar, /onRefresh/);
+  assert.match(topbar, /data-action-id="workbench-topbar-refresh"/);
+  assert.match(topbar, /data-action-id="workbench-topbar-open-health"/);
   assert.match(topbar, /\{item\.label\}/);
   assert.match(topbar, /data-tone=\{item\.tone\}/);
 });

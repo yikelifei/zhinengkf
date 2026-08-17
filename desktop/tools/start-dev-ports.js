@@ -18,6 +18,11 @@ const {
   ensureWechatBridgeServiceSession,
   wechatBridgeServiceEnv,
 } = require("./wechat-bridge-service-session");
+const {
+  createDesktopWebSession,
+  desktopWebSessionServiceEnv,
+  resolveDesktopWebSessionFile,
+} = require("./desktop-web-session");
 const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
 const { atomicWritePrivateJson, readPrivateJsonFile } = require("./private-runtime-file");
 
@@ -34,6 +39,8 @@ const stableRuntimeLauncherPidFile = path.join(stableRuntimeDir, "stable-runtime
 const designPlatformConfigFile = path.join(runtimeDir, "design-platform-config.json");
 const preferredDesignModeFile = path.join(runtimeDir, "preferred-design-mode.json");
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
+const supervisorStopRequestFile = path.join(runtimeDir, "desktop-supervisor-stop-request");
+const stableRuntimeStopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const mockModeLockFile = path.join(runtimeDir, "mock-mode.lock");
 const realModeLockFile = path.join(runtimeDir, "real-mode.lock");
 const mockRepairLockFile = path.join(runtimeDir, "mock-repair.lock");
@@ -55,6 +62,10 @@ const webStandaloneBuildIdPath = path.join(
   "BUILD_ID",
 );
 const internalApiToken = ensureInternalApiToken();
+const desktopWebSession = {
+  sessionFile: resolveDesktopWebSessionFile(runtimeDir),
+  proof: "",
+};
 const observerProofSession = ensureWechatWindowObserverProofSession(runtimeDir);
 const bridgeServiceSession = ensureWechatBridgeServiceSession(runtimeDir);
 const args = new Set(process.argv.slice(2));
@@ -90,6 +101,8 @@ const includeMockDesignPlatform =
     ? true
     : process.env.START_MOCK_DESIGN_PLATFORM !== "false");
 const integrationHealthUrl = `http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`;
+const defaultZhenxiAiDesktopBaseUrl = "http://127.0.0.1:3000";
+const deprecatedZhenxiAiDesktopBaseUrl = "http://127.0.0.1:31870";
 
 const services = [
   {
@@ -200,6 +213,7 @@ async function main() {
   }
 
   assertRequiredCommands();
+  ensureDesktopWebSessionForLaunch();
   if (keepAliveLauncher) {
     startKeepAliveHeartbeat();
     startKeepAliveAnchor();
@@ -346,6 +360,10 @@ function startKeepAliveMonitor() {
   if (keepAliveTimers.length) return;
   const timer = setInterval(() => {
     try {
+      if (keepAliveStopRequested()) {
+        stopManagedChildrenForShutdown();
+        process.exit(0);
+      }
       for (const service of services.filter((item) => item.enabled)) {
         if (getPortOwnerPids(service.port).length) {
           refreshServiceRecord(service);
@@ -357,7 +375,7 @@ function startKeepAliveMonitor() {
         }
         const launcherLogPath = path.join(logsDir, `${service.name}.launcher.log`);
         ensureServiceArtifactReady(service, launcherLogPath);
-        fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] monitor restarting ${service.name}\n`, "utf8");
+        appendLauncherLine(launcherLogPath, `monitor restarting ${service.name}`);
         const child = startService(service);
         refreshServiceRecord(service, child?.pid);
       }
@@ -367,6 +385,13 @@ function startKeepAliveMonitor() {
   }, 2000);
   timer.ref();
   keepAliveTimers.push(timer);
+}
+
+function ensureDesktopWebSessionForLaunch() {
+  Object.assign(
+    desktopWebSession,
+    createDesktopWebSession(runtimeDir, { sessionFile: desktopWebSession.sessionFile }),
+  );
 }
 
 function ensureServiceArtifactReady(service, launcherLogPath = "") {
@@ -436,7 +461,27 @@ function writeRuntimeWebStandaloneServer() {
 }
 
 function appendLauncherLine(filePath, message) {
-  fs.appendFileSync(filePath, `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  appendSafeLogLine(filePath, `[${new Date().toISOString()}] ${message}`, { silent: true });
+}
+
+function appendSafeLogLine(filePath, message, options = {}) {
+  const line = message.endsWith("\n") ? message : `${message}\n`;
+  const fallbackPath = `${filePath}.retry.${process.pid}.${Date.now()}.log`;
+  for (const candidate of [filePath, fallbackPath]) {
+    try {
+      fs.mkdirSync(path.dirname(candidate), { recursive: true });
+      fs.appendFileSync(candidate, line, "utf8");
+      return true;
+    } catch (error) {
+      if ((error?.code !== "EBUSY" && error?.code !== "EPERM") || candidate === fallbackPath) {
+        if (!options.silent) {
+          console.warn(`[warn] log write failed for ${filePath}: ${error?.message || error}`);
+        }
+        return false;
+      }
+    }
+  }
+  return false;
 }
 
 function startModeLockHeartbeat() {
@@ -458,22 +503,15 @@ function startManagedChild(service, stdoutPath, stderrPath, launcherLogPath, wra
     windowsHide: true,
   });
   if (process.platform === "win32") child.unref();
-  fs.appendFileSync(
+  appendLauncherLine(
     launcherLogPath,
-    `[${new Date().toISOString()}] launched managed child ${child.pid || "unknown"} via ${
-      launchCommand.usesOwnRedirection ? "wrapper command" : "direct service command"
-    }; wrapper kept at ${wrapperPath}\n`,
-    "utf8",
+    `launched managed child ${child.pid || "unknown"} via ${launchCommand.usesOwnRedirection ? "wrapper command" : "direct service command"}; wrapper kept at ${wrapperPath}`,
   );
   managedChildren.push(child);
   serviceRestartGraceUntil.set(service.name, Date.now() + serviceReadyTimeoutMs(service));
   scheduleServiceRecordRefresh(service, child.pid);
   child.once("exit", (code, signal) => {
-    fs.appendFileSync(
-      launcherLogPath,
-      `[${new Date().toISOString()}] ${service.name} managed process exited code=${code ?? ""} signal=${signal ?? ""}\n`,
-      "utf8",
-    );
+    appendLauncherLine(launcherLogPath, `${service.name} managed process exited code=${code ?? ""} signal=${signal ?? ""}`);
     const index = managedChildren.indexOf(child);
     if (index >= 0) managedChildren.splice(index, 1);
     if (stdout !== null) closeLogFd(stdout);
@@ -504,22 +542,15 @@ function openServiceLogForAppend(filePath, launcherLogPath, serviceName, streamN
     );
     try {
       const fd = fs.openSync(fallbackPath, "a");
-      fs.appendFileSync(
-        launcherLogPath,
-        `[${new Date().toISOString()}] ${serviceName} ${streamName} log was locked; using ${fallbackPath}\n`,
-        "utf8",
-      );
-      return fd;
-    } catch (fallbackError) {
-      fs.appendFileSync(
-        launcherLogPath,
-        `[${new Date().toISOString()}] ${serviceName} ${streamName} log open failed; using ignored stdio: ${
-          fallbackError?.message || fallbackError
-        }\n`,
-        "utf8",
-      );
-      return "ignore";
-    }
+        appendLauncherLine(launcherLogPath, `${serviceName} ${streamName} log was locked; using ${fallbackPath}`);
+        return fd;
+      } catch (fallbackError) {
+        appendLauncherLine(
+          launcherLogPath,
+          `${serviceName} ${streamName} log open failed; using ignored stdio: ${fallbackError?.message || fallbackError}`,
+        );
+        return "ignore";
+      }
   }
 }
 
@@ -841,7 +872,32 @@ function waitUntilStopped() {
   startKeepAliveHeartbeat();
   startKeepAliveAnchor();
   startKeepAliveServerAnchor();
-  return new Promise(() => undefined);
+  return new Promise(() => {
+    const timer = setInterval(() => {
+      if (!keepAliveStopRequested()) return;
+      stopManagedChildrenForShutdown();
+      process.exit(0);
+    }, 1000);
+    timer.ref();
+    keepAliveTimers.push(timer);
+  });
+}
+
+function keepAliveStopRequested() {
+  return fs.existsSync(supervisorStopRequestFile) || fs.existsSync(stableRuntimeStopRequestFile);
+}
+
+function stopManagedChildrenForShutdown() {
+  const pids = new Set();
+  for (const child of managedChildren) {
+    if (child?.pid) pids.add(String(child.pid));
+  }
+  const records = readPidFile();
+  for (const record of Object.values(records)) {
+    if (record?.pid) pids.add(String(record.pid));
+    for (const pid of record?.portOwnerPids || []) pids.add(String(pid));
+  }
+  for (const pid of pids) stopPid(pid);
 }
 
 function startKeepAliveHeartbeat() {
@@ -908,7 +964,7 @@ function logFatal(scope, error, options = {}) {
   const line = `[${new Date().toISOString()}] ${scope}: ${message}\n`;
   try {
     fs.mkdirSync(logsDir, { recursive: true });
-    fs.appendFileSync(path.join(logsDir, "start-dev-ports.fatal.log"), line, "utf8");
+    appendSafeLogLine(path.join(logsDir, "start-dev-ports.fatal.log"), line, { silent: true });
   } catch {
     // Fatal logging must not throw recursively.
   }
@@ -920,10 +976,10 @@ function logFatal(scope, error, options = {}) {
 function logLifecycle(scope, code) {
   try {
     fs.mkdirSync(logsDir, { recursive: true });
-    fs.appendFileSync(
+    appendSafeLogLine(
       path.join(logsDir, "start-dev-ports.lifecycle.log"),
-      `[${new Date().toISOString()}] pid=${process.pid} args=${JSON.stringify(process.argv.slice(2))} ${scope} code=${code}\n`,
-      "utf8",
+      `[${new Date().toISOString()}] pid=${process.pid} args=${JSON.stringify(process.argv.slice(2))} ${scope} code=${code}`,
+      { silent: true },
     );
   } catch {
     // Lifecycle logging must not block process shutdown.
@@ -962,7 +1018,7 @@ function startWindowsService(service) {
     throw new Error(`failed to create service wrapper for ${service.name}`);
   }
 
-  fs.appendFileSync(launcherLogPath, `[${new Date().toISOString()}] launching ${service.name}\n`, "utf8");
+  appendLauncherLine(launcherLogPath, `launching ${service.name}`);
   if (keepAliveLauncher && !startServicesThroughWrappers) {
     appendLauncherLine(
       launcherLogPath,
@@ -1203,12 +1259,22 @@ async function isServiceReadyForCurrentConfig(service) {
   if (workspacePortOwnerMismatchReason(service.name, portOwners)) return false;
   if (service.name === "web" && webPortRuntimeMismatchReason(portOwners)) return false;
   if (!(await isHealthy(service.url))) return false;
+  if (service.name === "web") return isDesktopWebSessionReady();
   if (service.name !== "api") return true;
 
   const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
   if (!apiHealthUsesRuntimeDir(apiHealth)) return false;
   const integrationHealth = await getJson(integrationHealthUrl);
   return integrationMatchesCurrentConfig(integrationHealth);
+}
+
+async function isDesktopWebSessionReady() {
+  const proof = String(desktopWebSession.proof || "").trim();
+  if (!proof) return false;
+  const health = await getJson(`http://127.0.0.1:${webPort}/api/health`, {
+    headers: { Cookie: `smart_kefu_desktop_session=${proof}` },
+  });
+  return Boolean(health?.ok);
 }
 
 async function isApiIntegrationReadyForCurrentConfig() {
@@ -1289,9 +1355,9 @@ async function isHealthyWithRetry(url, attempts, delayMs) {
   return false;
 }
 
-function getJson(url) {
+function getJson(url, options = {}) {
   return new Promise((resolve) => {
-    const request = http.get(url, { timeout: 1500 }, (response) => {
+    const request = http.get(url, { timeout: 1500, ...options }, (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => {
@@ -1629,7 +1695,10 @@ function serviceEnv(service) {
     ...process.env,
     ...serviceDefaultEnv(service),
   }, service?.name, internalApiToken);
-  const observerEnv = wechatWindowObserverServiceEnv(internalEnv, service?.name, observerProofSession.tokenFile);
+  const desktopSessionEnv = desktopWebSession.proof
+    ? desktopWebSessionServiceEnv(internalEnv, service?.name, desktopWebSession.proof)
+    : internalEnv;
+  const observerEnv = wechatWindowObserverServiceEnv(desktopSessionEnv, service?.name, observerProofSession.tokenFile);
   return selectServiceEnvironment(
     service?.name,
     wechatBridgeServiceEnv(observerEnv, service?.name, bridgeServiceSession.tokenFile),
@@ -1653,12 +1722,15 @@ function serviceDefaultEnv(service) {
   return {
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
+    ALLOW_LOCAL_BROWSER_WEB_API: process.env.ALLOW_LOCAL_BROWSER_WEB_API === "0" ? "0" : "1",
+    SMART_KEFU_RUNTIME_TARGET: process.env.SMART_KEFU_RUNTIME_TARGET || "desktop",
     USE_LOCAL_STORE: process.env.USE_LOCAL_STORE || "true",
     DESKTOP_RUNTIME_DIR: runtimeDir,
     LOCAL_STORE_FILE: path.join(runtimeDir, "local-store.json"),
     LOCAL_STORAGE_ROOT: path.join(runtimeDir, "storage"),
     LOW_VALUE_AUTOMATION_ENABLED: process.env.LOW_VALUE_AUTOMATION_ENABLED || "true",
     LOW_VALUE_AUTOMATION_RUN_ON_START: process.env.LOW_VALUE_AUTOMATION_RUN_ON_START || "true",
+    LOW_VALUE_AUTOMATION_MODE: process.env.LOW_VALUE_AUTOMATION_MODE || "interval",
     PORT: String(service?.port || webPort),
     WEB_PORT: String(webPort),
     API_PORT: String(apiPort),
@@ -1676,17 +1748,21 @@ function serviceDefaultEnv(service) {
 }
 
 function designPlatformDefaults() {
-  const shouldReuseExistingBaseUrl =
-    realDesignMode && existingDesignPlatformAdapter === designPlatformAdapter && Boolean(existingDesignPlatformBaseUrl);
-  const envBaseUrl = process.env.DESIGN_PLATFORM_BASE_URL || "";
+  const envBaseUrl = process.env.DESIGN_PLATFORM_BASE_URL || process.env.ZHENXI_AI_LOCAL_BASE_URL || "";
   const shouldUseEnvBaseUrl =
     realDesignMode && Boolean(envBaseUrl) && normalizeBaseUrl(envBaseUrl) !== `http://127.0.0.1:${mockPort}`;
+  const existingBaseIsDeprecated = normalizeBaseUrl(existingDesignPlatformBaseUrl) === deprecatedZhenxiAiDesktopBaseUrl;
+  const shouldReuseExistingBaseUrl =
+    realDesignMode &&
+    existingDesignPlatformAdapter === designPlatformAdapter &&
+    Boolean(existingDesignPlatformBaseUrl) &&
+    !existingBaseIsDeprecated;
   return {
     DESIGN_PLATFORM_ADAPTER: designPlatformAdapter,
     DESIGN_PLATFORM_BASE_URL:
       (shouldUseEnvBaseUrl ? envBaseUrl : "") ||
       (shouldReuseExistingBaseUrl ? existingDesignPlatformBaseUrl : "") ||
-      (designPlatformAdapter === "art_image_local" ? "http://127.0.0.1:3000" : `http://127.0.0.1:${mockPort}`),
+      (designPlatformAdapter === "art_image_local" ? defaultZhenxiAiDesktopBaseUrl : `http://127.0.0.1:${mockPort}`),
   };
 }
 

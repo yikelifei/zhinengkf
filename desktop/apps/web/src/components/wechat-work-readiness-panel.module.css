@@ -149,6 +149,178 @@
 .readyText { color: #159455; }
 .missingText { color: #c93535; }
 
+.callbackFields,
+.checklistGroup {
+  margin: 13px 16px 0;
+  border: 1px solid #e5e8ed;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.callbackFields header,
+.checklistGroup h4 {
+  margin: 0;
+  border-bottom: 1px solid #edf0f4;
+  background: #fafbfc;
+  padding: 8px 10px;
+}
+
+.callbackFields header {
+  display: grid;
+  gap: 2px;
+}
+
+.callbackFields header strong,
+.checklistGroup h4 {
+  color: #1f2329;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.callbackFields header span {
+  color: #646a73;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.callbackFields ul,
+.checklistGroup ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.callbackFields li,
+.checklistGroup li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border-bottom: 1px solid #edf0f4;
+  padding: 9px 10px;
+}
+
+.callbackFields li:last-child,
+.checklistGroup li:last-child {
+  border-bottom: 0;
+}
+
+.callbackFields li > span,
+.checklistGroup li > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.callbackFields li strong,
+.checklistGroup li strong {
+  color: #1f2329;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.callbackFields li small,
+.checklistGroup li small {
+  color: #646a73;
+  font-size: 10px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+
+.callbackFields code {
+  max-width: 46%;
+  overflow: hidden;
+  color: #344054;
+  font-size: 11px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checklistGroup li em {
+  flex: 0 0 auto;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.callbackFields li.ready code,
+.checklistGroup li.ready em { color: #159455; background: #eaf8f0; }
+.callbackFields li.blocked code,
+.checklistGroup li.blocked em { color: #b54708; background: #fff4dd; }
+.callbackFields li.missing code,
+.checklistGroup li.missing em { color: #c93535; background: #fff0ef; }
+
+.verificationColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 13px 16px 0;
+}
+
+.verificationColumns .checklistGroup {
+  margin: 0;
+}
+
+.launchPlan {
+  margin: 13px 16px 0;
+  border: 1px solid #e5e8ed;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.launchPlan > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid #edf0f4;
+  background: #fafbfc;
+  padding: 9px 11px;
+  color: #0052d9;
+}
+
+.launchPlan > header svg { flex: 0 0 auto; margin-top: 2px; }
+.launchPlan > header div { display: grid; min-width: 0; gap: 2px; }
+.launchPlan > header strong { color: #1f2329; font-size: 13px; line-height: 18px; }
+.launchPlan > header span { color: #646a73; font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+
+.planColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.planGroup { min-width: 0; }
+.planGroup + .planGroup { border-left: 1px solid #edf0f4; }
+.planGroup h4 {
+  margin: 0;
+  border-bottom: 1px solid #edf0f4;
+  padding: 8px 10px;
+  color: #344054;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.planGroup ol { margin: 0; padding: 0; list-style: none; }
+.planGroup li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 70px;
+  border-bottom: 1px solid #edf0f4;
+  padding: 9px 10px;
+}
+.planGroup li:last-child { border-bottom: 0; }
+.planGroup li > span { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.planGroup li strong { color: #1f2329; font-size: 12px; line-height: 17px; }
+.planGroup li small { color: #646a73; font-size: 10px; line-height: 15px; overflow-wrap: anywhere; }
+.planGroup li em { flex: 0 0 auto; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-style: normal; line-height: 16px; }
+.planGroup li.ready em { color: #159455; background: #eaf8f0; }
+.planGroup li.blocked em { color: #b54708; background: #fff4dd; }
+.planGroup li.missing em { color: #c93535; background: #fff0ef; }
+
 .footer {
   flex-wrap: wrap;
   gap: 8px 18px;
@@ -170,12 +342,21 @@
   .header { min-height: 0; align-items: flex-start; padding: 11px 12px; }
   .header p { display: none; }
   .header button { padding: 0 8px; }
-  .summary, .error, .identityBar, .callbackRow { margin-right: 12px; margin-left: 12px; }
+  .summary, .error, .identityBar, .callbackRow, .callbackFields { margin-right: 12px; margin-left: 12px; }
   .identityBar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .identityBar > div { border-right: 0; border-bottom: 1px solid #edf0f4; }
   .identityBar > div:nth-child(odd) { border-right: 1px solid #edf0f4; }
   .identityBar > div:nth-last-child(-n + 2) { border-bottom: 0; }
   .checkColumns { grid-template-columns: 1fr; padding: 11px 12px 0; }
+  .verificationColumns { grid-template-columns: 1fr; padding: 11px 12px 0; }
+  .launchPlan { margin-right: 12px; margin-left: 12px; }
+  .planColumns { grid-template-columns: 1fr; }
+  .planGroup + .planGroup { border-top: 1px solid #edf0f4; border-left: 0; }
+  .planGroup li { flex-direction: column; gap: 5px; min-height: 0; }
+  .callbackFields li,
+  .checklistGroup li { flex-direction: column; gap: 5px; }
+  .callbackFields code { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .checklistGroup li em { white-space: normal; }
   .callbackRow { align-items: flex-start; flex-direction: column; }
   .callbackRow code { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   .footer { display: grid; gap: 6px; padding-right: 12px; padding-left: 12px; }

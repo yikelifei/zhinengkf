@@ -64,7 +64,7 @@ sealed class OcrRpaHost
             status = "watching",
             automation = "ocr_rpa",
             endpoint = $"http://127.0.0.1:{_config.Port}",
-            sendEnabled = false,
+            sendEnabled = _config.SendEnabled,
             target = _identity,
             baselineChatTitle = _currentChatTitle,
             baselineUnreadBadgeCount = _previousBadges.Count,
@@ -193,8 +193,7 @@ sealed class OcrRpaHost
             return false;
         }
 
-        _lastObservationByChat[observation.ChatTitle] = observation.Fingerprint;
-        _lastInboundByChat[observation.ChatTitle] = observation.Message;
+        RememberObservation(observation);
         var externalId = Sha256(String.Join("\n", _identity.OwnerWxId, observation.ChatTitle, observation.Message, observation.Fingerprint));
         var inbound = new InboundEvent(
             EventVersion,
@@ -207,7 +206,8 @@ sealed class OcrRpaHost
             "text",
             externalId,
             DateTimeOffset.Now.ToString("O"),
-            []);
+            [],
+            "ocr_verified_bubble");
         _detectedInboundCount++;
         _inbound.Writer.TryWrite(inbound);
         Console.WriteLine(JsonSerializer.Serialize(new
@@ -219,6 +219,13 @@ sealed class OcrRpaHost
             externalId,
         }, JsonDefaults.Options));
         return true;
+    }
+
+    private void RememberObservation(OcrChatObservation observation)
+    {
+        _currentChatTitle = observation.ChatTitle;
+        _lastObservationByChat[observation.ChatTitle] = observation.Fingerprint;
+        _lastInboundByChat[observation.ChatTitle] = observation.Message;
     }
 
     private async Task PostInboundLoopAsync()
@@ -272,7 +279,7 @@ sealed class OcrRpaHost
                     ok = true,
                     status = "watching",
                     automation = "ocr_rpa",
-                    sendEnabled = false,
+                    sendEnabled = _config.SendEnabled,
                     detectedInboundCount = _detectedInboundCount,
                     postedInboundCount = _postedInboundCount,
                     currentChatTitle = _currentChatTitle,
@@ -298,6 +305,16 @@ sealed class OcrRpaHost
                 });
                 return;
             }
+            if (context.Request.HttpMethod == "POST" && route == "/open-chat")
+            {
+                using var document = await JsonDocument.ParseAsync(context.Request.InputStream, cancellationToken: _token);
+                var chatTitle = document.RootElement.TryGetProperty("chatTitle", out var titleElement)
+                    ? titleElement.GetString()?.Trim() ?? ""
+                    : "";
+                var result = await OpenChatAsync(chatTitle);
+                await RespondAsync(context, result.Ok ? 200 : 409, result);
+                return;
+            }
             if (context.Request.HttpMethod == "POST" && route == "/send")
             {
                 using var document = await JsonDocument.ParseAsync(context.Request.InputStream, cancellationToken: _token);
@@ -313,8 +330,89 @@ sealed class OcrRpaHost
         }
     }
 
+    private async Task<ChatPreparationResult> OpenChatAsync(string chatTitle)
+    {
+        if (!_config.SendEnabled)
+            return ChatPreparationResult.Fail("real_send_disabled", "PERSONAL_WECHAT_SEND is not 1");
+        if (chatTitle.Length == 0)
+            return ChatPreparationResult.Fail("chat_title_missing", "chat title is required");
+
+        await _interactionLock.WaitAsync(_token);
+        try
+        {
+            Point searchPoint;
+            using (var focusedCapture = OcrWindowCapture.Capture(_identity, focusIfNeeded: true))
+            {
+                var currentTitle = OcrLayoutAnalyzer.ReadChatTitle(_ocr, focusedCapture.Bitmap);
+                if (StringComparer.Ordinal.Equals(currentTitle, chatTitle))
+                {
+                    var currentObservation = OcrLayoutAnalyzer.Observe(_ocr, focusedCapture.Bitmap);
+                    SaveCapture(focusedCapture.Bitmap, "ocr-open-chat-verified");
+                    if (currentObservation is not null)
+                        RememberObservation(currentObservation);
+                    return new ChatPreparationResult(
+                        true,
+                        null,
+                        null,
+                        currentTitle,
+                        currentObservation?.Message ?? "");
+                }
+                var chatListWidth = OcrLayoutAnalyzer.ChatPaneLeft(focusedCapture.Bitmap.Width);
+                searchPoint = new Point(
+                    focusedCapture.ScreenBounds.Left + Math.Clamp(chatListWidth / 2, 110, chatListWidth - 70),
+                    focusedCapture.ScreenBounds.Top + 55);
+            }
+            // WeChat 4.x no longer consistently focuses the global search box with Ctrl+F.
+            // Click the visible search field in the bound window, then replace its contents.
+            Mouse.Position = searchPoint;
+            Mouse.LeftClick();
+            await Task.Delay(180, _token);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            ClipboardHelper.SetText(chatTitle);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_V);
+            await Task.Delay(750, _token);
+            Keyboard.Type(VirtualKeyShort.ENTER);
+
+            OcrChatObservation? observation = null;
+            for (var attempt = 0; attempt < 8; attempt++)
+            {
+                await Task.Delay(450, _token);
+                using var capture = OcrWindowCapture.Capture(_identity, focusIfNeeded: true);
+                observation = OcrLayoutAnalyzer.Observe(_ocr, capture.Bitmap);
+                if (observation is not null &&
+                    StringComparer.Ordinal.Equals(observation.ChatTitle, chatTitle))
+                {
+                    SaveCapture(capture.Bitmap, "ocr-open-chat-verified");
+                    break;
+                }
+                if (attempt == 7) SaveCapture(capture.Bitmap, "ocr-open-chat-mismatch");
+            }
+
+            if (observation is null || !StringComparer.Ordinal.Equals(observation.ChatTitle, chatTitle))
+                return ChatPreparationResult.Fail("chat_title_mismatch", "the requested chat was not opened and verified");
+
+            RememberObservation(observation);
+            return new ChatPreparationResult(
+                true,
+                null,
+                null,
+                observation.ChatTitle,
+                observation.Message);
+        }
+        catch (Exception error)
+        {
+            return ChatPreparationResult.Fail("open_chat_failed", error.Message);
+        }
+        finally
+        {
+            _interactionLock.Release();
+        }
+    }
+
     private async Task<SendResult> SendAsync(JsonElement operation)
     {
+        if (!_config.SendEnabled)
+            return SendResult.Fail("real_send_disabled", "PERSONAL_WECHAT_SEND is not 1");
         await _interactionLock.WaitAsync(_token);
         try
         {
@@ -437,6 +535,17 @@ sealed record OcrTextBlock(string Text, int Left, int Top, int Right, int Bottom
     public int CenterY => Top + (Bottom - Top) / 2;
 }
 
+sealed record ChatPreparationResult(
+    bool Ok,
+    string? Code,
+    string? ErrorMessage,
+    string ChatTitle,
+    string RecentMessage)
+{
+    public static ChatPreparationResult Fail(string code, string message) =>
+        new(false, code, message, "", "");
+}
+
 sealed record OcrUnreadBadge(int CenterY, string Signature);
 
 static class OcrLayoutAnalyzer
@@ -504,31 +613,53 @@ static class OcrLayoutAnalyzer
         var blocks = DetectPaneBlocks(ocr, bitmap);
         var chatLeft = ChatPaneLeft(bitmap.Width);
         var paneWidth = bitmap.Width - chatLeft;
-        var title = blocks
-            .Where(block => block.Top >= 28 && block.Bottom <= 92 && block.Left >= chatLeft + 4 && block.Left < chatLeft + Math.Min(360, paneWidth / 2))
-            .Where(block => IsUsefulTitle(block.Text))
-            .OrderBy(block => block.Left)
-            .ThenBy(block => block.Top)
-            .Select(block => block.Text.Trim())
-            .FirstOrDefault() ?? "";
+        var title = ReadChatTitle(blocks, bitmap.Width);
         if (title.Length == 0) return null;
 
         var incomingRightEdge = chatLeft + (int)(paneWidth * 0.60);
+        var incomingLeftEdge = chatLeft + Math.Max(42, (int)(paneWidth * 0.055));
+        var incomingAnchorEdge = chatLeft + (int)(paneWidth * 0.38);
         var messageBlock = blocks
             .Where(block => block.Top >= 88 && block.Bottom <= bitmap.Height - 135)
-            .Where(block => block.Left >= chatLeft + 8 && block.CenterX <= incomingRightEdge)
+            .Where(block =>
+                block.Left >= incomingLeftEdge &&
+                block.Left <= incomingAnchorEdge &&
+                block.CenterX <= incomingRightEdge)
             .Where(block => IsUsefulMessage(block.Text))
             .OrderByDescending(block => block.Bottom)
             .ThenBy(block => block.Left)
             .FirstOrDefault();
         if (messageBlock is null) return null;
 
-        var message = messageBlock.Text.Trim();
+        // OCR also sees words printed inside photos and file previews. Preserve the
+        // existence of that real non-text bubble without inventing those words as
+        // a customer message.
+        var message = IsLikelyPlainTextBubble(bitmap, messageBlock)
+            ? messageBlock.Text.Trim()
+            : "[非文本消息]";
         var conversationType = title.Contains('(') || title.Contains('（') || title.Contains("群", StringComparison.Ordinal)
             ? "group"
             : "direct";
         var fingerprint = Hash(String.Join("\n", title, message, messageBlock.Left / 8, messageBlock.Top / 8, ContentSignature(bitmap)));
         return new OcrChatObservation(title, conversationType, message, fingerprint, blocks);
+    }
+
+    public static string ReadChatTitle(OCRService ocr, Bitmap bitmap)
+    {
+        return ReadChatTitle(DetectPaneBlocks(ocr, bitmap), bitmap.Width);
+    }
+
+    private static string ReadChatTitle(IReadOnlyList<OcrTextBlock> blocks, int bitmapWidth)
+    {
+        var chatLeft = ChatPaneLeft(bitmapWidth);
+        var paneWidth = bitmapWidth - chatLeft;
+        return blocks
+            .Where(block => block.Top >= 28 && block.Bottom <= 92 && block.Left >= chatLeft + 4 && block.Left < chatLeft + Math.Min(360, paneWidth / 2))
+            .Where(block => IsUsefulTitle(block.Text))
+            .OrderBy(block => block.Left)
+            .ThenBy(block => block.Top)
+            .Select(block => block.Text.Trim())
+            .FirstOrDefault() ?? "";
     }
 
     public static IReadOnlyList<OcrTextBlock> DetectPaneBlocks(OCRService ocr, Bitmap bitmap)
@@ -579,6 +710,41 @@ static class OcrLayoutAnalyzer
             NormalizeText(block.Text).Contains(normalizedExpected, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsLikelyPlainTextBubble(Bitmap bitmap, OcrTextBlock block)
+    {
+        var left = Math.Max(0, block.Left - 12);
+        var top = Math.Max(0, block.Top - 10);
+        var right = Math.Min(bitmap.Width - 1, block.Right + 12);
+        var bottom = Math.Min(bitmap.Height - 1, block.Bottom + 10);
+        var total = 0;
+        var neutral = 0;
+        var dark = 0;
+        var light = 0;
+        for (var y = top; y <= bottom; y += 2)
+        for (var x = left; x <= right; x += 2)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            var maximum = Math.Max(pixel.R, Math.Max(pixel.G, pixel.B));
+            var minimum = Math.Min(pixel.R, Math.Min(pixel.G, pixel.B));
+            var luminance = (pixel.R * 299 + pixel.G * 587 + pixel.B * 114) / 1000;
+            total++;
+            if (maximum - minimum <= 28) neutral++;
+            if (luminance <= 115) dark++;
+            if (luminance >= 150) light++;
+        }
+        if (total == 0) return false;
+
+        var chatLeft = ChatPaneLeft(bitmap.Width);
+        var headerPixel = bitmap.GetPixel(
+            chatLeft + (bitmap.Width - chatLeft) / 2,
+            Math.Min(60, bitmap.Height - 1));
+        var headerLuminance = (headerPixel.R * 299 + headerPixel.G * 587 + headerPixel.B * 114) / 1000;
+        var neutralRatio = (double)neutral / total;
+        return headerLuminance < 128
+            ? neutralRatio >= 0.72 && (double)dark / total >= 0.65
+            : neutralRatio >= 0.72 && (double)light / total >= 0.65;
+    }
+
     private static bool IsUsefulTitle(string value)
     {
         var text = value.Trim();
@@ -591,9 +757,22 @@ static class OcrLayoutAnalyzer
     {
         var text = value.Trim();
         if (text.Length == 0) return false;
-        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^(昨天\s*)?\d{1,2}:\d{2}$")) return false;
-        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^(星期[一二三四五六日天]|\d+条新消息)$")) return false;
-        return text is not "查看更多消息" and not "以下为新消息";
+        if (!text.Any(Char.IsLetterOrDigit)) return false;
+        if (System.Text.RegularExpressions.Regex.IsMatch(
+                text,
+                @"^(?:(?:昨天|今天|星期[一二三四五六日天])\s*)?\d{1,2}:\d{2}$"))
+            return false;
+        if (System.Text.RegularExpressions.Regex.IsMatch(
+                text,
+                @"^\d+(?:\.\d+)?\s*(?:B|KB|MB|GB|TB|K|M|G|T|字节)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return false;
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^\d+条新消息$")) return false;
+        if (text.StartsWith("RPA入站测试", StringComparison.OrdinalIgnoreCase)) return false;
+        return text is not "查看更多消息"
+            and not "以下为新消息"
+            and not "查看原图"
+            and not "撤回了一条消息";
     }
 
     public static string ContentSignature(Bitmap bitmap) => RegionSignature(
@@ -641,6 +820,8 @@ sealed class OcrWindowCapture : IDisposable
     {
         var handle = new IntPtr(Int64.Parse(identity.WindowHandle));
         ValidateRuntime(identity, handle);
+        if (focusIfNeeded && GetForegroundWindow() != handle)
+            Focus(identity);
         if (!GetWindowRect(handle, out var rect))
             throw new InvalidOperationException("cannot read the bound WeChat window bounds");
         var bounds = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);

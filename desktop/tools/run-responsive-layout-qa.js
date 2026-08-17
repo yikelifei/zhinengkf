@@ -24,6 +24,7 @@ async function main(argv = process.argv.slice(2)) {
   const reportPath = path.join(outputDir, "responsive-layout-report.json");
   const markdownPath = path.join(outputDir, "responsive-layout-report.zh-CN.md");
   const probePath = path.join(outputDir, "electron-probe.json");
+  const edgeProbePath = path.join(outputDir, "edge-probe.json");
   const screenshotDir = path.join(outputDir, "screenshots");
   fs.mkdirSync(screenshotDir, { recursive: true });
 
@@ -43,76 +44,155 @@ async function main(argv = process.argv.slice(2)) {
     blockers: [],
     failures: [],
     process: null,
-    artifacts: { jsonReport: reportPath, markdownReport: markdownPath, probeReport: probePath, screenshotDir },
+    artifacts: { jsonReport: reportPath, markdownReport: markdownPath, probeReport: probePath, electronProbeReport: probePath, edgeProbeReport: edgeProbePath, screenshotDir },
   };
   writeReports(base, reportPath, markdownPath);
 
   try {
     validateLoopbackUrl(options.url);
     await preflightUrl(options.url, options.preflightTimeoutMs);
+    await delay(500);
 
-    let electronExecutable;
-    try {
-      electronExecutable = require("electron");
-    } catch {
-      return finish(base, {
-        blockers: ["Electron runtime is unavailable; run npm.cmd ci in desktop first"],
-      }, reportPath, markdownPath, 2);
+    const edgePrimaryResult = await runEdgeProbe({
+      cwd: desktopRoot,
+      env: {
+        ...process.env,
+        RESPONSIVE_QA_WEB_URL: options.url,
+        RESPONSIVE_QA_PROBE_OUTPUT: edgeProbePath,
+        RESPONSIVE_QA_SCREENSHOT_DIR: screenshotDir,
+      },
+      timeoutMs: options.timeoutMs,
+    });
+    const edgePrimaryParsed = readProbeFile(edgeProbePath);
+    if (!edgePrimaryParsed.error) {
+      const edgePrimaryProbe = edgePrimaryParsed.probe;
+      const edgePrimaryStatus = normalizeProbeStatus(edgePrimaryProbe);
+      if (edgePrimaryStatus !== "blocked") {
+        const edgePrimaryBlockers = probeBlockers(edgePrimaryStatus, edgePrimaryProbe, edgePrimaryResult, options.timeoutMs, "Edge CDP renderer");
+        return finish(base, {
+          status: edgePrimaryStatus,
+          passed: edgePrimaryStatus === "passed",
+          renderer: edgePrimaryProbe?.renderer || "Microsoft Edge CDP",
+          title: edgePrimaryProbe?.title || "",
+          viewports: edgePrimaryProbe?.viewports || [],
+          blockers: edgePrimaryBlockers,
+          failures: edgePrimaryProbe?.failures || [],
+          consoleErrors: edgePrimaryProbe?.consoleErrors || [],
+          process: { edge: childProcessEvidence(edgePrimaryResult) },
+          artifacts: { ...base.artifacts, probeReport: edgeProbePath },
+        }, reportPath, markdownPath, edgePrimaryStatus === "passed" ? 0 : 1);
+      }
     }
 
-    const childResult = await runChild(
-      electronExecutable,
-      [path.join(desktopRoot, "tools", "product-acceptance-layout-probe.js")],
-      {
+    let electronExecutable;
+    let electronLoadError = null;
+    try {
+      electronExecutable = require("electron");
+    } catch (error) {
+      electronLoadError = error;
+    }
+
+    let probe = null;
+    let finalProbePath = probePath;
+    let status = "blocked";
+    let blockers = [];
+    let failures = [];
+    let consoleErrors = [];
+    let processEvidence;
+
+    if (electronExecutable) {
+      const childResult = await runProbeChild(
+        electronExecutable,
+        [path.join(desktopRoot, "tools", "product-acceptance-layout-probe.js")],
+        {
+          cwd: desktopRoot,
+          outputDir,
+          probePath,
+          timeoutMs: options.timeoutMs,
+          env: {
+            ...process.env,
+            RESPONSIVE_QA_WEB_URL: options.url,
+            RESPONSIVE_QA_PROBE_OUTPUT: probePath,
+            RESPONSIVE_QA_SCREENSHOT_DIR: screenshotDir,
+            ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
+          },
+        },
+      );
+
+      processEvidence = childProcessEvidence(childResult);
+      const parsed = readProbeFile(probePath);
+      if (parsed.error) {
+        blockers = [childResult.timedOut
+          ? `Electron renderer did not finish within ${options.timeoutMs}ms`
+          : `Electron probe report is unavailable after ${(childResult.attempts || []).length || 1} attempt(s): ${parsed.error}`];
+      } else {
+        probe = parsed.probe;
+        status = normalizeProbeStatus(probe);
+        blockers = probeBlockers(status, probe, childResult, options.timeoutMs, "Electron renderer");
+        failures = probe.failures || [];
+        consoleErrors = probe.consoleErrors || [];
+      }
+    } else {
+      processEvidence = {
+        code: null,
+        signal: null,
+        timedOut: false,
+        stdoutTail: "",
+        stderrTail: electronLoadError?.message || String(electronLoadError || "Electron runtime is unavailable"),
+        attempts: [],
+      };
+      blockers = ["Electron runtime is unavailable; run npm.cmd ci in desktop first"];
+    }
+
+    if (shouldRunEdgeFallback(status, probe, processEvidence)) {
+      const edgeResult = edgePrimaryResult || await runEdgeProbe({
         cwd: desktopRoot,
-        timeoutMs: options.timeoutMs,
         env: {
           ...process.env,
           RESPONSIVE_QA_WEB_URL: options.url,
-          RESPONSIVE_QA_PROBE_OUTPUT: probePath,
+          RESPONSIVE_QA_PROBE_OUTPUT: edgeProbePath,
           RESPONSIVE_QA_SCREENSHOT_DIR: screenshotDir,
-          ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
         },
-      },
-    );
-
-    base.process = {
-      code: childResult.code,
-      signal: childResult.signal,
-      timedOut: childResult.timedOut,
-      stdoutTail: tail(childResult.stdout, 30),
-      stderrTail: tail(childResult.stderr, 30),
-    };
-
-    if (!fs.existsSync(probePath)) {
-      const reason = childResult.timedOut
-        ? `Electron renderer did not finish within ${options.timeoutMs}ms`
-        : `Electron renderer exited without a probe report (code=${childResult.code}, signal=${childResult.signal || "none"})`;
-      return finish(base, { blockers: [reason] }, reportPath, markdownPath, 2);
+        timeoutMs: options.timeoutMs,
+      });
+      base.process = {
+        electron: processEvidence,
+        edge: childProcessEvidence(edgeResult),
+      };
+      const parsed = readProbeFile(edgeProbePath);
+      if (parsed.error) {
+        const edgeBlocker = edgeResult.timedOut
+          ? `Edge CDP fallback did not finish within ${options.timeoutMs}ms`
+          : `Edge CDP fallback probe report is unavailable: ${parsed.error}`;
+        return finish(base, {
+          status: "blocked",
+          passed: false,
+          blockers: [...blockers, edgeBlocker],
+          failures,
+          consoleErrors,
+        }, reportPath, markdownPath, 2);
+      }
+      probe = parsed.probe;
+      finalProbePath = edgeProbePath;
+      status = normalizeProbeStatus(probe);
+      blockers = probeBlockers(status, probe, edgeResult, options.timeoutMs, "Edge CDP fallback");
+      failures = probe.failures || [];
+      consoleErrors = probe.consoleErrors || [];
+    } else {
+      base.process = processEvidence;
     }
 
-    let probe;
-    try {
-      probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-    } catch (error) {
-      return finish(base, { blockers: [`Electron probe report is unreadable: ${error.message}`] }, reportPath, markdownPath, 2);
-    }
-
-    const status = probe.status === "passed" ? "passed" : probe.status === "failed" ? "failed" : "blocked";
-    const blockers = [...(probe.blockers || [])];
-    if (status === "blocked" && blockers.length === 0) {
-      if (childResult.timedOut) blockers.push(`Electron renderer did not finish within ${options.timeoutMs}ms`);
-      else blockers.push(`Electron renderer stopped before completing both viewports (code=${childResult.code}, signal=${childResult.signal || "none"})`);
-    }
     const exitCode = status === "passed" ? 0 : status === "failed" ? 1 : 2;
     return finish(base, {
       status,
       passed: status === "passed",
-      title: probe.title || "",
-      viewports: probe.viewports || [],
+      renderer: probe?.renderer || base.renderer,
+      title: probe?.title || "",
+      viewports: probe?.viewports || [],
       blockers,
-      failures: probe.failures || [],
-      consoleErrors: probe.consoleErrors || [],
+      failures,
+      consoleErrors,
+      artifacts: { ...base.artifacts, probeReport: finalProbePath },
     }, reportPath, markdownPath, exitCode);
   } catch (error) {
     return finish(base, {
@@ -156,6 +236,156 @@ function validateLoopbackUrl(value) {
   }
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
     throw new Error("responsive QA URL must be an explicit loopback HTTP URL");
+  }
+}
+
+function childProcessEvidence(result) {
+  return {
+    code: result.code,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    stdoutTail: tail(result.stdout, 30),
+    stderrTail: tail(result.stderr, 30),
+    attempts: result.attempts || [],
+  };
+}
+
+function readProbeFile(probePath) {
+  if (!fs.existsSync(probePath)) return { error: "probe report was not written", probe: null };
+  try {
+    return { error: "", probe: JSON.parse(fs.readFileSync(probePath, "utf8")) };
+  } catch (error) {
+    return { error: `probe report is unreadable: ${error.message}`, probe: null };
+  }
+}
+
+function normalizeProbeStatus(probe) {
+  return probe?.status === "passed" ? "passed" : probe?.status === "failed" ? "failed" : "blocked";
+}
+
+function probeBlockers(status, probe, childResult, timeoutMs, rendererLabel) {
+  const blockers = [...(probe?.blockers || [])];
+  if (status !== "blocked" || blockers.length) return blockers;
+  if (childResult.timedOut) return [`${rendererLabel} did not finish within ${timeoutMs}ms`];
+  return [`${rendererLabel} stopped before completing both viewports after ${(childResult.attempts || []).length || 1} attempt(s) (code=${childResult.code}, signal=${childResult.signal || "none"})`];
+}
+
+function shouldRunEdgeFallback(status, probe, processEvidence) {
+  if (status !== "blocked") return false;
+  if (probe && Array.isArray(probe.viewports) && probe.viewports.length > 0) return false;
+  const diagnosticText = [
+    processEvidence.stderrTail,
+    ...(processEvidence.attempts || []).map((attempt) => attempt.stderrTail),
+    ...(probe?.blockers || []),
+  ].join("\n");
+  if (processEvidence.timedOut) return false;
+  return /GPU process|ERR_FAILED|renderer stopped|Electron runtime is unavailable|probe report/i.test(diagnosticText)
+    || !probe
+    || (Array.isArray(probe.viewports) && probe.viewports.length === 0);
+}
+
+async function runEdgeProbe(options) {
+  const maxAttempts = 3;
+  const attempts = [];
+  let lastResult = null;
+  const probePath = options.env?.RESPONSIVE_QA_PROBE_OUTPUT;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (probePath) {
+      try {
+        fs.rmSync(probePath, { force: true });
+      } catch {}
+    }
+    const result = runChildSync(process.execPath, [
+      path.join(desktopRoot, "tools", "product-acceptance-layout-edge-probe.js"),
+    ], {
+      ...options,
+      env: {
+        ...options.env,
+        RESPONSIVE_QA_EDGE_ATTEMPT: String(attempt),
+      },
+    });
+    const probeSummary = probePath ? readProbeSummary(probePath) : { status: "missing", viewportCount: 0 };
+    attempts.push({
+      attempt,
+      code: result.code,
+      signal: result.signal,
+      timedOut: result.timedOut,
+      probeStatus: probeSummary.status,
+      viewportCount: probeSummary.viewportCount,
+      stderrTail: tail(result.stderr, 12),
+    });
+    lastResult = result;
+    if (result.code === 0 || result.timedOut || probeSummary.status === "failed" || probeSummary.viewportCount > 0) break;
+    if (attempt < maxAttempts) await delay(1_000);
+  }
+  return { ...lastResult, attempts };
+}
+
+function runChildSync(command, args, options) {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    encoding: "utf8",
+    timeout: options.timeoutMs,
+    windowsHide: true,
+  });
+  return {
+    code: result.status,
+    signal: result.signal,
+    timedOut: Boolean(result.error && result.error.code === "ETIMEDOUT"),
+    stdout: result.stdout || "",
+    stderr: [result.stderr || "", result.error?.stack || result.error?.message || ""].filter(Boolean).join("\n"),
+  };
+}
+
+async function runProbeChild(command, args, options) {
+  const maxAttempts = 2;
+  const attempts = [];
+  let lastResult = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fs.rmSync(options.probePath, { force: true });
+    } catch {
+      // Best effort cleanup; the next probe write will still report the real state.
+    }
+    const userDataPath = path.join(options.outputDir, `electron-user-data-attempt-${attempt}`);
+    const result = await runChild(command, args, {
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs,
+      env: {
+        ...options.env,
+        RESPONSIVE_QA_ATTEMPT: String(attempt),
+        RESPONSIVE_QA_USER_DATA_PATH: userDataPath,
+      },
+    });
+    const probeSummary = readProbeSummary(options.probePath);
+    attempts.push({
+      attempt,
+      code: result.code,
+      signal: result.signal,
+      timedOut: result.timedOut,
+      probeStatus: probeSummary.status,
+      viewportCount: probeSummary.viewportCount,
+      stderrTail: tail(result.stderr, 12),
+    });
+    lastResult = result;
+
+    if (result.code === 0 || result.timedOut || probeSummary.status === "failed" || probeSummary.viewportCount >= 2) break;
+    if (attempt < maxAttempts) await delay(1_000);
+  }
+  return { ...lastResult, attempts };
+}
+
+function readProbeSummary(probePath) {
+  if (!fs.existsSync(probePath)) return { status: "missing", viewportCount: 0 };
+  try {
+    const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+    return {
+      status: probe.status || "unknown",
+      viewportCount: Array.isArray(probe.viewports) ? probe.viewports.length : 0,
+    };
+  } catch (error) {
+    return { status: `unreadable: ${error.message}`, viewportCount: 0 };
   }
 }
 
@@ -205,6 +435,10 @@ function runChild(command, args, options) {
       resolve({ code, signal, timedOut, stdout, stderr });
     });
   });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function finish(base, patch, reportPath, markdownPath, exitCode) {

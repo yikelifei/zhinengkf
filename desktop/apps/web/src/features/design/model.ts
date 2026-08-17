@@ -3,6 +3,7 @@ import {
   localDesignImageUrl,
   type DesignJob,
 } from "../../lib/api";
+import { safeRenderableImageSrc } from "../../lib/renderable-image-src";
 
 export function createDesignPlatformDeviceId() {
   const runtimeCrypto = globalThis.crypto;
@@ -12,12 +13,30 @@ export function createDesignPlatformDeviceId() {
   return `smart-kefu-${randomId}`.toLowerCase();
 }
 
+const DESIGN_PLATFORM_DEVICE_ID_STORAGE_KEY = "smart-kefu.design-platform.device-id";
+
+export function readRememberedDesignPlatformDeviceId() {
+  try {
+    return globalThis.localStorage?.getItem(DESIGN_PLATFORM_DEVICE_ID_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+export function rememberDesignPlatformDeviceId(deviceId: string) {
+  const normalized = deviceId.trim();
+  try {
+    if (normalized) globalThis.localStorage?.setItem(DESIGN_PLATFORM_DEVICE_ID_STORAGE_KEY, normalized);
+    else globalThis.localStorage?.removeItem(DESIGN_PLATFORM_DEVICE_ID_STORAGE_KEY);
+  } catch {}
+}
+
 export function designImagePreviewSrc(
   job: DesignJob,
   image?: NonNullable<DesignJob["images"]>[number] | null,
 ) {
   if (!image) return "";
-  return localDesignImageUrl(job.id, image, identityExpectation(job)) || image.downloadUrl || "";
+  return localDesignImageUrl(job.id, image, identityExpectation(job)) || safeRenderableImageSrc(image.downloadUrl);
 }
 
 function randomHexToken(byteLength: number, runtimeCrypto?: Crypto) {

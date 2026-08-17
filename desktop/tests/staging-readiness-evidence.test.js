@@ -7,13 +7,18 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  LEGACY_PERSONAL_WECHAT_READ_ONLY_ROUTES,
   READ_ONLY_ROUTES,
   SCHEMA_VERSION,
   STATUS,
   collectStagingReadiness,
+  doctorCommand,
   inspectDatabaseUrl,
   inspectUrl,
+  legacyPersonalWechatEnabled,
   parseArgs,
+  readEffectiveEnvironment,
+  readOnlyRoutesFor,
   renderMarkdown,
   writeReports,
 } = require("../tools/staging-readiness-evidence");
@@ -87,14 +92,28 @@ function successfulResponse(route) {
     return { ready: true, persistence: { mode: "prisma", mappedAccounts: 2, auditRecords: 8 } };
   }
   if (route.startsWith("/wechat-work/kf/audit")) {
-    return [
-      { action: "callback_accepted", status: "accepted" },
-      { action: "inbound_processed", status: "accepted" },
-      { action: "send_queued", status: "accepted" },
-    ];
+    return {
+      records: [
+        { action: "callback_accepted", status: "accepted" },
+        { action: "inbound_processed", status: "accepted" },
+        { action: "send_queued", status: "accepted" },
+      ],
+    };
   }
   if (route === "/integrations/design-platform/readiness") {
     return { adapter: "art_image_local", canSubmitFormalGeneration: true, checks: [{ key: "health", ok: true, severity: "error" }] };
+  }
+  if (route === "/ai/providers/status") {
+    return {
+      enabled: true,
+      primary: "primary",
+      fallbackChain: ["fallback"],
+      probe: false,
+      providers: [
+        { name: "primary", enabled: true, configured: true, issues: [] },
+        { name: "fallback", enabled: true, configured: true, issues: [] },
+      ],
+    };
   }
   if (route === "/wechat/channels/status") {
     return { channels: [{ key: "personal_wechat", ready: false, metrics: { accounts: 1 } }] };
@@ -147,6 +166,7 @@ test("URL and database policy reject obvious unsafe staging values", () => {
   assert.equal(inspectUrl("http://127.0.0.1:3000", { httpsUnlessLoopback: true }).safe, true);
   assert.equal(inspectUrl("http://service.acme.cn", { publicHttps: true }).reason, "public_https_required");
   assert.equal(inspectUrl("https://internal-host", { publicHttps: true }).reason, "public_https_required");
+  assert.equal(inspectUrl("https://callback.internal", { publicHttps: true }).reason, "public_https_required");
   assert.equal(inspectUrl("https://[fd00::1]", { publicHttps: true }).reason, "public_https_required");
   assert.equal(inspectUrl("https://rpa.acme.cn", { loopbackOnly: true }).reason, "loopback_required");
   assert.equal(inspectDatabaseUrl("postgresql://postgres:postgres@db.acme.cn/app?sslmode=require").status, STATUS.FAIL);
@@ -175,6 +195,97 @@ test("offline inventory never runs staging commands or network probes", async (t
   assert.equal(report.status, STATUS.BLOCKED);
   assert.equal(report.safety.allowedNetworkMethods.length, 0);
   assert.equal(report.results.filter((item) => item.id.startsWith("evidence.")).every((item) => item.status === STATUS.BLOCKED), true);
+  assert.equal(report.results.some((item) => item.id === "config.personal_wechat"), false);
+  assert.equal(report.results.some((item) => item.id === "evidence.personal_wechat"), false);
+});
+
+test("Linux configuration doctor uses python3 unless an explicit interpreter is configured", () => {
+  const automatic = doctorCommand("/release", "linux", {});
+  const explicit = doctorCommand("/release", "linux", { PYTHON: "/opt/python/bin/python" });
+
+  assert.equal(automatic.command, "python3");
+  assert.equal(path.basename(automatic.scriptPath), "config_readiness_doctor.py");
+  assert.equal(explicit.command, "/opt/python/bin/python");
+});
+
+test("staging design platform config rejects the mock design platform port", async (t) => {
+  const root = temporaryDirectory(t);
+  const accounts = path.join(root, "accounts.json");
+  fs.writeFileSync(accounts, "{}\n", "utf8");
+  const env = {
+    ...validEnvironment(accounts),
+    DESIGN_PLATFORM_ADAPTER: "art_image_local",
+    DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700",
+    MOCK_DESIGN_PLATFORM_PORT: "3700",
+  };
+
+  const report = await collectStagingReadiness({
+    env,
+    doctorReport: doctorReport(),
+    execute: false,
+    desktopRoot: root,
+    generatedAt: "2026-07-29T00:00:00.000Z",
+    runId: "mock-design-port-fixture",
+  });
+
+  const design = report.results.find((item) => item.id === "config.design_platform");
+  assert.equal(design.status, STATUS.FAIL);
+  assert.equal(design.evidence.baseUrl.mockPortSelected, true);
+  assert.ok(design.blockers.some((item) => /MOCK_DESIGN_PLATFORM_PORT/.test(item)));
+  assert.equal(JSON.stringify(report).includes(env.DESIGN_PLATFORM_ACCESS_TOKEN), false);
+});
+
+test("staging design platform inventory reads the private runtime config without exposing secrets", async (t) => {
+  const root = temporaryDirectory(t);
+  const runtimeRoot = path.join(root, "runtime");
+  const runtimeToken = "runtime-design-token-must-not-enter-report";
+  const runtimeCookie = "runtime-design-cookie-must-not-enter-report";
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, "design-platform-config.json"), JSON.stringify({
+    designPlatformAdapter: "art_image_local",
+    designPlatformBaseUrl: "http://127.0.0.1:3300",
+    designPlatformAccessToken: runtimeToken,
+    designPlatformCookie: runtimeCookie,
+    designPlatformDeviceId: "runtime-device-001",
+  }), "utf8");
+  const env = validEnvironment(path.join(root, "accounts.json"));
+  delete env.DESIGN_PLATFORM_ADAPTER;
+  delete env.DESIGN_PLATFORM_BASE_URL;
+  delete env.DESIGN_PLATFORM_ACCESS_TOKEN;
+  delete env.DESIGN_PLATFORM_DEVICE_ID;
+  env.DESKTOP_RUNTIME_DIR = runtimeRoot;
+
+  const report = await collectStagingReadiness({
+    env,
+    doctorReport: doctorReport(),
+    execute: false,
+    desktopRoot: root,
+    repositoryRevision: TEST_REVISION,
+    runId: "runtime-design-config",
+    generatedAt: "2026-08-06T00:00:00.000Z",
+  });
+  const design = report.results.find((item) => item.id === "config.design_platform");
+  const serialized = JSON.stringify(report);
+
+  assert.equal(design.status, STATUS.PASS);
+  assert.equal(design.evidence.runtimeConfigPresent, true);
+  assert.equal(design.evidence.runtimeConfigValid, true);
+  assert.equal(design.evidence.credentialConfigured, true);
+  assert.equal(design.evidence.deviceIdConfigured, true);
+  assert.equal(serialized.includes(runtimeToken), false);
+  assert.equal(serialized.includes(runtimeCookie), false);
+});
+
+test("Enterprise WeChat only staging routes exclude legacy personal WeChat probes", () => {
+  assert.equal(legacyPersonalWechatEnabled({}), false);
+  assert.equal(legacyPersonalWechatEnabled({ WECHAT_PRODUCT_MODE: "legacy_personal_wechat" }), true);
+  assert.deepEqual(readOnlyRoutesFor({}), [...READ_ONLY_ROUTES]);
+  assert.deepEqual(
+    readOnlyRoutesFor({ WECHAT_PRODUCT_MODE: "legacy_personal_wechat" }),
+    [...READ_ONLY_ROUTES, ...LEGACY_PERSONAL_WECHAT_READ_ONLY_ROUTES],
+  );
+  assert.equal(READ_ONLY_ROUTES.includes("/wechat/channels/status"), false);
+  assert.equal(READ_ONLY_ROUTES.includes("/wechat/bridge/status"), false);
 });
 
 test("explicit execute collects only existing read-only interfaces and can pass", async (t) => {
@@ -380,10 +491,89 @@ test("reports are revision-bound redacted JSON and Chinese Markdown under a run 
   assert.match(renderMarkdown(report), new RegExp(TEST_REVISION));
 });
 
+test("explicit env file does not merge repository env files", (t) => {
+  const root = temporaryDirectory(t);
+  const desktop = path.join(root, "desktop");
+  const envFile = path.join(root, "pre-icp.env");
+  fs.mkdirSync(desktop, { recursive: true });
+  fs.writeFileSync(path.join(root, ".env"), "NODE_ENV=development\nROOT_ONLY=unsafe\n", "utf8");
+  fs.writeFileSync(path.join(desktop, ".env"), "USE_LOCAL_STORE=true\nDESKTOP_ONLY=unsafe\n", "utf8");
+  fs.writeFileSync(envFile, "NODE_ENV=staging\nUSE_LOCAL_STORE=false\n", "utf8");
+
+  const env = readEffectiveEnvironment(root, { INHERITED_ONLY: "present" }, envFile);
+  assert.equal(env.NODE_ENV, "staging");
+  assert.equal(env.USE_LOCAL_STORE, "false");
+  assert.equal(env.INHERITED_ONLY, "present");
+  assert.equal(env.ROOT_ONLY, undefined);
+  assert.equal(env.DESKTOP_ONLY, undefined);
+});
+
+test("packaged Linux runtime without configuration doctor stays BLOCKED instead of FAIL", async (t) => {
+  const root = temporaryDirectory(t);
+  let commandCount = 0;
+  const report = await collectStagingReadiness({
+    env: validEnvironment(path.join(root, "accounts.json")),
+    execute: false,
+    repositoryRoot: root,
+    desktopRoot: root,
+    repositoryRevision: TEST_REVISION,
+    runCommand: () => {
+      commandCount += 1;
+      throw new Error("missing doctor must not execute");
+    },
+    runId: "packaged-runtime-no-doctor",
+    generatedAt: "2026-08-06T00:00:00.000Z",
+  });
+
+  const doctor = report.results.find((item) => item.id === "config.doctor");
+  assert.equal(commandCount, 0);
+  assert.equal(doctor.status, STATUS.BLOCKED);
+  assert.match(doctor.summary, /not packaged/);
+  assert.equal(report.summary.fail, 0);
+});
+
 test("CLI requires an explicit execute flag and rejects unknown options", () => {
-  assert.deepEqual(parseArgs([]), { execute: false, apiBase: "", help: false });
-  assert.deepEqual(parseArgs(["--execute", "--api-base", "https://staging.acme.cn/api"]), { execute: true, apiBase: "https://staging.acme.cn/api", help: false });
+  assert.deepEqual(parseArgs([]), {
+    execute: false,
+    apiBase: "",
+    envFile: "",
+    doctorReportFile: "",
+    repositoryRevision: "",
+    repositoryRoot: "",
+    desktopRoot: "",
+    reportRoot: "",
+    help: false,
+  });
+  assert.deepEqual(
+    parseArgs([
+      "--execute",
+      "--api-base", "https://staging.acme.cn/api",
+      "--env-file", "config/pre-icp.env",
+      "--doctor-report", "reports/config-doctor.json",
+      "--repository-revision", TEST_REVISION,
+      "--repository-root", "releases/fixture",
+      "--desktop-root", "releases/fixture/desktop",
+      "--report-root", ".runtime/server-readiness",
+    ]),
+    {
+      execute: true,
+      apiBase: "https://staging.acme.cn/api",
+      envFile: "config/pre-icp.env",
+      doctorReportFile: "reports/config-doctor.json",
+      repositoryRevision: TEST_REVISION,
+      repositoryRoot: "releases/fixture",
+      desktopRoot: "releases/fixture/desktop",
+      reportRoot: ".runtime/server-readiness",
+      help: false,
+    },
+  );
   assert.throws(() => parseArgs(["--api-base"]), /requires a URL/);
+  assert.throws(() => parseArgs(["--env-file"]), /requires a path/);
+  assert.throws(() => parseArgs(["--doctor-report"]), /requires a path/);
+  assert.throws(() => parseArgs(["--repository-revision"]), /requires a revision/);
+  assert.throws(() => parseArgs(["--repository-root"]), /requires a path/);
+  assert.throws(() => parseArgs(["--desktop-root"]), /requires a path/);
+  assert.throws(() => parseArgs(["--report-root"]), /requires a path/);
   assert.throws(() => parseArgs(["--send"]), /unknown argument/);
 });
 
@@ -394,6 +584,7 @@ test("source contract contains no mutating staging route or migration deploy com
   assert.deepEqual(READ_ONLY_ROUTES.every((route) => !/send-text|sync|callback$/i.test(route)), true);
   assert.equal(READ_ONLY_ROUTES.includes("/automation/status"), true);
   assert.equal(READ_ONLY_ROUTES.includes("/automation/readiness"), true);
+  assert.equal(READ_ONLY_ROUTES.includes("/ai/providers/status"), true);
   assert.doesNotMatch(source, /npm\W+exec/);
   assert.doesNotMatch(source, /prisma\W+migrate\W+deploy/);
   assert.doesNotMatch(source, /method:\s*["']POST["']/);

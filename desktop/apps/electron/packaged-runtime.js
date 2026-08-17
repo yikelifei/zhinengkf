@@ -30,6 +30,14 @@ function resolvePackagedPaths({ resourcesPath, appPath, userDataPath }) {
     logDir: path.join(userDataPath, "logs"),
     readOnlyRoot: path.join(resourcesPath, "services", "runtime-root"),
     serviceNodeModulesPath: path.join(resourcesPath, "services", "runtime-root", "node_modules"),
+    zhenxiMcpServerPath: path.join(
+      resourcesPath,
+      "services",
+      "runtime-root",
+      "packages",
+      "mcp",
+      "zhenxi-ai-server.mjs",
+    ),
     nodeModulesPath: path.join(appPath, "node_modules"),
     unpackedNodeModulesPath: path.join(`${appPath}.unpacked`, "node_modules"),
   };
@@ -42,6 +50,7 @@ function buildApiServiceEnvironment({ resourcesPath, appPath, userDataPath, base
     .join(path.delimiter);
   return selectServiceEnvironment("api", baseEnv, {
     NODE_ENV: "production",
+    SMART_KEFU_RUNTIME_TARGET: "desktop",
     ELECTRON_RUN_AS_NODE: "1",
     HOSTNAME: "127.0.0.1",
     API_PORT: "3200",
@@ -50,6 +59,7 @@ function buildApiServiceEnvironment({ resourcesPath, appPath, userDataPath, base
     DESKTOP_RUNTIME_DIR: paths.runtimeDir,
     LOCAL_STORAGE_ROOT: paths.storageDir,
     DESKTOP_ENV_FILE: path.join(paths.configDir, "runtime.env"),
+    ZHENXI_MCP_SERVER_PATH: paths.zhenxiMcpServerPath,
     NODE_PATH: nodePath,
   });
 }
@@ -66,6 +76,7 @@ function buildWebServiceEnvironment({ resourcesPath, appPath, userDataPath, base
     PORT: "3100",
     API_PORT: "3200",
     WEB_PORT: "3100",
+    ALLOW_LOCAL_BROWSER_WEB_API: "0",
     INTERNAL_API_TOKEN: token,
     DESKTOP_WEB_SESSION_PROOF: webSessionProof,
     DESKTOP_RUNTIME_DIR: paths.runtimeDir,
@@ -201,7 +212,7 @@ class PackagedServiceManager {
   }
 
   async start() {
-    for (const required of [this.paths.apiEntry, this.paths.webEntry]) {
+    for (const required of [this.paths.apiEntry, this.paths.webEntry, this.paths.zhenxiMcpServerPath]) {
       if (!fs.existsSync(required)) throw new Error(`Packaged service entry is missing: ${required}`);
     }
     for (const directory of [this.paths.runtimeDir, this.paths.storageDir, this.paths.configDir, this.paths.logDir]) {

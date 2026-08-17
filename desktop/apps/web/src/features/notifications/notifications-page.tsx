@@ -1,12 +1,19 @@
 "use client";
 
-import { useRef, useState } from "react";
+import Link from "next/link";
+import { useMemo, useRef, useState } from "react";
 import type { IdentityFilters, NotificationItem } from "../../lib/api";
 import styles from "../governance-pages.module.css";
 import {
   createNotificationConfirmationGuard,
   type NotificationConfirmationToken,
 } from "./notification-operation-guard";
+import {
+  groupNotificationsForDisplay,
+  notificationBodyForOperator,
+  type NotificationDisplayGroup,
+} from "./notification-presentation";
+import { notificationTargetHref } from "./notification-navigation";
 import { useNotificationsController } from "./use-notifications-controller";
 
 export type NotificationsPageProps = { identityFilters?: IdentityFilters };
@@ -23,6 +30,10 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
   const confirmationOpen = Boolean(
     confirmationToken && confirmationGuard.isCurrent(confirmationToken, controller.scopeKey),
   );
+  const displayGroups = useMemo(
+    () => groupNotificationsForDisplay(controller.notifications),
+    [controller.notifications],
+  );
 
   async function confirmMarkAll() {
     if (!confirmationToken || !confirmationGuard.consume(confirmationToken, controller.scopeKey)) {
@@ -33,9 +44,11 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
     await controller.markAllRead(confirmationToken.scopeKey);
   }
 
-  const statusClass = !controller.loaded
+  const statusClass = controller.readState === "unknown"
     ? styles.toneError
-    : controller.unreadCount ? styles.toneWarning : styles.toneOk;
+    : controller.readState === "loading"
+      ? styles.toneMuted
+    : controller.readState === "stale" || controller.unreadCount ? styles.toneWarning : styles.toneOk;
 
   return (
     <section className={styles.page} aria-labelledby="notifications-title" aria-busy={controller.busy}>
@@ -55,14 +68,16 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
         <header className={styles.panelHeader}>
           <div>
             <h2 id="notification-list-title">通知列表</h2>
-            <p>{controller.loaded
+            <p>{controller.readState === "stale"
+              ? "最新刷新失败，当前显示上次在同一身份范围内成功读取的可信结果；处理前请重新刷新。"
+              : controller.loaded
               ? controller.notifications.length
-                ? "当前返回 " + controller.notifications.length + " 条，其中 " + controller.unreadCount + " 条未读。"
+                ? "当前返回 " + controller.notifications.length + " 条，其中 " + controller.unreadCount + " 条未读；合并显示 " + displayGroups.length + " 组。"
                 : "读取成功，当前身份范围内没有通知。"
               : "当前读取结果未确认。"}</p>
           </div>
           <span className={styles.badge + " " + statusClass}>
-            {controller.loaded ? controller.unreadCount ? controller.unreadCount + " 未读" : controller.notifications.length ? "已处理" : "暂无通知" : "未确认"}
+            {controller.readState === "stale" ? "旧结果 / 待刷新" : controller.loaded ? controller.unreadCount ? controller.unreadCount + " 未读" : controller.notifications.length ? "已处理" : "暂无通知" : controller.readState === "loading" ? "读取中" : "未确认"}
           </span>
         </header>
         <div className={styles.panelBody}>
@@ -78,12 +93,13 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
 
           {controller.loaded && controller.notifications.length ? (
             <div className={styles.recordList}>
-              {controller.notifications.map((notification) => (
+              {displayGroups.map((group) => (
                 <NotificationRow
-                  notification={notification}
+                  group={group}
                   busy={controller.busy}
-                  onMarkRead={() => void controller.markOneRead(notification)}
-                  key={notification.id}
+                  identityFilters={identityFilters}
+                  onMarkRead={() => void controller.markGroupRead(group.notifications)}
+                  key={group.notification.id}
                 />
               ))}
             </div>
@@ -108,39 +124,52 @@ export function NotificationsPage({ identityFilters }: NotificationsPageProps) {
 }
 
 function NotificationRow({
-  notification,
+  group,
   busy,
+  identityFilters,
   onMarkRead,
 }: {
-  notification: NotificationItem;
+  group: NotificationDisplayGroup;
   busy: boolean;
+  identityFilters?: IdentityFilters;
   onMarkRead: () => void;
 }) {
+  const notification = group.notification;
+  const target = group.hasMixedTargets ? null : notificationTargetHref(notification, identityFilters);
   return (
     <article className={styles.record}>
       <div className={styles.recordHeader}>
-        <div><h3>{notification.title}</h3><p>{notification.body || "服务端未提供补充说明。"}</p></div>
-        <span className={styles.badge + " " + notificationTone(notification)}>{notification.readAt ? "已读" : levelLabel(notification.level)}</span>
+        <div>
+          <h3>{notification.title}</h3>
+          <p>{notificationBodyForOperator(notification.body)}</p>
+        </div>
+        <span className={styles.badge + " " + notificationTone(notification, group.unreadCount)}>{group.unreadCount === 0 ? "已读" : levelLabel(notification.level)}</span>
       </div>
       <div className={styles.statusLine}>
-        <div className={styles.recordMeta}><span>{formatDateTime(notification.createdAt)}</span><span>ID {notification.id}</span></div>
+        <div className={styles.recordMeta}>
+          <span>{formatDateTime(group.newestCreatedAt)}</span>
+          {group.occurrenceCount > 1 ? <span>同类通知 {group.occurrenceCount} 次</span> : null}
+          {group.hasMixedTargets ? <span>关联多个责任对象</span> : null}
+          {group.occurrenceCount > 1 ? <span>最早 {formatDateTime(group.oldestCreatedAt)}</span> : <span>ID {notification.id}</span>}
+        </div>
+        {target ? <Link className={styles.quietButton} href={target.href} data-action-id={"notification-open-target-" + notification.id}>{target.label}</Link> : null}
         <button
           className={styles.quietButton}
           type="button"
           data-action-id={"notification-mark-read-" + notification.id}
-          aria-label={"将通知" + notification.title + "标记为已读"}
+          aria-label={"将通知" + notification.title + (group.occurrenceCount > 1 ? "及同类通知" : "") + "标记为已读"}
           onClick={onMarkRead}
-          disabled={busy || Boolean(notification.readAt)}
+          disabled={busy || group.unreadCount === 0}
         >
-          {notification.readAt ? "已读" : "标为已读"}
+          {group.unreadCount === 0 ? "已读" : group.occurrenceCount > 1 ? "本组标为已读" : "标为已读"}
         </button>
       </div>
     </article>
   );
 }
 
-function notificationTone(notification: NotificationItem) {
-  if (notification.readAt) return styles.toneMuted;
+function notificationTone(notification: NotificationItem, unreadCount = notification.readAt ? 0 : 1) {
+  if (unreadCount === 0) return styles.toneMuted;
   if (notification.level === "error") return styles.toneError;
   if (notification.level === "warning") return styles.toneWarning;
   return styles.toneOk;

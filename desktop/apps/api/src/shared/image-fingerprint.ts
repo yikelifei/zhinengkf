@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import sharp from "sharp";
 
+const { MAX_STORED_IMAGE_BYTES } = require("../../../../packages/runtime/desktop-request-limits") as {
+  MAX_STORED_IMAGE_BYTES: number;
+};
+
 export const IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";
 export const MAX_IMAGE_DECODE_PIXELS = 25_000_000;
-export const MAX_IMAGE_FINGERPRINT_BYTES = 20 * 1024 * 1024;
+export const MAX_IMAGE_FINGERPRINT_BYTES = MAX_STORED_IMAGE_BYTES;
 
 export type ImageFingerprintResult = {
   fingerprint: string;
@@ -55,7 +59,7 @@ export async function fingerprintImageBytes(
     sequentialRead: true,
   });
   const metadata = await image.metadata();
-  const format = metadata.format === "jpg" ? "jpeg" : metadata.format;
+  const format = metadata.format;
   if (format !== "jpeg" && format !== "png") {
     throw new Error("image must decode as JPEG or PNG");
   }

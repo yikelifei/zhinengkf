@@ -37,9 +37,9 @@ const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const MAX_REPORT_BYTES = 2 * 1024 * 1024;
 const STAGING_REQUIRED_RESULT_IDS = Object.freeze([
   "config.doctor", "config.environment", "config.database", "config.automation_queue", "config.api_access",
-  "config.wechat_work", "config.design_platform", "config.personal_wechat", "config.model_chain",
+  "config.wechat_work", "config.design_platform", "config.model_chain",
   "evidence.database_migrations", "evidence.api_health", "evidence.wechat_work", "evidence.design_platform",
-  "evidence.personal_wechat", "evidence.automation_queue",
+  "evidence.automation_queue",
 ]);
 const RECOVERY_REQUIRED_RESULT_IDS = Object.freeze([
   "safety.source", "safety.target", "safety.distinct", "safety.isolated_target", "safety.confirmation",
@@ -53,7 +53,8 @@ const WINDOWS_REQUIRED_CHECKS = Object.freeze([
   "packaged placeholder-only AI settings", "packaged Prisma client", "packaged generated Prisma client",
   "packaged Sharp runtime", "packaged Sharp Windows native addon", "NSIS installer", "NSIS installer PE format", "packaged API smoke",
   "asar entry /apps/electron/main.js", "asar entry /apps/electron/preload.js",
-  "asar entry /apps/electron/packaged-runtime.js", "asar entry /package.json", "asar entry /.package-provenance.json",
+  "asar entry /apps/electron/packaged-runtime.js", "asar entry /apps/electron/desktop-session-refresh.js",
+  "asar entry /package.json", "asar entry /.package-provenance.json",
   "asar sensitive top-level paths", "packaged metadata", "packaged repository provenance", "resource sensitive-file scan", "Authenticode signing",
 ]);
 

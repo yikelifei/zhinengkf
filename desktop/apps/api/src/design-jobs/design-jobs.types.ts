@@ -38,6 +38,28 @@ export type ResolveUnknownDesignExecutionPayload = {
   resolution: "confirmed_not_generated_refunded";
 };
 
+export type ForwardExistingDesignImagesPayload = {
+  operationKey: string;
+  expectedWechatAccountId: string;
+  expectedConversationId: string;
+  expectedCustomerId: string;
+  targetWechatAccountId: string;
+  targetConversationId: string;
+  targetCustomerId: string;
+};
+
+export type RecoverCompletedDesignExecutionPayload = {
+  resolution: "confirmed_generated";
+  evidence: string;
+  refundStatus: "credit_bypass" | "not_required" | "refunded";
+  images: Array<{
+    imageId: string;
+    downloadUrl: string;
+    width?: number;
+    height?: number;
+  }>;
+};
+
 export type ResolveDesignExecutionRefundPayload = {
   resolution: "confirmed_refunded";
 };

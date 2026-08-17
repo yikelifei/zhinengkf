@@ -13,6 +13,8 @@ $MockModeLockFile = Join-Path $RuntimeDir "mock-mode.lock"
 $RealModeLockFile = Join-Path $RuntimeDir "real-mode.lock"
 $DesignPlatformConfigFile = Join-Path $RuntimeDir "design-platform-config.json"
 $PreferredDesignModeFile = Join-Path $RuntimeDir "preferred-design-mode.json"
+$SupervisorStopRequestFile = Join-Path $RuntimeDir "desktop-supervisor-stop-request"
+$StableStopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 $IsReal = $Mode -eq "real"
 $ModeArg = if ($IsReal) { "--real-design" } else { "--mock-design" }
 $ConflictMode = if ($IsReal) { "mock" } else { "real" }
@@ -46,6 +48,15 @@ function Add-LauncherLog {
   } catch {
     return
   }
+}
+
+function Test-SupervisorStopRequested {
+  return (Test-Path $SupervisorStopRequestFile) -or (Test-Path $StableStopRequestFile)
+}
+
+function Clear-SupervisorStopRequests {
+  Remove-Item -LiteralPath $SupervisorStopRequestFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $StableStopRequestFile -Force -ErrorAction SilentlyContinue
 }
 
 function Find-ConflictingDesignLaunchers {
@@ -227,6 +238,7 @@ function Get-LauncherEnvLines {
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 Assert-ModeSwitchAllowed
 Stop-ConflictingDesktopServices
+Clear-SupervisorStopRequests
 Update-MockModeLock
 Update-RealModeLock
 Disable-ConflictingLaunchers
@@ -239,8 +251,14 @@ $cmdLines = @(
   "setlocal",
   "cd /d ""$Root"""
 ) + (Get-LauncherEnvLines) + @(
+  "if exist ""$SupervisorStopRequestFile"" exit /b 0",
+  "if exist ""$StableStopRequestFile"" exit /b 0",
   ":restart",
+  "if exist ""$SupervisorStopRequestFile"" exit /b 0",
+  "if exist ""$StableStopRequestFile"" exit /b 0",
   $nodeLine,
+  "if exist ""$SupervisorStopRequestFile"" exit /b %ERRORLEVEL%",
+  "if exist ""$StableStopRequestFile"" exit /b %ERRORLEVEL%",
   "echo [%date% %time%] start-dev-ports exited with %ERRORLEVEL%, restarting >> ""$LauncherLog""",
   "timeout /t 2 /nobreak >nul",
   "goto restart"

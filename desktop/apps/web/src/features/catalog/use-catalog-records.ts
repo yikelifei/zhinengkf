@@ -10,22 +10,30 @@ export function useCatalogProducts(skuCode = "") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [stale, setStale] = useState(false);
   const requestSequence = useRef(0);
+  const recordsRef = useRef(records);
+  recordsRef.current = records;
 
   const refresh = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    setLoading(true); setError(""); setLoaded(false);
+    setLoading(true); setError("");
     try {
       const next = await getVerifiedSkus(true);
       if (sequence !== requestSequence.current) return;
       setRecords(next);
       setLoaded(true);
+      setStale(false);
       if (skuCode && !next.some((sku) => sku.skuCode === skuCode)) {
         setError(`未找到商品 ${skuCode}，请返回商品列表重新选择。`);
       }
     } catch (cause) {
       if (sequence === requestSequence.current) {
-        setRecords([]); setLoaded(false); setError(catalogError(cause, "商品读取失败"));
+        const hasTrustedRecords = recordsRef.current.length > 0;
+        if (!hasTrustedRecords) setRecords([]);
+        setLoaded(hasTrustedRecords);
+        setStale(hasTrustedRecords);
+        setError(`${catalogError(cause, "商品读取失败")}${hasTrustedRecords ? "；当前显示上一次可信快照。" : ""}`);
       }
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
@@ -47,7 +55,7 @@ export function useCatalogProducts(skuCode = "") {
       : [next, ...rows]);
   }
 
-  return { records, selected, loading, loaded, error, refresh, replace };
+  return { records, selected, loading, loaded, stale, error, refresh, replace };
 }
 
 export function useCatalogRepairQueue(skuCode = "") {
@@ -55,22 +63,30 @@ export function useCatalogRepairQueue(skuCode = "") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [stale, setStale] = useState(false);
   const requestSequence = useRef(0);
+  const auditRef = useRef(audit);
+  auditRef.current = audit;
 
   const refresh = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    setLoading(true); setError(""); setLoaded(false);
+    setLoading(true); setError("");
     try {
       const next = await getSkuCatalogAudit();
       if (sequence !== requestSequence.current) return;
       setAudit(next);
       setLoaded(true);
+      setStale(false);
       if (skuCode && !next.repairQueue?.some((item) => item.skuCode === skuCode)) {
         setError(`未找到修复任务 ${skuCode}，它可能已完成或已从队列移除。`);
       }
     } catch (cause) {
       if (sequence === requestSequence.current) {
-        setAudit(null); setLoaded(false); setError(catalogError(cause, "商品审计读取失败"));
+        const hasTrustedAudit = Boolean(auditRef.current);
+        if (!hasTrustedAudit) setAudit(null);
+        setLoaded(hasTrustedAudit);
+        setStale(hasTrustedAudit);
+        setError(`${catalogError(cause, "商品审计读取失败")}${hasTrustedAudit ? "；当前显示上一次可信审计。" : ""}`);
       }
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
@@ -86,5 +102,5 @@ export function useCatalogRepairQueue(skuCode = "") {
     [audit, skuCode],
   );
 
-  return { audit, selected, loading, loaded, error, refresh };
+  return { audit, selected, loading, loaded, stale, error, refresh };
 }

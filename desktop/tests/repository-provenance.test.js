@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   assertCleanRepository,
   normalizeRepositoryRevision,
+  parsePorcelainStatusEntries,
   resolveRepositoryRevision,
   resolveRepositoryState,
 } = require("../tools/repository-provenance");
@@ -40,6 +41,32 @@ test("repository provenance requires a readable clean worktree for packaging", (
     repositoryRoot: "C:/fixture-without-git",
     runCommand: () => ({ status: 128, stdout: "", stderr: "not a git repository" }),
   }), /revision unavailable/);
+});
+
+test("repository provenance can expose sanitized porcelain status entries when requested", () => {
+  assert.deepEqual(parsePorcelainStatusEntries([
+    " M desktop/apps/web/src/lib/api.ts",
+    "?? desktop/tests/new-boundary.test.js",
+    "R  desktop/old.ts -> desktop/new.ts",
+    "",
+  ].join("\n")), [
+    { status: "M", path: "desktop/apps/web/src/lib/api.ts" },
+    { status: "??", path: "desktop/tests/new-boundary.test.js" },
+    { status: "R", path: "desktop/new.ts" },
+  ]);
+
+  const state = resolveRepositoryState({
+    repositoryRoot: "C:/fixture",
+    includeStatusEntries: true,
+    runCommand: (_command, args) => args[0] === "rev-parse"
+      ? { status: 0, stdout: `${"f".repeat(40)}\n` }
+      : { status: 0, stdout: " M desktop/apps/api/src/wechat-work/wechat-work.service.ts\n?? desktop/tools/new-tool.js\n" },
+  });
+  assert.equal(state.clean, false);
+  assert.deepEqual(state.statusEntries, [
+    { status: "M", path: "desktop/apps/api/src/wechat-work/wechat-work.service.ts" },
+    { status: "??", path: "desktop/tools/new-tool.js" },
+  ]);
 });
 
 test("repository provenance uses a read-only git command and fails closed", () => {

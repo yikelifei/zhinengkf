@@ -18,7 +18,8 @@ const viewports = [
   { name: "desktop-1536", width: 1536, height: 960, mobile: false },
   { name: "mobile-390", width: 390, height: 844, mobile: true },
 ];
-const userDataPath = path.join(path.dirname(outputPath), "electron-user-data");
+const desktopSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim();
+const userDataPath = path.resolve(process.env.RESPONSIVE_QA_USER_DATA_PATH || path.join(path.dirname(outputPath), "electron-user-data"));
 const report = {
   schemaVersion: 1,
   startedAt: new Date().toISOString(),
@@ -94,7 +95,8 @@ async function inspectViewport(spec) {
   });
 
   try {
-    await browserWindow.loadURL(webUrl);
+    await installDesktopSessionCookie(browserWindow, webUrl);
+    await loadUrlWithRetry(browserWindow, webUrl, spec.name);
     await waitFor(
       browserWindow,
       `document.querySelector('main') && document.querySelector('[data-route-id]') && document.body.innerText.trim().length > 100`,
@@ -188,6 +190,56 @@ async function inspectViewport(spec) {
   } finally {
     if (!browserWindow.isDestroyed()) browserWindow.destroy();
   }
+}
+
+async function installDesktopSessionCookie(browserWindow, url) {
+  if (!/^[a-f0-9]{64}$/i.test(desktopSessionProof)) return false;
+  const target = new URL(url);
+  await browserWindow.webContents.session.cookies.set({
+    url: target.origin,
+    name: "smart_kefu_desktop_session",
+    value: desktopSessionProof,
+    path: "/api",
+    httpOnly: true,
+    sameSite: "strict",
+    secure: target.protocol === "https:",
+  });
+  return true;
+}
+
+async function loadUrlWithRetry(browserWindow, url, viewportName) {
+  const attempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await browserWindow.loadURL(url);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) break;
+      await waitForReachableLoopback(url, 5_000);
+      await delay(750 * attempt);
+      if (!browserWindow.isDestroyed()) browserWindow.webContents.stop();
+    }
+  }
+  throw new Error(`${viewportName} failed to load ${url} after ${attempts} attempts: ${lastError?.message || lastError}`);
+}
+
+async function waitForReachableLoopback(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url, { redirect: "follow" });
+      await response.body?.cancel();
+      if (response.ok) return;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(250);
+  }
+  throw new Error(`web service was not reachable before renderer retry: ${lastError?.message || lastError || "unknown error"}`);
 }
 
 async function runDesktopNavigationInteraction(browserWindow) {

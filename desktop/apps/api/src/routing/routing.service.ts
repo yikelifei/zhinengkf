@@ -6,7 +6,13 @@ import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/ident
 import { rules } from "../shared/rules";
 import { PrismaOperationsService } from "../prisma/prisma-operations.service";
 
-const { buildAgentReplyDraft, classifyTrainingSampleUsage, evaluateAgentRoute, findPendingSceneClarificationContext } = rules;
+const {
+  buildAgentReplyDraft,
+  classifyTrainingSampleUsage,
+  evaluateAgentRoute,
+  findPendingSceneClarificationContext,
+  recommendBundle,
+} = rules;
 
 type RouteEvaluatePayload = {
   text: string;
@@ -63,6 +69,8 @@ export class RoutingService {
           ...identityFilter,
         })
       : [];
+    const catalogSkus = this.localStore.listSkus();
+    const bundleRecommendation = buildReplyBundleRecommendation(result, catalogSkus);
     const draft = buildAgentReplyDraft(result, {
       agentId: agent?.id,
       wechatAccountId: payload.wechatAccountId,
@@ -70,6 +78,8 @@ export class RoutingService {
       customerId: payload.customerId,
       skills,
       knowledgeEntries,
+      catalogSkus,
+      bundleRecommendation,
     });
     return this.localStore.createRouteEvaluation(payload, {
       ...result,
@@ -169,6 +179,23 @@ export class RoutingService {
       .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
       .slice(0, 200);
   }
+}
+
+function buildReplyBundleRecommendation(route: any, skus: any[]) {
+  if (!["gift_design", "pre_sales"].includes(route.agentKey)) return null;
+  if (!(Number(route.budget?.perUnitAmount || 0) > 0)) return null;
+  return recommendBundle({
+    skus: skus.map((sku: any) => ({
+      ...sku,
+      costPrice: Number(sku.costPrice || 0),
+      salePrice: Number(sku.salePrice || 0),
+      sceneTags: Array.isArray(sku.sceneTags) ? sku.sceneTags : [],
+      replacementSkuCodes: Array.isArray(sku.replacementSkuCodes) ? sku.replacementSkuCodes : [],
+    })),
+    budget: route.budget || {},
+    scene: route.scene || route.text || "",
+    maxItems: 6,
+  });
 }
 
 function isSceneMemorySample(sample: any) {

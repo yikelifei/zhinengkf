@@ -1,8 +1,19 @@
 "use strict";
 
-function recommendBundle({ skus = [], budget, scene = "", maxItems = 8, minimumMarginRate = 0.15, deliveryLeadTimeWarningDays = 30 }) {
+function recommendBundle({
+  skus = [],
+  budget,
+  scene = "",
+  maxItems = 8,
+  selectedSkuCodes = [],
+  requiredSkuCodes = [],
+  requireImages = false,
+  minimumMarginRate = 0.15,
+  deliveryLeadTimeWarningDays = 30,
+}) {
   const perUnitBudget = Number(budget?.perUnitAmount || budget?.amount || 0);
   const requestedQuantity = positiveInteger(budget?.quantity, 1);
+  const requestedSkuCodes = normalizeSkuCodes([...selectedSkuCodes, ...requiredSkuCodes]);
   const automationOptions = {
     minimumMarginRate: normalizeMinimumMarginRate(minimumMarginRate),
     deliveryLeadTimeWarningDays: normalizeLeadTimeWarningDays(deliveryLeadTimeWarningDays),
@@ -22,17 +33,36 @@ function recommendBundle({ skus = [], budget, scene = "", maxItems = 8, minimumM
   }
 
   const activeSkus = skus.filter((sku) => Number(sku.salePrice || 0) > 0 && sku.isActive !== false);
-  const giftBoxes = activeSkus.filter((sku) => sku.type === "gift_box");
-  const products = activeSkus.filter((sku) => sku.type !== "gift_box");
-  const selectedGiftBox = pickBest(giftBoxes, scene, perUnitBudget, activeSkus, requestedQuantity, automationOptions) || null;
+  const selectableSkus = requireImages ? activeSkus.filter(hasSkuImageReference) : activeSkus;
+  const imageExcludedCount = activeSkus.length - selectableSkus.length;
+  const selectableGiftBoxes = selectableSkus.filter((sku) => sku.type === "gift_box");
+  const products = selectableSkus.filter((sku) => sku.type !== "gift_box");
+  const selectedWarnings = [];
+  warnUnavailableSelectedSkuCodes(requestedSkuCodes, skus, selectableSkus, requireImages, selectedWarnings);
+  const selectedGiftBox = pickSelectedGiftBox(requestedSkuCodes, selectableGiftBoxes, perUnitBudget, selectableSkus, requestedQuantity, selectedWarnings) ||
+    pickBest(selectableGiftBoxes, scene, perUnitBudget, selectableSkus, requestedQuantity, automationOptions) ||
+    null;
   const remainingBudget = perUnitBudget - Number(selectedGiftBox?.salePrice || 0);
-  const selectedItems = pickItems(products, scene, remainingBudget, maxItems, activeSkus, requestedQuantity, selectedGiftBox, automationOptions);
+  const selectedItems = pickItems(
+    products,
+    scene,
+    remainingBudget,
+    maxItems,
+    selectableSkus,
+    requestedQuantity,
+    selectedGiftBox,
+    automationOptions,
+    requestedSkuCodes,
+    selectedWarnings,
+  );
   const items = [selectedGiftBox, ...selectedItems].filter(Boolean);
   const totals = calculateTotals(items);
   const fulfillment = calculateFulfillment(items, requestedQuantity);
   const automation = inspectBundleAutomationReadiness(items, totals, automationOptions);
 
   const warnings = [];
+  warnings.push(...selectedWarnings);
+  if (requireImages && imageExcludedCount > 0) warnings.push(`${imageExcludedCount} image_missing_skus_excluded`);
   if (!selectedGiftBox) warnings.push("没有找到可用礼盒 SKU。");
   if (remainingBudget <= 0) warnings.push("礼盒价格已经超过单份预算。");
   if (totals.salePrice > perUnitBudget) warnings.push("推荐组合超过单份预算，需要人工确认。");
@@ -66,10 +96,55 @@ function pickBest(skus, scene, budget, allSkus = skus, requestedQuantity = 1, au
   return scored[0]?.sku || null;
 }
 
-function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuantity = 1, giftBox = null, automationOptions = {}) {
+function warnUnavailableSelectedSkuCodes(selectedSkuCodes, catalogSkus, selectableSkus, requireImages, warnings = []) {
+  if (!selectedSkuCodes.length) return;
+  const selectableCodes = new Set(selectableSkus.map((sku) => sku.skuCode).filter(Boolean));
+  const catalogByCode = new Map(catalogSkus.map((sku) => [sku.skuCode, sku]));
+  for (const skuCode of selectedSkuCodes) {
+    if (selectableCodes.has(skuCode)) continue;
+    const sku = catalogByCode.get(skuCode);
+    if (!sku) warnings.push(`${skuCode} selected_sku_not_found`);
+    else if (sku.isActive === false || !(Number(sku.salePrice || 0) > 0)) warnings.push(`${skuCode} selected_sku_inactive_or_unpriced`);
+    else if (requireImages && !hasSkuImageReference(sku)) warnings.push(`${skuCode} selected_sku_missing_image`);
+    else warnings.push(`${skuCode} selected_sku_unavailable`);
+  }
+}
+
+function pickSelectedGiftBox(selectedSkuCodes, giftBoxes, budget, allSkus = giftBoxes, requestedQuantity = 1, warnings = []) {
+  for (const skuCode of selectedSkuCodes) {
+    const original = giftBoxes.find((sku) => sku.skuCode === skuCode);
+    if (!original) continue;
+    const effective = withReplacementIfNeeded(original, allSkus, requestedQuantity);
+    const price = Number(effective.salePrice || 0);
+    if (!isUsable(effective, requestedQuantity)) {
+      warnings.push(`已选礼盒 ${skuCode} 库存不足或不可用，未进入本次搭配。`);
+      continue;
+    }
+    if (price <= 0 || price > budget) {
+      warnings.push(`已选礼盒 ${skuCode} 超出单份预算，未进入本次搭配。`);
+      continue;
+    }
+    return effective;
+  }
+  return null;
+}
+
+function pickItems(
+  skus,
+  scene,
+  budget,
+  maxItems,
+  allSkus = skus,
+  requestedQuantity = 1,
+  giftBox = null,
+  automationOptions = {},
+  requiredSkuCodes = [],
+  warnings = [],
+) {
   let remaining = budget;
   const selected = [];
   const selectedSkuCodes = new Set(giftBox?.skuCode ? [giftBox.skuCode] : []);
+  const itemLimit = positiveInteger(maxItems, 8);
   const candidates = skus
     .map((sku) => ({ original: sku, effective: withReplacementIfNeeded(sku, allSkus, requestedQuantity) }))
     .filter((candidate) => isUsable(candidate.effective, requestedQuantity))
@@ -85,26 +160,100 @@ function pickItems(skus, scene, budget, maxItems, allSkus = skus, requestedQuant
       return bScore - aScore || Number(a.effective.salePrice || 0) - Number(b.effective.salePrice || 0);
     });
 
-  for (const candidate of candidates) {
-    const price = Number(candidate.effective.salePrice || 0);
-    const skuCode = candidate.effective.skuCode;
-    if (price <= 0 || price > remaining || selected.length >= maxItems) continue;
-    if (skuCode && selectedSkuCodes.has(skuCode)) continue;
-    const currentItems = [giftBox, ...selected].filter(Boolean);
-    if (conflictsWithSelection(candidate.effective, currentItems)) continue;
-    const required = resolveRequiredCompanions(candidate.effective, allSkus, requestedQuantity, currentItems, remaining - price);
-    if (!required.ok || selected.length + 1 + required.items.length > maxItems) continue;
-    selected.push(candidate.effective);
-    if (skuCode) selectedSkuCodes.add(skuCode);
-    remaining -= price;
-    for (const requiredItem of required.items) {
-      if (requiredItem.skuCode && selectedSkuCodes.has(requiredItem.skuCode)) continue;
-      selected.push(requiredItem);
-      if (requiredItem.skuCode) selectedSkuCodes.add(requiredItem.skuCode);
-      remaining -= Number(requiredItem.salePrice || 0);
+  for (const skuCode of requiredSkuCodes) {
+    const original = skus.find((sku) => sku.skuCode === skuCode);
+    if (!original) {
+      const catalogSku = allSkus.find((sku) => sku.skuCode === skuCode);
+      if (!catalogSku) warnings.push(`已选商品 ${skuCode} 不在商品库中，未进入本次搭配。`);
+      else if (catalogSku.type !== "gift_box") warnings.push(`已选商品 ${skuCode} 当前不可用于搭配，未进入本次搭配。`);
+      continue;
     }
+    addCandidateToSelection({
+      candidate: { original, effective: withReplacementIfNeeded(original, allSkus, requestedQuantity) },
+      selected,
+      selectedSkuCodes,
+      giftBox,
+      allSkus,
+      requestedQuantity,
+      itemLimit,
+      warningSkuCode: skuCode,
+      warnings,
+      anchored: true,
+      getRemaining: () => remaining,
+      setRemaining: (value) => { remaining = value; },
+    });
+  }
+
+  for (const candidate of candidates) {
+    addCandidateToSelection({
+      candidate,
+      selected,
+      selectedSkuCodes,
+      giftBox,
+      allSkus,
+      requestedQuantity,
+      itemLimit,
+      warnings,
+      getRemaining: () => remaining,
+      setRemaining: (value) => { remaining = value; },
+    });
   }
   return selected;
+}
+
+function addCandidateToSelection({
+  candidate,
+  selected,
+  selectedSkuCodes,
+  giftBox,
+  allSkus,
+  requestedQuantity,
+  itemLimit,
+  warnings = [],
+  warningSkuCode,
+  anchored = false,
+  getRemaining,
+  setRemaining,
+}) {
+  const remaining = getRemaining();
+  const price = Number(candidate.effective.salePrice || 0);
+  const skuCode = candidate.effective.skuCode;
+  const originalSkuCode = warningSkuCode || candidate.original?.skuCode || skuCode;
+  if (!isUsable(candidate.effective, requestedQuantity)) {
+    if (anchored) warnings.push(`已选商品 ${originalSkuCode} 库存不足或不可用，未进入本次搭配。`);
+    return false;
+  }
+  if (price <= 0 || price > remaining) {
+    if (anchored) warnings.push(`已选商品 ${originalSkuCode} 超出剩余单份预算，未进入本次搭配。`);
+    return false;
+  }
+  if (selected.length >= itemLimit) {
+    if (anchored) warnings.push(`已选商品 ${originalSkuCode} 超过最多商品数，未进入本次搭配。`);
+    return false;
+  }
+  if (skuCode && selectedSkuCodes.has(skuCode)) return false;
+  const currentItems = [giftBox, ...selected].filter(Boolean);
+  if (conflictsWithSelection(candidate.effective, currentItems)) {
+    if (anchored) warnings.push(`已选商品 ${originalSkuCode} 与当前搭配存在冲突规则，未进入本次搭配。`);
+    return false;
+  }
+  const required = resolveRequiredCompanions(candidate.effective, allSkus, requestedQuantity, currentItems, remaining - price);
+  if (!required.ok || selected.length + 1 + required.items.length > itemLimit) {
+    if (anchored) warnings.push(`已选商品 ${originalSkuCode} 的必搭商品不可用，未进入本次搭配。`);
+    return false;
+  }
+  selected.push(candidate.effective);
+  if (skuCode) selectedSkuCodes.add(skuCode);
+  if (candidate.original?.skuCode) selectedSkuCodes.add(candidate.original.skuCode);
+  let nextRemaining = remaining - price;
+  for (const requiredItem of required.items) {
+    if (requiredItem.skuCode && selectedSkuCodes.has(requiredItem.skuCode)) continue;
+    selected.push(requiredItem);
+    if (requiredItem.skuCode) selectedSkuCodes.add(requiredItem.skuCode);
+    nextRemaining -= Number(requiredItem.salePrice || 0);
+  }
+  setRemaining(nextRemaining);
+  return true;
 }
 
 function withReplacementIfNeeded(sku, allSkus, requestedQuantity = 1) {
@@ -237,6 +386,58 @@ function matchingRuleCodes(sku, key) {
 
 function cleanSkuCode(value) {
   return String(value || "").trim();
+}
+
+function normalizeSkuCodes(values) {
+  const seen = new Set();
+  const codes = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    const code = cleanSkuCode(value);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+function hasSkuImageReference(sku) {
+  const directKeys = [
+    "mainImagePath",
+    "mainImageUrl",
+    "imagePath",
+    "imageUrl",
+    "localPath",
+    "downloadUrl",
+    "publicUrl",
+    "url",
+    "path",
+    "filePath",
+    "mainImage",
+    "productImage",
+    "skuImageUrl",
+  ];
+  for (const key of directKeys) {
+    if (isSupportedSkuImageReference(sku?.[key])) return true;
+  }
+  for (const key of ["angleImages", "imageRefs", "imageUrls", "imagePaths", "images", "multiAngleImages", "gallery"]) {
+    const list = Array.isArray(sku?.[key]) ? sku[key] : [];
+    for (const item of list) {
+      if (isSupportedSkuImageReference(item)) return true;
+      if (item && typeof item === "object" && hasSkuImageReference(item)) return true;
+    }
+  }
+  return false;
+}
+
+function isSupportedSkuImageReference(value) {
+  const reference = String(value || "").trim();
+  if (!reference) return false;
+  if (/^data:/i.test(reference)) return /^data:image\//i.test(reference);
+  const clean = reference.split(/[?#]/)[0] || "";
+  const fileName = clean.split(/[\\/]/).filter(Boolean).pop() || clean;
+  if (!fileName.includes(".")) return true;
+  const extension = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
+  return [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".avif"].includes(extension);
 }
 
 function automationCandidateScore(sku, giftBox = null, options = {}) {

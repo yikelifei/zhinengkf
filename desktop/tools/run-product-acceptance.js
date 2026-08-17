@@ -5,7 +5,6 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
-const { createWechatWindowObserverEvidence } = require("../packages/rules/wechatWindowEvidence");
 const {
   createWechatWindowObserverProofSession,
   wechatWindowObserverServiceEnv,
@@ -15,12 +14,38 @@ const {
 const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
 const matrixPath = path.join(desktopRoot, "config", "product-acceptance-matrix.json");
+const nextEnvFile = path.join(desktopRoot, "apps", "web", "next-env.d.ts");
+const nextEnvProductionTypes =
+  '/// <reference types="next" />\n' +
+  '/// <reference types="next/image-types/global" />\n' +
+  '/// <reference types="next/navigation-types/compat/navigation" />\n' +
+  'import "./.next/types/routes.d.ts";\n' +
+  "\n" +
+  "// NOTE: This file should not be edited\n" +
+  "// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.\n";
 const forbiddenMutationPatterns = [
   /\/api\/wechat-work\/kf\/send-text\/?$/,
   /\/api\/wechat\/send-tasks\/[^/]+\/mark-sent(?:-current-window)?\/?$/,
   /\/api\/wechat\/send-tasks\/[^/]+\/bridge-ack\/?$/,
-  /\/api\/quotes\/[^/]+\/verify-payment-proof\/?$/,
   /\/api\/chat\/send\/?$/,
+];
+const localSafeWechatWorkFixtures = [
+  {
+    sourceAccountId: "wechat_demo_1",
+    accountId: "wechat_work_acceptance_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    openKfid: "e2e-open-kfid-1",
+    externalUserId: "e2e-external-user-1",
+  },
+  {
+    sourceAccountId: "wechat_demo_2",
+    accountId: "wechat_work_acceptance_2",
+    conversationId: "conversation_demo_2",
+    customerId: "customer_demo_2",
+    openKfid: "e2e-open-kfid-2",
+    externalUserId: "e2e-external-user-2",
+  },
 ];
 
 class BlockedError extends Error {
@@ -36,17 +61,19 @@ const handlers = {
   stack_startup: runStackStartup,
   identity_isolation: runIdentityIsolation,
   manual_safe_queue: runManualSafeQueue,
-  personal_bridge_no_send: runPersonalBridgeNoSend,
   inbound_local: runInboundLocal,
   wechat_work_callback: runWechatWorkCallback,
   design_task: runDesignTask,
   automation_cycle: runAutomationCycle,
   crm_regression: runCrmRegression,
   contract_regression: runContractRegression,
+  commerce_lifecycle_journey: runCommerceLifecycleJourney,
+  commerce_contract_regression: runCommerceContractRegression,
+  training_governance_regression: runTrainingGovernanceRegression,
+  training_agent_ai_journey: runTrainingAgentAiJourney,
   layout_390: runLayout390,
   external_design_readiness: runExternalDesignReadiness,
   external_wechat_work_readiness: runExternalWechatWorkReadiness,
-  external_personal_wechat_readiness: runExternalPersonalWechatReadiness,
 };
 
 if (require.main === module) {
@@ -94,7 +121,7 @@ async function main(argv = process.argv.slice(2)) {
 
   const selectedModes = selectModes(options.mode);
   console.log(`[acceptance] run=${runId} mode=${options.mode} selected=${[...selectedModes].join(",")}`);
-  console.log("[acceptance] safety=loopback-only, real-send=forbidden, payment=forbidden");
+  console.log("[acceptance] safety=loopback-only, real-send=forbidden, real-payment=forbidden, internal-payment-ledger=allowed");
   console.log(`[acceptance] output=${outputDir}`);
 
   try {
@@ -111,6 +138,7 @@ async function main(argv = process.argv.slice(2)) {
     }
   } finally {
     await stopServices(context);
+    restoreNextEnvTypes();
     context.finishedAt = new Date().toISOString();
     writeReports(context);
   }
@@ -124,6 +152,13 @@ async function main(argv = process.argv.slice(2)) {
 
   if (report.summary.failed > 0) process.exitCode = 1;
   else if (options.strict && report.summary.blocked > 0) process.exitCode = 2;
+}
+
+function restoreNextEnvTypes() {
+  if (!fs.existsSync(nextEnvFile)) return;
+  const current = fs.readFileSync(nextEnvFile, "utf8");
+  if (current === nextEnvProductionTypes) return;
+  fs.writeFileSync(nextEnvFile, nextEnvProductionTypes, "utf8");
 }
 
 async function executeScenario(context, scenario) {
@@ -199,11 +234,14 @@ async function runStackStartup(context) {
   const webUrl = `http://127.0.0.1:${webPort}/`;
   const mockBase = `http://127.0.0.1:${mockPort}`;
   const designConfigPath = path.join(context.serviceRuntimeDir, "design-platform-config.json");
+  const aiSettingsPath = path.join(context.serviceRuntimeDir, "ai-settings.yaml");
   const localStoreFile = path.join(context.serviceRuntimeDir, "local-store.json");
   const wechatWorkKey = Buffer.from("0123456789abcdef0123456789abcdef", "utf8")
     .toString("base64")
     .replace(/=$/, "");
   const internalApiToken = crypto.randomBytes(32).toString("hex");
+  const designPlatformCallbackApiKey = crypto.randomBytes(32).toString("hex");
+  const desktopWebSessionProof = crypto.randomBytes(32).toString("hex");
   const observerProofSession = createWechatWindowObserverProofSession(context.serviceRuntimeDir);
   const serviceEnv = {
     ...withoutWechatWindowObserverProof(process.env),
@@ -218,8 +256,14 @@ async function runStackStartup(context) {
     DESIGN_PLATFORM_ADAPTER: "standard_v1",
     DESIGN_PLATFORM_BASE_URL: mockBase,
     DESIGN_PLATFORM_RUNTIME_CONFIG: designConfigPath,
+    DESIGN_PLATFORM_CALLBACK_API_KEY: designPlatformCallbackApiKey,
+    ACCEPTANCE_ALLOW_LOOPBACK_DESIGN_DOWNLOADS: "1",
+    ALLOW_DEMO_DATA_MUTATIONS: "1",
+    AI_ENGINE_SETTINGS_PATH: aiSettingsPath,
+    LOCAL_ACCEPTANCE_AI_KEY: "loopback-acceptance-only",
     CUSTOMER_SERVICE_PUBLIC_BASE_URL: `http://127.0.0.1:${apiPort}`,
     INTERNAL_API_TOKEN: internalApiToken,
+    DESKTOP_WEB_SESSION_PROOF: desktopWebSessionProof,
     WECHAT_SEND_ADAPTER: "dry_run",
     WECHAT_BRIDGE_OUTBOX_DIR: path.join(context.serviceRuntimeDir, "wechat-outbox"),
     WECHAT_BRIDGE_INBOX_DIR: path.join(context.serviceRuntimeDir, "wechat-inbox"),
@@ -237,6 +281,7 @@ async function runStackStartup(context) {
     LOW_VALUE_AUTOMATION_ENABLED: "true",
     LOW_VALUE_AUTOMATION_RUN_ON_START: "false",
     LOW_VALUE_AUTOMATION_INTERVAL_MS: "3600000",
+    LOW_VALUE_AUTOMATION_MODE: "interval",
     LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
     WECHAT_WORK_CORP_ID: "e2e-corp-id",
     WECHAT_WORK_AGENT_ID: "1000002",
@@ -245,7 +290,7 @@ async function runStackStartup(context) {
     WECHAT_WORK_ENCODING_AES_KEY: wechatWorkKey,
     WECHAT_WORK_OPEN_KFID: "e2e-open-kfid",
     WECHAT_WORK_API_BASE_URL: mockBase,
-    WECHAT_WORK_DEFAULT_WECHAT_ACCOUNT_ID: "wechat_demo_1",
+    WECHAT_WORK_DEFAULT_WECHAT_ACCOUNT_ID: localSafeWechatWorkFixtures[0].accountId,
     WECHAT_WORK_DEFAULT_CONVERSATION_ID: "conversation_demo_1",
     WECHAT_WORK_DEFAULT_CUSTOMER_ID: "customer_demo_1",
   };
@@ -259,6 +304,25 @@ async function runStackStartup(context) {
     receiveId: serviceEnv.WECHAT_WORK_CORP_ID,
   };
 
+  fs.writeFileSync(
+    aiSettingsPath,
+    [
+      "ai_engine:",
+      "  enabled: true",
+      "  primary: local_acceptance",
+      "  fallback_chain: []",
+      "  timeout_seconds: 5",
+      "  max_retries: 0",
+      "  providers:",
+      "    local_acceptance:",
+      "      enabled: true",
+      "      api_key: ${LOCAL_ACCEPTANCE_AI_KEY}",
+      `      base_url: ${mockBase}/v1`,
+      "      model: local-acceptance-text",
+      "      request_format: openai",
+    ].join("\n"),
+    "utf8",
+  );
   fs.writeFileSync(
     designConfigPath,
     `${JSON.stringify({ designPlatformAdapter: "standard_v1", designPlatformBaseUrl: mockBase }, null, 2)}\n`,
@@ -305,6 +369,11 @@ async function runStackStartup(context) {
   assert(health.ok === true, "API health did not report ok=true");
   assert(health.dataMode === "local-json", `unexpected API data mode: ${health.dataMode}`);
   assert(mockHealth.ok === true, "mock design health did not report ok=true");
+  await requestJson(context, "/wechat/accounts");
+  const identityFixtures = prepareLocalSafeWechatWorkFixtures(context, localStoreFile);
+  const visibleAccounts = await requestJson(context, "/wechat/accounts");
+  assert(visibleAccounts.length >= identityFixtures.length, "local-safe Enterprise WeChat fixtures are not visible");
+  context.acceptanceIdentities = identityFixtures;
 
   return {
     evidence: {
@@ -313,6 +382,7 @@ async function runStackStartup(context) {
       mockHealthUrl: `${mockBase}/v1/health`,
       dataMode: health.dataMode,
       localStoreFile,
+      identityFixtureAccountIds: identityFixtures.map((item) => item.accountId),
       logs: Object.fromEntries(context.children.map((item) => [item.name, item.logPath])),
     },
   };
@@ -322,8 +392,9 @@ async function runIdentityIsolation(context) {
   requireStack(context);
   const accounts = await requestJson(context, "/wechat/accounts");
   assert(Array.isArray(accounts) && accounts.length >= 2, "expected at least two WeChat accounts");
-  const first = accounts.find((item) => item.id === "wechat_demo_1") || accounts[0];
-  const second = accounts.find((item) => item.id === "wechat_demo_2") || accounts[1];
+  const [firstFixture, secondFixture] = requireAcceptanceIdentities(context);
+  const first = accounts.find((item) => item.id === firstFixture.accountId) || accounts[0];
+  const second = accounts.find((item) => item.id === secondFixture.accountId) || accounts[1];
   const firstConversations = await requestJson(context, `/wechat/conversations?wechatAccountId=${encodeURIComponent(first.id)}`);
   const secondConversations = await requestJson(context, `/wechat/conversations?wechatAccountId=${encodeURIComponent(second.id)}`);
   assert(firstConversations.length > 0 && secondConversations.length > 0, "each account must have at least one conversation");
@@ -366,19 +437,21 @@ async function runIdentityIsolation(context) {
 async function runManualSafeQueue(context) {
   const conversation = await ensurePrimaryConversation(context);
   const expected = identityExpectation(conversation);
-  const task = await requestJson(context, "/wechat/send-tasks/demo", {
+  const result = await requestJson(context, `/wechat/conversations/${encodeURIComponent(conversation.id)}/manual-replies`, {
     method: "POST",
     body: {
-      wechatAccountId: conversation.wechatAccountId,
-      conversationId: conversation.id,
       text: "E2E 人工回复安全入队验证：只排队，不发送。",
+      operationKey: `${context.runId}:manual-reply:safe-queue`,
       ...expected,
     },
   });
+  assert(result.queued === true, "manual reply endpoint did not confirm queueing");
+  const task = result.task;
   assert(task.status === "queued", `manual queue task status is ${task.status}`);
   assert(task.wechatAccountId === conversation.wechatAccountId, "queued task account mismatch");
   assert(task.conversationId === conversation.id, "queued task conversation mismatch");
   assert(task.customerId === conversation.customerId, "queued task customer mismatch");
+  assert(task.payload?.source === "manual_reply", "queued task is not marked as a manual reply");
   const binding = task.guardSnapshot?.binding;
   assert(binding && binding.ok !== false && (!binding.failedKeys || binding.failedKeys.length === 0), "queued task binding was not verified");
   const attemptQuery = new URLSearchParams({
@@ -401,120 +474,8 @@ async function runManualSafeQueue(context) {
       },
       bindingStatus: binding.status || "passed",
       sendAttemptCount: attempts.length,
+      payloadSource: task.payload?.source || "",
       realSendInvoked: false,
-    },
-  };
-}
-
-async function runPersonalBridgeNoSend(context) {
-  requireStack(context);
-  if (!context.manualSendTask) throw new BlockedError("manual safe queue task is unavailable", ["LSF-MANUAL-QUEUE-001"]);
-  const task = context.manualSendTask;
-  const expected = identityExpectation(task);
-  const snapshot = await requestJson(context, "/wechat/window-snapshots/demo", {
-    method: "POST",
-    body: {
-      mode: "correct",
-      wechatAccountId: task.wechatAccountId,
-      conversationId: task.conversationId,
-      ...expected,
-    },
-  });
-  assert(snapshot.diagnostic?.ok !== false, "demo window snapshot is not safe");
-  assert(snapshot.diagnostic?.observerEvidence?.verified === false, "demo window snapshot became trusted send evidence");
-  const observerEvidence = createWechatWindowObserverEvidence({
-    source: "windows_foreground_observer",
-    isOnline: true,
-    wechatAccountId: task.wechatAccountId,
-    accountDisplayName: task.wechatAccount?.displayName || "",
-    windowHandle: "acceptance-observer",
-    processId: process.pid,
-    chatTitle: task.conversation?.title || task.conversation?.externalChatId || "",
-    activeChatTitle: task.conversation?.title || task.conversation?.externalChatId || "",
-    externalChatId: task.conversation?.externalChatId || "",
-    recentCustomerId: task.customerId || task.conversation?.customerId || "",
-    recentMessageText: "",
-    confidence: 0.99,
-    capturedAt: new Date().toISOString(),
-    raw: { acceptanceNoSend: true },
-  }, context.observerProofToken);
-  const observerInboxFile = path.join(context.serviceEnv.WECHAT_WINDOW_SNAPSHOT_INBOX_DIR, "acceptance-observer.json");
-  fs.mkdirSync(path.dirname(observerInboxFile), { recursive: true });
-  fs.writeFileSync(observerInboxFile, `${JSON.stringify(observerEvidence, null, 2)}\n`, "utf8");
-  const observerScan = await requestJson(context, "/wechat/window-snapshots/inbox/scan", { method: "POST", body: {} });
-  assert(Number(observerScan.processed?.length || 0) === 1, "signed observer evidence was not accepted");
-  const execution = await requestJson(context, `/wechat/send-tasks/${encodeURIComponent(task.id)}/execute`, {
-    method: "POST",
-    body: { adapter: "windows_bridge", ...expected },
-  });
-  assert(execution.task?.status === "sending", `bridge task status is ${execution.task?.status}`);
-  assert(execution.attempt?.status === "started", `bridge attempt status is ${execution.attempt?.status}`);
-
-  const worker = await runCommand(process.execPath, [
-    path.join(desktopRoot, "tools", "wechat-bridge-worker.js"),
-    "--once",
-    "--mode",
-    "dispatch",
-    "--api-base",
-    context.stack.apiBase,
-  ], {
-    cwd: desktopRoot,
-    env: { ...context.serviceEnv, BRIDGE_MODE: "dispatch" },
-    timeoutMs: 30_000,
-  });
-  assertCommandPassed(worker, "wechat bridge dispatch worker");
-
-  const dispatchFiles = listFiles(context.serviceEnv.WECHAT_BRIDGE_DISPATCH_DIR, ".dispatch.json");
-  assert(dispatchFiles.length >= 1, "bridge worker did not create a dispatch file");
-  const personal = await runCommand(process.execPath, [
-    path.join(desktopRoot, "tools", "personal-wechat-bridge.js"),
-    "--once",
-    "--api-base",
-    context.stack.apiBase,
-    "--dispatch-dir",
-    context.serviceEnv.WECHAT_BRIDGE_DISPATCH_DIR,
-    "--inbox-dir",
-    context.serviceEnv.WECHAT_BRIDGE_INBOX_DIR,
-    "--status-file",
-    context.serviceEnv.PERSONAL_WECHAT_BRIDGE_STATUS_FILE,
-  ], {
-    cwd: desktopRoot,
-    env: {
-      ...context.serviceEnv,
-      PERSONAL_WECHAT_SEND: "0",
-      PERSONAL_WECHAT_AUTO_ENTER: "0",
-      PERSONAL_WECHAT_BRIDGE_AUTO_ENTER: "0",
-      PERSONAL_WECHAT_DISABLE_ACK_SCAN: "1",
-    },
-    timeoutMs: 30_000,
-  });
-  assertCommandPassed(personal, "personal WeChat no-send bridge");
-  const bridgeStatus = JSON.parse(fs.readFileSync(context.serviceEnv.PERSONAL_WECHAT_BRIDGE_STATUS_FILE, "utf8"));
-  const ackFiles = listFiles(context.serviceEnv.WECHAT_BRIDGE_INBOX_DIR, ".ack.json");
-  assert(bridgeStatus.sendEnabled === false, "personal bridge unexpectedly enabled real send");
-  assert(bridgeStatus.autoEnter !== true, "personal bridge unexpectedly enabled auto-enter");
-  assert(Number(bridgeStatus.result?.skippedCount || 0) >= 1, "personal bridge did not observe-and-skip dispatch");
-  assert(Number(bridgeStatus.result?.processedCount || 0) === 0, "personal bridge processed a real send");
-  assert(ackFiles.length === 0, "personal bridge wrote an acknowledgement in no-send mode");
-  const tasks = await requestJson(
-    context,
-    `/wechat/send-tasks?conversationId=${encodeURIComponent(task.conversationId)}&wechatAccountId=${encodeURIComponent(task.wechatAccountId)}`,
-  );
-  const refreshed = tasks.find((item) => item.id === task.id);
-  assert(refreshed?.status === "sending", `task should wait for ack, got ${refreshed?.status}`);
-
-  return {
-    evidence: {
-      taskId: task.id,
-      windowSnapshotId: snapshot.id,
-      attemptId: execution.attempt.id,
-      dispatchFiles,
-      bridgeStatusFile: context.serviceEnv.PERSONAL_WECHAT_BRIDGE_STATUS_FILE,
-      sendEnabled: bridgeStatus.sendEnabled,
-      autoEnter: bridgeStatus.autoEnter,
-      skippedCount: bridgeStatus.result.skippedCount,
-      ackFileCount: ackFiles.length,
-      finalTaskStatus: refreshed.status,
     },
   };
 }
@@ -598,7 +559,7 @@ async function runWechatWorkCallback(context) {
   assert(afterValidTasks.length === beforeTasks.length, "callback acknowledgement created an outbound task");
   const audit = await requestJson(context, "/wechat-work/kf/audit?limit=20");
   const accepted = (audit.records || []).find(
-    (record) => record.action === "callback_accepted" && record.status === "accepted" && record.openKfid === "e2e-open-kfid",
+    (record) => record.action === "callback_accepted" && record.status === "processed" && record.openKfid === "e2e-open-kfid",
   );
   assert(accepted, "valid callback acknowledgement was not recorded in the Enterprise WeChat audit log");
 
@@ -618,6 +579,7 @@ async function runWechatWorkCallback(context) {
 async function runDesignTask(context) {
   const conversation = await ensurePrimaryConversation(context);
   const payload = {
+    operationKey: `${context.runId}:design-job:create`,
     wechatAccountId: conversation.wechatAccountId,
     customerId: conversation.customerId,
     conversationId: conversation.id,
@@ -647,7 +609,11 @@ async function runDesignTask(context) {
   const rejected = await requestJson(context, "/design-jobs", {
     method: "POST",
     expectedStatuses: [400],
-    body: { ...payload, wechatAccountId: "wechat_demo_2" },
+    body: {
+      ...payload,
+      operationKey: `${context.runId}:design-job:cross-identity`,
+      wechatAccountId: requireAcceptanceIdentities(context)[1].accountId,
+    },
   });
   const mockHealth = await requestJson(context, `${context.stack.mockBase}/v1/health`, { baseUrl: null });
   assert(mockHealth.ok === true, "mock design platform is not healthy");
@@ -665,16 +631,235 @@ async function runDesignTask(context) {
   };
 }
 
+async function runCommerceLifecycleJourney(context) {
+  const conversation = await ensurePrimaryConversation(context);
+  const expected = identityExpectation(conversation);
+  const identityQuery = buildIdentityQuery(conversation);
+  const customerLogo = await requestJson(context, "/assets/demo-customer-logo", {
+    method: "POST",
+    body: {
+      customerId: conversation.customerId,
+      ...expected,
+    },
+  });
+  assert(customerLogo.id, "demo customer logo asset was not created");
+
+  const payload = {
+    operationKey: `${context.runId}:commerce:design-job:create`,
+    wechatAccountId: conversation.wechatAccountId,
+    customerId: conversation.customerId,
+    conversationId: conversation.id,
+    budget: { mode: "per_box", amount: 160, perUnitAmount: 160, quantity: 20, totalAmount: 3200 },
+    scene: "local-safe gift-box lifecycle",
+    bundle: buildCommerceAcceptanceBundle(),
+    assetIds: [customerLogo.id],
+    customerText: "local-safe acceptance: generate gift-box candidate images for a confirmed commerce lifecycle.",
+    outputCount: 4,
+  };
+  const job = await requestJson(context, "/design-jobs", { method: "POST", body: payload });
+  assert(job.id && job.conversationId === conversation.id, "commerce design job was not bound to the conversation");
+  assert(job.customerId === conversation.customerId, "commerce design job customer mismatch");
+
+  const preflight = await requestJson(context, `/design-jobs/${encodeURIComponent(job.id)}/preflight`, {
+    method: "POST",
+    body: expected,
+  });
+  assert(preflight.ok === true, `commerce design preflight was not ready: ${JSON.stringify(preflight.missing || preflight.checks || [])}`);
+
+  const submitted = await requestJson(context, `/design-jobs/${encodeURIComponent(job.id)}/submit`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:design-job:submit`,
+      ...expected,
+    },
+    timeoutMs: 30_000,
+  });
+  const completedJob = await waitForDesignJobImages(context, unwrapDesignJob(submitted), expected);
+  const images = [...(completedJob.images || [])].sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
+  const firstImage = images[0];
+  assert(firstImage?.id || firstImage?.imageId, "commerce design job did not return a selectable candidate image");
+
+  const selection = await requestJson(context, `/design-jobs/${encodeURIComponent(job.id)}/select-image`, {
+    method: "POST",
+    body: {
+      text: "choose image 1",
+      referencedImageId: firstImage.id || firstImage.imageId,
+      ...expected,
+    },
+  });
+  assert(selection.matched === true, `candidate image selection was not matched: ${JSON.stringify(selection)}`);
+  const quote =
+    selection.quote ||
+    (await requestJson(context, `/design-jobs/${encodeURIComponent(job.id)}/quote`, {
+      method: "POST",
+      body: expected,
+    }));
+  assert(quote.id, "commerce quote draft was not created");
+  assert(quote.designJobId === job.id, "commerce quote was not bound to the design job");
+  assert(quote.selectedImageId, "commerce quote has no selected image");
+
+  const payment = await requestJson(context, `/quotes/${encodeURIComponent(quote.id)}/verify-payment-proof`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:quote:payment-proof`,
+      paymentStatus: "paid",
+      amountCny: quote.totalPrice || 3200,
+      method: "internal_acceptance_ledger",
+      proofReference: `local-safe-${context.runId}`,
+      note: "local-safe acceptance records an internal payment proof ledger only.",
+      ...expected,
+    },
+  });
+  assert(payment.paymentEvent?.id, "internal payment proof ledger event was not recorded");
+  assert(payment.orderDraft?.id, "payment proof did not create or confirm an order draft");
+  assert(payment.orderDraft.status === "confirmed", `order was not confirmed after payment proof: ${payment.orderDraft.status}`);
+  assert(payment.orderDraft.paymentStatus === "paid", `order payment status is not paid: ${payment.orderDraft.paymentStatus}`);
+  assert(payment.sendTask?.status === "queued", "order confirmation did not remain in the safe send queue");
+
+  const orderId = payment.orderDraft.id;
+  const processing = await requestJson(context, `/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:fulfillment:processing`,
+      status: "processing",
+      productionStatus: "in_production",
+      productionDueAt: "2026-08-06 18:00",
+      customerNotes: "local-safe acceptance: production started.",
+      ...expected,
+    },
+  });
+  assert(processing.status === "processing", `order did not enter processing: ${processing.status}`);
+  assert(processing.productionStatus === "in_production", `order production did not start: ${processing.productionStatus}`);
+
+  const qualityChecked = await requestJson(context, `/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:fulfillment:quality-check`,
+      productionStatus: "quality_check",
+      productionDueAt: "2026-08-06 18:00",
+      customerNotes: "local-safe acceptance: production moved to quality check.",
+      ...expected,
+    },
+  });
+  assert(qualityChecked.productionStatus === "quality_check", `order did not enter quality check: ${qualityChecked.productionStatus}`);
+
+  const readyToShip = await requestJson(context, `/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:fulfillment:ready-to-ship`,
+      productionStatus: "ready_to_ship",
+      productionDueAt: "2026-08-06 18:00",
+      customerNotes: "local-safe acceptance: order passed quality check and is ready to ship.",
+      ...expected,
+    },
+  });
+  assert(readyToShip.productionStatus === "ready_to_ship", `order was not ready to ship: ${readyToShip.productionStatus}`);
+
+  const productionFollowup = await requestJson(context, `/wechat/orders/${encodeURIComponent(orderId)}/queue-followup`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:production-followup`,
+      type: "production",
+      reason: "acceptance-production-followup",
+      ...expected,
+    },
+  });
+  assert(productionFollowup.sendTask?.status === "queued", "production follow-up did not remain queued");
+
+  const shipped = await requestJson(context, `/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:fulfillment:shipped`,
+      productionStatus: "shipped",
+      carrier: "SF Express",
+      trackingNo: `SF${context.runId.replace(/\D/g, "").slice(-12).padStart(12, "0")}`,
+      shippedAt: "2026-08-07 15:00",
+      customerNotes: "local-safe acceptance: shipment facts recorded.",
+      ...expected,
+    },
+  });
+  assert(shipped.productionStatus === "shipped", `order was not marked shipped: ${shipped.productionStatus}`);
+
+  const fulfilled = await requestJson(context, `/orders/${encodeURIComponent(orderId)}/fulfillment`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:fulfillment:delivered`,
+      status: "fulfilled",
+      productionStatus: "delivered",
+      carrier: shipped.carrier,
+      trackingNo: shipped.trackingNo,
+      shippedAt: shipped.shippedAt,
+      deliveredAt: "2026-08-08 10:00",
+      customerNotes: "local-safe acceptance: customer delivery confirmed.",
+      ...expected,
+    },
+  });
+  assert(fulfilled.status === "fulfilled", `order final status is not fulfilled: ${fulfilled.status}`);
+  assert(fulfilled.productionStatus === "delivered", `order production final status is not delivered: ${fulfilled.productionStatus}`);
+
+  const deliveryFollowup = await requestJson(context, `/wechat/orders/${encodeURIComponent(orderId)}/queue-followup`, {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:commerce:order:delivery-followup`,
+      type: "delivery",
+      reason: "acceptance-delivery-followup",
+      ...expected,
+    },
+  });
+  assert(deliveryFollowup.sendTask?.status === "queued", "delivery follow-up did not remain queued");
+
+  const sendTaskIds = [
+    payment.sendTask?.id,
+    productionFollowup.sendTask?.id,
+    deliveryFollowup.sendTask?.id,
+  ].filter(Boolean);
+  const tasks = await requestJson(context, `/wechat/send-tasks?${identityQuery}`);
+  const journeyTasks = tasks.filter((task) => sendTaskIds.includes(task.id));
+  assert(journeyTasks.length === sendTaskIds.length, "not every commerce send task was visible in the safe queue");
+  assert(journeyTasks.every((task) => task.status !== "sent"), "commerce journey marked a send task sent");
+  const attemptCounts = {};
+  for (const taskId of sendTaskIds) {
+    const attempts = await requestJson(context, `/wechat/send-attempts?sendTaskId=${encodeURIComponent(taskId)}&${identityQuery}`);
+    attemptCounts[taskId] = attempts.length;
+    assert(attempts.length === 0, `commerce send task ${taskId} created a send attempt`);
+  }
+
+  return {
+    evidence: {
+      customerLogoAssetId: customerLogo.id,
+      designJobId: job.id,
+      externalJobId: completedJob.externalJobId || null,
+      imageCandidateCount: images.length,
+      selectedImageId: quote.selectedImageId,
+      quoteDraftId: quote.id,
+      quoteTotalPrice: quote.totalPrice,
+      paymentEventId: payment.paymentEvent.id,
+      orderDraftId: orderId,
+      finalOrderStatus: fulfilled.status,
+      finalProductionStatus: fulfilled.productionStatus,
+      confirmationSendTaskId: payment.sendTask?.id || null,
+      productionFollowupSendTaskId: productionFollowup.sendTask?.id || null,
+      deliveryFollowupSendTaskId: deliveryFollowup.sendTask?.id || null,
+      queuedSendTaskStatuses: Object.fromEntries(journeyTasks.map((task) => [task.id, task.status])),
+      sendAttemptCounts: attemptCounts,
+      realPaymentGatewayCalled: false,
+      realSendInvoked: false,
+      externalMutationCount: context.mutationLog.filter((item) => item.external).length,
+    },
+  };
+}
+
 async function runAutomationCycle(context) {
   requireStack(context);
   const statusBefore = await requestJson(context, "/automation/status");
   const readiness = await requestJson(context, "/automation/readiness");
+  const conversation = await ensurePrimaryConversation(context);
   const run = await requestJson(context, "/automation/run-once", {
     method: "POST",
     body: {
-      wechatAccountId: "wechat_demo_1",
-      conversationId: "conversation_demo_1",
-      customerId: "customer_demo_1",
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
     },
   });
   const statusAfter = await requestJson(context, "/automation/status");
@@ -724,16 +909,22 @@ async function runCrmRegression(context) {
 
 async function runContractRegression(context) {
   const files = [
+    "tests/enterprise-wechat-only-api-surface.test.js",
     "tests/identity-binding.test.js",
     "tests/inbound-workflow.test.js",
-    "tests/personal-wechat-bridge.test.js",
+    "tests/wechat-inbound-auth.test.js",
+    "tests/wechat-work-api.test.js",
+    "tests/wechat-work-production-readiness.test.js",
     "tests/automation-service-status.test.js",
     "tests/mock-design-platform.test.js",
     "tests/product-acceptance-matrix.test.js",
   ];
   const result = await runCommand(process.execPath, ["--test", ...files], {
     cwd: desktopRoot,
-    env: { ...process.env, PERSONAL_WECHAT_SEND: "0", PERSONAL_WECHAT_AUTO_ENTER: "0" },
+    env: acceptanceLoopbackEnv(context, {
+      PERSONAL_WECHAT_SEND: "0",
+      PERSONAL_WECHAT_AUTO_ENTER: "0",
+    }),
     timeoutMs: 180_000,
   });
   assertCommandPassed(result, "selected Node contract regression");
@@ -746,36 +937,336 @@ async function runContractRegression(context) {
   };
 }
 
+async function runCommerceContractRegression(context) {
+  const files = [
+    "tests/design-job-create-ui.test.js",
+    "tests/design-quote-ui.test.js",
+    "tests/payment-routing-boundaries.test.js",
+    "tests/sales-order-fulfillment-ui.test.js",
+    "tests/sales-record-single-read.test.js",
+    "tests/order-followup-message.test.js",
+    "tests/commerce-page-responsibilities.test.js",
+  ];
+  const result = await runCommand(process.execPath, ["--test", ...files], {
+    cwd: desktopRoot,
+    env: acceptanceLoopbackEnv(context, {
+      PERSONAL_WECHAT_SEND: "0",
+      PERSONAL_WECHAT_AUTO_ENTER: "0",
+      PERSONAL_WECHAT_BRIDGE_AUTO_ENTER: "0",
+      LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
+    }),
+    timeoutMs: 180_000,
+  });
+  assertCommandPassed(result, "commerce lifecycle contract regression");
+  return {
+    evidence: {
+      command: `node --test ${files.join(" ")}`,
+      files,
+      coveredFlows: [
+        "design_job_create",
+        "design_quote_create",
+        "quote_payment_boundary",
+        "order_fulfillment_fields",
+        "sales_single_record_reads",
+        "order_followup_messages",
+        "commerce_page_responsibilities",
+      ],
+      paymentMutationAttempted: false,
+      realSendInvoked: false,
+      outputTail: tail(result.stdout, 20),
+    },
+  };
+}
+
+async function runTrainingGovernanceRegression(context) {
+  const files = [
+    "tests/chat-training.test.js",
+    "tests/local-store-training-samples.test.js",
+    "tests/training-service.test.js",
+    "tests/training-overview-ui.test.js",
+    "tests/operator-access.test.js",
+    "tests/operator-access-ui.test.js",
+    "tests/trusted-operator-ui.test.js",
+  ];
+  const result = await runCommand(process.execPath, ["--test", ...files], {
+    cwd: desktopRoot,
+    env: acceptanceLoopbackEnv(context, {
+      PERSONAL_WECHAT_SEND: "0",
+      PERSONAL_WECHAT_AUTO_ENTER: "0",
+      PERSONAL_WECHAT_BRIDGE_AUTO_ENTER: "0",
+      LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
+    }),
+    timeoutMs: 180_000,
+  });
+  assertCommandPassed(result, "training and trusted-operator regression");
+  return {
+    evidence: {
+      command: `node --test ${files.join(" ")}`,
+      files,
+      coveredFlows: [
+        "chat_training_import",
+        "training_sample_identity_scope",
+        "agent_skill_suggestions",
+        "training_overview",
+        "trusted_operator_policy",
+        "high_risk_route_guard",
+      ],
+      paymentMutationAttempted: false,
+      realSendInvoked: false,
+      outputTail: tail(result.stdout, 20),
+    },
+  };
+}
+
+async function runTrainingAgentAiJourney(context) {
+  requireStack(context);
+  const conversation = await ensurePrimaryConversation(context);
+  const directIdentity = {
+    wechatAccountId: conversation.wechatAccountId,
+    conversationId: conversation.id,
+    customerId: conversation.customerId,
+  };
+  const expected = identityExpectation(conversation);
+  const identityQuery = buildIdentityQuery(conversation);
+  const agents = await requestJson(context, `/agents?${identityQuery}`);
+  const agent = agents.find((item) => item.key === "logistics_exception");
+  assert(agent?.id, "logistics exception Agent was not available");
+
+  const customerQuestion = `acceptance logistics stuck tracking ${context.runId}`;
+  const idealReply = [
+    "I will check the current tracking status first, contact the carrier if the parcel is stalled,",
+    "and update the customer before promising refund or reshipment.",
+  ].join(" ");
+  const chatImport = await requestJson(context, "/training/chat-imports", {
+    method: "POST",
+    body: {
+      operationKey: `${context.runId}:training-agent-ai:chat-import`,
+      name: "local-safe training to agent acceptance",
+      channel: "wechat",
+      agentId: agent.id,
+      text: [`客户：${customerQuestion}?`, `客服：${idealReply}`].join("\n"),
+      ...directIdentity,
+    },
+  });
+  assert(chatImport.id, "chat import was not created");
+  assert(Array.isArray(chatImport.samples) && chatImport.samples.length > 0, "chat import did not create training samples");
+  const importedSample = chatImport.samples[0];
+
+  const review = await requestJson(context, `/training/samples/${encodeURIComponent(importedSample.id)}/review`, {
+    method: "POST",
+    body: {
+      status: "ready",
+      agentId: agent.id,
+      agentKey: "logistics_exception",
+      scene: "logistics_exception",
+      customerText: customerQuestion,
+      idealReply,
+      score: 92,
+      skillHints: ["logistics tracking", "carrier follow-up"],
+      note: "local-safe acceptance confirmed the imported sample for scoped Agent training.",
+      ...expected,
+    },
+  });
+  assert(review.sample?.id === importedSample.id, "training sample review returned the wrong sample");
+  assert(review.sample?.status === "ready", "training sample was not marked ready");
+  assert(review.sample?.quality?.level === "safe", `training sample quality is not safe: ${review.sample?.quality?.level}`);
+  assert(review.sample?.quality?.usage?.routeMemory === true, "training sample was not accepted as route memory");
+  assert(review.sample?.quality?.usage?.replySkill === true, "training sample was not accepted as reply skill");
+
+  const routeAndReplySamples = await requestJson(
+    context,
+    `/training/samples?agentId=${encodeURIComponent(agent.id)}&quality=route_and_reply&${identityQuery}`,
+  );
+  assert(routeAndReplySamples.some((sample) => sample.id === importedSample.id), "reviewed sample was not visible as route_and_reply training");
+
+  const suggestions = await requestJson(
+    context,
+    `/training/skill-suggestions?agentId=${encodeURIComponent(agent.id)}&minScore=60&${identityQuery}`,
+  );
+  const selectedSuggestions = suggestions.filter((suggestion) => (suggestion.sampleIds || []).includes(importedSample.id));
+  assert(selectedSuggestions.length > 0, "reviewed sample did not produce scoped Agent skill suggestions");
+  assert(selectedSuggestions.every((suggestion) => suggestion.scope?.level === "conversation"), "skill suggestions were not scoped to the conversation");
+
+  const applied = await requestJson(context, "/training/skill-suggestions/apply", {
+    method: "POST",
+    body: {
+      agentId: agent.id,
+      minScore: 60,
+      suggestionKeys: selectedSuggestions.map((suggestion) => suggestion.suggestionKey),
+      includeNeedsReview: true,
+      ...directIdentity,
+    },
+  });
+  assert(Number(applied.selected || 0) === selectedSuggestions.length, "not every scoped suggestion was selected");
+  assert(Number(applied.applied || 0) === selectedSuggestions.length, "not every scoped suggestion was applied after trusted review");
+  assert(Array.isArray(applied.blocked) && applied.blocked.length === 0, "scoped suggestions were unexpectedly blocked");
+
+  const skills = await requestJson(context, `/agents/${encodeURIComponent(agent.id)}/skills?${identityQuery}`);
+  const scopedSkillNames = new Set(selectedSuggestions.map((suggestion) => suggestion.name));
+  const scopedSkills = skills.filter((skill) => scopedSkillNames.has(skill.name));
+  assert(scopedSkills.length > 0, "applied scoped Agent skills were not visible to the same identity");
+  assert(scopedSkills.every((skill) => skill.scope?.level === "conversation"), "applied Agent skills were not conversation-scoped");
+
+  const secondaryAccountId = requireAcceptanceIdentities(context)[1].accountId;
+  const otherConversations = await requestJson(
+    context,
+    `/wechat/conversations?wechatAccountId=${encodeURIComponent(secondaryAccountId)}`,
+  );
+  const otherConversation = otherConversations[0];
+  assert(otherConversation?.id && otherConversation.customerId, "second demo conversation was not available for identity isolation proof");
+  const otherQuery = buildIdentityQuery({
+    wechatAccountId: secondaryAccountId,
+    id: otherConversation.id,
+    customerId: otherConversation.customerId,
+  });
+  const crossIdentitySkills = await requestJson(context, `/agents/${encodeURIComponent(agent.id)}/skills?${otherQuery}`);
+  assert(
+    crossIdentitySkills.every((skill) => !scopedSkillNames.has(skill.name)),
+    "conversation-scoped Agent skill leaked into another identity",
+  );
+
+  const inbound = await requestJson(context, "/wechat/inbound/messages", {
+    method: "POST",
+    body: {
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      text: customerQuestion,
+      externalId: `${context.runId}-training-agent-ai-inbound`,
+    },
+  });
+  assert(inbound.message?.direction === "inbound", "training Agent inbound message was not persisted");
+  assert(inbound.route?.agentKey === "logistics_exception", `training Agent route used ${inbound.route?.agentKey}`);
+  assert(inbound.route?.sceneMemory?.applied === true, "reviewed training sample was not used as route memory");
+  assert((inbound.route?.appliedSkills || []).some((skill) => scopedSkillNames.has(skill.name)), "inbound reply did not apply the scoped Agent skill");
+  assert((inbound.route?.knowledgeMatches || []).length > 0, "inbound reply did not match reviewed knowledge");
+  assert(inbound.route?.replyDraft?.source === "ai_assisted", `reply draft did not use the local-safe AI layer: ${inbound.route?.replyDraft?.source}`);
+  assert(inbound.route?.replyDraft?.aiAssistance?.used === true, "local-safe journey did not use the loopback AI provider");
+  assert(inbound.route?.replyDraft?.aiAssistance?.provider === "local_acceptance", "training journey used an unexpected AI provider");
+  if (inbound.plan?.shouldQueueReply) {
+    assert(inbound.sendTask?.status === "queued", "training Agent reply did not remain queued");
+    const attempts = await requestJson(context, `/wechat/send-attempts?sendTaskId=${encodeURIComponent(inbound.sendTask.id)}&${identityQuery}`);
+    assert(attempts.length === 0, "training Agent queued reply created a real send attempt");
+  } else {
+    assert(inbound.sendTask === null, "non-queued training Agent plan returned a send task");
+  }
+
+  const contractFiles = [
+    "tests/agent-router.test.js",
+    "tests/agent-reply-draft.test.js",
+    "tests/agent-reply-draft-identity.test.js",
+    "tests/agents-skill-identity.test.js",
+    "tests/wechat-ai-suggestion.test.js",
+    "tests/ai-provider-router.test.js",
+    "tests/ai-provider-config.test.js",
+  ];
+  const contractResult = await runCommand(process.execPath, ["--test", ...contractFiles], {
+    cwd: desktopRoot,
+    env: acceptanceLoopbackEnv(context, {
+      PERSONAL_WECHAT_SEND: "0",
+      PERSONAL_WECHAT_AUTO_ENTER: "0",
+      PERSONAL_WECHAT_BRIDGE_AUTO_ENTER: "0",
+      LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
+    }),
+    timeoutMs: 180_000,
+  });
+  assertCommandPassed(contractResult, "training Agent and AI fallback contract regression");
+
+  return {
+    evidence: {
+      chatImportId: chatImport.id,
+      reviewedSampleId: importedSample.id,
+      agentId: agent.id,
+      suggestionCount: selectedSuggestions.length,
+      appliedSkillCount: scopedSkills.length,
+      crossIdentitySkillCount: crossIdentitySkills.length,
+      inboundMessageId: inbound.message?.id || null,
+      routeId: inbound.route?.id || null,
+      routeAction: inbound.route?.action || "",
+      sceneMemoryApplied: inbound.route?.sceneMemory?.applied === true,
+      appliedSkillNames: inbound.route?.appliedSkills?.map((skill) => skill.name) || [],
+      knowledgeMatchCount: inbound.route?.knowledgeMatches?.length || 0,
+      aiAssistanceUsed: inbound.route?.replyDraft?.aiAssistance?.used === true,
+      aiFailureFallbackCovered: true,
+      sendTaskId: inbound.sendTask?.id || null,
+      sendTaskStatus: inbound.sendTask?.status || null,
+      realSendInvoked: false,
+      externalMutationCount: context.mutationLog.filter((item) => item.external).length,
+      contractCommand: `node --test ${contractFiles.join(" ")}`,
+      contractOutputTail: tail(contractResult.stdout, 20),
+    },
+  };
+}
+
 async function runLayout390(context) {
   requireStack(context);
   if (context.options.skipLayout) throw new BlockedError("responsive renderer was skipped by --skip-layout", ["layout renderer disabled"]);
   const outputDir = path.join(context.outputDir, "responsive-layout");
   const outputPath = path.join(outputDir, "responsive-layout-report.json");
-  const result = await runCommand(process.execPath, [
-    path.join(desktopRoot, "tools", "run-responsive-layout-qa.js"),
-    "--url",
-    context.stack.webUrl,
-    "--output-dir",
-    outputDir,
-  ], {
+  const markdownPath = path.join(outputDir, "responsive-layout-report.zh-CN.md");
+  const edgeProbePath = path.join(outputDir, "edge-probe.json");
+  const screenshotDir = path.join(outputDir, "screenshots");
+  fs.mkdirSync(screenshotDir, { recursive: true });
+
+  const result = await runEdgeLayoutProbe({
     cwd: desktopRoot,
-    env: context.serviceEnv,
+    env: {
+      ...context.serviceEnv,
+      RESPONSIVE_QA_WEB_URL: context.stack.webUrl,
+      RESPONSIVE_QA_PROBE_OUTPUT: edgeProbePath,
+      RESPONSIVE_QA_SCREENSHOT_DIR: screenshotDir,
+    },
+    outputPath: edgeProbePath,
     timeoutMs: 180_000,
   });
-  if (!fs.existsSync(outputPath)) assertCommandPassed(result, "responsive layout QA runner");
+  if (!fs.existsSync(edgeProbePath)) assertCommandPassed(result, "responsive Edge CDP layout probe");
+  const parsed = readJsonFile(edgeProbePath);
+  const status = parsed.status === "passed" ? "passed" : parsed.status === "failed" ? "failed" : "blocked";
+  const layout = {
+    schemaVersion: 1,
+    startedAt: parsed.startedAt || new Date().toISOString(),
+    finishedAt: parsed.finishedAt || new Date().toISOString(),
+    status,
+    passed: status === "passed",
+    url: context.stack.webUrl,
+    renderer: parsed.renderer || "Microsoft Edge CDP",
+    title: parsed.title || "",
+    requestedViewports: [
+      { name: "desktop-1536", width: 1536, height: 960 },
+      { name: "mobile-390", width: 390, height: 844 },
+    ],
+    viewports: Array.isArray(parsed.viewports) ? parsed.viewports : [],
+    blockers: buildResponsiveLayoutBlockers(status, parsed, result, "Edge CDP renderer"),
+    failures: Array.isArray(parsed.failures) ? parsed.failures : [],
+    consoleErrors: Array.isArray(parsed.consoleErrors) ? parsed.consoleErrors : [],
+    process: {
+      edge: commandEvidence(result),
+    },
+    artifacts: {
+      jsonReport: outputPath,
+      markdownReport: markdownPath,
+      probeReport: edgeProbePath,
+      edgeProbeReport: edgeProbePath,
+      screenshotDir,
+    },
+    stage: parsed.stage || "",
+    diagnostics: parsed.diagnostics || null,
+  };
+  fs.writeFileSync(outputPath, `${JSON.stringify(layout, null, 2)}\n`, "utf8");
+  fs.writeFileSync(markdownPath, renderResponsiveLayoutMarkdown(layout), "utf8");
   assert(fs.existsSync(outputPath), "responsive layout JSON was not written");
-  const layout = JSON.parse(fs.readFileSync(outputPath, "utf8"));
   if (layout.status === "blocked") {
-    throw new BlockedError("responsive Electron layout QA is blocked", layout.blockers || ["renderer unavailable"], {
+    throw new BlockedError("responsive layout QA is blocked", layout.blockers || ["renderer unavailable"], {
       reportPath: outputPath,
       process: layout.process || null,
     });
   }
   assert(layout.status === "passed", `responsive layout failed: ${(layout.failures || []).join("; ")}`);
   assert(Array.isArray(layout.viewports) && layout.viewports.length === 2, "responsive layout must include 1536px and 390px evidence");
+  assertResponsiveScreenshotEvidence(layout.viewports, screenshotDir);
   return {
     evidence: {
-      renderer: "existing Electron Chromium runtime",
+      renderer: layout.renderer || "Chromium renderer",
       url: layout.url,
       viewports: layout.viewports.map((item) => ({
         name: item.name,
@@ -789,6 +1280,139 @@ async function runLayout390(context) {
       markdownPath: layout.artifacts?.markdownReport || "",
     },
   };
+}
+
+function assertResponsiveScreenshotEvidence(viewports, screenshotDir) {
+  const screenshotRoot = `${path.resolve(screenshotDir)}${path.sep}`;
+  for (const expectedName of ["desktop-1536", "mobile-390"]) {
+    const viewport = viewports.find((item) => item?.name === expectedName);
+    assert(viewport, `responsive layout is missing ${expectedName} evidence`);
+    const screenshotPath = path.resolve(String(viewport.screenshotPath || ""));
+    assert(screenshotPath.startsWith(screenshotRoot), `${expectedName} screenshot escaped the acceptance artifact directory`);
+    const stat = fs.statSync(screenshotPath, { throwIfNoEntry: false });
+    assert(stat?.isFile() && stat.size > 0, `${expectedName} screenshot artifact is missing or empty`);
+  }
+}
+
+async function runEdgeLayoutProbe(options) {
+  const maxAttempts = 3;
+  const attempts = [];
+  let lastResult = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fs.rmSync(options.outputPath, { force: true });
+    } catch {
+      // Best-effort cleanup; the next probe write still determines the final state.
+    }
+    const result = await runCommand(process.execPath, [
+      path.join(desktopRoot, "tools", "product-acceptance-layout-edge-probe.js"),
+    ], {
+      cwd: options.cwd,
+      env: {
+        ...options.env,
+        RESPONSIVE_QA_EDGE_ATTEMPT: String(attempt),
+      },
+      timeoutMs: options.timeoutMs,
+    });
+    const summary = readResponsiveLayoutProbeSummary(options.outputPath);
+    attempts.push({
+      attempt,
+      code: result.code,
+      signal: result.signal,
+      timedOut: Boolean(result.timedOut),
+      probeStatus: summary.status,
+      viewportCount: summary.viewportCount,
+      stderrTail: tail(result.stderr, 12),
+    });
+    lastResult = result;
+    if (result.code === 0 || result.timedOut || summary.status === "failed" || summary.viewportCount > 0) break;
+    if (attempt < maxAttempts) await delay(1_000);
+  }
+  return { ...lastResult, attempts };
+}
+
+function acceptanceLoopbackEnv(context, overrides = {}) {
+  const stackBasedMockBase = context?.stack?.mockBase;
+  const defaultMockBase = context?.serviceEnv?.DESIGN_PLATFORM_BASE_URL || "http://127.0.0.1:3700";
+  const inheritedEnv = context?.serviceEnv || process.env;
+  return {
+    ...inheritedEnv,
+    ...overrides,
+    DESIGN_PLATFORM_ADAPTER: "standard_v1",
+    DESIGN_PLATFORM_BASE_URL: stackBasedMockBase || defaultMockBase,
+    ACCEPTANCE_ALLOW_LOOPBACK_DESIGN_DOWNLOADS: "1",
+  };
+}
+
+function readResponsiveLayoutProbeSummary(filePath) {
+  if (!fs.existsSync(filePath)) return { status: "missing", viewportCount: 0 };
+  try {
+    const probe = readJsonFile(filePath);
+    return {
+      status: probe.status || "unknown",
+      viewportCount: Array.isArray(probe.viewports) ? probe.viewports.length : 0,
+    };
+  } catch (error) {
+    return { status: `unreadable: ${error.message}`, viewportCount: 0 };
+  }
+}
+
+function buildResponsiveLayoutBlockers(status, probe, result, rendererLabel) {
+  const blockers = Array.isArray(probe.blockers) ? [...probe.blockers] : [];
+  if (status !== "blocked" || blockers.length) return blockers;
+  if (result.timedOut) return [`${rendererLabel} did not finish within 180000ms`];
+  return [
+    `${rendererLabel} stopped before completing both viewports after ${(result.attempts || []).length || 1} attempt(s) (code=${result.code}, signal=${result.signal || "none"})`,
+  ];
+}
+
+function commandEvidence(result) {
+  return {
+    code: result.code,
+    signal: result.signal,
+    timedOut: Boolean(result.timedOut),
+    stdoutTail: tail(result.stdout, 30),
+    stderrTail: tail(result.stderr, 30),
+    attempts: result.attempts || [],
+  };
+}
+
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function renderResponsiveLayoutMarkdown(report) {
+  const lines = [
+    "# Responsive layout acceptance",
+    "",
+    `- Status: **${String(report.status || "blocked").toUpperCase()}**`,
+    `- URL: \`${report.url || "not provided"}\``,
+    `- Renderer: ${report.renderer || "unknown"}`,
+    `- Started: ${report.startedAt || ""}`,
+    `- Finished: ${report.finishedAt || ""}`,
+    "",
+    "## Viewports",
+    "",
+    "| Viewport | Size | Status | Horizontal overflow | Navigation | Primary pane | Interaction |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const viewport of report.viewports || []) {
+    const checks = viewport.checks || {};
+    lines.push(
+      `| ${viewport.name} | ${viewport.viewport?.width || "?"}x${viewport.viewport?.height || "?"} | ${viewport.passed ? "PASS" : "FAIL"} | ${responsiveMark(checks.noPageHorizontalOverflow)} | ${responsiveMark(checks.navigationAvailable)} | ${responsiveMark(checks.primaryPaneVisible)} | ${responsiveMark(checks.interactionReachable)} |`,
+    );
+  }
+  if (!(report.viewports || []).length) lines.push("| no rendered evidence | - | BLOCKED | - | - | - | - |");
+  lines.push("", "## Issues", "");
+  const issues = [...(report.blockers || []), ...(report.failures || [])];
+  if (issues.length) issues.forEach((item) => lines.push(`- ${singleLine(item)}`));
+  else lines.push("- none");
+  lines.push("", "## Artifacts", "", `- JSON: \`${report.artifacts.jsonReport}\``, `- Edge probe: \`${report.artifacts.edgeProbeReport}\``, `- Screenshots: \`${report.artifacts.screenshotDir}\``, "");
+  return `${lines.join("\n")}\n`;
+}
+
+function responsiveMark(value) {
+  return value === true ? "PASS" : value === false ? "FAIL" : "-";
 }
 
 async function runExternalDesignReadiness(context) {
@@ -838,31 +1462,6 @@ async function runExternalWechatWorkReadiness(context) {
   };
 }
 
-async function runExternalPersonalWechatReadiness(context) {
-  requireExternalReadinessPermission(context);
-  const channels = await externalRequest(context, "/wechat/channels/status");
-  const bridge = await externalRequest(context, "/wechat/bridge/status");
-  const personal = channels.channels?.find((item) => item.key === "personal_wechat");
-  const blockers = [];
-  if (!personal || personal.status !== "ready") blockers.push(`personal_wechat channel status=${personal?.status || "missing"}`);
-  if (bridge.worker?.ok !== true) blockers.push(bridge.worker?.message || "bridge worker is not ready");
-  if (blockers.length) {
-    throw new BlockedError("真实个人微信桥接尚未就绪", blockers, {
-      channel: personal || null,
-      worker: bridge.worker || null,
-    });
-  }
-  return {
-    evidence: {
-      channelStatus: personal.status,
-      workerStatus: bridge.worker.status,
-      realSendAttempted: false,
-      autoEnterAttempted: false,
-      ackWritten: false,
-    },
-  };
-}
-
 function requireExternalReadinessPermission(context) {
   if (!context.options.allowExternalReadiness) {
     throw new BlockedError("real-external 只读探测需要显式传入 --allow-external-readiness", ["external readiness permission not granted"]);
@@ -878,11 +1477,79 @@ async function externalRequest(context, route) {
 async function ensurePrimaryConversation(context) {
   requireStack(context);
   if (context.primaryConversation) return context.primaryConversation;
-  const conversations = await requestJson(context, "/wechat/conversations?wechatAccountId=wechat_demo_1");
+  const primaryFixture = requireAcceptanceIdentities(context)[0];
+  const conversations = await requestJson(
+    context,
+    `/wechat/conversations?wechatAccountId=${encodeURIComponent(primaryFixture.accountId)}`,
+  );
   const conversation = conversations.find((item) => item.id === "conversation_demo_1") || conversations[0];
-  if (!conversation) throw new BlockedError("no demo conversation is available", ["wechat_demo_1 conversation"]);
+  if (!conversation) {
+    throw new BlockedError("no local-safe Enterprise WeChat conversation is available", [primaryFixture.accountId]);
+  }
   context.primaryConversation = conversation;
   return conversation;
+}
+
+function requireAcceptanceIdentities(context) {
+  if (!Array.isArray(context.acceptanceIdentities) || context.acceptanceIdentities.length < 2) {
+    throw new BlockedError("local-safe Enterprise WeChat identity fixtures are unavailable", ["MCK-STACK-001"]);
+  }
+  return context.acceptanceIdentities;
+}
+
+function prepareLocalSafeWechatWorkFixtures(context, localStoreFile) {
+  const relativeStorePath = path.relative(context.serviceRuntimeDir, localStoreFile);
+  if (relativeStorePath.startsWith("..") || path.isAbsolute(relativeStorePath)) {
+    throw new Error(`refusing to prepare acceptance fixtures outside the isolated runtime: ${localStoreFile}`);
+  }
+  if (!fs.existsSync(localStoreFile)) {
+    throw new Error(`local store was not initialized for acceptance: ${localStoreFile}`);
+  }
+
+  const data = JSON.parse(fs.readFileSync(localStoreFile, "utf8"));
+  const now = new Date().toISOString();
+  const prepared = localSafeWechatWorkFixtures.map((fixture) => {
+    const account = data.wechatAccounts.find((item) => item.id === fixture.sourceAccountId || item.id === fixture.accountId);
+    const customer = data.customers.find((item) => item.id === fixture.customerId);
+    const conversation = data.conversations.find((item) => item.id === fixture.conversationId);
+    if (!account || !customer || !conversation) {
+      throw new Error(`canonical local-store seed is missing acceptance identity ${fixture.sourceAccountId}`);
+    }
+
+    account.id = fixture.accountId;
+    account.platform = "wechat_work_kf";
+    account.wechatWork = { ...(account.wechatWork || {}), openKfid: fixture.openKfid };
+    account.updatedAt = now;
+    customer.source = "wechat_work_kf";
+    customer.wechatWorkExternalUserId = fixture.externalUserId;
+    customer.updatedAt = now;
+    conversation.channel = "work_wechat";
+    conversation.wechatAccountId = fixture.accountId;
+    conversation.externalChatId = `wechat_work_kf:${fixture.openKfid}:${fixture.externalUserId}`;
+    conversation.wechatWork = { openKfid: fixture.openKfid, externalUserId: fixture.externalUserId };
+    conversation.updatedAt = now;
+
+    return { ...fixture };
+  });
+
+  const fixtureConversationIds = new Set(prepared.map((item) => item.conversationId));
+  data.wechatWorkBindings = (Array.isArray(data.wechatWorkBindings) ? data.wechatWorkBindings : [])
+    .filter((binding) => !fixtureConversationIds.has(binding.conversationId));
+  for (const fixture of prepared) {
+    data.wechatWorkBindings.push({
+      id: `wechat_work_binding_acceptance_${fixture.accountId.endsWith("_2") ? "2" : "1"}`,
+      openKfid: fixture.openKfid,
+      externalUserId: fixture.externalUserId,
+      wechatAccountId: fixture.accountId,
+      customerId: fixture.customerId,
+      conversationId: fixture.conversationId,
+      createdAt: now,
+      updatedAt: now,
+      lastInboundAt: now,
+    });
+  }
+  fs.writeFileSync(localStoreFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  return prepared;
 }
 
 function requireStack(context) {
@@ -895,6 +1562,91 @@ function identityExpectation(record) {
     expectedConversationId: record.conversationId || record.id,
     expectedCustomerId: record.customerId,
   };
+}
+
+function buildIdentityQuery(record) {
+  const params = new URLSearchParams();
+  params.set("wechatAccountId", record.wechatAccountId);
+  params.set("conversationId", record.conversationId || record.id);
+  params.set("customerId", record.customerId);
+  return params.toString();
+}
+
+function buildCommerceAcceptanceBundle() {
+  const box = {
+    skuCode: "BOX-A",
+    name: "Demo gift box A",
+    type: "gift_box",
+    salePrice: 40,
+    costPrice: 18,
+    stock: 150,
+    dimensions: { lengthCm: 32, widthCm: 24, heightCm: 9 },
+    weightGram: 420,
+    leadTimeDays: 3,
+    mainImagePath: "https://example.test/smart-kefu/demo-skus/box-a.png",
+    imageUrl: "https://example.test/smart-kefu/demo-skus/box-a.png",
+  };
+  const tea = {
+    skuCode: "TEA-A",
+    name: "Demo tea gift A",
+    type: "item",
+    salePrice: 118,
+    costPrice: 58,
+    stock: 80,
+    dimensions: { lengthCm: 16, widthCm: 9, heightCm: 6 },
+    weightGram: 280,
+    leadTimeDays: 5,
+    mainImagePath: "https://example.test/smart-kefu/demo-skus/tea-a.png",
+    imageUrl: "https://example.test/smart-kefu/demo-skus/tea-a.png",
+  };
+  return {
+    giftBox: box,
+    items: [box, tea],
+    automation: {
+      ready: true,
+      blockers: [],
+    },
+  };
+}
+
+function unwrapDesignJob(value) {
+  if (value?.job) return value.job;
+  return value || {};
+}
+
+async function waitForDesignJobImages(context, job, expected) {
+  let latest = unwrapDesignJob(job);
+  let lastRemoteStatus = "";
+  const pollTrace = [];
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const images = Array.isArray(latest.images) ? latest.images : [];
+    if (images.length > 0) return latest;
+    const polled = await requestJson(context, `/design-jobs/${encodeURIComponent(latest.id)}/poll`, {
+      method: "POST",
+      body: expected,
+      timeoutMs: 30_000,
+    });
+    lastRemoteStatus = polled.remoteStatus || polled.result?.status || latest.status || "";
+    latest = unwrapDesignJob(polled);
+    const latestImages = Array.isArray(latest.images) ? latest.images : [];
+    const resultImages = Array.isArray(polled.result?.images) ? polled.result.images : [];
+    pollTrace.push({
+      attempt: attempt + 1,
+      remoteStatus: lastRemoteStatus,
+      jobStatus: latest.status || "",
+      jobImageCount: latestImages.length,
+      resultImageCount: resultImages.length,
+      errorMessage: latest.errorMessage || polled.result?.errorMessage || "",
+    });
+    if (latestImages.length > 0) return latest;
+    if (["failed", "manual_review", "timeout", "cancelled"].includes(String(latest.status || lastRemoteStatus))) {
+      const detail = pollTrace.map((item) => `${item.attempt}:${item.remoteStatus}/${item.jobStatus}:jobImages=${item.jobImageCount}:resultImages=${item.resultImageCount}${item.errorMessage ? `:${singleLine(item.errorMessage)}` : ""}`).join(" | ");
+      throw new Error(`design job reached terminal status before images: ${latest.status || lastRemoteStatus}; trace=${detail}`);
+    }
+    await delay(300);
+  }
+  const detail = pollTrace.map((item) => `${item.attempt}:${item.remoteStatus}/${item.jobStatus}:jobImages=${item.jobImageCount}:resultImages=${item.resultImageCount}${item.errorMessage ? `:${singleLine(item.errorMessage)}` : ""}`).join(" | ");
+  throw new Error(`design job did not produce candidate images; last remote status=${lastRemoteStatus || "unknown"}; trace=${detail || "none"}`);
 }
 
 async function requestJson(context, route, options = {}) {
@@ -1034,22 +1786,34 @@ function waitForChildExit(child, timeoutMs) {
 }
 
 async function waitForHttp(url, timeoutMs) {
+  const attempts = { count: 0 };
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
+  let lastResponseStatus = null;
   while (Date.now() < deadline) {
     try {
+      attempts.count += 1;
       const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
+      lastResponseStatus = response.status;
       if (response.status >= 200 && response.status < 400) {
         await response.arrayBuffer();
         return;
       }
-      lastError = new Error(`${url} returned ${response.status}`);
+      lastError = new Error(`received ${response.status}`);
     } catch (error) {
       lastError = error;
     }
     await delay(350);
   }
-  throw lastError || new Error(`timed out waiting for ${url}`);
+  const lastErrorMessage = lastError ? singleLine(String(lastError.message || String(lastError))) : "unknown";
+  const lastErrorName = lastError && lastError.name ? lastError.name : "Error";
+  const lastErrorCode = lastError && lastError.code ? lastError.code : "";
+  const responseHint = lastResponseStatus === null ? "n/a" : String(lastResponseStatus);
+  const codeSuffix = lastErrorCode ? ` code=${lastErrorCode}` : "";
+  const timeoutMsUsed = timeoutMs < Infinity ? `${timeoutMs}ms` : "unlimited";
+  throw new Error(
+    `[acceptance] waitForHttp failed for ${url}: ${lastErrorName}${codeSuffix}: ${lastErrorMessage} (status=${responseHint}, attempts=${attempts.count}, timeout=${timeoutMsUsed})`,
+  );
 }
 
 function runCmdLine(commandLine, options = {}) {
@@ -1069,6 +1833,7 @@ function runCommand(command, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const append = (current, chunk) => (current + chunk.toString("utf8")).slice(-200_000);
     child.stdout.on("data", (chunk) => {
       stdout = append(stdout, chunk);
@@ -1077,6 +1842,7 @@ function runCommand(command, args, options = {}) {
       stderr = append(stderr, chunk);
     });
     const timer = setTimeout(() => {
+      timedOut = true;
       if (process.platform === "win32" && child.pid) {
         spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
       } else {
@@ -1089,7 +1855,7 @@ function runCommand(command, args, options = {}) {
     });
     child.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ command, args, code, signal, stdout, stderr });
+      resolve({ command, args, code, signal, timedOut, stdout, stderr });
     });
   });
 }
@@ -1218,9 +1984,14 @@ function buildReport(context) {
       outputDir: context.outputDir,
       jsonReport,
       markdownReport,
-      screenshot390: path.join(context.outputDir, "layout-390.png"),
+      screenshot390: existingArtifact(path.join(context.outputDir, "responsive-layout", "screenshots", "mobile-390.png")),
     },
   };
+}
+
+function existingArtifact(filePath) {
+  const stat = fs.statSync(filePath, { throwIfNoEntry: false });
+  return stat?.isFile() && stat.size > 0 ? filePath : null;
 }
 
 function writeReports(context) {
@@ -1274,7 +2045,7 @@ function renderMarkdown(report) {
     "",
     `- 机器可读报告：${report.artifacts.jsonReport}`,
     `- 中文报告：${report.artifacts.markdownReport}`,
-    `- 390px 截图：${report.artifacts.screenshot390}`,
+    `- 390px 截图：${report.artifacts.screenshot390 || "未生成"}`,
     "",
   );
   return `${lines.join("\n")}\n`;

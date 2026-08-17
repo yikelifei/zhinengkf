@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
@@ -7,9 +7,13 @@ import { rules } from "../shared/rules";
 import { OrdersService } from "../orders/orders.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import {
+  assertExactOperationReplay,
+  createOperationFingerprint,
   deterministicOperationId,
   isUniqueConstraintError,
   normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
   stableOperationKey,
 } from "../shared/operation-idempotency";
 
@@ -126,6 +130,14 @@ export class QuotesService {
       orderBy: { updatedAt: "desc" },
       take: 200,
     });
+  }
+
+  async getById(id: string, expected: ExpectedIdentityPayload = {}) {
+    const quote = await this.getQuoteForSend(id);
+    if (!quote) throw new Error(`quote draft not found: ${id}`);
+    this.ensureQuoteIdentity(quote);
+    assertExpectedIdentity(quote, expected, "quote draft");
+    return quote;
   }
 
   async update(id: string, patch: QuoteUpdatePatch & ExpectedIdentityPayload) {
@@ -393,6 +405,9 @@ export class QuotesService {
     payload: {
       operationKey?: string;
       paymentStatus?: "deposit_paid" | "paid";
+      amountCny?: number | string;
+      method?: string;
+      proofReference?: string;
       owner?: string;
       note?: string;
     } & ExpectedIdentityPayload = {},
@@ -404,22 +419,74 @@ export class QuotesService {
     this.ensureQuoteIdentity(quote);
     assertExpectedIdentity(quote, payload, "quote draft");
     this.assertQuoteHasSelectedImageForPaymentProof(quote);
+    const paymentProof = normalizeRequiredPaymentProof(payload);
 
     const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
     const reviewer = payload.owner || quote.owner || "人工客服";
     const note = payload.note || `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`;
+    const requestOperation = buildPaymentProofRequestOperation(operationKey, quote, {
+      ...payload,
+      paymentStatus,
+      amountCny: paymentProof.amountCny,
+      method: paymentProof.method,
+      proofReference: paymentProof.proofReference,
+      reviewer,
+      note,
+    });
+    const expectedPaymentEvent = {
+      quoteDraftId: quote.id,
+      orderDraftId: null,
+      customerId: quote.customerId || quote.designJob?.customerId || null,
+      conversationId: quote.designJob?.conversationId || null,
+      wechatAccountId: quote.designJob?.wechatAccountId || null,
+      paymentStatus,
+      amountCny: paymentProof.amountCny,
+      method: paymentProof.method,
+      proofReference: paymentProof.proofReference,
+      reviewer,
+      note,
+      source: "manual_payment_proof",
+      idempotencyKey: `${operationKey}:payment-event`,
+    };
+    const replay = await this.replayVerifiedPaymentProofIfCompleted(id, payload, requestOperation, expectedPaymentEvent);
+    if (replay) return replay;
+    await this.assertPaymentEventReplayIfPresent(expectedPaymentEvent.idempotencyKey, expectedPaymentEvent, {
+      includeOrderDraftId: false,
+    });
+    await this.assertNoDuplicatePaymentProofReference(quote.id, expectedPaymentEvent.idempotencyKey, paymentProof);
+    await this.assertVerifiedPaymentAmountSufficient(quote, {
+      operationKey,
+      paymentStatus,
+      amountCny: paymentProof.amountCny,
+    });
     const quotePatch = {
       status: "accepted",
       paymentStatus,
       owner: reviewer,
       customerNotes: note,
     };
+    const existingOrder = await this.findOrderDraftForQuote(id);
     const updatedQuote = await this.updateQuoteDraft(id, { ...payload, ...quotePatch }, true);
-    const orderDraft = await this.orders.createFromQuote(id, {
-      expectedWechatAccountId: payload.expectedWechatAccountId,
-      expectedConversationId: payload.expectedConversationId,
-      expectedCustomerId: payload.expectedCustomerId,
+    const paymentEvent = await this.recordPaymentEvent(updatedQuote, null, {
+      operationKey,
+      paymentStatus,
+      amountCny: paymentProof.amountCny,
+      method: paymentProof.method,
+      proofReference: paymentProof.proofReference,
+      reviewer,
+      note,
     });
+    const orderDraft = existingOrder
+      ? await this.orders.getById(existingOrder.id, {
+          expectedWechatAccountId: payload.expectedWechatAccountId,
+          expectedConversationId: payload.expectedConversationId,
+          expectedCustomerId: payload.expectedCustomerId,
+        })
+      : await this.orders.createFromQuote(id, {
+          expectedWechatAccountId: payload.expectedWechatAccountId,
+          expectedConversationId: payload.expectedConversationId,
+          expectedCustomerId: payload.expectedCustomerId,
+        });
     const confirmedOrder = await this.orders.recordVerifiedPayment(orderDraft.id, {
       expectedWechatAccountId: payload.expectedWechatAccountId,
       expectedConversationId: payload.expectedConversationId,
@@ -461,12 +528,15 @@ export class QuotesService {
           conversationId: confirmedOrder.conversationId || quote.designJob?.conversationId,
           customerId: confirmedOrder.customerId || quote.customerId || quote.designJob?.customerId,
           paymentStatus,
+          paymentEventId: paymentEvent.id,
           sendTaskId: null,
+          requestOperation,
         },
       });
       return {
         quote: updatedQuote,
         orderDraft: confirmedOrder,
+        paymentEvent,
         sendTask: null,
         message: "高价值订单付款已核验，已保留人工接管；请人工核对订单确认后再发送。",
       };
@@ -483,6 +553,41 @@ export class QuotesService {
         reason: "manual_payment_proof_verified",
         note: `${note} 已解除人工接管，订单确认进入安全发送前校验。`,
       });
+    }
+
+    const existingConfirmationTask = activeOrderConfirmationTask(confirmedOrder.confirmationSendTask);
+    if (existingConfirmationTask) {
+      await this.createReviewLog({
+        targetType: "quote",
+        targetId: id,
+        decision: "manual_payment_proof_verified",
+        reviewer,
+        note,
+        beforeStatus: quote.status || "",
+        afterStatus: "accepted",
+        metadata: {
+          effectKey: `${operationKey}:payment-review`,
+          source: "manual_payment_proof_verified",
+          quoteDraftId: id,
+          orderDraftId: confirmedOrder.id,
+          designJobId: quote.designJobId,
+          wechatAccountId: confirmedOrder.wechatAccountId || quote.designJob?.wechatAccountId,
+          conversationId: confirmedOrder.conversationId || quote.designJob?.conversationId,
+          customerId: confirmedOrder.customerId || quote.customerId || quote.designJob?.customerId,
+          paymentStatus,
+          paymentEventId: paymentEvent.id,
+          sendTaskId: existingConfirmationTask.id,
+          existingConfirmationTask: true,
+          requestOperation,
+        },
+      });
+      return {
+        quote: updatedQuote,
+        orderDraft: confirmedOrder,
+        paymentEvent,
+        sendTask: existingConfirmationTask,
+        message: "付款凭证已记录；订单确认消息已有队列或发送记录，本次不重复入队。",
+      };
     }
 
     try {
@@ -513,10 +618,12 @@ export class QuotesService {
           conversationId: confirmedOrder.conversationId || quote.designJob?.conversationId,
           customerId: confirmedOrder.customerId || quote.customerId || quote.designJob?.customerId,
           paymentStatus,
+          paymentEventId: paymentEvent.id,
           sendTaskId: confirmation.sendTask?.id || null,
+          requestOperation,
         },
       });
-      return { quote: updatedQuote, orderDraft: confirmation.orderDraft, sendTask: confirmation.sendTask, message: confirmation.message };
+      return { quote: updatedQuote, orderDraft: confirmation.orderDraft, paymentEvent, sendTask: confirmation.sendTask, message: confirmation.message };
     } catch (error) {
       if (conversationId) {
         await this.wechatDispatch.setConversationManualLock(conversationId, {
@@ -572,6 +679,54 @@ export class QuotesService {
     }
 
     return result;
+  }
+
+  private async recordPaymentEvent(
+    quote: any,
+    orderDraft: any,
+    payload: {
+      operationKey: string;
+      paymentStatus: "deposit_paid" | "paid";
+      amountCny?: number | string;
+      method?: string;
+      proofReference?: string;
+      reviewer?: string;
+      note?: string;
+    },
+  ) {
+    const idempotencyKey = `${payload.operationKey}:payment-event`;
+    const data = {
+      quoteDraftId: quote.id,
+      orderDraftId: orderDraft?.id || null,
+      customerId: orderDraft?.customerId || quote.customerId || quote.designJob?.customerId,
+      conversationId: orderDraft?.conversationId || quote.designJob?.conversationId || null,
+      wechatAccountId: orderDraft?.wechatAccountId || quote.designJob?.wechatAccountId || null,
+      paymentStatus: payload.paymentStatus,
+      amountCny: normalizePaymentEventAmount(payload.amountCny),
+      method: cleanPaymentEventText(payload.method),
+      proofReference: cleanPaymentEventText(payload.proofReference),
+      reviewer: cleanPaymentEventText(payload.reviewer),
+      note: cleanPaymentEventText(payload.note),
+      source: "manual_payment_proof",
+      idempotencyKey,
+    };
+    if (!data.customerId) throw new BadRequestException("payment event requires a customer identity");
+    const existing = await this.findPaymentEventByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      assertPaymentEventReplay(existing, data, { includeOrderDraftId: true });
+      return existing;
+    }
+    if (appConfig.useLocalStore) return this.localStore.recordPaymentEvent(data);
+    const prisma = this.prisma as any;
+    try {
+      return await prisma.paymentEvent.create({ data });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const winner = await this.findPaymentEventByIdempotencyKey(idempotencyKey);
+      if (!winner) throw error;
+      assertPaymentEventReplay(winner, data, { includeOrderDraftId: true });
+      return winner;
+    }
   }
 
   private async syncExistingQuoteSelection(existing: any, selectedImageId?: string) {
@@ -682,6 +837,157 @@ export class QuotesService {
       return this.localStore.listOrderDrafts().find((order: any) => order.quoteDraftId === quoteDraftId) || null;
     }
     return (this.prisma as any).orderDraft.findUnique({ where: { quoteDraftId } });
+  }
+
+  private async replayVerifiedPaymentProofIfCompleted(
+    quoteDraftId: string,
+    expected: ExpectedIdentityPayload,
+    requestOperation: ReturnType<typeof requestOperationMetadata>,
+    expectedPaymentEvent: Record<string, unknown>,
+  ) {
+    const review = await this.findReviewLogByEffectKey(`${requestOperation.key}:payment-review`);
+    if (!review) return null;
+
+    const paymentEvent = await this.findPaymentEventByIdempotencyKey(String(expectedPaymentEvent.idempotencyKey || ""));
+    const storedOperation = readRequestOperationMetadata(review.metadata);
+    if (storedOperation) {
+      assertExactOperationReplay(storedOperation, requestOperation, "quote payment proof verification");
+    } else if (paymentEvent) {
+      assertPaymentEventReplay(paymentEvent, expectedPaymentEvent, { includeOrderDraftId: false });
+    } else {
+      throw new ConflictException({
+        code: "OPERATION_REPLAY_INCOMPLETE",
+        message: "quote payment proof verification replay is missing its payment event",
+      });
+    }
+
+    if (!paymentEvent) {
+      throw new ConflictException({
+        code: "OPERATION_REPLAY_INCOMPLETE",
+        message: "quote payment proof verification replay is missing its payment event",
+      });
+    }
+    assertPaymentEventReplay(paymentEvent, expectedPaymentEvent, { includeOrderDraftId: false });
+
+    const metadata = review.metadata && typeof review.metadata === "object" ? review.metadata as Record<string, unknown> : {};
+    const quote = await this.getById(quoteDraftId, expected);
+    const orderDraftId = String(metadata.orderDraftId || "").trim();
+    const orderDraft = orderDraftId
+      ? await this.orders.getById(orderDraftId, expected)
+      : await this.findOrderDraftForQuote(quoteDraftId);
+    if (!orderDraft) {
+      throw new ConflictException({
+        code: "OPERATION_REPLAY_INCOMPLETE",
+        message: "quote payment proof verification replay is missing its order draft",
+      });
+    }
+    return {
+      quote,
+      orderDraft,
+      paymentEvent,
+      sendTask: String(metadata.sendTaskId || "").trim() ? activeOrderConfirmationTask(orderDraft.confirmationSendTask) : null,
+      message: review.decision === "manual_payment_proof_verified_high_value"
+        ? "高价值订单付款已核验，已保留人工接管；请人工核对订单确认后再发送。"
+        : "付款凭证已记录；订单确认消息已有队列或发送记录，本次不重复入队。",
+    };
+  }
+
+  private async findReviewLogByEffectKey(effectKey: string) {
+    const key = String(effectKey || "").trim();
+    if (!key) return null;
+    const effectId = deterministicOperationId("review", key);
+    if (appConfig.useLocalStore) {
+      if (typeof this.localStore.getReviewLog === "function") {
+        const byId = this.localStore.getReviewLog(effectId);
+        if (byId) return byId;
+      }
+      if (typeof this.localStore.listReviewLogs !== "function") return null;
+      return this.localStore
+        .listReviewLogs({ limit: 300 })
+        .find((log: any) => String(log?.metadata?.effectKey || "") === key) || null;
+    }
+    const prisma = this.prisma as any;
+    if (typeof prisma.reviewLog?.findUnique === "function") {
+      const byId = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (byId) return byId;
+    }
+    if (typeof prisma.reviewLog?.findFirst !== "function") return null;
+    return prisma.reviewLog.findFirst({
+      where: { metadata: { path: ["effectKey"], equals: key } },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  private async findPaymentEventByIdempotencyKey(idempotencyKey: string) {
+    const key = String(idempotencyKey || "").trim();
+    if (!key) return null;
+    if (appConfig.useLocalStore) {
+      if (typeof this.localStore.listPaymentEvents !== "function") return null;
+      return this.localStore
+        .listPaymentEvents({})
+        .find((event: any) => String(event?.idempotencyKey || "") === key) || null;
+    }
+    const prisma = this.prisma as any;
+    if (typeof prisma.paymentEvent?.findUnique !== "function") return null;
+    return prisma.paymentEvent.findUnique({ where: { idempotencyKey: key } });
+  }
+
+  private async assertPaymentEventReplayIfPresent(
+    idempotencyKey: string,
+    expectedPaymentEvent: Record<string, unknown>,
+    options: { includeOrderDraftId: boolean },
+  ) {
+    const existing = await this.findPaymentEventByIdempotencyKey(idempotencyKey);
+    if (!existing) return;
+    assertPaymentEventReplay(existing, expectedPaymentEvent, options);
+  }
+
+  private async assertNoDuplicatePaymentProofReference(
+    quoteDraftId: string,
+    idempotencyKey: string,
+    proof: { method: string; proofReference: string },
+  ) {
+    const method = cleanPaymentEventText(proof.method);
+    const proofReference = cleanPaymentEventText(proof.proofReference);
+    if (!method || !proofReference) return;
+    const existing = (await this.listPaymentEventsForQuote(quoteDraftId)).find((event: any) =>
+      String(event?.idempotencyKey || "") !== idempotencyKey &&
+      cleanPaymentEventText(event?.method) === method &&
+      cleanPaymentEventText(event?.proofReference) === proofReference,
+    );
+    if (!existing) return;
+    throw new ConflictException("同一报价下该付款凭证已经核验过，不能换 operationKey 重复入账。");
+  }
+
+  private async assertVerifiedPaymentAmountSufficient(
+    quote: any,
+    payload: { operationKey: string; paymentStatus: "deposit_paid" | "paid"; amountCny: number },
+  ) {
+    if (payload.paymentStatus !== "paid") return;
+    const totalPrice = normalizePaymentEventAmount(quote?.totalPrice);
+    if (totalPrice === null || totalPrice <= 0) throw new BadRequestException("报价总价无效，不能核验为全款已付。");
+    const existingPaidAmount = (await this.listPaymentEventsForQuote(quote.id))
+      .filter((event: any) => String(event?.idempotencyKey || "") !== `${payload.operationKey}:payment-event`)
+      .filter((event: any) => event?.paymentStatus === "deposit_paid" || event?.paymentStatus === "paid")
+      .reduce((sum: number, event: any) => sum + (normalizePaymentEventAmount(event?.amountCny) || 0), 0);
+    const paidTotal = Math.round((existingPaidAmount + payload.amountCny) * 100) / 100;
+    if (paidTotal + 0.0001 >= totalPrice) return;
+    throw new BadRequestException(`全款核验金额不足：报价总额 ${totalPrice} 元，已核验合计 ${paidTotal} 元。`);
+  }
+
+  private async listPaymentEventsForQuote(quoteDraftId: string) {
+    const quoteId = String(quoteDraftId || "").trim();
+    if (!quoteId) return [];
+    if (appConfig.useLocalStore) {
+      if (typeof this.localStore.listPaymentEvents !== "function") return [];
+      return this.localStore.listPaymentEvents({ quoteDraftId: quoteId });
+    }
+    const prisma = this.prisma as any;
+    if (typeof prisma.paymentEvent?.findMany !== "function") return [];
+    return prisma.paymentEvent.findMany({
+      where: { quoteDraftId: quoteId },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   private isQuoteSelectionLocked(quote: any) {
@@ -864,6 +1170,10 @@ export class QuotesService {
   }
 }
 
+function activeOrderConfirmationTask(task: any) {
+  return ["queued", "sending", "pending_ack", "sent"].includes(String(task?.status || "")) ? task : null;
+}
+
 type QuoteUpdatePatch = {
   status?: string;
   paymentStatus?: string;
@@ -969,4 +1279,100 @@ function assertManualReleaseReason(reason: unknown, context: string) {
 function normalizeVerifiedPaymentStatus(value: unknown): "deposit_paid" | "paid" {
   if (value === "deposit_paid" || value === "paid") return value;
   throw new BadRequestException("付款凭证核验只允许标记为定金已付或全款已付。");
+}
+
+function normalizeRequiredPaymentProof(payload: { amountCny?: unknown; method?: unknown; proofReference?: unknown }) {
+  const amountCny = normalizePaymentEventAmount(payload.amountCny);
+  if (amountCny === null || amountCny <= 0) throw new BadRequestException("付款核验金额必须大于 0。");
+  const method = cleanPaymentEventText(payload.method);
+  if (!method) throw new BadRequestException("付款核验必须填写收款方式。");
+  const proofReference = cleanPaymentEventText(payload.proofReference);
+  if (!proofReference) throw new BadRequestException("付款核验必须填写凭证引用。");
+  return { amountCny, method, proofReference };
+}
+
+function normalizePaymentEventAmount(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException("付款核验金额必须是非负数字。");
+  return Math.round(amount * 100) / 100;
+}
+
+function cleanPaymentEventText(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function buildPaymentProofRequestOperation(
+  operationKey: string,
+  quote: any,
+  payload: {
+    paymentStatus: "deposit_paid" | "paid";
+    amountCny?: unknown;
+    method?: unknown;
+    proofReference?: unknown;
+    reviewer?: unknown;
+    note?: unknown;
+  } & ExpectedIdentityPayload,
+) {
+  return requestOperationMetadata(
+    operationKey,
+    createOperationFingerprint(
+      "quote-payment-proof-verification",
+      {
+        quoteDraftId: quote?.id || null,
+        designJobId: quote?.designJobId || null,
+        selectedImageId: quote?.selectedImageId || null,
+        customerId: quote?.customerId || quote?.designJob?.customerId || null,
+        conversationId: quote?.designJob?.conversationId || null,
+        wechatAccountId: quote?.designJob?.wechatAccountId || null,
+        expectedWechatAccountId: payload.expectedWechatAccountId || null,
+        expectedConversationId: payload.expectedConversationId || null,
+        expectedCustomerId: payload.expectedCustomerId || null,
+      },
+      {
+        paymentStatus: payload.paymentStatus,
+        amountCny: normalizePaymentEventAmount(payload.amountCny),
+        method: cleanPaymentEventText(payload.method),
+        proofReference: cleanPaymentEventText(payload.proofReference),
+        reviewer: cleanPaymentEventText(payload.reviewer),
+        note: cleanPaymentEventText(payload.note),
+      },
+    ),
+  );
+}
+
+function assertPaymentEventReplay(
+  existing: Record<string, unknown>,
+  expected: Record<string, unknown>,
+  options: { includeOrderDraftId: boolean },
+) {
+  const stored = paymentEventReplaySnapshot(existing, options);
+  const requested = paymentEventReplaySnapshot(expected, options);
+  const storedFingerprint = createOperationFingerprint("payment-event-replay", {}, stored);
+  const requestedFingerprint = createOperationFingerprint("payment-event-replay", {}, requested);
+  if (storedFingerprint === requestedFingerprint) return;
+  throw new ConflictException({
+    code: "OPERATION_KEY_REUSED",
+    message: "payment event operationKey was already used with different payment proof details",
+  });
+}
+
+function paymentEventReplaySnapshot(event: Record<string, unknown>, options: { includeOrderDraftId: boolean }) {
+  return {
+    quoteDraftId: cleanPaymentEventText(event.quoteDraftId),
+    ...(options.includeOrderDraftId ? { orderDraftId: cleanPaymentEventText(event.orderDraftId) } : {}),
+    customerId: cleanPaymentEventText(event.customerId),
+    conversationId: cleanPaymentEventText(event.conversationId),
+    wechatAccountId: cleanPaymentEventText(event.wechatAccountId),
+    paymentStatus: cleanPaymentEventText(event.paymentStatus),
+    amountCny: normalizePaymentEventAmount(event.amountCny),
+    method: cleanPaymentEventText(event.method),
+    proofReference: cleanPaymentEventText(event.proofReference),
+    reviewer: cleanPaymentEventText(event.reviewer),
+    note: cleanPaymentEventText(event.note),
+    source: cleanPaymentEventText(event.source) || "manual_payment_proof",
+    idempotencyKey: cleanPaymentEventText(event.idempotencyKey),
+  };
 }

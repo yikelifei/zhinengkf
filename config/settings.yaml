@@ -30,15 +30,86 @@ channels:
       type: official_or_aggregator_api
 ai_engine:
   enabled: true
-  primary: custom_api_1
+  include_provider_presets: true
+  primary: zhenxi_ai
   prompt_key: commercial_customer_service_skill
-  fallback_chain:
-  - zhipu
-  - deepseek
-  - openai
-  timeout_seconds: 15
-  max_retries: 2
+  fallback_chain: []
+  timeout_seconds: 8
+  max_retries: 0
+  routing:
+    enabled: true
+    complexity_threshold: 4
+    economy_chain:
+    - siliconflow
+    - dashscope
+    - volcengine
+    - zhipu
+    quality_chain:
+    - zhenxi_ai
+    - moonshot
+    - deepseek
+    - openai
+  multimodal:
+    enabled: true
+    vision_chain:
+    - zhenxi_ai
+    - openai
+    transcription_chain:
+    - zhenxi_ai
+    - openai
+    vision_timeout_seconds: 30
+    transcription_timeout_seconds: 20
+    video_frame_count: 3
   providers:
+    zhenxi_ai:
+      enabled: true
+      routing_tier: quality
+      credential_source: zhenxi_ai_shared
+      shared_env_path: "${ZHENXI_AI_TEXT_ENV_PATH:-../../art image-new/web/.env.local}"
+      api_key: ${AI_API_KEY}
+      base_url: ${AI_BASE_URL}
+      model: ${AI_TEXT_MODEL}
+      vision_enabled: true
+      audio_input_enabled: true
+      request_format: openai
+      temperature: 0.7
+      max_tokens: 1200
+    siliconflow:
+      enabled: false
+      routing_tier: economy
+      api_key: ${SILICONFLOW_API_KEY}
+      base_url: "${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}"
+      model: "${SILICONFLOW_MODEL:-Qwen/Qwen3-8B}"
+      request_format: openai
+      temperature: 0.4
+      max_tokens: 500
+    dashscope:
+      enabled: false
+      routing_tier: economy
+      api_key: ${DASHSCOPE_API_KEY}
+      base_url: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      model: "${DASHSCOPE_MODEL:-qwen3.5-flash}"
+      request_format: openai
+      temperature: 0.4
+      max_tokens: 500
+    volcengine:
+      enabled: false
+      routing_tier: economy
+      api_key: ${VOLCENGINE_API_KEY}
+      base_url: "${VOLCENGINE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+      model: "${VOLCENGINE_MODEL:-doubao-seed-2-0-lite-260215}"
+      request_format: openai
+      temperature: 0.4
+      max_tokens: 500
+    moonshot:
+      enabled: false
+      routing_tier: quality
+      api_key: ${MOONSHOT_API_KEY}
+      base_url: "${MOONSHOT_BASE_URL:-https://api.moonshot.ai/v1}"
+      model: "${MOONSHOT_MODEL:-kimi-k2.6}"
+      request_format: openai
+      temperature: 1
+      max_tokens: 1200
     geeknow:
       enabled: false
       api_key: ${GEEKNOW_API_KEY}
@@ -49,27 +120,34 @@ ai_engine:
       max_tokens: 800
     openai:
       enabled: false
+      routing_tier: quality
       api_key: ${OPENAI_API_KEY}
-      base_url: ${OPENAI_BASE_URL}
-      model: ${OPENAI_MODEL}
+      base_url: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+      model: "${OPENAI_MODEL:-gpt-4o-mini}"
+      vision_enabled: true
+      vision_model: "${OPENAI_VISION_MODEL:-gpt-4o-mini}"
+      transcription_model: "${OPENAI_TRANSCRIPTION_MODEL:-gpt-transcribe}"
+      transcription_endpoint: /audio/transcriptions
       temperature: 0.7
       max_tokens: 300
     zhipu:
       enabled: true
+      routing_tier: economy
       api_key: ${ZHIPU_API_KEY}
-      base_url: ${ZHIPU_BASE_URL}
-      model: ${ZHIPU_MODEL}
+      base_url: "${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}"
+      model: "${ZHIPU_MODEL:-glm-4-flash}"
       temperature: 0.7
       max_tokens: 300
     deepseek:
       enabled: false
+      routing_tier: economy
       api_key: ${DEEPSEEK_API_KEY}
-      base_url: ${DEEPSEEK_BASE_URL}
-      model: ${DEEPSEEK_MODEL}
+      base_url: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
+      model: "${DEEPSEEK_MODEL:-deepseek-chat}"
       temperature: 0.7
       max_tokens: 300
     custom_api_1:
-      enabled: true
+      enabled: false
       api_key: ${CUSTOM_API_KEY}
       base_url: ${CUSTOM_API_BASE}
       model: ${CUSTOM_API_MODEL}

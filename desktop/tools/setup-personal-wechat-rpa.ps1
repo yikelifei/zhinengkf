@@ -1,6 +1,7 @@
 param(
   [string]$AccountNickname = "",
-  [string]$OwnerWxId = ""
+  [string]$OwnerWxId = "",
+  [string]$WechatAccountId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,6 +54,7 @@ if ($actualRevision -ne $sdkRevision) {
 & (Join-Path $PSScriptRoot "personal-wechat-rpa-host\patch-wechat-auto-sdk.ps1") -SdkRoot $vendorRoot
 
 $token = $null
+$existingConfig = $null
 if (Test-Path -LiteralPath $rpaConfigPath -PathType Leaf) {
   $existingConfig = [System.IO.File]::ReadAllText($rpaConfigPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
   if ($existingConfig.accountNickname -and $existingConfig.accountNickname -ne $AccountNickname) {
@@ -64,9 +66,42 @@ if (Test-Path -LiteralPath $rpaConfigPath -PathType Leaf) {
     throw "existing RPA config belongs to another owner wxid; refusing automatic overwrite"
   }
   $token = [string]$existingConfig.token
+  if ([string]::IsNullOrWhiteSpace($WechatAccountId) -and $existingConfig.instances) {
+    $registered = @($existingConfig.instances | Where-Object {
+      $_.enabled -ne $false -and
+      $_.tombstone -ne $true -and
+      [string]$_.accountNickname -eq $AccountNickname -and
+      [string]$_.ownerWxId -eq $OwnerWxId
+    })
+    if ($registered.Count -eq 1) {
+      $WechatAccountId = [string]$registered[0].wechatAccountId
+      if ([string]::IsNullOrWhiteSpace($token)) { $token = [string]$registered[0].token }
+    } elseif ($registered.Count -gt 1) {
+      throw "multiple RPA registry entries match this WeChat identity; specify WechatAccountId explicitly"
+    }
+  }
 }
 if ([string]::IsNullOrWhiteSpace($OwnerWxId)) {
   throw "OwnerWxId is required to lock the RPA host to one exact WeChat account"
+}
+if ([string]::IsNullOrWhiteSpace($WechatAccountId)) {
+  $localStorePath = Join-Path $runtimeRoot "local-store.json"
+  if (Test-Path -LiteralPath $localStorePath -PathType Leaf) {
+    $localStore = [System.IO.File]::ReadAllText($localStorePath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $accountMatches = @($localStore.wechatAccounts | Where-Object {
+      [string]$_.platform -eq "personal_wechat_rpa" -and
+      [string]$_.personalWechatRpa.accountNickname -eq $AccountNickname -and
+      [string]$_.personalWechatRpa.ownerWxId -eq $OwnerWxId
+    })
+    if ($accountMatches.Count -eq 1) {
+      $WechatAccountId = [string]$accountMatches[0].id
+    } elseif ($accountMatches.Count -gt 1) {
+      throw "multiple platform WeChat accounts match this RPA identity; specify WechatAccountId explicitly"
+    }
+  }
+}
+if ([string]::IsNullOrWhiteSpace($WechatAccountId)) {
+  throw "WechatAccountId is required because the RPA host must authenticate as one existing platform WeChat account"
 }
 if ([string]::IsNullOrWhiteSpace($token)) {
   $bytes = New-Object byte[] 32
@@ -75,10 +110,34 @@ if ([string]::IsNullOrWhiteSpace($token)) {
   $token = ([BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
 }
 
+$instance = [ordered]@{
+  wechatAccountId = $WechatAccountId
+  endpoint = "http://127.0.0.1:3211"
+  token = $token
+  accountNickname = $AccountNickname
+  ownerWxId = $OwnerWxId
+  enabled = $true
+}
+$otherInstances = @()
+if ($existingConfig -and $existingConfig.instances) {
+  $otherInstances = @($existingConfig.instances | Where-Object {
+    [string]$_.wechatAccountId -ne $WechatAccountId -and
+    [string]$_.accountNickname -ne $AccountNickname -and
+    [string]$_.ownerWxId -ne $OwnerWxId
+  })
+}
+$disabledInstances = if ($existingConfig -and $existingConfig.disabledInstances) {
+  @($existingConfig.disabledInstances | Where-Object { [string]$_.wechatAccountId -ne $WechatAccountId })
+} else {
+  @()
+}
 $config = [ordered]@{
+  registryVersion = "personal_wechat_rpa_registry_v1"
   accountNickname = $AccountNickname
   ownerWxId = $OwnerWxId
   token = $token
+  instances = @($otherInstances) + @($instance)
+  disabledInstances = @($disabledInstances)
   apiBase = "http://127.0.0.1:3200/api/"
   port = 3211
   automationMode = "ocr"

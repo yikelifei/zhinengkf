@@ -4,6 +4,7 @@ function planInboundAutomation(input = {}) {
   const route = input.route || {};
   const assetIds = normalizeList(input.assetIds);
   const bundle = input.bundleRecommendation || null;
+  const zhenxiRequest = input.zhenxiRequest || null;
   const routingPolicy = normalizeRoutingPolicy(route.routingPolicy);
 
   if (input.conversationManualLocked || route.conversationManualLocked) {
@@ -16,7 +17,7 @@ function planInboundAutomation(input = {}) {
     }, routingPolicy);
   }
 
-  if (routingPolicy?.manualRequired || route.action === "manual_review") {
+  if ((routingPolicy?.manualRequired || route.action === "manual_review") && !canSafelyRouteZhenxiRequest(route, routingPolicy, zhenxiRequest)) {
     if (canQueueInternalTestReply(input, route, routingPolicy)) {
       return withRoutingPolicy({
         type: "queue_reply",
@@ -27,12 +28,84 @@ function planInboundAutomation(input = {}) {
         internalTestOverride: true,
       }, routingPolicy);
     }
+    const reviewReason = manualReviewReason(route, routingPolicy);
+    if (reviewReason === "high_value_customer" && normalizeList(route.riskFlags).length === 0) {
+      return withRoutingPolicy({
+        type: "queue_reply",
+        reason: "high_value_safe_acknowledgement",
+        shouldQueueReply: true,
+        shouldCreateDesignJob: false,
+        shouldNotifyHuman: true,
+        shouldLockConversation: false,
+        acknowledgementOnly: true,
+      }, highValueAcknowledgementRoutingPolicy(routingPolicy));
+    }
     return withRoutingPolicy({
       type: "manual_review",
-      reason: manualReviewReason(route, routingPolicy),
+      reason: reviewReason,
       shouldQueueReply: false,
       shouldCreateDesignJob: false,
       shouldNotifyHuman: true,
+    }, routingPolicy);
+  }
+
+  if (zhenxiRequest?.kind === "clarify") {
+    return withZhenxiRoutingPolicy({
+      type: "queue_reply",
+      reason: zhenxiRequest.reason || "zhenxi_output_type_unclear",
+      shouldQueueReply: true,
+      shouldCreateDesignJob: false,
+      shouldCreateZhenxiCopyJob: false,
+      shouldNotifyHuman: false,
+      zhenxiRequest,
+    }, routingPolicy);
+  }
+
+  if (zhenxiRequest?.kind === "copy") {
+    return withZhenxiRoutingPolicy({
+      type: "create_zhenxi_copy_job",
+      reason: "explicit_zhenxi_copy_request",
+      shouldQueueReply: true,
+      shouldCreateDesignJob: true,
+      shouldCreateZhenxiCopyJob: true,
+      shouldNotifyHuman: false,
+      zhenxiRequest,
+    }, routingPolicy);
+  }
+
+  if (["image", "multi", "bundle"].includes(zhenxiRequest?.kind)) {
+    if (zhenxiRequest.missingReference) {
+      return withZhenxiRoutingPolicy({
+        type: "queue_reply",
+        reason: "zhenxi_reference_required",
+        shouldQueueReply: true,
+        shouldCreateDesignJob: false,
+        shouldCreateZhenxiCopyJob: false,
+        shouldNotifyHuman: false,
+        missingFields: ["customer_assets"],
+        zhenxiRequest,
+      }, routingPolicy);
+    }
+    return withZhenxiRoutingPolicy({
+      type: "create_design_job",
+      reason: zhenxiRequest.reason || (zhenxiRequest.kind === "bundle" ? "customer_tool_plan_ready" : "explicit_zhenxi_image_request"),
+      shouldQueueReply: true,
+      shouldCreateDesignJob: true,
+      shouldCreateZhenxiCopyJob: false,
+      shouldNotifyHuman: false,
+      zhenxiRequest,
+    }, routingPolicy);
+  }
+
+  if (zhenxiRequest?.kind === "cancel" && zhenxiRequest?.reason === "explicit_image_generation_declined") {
+    return withRoutingPolicy({
+      type: "queue_reply",
+      reason: "explicit_image_generation_declined",
+      shouldQueueReply: routingPolicy?.canQueueAutoReply !== false,
+      shouldCreateDesignJob: false,
+      shouldCreateZhenxiCopyJob: false,
+      shouldNotifyHuman: false,
+      zhenxiRequest,
     }, routingPolicy);
   }
 
@@ -50,17 +123,6 @@ function planInboundAutomation(input = {}) {
   }
 
   if (route.agentKey === "gift_design" && route.action === "auto_agent") {
-    if (!assetIds.length) {
-      return withRoutingPolicy({
-        type: "queue_reply",
-        reason: "missing_real_customer_assets",
-        shouldQueueReply: true,
-        shouldCreateDesignJob: false,
-        shouldNotifyHuman: false,
-        missingFields: ["customer_assets"],
-      }, routingPolicy);
-    }
-
     if (!bundle?.items?.length) {
       return withRoutingPolicy({
         type: "manual_review",
@@ -68,6 +130,20 @@ function planInboundAutomation(input = {}) {
         shouldQueueReply: false,
         shouldCreateDesignJob: false,
         shouldNotifyHuman: true,
+      }, routingPolicy);
+    }
+
+    // 搭品效果图以商品库中每个 SKU 的真实图为权威素材。只有客户明确要求
+    // 放 Logo、原图或人物时才需要额外客户素材，不能把“未发 Logo”误当成
+    // 所有礼盒搭配任务的阻塞项。
+    if (!assetIds.length && !bundleHasUsableRealImages(bundle)) {
+      return withRoutingPolicy({
+        type: "queue_reply",
+        reason: "missing_real_customer_assets",
+        shouldQueueReply: true,
+        shouldCreateDesignJob: false,
+        shouldNotifyHuman: false,
+        missingFields: ["customer_assets"],
       }, routingPolicy);
     }
 
@@ -110,7 +186,51 @@ function planInboundAutomation(input = {}) {
   }, routingPolicy);
 }
 
+function canSafelyRouteZhenxiRequest(route, routingPolicy, request) {
+  if (!request || !["clarify", "copy", "image", "multi", "bundle"].includes(String(request.kind || ""))) return false;
+  if (route?.isHighValue === true) return false;
+  const needsCatalog = request?.toolIntents?.catalog === true || request?.kind === "bundle";
+  const blockingRiskFlags = normalizeList(route?.riskFlags).filter((flag) => flag !== "unverified_catalog_data" || needsCatalog);
+  if (blockingRiskFlags.length > 0) return false;
+  if (["high_value_human", "risk_human"].includes(String(routingPolicy?.lane || ""))) return false;
+  return true;
+}
+
+function bundleHasUsableRealImages(bundle) {
+  const items = Array.isArray(bundle?.items) ? bundle.items : [];
+  if (!items.length) return false;
+  return items.every((item) => {
+    const candidates = [
+      item?.imageUrl,
+      item?.image,
+      item?.localImagePath,
+      item?.localPath,
+      ...(Array.isArray(item?.imageUrls) ? item.imageUrls : []),
+      ...(Array.isArray(item?.imageRefs) ? item.imageRefs : []),
+      ...(Array.isArray(item?.images) ? item.images : []),
+    ];
+    return candidates.some((value) => typeof value === "string" && value.trim().length > 0);
+  });
+}
+
 function buildInboundReplyText(route = {}, plan = {}) {
+  if (plan.zhenxiRequest?.replyText) return String(plan.zhenxiRequest.replyText).trim();
+  if (plan.reason === "high_value_safe_acknowledgement") {
+    const hasMissingFieldAudit = Array.isArray(route?.missingFields);
+    const missingFields = new Set(hasMissingFieldAudit ? route.missingFields : []);
+    const coreDetailsComplete = !["budget", "quantity", "usage_scene"].some((field) => missingFields.has(field));
+    if (hasMissingFieldAudit && coreDetailsComplete && missingFields.has("customer_assets")) {
+      return "那就按稳重、有质感的商务款往下做，包装别太花。把 Logo 文件和贺卡文字发我，我接着配方案。";
+    }
+    if (hasMissingFieldAudit && coreDetailsComplete && missingFields.size === 0) {
+      return "信息够了，我先按稳重、有质感的商务款整理方案，价格和交期核对好再给您。";
+    }
+    const quantity = positiveNumber(route?.budget?.quantity);
+    const perUnitAmount = positiveNumber(route?.budget?.perUnitAmount);
+    const quantityText = quantity ? `${quantity} 份` : "这批";
+    const budgetText = perUnitAmount ? `、每份 ${formatMoney(perUnitAmount)} 元` : "";
+    return `${quantityText}${budgetText}，这个预算做商务礼盒比较从容。建议把礼品、包装和定制费用一起考虑，别把预算全压在单品上，成品会更体面。主要是送客户还是员工？我先按赠送对象给您定方向。`;
+  }
   const base = String(route.suggestedReply || "").trim();
   if (plan.reason === "internal_test_safe_reply") {
     return String(route.sceneClarification?.question || "").trim()
@@ -162,11 +282,55 @@ function withRoutingPolicy(plan, routingPolicy) {
   };
 }
 
+function withZhenxiRoutingPolicy(plan, routingPolicy) {
+  if (!routingPolicy) return plan;
+  return withRoutingPolicy(plan, {
+    ...routingPolicy,
+    lane: "zhenxi_generation",
+    handler: "agent",
+    manualRequired: false,
+    canAskClarification: true,
+    canQueueAutoReply: true,
+    autoSendAllowed: true,
+    reason: plan.reason,
+    nextStep: plan.shouldCreateDesignJob ? "create_zhenxi_generation_job" : "collect_zhenxi_generation_info",
+  });
+}
+
 function manualReviewReason(route, routingPolicy) {
   if (routingPolicy?.lane === "high_value_human" || route.isHighValue) return "high_value_customer";
   if (routingPolicy?.lane === "risk_human") return "risk_or_sensitive_route";
   if (routingPolicy?.lane === "manual_review") return "routing_policy_manual_review";
   return "risk_or_unclear_route";
+}
+
+function highValueAcknowledgementRoutingPolicy(routingPolicy) {
+  return {
+    ...(routingPolicy || {}),
+    lane: "high_value_guided_reply",
+    handler: "agent",
+    manualRequired: false,
+    canAskClarification: true,
+    canQueueAutoReply: true,
+    autoSendAllowed: true,
+    reason: "高价值需求先发送安全确认并通知人工；正式方案、价格和履约承诺仍需核对。",
+    nextStep: "queue_safe_acknowledgement_and_notify_operator",
+    safeguards: normalizeList([
+      ...(routingPolicy?.safeguards || []),
+      "wechat_send_guard_required",
+      "acknowledgement_only",
+      "final_quote_manual_review",
+    ]),
+  };
+}
+
+function positiveNumber(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function formatMoney(value) {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
 }
 
 module.exports = {

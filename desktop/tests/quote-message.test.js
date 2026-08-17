@@ -75,3 +75,27 @@ test("builds an unpaid order confirmation without pretending payment", () => {
   assert.match(message, /付款方式、交期和细节/);
   assert.doesNotMatch(message, /已付款记录/);
 });
+
+test("quote and order confirmation messages do not leak unreadable placeholder text", () => {
+  const quoteMessage = buildQuoteCustomerMessage({
+    customerName: "????",
+    scene: "????",
+    quantity: 10,
+    unitPrice: 100,
+    totalPrice: 1000,
+    items: [{ name: "????" }, { skuCode: "BOX-A" }],
+  });
+  const orderMessage = buildOrderConfirmationCustomerMessage({
+    customerName: "????",
+    scene: "????",
+    quantity: 10,
+    totalPrice: 1000,
+    paymentStatus: "paid",
+    items: [{ name: "????" }, { skuCode: "BOX-A" }],
+  });
+
+  assert.doesNotMatch(quoteMessage, /\?\?\?\?|\uFFFD/);
+  assert.doesNotMatch(orderMessage, /\?\?\?\?|\uFFFD/);
+  assert.match(quoteMessage, /BOX-A/);
+  assert.match(orderMessage, /BOX-A/);
+});

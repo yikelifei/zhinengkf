@@ -13,6 +13,8 @@ $StableStartingLock = Join-Path $RuntimeDir "stable-starting.lock"
 $StopRequestFile = Join-Path $RuntimeDir "stable-runtime-stop-request"
 $HeartbeatFile = Join-Path $RuntimeDir "keep-alive.json"
 $SupervisorMode = $env:STABLE_KEEPALIVE_SUPERVISOR -eq "1"
+$SupervisorMutex = $null
+$SupervisorMutexHeld = $false
 $env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"
 $env:STABLE_PERSONAL_WECHAT_SEND = "0"
 
@@ -161,10 +163,55 @@ function Invoke-StableSupervisorLoop {
   }
 }
 
+function Enter-StableSupervisorMutex {
+  $normalizedRuntime = [IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\').ToLowerInvariant()
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalizedRuntime))
+    $hash = ([BitConverter]::ToString($hashBytes)).Replace("-", "").Substring(0, 24)
+  } finally {
+    $sha256.Dispose()
+  }
+  $script:SupervisorMutex = [Threading.Mutex]::new($false, "Local\ZhinengKefuStableKeepalive-$hash")
+  try {
+    $script:SupervisorMutexHeld = $script:SupervisorMutex.WaitOne(0)
+  } catch [Threading.AbandonedMutexException] {
+    $script:SupervisorMutexHeld = $true
+  }
+  return $script:SupervisorMutexHeld
+}
+
+function Exit-StableSupervisorMutex {
+  if ($script:SupervisorMutexHeld -and $script:SupervisorMutex) {
+    try { $script:SupervisorMutex.ReleaseMutex() } catch {}
+  }
+  if ($script:SupervisorMutex) { $script:SupervisorMutex.Dispose() }
+  $script:SupervisorMutexHeld = $false
+  $script:SupervisorMutex = $null
+}
+
 try {
   Normalize-ProcessPathEnvironment
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+  if ($SupervisorMode) {
+    if (Test-Path $StopRequestFile) {
+      Write-StableStartLog "stable keepalive supervisor observed stop request before startup pid=$PID"
+      exit 0
+    }
+    if (-not (Enter-StableSupervisorMutex)) {
+      Write-StableStartLog "duplicate stable keepalive supervisor skipped pid=$PID"
+      exit 0
+    }
+    try {
+      Invoke-StableSupervisorLoop
+    } finally {
+      Exit-StableSupervisorMutex
+    }
+    exit 0
+  }
+
   try {
     Remove-Item -Force -ErrorAction Stop -Path $StopRequestFile
   } catch [System.Management.Automation.ItemNotFoundException] {
@@ -172,11 +219,6 @@ try {
     Write-Warning "stable stop request cleanup unavailable: $($_.Exception.Message)"
   }
   Write-StableStartingLock
-
-  if ($SupervisorMode) {
-    Invoke-StableSupervisorLoop
-    exit 0
-  }
 
   & node (Join-Path $Root "tools\stable-start-needed.js") | Out-Null
   if ($LASTEXITCODE -eq 0) {

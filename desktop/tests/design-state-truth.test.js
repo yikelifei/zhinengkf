@@ -188,9 +188,11 @@ test("execution confirmation becomes disabled with an explicit reason when acces
 });
 
 test("design settings renders only the snapshotted intent and disables confirmation for every busy state", () => {
+  const snapshotApiFixture = ["api", "key", "snapshot"].join("-");
   const intent = {
     adapter: "adapter-snapshot",
     baseUrl: "https://snapshot.example.test",
+    apiKey: snapshotApiFixture,
     accessToken: "secret",
   };
   const markup = renderDirectWithHooks(
@@ -199,7 +201,8 @@ test("design settings renders only the snapshotted intent and disables confirmat
       null, false, "",
       null, false, "",
       null, false, "",
-      "edited-adapter", "https://edited.example.test", "secret", "", "",
+      null, false, "",
+      "edited-adapter", "https://edited.example.test", "edited-api-key", "secret", "", "",
       "refresh", "", "", { generation: 7, intent }, null,
     ],
     [{ current: null }, { current: false }, { current: 7 }],
@@ -253,7 +256,7 @@ test("design account activation and settings freeze request inputs and use singl
   const activation = read(files[1]);
   assert.match(activation, /const targetDeviceLabel = deviceLabel\.trim\(\) \|\| "智能客服工作台"/);
   const settings = read(files[2]);
-  assert.match(settings, /settingsSaveIntent\(adapter, baseUrl, accessToken, cookie, deviceId\)/);
+  assert.match(settings, /settingsSaveIntent\(adapter, baseUrl, apiKey, accessToken, cookie, deviceId\)/);
   assert.match(settings, /setPendingConfirmation\(\{ generation, intent \}\)/);
   assert.match(settings, /load: \(\) => updateDesignPlatformConfig\(intent\)/);
 });

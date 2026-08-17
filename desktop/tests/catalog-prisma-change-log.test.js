@@ -209,6 +209,48 @@ test("bulk import is one transaction and rolls back earlier rows when a later au
   }
 });
 
+test("bulk import creates new SKUs inactive while preserving an existing SKU status", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = false;
+  try {
+    const { prisma, state } = buildFakePrisma();
+    const service = createService(prisma);
+    await service.upsertSku(skuPayload({ skuCode: "SKU-EXISTING", isActive: true }));
+    await service.bulkUpsert([
+      skuPayload({ skuCode: "SKU-EXISTING", name: "已有商品更新", isActive: undefined }),
+      skuPayload({ skuCode: "SKU-NEW-DRAFT", name: "新导入草稿", isActive: undefined }),
+    ]);
+    assert.equal(state.skus.get("SKU-EXISTING").isActive, true);
+    assert.equal(state.skus.get("SKU-NEW-DRAFT").isActive, false);
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
+test("LocalStore bulk import also preserves existing inactive status and drafts new SKUs", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  let capturedRows = [];
+  try {
+    const localStore = {
+      listSkus() { return [{ skuCode: "SKU-EXISTING-INACTIVE", isActive: false }]; },
+      bulkUpsertSkus(rows) {
+        capturedRows = rows;
+        return { count: rows.length, results: rows.map((row, index) => ({ id: `sku-${index + 1}`, ...row })) };
+      },
+    };
+    const service = new CatalogService({}, localStore, {});
+    await service.bulkUpsert([
+      skuPayload({ skuCode: "SKU-EXISTING-INACTIVE", isActive: undefined, mainImagePath: undefined }),
+      skuPayload({ skuCode: "SKU-NEW-LOCAL-DRAFT", isActive: undefined, mainImagePath: undefined }),
+    ]);
+    assert.equal(capturedRows[0].isActive, false);
+    assert.equal(capturedRows[1].isActive, false);
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
 test("catalog audit migration retains history by restricting SKU deletion", () => {
   const fs = require("node:fs");
   const path = require("node:path");

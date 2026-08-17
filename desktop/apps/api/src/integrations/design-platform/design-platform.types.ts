@@ -8,6 +8,7 @@ export type DesignPlatformJobPayload = {
   scene?: string | null;
   bundle: Record<string, unknown>;
   assets: Array<Record<string, unknown>>;
+  designType?: string;
   outputCount: number;
   renderStyle: string;
   requirements: Record<string, unknown>;

@@ -4,14 +4,22 @@ import {
   ForbiddenException,
   GoneException,
   Injectable,
+  Logger,
   NotFoundException,
   OnApplicationBootstrap,
   OnModuleDestroy,
+  Optional,
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 import { DesignPlatformClient } from "../integrations/design-platform/design-platform.client";
+import {
+  isTrustedInternalZhenxiWorkspaceHealth,
+  supportsZhenxiCustomerCopyGeneration,
+  supportsZhenxiCustomerImageGeneration,
+} from "../integrations/design-platform/design-platform-readiness";
 import {
   DesignPlatformCallbackPayload,
   DesignPlatformJobPayload,
@@ -20,13 +28,21 @@ import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig, hasIndependentDesignPlatformCallbackApiKey } from "../shared/app-config";
+import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
 import { StorageService } from "../storage/storage.service";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
 import { QuotesService } from "../quotes/quotes.service";
 import { OrdersService } from "../orders/orders.service";
+import { AiProviderService } from "../ai/ai-provider.service";
 import { rules } from "../shared/rules";
 import { ExpectedIdentityPayload, assertExpectedIdentity } from "../shared/identity-expectation";
-import { fingerprintImageFile } from "../shared/image-fingerprint";
+import {
+  fingerprintImageBytes,
+  fingerprintImageFile,
+  MAX_IMAGE_DECODE_PIXELS,
+  MAX_IMAGE_FINGERPRINT_BYTES,
+  readBoundedRegularFile,
+} from "../shared/image-fingerprint";
 import {
   assertExactOperationReplay,
   assertStoredOperationIdentityReplay,
@@ -63,6 +79,7 @@ function assertSmokeContract(
 }
 
 const {
+  CUSTOMER_DESIGN_CANDIDATE_COUNT,
   buildWaitingMessage,
   decideRevisionPolicy,
   evaluateArtImageLocalHealthReadiness,
@@ -88,6 +105,8 @@ const {
 import {
   CreateDesignJobPayload,
   CreateDesignRevisionPayload,
+  ForwardExistingDesignImagesPayload,
+  RecoverCompletedDesignExecutionPayload,
   ResolveDesignExecutionRefundPayload,
   ResolveUnknownDesignExecutionPayload,
   SelectDesignImagePayload,
@@ -112,6 +131,7 @@ type DesignPreflightCheck = {
   ok: boolean;
   severity: "info" | "warning" | "error";
   detail?: string;
+  action?: string;
 };
 
 type DesignRevisionLike = {
@@ -181,11 +201,15 @@ type DesignPlatformSmokeTestResult = {
 
 @Injectable()
 export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger(DesignJobsService.name);
   private readonly activeResultPolls = new Set<string>();
   private readonly activeExecutionPromises = new Map<string, Promise<void>>();
   private readonly activeCreateEffectPromises = new Map<string, Promise<any>>();
   private readonly activeExternalOperationPromises = new Map<string, Promise<any>>();
   private readonly activeDesignCallbackPromises = new Map<string, Promise<any>>();
+  private readonly activeZhenxiCopyTasks = new Set<string>();
+  private readonly activeCustomerCreativeVisualQc = new Set<string>();
+  private readonly customerCreativeVisualQcClaimToken = Symbol("customer-creative-visual-qc-claim");
   private activeRecoveryReconciliation: Promise<void> | null = null;
   private recoveryStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryInterval: ReturnType<typeof setInterval> | null = null;
@@ -200,6 +224,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     private readonly quotes: QuotesService,
     private readonly orders: OrdersService,
     private readonly platformExecutions: DesignPlatformExecutionService,
+    @Optional() private readonly aiProviders?: AiProviderService,
   ) {}
 
   onApplicationBootstrap() {
@@ -275,7 +300,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
     if (this.usesDurableArtImageExecutions()) {
       const errorMessage =
-        "art_image_local smoke generation is disabled because every real generation must start from a persisted DesignJob and durable execution";
+        "Zhenxi AI smoke generation is disabled because every real generation must start from a persisted DesignJob and durable execution";
       steps.push({ key: "durable_execution_required", label: "持久化执行要求", ok: false, detail: errorMessage });
       return {
         ok: false,
@@ -556,7 +581,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const failed: any[] = [];
 
     for (const job of jobs as any[]) {
-      const decision = evaluateDesignAutoSubmit(job, { highValueAmountCny: appConfig.highValueAmountCny });
+      const decision = evaluateDesignAutoSubmit(job, {
+        highValueAmountCny: appConfig.highValueAmountCny,
+        zhenxiGenerationEnabled: this.zhenxiImageGenerationEnabled(),
+      });
       if (!decision.ok) {
         skipped.push({
           designJobId: job.id,
@@ -593,8 +621,36 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     };
   }
 
-  async runLowValueAutomation(filter: IdentityFilter = {}) {
+  async runLowValueAutomation(
+    filter: IdentityFilter = {},
+    options: { includeCustomerTools?: boolean } = {},
+  ) {
+    const customerTools = options.includeCustomerTools === false
+      ? {}
+      : await this.runCustomerToolAutomation(filter);
+    const quoteSend = await this.quotes.scanLowValueAutoQuoteSends(filter);
+    const orderDraft = await this.orders.scanLowValueAutoOrderDrafts(filter);
+    const orderConfirmation = await this.wechatDispatch.scanLowValueOrderConfirmations(filter);
+    const orderFollowup = await this.wechatDispatch.scanLowValueOrderFollowups(filter);
+
+    return {
+      ...customerTools,
+      quoteSend,
+      orderDraft,
+      orderConfirmation,
+      orderFollowup,
+    };
+  }
+
+  async runCustomerToolAutomation(filter: IdentityFilter = {}) {
+    const zhenxiCopy = await this.scanZhenxiCopyDrafts(filter);
     const autoSubmit = await this.scanAutoSubmitDrafts(filter);
+    const imageSend = await this.scanLowValueDesignImageSends(filter);
+
+    return { zhenxiCopy, autoSubmit, imageSend };
+  }
+
+  async scanLowValueDesignImageSends(filter: IdentityFilter = {}) {
     const jobs = appConfig.useLocalStore
       ? this.localStore.listDesignJobs(filter)
       : await this.prisma.designJob.findMany({
@@ -611,6 +667,14 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     };
 
     for (const job of jobs as any[]) {
+      if (this.activeCustomerCreativeVisualQc.has(job.id)) {
+        imageSend.skipped.push({
+          designJobId: job.id,
+          requestId: job.requestId,
+          reason: "visual_qc_already_processing",
+        });
+        continue;
+      }
       const decision = evaluateLowValueDesignImageSend(job, { highValueAmountCny: appConfig.highValueAmountCny });
       if (!decision.ok) {
         imageSend.skipped.push({
@@ -638,19 +702,156 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       }
     }
 
-    const quoteSend = await this.quotes.scanLowValueAutoQuoteSends(filter);
-    const orderDraft = await this.orders.scanLowValueAutoOrderDrafts(filter);
-    const orderConfirmation = await this.wechatDispatch.scanLowValueOrderConfirmations(filter);
-    const orderFollowup = await this.wechatDispatch.scanLowValueOrderFollowups(filter);
+    return imageSend;
+  }
 
-    return {
-      autoSubmit,
-      imageSend,
-      quoteSend,
-      orderDraft,
-      orderConfirmation,
-      orderFollowup,
-    };
+  async scanZhenxiCopyDrafts(filter: IdentityFilter = {}) {
+    const jobs = appConfig.useLocalStore
+      ? this.localStore.listDesignJobs(filter).filter((job: any) => job.status === "draft" && String(job.designType || "").startsWith("zhenxi_copy_"))
+      : await (this.prisma as any).designJob.findMany({
+          where: { status: "draft", designType: { startsWith: "zhenxi_copy_" }, ...cleanIdentityWhere(filter) },
+          include: { conversation: true },
+          orderBy: { updatedAt: "asc" },
+          take: 100,
+        });
+    const completed: any[] = [];
+    const failed: any[] = [];
+    const outcomeUnknown: any[] = [];
+    const skipped: any[] = [];
+
+    if (!this.zhenxiCopyGenerationEnabled()) {
+      return {
+        scanned: jobs.length,
+        completed,
+        failed,
+        outcomeUnknown,
+        skipped: jobs.map((job: any) => ({
+          designJobId: job.id,
+          requestId: job.requestId,
+          reason: "zhenxi_generation_not_ready",
+        })),
+      };
+    }
+
+    for (const job of jobs as any[]) {
+      if (this.activeZhenxiCopyTasks.has(job.id)) {
+        skipped.push({ designJobId: job.id, reason: "already_processing" });
+        continue;
+      }
+      if (job.conversation?.manualLocked || await this.isConversationManualLocked(job.conversationId)) {
+        skipped.push({ designJobId: job.id, reason: "conversation_manual_locked" });
+        continue;
+      }
+      this.activeZhenxiCopyTasks.add(job.id);
+      try {
+        const claimed = appConfig.useLocalStore
+          ? this.localStore.updateDesignJob(job.id, {
+              status: "generating",
+              submitDispatchStatus: "dispatching",
+              submittedAt: new Date().toISOString(),
+            })
+          : await this.claimPrismaZhenxiCopyJob(job.id);
+        if (!claimed) {
+          skipped.push({ designJobId: job.id, reason: "claim_lost" });
+          continue;
+        }
+        const requirements = isPlainObject(job.requirements) ? job.requirements : {};
+        const zhenxi = isPlainObject(requirements.zhenxi) ? requirements.zhenxi : {};
+        const module = normalizeZhenxiCopyModule(zhenxi.module || String(job.designType || "").replace(/^zhenxi_copy_/, ""));
+        const prompt = String(zhenxi.prompt || job.customerText || "").trim();
+        const requestId = stableOperationKey("zhenxi-copy", job.requestId || job.id).slice(0, 80);
+        const outcome = await this.designPlatform.generateZhenxiCopy({
+          prompt,
+          requestId,
+          module,
+          ratio: String(zhenxi.ratio || "") || undefined,
+        });
+        if (outcome.status === "completed") {
+          const updatedRequirements = {
+            ...requirements,
+            zhenxi: {
+              ...zhenxi,
+              requestId: outcome.requestId,
+              status: "completed",
+              result: { prompts: outcome.prompts, selectedPrompt: outcome.selectedPrompt },
+              completedAt: new Date().toISOString(),
+            },
+          };
+          const updated = await this.updateDesignRevisionJob(job.id, {
+            status: "completed",
+            submitDispatchStatus: "accepted",
+            requirements: updatedRequirements,
+            errorMessage: null,
+          });
+          await this.queueDesignTextMessage(
+            updated,
+            outcome.selectedPrompt,
+            "zhenxi-copy-result",
+            stableOperationKey("zhenxi-copy-send", job.id),
+          );
+          completed.push(updated);
+          continue;
+        }
+
+        const unknown = outcome.status === "outcome_unknown";
+        const updated = await this.updateDesignRevisionJob(job.id, {
+          status: unknown ? "manual_review" : "failed",
+          submitDispatchStatus: unknown ? "outcome_unknown" : "explicit_failed",
+          errorMessage: outcome.errorMessage,
+          requirements: {
+            ...requirements,
+            zhenxi: {
+              ...zhenxi,
+              requestId: outcome.requestId,
+              status: outcome.status,
+              errorCode: outcome.errorCode,
+            },
+          },
+        });
+        await this.notifications.create(
+          "warning",
+          unknown ? "臻希 AI 文案结果未知" : "臻希 AI 文案生成失败",
+          unknown ? "可能已经生成或扣费，系统已禁止自动重试，请按请求号人工核对。" : outcome.errorMessage,
+          { designJobId: job.id, requestId: outcome.requestId, errorCode: outcome.errorCode },
+        );
+        (unknown ? outcomeUnknown : failed).push(updated);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "unknown Zhenxi copy automation error";
+        await this.updateDesignRevisionJob(job.id, {
+          status: "manual_review",
+          submitDispatchStatus: "outcome_unknown",
+          errorMessage,
+        }).catch(() => null);
+        outcomeUnknown.push({ designJobId: job.id, errorMessage });
+      } finally {
+        this.activeZhenxiCopyTasks.delete(job.id);
+      }
+    }
+
+    return { scanned: jobs.length, completed, failed, outcomeUnknown, skipped };
+  }
+
+  private async claimPrismaZhenxiCopyJob(id: string) {
+    const changed = await (this.prisma as any).designJob.updateMany({
+      where: { id, status: "draft", designType: { startsWith: "zhenxi_copy_" } },
+      data: { status: "generating", submitDispatchStatus: "dispatching", submittedAt: new Date() },
+    });
+    if (changed.count !== 1) return null;
+    return (this.prisma as any).designJob.findUnique({ where: { id } });
+  }
+
+  private zhenxiImageGenerationEnabled() {
+    return supportsZhenxiCustomerImageGeneration(
+      appConfig.designPlatformAdapter,
+      process.env.ZHENXI_MCP_ENABLED !== "0",
+    );
+  }
+
+  private zhenxiCopyGenerationEnabled() {
+    return supportsZhenxiCustomerCopyGeneration(
+      appConfig.designPlatformAdapter,
+      process.env.ZHENXI_MCP_ENABLED !== "0",
+    );
   }
 
   async pollActiveResults(limit = appConfig.lowValueAutomationPollLimit, filter: IdentityFilter = {}) {
@@ -803,6 +1004,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   createTimeoutDemo(payload: { conversationId?: string } & ExpectedIdentityPayload = {}) {
+    assertDemoDataMutationAllowed("timeout design demo");
     if (!appConfig.useLocalStore) throw new Error("timeout demo is only available in local-json mode");
     if (!payload.conversationId) {
       throw new BadRequestException("conversationId is required for timeout demo");
@@ -843,6 +1045,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   createFailureDemo(payload: { conversationId?: string } & ExpectedIdentityPayload = {}) {
+    assertDemoDataMutationAllowed("failure design demo");
     if (!appConfig.useLocalStore) throw new Error("failure demo is only available in local-json mode");
     if (!payload.conversationId) {
       throw new BadRequestException("conversationId is required for failure demo");
@@ -912,6 +1115,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         customerId: String(storedIdentity.customerId || ""),
         conversationId: String(storedIdentity.conversationId || payload.conversationId || ""),
         wechatAccountId: storedIdentity.wechatAccountId || undefined,
+        outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
       } as CreateDesignJobPayload;
       const replayAssets = this.normalizeRequestedAssets(replayPayload);
       const replayOperation = requestOperationMetadata(
@@ -935,6 +1139,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       ...payload,
       customerId: payload.customerId || identity.customerId,
       wechatAccountId: payload.wechatAccountId || identity.wechatAccountId,
+      outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
     };
     const isHighValue = isHighValueBudget(normalizedPayload.budget, appConfig.highValueAmountCny);
     const requestedAssets = this.normalizeRequestedAssets(normalizedPayload);
@@ -1067,20 +1272,24 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       });
     }
 
+    const designType = String(job.designType || "");
+    const usesStandaloneZhenxiDesign = designType === "zhenxi_image" || designType.startsWith("zhenxi_copy_");
     const requiresRealImages = (job.requirements as any)?.useRealSkuImages !== false;
     const realRefs = inspectRealDesignReferences({
       assets: job.assets || [],
       bundle: job.bundle || {},
       requireCustomerAssets: requiresRealImages,
-      requireCompleteBundle: requiresRealImages,
+      requireCompleteBundle: requiresRealImages && !usesStandaloneZhenxiDesign,
     });
     const bundleRefs = realRefs.bundleRefs || inspectBundleReferences(job.bundle || {});
     const assetRefs = realRefs.assetRefs || inspectAssetReferences(job.assets || []);
     const usableRefs = [...assetRefs, ...bundleRefs].filter((item) => item.ok);
     const unusableRefs = [...assetRefs, ...bundleRefs].filter((item) => !item.ok);
-    const bundleAutomation = inspectBundleAutomationReadiness(job.bundle || {});
+    const bundleAutomation = usesStandaloneZhenxiDesign
+      ? { ok: true, reason: "standalone_zhenxi_design", blockers: [] }
+      : inspectBundleAutomationReadiness(job.bundle || {});
     const outputCount = inspectDesignOutputCount(job.outputCount, {
-      fallback: appConfig.defaultOutputCount || 6,
+      fallback: CUSTOMER_DESIGN_CANDIDATE_COUNT,
     });
     const callback = this.buildDesignPlatformCallback(job.requestId || id);
     const callbackSummary = {
@@ -1123,6 +1332,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       detail: requiresRealImages
         ? `可用图片 ${usableRefs.length} 个，不可用 ${unusableRefs.length} 个`
         : `未强制要求真实图片，可用图片 ${usableRefs.length} 个`,
+      action: !requiresRealImages || realRefs.ok
+        ? undefined
+        : "回到 /design/jobs/new 或商品库，为客户参考图、礼盒和全部 SKU 补齐可读取的本地/HTTPS/data:image 图片。",
     });
 
     checks.push({
@@ -1131,8 +1343,13 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       ok: bundleAutomation.ok,
       severity: "error",
       detail: bundleAutomation.ok
-        ? "商品组合满足自动出图/报价前置规则。"
+        ? usesStandaloneZhenxiDesign
+          ? "独立物料设计不依赖礼盒商品组合。"
+          : "商品组合满足自动出图/报价前置规则。"
         : `商品组合需要人工确认：${(bundleAutomation.blockers || []).join(", ") || "unknown"}`,
+      action: bundleAutomation.ok
+        ? undefined
+        : "回到 /catalog/bundles 或任务创建页，选择包含礼盒和内搭商品且有图、有价、有库存的搭配。",
     });
 
     checks.push({
@@ -1158,6 +1375,32 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       });
     }
 
+    if (appConfig.designPlatformAdapter === "zhenxi_external") {
+      const mcpReady = health?.transport === "mcp_stdio" && health?.reachable === true;
+      checks.push({
+        key: "zhenxi_mcp_release",
+        label: "臻希 AI 成品软件 MCP",
+        ok: mcpReady,
+        severity: "error",
+        detail: mcpReady
+          ? "已连接本机臻希 AI 成品软件；正式生成将严格先生成文案，再流式生成图片。"
+          : "未通过内置 MCP 连接到臻希 AI 成品软件。",
+        action: mcpReady
+          ? undefined
+          : "先启动并登录臻希 AI 成品软件，再确认智能客服已启用 ZHENXI_MCP_ENABLED。",
+      });
+      const unsupported = unusableRefs.slice(0, 5).map((item) => `${item.source}:${item.reason}`).join("; ");
+      if (unsupported) {
+        checks.push({
+          key: "unsupported_refs",
+          label: "不可用图片引用",
+          ok: false,
+          severity: requiresRealImages && !realRefs.ok ? "error" : "warning",
+          detail: unsupported,
+        });
+      }
+    }
+
     if (appConfig.designPlatformAdapter === "art_image_local") {
       checks.push({
         key: "art_image_adapter",
@@ -1181,45 +1424,70 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         checks.push(...artImageHealth.checks);
       }
 
-      try {
-        const auth = await this.designPlatform.getArtImageLocalAuthSession();
+      if (isTrustedInternalZhenxiWorkspaceHealth(health)) {
         checks.push({
           key: "art_image_auth_session",
-          label: "设计平台登录态",
-          ok: auth.authenticated,
-          severity: "error",
-          detail: auth.authenticated
-            ? `已登录 ${formatAuthSessionUser(auth)}`
-            : "设计平台未登录，或客服平台没有拿到设计平台登录凭证。请先登录设计平台，或配置 DESIGN_PLATFORM_COOKIE / DESIGN_PLATFORM_ACCESS_TOKEN。",
+          label: "臻希 AI 本地内部会话",
+          ok: true,
+          severity: "info",
+          detail: "复用本机臻希 AI 内部工作台生成入口，不重复登录或创建第二个设备绑定。",
         });
-      } catch (error) {
         checks.push({
-          key: "art_image_auth_session",
-          label: "设计平台登录态",
-          ok: false,
-          severity: "error",
-          detail: error instanceof Error ? error.message : "无法读取设计平台登录状态",
+          key: "art_image_activation",
+          label: "臻希 AI 本机执行绑定",
+          ok: true,
+          severity: "info",
+          detail: "当前内部工作台已明确开启本机生成，并配置 GPT 图片模型。",
         });
-      }
+      } else {
+        try {
+          const auth = await this.designPlatform.getArtImageLocalAuthSession();
+          checks.push({
+            key: "art_image_auth_session",
+            label: "设计平台登录态",
+            ok: auth.authenticated,
+            severity: "error",
+            detail: auth.authenticated
+              ? `已登录 ${formatAuthSessionUser(auth)}`
+              : "设计平台未登录，或客服平台没有拿到设计平台登录凭证。请先登录设计平台，或配置 DESIGN_PLATFORM_COOKIE / DESIGN_PLATFORM_ACCESS_TOKEN。",
+            action: auth.authenticated
+              ? undefined
+              : "先到 /design/activation 完成设备激活，再到 /design/account 登录臻希 AI 账号。",
+          });
+        } catch (error) {
+          checks.push({
+            key: "art_image_auth_session",
+            label: "设计平台登录态",
+            ok: false,
+            severity: "error",
+            detail: error instanceof Error ? error.message : "无法读取设计平台登录状态",
+            action: "到 /design/account 重新登录臻希 AI；如果仍失败，先回 /design/activation 确认设备 ID 已激活。",
+          });
+        }
 
-      try {
-        const activationStatus = await this.designPlatform.getArtImageLocalActivationStatus();
-        const activation = evaluateDesignPlatformActivationStatus(activationStatus);
-        checks.push({
-          key: "art_image_activation",
-          label: "设计平台设备激活",
-          ok: activation.ok,
-          severity: activation.ok ? "info" : "error",
-          detail: activation.detail,
-        });
-      } catch (error) {
-        checks.push({
-          key: "art_image_activation",
-          label: "设计平台设备激活",
-          ok: false,
-          severity: "error",
-          detail: error instanceof Error ? error.message : "无法读取设计平台设备激活状态",
-        });
+        try {
+          const activationStatus = await this.designPlatform.getArtImageLocalActivationStatus();
+          const activation = evaluateDesignPlatformActivationStatus(activationStatus);
+          checks.push({
+            key: "art_image_activation",
+            label: "设计平台设备激活",
+            ok: activation.ok,
+            severity: activation.ok ? "info" : "error",
+            detail: activation.detail,
+            action: activation.ok
+              ? undefined
+              : "到 /design/activation 使用臻希 AI 管理员激活码激活当前客服设备。",
+          });
+        } catch (error) {
+          checks.push({
+            key: "art_image_activation",
+            label: "设计平台设备激活",
+            ok: false,
+            severity: "error",
+            detail: error instanceof Error ? error.message : "无法读取设计平台设备激活状态",
+            action: "到 /design/activation 重新填写设备 ID 并激活；确认臻希 AI 本地服务仍在当前端口。",
+          });
+        }
       }
     }
 
@@ -1281,6 +1549,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (this.usesDurableArtImageExecutions()) return this.pollDurableArtImageResult(job);
 
     const result = await this.designPlatform.getDesignJobResults(job.externalJobId);
+    this.logger.log(
+      `design platform poll result jobId=${job.id} externalJobId=${job.externalJobId} status=${String(result.status || "unknown")} images=${Array.isArray(result.images) ? result.images.length : 0}`,
+    );
     if (result.status === "completed") {
       const updated = await this.handleDesignPlatformCallback({
         requestId: job.requestId,
@@ -1368,6 +1639,71 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       { designJobId: job.id, externalJobId: execution.externalJobId },
     );
     return resolved;
+  }
+
+  async recoverCompletedExecution(
+    id: string,
+    executionId: string,
+    payload: RecoverCompletedDesignExecutionPayload & ExpectedIdentityPayload,
+    trustedReviewer: string,
+  ) {
+    if (!this.usesDurableArtImageExecutions()) {
+      throw new BadRequestException("verified completion recovery is only available for the durable Zhenxi adapter");
+    }
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, payload || {}, "design job");
+    if (payload?.resolution !== "confirmed_generated") {
+      throw new BadRequestException("resolution must be confirmed_generated");
+    }
+    const reviewer = String(trustedReviewer || "").trim();
+    if (!reviewer || !/^[\p{L}\p{N}_.@-]{1,80}$/u.test(reviewer)) {
+      throw new BadRequestException("reviewer must be a non-empty operator identifier");
+    }
+    const evidence = String(payload?.evidence || "").trim();
+    if (evidence.length < 8 || evidence.length > 500) {
+      throw new BadRequestException("evidence must contain 8 to 500 characters");
+    }
+    const execution = await this.platformExecutions.get(executionId);
+    if (!execution || execution.designJobId !== job.id) {
+      throw new BadRequestException("design platform execution does not belong to this design job");
+    }
+    const images = this.normalizeCallbackImages(payload?.images || []);
+    const imageMetadataCheck = this.validateCallbackImages(job, images);
+    if (!imageMetadataCheck.ok) {
+      throw new BadRequestException(`verified completion image metadata is invalid: ${imageMetadataCheck.reasons.join("; ")}`);
+    }
+    const requiredCount = this.minimumRequiredInitialImageCount(job);
+    if (images.length !== requiredCount) {
+      throw new BadRequestException(`verified completion must contain exactly ${requiredCount} images`);
+    }
+
+    await this.platformExecutions.recoverVerifiedCompletion({
+      executionId: execution.id,
+      images,
+      refundStatus: payload.refundStatus,
+    });
+    await this.createReviewLog({
+      targetType: "design_platform_execution",
+      targetId: execution.id,
+      decision: payload.resolution,
+      reviewer,
+      note: evidence,
+      beforeStatus: `${execution.status}:${execution.acceptanceStatus}`,
+      afterStatus: "completed:pending",
+      metadata: {
+        designJobId: job.id,
+        externalJobId: execution.externalJobId,
+        recoveredImageCount: images.length,
+        source: "verified_completed_execution_recovery",
+      },
+    });
+    const acceptedJob = await this.acceptDurableArtImageExecution(execution.id);
+    const publicExecution = (await this.platformExecutions.listPublicForDesignJob(job.id))
+      .find((item) => item.id === execution.id) || null;
+    return { job: acceptedJob || await this.findDesignJobForExecution(job.id), execution: publicExecution };
   }
 
   async resolveExecutionRefund(
@@ -1709,7 +2045,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       : await this.prisma.designJob.findUnique({ where: { id }, include: { assets: true } });
     if (!job) throw new Error(`design job not found: ${id}`);
     assertExpectedIdentity(job, expected, "design job");
-    this.assertDesignJobCanCancel(job);
+    const durableExecution = this.usesDurableArtImageExecutions() && job.externalJobId
+      ? await this.platformExecutions!.get(job.externalJobId)
+      : null;
+    this.assertDesignJobCanCancel(job, durableExecution);
     let cancelled: { cancelled: boolean; job: any };
     if (appConfig.useLocalStore) {
       cancelled = typeof (this.localStore as any).cancelDesignJobIfCurrent === "function"
@@ -2276,6 +2615,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     }
 
     const images = this.normalizeCallbackImages(payload.images || []);
+    this.logger.log(
+      `design platform callback jobId=${job.id} externalJobId=${payload.externalJobId || job.externalJobId || ""} status=${payload.status} images=${images.length}`,
+    );
     if (!images.length) {
       const errorMessage = "design platform completed without images";
       const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
@@ -2324,22 +2666,24 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         errorMessage,
       });
     }
-    const minimumInitialImageCount = this.minimumRequiredInitialImageCount(job);
-    if (this.isInitialDesignResult(job) && images.length < minimumInitialImageCount) {
-      const errorMessage = `design platform returned only ${images.length} candidate images; expected at least ${minimumInitialImageCount}`;
+    const requiredCandidateImageCount = this.minimumRequiredInitialImageCount(job);
+    if (images.length !== requiredCandidateImageCount) {
+      const errorMessage = images.length < requiredCandidateImageCount
+        ? `design platform returned only ${images.length} candidate images; expected exactly ${requiredCandidateImageCount}`
+        : `design platform returned ${images.length} candidate images; expected exactly ${requiredCandidateImageCount}`;
       const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
       if (!failure.settled) return failure.job;
-      const retryCount = Number(failure.job.retryCount || 0);
+      const retryCount = this.designResultRetryCount(failure.job, failure.revision);
       await this.notifications.create(
         retryCount < 1 ? "warning" : "error",
-        "设计平台候选图不足",
-        `只返回 ${images.length} 张候选图，至少需要 ${minimumInitialImageCount} 张。`,
+        "设计平台候选图数量不符合要求",
+        `本轮返回 ${images.length} 张候选图，必须固定返回 ${requiredCandidateImageCount} 张。`,
         {
           ...(callbackOperation ? { effectKey: stableOperationKey("design-callback-insufficient-images", callbackOperation.key) } : {}),
           designJobId: job.id,
           externalJobId: payload.externalJobId || job.externalJobId,
           returnedImageCount: images.length,
-          requiredImageCount: minimumInitialImageCount,
+          requiredImageCount: requiredCandidateImageCount,
         },
       );
       if (automaticRetryAllowed && retryCount < 1) {
@@ -2372,6 +2716,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         fingerprint = (await fingerprintImageFile(localPath)).fingerprint;
       } catch (error) {
         if (localPath) await this.removeUnusableDownloadedDesignImage(job.id, localPath);
+        this.logger.warn(
+          `design image save failed jobId=${job.id} externalJobId=${payload.externalJobId || job.externalJobId || ""} imageId=${imageId} position=${position} downloadUrl=${this.safeLogUrl(image.downloadUrl)} error=${this.errorMessage(error)}`,
+        );
         localPath = undefined;
         fingerprint = undefined;
       }
@@ -2381,6 +2728,9 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const downloadFailureCount = savedImages.filter((item) => !item.localPath).length;
     const localSavedCount = savedImages.length - downloadFailureCount;
     const requiredLocalImageCount = this.minimumRequiredLocalImageCount(job);
+    this.logger.log(
+      `design callback local image save summary jobId=${job.id} saved=${localSavedCount} failed=${downloadFailureCount} required=${requiredLocalImageCount}`,
+    );
     if (localSavedCount < requiredLocalImageCount) {
       const errorMessage = `design platform saved only ${localSavedCount} local image files; expected at least ${requiredLocalImageCount}`;
       const failure = await this.settleDesignCallbackFailure(job, payload, callbackOperation, errorMessage);
@@ -2532,7 +2882,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           create: {
             designJobId: job.id,
             imageId,
-            downloadUrl: image.downloadUrl,
+            downloadUrl: sanitizePersistedImageUrl(image.downloadUrl),
             localPath,
             width: image.width,
             height: image.height,
@@ -2571,8 +2921,20 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     });
   }
 
-  private assertDesignJobCanCancel(job: any) {
+  private assertDesignJobCanCancel(job: any, durableExecution: any = null) {
     const status = String(job?.status || "");
+    const executionStatus = String(durableExecution?.status || "");
+    const generationStarted = durableExecution
+      ? !["prepared", "cancelled"].includes(executionStatus)
+      : Boolean(job?.externalJobId || ["submitted", "generating"].includes(status));
+    if (this.usesDurableArtImageExecutions() && generationStarted) {
+      throw new ConflictException({
+        code: "DESIGN_GENERATION_ALREADY_STARTED",
+        message: "臻希 AI 任务发起后即进入计费且无法取消；请等待结果，禁止再次提交或自动重试。",
+        designJobId: job?.id,
+        externalJobId: job?.externalJobId || null,
+      });
+    }
     const label = this.designJobTerminalStatusLabel(status);
     if (!label) return;
     throw new BadRequestException(`design job cannot be cancelled: ${label}`);
@@ -2619,13 +2981,11 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   private minimumRequiredInitialImageCount(job: any) {
-    const requestedCount = Number(job.outputCount || appConfig.defaultOutputCount || 6);
-    if (!Number.isFinite(requestedCount) || requestedCount <= 0) return 4;
-    return Math.min(Math.max(Math.trunc(requestedCount), 1), 4);
+    return CUSTOMER_DESIGN_CANDIDATE_COUNT;
   }
 
   private minimumRequiredLocalImageCount(job: any) {
-    return this.isInitialDesignResult(job) ? this.minimumRequiredInitialImageCount(job) : 1;
+    return this.minimumRequiredInitialImageCount(job);
   }
 
   private normalizeCallbackImages(images: any[]) {
@@ -2668,7 +3028,13 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
   async quickConfirmAndQueueSend(
     id: string,
-    options: { operationKey?: string; releaseManualLock?: boolean; reviewer?: string; releaseReason?: string } & ExpectedIdentityPayload = {},
+    options: {
+      operationKey?: string;
+      releaseManualLock?: boolean;
+      reviewer?: string;
+      releaseReason?: string;
+      visualQcClaimToken?: symbol;
+    } & ExpectedIdentityPayload = {},
   ) {
     const job = appConfig.useLocalStore
       ? this.localStore.getDesignJob(id)
@@ -2708,12 +3074,29 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         `design job has ${missingLocalImages.length} candidate images without local files; poll results again or retry generation before sending`,
       );
     }
+    if (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) {
+      await this.notifications.create(
+        "warning",
+        "候选图数量不完整",
+        `当前轮次只有 ${images.length} 张可发送候选图，客服设计 SOP 要求每轮固定 ${CUSTOMER_DESIGN_CANDIDATE_COUNT} 张。`,
+        {
+          designJobId: job.id,
+          requestId: job.requestId,
+          candidateCount: images.length,
+          requiredCandidateCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+        },
+      );
+      throw new BadRequestException(
+        `design job must have exactly ${CUSTOMER_DESIGN_CANDIDATE_COUNT} candidate images before sending; received ${images.length}`,
+      );
+    }
     const imagePaths = images.map((image) => image.localPath).filter(Boolean) as string[];
     if (!options.releaseManualLock) {
       const decision = evaluateLowValueDesignImageSend({ ...job, images }, { highValueAmountCny: appConfig.highValueAmountCny });
       if (!decision.ok) {
         throw new BadRequestException(`design image send is not allowed without manual approval: ${decision.reason}`);
       }
+      await this.assertCustomerCreativeVisualQc(job, imagePaths, options.visualQcClaimToken);
     }
 
     if (options.releaseManualLock) {
@@ -2738,7 +3121,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         customerId: job.customerId,
         designJobId: job.id,
         imagePaths,
-        textBeforeImages: "我先把几版礼盒效果图发您，您可以直接引用喜欢的那张告诉我。",
+        textBeforeImages: designImageDeliveryText(job),
         automation: {
           source: "low_value_design_image_send",
           valueLevel: "low",
@@ -2746,7 +3129,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         },
       });
       if (appConfig.useLocalStore) this.localStore.updateDesignJob(id, { status: "sent", sendTaskId: sendTask.id });
-      else await this.prisma.designJob.update({ where: { id }, data: { status: "sent", sendTaskId: sendTask.id } as any });
+      else await this.prisma.designJob.update({ where: { id }, data: { status: "sent" } });
       if (options.releaseManualLock) {
         await this.createReviewLog({
           targetType: "design_job",
@@ -3069,6 +3452,15 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
         designJobId: job.id,
         text,
         reason,
+        ...(!job.isHighValue && !isHighValueBudget(job.budget, appConfig.highValueAmountCny)
+          ? {
+              automation: {
+                source: String(reason || "design-message").replace(/-/g, "_"),
+                valueLevel: "low",
+                queuedBy: "customer_tool_automation",
+              },
+            }
+          : {}),
       });
     } catch (error) {
       if (await this.isConversationManualLocked(job.conversationId)) {
@@ -3466,7 +3858,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           requestId: job.requestId,
           designType: job.designType,
           renderStyle: job.renderStyle,
-          outputCount: job.outputCount,
+          outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
           budget: job.budget,
           bundle: job.bundle,
           requirements: job.requirements,
@@ -3636,8 +4028,12 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
 
   private async completeDesignSubmitEffects(job: any, operation: RequestOperationMetadata) {
     const latest = await this.loadDesignJobWithAssets(job.id);
-    if (latest.wechatAccountId) {
-      const waitMessage = buildWaitingMessage({ scene: latest.scene || "", outputCount: latest.outputCount });
+    const customerAgent = isPlainObject(latest.requirements?.customerAgent) ? latest.requirements.customerAgent : {};
+    if (latest.wechatAccountId && customerAgent.suppressWaitingMessage !== true) {
+      const waitMessage = buildWaitingMessage({
+        scene: latest.scene || "",
+        outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+      });
       await this.queueDesignTextMessage(
         latest,
         waitMessage,
@@ -3736,6 +4132,409 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     return error instanceof Error ? error.message : "unknown design platform error";
   }
 
+  async forwardExistingImages(
+    id: string,
+    payload: ForwardExistingDesignImagesPayload & { reviewer?: string },
+  ) {
+    const operationKey = normalizeOperationKey(payload?.operationKey, "operationKey");
+    const requiredIdentity = [
+      "expectedWechatAccountId",
+      "expectedConversationId",
+      "expectedCustomerId",
+      "targetWechatAccountId",
+      "targetConversationId",
+      "targetCustomerId",
+    ] as const;
+    const missingIdentity = requiredIdentity.filter((key) => !String(payload?.[key] || "").trim());
+    if (missingIdentity.length) {
+      throw new BadRequestException(`forward existing images requires complete identity: ${missingIdentity.join(", ")}`);
+    }
+
+    return this.runExternalOperationOnce(`forward-existing-images:${operationKey}`, async () => {
+      const sourceJob = appConfig.useLocalStore
+        ? this.localStore.getDesignJob(id)
+        : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
+      if (!sourceJob) throw new NotFoundException(`design job not found: ${id}`);
+      assertExpectedIdentity(sourceJob, payload, "source design job");
+      this.assertDesignJobHasCompleteSendIdentity(sourceJob);
+
+      const targetConversation = appConfig.useLocalStore
+        ? this.localStore.listConversations().find((item: any) => item.id === payload.targetConversationId) || null
+        : await this.prisma.conversation.findUnique({
+            where: { id: payload.targetConversationId },
+            select: { id: true, customerId: true, wechatAccountId: true },
+          });
+      if (!targetConversation) {
+        throw new NotFoundException(`target conversation not found: ${payload.targetConversationId}`);
+      }
+      assertExpectedIdentity(
+        { ...targetConversation, conversationId: targetConversation.id },
+        {
+          expectedWechatAccountId: payload.targetWechatAccountId,
+          expectedConversationId: payload.targetConversationId,
+          expectedCustomerId: payload.targetCustomerId,
+        },
+        "target conversation",
+      );
+      if (String(sourceJob.customerId) !== String(payload.targetCustomerId)) {
+        throw new BadRequestException("existing design images may only be forwarded to another conversation for the same customer");
+      }
+
+      const sourceImages = latestCandidateRound(
+        [...((sourceJob.images || []) as DesignImageCandidateLike[])].sort((a, b) => a.position - b.position),
+      ).sort((a: DesignImageCandidateLike, b: DesignImageCandidateLike) => a.position - b.position);
+      if (sourceImages.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) {
+        throw new BadRequestException(
+          `source design job must have exactly ${CUSTOMER_DESIGN_CANDIDATE_COUNT} current candidate images; received ${sourceImages.length}`,
+        );
+      }
+      if (sourceImages.some((image: DesignImageCandidateLike) => !String(image.localPath || "").trim())) {
+        throw new BadRequestException("source design job contains candidate images without local files");
+      }
+
+      const preparedSources = [] as Array<{
+        source: DesignImageCandidateLike;
+        bytes: Buffer;
+        sha256: string;
+        fingerprint: string;
+        format: "jpeg" | "png";
+        width: number;
+        height: number;
+      }>;
+      for (const image of sourceImages) {
+        const bytes = await readBoundedRegularFile(String(image.localPath), MAX_IMAGE_FINGERPRINT_BYTES);
+        const fingerprint = await fingerprintImageBytes(bytes);
+        preparedSources.push({
+          source: image,
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          ...fingerprint,
+        });
+      }
+
+      const operation = requestOperationMetadata(
+        operationKey,
+        createOperationFingerprint(
+          "design-forward-existing-images",
+          {
+            sourceDesignJobId: sourceJob.id,
+            sourceWechatAccountId: sourceJob.wechatAccountId,
+            sourceConversationId: sourceJob.conversationId,
+            customerId: sourceJob.customerId,
+            targetWechatAccountId: payload.targetWechatAccountId,
+            targetConversationId: payload.targetConversationId,
+          },
+          { images: preparedSources.map((item) => ({ position: item.source.position, sha256: item.sha256 })) },
+        ),
+      );
+      const forwardedRequestId = deterministicOperationId("design_forward", operation.key);
+      const destinationDirectory = path.join(
+        appConfig.localStorageRoot,
+        "design-jobs",
+        "forwarded",
+        createHash("sha256").update(operation.key).digest("hex").slice(0, 24),
+      );
+      await fs.mkdir(destinationDirectory, { recursive: true });
+      const copiedImages = [] as Array<Record<string, unknown>>;
+      for (const [index, item] of preparedSources.entries()) {
+        const extension = item.format === "jpeg" ? ".jpg" : ".png";
+        const localPath = path.join(destinationDirectory, `candidate_${index + 1}${extension}`);
+        try {
+          await fs.writeFile(localPath, item.bytes, { flag: "wx" });
+        } catch (error) {
+          if (!isNodeErrorCode(error, "EEXIST")) throw error;
+          const existingBytes = await readBoundedRegularFile(localPath, MAX_IMAGE_FINGERPRINT_BYTES);
+          const existingSha256 = createHash("sha256").update(existingBytes).digest("hex");
+          if (existingSha256 !== item.sha256) {
+            throw new ConflictException("forwarded image destination already exists with different content");
+          }
+        }
+        copiedImages.push({
+          id: deterministicOperationId("image", operation.key, index + 1),
+          imageId: `forwarded_candidate_${index + 1}`,
+          position: index + 1,
+          localPath,
+          downloadUrl: null,
+          width: item.width,
+          height: item.height,
+          fingerprint: item.fingerprint,
+          legacyIdentityHash: item.sha256,
+          selected: false,
+        });
+      }
+
+      const sourceRequirements = isPlainObject(sourceJob.requirements) ? sourceJob.requirements : {};
+      const requirements = {
+        ...(isPlainObject(sourceRequirements.customerAgent)
+          ? { customerAgent: sourceRequirements.customerAgent }
+          : {}),
+        requestOperation: operation,
+        forwardedExistingImages: {
+          sourceDesignJobId: sourceJob.id,
+          sourceRequestId: sourceJob.requestId,
+          sourceWechatAccountId: sourceJob.wechatAccountId,
+          sourceConversationId: sourceJob.conversationId,
+          targetWechatAccountId: payload.targetWechatAccountId,
+          targetConversationId: payload.targetConversationId,
+          sameCustomerValidated: true,
+          regenerated: false,
+          imageSha256: preparedSources.map((item) => item.sha256),
+        },
+      };
+
+      let forwardedJob: any;
+      if (appConfig.useLocalStore) {
+        forwardedJob = this.localStore.createDesignJob({
+          requestId: forwardedRequestId,
+          customerId: payload.targetCustomerId,
+          conversationId: payload.targetConversationId,
+          wechatAccountId: payload.targetWechatAccountId,
+          budget: sourceJob.budget || {},
+          bundle: sourceJob.bundle || {},
+          scene: sourceJob.scene || "",
+          customerText: sourceJob.customerText || "",
+          designType: sourceJob.designType || "bundle_render",
+          outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+          renderStyle: sourceJob.renderStyle || "",
+          requirements,
+          isHighValue: Boolean(sourceJob.isHighValue),
+          status: "quick_confirm",
+          manualQcRequired: true,
+        });
+        assertExactOperationReplay(readRequestOperationMetadata(forwardedJob.requirements), operation, "forwarded design job");
+        this.localStore.upsertDesignImages(forwardedJob.id, copiedImages);
+        if (!["sent", "customer_selected", "quote_created"].includes(String(forwardedJob.status || ""))) {
+          forwardedJob = this.localStore.updateDesignJob(forwardedJob.id, {
+            status: "quick_confirm",
+            completedAt: forwardedJob.completedAt || new Date().toISOString(),
+          });
+        } else {
+          forwardedJob = this.localStore.getDesignJob(forwardedJob.id);
+        }
+      } else {
+        const prisma = this.prisma as any;
+        const existing = await prisma.designJob.findUnique({
+          where: { requestId: forwardedRequestId },
+          include: { images: true },
+        });
+        if (existing) {
+          assertExactOperationReplay(readRequestOperationMetadata(existing.requirements), operation, "forwarded design job");
+          assertExpectedIdentity(existing, {
+            expectedWechatAccountId: payload.targetWechatAccountId,
+            expectedConversationId: payload.targetConversationId,
+            expectedCustomerId: payload.targetCustomerId,
+          }, "forwarded design job");
+          forwardedJob = existing;
+        } else {
+          try {
+            forwardedJob = await prisma.designJob.create({
+              data: {
+                id: deterministicOperationId("design", operation.key),
+                requestId: forwardedRequestId,
+                customerId: payload.targetCustomerId,
+                conversationId: payload.targetConversationId,
+                wechatAccountId: payload.targetWechatAccountId,
+                budget: sourceJob.budget || {},
+                bundle: sourceJob.bundle || {},
+                requirements,
+                customerText: sourceJob.customerText || "",
+                scene: sourceJob.scene || "",
+                designType: sourceJob.designType || "bundle_render",
+                renderStyle: sourceJob.renderStyle || "",
+                outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+                isHighValue: Boolean(sourceJob.isHighValue),
+                manualQcRequired: true,
+                status: "quick_confirm",
+                completedAt: new Date(),
+                images: {
+                  create: copiedImages.map(({ id: imageId, ...image }) => ({ ...image, id: imageId })),
+                },
+              },
+              include: { images: true },
+            });
+          } catch (error) {
+            if (!isUniqueConstraintError(error)) throw error;
+            forwardedJob = await prisma.designJob.findUnique({
+              where: { requestId: forwardedRequestId },
+              include: { images: true },
+            });
+            if (!forwardedJob) throw error;
+            assertExactOperationReplay(readRequestOperationMetadata(forwardedJob.requirements), operation, "forwarded design job");
+          }
+        }
+      }
+
+      const sendTask = await this.quickConfirmAndQueueSend(forwardedJob.id, {
+        operationKey: stableOperationKey("design-forward-send", operation.key),
+        expectedWechatAccountId: payload.targetWechatAccountId,
+        expectedConversationId: payload.targetConversationId,
+        expectedCustomerId: payload.targetCustomerId,
+        releaseManualLock: true,
+        reviewer: payload.reviewer || "manual operator",
+        releaseReason: "manual_forward_existing_images",
+      });
+      return {
+        sourceDesignJobId: sourceJob.id,
+        forwardedDesignJobId: forwardedJob.id,
+        targetWechatAccountId: payload.targetWechatAccountId,
+        targetConversationId: payload.targetConversationId,
+        customerId: payload.targetCustomerId,
+        imageCount: copiedImages.length,
+        regenerated: false,
+        sendTask,
+      };
+    });
+  }
+
+  async retryCustomerCreativeVisualQc(
+    id: string,
+    options: { operationKey?: string; reviewer?: string } & ExpectedIdentityPayload = {},
+  ) {
+    const job = appConfig.useLocalStore
+      ? this.localStore.getDesignJob(id)
+      : await this.prisma.designJob.findUnique({ where: { id }, include: { images: true } });
+    if (!job) throw new NotFoundException(`design job not found: ${id}`);
+    assertExpectedIdentity(job, options, "design job");
+    if (!["manual_review", "quick_confirm"].includes(String(job.status || ""))) {
+      throw new BadRequestException("visual QC retry requires a manual_review or quick_confirm design job");
+    }
+    if (job.isHighValue) throw new BadRequestException("high-value design jobs require manual approval");
+    const requirements = job.requirements && typeof job.requirements === "object" ? job.requirements : {};
+    if (!requirements.customerAgent) throw new BadRequestException("design job is not a customer creative visual task");
+    const images = latestCandidateRound([...(job.images || [])]).sort((a: any, b: any) => a.position - b.position);
+    if (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT || images.some((image: any) => !image.localPath)) {
+      throw new BadRequestException(`visual QC retry requires exactly ${CUSTOMER_DESIGN_CANDIDATE_COUNT} local images`);
+    }
+    const operationKey = options.operationKey
+      ? normalizeOperationKey(options.operationKey, "operationKey")
+      : stableOperationKey("design-visual-qc-retry", job.id);
+    if (this.activeCustomerCreativeVisualQc.has(job.id)) {
+      throw new ConflictException("customer creative visual QC is already processing");
+    }
+    this.activeCustomerCreativeVisualQc.add(job.id);
+    try {
+      await this.wechatDispatch.setConversationManualLock(job.conversationId, {
+        effectKey: `${operationKey}:manual-unlock`,
+        expectedWechatAccountId: job.wechatAccountId,
+        expectedConversationId: job.conversationId,
+        expectedCustomerId: job.customerId,
+        locked: false,
+        reviewer: options.reviewer || "local_admin",
+        reason: "manual_retry_creative_visual_qc",
+        note: "已修复多模态质检链路，仅重新质检现有图片，不重新调用出图模型。",
+      });
+      if (appConfig.useLocalStore) this.localStore.updateDesignJob(job.id, { status: "quick_confirm", errorMessage: "" });
+      else await this.prisma.designJob.update({ where: { id: job.id }, data: { status: "quick_confirm", errorMessage: "" } });
+      return await this.quickConfirmAndQueueSend(job.id, {
+        operationKey,
+        expectedWechatAccountId: job.wechatAccountId,
+        expectedConversationId: job.conversationId,
+        expectedCustomerId: job.customerId,
+        releaseManualLock: false,
+        visualQcClaimToken: this.customerCreativeVisualQcClaimToken,
+      });
+    } finally {
+      this.activeCustomerCreativeVisualQc.delete(job.id);
+    }
+  }
+
+  private async assertCustomerCreativeVisualQc(job: any, imagePaths: string[], claimToken?: symbol) {
+    const requirements = job?.requirements && typeof job.requirements === "object" ? job.requirements : {};
+    const customerAgent = requirements.customerAgent && typeof requirements.customerAgent === "object"
+      ? requirements.customerAgent
+      : null;
+    if (!customerAgent) return;
+    const label = String(customerAgent.deliverableLabel || customerAgent.deliverable || "客户设计物料").trim();
+    const zhenxi = requirements.zhenxi && typeof requirements.zhenxi === "object" ? requirements.zhenxi : {};
+    const expectedCopy = String(zhenxi.copyText || "").trim();
+    const visualContentMode = String(zhenxi.visualContentMode || "").trim();
+    const exactCopyOnly = zhenxi.exactCopyOnly === true;
+    const forbidInventedProducts = zhenxi.forbidInventedProducts !== false;
+    if (!this.aiProviders) {
+      await this.handoffDesignJobToManual(job, {
+        reason: "creative_visual_qc_unavailable",
+        source: "customer_tool_agent_visual_qc",
+        note: `${label}生成完成，但多模态质检服务不可用，已阻止自动发送。`,
+        title: "客户设计物料待人工质检",
+      });
+      throw new BadRequestException("customer creative visual QC is unavailable; automatic send is blocked");
+    }
+
+    const ownsExistingClaim = claimToken === this.customerCreativeVisualQcClaimToken;
+    if (this.activeCustomerCreativeVisualQc.has(job.id) && !ownsExistingClaim) {
+      throw new ConflictException("customer creative visual QC is already processing");
+    }
+    if (!ownsExistingClaim) this.activeCustomerCreativeVisualQc.add(job.id);
+    try {
+      const images = await Promise.all(imagePaths.map(async (filePath) => {
+        const source = await fs.readFile(filePath);
+        const bytes = await sharp(source, {
+          failOn: "warning",
+          limitInputPixels: MAX_IMAGE_DECODE_PIXELS,
+          sequentialRead: true,
+        })
+          .rotate()
+          .flatten({ background: { r: 255, g: 255, b: 255 } })
+          .resize(768, 768, { fit: "inside", withoutEnlargement: true, kernel: sharp.kernel.lanczos3 })
+          .jpeg({ quality: 82, progressive: true, chromaSubsampling: "4:4:4" })
+          .toBuffer();
+        return { bytes, mimeType: "image/jpeg" as const };
+      }));
+      const response = await this.aiProviders.understandImages({
+        images,
+        prompt: [
+          "你是印刷设计交付前的严格质检员。检查全部候选图，必须只返回 JSON，不要 Markdown。",
+          `客户只要求的物料：${label}。不得混入其他未要求物料。`,
+          expectedCopy ? `客户要求原样出现的文字：${expectedCopy}。逐字检查简繁体、标点、错字和乱码。` : "客户没有指定必须出现的文案，不得虚构品牌或错误文字。",
+          expectedCopy ? "指定中文必须是结构正确、清楚可读的标准字形；偏旁、笔画、字形被艺术化到易误读也判不合格。" : "",
+          exactCopyOnly ? "画面只能出现指定文案；任何额外汉字、英文、数字、占位文字或伪文字都判不合格。" : "",
+          String(zhenxi.logoMode || "") === "none" ? "客户明确不要 Logo，图中不得自行增加品牌 Logo。" : "如图中有 Logo，检查其清晰度、完整性和是否被重绘变形。",
+          visualContentMode === "graphic_only"
+            ? "这是纯平面视觉，出现商品、礼盒、包装、杯子、雨伞、毛巾、文具或其他实物即不合格。"
+            : "",
+          visualContentMode === "real_product"
+            ? "这是真实商品展示，商品外观、颜色、数量和包装关系必须与参考素材及商品清单一致。"
+            : "",
+          forbidInventedProducts && visualContentMode !== "real_product" ? "没有获准展示商品，不得擅自补画商品或包装。" : "",
+          "还要逐张检查图像破损、明显拼接错误、商品畸变、文字超出安全区、主体被裁切、手机缩略图不可读，以及只有通用占位背景而不具备商业交付价值。",
+          "四张候选图必须全部符合要求；问题中要注明第几张，任意一张不合格则整体不通过。",
+          '返回格式：{"pass":true或false,"issues":["具体问题"],"checkedCount":数字}。任意一张不合格，pass 必须为 false。',
+        ].join("\n"),
+      });
+      const result = parseCustomerCreativeVisualQc(response.text);
+      if (!result.pass || result.checkedCount !== imagePaths.length) {
+        const issues = result.issues.length ? result.issues.join("；") : "多模态质检未确认全部候选图合格";
+        await this.handoffDesignJobToManual(job, {
+          reason: "creative_visual_qc_failed",
+          source: "customer_tool_agent_visual_qc",
+          note: `${label}自动质检未通过：${issues}`,
+          title: "客户设计物料质检未通过",
+        });
+        throw new BadRequestException(`customer creative visual QC failed: ${issues}`);
+      }
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      await this.handoffDesignJobToManual(job, {
+        reason: "creative_visual_qc_unavailable",
+        source: "customer_tool_agent_visual_qc",
+        note: `${label}多模态质检未能完成：${error instanceof Error ? error.message : "unknown error"}`,
+        title: "客户设计物料待人工质检",
+      });
+      throw new BadRequestException("customer creative visual QC could not be completed; automatic send is blocked");
+    } finally {
+      if (!ownsExistingClaim) this.activeCustomerCreativeVisualQc.delete(job.id);
+    }
+  }
+
+  private safeLogUrl(value: unknown) {
+    try {
+      const url = new URL(String(value || ""));
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return String(value || "").slice(0, 120);
+    }
+  }
+
   private async buildDesignPlatformPayload(
     job: any,
     revision?: DesignRevisionLike | null,
@@ -3761,7 +4560,8 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       scene: job.scene,
       bundle: job.bundle as Record<string, unknown>,
       assets,
-      outputCount: job.outputCount,
+      designType: job.designType,
+      outputCount: Number(job.outputCount || CUSTOMER_DESIGN_CANDIDATE_COUNT),
       renderStyle: job.renderStyle,
       requirements: job.requirements as Record<string, unknown>,
       customerText: job.customerText,
@@ -3930,6 +4730,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
           assetId: asset.id,
           remoteAssetId: remote.assetId || remote.remoteAssetId || remote.id || remote.url,
           url: remote.url,
+          localPath: remote.localPath || asset.localPath,
           fileName: asset.fileName,
           mimeType: asset.mimeType,
           role: asset.role || "reference",
@@ -4104,7 +4905,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
       scene: payload.scene || "",
       customerText: payload.customerText || "",
       designType: payload.designType || "bundle_render",
-      outputCount: payload.outputCount || appConfig.defaultOutputCount,
+      outputCount: CUSTOMER_DESIGN_CANDIDATE_COUNT,
     };
   }
 
@@ -4375,7 +5176,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   private usesDurableArtImageExecutions() {
-    return Boolean(this.designPlatform.isArtImageLocalAdapter?.());
+    return Boolean(
+      this.designPlatform.isDurableGenerationAdapter?.() ||
+      this.designPlatform.isArtImageLocalAdapter?.(),
+    );
   }
 
   private async beginDurableArtImageExecution(
@@ -4390,6 +5194,7 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     const begun = await this.platformExecutions!.begin({
       designJobId: job.id,
       designRevisionId: revision?.id || null,
+      adapter: appConfig.designPlatformAdapter,
       attemptNo,
       ...(retryCount !== undefined ? { retryCount } : {}),
       ...(revisionRetryCount !== undefined ? { revisionRetryCount } : {}),
@@ -4423,7 +5228,10 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
     if (!generating) return;
     let outcome: any;
     try {
-      outcome = await this.designPlatform.executeArtImageLocalGeneration(payload, execution.externalJobId);
+      const executeDurable = this.designPlatform.executeDurableGeneration?.bind(this.designPlatform);
+      outcome = executeDurable
+        ? await executeDurable(payload, execution.externalJobId)
+        : await this.designPlatform.executeArtImageLocalGeneration(payload, execution.externalJobId);
     } catch (error) {
       outcome = {
         status: "outcome_unknown",
@@ -4604,14 +5412,11 @@ export class DesignJobsService implements OnApplicationBootstrap, OnModuleDestro
   }
 
   private async designCallbackAllowsAutomaticRetry(payload: DesignPlatformCallbackPayload) {
-    if (!this.usesDurableArtImageExecutions()) return true;
-    if (payload.status !== "failed" || !payload.externalJobId) return false;
-    const execution = await this.platformExecutions!.get(payload.externalJobId);
-    return Boolean(
-      execution &&
-      execution.status === "explicit_failed" &&
-      ["refunded", "not_required", "credit_bypass"].includes(execution.refundStatus),
-    );
+    void payload;
+    // Zhenxi requests are billed when dispatch starts and cannot be cancelled. A second
+    // model call must therefore require an explicit human retry, even after a known failure.
+    if (this.usesDurableArtImageExecutions()) return false;
+    return true;
   }
 
   private async findDesignJobForExecution(designJobId: string) {
@@ -4734,6 +5539,44 @@ function formatAuthSessionUser(auth: { user?: unknown; profile?: unknown }) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNodeErrorCode(error: unknown, code: string) {
+  return Boolean(error && typeof error === "object" && (error as { code?: unknown }).code === code);
+}
+
+function designImageDeliveryText(job: any) {
+  const requirements = isPlainObject(job?.requirements) ? job.requirements : {};
+  const customerAgent = isPlainObject(requirements.customerAgent) ? requirements.customerAgent : {};
+  const label = String(customerAgent.deliverableLabel || "").trim();
+  if (label) return `我把${label}的 4 版效果发您了，您直接回复喜欢第几张，或者告诉我想改哪里。`;
+  return "我先把几版礼盒效果图发您，您可以直接引用喜欢的那张告诉我。";
+}
+
+function parseCustomerCreativeVisualQc(value: unknown) {
+  const text = String(value || "").trim();
+  const jsonText = text.match(/\{[\s\S]*\}/)?.[0] || "";
+  try {
+    const parsed = JSON.parse(jsonText);
+    return {
+      pass: parsed?.pass === true,
+      checkedCount: Number.isFinite(Number(parsed?.checkedCount)) ? Number(parsed.checkedCount) : 0,
+      issues: (Array.isArray(parsed?.issues) ? parsed.issues : [])
+        .map((item: unknown) => String(item || "").trim())
+        .filter(Boolean)
+        .slice(0, 20),
+    };
+  } catch {
+    return { pass: false, checkedCount: 0, issues: ["质检模型未返回有效 JSON 结果"] };
+  }
+}
+
+function normalizeZhenxiCopyModule(value: unknown): "poster_copy" | "xiaohongshu" | "detail_page" | "video_script" {
+  const module = String(value || "");
+  if (["xiaohongshu", "detail_page", "video_script"].includes(module)) {
+    return module as "xiaohongshu" | "detail_page" | "video_script";
+  }
+  return "poster_copy";
 }
 
 function sanitizePersistedImageUrl(value: unknown) {

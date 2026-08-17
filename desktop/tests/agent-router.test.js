@@ -3,7 +3,57 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { evaluateAgentRoute, findPendingSceneClarificationContext } = require("../packages/rules");
+const {
+  evaluateAgentRoute,
+  findPendingFieldQuestionContext,
+  findPendingSceneClarificationContext,
+} = require("../packages/rules");
+
+test("routes basic customer service questions to direct low-risk answers", () => {
+  const cases = [
+    ["你是谁？", "identity", /我是小石/],
+    ["你可以做什么？", "capabilities", /商品和礼盒推荐/],
+    ["你背后是什么模型？", "model", /AI 模型/],
+    ["这个客服怎么用？", "usage", /直接描述需求/],
+    ["你好", "greeting", /在的，您说/],
+    ["[微笑]", "greeting", /在的，您说/],
+    ["你只会说这一句吗？", "repetition_feedback", /太像模板/],
+    ["不要每次都回一样的话好吗", "repetition_feedback", /太像模板/],
+    ["客服回复太机械了，没有人味", "repetition_feedback", /按前面的内容往下聊/],
+    ["现在的对话消息很假", "repetition_feedback", /太像模板/],
+  ];
+
+  for (const [text, intent, answerPattern] of cases) {
+    const result = evaluateAgentRoute({ text });
+    assert.equal(result.agentKey, "general", text);
+    assert.equal(result.scene, "通用问答", text);
+    assert.equal(result.basicIntent, intent, text);
+    assert.equal(result.action, "auto_agent", text);
+    assert.equal(result.routingPolicy.lane, "low_value_agent", text);
+    assert.equal(result.routingPolicy.canQueueAutoReply, true, text);
+    assert.equal(result.manualRequired, false, text);
+    assert.match(result.suggestedReply, answerPattern, text);
+  }
+});
+
+test("routes natural product-style browsing questions into Xiaoshi pre-sales", () => {
+  for (const text of ["都有哪些款式啊", "有哪几款？", "发几个款我看看"]) {
+    const result = evaluateAgentRoute({ text });
+    assert.equal(result.agentKey, "pre_sales", text);
+    assert.equal(result.scene, "售前转化", text);
+    assert.notEqual(result.action, "manual_review", text);
+    assert.ok(result.matchedKeywords.length > 0, text);
+  }
+});
+
+test("keeps sensitive wording on manual review even when it contains a basic question", () => {
+  const result = evaluateAgentRoute({ text: "你是谁？我要投诉并要求赔偿" });
+
+  assert.equal(result.basicIntent, "identity");
+  assert.equal(result.action, "manual_review");
+  assert.equal(result.routingPolicy.lane, "risk_human");
+  assert.equal(result.routingPolicy.canQueueAutoReply, false);
+});
 
 test("routes complete low-value gift design request to gift design agent", () => {
   const result = evaluateAgentRoute({
@@ -56,6 +106,38 @@ test("routes high-value request to manual review", () => {
   assert.equal(result.routingPolicy.safeguards.includes("price_image_and_order_manual_review"), true);
 });
 
+test("keeps weak high-value pre-sales inquiry on deterministic acknowledgement path", () => {
+  const result = evaluateAgentRoute({
+    text: "我想做20份500元的商务礼盒，有什么建议？",
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.status, "weak");
+  assert.equal(result.isHighValue, true);
+  assert.equal(result.action, "manual_review");
+  assert.equal(result.routingPolicy.lane, "high_value_human");
+  assert.equal(result.routingPolicy.manualRequired, true);
+});
+
+test("treats a named companion-gift product complaint as clear pre-sales", () => {
+  const result = evaluateAgentRoute({
+    text: "扩香石这三个不是很好看呢",
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.action, "auto_agent");
+  assert.deepEqual(result.missingFields, []);
+});
+
+test("routes Xiaoshi batch-two price and style phrases to pre-sales", () => {
+  for (const text of ["再便宜点", "这款怎么卖的", "好贵，我再看看吧", "这个笔记本太可爱了", "不定了，班费有点拮据"]) {
+    const result = evaluateAgentRoute({ text });
+    assert.equal(result.agentKey, "pre_sales", text);
+    assert.equal(result.sceneDecision.status, "clear", text);
+  }
+});
+
 test("routes order and payment request to order payment agent", () => {
   const result = evaluateAgentRoute({
     text: "我已经付定金了，订单能不能改地址并开发票",
@@ -76,7 +158,10 @@ test("marks mixed order and after-sales request as ambiguous manual review", () 
   assert.equal(result.sceneDecision.status, "ambiguous");
   assert.equal(result.action, "manual_review");
   assert.equal(result.missingFields.includes("scene_clarification"), true);
-  assert.equal(result.sceneDecision.secondaryScene.agentKey, "after_sales");
+  assert.deepEqual(
+    new Set([result.sceneDecision.topScene.agentKey, result.sceneDecision.secondaryScene.agentKey]),
+    new Set(["order_payment", "after_sales"]),
+  );
   assert.equal(result.sceneClarification.type, "choose_scene");
   assert.match(result.sceneClarification.question, /下单支付/);
   assert.match(result.sceneClarification.question, /售后/);
@@ -123,7 +208,7 @@ test("uses route correction memory for repeated scene routing", () => {
   assert.equal(result.agentKey, "after_sales");
   assert.equal(result.scene, "售后安抚");
   assert.equal(result.sceneDecision.status, "clear");
-  assert.equal(result.sceneDecision.reason, "route_correction_memory");
+  assert.equal(result.sceneDecision.reason, "route_correction_memory_boost");
   assert.equal(result.sceneMemory.applied, true);
   assert.equal(result.sceneMemory.sampleId, "sample_after_sales_memory");
   assert.equal(result.matchedKeywords.includes("route_correction_memory"), true);
@@ -283,8 +368,100 @@ test("resolves ordinal scene option selection", () => {
     clarificationContext: previous,
   });
 
-  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.agentKey, previous.sceneClarification.options[1].agentKey);
   assert.equal(result.sceneDecision.reason, "customer_scene_clarified");
+});
+
+test("resolves a named pre-sales clarification option", () => {
+  const previous = {
+    sceneDecision: { status: "ambiguous" },
+    sceneClarification: {
+      required: true,
+      type: "choose_scene",
+      options: [
+        { agentKey: "pre_sales", scene: "售前转化", label: "售前咨询/商品推荐" },
+        { agentKey: "gift_design", scene: "礼盒设计", label: "礼盒设计/效果图" },
+      ],
+    },
+  };
+  const result = evaluateAgentRoute({
+    text: "售前咨询。",
+    clarificationContext: previous,
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.sceneDecision.reason, "customer_scene_clarified");
+});
+
+test("routes damaged gift boxes to after-sales instead of gift design", () => {
+  const result = evaluateAgentRoute({
+    text: "收到的礼盒破损了，怎么处理？",
+  });
+
+  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.sceneClarification, null);
+});
+
+test("allows a high-value pre-sales catalog reply while keeping the final quote manual", () => {
+  const result = evaluateAgentRoute({
+    text: "我想买100份员工礼盒，每份预算150元，有什么推荐？",
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.isHighValue, true);
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.routingPolicy.lane, "high_value_guided_reply");
+  assert.equal(result.routingPolicy.safeguards.includes("catalog_facts_only"), true);
+  assert.equal(result.routingPolicy.safeguards.includes("final_quote_manual_review"), true);
+});
+
+test("does not mistake an order quantity for a unit price", () => {
+  const result = evaluateAgentRoute({
+    text: "这个礼盒多少钱，100套能优惠吗？",
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.budget.quantity, 100);
+  assert.equal(result.budget.perUnitAmount, null);
+  assert.equal(result.budget.totalAmount, null);
+  assert.equal(result.isHighValue, false);
+});
+
+test("inherits recent gift budget while treating a delivery date as a date", () => {
+  const result = evaluateAgentRoute(
+    { text: "主要送客户，8月30日前，需要 Logo 和贺卡" },
+    {
+      budgetContext: {
+        mode: "per_box",
+        quantity: 20,
+        perUnitAmount: 500,
+        totalAmount: 10000,
+        confidence: "high",
+        sourceAgentKey: "gift_design",
+      },
+    },
+  );
+
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.budget.quantity, 20);
+  assert.equal(result.budget.perUnitAmount, 500);
+  assert.equal(result.budget.totalAmount, 10000);
+  assert.deepEqual(result.missingFields, ["customer_assets"]);
+  assert.equal(result.isHighValue, true);
+});
+
+test("keeps an explicit product combination and stock request in pre-sales", () => {
+  const result = evaluateAgentRoute({
+    text: "我想买100份员工福利礼盒，每份预算150元，请直接推荐商品组合和库存情况。",
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.routingPolicy.lane, "high_value_guided_reply");
 });
 
 test("uses only latest unresolved scene clarification as context", () => {
@@ -312,6 +489,182 @@ test("uses only latest unresolved scene clarification as context", () => {
   assert.equal(findPendingSceneClarificationContext([pending], "conv_1"), pending);
   assert.equal(findPendingSceneClarificationContext([pending, resolved], "conv_1"), null);
   assert.equal(findPendingSceneClarificationContext([pending, clearRoute], "conv_1"), null);
+});
+
+test("treats a terse quantity as the answer to Xiaoshi's previous quantity question", () => {
+  const previous = {
+    id: "route_quantity_question",
+    conversationId: "conv_followup",
+    createdAt: "2026-08-15T09:00:00.000Z",
+    agentKey: "pre_sales",
+    scene: "售前咨询",
+    action: "auto_agent",
+    riskFlags: [],
+    suggestedReply: "款式挺多的，我先按数量给您筛，您大概需要多少份呀？",
+  };
+  const followupContext = findPendingFieldQuestionContext([previous], "conv_followup");
+  const result = evaluateAgentRoute({ text: "10份呀", followupContext });
+
+  assert.equal(followupContext.requestedField, "quantity");
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.reason, "customer_field_answered");
+  assert.equal(result.followupResolution.requestedField, "quantity");
+  assert.equal(result.budget.quantity, 10);
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.sceneClarification, null);
+});
+
+test("does not let a pending sales question override a clear after-sales request", () => {
+  const result = evaluateAgentRoute({
+    text: "我要退款，订单里的礼盒破损了",
+    followupContext: {
+      requestedField: "quantity",
+      agentKey: "pre_sales",
+      scene: "售前咨询",
+      question: "您要多少份呀",
+    },
+  });
+
+  assert.equal(result.agentKey, "after_sales");
+  assert.equal(result.followupResolution, null);
+});
+
+test("keeps a quantity correction in the sales conversation even when Xiaoshi had asked for budget", () => {
+  const result = evaluateAgentRoute({
+    text: "12份呀",
+    followupContext: {
+      requestedField: "budget",
+      agentKey: "pre_sales",
+      scene: "售前转化",
+      question: "10份收到，咱单份预算大概多少呢？",
+    },
+    budgetContext: {
+      sourceAgentKey: "pre_sales",
+      quantity: 10,
+    },
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.reason, "customer_field_answered");
+  assert.equal(result.followupResolution.expectedField, "budget");
+  assert.equal(result.followupResolution.requestedField, "quantity");
+  assert.equal(result.budget.quantity, 12);
+});
+
+test("recognizes Xiaoshi's natural alternative wording as a pending budget question", () => {
+  const previous = {
+    id: "route_natural_budget_question",
+    conversationId: "conv_natural_budget",
+    createdAt: new Date().toISOString(),
+    agentKey: "pre_sales",
+    scene: "售前咨询",
+    action: "auto_agent",
+    riskFlags: [],
+    suggestedReply: "12份记下了，咱单份大概想控制在多少钱呢？",
+  };
+
+  const context = findPendingFieldQuestionContext([previous], "conv_natural_budget");
+  assert.equal(context.requestedField, "budget");
+});
+
+test("inherits quantity when the customer answers Xiaoshi's natural budget question", () => {
+  const result = evaluateAgentRoute({
+    text: "单份20元左右",
+    followupContext: {
+      requestedField: "budget",
+      agentKey: "pre_sales",
+      scene: "售前咨询",
+      question: "12份记下了，咱单份大概想控制在多少钱呢？",
+    },
+    budgetContext: { sourceAgentKey: "pre_sales", quantity: 12 },
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.reason, "customer_field_answered");
+  assert.equal(result.budget.quantity, 12);
+  assert.equal(result.budget.perUnitAmount, 20);
+  assert.equal(result.salesContext.currentField, "budget");
+});
+
+test("keeps usage and style answers in the same sales context", () => {
+  const usage = evaluateAgentRoute(
+    { text: "教师节送老师" },
+    { budgetContext: { sourceAgentKey: "pre_sales", quantity: 12, perUnitAmount: 20 } },
+  );
+  assert.equal(usage.agentKey, "pre_sales");
+  assert.equal(usage.salesContext.usageScene, "教师节送老师");
+  assert.equal(usage.salesContext.currentField, "usage_scene");
+
+  const style = evaluateAgentRoute({
+    text: "实用一点",
+    followupContext: {
+      requestedField: "style_preference",
+      agentKey: "pre_sales",
+      scene: "售前咨询",
+      question: "咱偏实用还是氛围感一点？",
+    },
+  }, {
+    budgetContext: { sourceAgentKey: "pre_sales", quantity: 12, perUnitAmount: 20 },
+    salesContext: usage.salesContext,
+  });
+  assert.equal(style.agentKey, "pre_sales");
+  assert.equal(style.sceneDecision.reason, "customer_field_answered");
+  assert.equal(style.salesContext.usageScene, "教师节送老师");
+  assert.equal(style.salesContext.stylePreference, "实用");
+  assert.equal(style.salesContext.currentField, "style_preference");
+});
+
+test("starts a fresh requirement when the customer changes the usage scene", () => {
+  const result = evaluateAgentRoute({
+    text: "另外中秋送客户呢",
+  }, {
+    budgetContext: { sourceAgentKey: "pre_sales", quantity: 12, perUnitAmount: 20 },
+    salesContext: { usageScene: "教师节送老师", stylePreference: "实用" },
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.salesContext.usageScene, "中秋送客户");
+  assert.equal(result.salesContext.stylePreference, null);
+  assert.equal(result.salesContext.contextReset, "usage_scene_changed");
+  assert.equal(Number(result.budget.quantity || 0), 0);
+  assert.equal(Number(result.budget.perUnitAmount || 0), 0);
+});
+
+test("keeps explicitly supplied quantity and budget when changing usage scene", () => {
+  const result = evaluateAgentRoute({
+    text: "另外中秋送客户，还是30份，单份25元",
+  }, {
+    budgetContext: { sourceAgentKey: "pre_sales", quantity: 12, perUnitAmount: 20 },
+    salesContext: { usageScene: "教师节送老师", stylePreference: "实用" },
+  });
+
+  assert.equal(result.salesContext.usageScene, "中秋送客户");
+  assert.equal(result.salesContext.stylePreference, null);
+  assert.equal(result.salesContext.contextReset, "usage_scene_changed");
+  assert.equal(result.budget.quantity, 30);
+  assert.equal(result.budget.perUnitAmount, 25);
+});
+
+test("translates a rejected cute style into a positive simple preference", () => {
+  const result = evaluateAgentRoute({ text: "不要这款笔记本，太可爱了" });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.salesContext.stylePreference, "简约");
+  assert.ok(result.salesContext.currentFields.includes("style_preference"));
+});
+
+test("keeps terse alternative-product requests in the active sales conversation", () => {
+  const result = evaluateAgentRoute({ text: "还有别的吗" }, {
+    budgetContext: { sourceAgentKey: "pre_sales", quantity: 12, perUnitAmount: 20 },
+    salesContext: { usageScene: "教师节送老师", stylePreference: "简约" },
+  });
+
+  assert.equal(result.agentKey, "pre_sales");
+  assert.equal(result.sceneDecision.reason, "top_scene_confident");
+  assert.ok(result.matchedKeywords.includes("conversation:sales_followup"));
+  assert.equal(result.salesContext.usageScene, "教师节送老师");
+  assert.equal(result.salesContext.stylePreference, "简约");
+  assert.deepEqual(result.salesContext.currentFields, []);
 });
 
 test("routes logistics exception with tracking info to logistics agent", () => {

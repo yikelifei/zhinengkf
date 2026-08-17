@@ -62,10 +62,14 @@
 .panel p,
 .channelCard p,
 .runtimeCard p,
-.notice p {
+.noticeBody {
   margin: 5px 0 0;
   color: var(--wk-color-text-muted, #667085);
   line-height: 1.55;
+}
+
+.noticeBody p {
+  margin: 0;
 }
 
 .pageActions,
@@ -381,6 +385,7 @@
 }
 
 .checkList,
+.authorizationList,
 .snapshotList,
 .detailList {
   display: grid;
@@ -391,6 +396,7 @@
 }
 
 .checkItem,
+.authorizationList li,
 .snapshotItem,
 .detailRow {
   display: flex;
@@ -402,6 +408,7 @@
 }
 
 .checkItem span,
+.authorizationList li span,
 .snapshotItem span,
 .detailRow span {
   min-width: 0;
@@ -409,6 +416,7 @@
 }
 
 .checkItem small,
+.authorizationList li small,
 .snapshotItem small,
 .detailRow small {
   display: block;
@@ -446,8 +454,253 @@
   color: var(--wk-color-text-muted, #667085);
 }
 
+.planColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.planGroup {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 12px;
+  background: var(--wk-color-surface-subtle, #f8fafc);
+}
+
+.planGroup h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.planGroup ol {
+  display: grid;
+  gap: 9px;
+  padding: 0;
+  margin: 12px 0 0;
+  list-style: none;
+}
+
+.planGroup li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--wk-color-border, #e5e7eb);
+}
+
+.planGroup li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.planGroup li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planGroup li small {
+  display: block;
+  margin-top: 3px;
+  color: var(--wk-color-text-muted, #667085);
+}
+
+.planGroup li em {
+  flex: 0 0 auto;
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .runtimeGrid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.customerEntryGrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.customerEntryNextStep {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  padding: 15px 16px;
+  background: #eff6ff;
+}
+
+.customerEntryNextStep[data-ready="true"] {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.customerEntryNextIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--wk-color-brand, #2457d6);
+  background: var(--wk-color-surface, #fff);
+}
+
+.customerEntryNextStep strong,
+.customerEntryNextStep p {
+  display: block;
+}
+
+.customerEntryNextStep p {
+  margin: 4px 0 0;
+  color: var(--wk-color-text-muted, #667085);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--wk-color-brand, #2457d6);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.primaryActionLink {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 10px;
+  padding: 0 14px;
+  color: #fff;
+  background: var(--wk-color-brand, #2457d6);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.primaryActionLink:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--wk-color-brand, #2457d6) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.customerFlow a {
+  color: var(--wk-color-brand, #2457d6);
+  font-weight: 650;
+}
+
+.qrResult {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.qrCanvas {
+  display: grid;
+  width: fit-content;
+  max-width: 100%;
+  place-items: center;
+  padding: 14px;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.qrCanvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.entryPlaceholder {
+  display: grid;
+  min-height: 330px;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  border: 1px dashed var(--wk-color-border-strong, #cbd5e1);
+  border-radius: 16px;
+  color: var(--wk-color-text-muted, #667085);
+  background: var(--wk-color-surface-subtle, #f8fafc);
+  text-align: center;
+}
+
+.entryPlaceholder strong {
+  color: var(--wk-color-text, #172033);
+}
+
+.customerFlow {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.customerFlow li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.customerFlow li > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--wk-color-brand, #2457d6);
+  font-weight: 750;
+}
+
+.customerFlow strong,
+.customerFlow small {
+  display: block;
+}
+
+.customerFlow small {
+  margin-top: 3px;
+  color: var(--wk-color-text-muted, #667085);
+  line-height: 1.5;
+}
+
+.upgradeReadiness {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.upgradeReadiness[data-ready="true"] {
+  border-color: #bbf7d0;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.upgradeReadiness p {
+  margin: 4px 0 0;
+}
+
+.upgradeReadiness small {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
 .formGrid {
@@ -645,6 +898,10 @@
   .flowList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .customerEntryGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 520px) {
@@ -672,6 +929,7 @@
 
   .summaryGrid,
   .channelGrid,
+  .customerEntryGrid,
   .runtimeGrid,
   .formGrid,
   .snapshotGrid,
@@ -680,12 +938,33 @@
     grid-template-columns: 1fr;
   }
 
+  .customerEntryNextStep {
+    grid-template-columns: 1fr;
+  }
+
+  .primaryActionLink {
+    width: 100%;
+  }
+
+  .planColumns {
+    grid-template-columns: 1fr;
+  }
+
+  .planGroup li {
+    flex-direction: column;
+  }
+
+  .planGroup li em {
+    white-space: normal;
+  }
+
   .fieldWide,
   .checkboxField {
     grid-column: auto;
   }
 
   .checkItem,
+  .authorizationList li,
   .snapshotItem,
   .detailRow {
     align-items: flex-start;

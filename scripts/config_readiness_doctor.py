@@ -256,6 +256,7 @@ def _check_automation_scheduler(env: dict[str, str]) -> dict:
 
 
 def _check_personal_wechat(env: dict[str, str]) -> dict:
+    product_mode = _text(env.get("WECHAT_PRODUCT_MODE")) or "enterprise_wechat_only"
     adapter = _text(env.get("WECHAT_SEND_ADAPTER")) or "dry_run"
     required_flags = (
         "PERSONAL_WECHAT_BRIDGE",
@@ -264,6 +265,22 @@ def _check_personal_wechat(env: dict[str, str]) -> dict:
         "PERSONAL_WECHAT_AUTO_ENTER",
     )
     flags = {name: _explicit_flag(env.get(name)) for name in required_flags}
+    if product_mode != "legacy_personal_wechat":
+        return _component(
+            "personal_wechat_bridge",
+            "Personal WeChat bridge (legacy)",
+            [],
+            {
+                "productMode": product_mode,
+                "productionEnabled": False,
+                "sendAdapter": adapter,
+                "managedStartEnabled": flags["PERSONAL_WECHAT_BRIDGE"],
+                "sendEnabled": flags["PERSONAL_WECHAT_SEND"],
+                "allowUnverifiedWindow": flags["PERSONAL_WECHAT_ALLOW_UNVERIFIED_WINDOW"],
+                "autoEnter": flags["PERSONAL_WECHAT_AUTO_ENTER"],
+                "apiBaseConfigured": False,
+            },
+        )
     missing: list[str] = []
     if adapter != "windows_bridge":
         missing.append("WECHAT_SEND_ADAPTER=windows_bridge")
@@ -273,9 +290,11 @@ def _check_personal_wechat(env: dict[str, str]) -> dict:
         missing.append("PERSONAL_WECHAT_API_BASE or BRIDGE_API_BASE must be an http or https URL")
     return _component(
         "personal_wechat_bridge",
-        "Personal WeChat bridge",
+            "Personal WeChat bridge",
         missing,
         {
+            "productMode": product_mode,
+            "productionEnabled": True,
             "sendAdapter": adapter,
             "managedStartEnabled": flags["PERSONAL_WECHAT_BRIDGE"],
             "sendEnabled": flags["PERSONAL_WECHAT_SEND"],
@@ -300,12 +319,10 @@ def _valid_wechat_work_aes_key(value: str) -> bool:
 def _check_wechat_work(env: dict[str, str]) -> dict:
     checks = {
         "corpId": "WECHAT_WORK_CORP_ID",
-        "agentId": "WECHAT_WORK_AGENT_ID",
         "secret": "WECHAT_WORK_SECRET",
         "token": "WECHAT_WORK_TOKEN",
         "encodingAesKey": "WECHAT_WORK_ENCODING_AES_KEY",
         "openKfid": "WECHAT_WORK_OPEN_KFID",
-        "defaultConversation": "WECHAT_WORK_DEFAULT_CONVERSATION_ID",
     }
     configured = {name: not _looks_placeholder(env.get(env_name)) for name, env_name in checks.items()}
     configured["encodingAesKey"] = _valid_wechat_work_aes_key(env.get("WECHAT_WORK_ENCODING_AES_KEY", ""))
@@ -507,12 +524,13 @@ def _effective_environment(root: Path, environment: dict[str, str] | None):
 
 def build_report(root: Path = ROOT, environment: dict[str, str] | None = None) -> dict:
     root = Path(root).resolve()
-    settings_path = root / "config" / "settings.yaml"
-    settings, settings_valid = _read_settings(settings_path)
+    default_settings_path = root / "config" / "settings.yaml"
     root_example = _read_env_file(root / ".env.example")
     desktop_example = _read_env_file(root / "desktop" / ".env.example")
 
     with _effective_environment(root, environment) as (env, root_env, desktop_env):
+        settings_path = _resolve_path(root, env.get("AI_ENGINE_SETTINGS_PATH", ""), default_settings_path)
+        settings, settings_valid = _read_settings(settings_path)
         api, api_port = _check_api(env)
         design, design_runtime_source = _check_design_platform(root, env)
         components = [
@@ -538,7 +556,11 @@ def build_report(root: Path = ROOT, environment: dict[str, str] | None = None) -
         "overall": "blocked" if blocked_count else "ready",
         "summary": {"ready": ready_count, "blocked": blocked_count, "total": len(components)},
         "sources": {
-            "settingsYaml": {"present": settings_path.is_file(), "valid": settings_valid},
+            "settingsYaml": {
+                "present": settings_path.is_file(),
+                "valid": settings_valid,
+                "explicitPathConfigured": bool(_text(env.get("AI_ENGINE_SETTINGS_PATH"))),
+            },
             "rootEnv": {"present": (root / ".env").is_file(), "configuredKeyCount": len(root_env)},
             "desktopEnv": {"present": (root / "desktop" / ".env").is_file(), "configuredKeyCount": len(desktop_env)},
             "rootEnvExample": {"present": (root / ".env.example").is_file(), "declaredKeyCount": len(root_example)},

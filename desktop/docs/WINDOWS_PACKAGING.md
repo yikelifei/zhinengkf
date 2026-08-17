@@ -13,10 +13,13 @@ electron-builder 官方说明：应用默认使用 asar；`files` 控制应用�
 在 `desktop` 目录执行：
 
 ```powershell
+npm.cmd run delivery:windows-package-preflight
 npm.cmd ci
 npm.cmd run package:win:dir
 npm.cmd run package:win:test
 ```
+
+`delivery:windows-package-preflight` 是备案/预发布前的只读计划检查，只写 `.runtime/windows-package-verification/latest.{json,md}`，不打包、不签名、不执行安装器，也不能替代正式 `smart_kefu_windows_package_verification_v3` 报告。
 
 流程按顺序生成 Prisma Client、构建 Nest API、以 `FORCE_WEB_CLEAN_BUILD=1` 强制重建 Next standalone，然后运行 electron-builder。Windows 打包不复用已有 Web 产物；任一构建失败都不会生成 provenance。`package:win:dir` 先生成 `win-unpacked` 便于检查；`package:win:test` 生成 `SmartKefu-Setup-<version>-x64.exe` 并自动执行包验证。
 

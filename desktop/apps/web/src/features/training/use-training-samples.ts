@@ -10,10 +10,11 @@ export function useTrainingSamples(identityFilters?: IdentityFilters, quality: T
   const [error, setError] = useState("");
   const refreshSequence = useRef(0);
   const stableIdentityFilters = useMemo<IdentityFilters>(() => ({
+    agentId: identityFilters?.agentId,
     wechatAccountId: identityFilters?.wechatAccountId,
     conversationId: identityFilters?.conversationId,
     customerId: identityFilters?.customerId,
-  }), [identityFilters?.conversationId, identityFilters?.customerId, identityFilters?.wechatAccountId]);
+  }), [identityFilters?.agentId, identityFilters?.conversationId, identityFilters?.customerId, identityFilters?.wechatAccountId]);
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;

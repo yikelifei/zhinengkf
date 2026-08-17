@@ -129,7 +129,7 @@ export type DesignAsset = {
   wechatAccountId?: string | null;
   conversationId?: string | null;
   customerId?: string | null;
-  role?: string;
+  role?: string | null;
   fileName: string;
   mimeType: string;
   localPath: string;
@@ -323,6 +323,20 @@ export type SkuCatalogAudit = {
     blockers: string[];
     nextActions: string[];
   };
+  dataReadiness?: {
+    level: "empty" | "test_only" | "partial" | "verified";
+    totalCount: number;
+    operatorProvidedCount: number;
+    demoImageCount: number;
+    customerReplyEligibleCount: number;
+    customerReplyEligibleSkuCodes?: string[];
+    unverifiedCount: number;
+    internalTestReady: boolean;
+    customerReplyReady: boolean;
+    summary: string;
+    blockers: string[];
+    nextActions: string[];
+  };
   repairQueueCount?: number;
   blockingRepairCount?: number;
   repairQueue?: SkuRepairQueueItem[];
@@ -369,6 +383,55 @@ export type SkuImportFieldMapping = SkuImportField & {
   matched: boolean;
 };
 
+export type KnowledgeImportField = SkuImportField;
+
+export type KnowledgeImportRow = {
+  title: string;
+  content: string;
+  agentKey?: string;
+  agentId?: string;
+  tags?: string[];
+  source?: string;
+  qualityScore?: number;
+};
+
+export type KnowledgeImportResult = {
+  ok: boolean;
+  importedCount: number;
+  skippedCount: number;
+  rows: KnowledgeImportRow[];
+  errors: Array<{ line: number; message: string }>;
+  missingRequiredFields?: KnowledgeImportField[];
+  fieldMapping?: Array<KnowledgeImportField & { sourceHeader: string; column: number | null; matched: boolean }>;
+  unmappedHeaders?: string[];
+  acceptance?: {
+    total: number;
+    readyCount: number;
+    needsReviewCount: number;
+    missingAgentCount: number;
+    missingTagsCount: number;
+    shortContentCount: number;
+    blocked: boolean;
+    blockers: string[];
+    nextActions: string[];
+  };
+  saved?: {
+    count: number;
+    results: Array<Record<string, unknown>>;
+    skipped?: Array<Record<string, unknown>>;
+    reviewLog?: ReviewLog;
+    failed?: boolean;
+  };
+  history?: ReviewLog;
+};
+
+export type KnowledgeImportTemplate = {
+  fileName: string;
+  mimeType: string;
+  dataBase64: string;
+  fields: KnowledgeImportField[];
+};
+
 export type Agent = {
   id: string;
   key: string;
@@ -378,9 +441,15 @@ export type Agent = {
   enabled: boolean;
   skills: Array<{
     id: string;
+    agentId?: string;
     name: string;
     description: string;
     enabled: boolean;
+    version?: number;
+    sourceType?: string | null;
+    sampleCount?: number;
+    confidence?: number;
+    lastCompiledAt?: string | null;
     scope?: {
       level?: string;
       label?: string;
@@ -389,9 +458,37 @@ export type Agent = {
       conversationId?: string | null;
       customerId?: string | null;
     };
+    executionPolicy?: {
+      actionKey:
+        | "skill.instruction_preview"
+        | "design_platform.health_check"
+        | "catalog.audit"
+        | "automation.readiness_check";
+      label: string;
+      description: string;
+      mode: "allowlist_read_only";
+      riskLevel: "read_only";
+      sideEffects: "none";
+      timeoutMs: number;
+      confirmationRequired: true;
+      confirmationText: string;
+      rollbackMode: "not_required_read_only";
+      canExecute: boolean;
+      blockedReason: string | null;
+    };
   }>;
   trainingSampleCount: number;
   averageTrainingScore: number;
+};
+
+export type AgentSkillExecutionResult = {
+  executionId: string;
+  status: "completed";
+  replayed: boolean;
+  policy: NonNullable<Agent["skills"][number]["executionPolicy"]>;
+  result: Record<string, unknown>;
+  startedAt: string;
+  completedAt: string;
 };
 
 export type ChatImport = {
@@ -509,6 +606,8 @@ export type TrainingOverview = {
   chatImportSamples: number;
   averageScore: number;
   suggestionCount: number;
+  knowledgeEntryCount?: number;
+  starterKnowledgeEntryCount?: number;
   agentsWithSamples: number;
   qualitySummary?: {
     safeSamples: number;
@@ -549,7 +648,84 @@ export type TrainingOverview = {
     lastSampleAt?: string;
     topSkillHints: Array<{ name: string; count: number }>;
   }>;
+  knowledgeByAgent?: Array<{
+    agentId?: string | null;
+    agentKey?: string;
+    name: string;
+    count: number;
+    starterCount: number;
+    topTitles: string[];
+  }>;
+  topKnowledgeEntries?: Array<{
+    id: string;
+    agentId?: string | null;
+    title: string;
+    sourceType?: string;
+    qualityScore?: number;
+    tags?: string[];
+  }>;
   recommendations: string[];
+};
+
+export type ConversationLearningDashboard = {
+  schema: "conversation_learning_dashboard_v1";
+  generatedAt: string;
+  summary: {
+    conversationCount: number;
+    wonCount: number;
+    lostCount: number;
+    ongoingCount: number;
+    stalledCount: number;
+    learningObservationCount: number;
+    reviewRequiredCount: number;
+    topReasons: Array<{ code: string; label: string; count: number }>;
+  };
+  conversations: Array<{
+    conversation: {
+      id: string;
+      title?: string;
+      customerId?: string;
+      wechatAccountId?: string;
+      status?: string;
+      lastMessageAt?: string;
+    };
+    feedback: {
+      outcome: "won" | "lost" | "ongoing";
+      state: "converted" | "not_converted" | "stalled" | "in_progress";
+      outcomeSource: "automatic" | "operator_confirmed";
+      whyNotConverted: string;
+      primaryReason: {
+        code: string;
+        label: string;
+        confidence: number;
+        inference?: boolean;
+        evidence: Array<{ excerpt?: string; source?: string; messageId?: string }>;
+      };
+      recommendedActions: string[];
+      metrics: {
+        messageCount: number;
+        inboundCount: number;
+        quoteCount: number;
+        orderCount: number;
+        stalledHours: number;
+      };
+    };
+    learningObservationCount: number;
+    reviewRequiredCount: number;
+    learningInsights: Array<{
+      observedAt?: string;
+      customerIntent?: string;
+      stage?: string;
+      nextBestAction?: string;
+      learningPolicy?: { autoPromote?: boolean; status?: string };
+    }>;
+  }>;
+  learningPolicy: {
+    everyInboundCreatesObservation: boolean;
+    silenceIsNotLoss: boolean;
+    autoPromoteToKnowledge: boolean;
+    reviewRequiredBeforeKnowledgeOrSkill: boolean;
+  };
 };
 
 export type TrainingSampleQualityApiFilter =
@@ -680,6 +856,7 @@ export type OperatorCapability =
   | "approve_send"
   | "manage_design_executions"
   | "manage_training"
+  | "execute_agent_skills"
   | "manage_roles";
 
 export type OperatorAccessStatus = {
@@ -718,6 +895,185 @@ export type OperatorAccessPolicy = {
   notice: string;
 };
 
+export type AiProviderStatus = {
+  enabled: boolean;
+  primary: string;
+  fallbackChain: string[];
+  timeoutSeconds: number;
+  maxRetries: number;
+  promptKey: string;
+  routing: {
+    enabled: boolean;
+    complexityThreshold: number;
+    economyChain: string[];
+    qualityChain: string[];
+  };
+  adaptiveRouting: {
+    enabled: boolean;
+    strategy: "latency_reliability_circuit_breaker";
+    failureThreshold: number;
+    economyOrder: string[];
+    qualityOrder: string[];
+  };
+  probe: boolean;
+  providers: Array<{
+    name: string;
+    label: string;
+    description: string;
+    region: "china" | "global" | "aggregator" | "custom";
+    enabled: boolean;
+    configured: boolean;
+    apiKeyConfigured: boolean;
+    credentialSource: "environment" | "zhenxi_ai_shared" | "invalid";
+    sharedSourceConfigured: boolean;
+    issues: string[];
+    requestFormat: string;
+    model: string;
+    routingTier: "economy" | "quality";
+    docsUrl: string;
+    keyOnlySetup: boolean;
+    performance: {
+      sampleCount: number;
+      successCount: number;
+      failureCount: number;
+      successRate: number | null;
+      averageLatencyMs: number | null;
+      lastLatencyMs: number | null;
+      consecutiveFailures: number;
+      circuitState: "unmeasured" | "closed" | "open" | "half_open";
+      cooldownRemainingMs: number;
+      lastSuccessAt: string | null;
+      lastFailureAt: string | null;
+    };
+    isPrimary: boolean;
+    inFallbackChain: boolean;
+    inEconomyChain: boolean;
+    inQualityChain: boolean;
+    available?: boolean | null;
+    latencyMs?: number;
+    error?: string;
+  }>;
+};
+
+export type DeliveryReadiness = {
+  schema: "smart_kefu_delivery_readiness_v1";
+  generatedAt: string;
+  mode: "offline_report_inventory";
+  networkCalls: false;
+  commandsExecuted: false;
+  commandEnvironment?: {
+    platform: string;
+    shell: "windows" | "posix";
+    workspace: "development_or_release";
+    productionServerExecutionSupported: false;
+  };
+  status: "ready" | "blocked" | "failed" | "unknown";
+  productMode: string;
+  nextAction: string;
+  recommendedCommands: Array<{ label: string; command: string; reason: string }>;
+  projectAudit: {
+    available: boolean;
+    reportPath: string;
+    generatedAt: string;
+    status: string;
+    counts: { pass: number; blocked: number; fail: number };
+    blockers: DeliveryReadinessBlocker[];
+  };
+  acceptance: {
+    available: boolean;
+    reportPath: string;
+    runId: string;
+    startedAt: string;
+    finishedAt: string;
+    requestedMode: string;
+    executedModes: string[];
+    summary: { passed: number; failed: number; blocked: number; skipped: number; total: number };
+    blockers: DeliveryReadinessBlocker[];
+  };
+  evidenceReports: DeliveryEvidenceReport[];
+  releaseCandidateScope: DeliveryReleaseCandidateScope;
+  localDelivery: DeliveryLocalDeliveryVerdict;
+  freshness: {
+    checkedAt: string;
+    maxAgeHours: number;
+    staleSourceIds: string[];
+    sources: Array<{
+      id: string;
+      label: string;
+      available: boolean;
+      generatedAt: string;
+      external: boolean;
+      command: string;
+      stale: boolean;
+    }>;
+  };
+  blockers: DeliveryReadinessBlocker[];
+};
+
+export type DeliveryLocalDeliveryVerdict = {
+  state: "local_verified" | "local_verified_external_blocked" | "local_evidence_incomplete" | "local_failed";
+  label: string;
+  summary: string;
+  localEvidenceReady: boolean;
+  productionReleaseAllowed: boolean;
+  localCodeDefectCount: number;
+  localEvidenceBlockerCount: number;
+  externalBlockerCount: number;
+  localEvidenceBlockerIds: string[];
+  externalBlockerIds: string[];
+  canContinueDuringIcp: boolean;
+};
+
+export type DeliveryReleaseCandidateScopeGroup = {
+  id: string;
+  label: string;
+  risk: "high" | "medium" | "low" | string;
+  count: number;
+  untracked: number;
+  modified: number;
+  paths: string[];
+};
+
+export type DeliveryReleaseCandidateScope = {
+  available: boolean;
+  reportPath: string;
+  generatedAt: string;
+  status: string;
+  requiresCleanReleaseWorkspace: boolean;
+  statusEntriesAvailable: boolean;
+  statusEntryCount: number;
+  untrackedCount: number;
+  modifiedCount: number;
+  groups: DeliveryReleaseCandidateScopeGroup[];
+  riskNotes: string[];
+};
+
+export type DeliveryEvidenceReport = {
+  id: string;
+  label: string;
+  available: boolean;
+  reportPath: string;
+  generatedAt: string;
+  status: string;
+  mode: string;
+  summary: string;
+  counts: { pass: number; blocked: number; fail: number; skipped?: number; total?: number };
+  command: string;
+};
+
+export type DeliveryReadinessBlocker = {
+  id: string;
+  title: string;
+  status: "blocked" | "failed";
+  summary: string;
+  source: "project_completion_audit" | "product_acceptance" | string;
+  external: boolean;
+  command?: string;
+  ownerHint: string;
+  phase: "during_icp" | "after_icp" | "release_gate";
+  actionItems: string[];
+};
+
 export type WechatWorkReadinessStatus = "ready" | "blocked" | "missing";
 
 export type WechatWorkReadinessCheck = {
@@ -725,6 +1081,40 @@ export type WechatWorkReadinessCheck = {
   status: WechatWorkReadinessStatus;
   detail: string;
   external: boolean;
+  reason: string;
+  fix: string;
+  evidence?: string;
+};
+
+export type WechatWorkLaunchPlanItem = {
+  key: string;
+  title: string;
+  detail: string;
+  status: WechatWorkReadinessStatus;
+  phase: "during_icp" | "after_icp";
+  owner: "developer" | "operator" | "wechat_admin";
+  action: string;
+};
+
+export type WechatWorkCallbackConsoleField = {
+  key: string;
+  label: string;
+  sourceEnv: string;
+  status: WechatWorkReadinessStatus;
+  detail: string;
+  secret: boolean;
+  copyValue?: string;
+};
+
+export type WechatWorkPreLiveChecklistItem = {
+  key: string;
+  title: string;
+  detail: string;
+  status: WechatWorkReadinessStatus;
+  phase: "during_icp" | "before_external_joint_test";
+  owner: "developer" | "operator" | "wechat_admin";
+  verify: string;
+  blockedBy?: string;
 };
 
 export type WechatWorkProductionReadiness = {
@@ -733,6 +1123,13 @@ export type WechatWorkProductionReadiness = {
   networkCalls: false;
   status: WechatWorkReadinessStatus;
   productionReady: boolean;
+  source?: {
+    kind: "desktop_local" | "production_server" | "remote_unavailable";
+    label: string;
+    checkedAt: string;
+    endpoint?: string;
+    errorCode?: string;
+  };
   local: {
     status: WechatWorkReadinessStatus;
     ready: boolean;
@@ -748,6 +1145,9 @@ export type WechatWorkProductionReadiness = {
     path: string;
     url: string;
     publicHttpsFormatReady: boolean;
+    consoleFields: WechatWorkCallbackConsoleField[];
+    localVerification: string[];
+    externalVerification: string[];
   };
   identityPolicy: {
     channel: "work_wechat";
@@ -757,10 +1157,126 @@ export type WechatWorkProductionReadiness = {
     callerSelectableAdapter: false;
   };
   codeContracts: string[];
+  launchPlan: {
+    currentPhase: "local_configuring" | "icp_waiting" | "external_acceptance" | "production_ready";
+    recommendedNextAction: string;
+    duringIcp: WechatWorkLaunchPlanItem[];
+    afterIcp: WechatWorkLaunchPlanItem[];
+  };
+  preLiveChecklist: {
+    duringIcp: WechatWorkPreLiveChecklistItem[];
+    beforeExternalJointTest: WechatWorkPreLiveChecklistItem[];
+  };
   metrics: {
     mappedAccounts: number;
     auditRecords: number;
   };
+};
+
+export type WechatWorkAuthorizationFlow = {
+  id: string;
+  status: "pending" | "exchanging" | "completed" | "failed" | "expired";
+  createdAt: string;
+  expiresAt: string;
+  completedAt?: string;
+  corpId?: string;
+  error?: string;
+};
+
+export type WechatWorkAuthorizationStatus = {
+  schema: "smart_kefu_wechat_work_suite_authorization_status_v1";
+  configured: boolean;
+  readyForInstall: boolean;
+  checks: Array<{ key: string; ok: boolean; detail: string }>;
+  callbacks: {
+    command: string;
+    authorization: string;
+  };
+  latestFlow: WechatWorkAuthorizationFlow | null;
+  flows: WechatWorkAuthorizationFlow[];
+  authorizations: Array<{
+    corpId: string;
+    corpName: string;
+    corpType: string;
+    logoUrl: string;
+    status: "active" | "revoked";
+    authorizedAt: string;
+    updatedAt: string;
+  }>;
+  activeAuthorizationCount: number;
+  credentialMode: "suite_authorization" | "static_secret" | "unavailable";
+};
+
+export type WechatWorkAuthorizationInstallLink = {
+  flow: WechatWorkAuthorizationFlow;
+  installUrl: string;
+};
+
+export type WechatWorkCustomerEntry = {
+  openKfid: string;
+  scene: string;
+  url: string;
+  generatedAt: string;
+};
+
+export type WechatWorkConnectionDiagnosis = {
+  checkedAt: string;
+  apiReachable: boolean;
+  credentialCompatible: boolean;
+  configuredOpenKfid: string;
+  configuredOpenKfidFound: boolean;
+  accounts: Array<{
+    openKfid: string;
+    name: string;
+    avatar: string;
+    managePrivilege: boolean;
+    customerEntry: WechatWorkCustomerEntry | null;
+  }>;
+  customerEntryAccountCount: number;
+  evidence: {
+    latestCallbackAt: string | null;
+    latestInboundAt: string | null;
+    latestOfficialSendAt: string | null;
+    latestOfficialSendStatus: string | null;
+  };
+  ready: boolean;
+  detail: string;
+  blockerCode: string;
+};
+
+export type WechatWorkCallbackEventStatus = {
+  configured: boolean;
+  connected: boolean;
+  endpoint: string | null;
+  lastConnectedAt: string | null;
+  lastEventAt: string | null;
+  lastError: string | null;
+  reconnects: number;
+};
+
+export type WechatWorkCredentialValidation = {
+  valid: true;
+  configuredOpenKfid: string;
+  suggestedOpenKfid: string;
+  accounts: Array<{ openKfid: string; name: string; avatar: string; managePrivilege: boolean }>;
+  detail: string;
+};
+
+export type WechatWorkUpgradeServiceConfig = {
+  ready: boolean;
+  memberUserIds: string[];
+  departmentIds: number[];
+  groupChatIds: string[];
+  detail: string;
+};
+
+export type WechatWorkCustomerUpgradeResult = {
+  ok: boolean;
+  recommended: boolean;
+  alreadyRecommended: boolean;
+  memberUserId: string;
+  conversationId: string;
+  customerId: string;
 };
 
 export type WechatAccount = {
@@ -783,6 +1299,7 @@ export type Conversation = {
   customer?: {
     id: string;
     name: string;
+    avatarUrl?: string | null;
     wechatId?: string | null;
     phone?: string | null;
     tags?: string[];
@@ -792,6 +1309,21 @@ export type Conversation = {
     updatedAt?: string;
   };
   wechatAccount?: WechatAccount;
+};
+
+export type CreateDesignJobInput = {
+  operationKey: string;
+  wechatAccountId?: string;
+  customerId: string;
+  conversationId: string;
+  budget: Record<string, unknown>;
+  scene?: string;
+  bundle: Record<string, unknown>;
+  assetIds?: string[];
+  assets: Array<Record<string, unknown>>;
+  customerText?: string;
+  designType?: string;
+  outputCount?: number;
 };
 
 export type ConversationOperations = Conversation & {
@@ -848,6 +1380,7 @@ export type ConversationIdentity = {
 
 export type ConversationAttachment = {
   id: string;
+  assetId?: string;
   kind: "image" | "file";
   name: string;
   mimeType?: string;
@@ -930,6 +1463,7 @@ export type SendTask = {
       deliveryUnknownAt?: string;
       automaticRetryBlocked?: boolean;
       manualReviewRequired?: boolean;
+      manualReply?: boolean;
       manualDeliveryResolution?: {
         resolution?: "confirmed_sent" | "confirmed_not_sent";
         reason?: string;
@@ -1491,12 +2025,29 @@ export type QuoteDraft = {
   sendTaskId?: string | null;
   customerNotes?: string;
   owner?: string;
+  bundleSnapshot?: Record<string, unknown> | null;
+  selectedImageSnapshot?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
   customer?: { id: string; name: string };
   designJob?: DesignJob;
   selectedImage?: NonNullable<DesignJob["images"]>[number] | null;
   sendTask?: SendTask | null;
+  paymentEvents?: PaymentEvent[];
+};
+
+export type ConversationReplySuggestion = {
+  suggestedReply: string;
+  sourceText: string;
+  knowledgeMatches: NonNullable<RouteEvaluation["knowledgeMatches"]>;
+  appliedSkills: NonNullable<RouteEvaluation["appliedSkills"]>;
+  ai: {
+    provider: string;
+    model: string;
+    attempts: number;
+    qualityRepairs: number;
+    historyTurns: number;
+  };
 };
 
 export type OrderDraft = {
@@ -1515,6 +2066,12 @@ export type OrderDraft = {
   profitRate?: number;
   status: string;
   paymentStatus: string;
+  productionStatus?: string | null;
+  productionDueAt?: string | null;
+  carrier?: string | null;
+  trackingNo?: string | null;
+  shippedAt?: string | null;
+  deliveredAt?: string | null;
   customerNotes?: string;
   owner?: string;
   bundleSnapshot?: Record<string, unknown> | null;
@@ -1534,6 +2091,60 @@ export type OrderDraft = {
   productionFollowupSendTask?: SendTask | null;
   deliveryFollowupSendTaskId?: string | null;
   deliveryFollowupSendTask?: SendTask | null;
+  paymentEvents?: PaymentEvent[];
+};
+
+export type PaymentEvent = {
+  id: string;
+  quoteDraftId: string;
+  orderDraftId?: string | null;
+  customerId: string;
+  conversationId?: string | null;
+  wechatAccountId?: string | null;
+  paymentStatus: "deposit_paid" | "paid" | string;
+  amountCny?: number | string | null;
+  method?: string | null;
+  proofReference?: string | null;
+  reviewer?: string | null;
+  note?: string | null;
+  source?: string | null;
+  idempotencyKey?: string;
+  createdAt: string;
+};
+
+export type AfterSalesCase = {
+  id: string;
+  orderDraftId: string;
+  quoteDraftId?: string | null;
+  designJobId?: string | null;
+  status: "open" | "resolved" | "rejected" | "cancelled" | string;
+  type: "refund" | "replacement" | "return" | "compensation" | "other" | string;
+  typeLabel?: string;
+  reason: string;
+  requestedAmountCny?: number | string | null;
+  evidenceReference?: string | null;
+  desiredResolution?: string | null;
+  paymentSummary?: {
+    paidAmountCny: number;
+    refundedAmountCny: number;
+    refundableAmountCny: number;
+  } | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolution?: {
+    type: string;
+    typeLabel?: string;
+    approvedAmountCny?: number | string | null;
+    refundMethod?: string | null;
+    refundReference?: string | null;
+    replacementCarrier?: string | null;
+    replacementTrackingNo?: string | null;
+    note?: string | null;
+    paymentEventId?: string | null;
+    resolvedBy?: string | null;
+    resolvedAt?: string | null;
+  } | null;
 };
 
 export type QuotePreview = {
@@ -1546,6 +2157,10 @@ export type OrderConfirmationPreview = {
   orderDraft: OrderDraft;
   message: string;
   warnings: string[];
+};
+
+export type OrderFollowupPreview = OrderConfirmationPreview & {
+  type: "production" | "delivery";
 };
 
 export type NotificationItem = {
@@ -1638,6 +2253,7 @@ export type DesignPlatformReadiness = {
     ok: boolean;
     severity: "info" | "warning" | "error";
     detail: string;
+    action?: string;
   }>;
   nextSteps: string[];
   config: {
@@ -1647,8 +2263,19 @@ export type DesignPlatformReadiness = {
     hasDeviceId: boolean;
     hasCallbackApiKey?: boolean;
     callbackUrl?: string;
+    zhenxiAi?: ZhenxiAiLinks;
   };
   data?: Record<string, unknown>;
+};
+
+export type ZhenxiAiLinks = {
+  primaryAppUrl: string;
+  websiteUrl: string;
+  wwwWebsiteUrl: string;
+  localDevUrl?: string;
+  localPreviewUrl?: string;
+  localCandidateBaseUrls?: string[];
+  authRedirectUrls: string[];
 };
 
 export type DesignPlatformConfigSummary = {
@@ -1661,6 +2288,7 @@ export type DesignPlatformConfigSummary = {
   hasCallbackApiKey?: boolean;
   customerServicePublicBaseUrl?: string;
   callbackUrl?: string;
+  zhenxiAi?: ZhenxiAiLinks;
   deviceIdSuffix?: string;
   runtimeConfigPath?: string;
 };
@@ -1669,6 +2297,25 @@ export type DesignPlatformConfigResponse = {
   ok: boolean;
   config: DesignPlatformConfigSummary;
   readiness?: DesignPlatformReadiness;
+};
+
+export type DesignPlatformCandidateProbeResponse = {
+  ok: boolean;
+  adapter: string;
+  selectedBaseUrl: string;
+  recommendedBaseUrl: string;
+  candidateCount: number;
+  candidates: Array<{
+    baseUrl: string;
+    ok: boolean;
+    selected: boolean;
+    latencyMs: number;
+    statusCode?: number;
+    service?: string;
+    status?: string;
+    version?: string;
+    errorMessage?: string;
+  }>;
 };
 
 export type DesignPlatformLoginResponse = DesignPlatformConfigResponse & {
@@ -1744,6 +2391,7 @@ export type DesignJobPreflightResult = {
     ok: boolean;
     severity: "info" | "warning" | "error";
     detail?: string;
+    action?: string;
   }>;
   health?: Record<string, unknown> | null;
 };
@@ -1804,11 +2452,23 @@ export type UploadAssetPayload = {
 
 const API_BASE = "/api";
 const WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS = [300, 700, 1200, 2000, 3200];
+const TRUSTED_DESKTOP_SESSION_ERROR_CODES = new Set([
+  "desktop_session_unavailable",
+  "desktop_session_proof_missing",
+  "desktop_session_proof_invalid",
+  "trusted_local_session_required",
+  "trusted_local_session_unavailable",
+  "trusted_session_proof_missing",
+  "runtime_session_not_configured",
+]);
 
 export type IdentityFilters = {
+  agentId?: string;
   wechatAccountId?: string;
   conversationId?: string;
   customerId?: string;
+  assetId?: string;
+  assetRole?: string;
 };
 
 export type IdentityExpectation = {
@@ -1823,6 +2483,24 @@ export type ManualReleaseOptions = {
   reason?: string;
   note?: string;
 };
+
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly trustedDesktopSessionRequired: boolean;
+
+  constructor(message: string, options: { status: number; code?: string; trustedDesktopSessionRequired?: boolean }) {
+    super(message);
+    this.name = options.trustedDesktopSessionRequired ? "TrustedDesktopSessionError" : "ApiRequestError";
+    this.status = options.status;
+    this.code = options.code || "";
+    this.trustedDesktopSessionRequired = Boolean(options.trustedDesktopSessionRequired);
+  }
+}
+
+export function isTrustedDesktopSessionError(error: unknown) {
+  return error instanceof ApiRequestError && error.trustedDesktopSessionRequired;
+}
 
 function sleepApi(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1877,6 +2555,15 @@ function identityQuery(filters: IdentityFilters = {}) {
   return query ? `?${query}` : "";
 }
 
+function trainingQuery(filters: IdentityFilters & { minScore?: number; includeReview?: boolean } = {}) {
+  const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+  if (filters.agentId) params.set("agentId", filters.agentId);
+  if (filters.minScore) params.set("minScore", String(filters.minScore));
+  if (filters.includeReview) params.set("includeReview", "1");
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 function expectedIdentityQuery(expected: IdentityExpectation = {}) {
   const params = new URLSearchParams();
   if (expected.expectedWechatAccountId) params.set("wechatAccountId", expected.expectedWechatAccountId);
@@ -1886,16 +2573,65 @@ function expectedIdentityQuery(expected: IdentityExpectation = {}) {
   return query ? `?${query}` : "";
 }
 
+async function apiResponseError(response: Response) {
+  const fallback = `api ${response.status}`;
+  const text = await readResponseText(response);
+  const payload = parseErrorPayload(text);
+  const code = String(payload?.code || "").trim();
+  if (isDesktopSessionErrorCode(code)) {
+    return new ApiRequestError(trustedDesktopSessionMessage(code), {
+      status: response.status,
+      code,
+      trustedDesktopSessionRequired: true,
+    });
+  }
+  const message = String(payload?.message || "").trim();
+  if (message) return new ApiRequestError(message, { status: response.status, code });
+  const cleanText = text.trim();
+  return new ApiRequestError(cleanText || fallback, { status: response.status, code });
+}
+
+async function readResponseText(response: Response) {
+  const textReader = (response as { text?: () => Promise<string> }).text;
+  if (typeof textReader !== "function") return "";
+  try {
+    return await textReader.call(response);
+  } catch {
+    return "";
+  }
+}
+
+function parseErrorPayload(text: string): { code?: unknown; message?: unknown } | null {
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDesktopSessionErrorCode(code: string) {
+  return TRUSTED_DESKTOP_SESSION_ERROR_CODES.has(code);
+}
+
+function trustedDesktopSessionMessage(code: string) {
+  if (code === "trusted_local_session_unavailable" || code === "runtime_session_not_configured") {
+    return "桌面端可信会话还没有就绪。请用客服桌面启动器重新打开应用，等待 Web 和 API 都就绪后刷新本页；不要直接访问 3200 API。";
+  }
+  if (code === "trusted_local_session_required" || code === "trusted_session_proof_missing") {
+    return "当前操作没有通过桌面端可信会话鉴权。请从臻希智能客服桌面端窗口打开本页；如果已经在桌面端，请刷新页面或重启客服启动器。";
+  }
+  return "当前页面不是已验证的臻希智能客服桌面端窗口。请从桌面端重新打开客服系统，不要直接用普通浏览器访问 127.0.0.1:3100。";
+}
+
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -1908,10 +2644,7 @@ async function postJsonWithNetworkRetry<T>(path: string, body: unknown): Promise
         headers: { "Content-Type": "application/json" },
         body: serializedBody,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || `api ${response.status}`);
-      }
+      if (!response.ok) throw await apiResponseError(response);
       return await response.json();
     } catch (error) {
       if (attempt > 0 || !(error instanceof TypeError)) throw error;
@@ -1926,22 +2659,23 @@ async function patchJson<T>(path: string, body?: unknown): Promise<T> {
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getDesignJobs(filters: IdentityFilters = {}): Promise<DesignJob[]> {
   const response = await fetch(`${API_BASE}/design-jobs${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
+}
+
+export async function createDesignJob(payload: CreateDesignJobInput): Promise<DesignJob> {
+  return postJsonWithNetworkRetry<DesignJob>("/design-jobs", payload);
 }
 
 export async function getSkus(includeInactive = false): Promise<Sku[]> {
   const response = await fetch(`${API_BASE}/catalog/skus${includeInactive ? "?includeInactive=true" : ""}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -1954,7 +2688,7 @@ export async function getAssets(ownerType?: string, ownerId?: string, filters: I
   if (filters.customerId) params.set("customerId", filters.customerId);
   const query = params.toString();
   const response = await fetch(`${API_BASE}/assets${query ? `?${query}` : ""}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2068,14 +2802,135 @@ export async function getSkuChangeLogs(limit = 30, skuCode?: string): Promise<Sk
 
 export async function getAgents(filters: IdentityFilters = {}): Promise<Agent[]> {
   const response = await fetch(`${API_BASE}/agents${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
+}
+
+export function localAssetByIdUrl(assetId?: string, expected: IdentityExpectation = {}): string {
+  const value = String(assetId || "").trim();
+  if (!value) return "";
+  const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
+  return `${API_BASE}/assets/${encodeURIComponent(value)}/local-file?${params.toString()}`;
+}
+
+export async function executeAgentSkill(
+  agentId: string,
+  skillId: string,
+  payload: {
+    operationKey: string;
+    confirmation: string;
+  } & IdentityFilters,
+): Promise<AgentSkillExecutionResult> {
+  return postJson<AgentSkillExecutionResult>(
+    `/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(skillId)}/execute`,
+    payload,
+  );
 }
 
 export async function getChatImports(filters: IdentityFilters = {}): Promise<ChatImport[]> {
   const response = await fetch(`${API_BASE}/training/chat-imports${identityQuery(filters)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
+}
+
+export async function getTrainingOverview(filters: IdentityFilters = {}): Promise<TrainingOverview> {
+  const response = await fetch(`${API_BASE}/training/overview${trainingQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
+}
+
+export async function getConversationLearning(
+  filters: IdentityFilters & { limit?: number } = {},
+): Promise<ConversationLearningDashboard> {
+  const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+  if (filters.limit) params.set("limit", String(filters.limit));
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/training/conversation-learning${query ? `?${query}` : ""}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function confirmConversationOutcome(
+  conversationId: string,
+  payload: {
+    operationKey: string;
+    outcome: "won" | "lost" | "ongoing";
+    reasonCode?: string;
+    note?: string;
+  } & IdentityExpectation,
+) {
+  return postJson(`/training/conversation-learning/${encodeURIComponent(conversationId)}/outcome`, payload);
+}
+
+export async function getTrainingKnowledgeEntries(filters: IdentityFilters & { includeReview?: boolean } = {}) {
+  const response = await fetch(`${API_BASE}/training/knowledge${trainingQuery({ ...filters, includeReview: filters.includeReview ?? true })}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export type TrainingRagPreview = {
+  query: string;
+  route: {
+    scene?: string;
+    agentKey?: string;
+    agentId?: string | null;
+    agentName?: string | null;
+    action?: string;
+    confidence?: number;
+    riskFlags?: string[];
+  };
+  reply: string;
+  appliedSkills: Array<{ id?: string; name?: string; description?: string; confidence?: number; sampleCount?: number }>;
+  knowledgeMatches: Array<{
+    id?: string;
+    title?: string;
+    excerpt?: string;
+    score?: number;
+    ragConfidence?: string;
+    humanVerbatim?: boolean;
+    allowVerbatim?: boolean;
+    retrievalReasons?: string[];
+    matchedSignals?: string[];
+  }>;
+  rag: {
+    strategy?: string;
+    decision?: string;
+    confidence?: string;
+    candidateCount?: number;
+    eligibleCount?: number;
+    retrievedCount?: number;
+    excludedByReviewStatus?: number;
+    topScore?: number;
+    querySignals?: string[];
+  };
+  styleProfile?: {
+    id?: string;
+    name?: string;
+    evidence?: string;
+    preserveHumanVerbatim?: boolean;
+  };
+};
+
+export async function previewTrainingRag(query: string, filters: IdentityFilters = {}): Promise<TrainingRagPreview> {
+  return postJson<TrainingRagPreview>("/training/rag/preview", { query, ...filters });
+}
+
+export async function reviewTrainingKnowledgeEntry(
+  id: string,
+  payload: {
+    status: "ready" | "review" | "rejected";
+    reviewer?: string;
+    note?: string;
+    operationKey?: string;
+    agentId?: string;
+    agentKey?: string;
+    title?: string;
+    content?: string;
+    tags?: string[] | string;
+    qualityScore?: number;
+  } & IdentityExpectation,
+): Promise<{ knowledgeEntry: Record<string, unknown>; reviewLog: ReviewLog }> {
+  return postJson<{ knowledgeEntry: Record<string, unknown>; reviewLog: ReviewLog }>(`/training/knowledge/${encodeURIComponent(id)}/review`, payload);
 }
 
 export async function getTrainingSamples(filters: {
@@ -2102,8 +2957,10 @@ export async function getTrainingSamples(filters: {
   return response.json();
 }
 
-export async function getTrainingOverview(filters: IdentityFilters = {}): Promise<TrainingOverview | null> {
-  const response = await fetch(`${API_BASE}/training/overview${identityQuery(filters)}`, { cache: "no-store" });
+export async function getTrainingSample(id: string, filters: IdentityFilters = {}): Promise<TrainingSample> {
+  const params = trainingQuery(filters);
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/training/samples/${encodeURIComponent(id)}${query ? `?${query}` : ""}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
   return response.json();
 }
@@ -2114,6 +2971,7 @@ export async function reviewTrainingSample(
     status: "ready" | "review" | "rejected";
     reviewer?: string;
     note?: string;
+    operationKey?: string;
     agentId?: string;
     agentKey?: string;
     scene?: string;
@@ -2131,6 +2989,7 @@ export async function batchReviewTrainingSamples(payload: {
   status: "ready" | "review" | "rejected";
   reviewer?: string;
   note?: string;
+  operationKey?: string;
   expectedBySampleId?: Record<string, IdentityExpectation>;
 }): Promise<{
   updated: number;
@@ -2144,19 +3003,13 @@ export async function batchReviewTrainingSamples(payload: {
 
 export async function getWechatAccounts(): Promise<WechatAccount[]> {
   const response = await fetch(`${API_BASE}/wechat/accounts`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getPersonalWechatRpaRegistry(): Promise<PersonalWechatRpaRegistry> {
   const response = await fetch(`${API_BASE}/personal-wechat-rpa/instances`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2188,46 +3041,173 @@ export async function disablePersonalWechatRpaInstance(wechatAccountId: string):
 
 export async function getOperatorAccessStatus(): Promise<OperatorAccessStatus> {
   const response = await fetch(`${API_BASE}/operator-access/status`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getOperatorAccessPolicy(): Promise<OperatorAccessPolicy> {
   const response = await fetch(`${API_BASE}/operator-access/policy`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getAiProviderStatus(): Promise<AiProviderStatus> {
+  const response = await fetch(`${API_BASE}/ai/providers/status`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function probeAiProviderStatus(): Promise<AiProviderStatus> {
+  const response = await fetch(`${API_BASE}/ai/providers/status/probe`, { method: "POST" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function saveAiProviderCredential(
+  provider: string,
+  payload: { apiKey?: string; model?: string; enabled?: boolean },
+): Promise<{ saved: boolean; restartRequired: boolean; detail: string; provider: AiProviderStatus["providers"][number] }> {
+  const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/credential`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getDeliveryReadiness(): Promise<DeliveryReadiness> {
+  const response = await fetch(`${API_BASE}/delivery/readiness`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getWechatWorkProductionPreflight(): Promise<WechatWorkProductionReadiness> {
   const response = await fetch(`${API_BASE}/wechat-work/preflight`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
+}
+
+export async function getWechatWorkCallbackEventStatus(): Promise<WechatWorkCallbackEventStatus> {
+  const response = await fetch(`${API_BASE}/wechat-work/events/status`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getWechatWorkAuthorizationStatus(): Promise<WechatWorkAuthorizationStatus> {
+  const response = await fetch(`${API_BASE}/wechat-work/authorization/status`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function createWechatWorkAuthorizationInstallLink(): Promise<WechatWorkAuthorizationInstallLink> {
+  const response = await fetch(`${API_BASE}/wechat-work/authorization/install-link`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function createWechatWorkCustomerEntry(): Promise<WechatWorkCustomerEntry> {
+  return postJson<WechatWorkCustomerEntry>("/wechat-work/kf/contact-way", {});
+}
+
+export type WechatWorkCustomerEntryBatchResult = {
+  ok: boolean;
+  partial: boolean;
+  accountCount: number;
+  boundAccountCount: number;
+  createdAccountCount: number;
+  reusedAccountCount: number;
+  failedAccountCount: number;
+  accounts: Array<{
+    openKfid: string;
+    name: string;
+    ok: boolean;
+    reused: boolean;
+    entry: WechatWorkCustomerEntry | null;
+    errorMessage?: string;
+  }>;
+};
+
+export async function bindAllWechatWorkCustomerEntries(): Promise<WechatWorkCustomerEntryBatchResult> {
+  return postJson<WechatWorkCustomerEntryBatchResult>("/wechat-work/kf/contact-ways/bind-all", {});
+}
+
+export async function diagnoseWechatWorkConnection(): Promise<WechatWorkConnectionDiagnosis> {
+  return postJson<WechatWorkConnectionDiagnosis>("/wechat-work/kf/connection/diagnose", {});
+}
+
+export async function validateWechatWorkCustomerServiceSecret(secret: string): Promise<WechatWorkCredentialValidation> {
+  return postJson<WechatWorkCredentialValidation>("/wechat-work/kf/connection/validate-credential", { secret });
+}
+
+export async function saveWechatWorkCustomerServiceCredential(secret: string, openKfid: string): Promise<{
+  saved: boolean;
+  secretConfigured: boolean;
+  account: WechatWorkCredentialValidation["accounts"][number];
+  restartRequired: boolean;
+  activation: {
+    activated: boolean;
+    sync: {
+      ok: boolean;
+      receivedCount: number;
+      processedCount: number;
+      failedCount: number;
+      errorMessage?: string;
+    };
+    customerEntry: {
+      ok: boolean;
+      entry: WechatWorkCustomerEntry | null;
+      errorMessage?: string;
+    };
+  };
+  detail: string;
+}> {
+  return postJson("/wechat-work/kf/connection/save-credential", { secret, openKfid });
+}
+
+export async function importWechatWorkCustomerEntry(url: string): Promise<WechatWorkCustomerEntry> {
+  return postJson<WechatWorkCustomerEntry>("/wechat-work/kf/contact-way/import", { url });
+}
+
+export async function getWechatWorkCustomerEntry(): Promise<WechatWorkCustomerEntry | null> {
+  const response = await fetch(`${API_BASE}/wechat-work/kf/contact-way`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getWechatWorkUpgradeServiceConfig(): Promise<WechatWorkUpgradeServiceConfig> {
+  const response = await fetch(`${API_BASE}/wechat-work/kf/upgrade-service/config`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function upgradeWechatWorkCustomerService(
+  identity: ConversationIdentity,
+  memberUserId: string,
+  wording: string,
+  requestId: string,
+): Promise<WechatWorkCustomerUpgradeResult> {
+  return postJson<WechatWorkCustomerUpgradeResult>("/wechat-work/kf/customers/upgrade-service", {
+    ...identity,
+    memberUserId,
+    wording,
+    requestId,
+  });
 }
 
 export async function getWechatConversations(): Promise<Conversation[]> {
   const response = await fetch(`${API_BASE}/wechat/conversations`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getConversationOperationsQueue(): Promise<ConversationOperationsQueue> {
   const response = await fetch(`${API_BASE}/conversation-ops/queue`, { cache: "no-store" });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2258,10 +3238,7 @@ export async function getConversationTimeline(
     `${API_BASE}/wechat/conversations/${encodeURIComponent(identity.conversationId)}/messages?${params.toString()}`,
     { cache: "no-store" },
   );
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `api ${response.status}`);
-  }
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2272,18 +3249,47 @@ export async function markConversationMessagesRead(identity: ConversationIdentit
   return postJson(`/wechat/conversations/${encodeURIComponent(identity.conversationId)}/read`, identityExpectation(identity));
 }
 
+export async function generateConversationReplySuggestion(
+  identity: ConversationIdentity,
+): Promise<ConversationReplySuggestion> {
+  return postJson<ConversationReplySuggestion>(
+    `/wechat/conversations/${encodeURIComponent(identity.conversationId)}/reply-suggestion`,
+    identityExpectation(identity),
+  );
+}
+
+export async function refreshWechatWorkCustomerProfile(identity: ConversationIdentity): Promise<{
+  refreshed: boolean;
+  customer: NonNullable<Conversation["customer"]>;
+  conversation: Conversation;
+}> {
+  return postJson("/wechat-work/kf/customers/refresh-profile", identity);
+}
+
 export async function queueManualConversationReply(
   identity: ConversationIdentity,
   text: string,
   operationKey: string,
   operator = "人工客服",
+  assetIds: string[] = [],
 ): Promise<{ queued: true; task: SendTask }> {
   return postJson(`/wechat/conversations/${encodeURIComponent(identity.conversationId)}/manual-replies`, {
     ...identityExpectation(identity),
     text,
+    assetIds,
     operationKey,
     operator,
   });
+}
+
+export async function preparePersonalWechatConversation(identity: ConversationIdentity): Promise<{
+  ok: true;
+  identity: ConversationIdentity;
+  chatTitle: string;
+  recentMessage: string;
+  captureSource: string;
+}> {
+  return postJson("/personal-wechat-rpa/conversations/prepare", identity);
 }
 
 export async function setConversationManualLock(
@@ -2295,7 +3301,7 @@ export async function setConversationManualLock(
 
 export async function getSendTasks(filters: IdentityFilters = {}): Promise<SendTask[]> {
   const response = await fetch(`${API_BASE}/wechat/send-tasks${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2305,31 +3311,31 @@ export async function getSendAttempts(sendTaskId?: string, filters: IdentityFilt
   const query = params.toString();
   const suffix = query ? `?${query}` : "";
   const response = await fetch(`${API_BASE}/wechat/send-attempts${suffix}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getSendAdapter(): Promise<SendAdapterInfo | null> {
   const response = await fetch(`${API_BASE}/wechat/send-adapter`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getBridgeOutbox(filters: IdentityFilters = {}): Promise<BridgeOutboxResult> {
   const response = await fetch(`${API_BASE}/wechat/bridge/outbox${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getBridgeStatus(filters: IdentityFilters = {}): Promise<BridgeStatusResult> {
   const response = await fetch(`${API_BASE}/wechat/bridge/status${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getBridgeDispatch(filters: IdentityFilters = {}): Promise<BridgeDispatchResult> {
   const response = await fetch(`${API_BASE}/wechat/bridge/dispatch${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2339,7 +3345,7 @@ export async function getWechatChannelStatus(filters: IdentityFilters = {}): Pro
   for (let attempt = 0; attempt <= WECHAT_CHANNEL_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) throw new Error(`api ${response.status}`);
+      if (!response.ok) throw await apiResponseError(response);
       const status = await response.json();
       if (status && Array.isArray(status.channels) && status.summary) return status;
       lastError = new Error("微信渠道状态响应缺少必要字段");
@@ -2367,7 +3373,7 @@ export async function testWechatChannelInbound(
 
 export async function getWindowObserverStatus(): Promise<WindowObserverStatus> {
   const response = await fetch(`${API_BASE}/wechat/window-observer/status`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2388,7 +3394,7 @@ export async function scanBridgeInbox(): Promise<BridgeInboxScanResult> {
 
 export async function getWechatWindowSnapshots(filters: IdentityFilters = {}): Promise<WechatWindowSnapshot[]> {
   const response = await fetch(`${API_BASE}/wechat/window-snapshots${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -2440,6 +3446,16 @@ export async function executeDryRunSend(id: string, expected: IdentityExpectatio
 
 export async function executeSendTask(id: string, expected: IdentityExpectation = {}): Promise<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }> {
   return postJson<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }>(`/wechat/send-tasks/${id}/execute`, expected);
+}
+
+export async function executeManualReplyNow(
+  id: string,
+  identity: ConversationIdentity,
+): Promise<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }> {
+  return postJson<{ task: SendTask; attempt: SendAttempt; adapter: SendAdapterInfo }>(
+    `/wechat/send-tasks/${id}/execute-manual-reply`,
+    identityExpectation(identity),
+  );
 }
 
 export async function requeueSendTask(id: string, payload: { reason?: string } & IdentityExpectation = {}): Promise<SendTask> {
@@ -2537,6 +3553,7 @@ export async function processInboundMessage(payload: {
   conversationId: string;
   customerId?: string;
   text: string;
+  externalId: string;
   assetIds?: string[];
   attachments?: Array<Record<string, unknown>>;
 }): Promise<InboundProcessResult> {
@@ -2555,6 +3572,36 @@ export async function importChatTranscript(payload: {
   text: string;
 }): Promise<ChatImport> {
   return postJsonWithNetworkRetry<ChatImport>("/training/chat-imports", payload);
+}
+
+export async function previewKnowledgeImportText(
+  text: string,
+  options: {
+    operationKey?: string;
+    source?: string;
+    customerId?: string;
+    conversationId?: string;
+    wechatAccountId?: string;
+  } = {},
+): Promise<KnowledgeImportResult> {
+  return postJson<KnowledgeImportResult>("/training/knowledge/import-preview", { ...options, text });
+}
+
+export async function importKnowledgeText(payload: {
+  operationKey: string;
+  source?: string;
+  customerId?: string;
+  conversationId?: string;
+  wechatAccountId?: string;
+  text: string;
+}): Promise<KnowledgeImportResult> {
+  return postJsonWithNetworkRetry<KnowledgeImportResult>("/training/knowledge/import", payload);
+}
+
+export async function downloadKnowledgeImportTemplate(): Promise<KnowledgeImportTemplate> {
+  const response = await fetch(`${API_BASE}/training/knowledge/import-template`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`api ${response.status}`);
+  return response.json();
 }
 
 export async function getSkillSuggestions(filters: ({ agentId?: string; minScore?: number } & IdentityFilters) | string = {}): Promise<SkillSuggestion[]> {
@@ -2581,6 +3628,8 @@ export async function recommendBundle(payload: {
   budget: DesignJob["budget"];
   scene: string;
   maxItems?: number;
+  selectedSkuCodes?: string[];
+  requireImages?: boolean;
 }): Promise<BundleRecommendation> {
   return postJson<BundleRecommendation>("/catalog/bundle/recommend", payload);
 }
@@ -2613,7 +3662,7 @@ export async function createDemoDesignJob(
     assets: [{ assetId: "demo-logo", type: "logo", name: "客户Logo" }],
     customerText: "想看一套端午员工福利礼盒真实摆拍效果图，整体要高级、温和、有企业礼赠感。",
     designType: "bundle_render",
-    outputCount: 6,
+    outputCount: 4,
   });
 }
 
@@ -2833,6 +3882,17 @@ export type AutomationStatus = {
   enabled: boolean;
   running: boolean;
   active: boolean;
+  mode?: "interval" | "durable" | "invalid";
+  scheduler?: {
+    mode?: "interval" | "durable" | "invalid";
+    active?: boolean;
+    configured?: boolean;
+    connected?: boolean;
+    scheduled?: boolean;
+    workerReady?: boolean;
+    evidenceSource?: string;
+    durableEvidence?: { available?: boolean } & Record<string, unknown>;
+  };
   startedAt?: string | null;
   runningStartedAt?: string | null;
   nextRunAt?: string | null;
@@ -2938,25 +3998,33 @@ export async function scanHighValueHandoffs(filters: IdentityFilters = {}): Prom
 
 export async function getDesignPlatformHealth(): Promise<DesignPlatformHealth> {
   const response = await fetch(`${API_BASE}/integrations/design-platform/health`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
-export async function getDesignPlatformReadiness(): Promise<DesignPlatformReadiness> {
-  const response = await fetch(`${API_BASE}/integrations/design-platform/readiness`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+export async function getDesignPlatformReadiness(deviceId = ""): Promise<DesignPlatformReadiness> {
+  const query = deviceId.trim() ? `?deviceId=${encodeURIComponent(deviceId.trim())}` : "";
+  const response = await fetch(`${API_BASE}/integrations/design-platform/readiness${query}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getDesignPlatformConfig(): Promise<DesignPlatformConfigResponse> {
   const response = await fetch(`${API_BASE}/integrations/design-platform/config`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getDesignPlatformCandidates(): Promise<DesignPlatformCandidateProbeResponse> {
+  const response = await fetch(`${API_BASE}/integrations/design-platform/candidates`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function updateDesignPlatformConfig(payload: {
   adapter?: string;
   baseUrl?: string;
+  apiKey?: string;
   accessToken?: string;
   cookie?: string;
   deviceId?: string;
@@ -3144,13 +4212,19 @@ export async function createQuote(id: string, expected: IdentityExpectation = {}
 
 export async function getQuotes(filters: IdentityFilters = {}): Promise<QuoteDraft[]> {
   const response = await fetch(`${API_BASE}/quotes${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getQuoteDraft(id: string, expected: IdentityExpectation = {}): Promise<QuoteDraft> {
+  const response = await fetch(`${API_BASE}/quotes/${id}${expectedIdentityQuery(expected)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
 export async function getQuotePreview(id: string, expected: IdentityExpectation = {}): Promise<QuotePreview> {
   const response = await fetch(`${API_BASE}/quotes/${id}/preview${expectedIdentityQuery(expected)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -3184,22 +4258,33 @@ export async function verifyQuotePaymentProofAndQueueConfirmation(
   paymentStatus: "deposit_paid" | "paid",
   operationKey: string,
   expected: IdentityExpectation = {},
-): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask?: SendTask | null; message: string }> {
+  note?: string,
+  paymentDetails: { amountCny?: number | string; method?: string; proofReference?: string } = {},
+): Promise<{ quote: QuoteDraft; orderDraft: OrderDraft; paymentEvent: PaymentEvent; sendTask?: SendTask | null; message: string }> {
   const paymentLabel = paymentStatus === "paid" ? "全款" : "定金";
-  return postJson<{ quote: QuoteDraft; orderDraft: OrderDraft; sendTask?: SendTask | null; message: string }>(
+  return postJson<{ quote: QuoteDraft; orderDraft: OrderDraft; paymentEvent: PaymentEvent; sendTask?: SendTask | null; message: string }>(
     `/quotes/${id}/verify-payment-proof`,
     {
       ...expected,
       operationKey,
       paymentStatus,
-      note: `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`,
+      amountCny: paymentDetails.amountCny,
+      method: paymentDetails.method,
+      proofReference: paymentDetails.proofReference,
+      note: note?.trim() || `人工已核验客户${paymentLabel}付款凭证，报价进入订单跟进。`,
     },
   );
 }
 
 export async function getOrderDrafts(filters: IdentityFilters = {}): Promise<OrderDraft[]> {
   const response = await fetch(`${API_BASE}/orders${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getOrderDraft(id: string, expected: IdentityExpectation = {}): Promise<OrderDraft> {
+  const response = await fetch(`${API_BASE}/orders/${id}${expectedIdentityQuery(expected)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -3214,9 +4299,65 @@ export async function updateOrderDraft(id: string, patch: {
   return postJson<OrderDraft>(`/orders/${id}/update`, patch);
 }
 
+export async function updateOrderFulfillment(id: string, patch: {
+  operationKey: string;
+  status?: string;
+  productionStatus?: string;
+  productionDueAt?: string;
+  carrier?: string;
+  trackingNo?: string;
+  shippedAt?: string;
+  deliveredAt?: string;
+  customerNotes?: string;
+} & IdentityExpectation): Promise<OrderDraft> {
+  return postJson<OrderDraft>(`/orders/${id}/fulfillment`, patch);
+}
+
+export async function getOrderAfterSalesCases(id: string, expected: IdentityExpectation = {}): Promise<AfterSalesCase[]> {
+  const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/after-sales${expectedIdentityQuery(expected)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function createOrderAfterSalesCase(id: string, payload: {
+  operationKey: string;
+  type: string;
+  reason: string;
+  requestedAmountCny?: number | string;
+  evidenceReference?: string;
+  desiredResolution?: string;
+} & IdentityExpectation): Promise<AfterSalesCase> {
+  return postJson<AfterSalesCase>(`/orders/${encodeURIComponent(id)}/after-sales`, payload);
+}
+
+export async function resolveOrderAfterSalesCase(id: string, caseId: string, payload: {
+  operationKey: string;
+  resolutionType: string;
+  approvedAmountCny?: number | string;
+  refundMethod?: string;
+  refundReference?: string;
+  replacementCarrier?: string;
+  replacementTrackingNo?: string;
+  note?: string;
+} & IdentityExpectation): Promise<AfterSalesCase> {
+  return postJson<AfterSalesCase>(`/orders/${encodeURIComponent(id)}/after-sales/${encodeURIComponent(caseId)}/resolve`, payload);
+}
+
 export async function getOrderConfirmationPreview(id: string, expected: IdentityExpectation = {}): Promise<OrderConfirmationPreview> {
   const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/confirmation-preview${expectedIdentityQuery(expected)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getOrderFollowupPreview(
+  id: string,
+  type: "production" | "delivery",
+  expected: IdentityExpectation = {},
+): Promise<OrderFollowupPreview> {
+  const identityQuery = expectedIdentityQuery(expected);
+  const separator = identityQuery ? "&" : "?";
+  const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(id)}/followup-preview${identityQuery}${separator}type=${encodeURIComponent(type)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -3264,7 +4405,25 @@ export async function markManualReview(id: string, expected: IdentityExpectation
 
 export async function getReviewCenter(filters: IdentityFilters = {}): Promise<ReviewCenter> {
   const response = await fetch(`${API_BASE}/reviews${identityQuery(filters)}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getReviewDesignJob(id: string, filters: IdentityFilters = {}): Promise<DesignJob> {
+  const response = await fetch(`${API_BASE}/reviews/design-jobs/${encodeURIComponent(id)}${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getReviewQuote(id: string, filters: IdentityFilters = {}): Promise<QuoteDraft> {
+  const response = await fetch(`${API_BASE}/reviews/quotes/${encodeURIComponent(id)}${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getReviewOrder(id: string, filters: IdentityFilters = {}): Promise<OrderDraft> {
+  const response = await fetch(`${API_BASE}/reviews/orders/${encodeURIComponent(id)}${identityQuery(filters)}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 
@@ -3302,7 +4461,7 @@ export async function getNotifications(unreadOnly = false, filters: IdentityFilt
   const response = await fetch(`${API_BASE}/notifications?${params.toString()}`, {
     cache: "no-store",
   });
-  if (!response.ok) throw new Error(`api ${response.status}`);
+  if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
 

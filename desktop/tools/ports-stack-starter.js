@@ -5,6 +5,10 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { ensureInternalApiToken } = require("./internal-api-session");
+const {
+  readDesktopWebSessionProof,
+  resolveDesktopWebSessionFile,
+} = require("./desktop-web-session");
 const { createWechatWindowObserverProofSession } = require("./wechat-window-observer-session");
 const { ensureWechatBridgeServiceSession } = require("./wechat-bridge-service-session");
 const { atomicWritePrivateJson, readPrivateJsonFile } = require("./private-runtime-file");
@@ -41,8 +45,10 @@ const launcherLog = path.join(runtimeDir, "logs", realDesignMode ? "launcher-rea
 const stackStarterLog = path.join(runtimeDir, "logs", "ports-stack-starter.log");
 const conflictMode = realDesignMode ? "mock" : "real";
 const managedPorts = [numberEnv("WEB_PORT", 3100), numberEnv("API_PORT", 3200), numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)];
+const defaultZhenxiAiDesktopBaseUrl = "http://127.0.0.1:3000";
 const stackStarterLockFile = path.join(runtimeDir, `ports-stack-starter-${supervisorMode}.lock`);
 const internalApiToken = ensureInternalApiToken();
+const desktopWebSessionFile = resolveDesktopWebSessionFile(runtimeDir);
 const bridgeServiceSession = ensureWechatBridgeServiceSession(runtimeDir);
 const observerProofSession = {
   tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
@@ -241,9 +247,9 @@ async function main() {
 }
 
 function launchDirectKeepAlive(env) {
-  fs.appendFileSync(launcherLog, `\n[${new Date().toISOString()}] launching ${modeArg} keep-alive stack\n`, "utf8");
-  const stdout = fs.openSync(launcherLog, "a");
-  const stderr = fs.openSync(launcherLog, "a");
+  appendLauncherLog(`\n[${new Date().toISOString()}] launching ${modeArg} keep-alive stack`);
+  const stdout = openLogForAppend(launcherLog) ?? "ignore";
+  const stderr = openLogForAppend(launcherLog) ?? "ignore";
   const child = spawn(process.execPath, ["tools/start-dev-ports.js", modeArg, "--keep-alive"], {
     cwd: desktopRoot,
     env,
@@ -445,9 +451,50 @@ function sleep(ms) {
 function logStep(message) {
   try {
     fs.mkdirSync(path.dirname(stackStarterLog), { recursive: true });
-    fs.appendFileSync(stackStarterLog, `[${new Date().toISOString()}] pid=${process.pid} ${message}\n`, "utf8");
+    appendLauncherLog(`[${new Date().toISOString()}] pid=${process.pid} ${message}`, stackStarterLog);
   } catch {
     // Startup diagnostics must never block launching the desktop services.
+  }
+}
+
+function appendLauncherLog(message, target = launcherLog) {
+  const line = message.endsWith("\n") ? message : `${message}\n`;
+  const candidates = [
+    target,
+    `${target}.retry.${process.pid}.${Date.now()}.log`,
+  ];
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(path.dirname(candidate), { recursive: true });
+      fs.appendFileSync(candidate, line, "utf8");
+      return true;
+    } catch (error) {
+      if (candidate !== candidates[1] && (error?.code === "EBUSY" || error?.code === "EPERM")) {
+        continue;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
+function openLogForAppend(filePath) {
+  try {
+    return fs.openSync(filePath, "a");
+  } catch (error) {
+    if (error?.code !== "EBUSY" && error?.code !== "EPERM") {
+      appendLauncherLog(`[warn] cannot open launcher log ${filePath}: ${error?.message || error}`, launcherLog);
+      throw error;
+    }
+    try {
+      return fs.openSync(`${filePath}.retry.${process.pid}.${Date.now()}.log`, "a");
+    } catch (retryError) {
+      appendLauncherLog(
+        `[warn] retry open launcher log failed for ${filePath}: ${retryError?.message || retryError}`,
+        launcherLog,
+      );
+      return "ignore";
+    }
   }
 }
 
@@ -606,6 +653,8 @@ async function activeStackReadiness() {
   if (!(await httpOk(`http://127.0.0.1:${webPort}/`))) {
     return { ok: false, reason: `web health check failed on port ${webPort} (pids ${webPids.join(",")})` };
   }
+  const webDesktopSession = await webDesktopSessionReadiness(webPort);
+  if (!webDesktopSession.ok) return webDesktopSession;
   const apiHealth = await getJson(`http://127.0.0.1:${apiPort}/api/health`);
   if (!apiHealth?.ok) {
     return { ok: false, reason: `api health check failed on port ${apiPort} (pids ${apiPids.join(",")})` };
@@ -644,6 +693,22 @@ async function activeStackReadiness() {
           integrationHealth.baseUrl || "unknown"
         }, expected standard_v1 at http://127.0.0.1:${mockPort}`,
       };
+}
+
+async function webDesktopSessionReadiness(webPort) {
+  let proof = "";
+  try {
+    proof = readDesktopWebSessionProof(desktopWebSessionFile);
+  } catch {
+    return { ok: false, reason: "desktop web session proof file is missing or invalid" };
+  }
+  const health = await getJson(`http://127.0.0.1:${webPort}/api/health`, 1500, {
+    Cookie: `smart_kefu_desktop_session=${proof}`,
+  });
+  if (!health?.ok) {
+    return { ok: false, reason: "desktop web session proof is not accepted by the Web proxy" };
+  }
+  return { ok: true, reason: "" };
 }
 
 async function activeApiLooksRealDesignMode() {
@@ -726,20 +791,20 @@ function readPreferredDesignMode() {
 }
 
 function realDesignBaseUrl() {
-  const envBaseUrl = process.env.DESIGN_PLATFORM_BASE_URL || "";
+  const envBaseUrl = process.env.DESIGN_PLATFORM_BASE_URL || process.env.ZHENXI_AI_LOCAL_BASE_URL || "";
   if (envBaseUrl && normalizeBaseUrl(envBaseUrl) !== `http://127.0.0.1:${numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700)}`) {
     return envBaseUrl;
   }
-  return "http://127.0.0.1:3000";
+  return defaultZhenxiAiDesktopBaseUrl;
 }
 
 function normalizeBaseUrl(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
-function getJson(url, timeoutMs = 1500) {
+function getJson(url, timeoutMs = 1500, headers = {}) {
   return new Promise((resolve) => {
-    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+    const req = http.get(url, { timeout: timeoutMs, headers }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => {

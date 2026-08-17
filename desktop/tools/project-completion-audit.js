@@ -11,6 +11,7 @@ const SCHEMA_VERSION = "smart_kefu_project_completion_audit_v3";
 
 const REQUIRED_ARTIFACTS = Object.freeze([
   { id: "release.gate", title: "生产发布门禁", file: "desktop/tools/production-release-gate.js" },
+  { id: "release.freeze_plan", title: "Release candidate freeze plan tool", file: "desktop/tools/release-candidate-freeze-plan.js" },
   { id: "release.checklist", title: "生产发布清单", file: "docs/PRODUCTION_RELEASE_CHECKLIST.md" },
   { id: "staging.tool", title: "预发布只读证据工具", file: "desktop/tools/staging-readiness-evidence.js" },
   { id: "staging.guide", title: "预发布证据说明", file: "docs/STAGING_READINESS_EVIDENCE.md" },
@@ -590,8 +591,128 @@ const CONTRACTS = Object.freeze([
       /"package:win:signed"\s*:/,
       /"ci:release-quality"\s*:/,
       /"project:completion:audit"\s*:/,
-      /"test"\s*:\s*"node --test --test-concurrency=1 tests\/\*\.test\.js"/,
+      /"delivery:freeze-plan"\s*:\s*"node tools\/release-candidate-freeze-plan\.js"/,
+      /"test"\s*:\s*"node tools\/run-node-tests\.js"/,
       /"prisma:agents:init"\s*:\s*"node tools\/initialize-prisma-agents\.js"/,
+    ],
+  },
+  {
+    id: "contract.node_test_runner",
+    title: "Node 测试入口环境隔离",
+    file: "desktop/tools/run-node-tests.js",
+    patterns: [
+      /\["--test",\s*"--test-concurrency=1",\s*\.\.\.testFiles\]/,
+      /testFiles\s*=\s*args\.length\s*\?\s*args\s*:\s*\["tests\/\*\.test\.js"\]/,
+      /USE_LOCAL_STORE:\s*"true"/,
+      /DESIGN_PLATFORM_BASE_URL:\s*"http:\/\/127\.0\.0\.1:3700"/,
+      /shell:\s*false/,
+    ],
+    forbidden: [
+      /shell:\s*true/,
+    ],
+  },
+  {
+    id: "contract.release_freeze_plan_closure",
+    title: "Release candidate freeze plan is wired into delivery evidence",
+    file: "desktop/tools/release-candidate-freeze-plan.js",
+    patterns: [
+      /smart_kefu_release_candidate_freeze_plan_v1/,
+      /branchPlans/,
+      /codex\/rc-foundation-governance/,
+      /codex\/rc-core-product-flow/,
+      /codex\/rc-enterprise-wechat-channel/,
+      /compat-personal-wechat-quarantine/,
+      /requiresCleanReleaseWorkspace/,
+      /sourceHandoff/,
+    ],
+  },
+  {
+    id: "contract.release_freeze_plan_handoff",
+    title: "Delivery handoff includes release candidate freeze evidence",
+    file: "desktop/tools/delivery-handoff-bundle.js",
+    patterns: [
+      /command:\s*"npm run delivery:freeze-plan"/,
+      /path\.join\(runtimeRoot,\s*"release-candidate-freeze-plan",\s*"latest\.json"\)/,
+      /summarizeGenericReport\("release\.freeze_plan"/,
+    ],
+  },
+  {
+    id: "contract.release_freeze_plan_readiness",
+    title: "Delivery readiness page exposes release candidate freeze evidence",
+    file: "desktop/apps/api/src/delivery/delivery-readiness.service.ts",
+    patterns: [
+      /DELIVERY_FREEZE_PLAN_COMMAND\s*=\s*"npm\.cmd run delivery:freeze-plan"/,
+      /id:\s*"release_freeze_plan"/,
+      /relativePath:\s*"release-candidate-freeze-plan\/latest\.json"/,
+      /command:\s*DELIVERY_FREEZE_PLAN_COMMAND/,
+    ],
+  },
+  {
+    id: "contract.demo_data_mutation_boundary",
+    title: "生产 demo 写入口显式失败关闭",
+    file: "desktop/apps/api/src/shared/demo-data-boundary.ts",
+    patterns: [
+      /DEMO_DATA_MUTATION_BLOCKED_CODE/,
+      /appConfig\.allowDemoDataMutations/,
+      /ForbiddenException/,
+    ],
+    sections: [
+      {
+        id: "config-default",
+        file: "desktop/apps/api/src/shared/app-config.ts",
+        startPattern: /export const appConfig\s*=/,
+        patterns: [
+          /allowDemoDataMutations:\s*booleanEnv\(\s*"ALLOW_DEMO_DATA_MUTATIONS",\s*process\.env\.NODE_ENV !== "production" && process\.env\.USE_LOCAL_STORE !== "false",?\s*\)/,
+        ],
+      },
+      {
+        id: "assets-demo-logo",
+        file: "desktop/apps/api/src/assets/assets.service.ts",
+        startPattern: /async createDemoCustomerLogo\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("demo customer logo"\)/],
+      },
+      {
+        id: "catalog-demo-images",
+        file: "desktop/apps/api/src/catalog/catalog.service.ts",
+        startPattern: /async createDemoSkuImages\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("demo SKU images"\)/],
+      },
+      {
+        id: "notification-demo",
+        file: "desktop/apps/api/src/notifications/notifications.service.ts",
+        startPattern: /createDemo\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("demo notification"\)/],
+      },
+      {
+        id: "design-timeout-demo",
+        file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+        startPattern: /createTimeoutDemo\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("timeout design demo"\)/],
+      },
+      {
+        id: "design-failure-demo",
+        file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+        startPattern: /createFailureDemo\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("failure design demo"\)/],
+      },
+      {
+        id: "wechat-window-demo",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /createDemoWindowSnapshot\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("demo window snapshot"\)/],
+      },
+      {
+        id: "wechat-send-demo",
+        file: "desktop/apps/api/src/wechat/wechat-dispatch.service.ts",
+        startPattern: /createDemoSendTask\s*\([\s\S]*?\)\s*/,
+        patterns: [/assertDemoDataMutationAllowed\("demo send task"\)/],
+      },
+      {
+        id: "acceptance-explicit-demo-mode",
+        file: "desktop/tools/run-product-acceptance.js",
+        startPattern: /const serviceEnv\s*=/,
+        patterns: [/ALLOW_DEMO_DATA_MUTATIONS:\s*"1"/],
+      },
     ],
   },
   {
@@ -1100,6 +1221,25 @@ const CONTRACTS = Object.freeze([
     ],
   },
   {
+    id: "contract.enterprise_wechat_only_api_surface",
+    title: "Enterprise WeChat-only product mode closes legacy bridge API surface",
+    file: "desktop/apps/api/src/wechat/wechat.controller.ts",
+    patterns: [
+      /function assertEnterpriseWechatOnlySendAdapter/,
+      /resolvedSendAdapterName\(adapter\) === "windows_bridge"/,
+      /processChannelInboundTest[\s\S]{0,700}channel !== "work_wechat"[\s\S]{0,220}throw new BadRequestException\("only work_wechat is supported"\)/,
+      /getSendAdapter[\s\S]{0,220}assertEnterpriseWechatOnlySendAdapter\(adapter\)/,
+      /processSafeSendQueue[\s\S]{0,260}assertEnterpriseWechatOnlySendAdapter\(payload\?\.adapter\)/,
+      /executeSend[\s\S]{0,220}assertEnterpriseWechatOnlySendAdapter\(payload\?\.adapter\)/,
+    ],
+    forbidden: [
+      /LEGACY_PERSONAL_WECHAT_MODE/,
+      /assertLegacyPersonalWechatApiAllowed/,
+      /\b(?:listBridgeOutbox|listBridgeDispatch|getBridgeStatus|scanBridgeInbox|listWindowSnapshots|getWindowObserverStatus|captureWindowObserverOnce|scanWindowSnapshotInbox|createDemoWindowSnapshot|validateWithCurrentWindow|markSent|markSentWithCurrentWindow|acknowledgeBridgeSend)\s*\(/,
+      /@(?:Get|Post)\(["'](?:bridge\/|window-snapshots|window-observer\/|send-tasks\/:id\/bridge-ack)/,
+    ],
+  },
+  {
     id: "contract.wechat_work_cursor_terminality",
     title: "企业微信入站终态游标与 CAS",
     file: "desktop/apps/api/src/wechat-work/wechat-work.service.ts",
@@ -1184,7 +1324,7 @@ const CONTRACTS = Object.freeze([
     id: "contract.sharp_runtime",
     title: "Sharp 生产依赖与 Windows 运行时",
     file: "desktop/package.json",
-    patterns: [/["']sharp["']\s*:\s*["']0\.34\.5["']/],
+    patterns: [/["']sharp["']\s*:\s*["']0\.35\.3["']/],
   },
   {
     id: "contract.report_ignored",
@@ -1366,9 +1506,9 @@ const CONTRACTS = Object.freeze([
     title: "Web design, SKU and asset reads surface API failures instead of sample or empty success",
     file: "desktop/apps/web/src/lib/api.ts",
     patterns: [
-      /export async function getDesignJobs[\s\S]{0,900}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
-      /export async function getSkus[\s\S]{0,900}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
-      /export async function getAssets[\s\S]{0,1800}?if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\);[\s\S]{0,120}?return response\.json\(\);/,
+      /export async function getDesignJobs[\s\S]{0,900}?if \(!response\.ok\) throw (?:new Error\(`api \$\{response\.status\}`\)|await apiResponseError\(response\));[\s\S]{0,120}?return response\.json\(\);/,
+      /export async function getSkus[\s\S]{0,900}?if \(!response\.ok\) throw (?:new Error\(`api \$\{response\.status\}`\)|await apiResponseError\(response\));[\s\S]{0,120}?return response\.json\(\);/,
+      /export async function getAssets[\s\S]{0,1800}?if \(!response\.ok\) throw (?:new Error\(`api \$\{response\.status\}`\)|await apiResponseError\(response\));[\s\S]{0,120}?return response\.json\(\);/,
     ],
     forbidden: [
       /return sampleDesignJobs/,
@@ -1681,6 +1821,27 @@ const CONTRACTS = Object.freeze([
     ],
     forbidden: [
       /\b(?:endpoint|token|windowsSessionId|sessionId|processId|windowHandle|configPath|executablePath|localPath)\s*\??\s*:/,
+    ],
+  },
+  {
+    id: "contract.design_candidate_round_exact_count",
+    title: "Design callback, revision and manual send require exactly four candidate images",
+    file: "desktop/apps/api/src/design-jobs/design-jobs.service.ts",
+    patterns: [
+      /private minimumRequiredInitialImageCount\(job: any\)\s*\{\s*return CUSTOMER_DESIGN_CANDIDATE_COUNT;\s*\}/,
+      /const requiredCandidateImageCount = this\.minimumRequiredInitialImageCount\(job\);[\s\S]*?if \(images\.length !== requiredCandidateImageCount\)/,
+      /private minimumRequiredLocalImageCount\(job: any\)\s*\{\s*return this\.minimumRequiredInitialImageCount\(job\);\s*\}/,
+      /if \(images\.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT\)[\s\S]*?design job must have exactly \$\{CUSTOMER_DESIGN_CANDIDATE_COUNT\} candidate images before sending/,
+    ],
+  },
+  {
+    id: "contract.low_value_design_exact_candidate_count",
+    title: "Low-value automation queues only a complete four-image candidate round",
+    file: "desktop/packages/rules/lowValueAutomation.js",
+    patterns: [
+      /CUSTOMER_DESIGN_CANDIDATE_COUNT, inspectBundleAutomationReadiness/,
+      /if \(images\.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT\) \{\s*return skip\("candidate_count_mismatch", \[`images:\$\{CUSTOMER_DESIGN_CANDIDATE_COUNT\}`\]\);\s*\}/,
+      /if \(sendableImages\.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT\) \{\s*return skip\("missing_images", \["images"\]\);\s*\}/,
     ],
   },
   {
@@ -2086,8 +2247,40 @@ function readText(root, relative) {
     : null;
 }
 
-function artifactResults(root) {
-  return REQUIRED_ARTIFACTS.map((artifact) => {
+function normalizeAuditResultIds(options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(options, "resultIds")) return null;
+  if (!Array.isArray(options.resultIds) || options.resultIds.length === 0) {
+    throw new Error("resultIds must be a non-empty array when provided");
+  }
+  const resultIds = new Set();
+  for (const id of options.resultIds) {
+    if (typeof id !== "string" || !id.trim()) throw new Error("resultIds must contain non-empty strings");
+    resultIds.add(id);
+  }
+  return resultIds;
+}
+
+function wantsResult(resultIds, id) {
+  return !resultIds || resultIds.has(id);
+}
+
+function wantsAnyResult(resultIds, ids) {
+  return !resultIds || ids.some((id) => resultIds.has(id));
+}
+
+function filterRequestedResults(results, resultIds) {
+  return resultIds ? results.filter((item) => resultIds.has(item.id)) : results;
+}
+
+function assertRequestedResultsResolved(resultIds, results) {
+  if (!resultIds) return;
+  const resolved = new Set(results.map((item) => item.id));
+  const missing = [...resultIds].filter((id) => !resolved.has(id));
+  if (missing.length) throw new Error(`unsupported or unavailable audit result id: ${missing.join(", ")}`);
+}
+
+function artifactResults(root, resultIds = null) {
+  return REQUIRED_ARTIFACTS.filter((artifact) => wantsResult(resultIds, artifact.id)).map((artifact) => {
     const filePath = absoluteFrom(root, artifact.file);
     const present = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
     return result(
@@ -2100,8 +2293,8 @@ function artifactResults(root) {
   });
 }
 
-function contractResults(root) {
-  return CONTRACTS.map((contract) => {
+function contractResults(root, resultIds = null) {
+  return CONTRACTS.filter((contract) => wantsResult(resultIds, contract.id)).map((contract) => {
     const text = readText(root, contract.file);
     if (text === null) {
       return result(contract.id, contract.title, STATUS.FAIL, "契约文件缺失。", {
@@ -2203,6 +2396,42 @@ function contractResults(root) {
 
 let typescriptCompiler = null;
 
+const AUDIT_TEXT_CACHE_LIMIT = 256;
+const typescriptParseCache = new Map();
+const maskedTypeScriptCache = new Map();
+const criticalImportBindingCache = new Map();
+const criticalSectionInspectionCache = new Map();
+
+function clearAuditAnalysisCaches() {
+  const clearedEntries =
+    typescriptParseCache.size +
+    maskedTypeScriptCache.size +
+    criticalImportBindingCache.size +
+    criticalSectionInspectionCache.size;
+  typescriptParseCache.clear();
+  maskedTypeScriptCache.clear();
+  criticalImportBindingCache.clear();
+  criticalSectionInspectionCache.clear();
+  return clearedEntries;
+}
+
+function appendUniqueAuditTrigger(seeds, trigger) {
+  return seeds.includes(trigger) ? [...seeds] : [...seeds, trigger];
+}
+
+function cachedByText(cache, key, createValue, limit = AUDIT_TEXT_CACHE_LIMIT) {
+  if (cache.has(key)) {
+    const value = cache.get(key);
+    cache.delete(key);
+    cache.set(key, value);
+    return value;
+  }
+  const value = createValue();
+  cache.set(key, value);
+  while (cache.size > limit) cache.delete(cache.keys().next().value);
+  return value;
+}
+
 function isStrictlyContainedPath(root, candidate) {
   const relative = path.relative(root, candidate);
   return Boolean(relative)
@@ -2267,80 +2496,85 @@ function loadTypeScriptCompiler() {
 }
 
 function parseTypeScriptForAudit(text, fileName = "audit-source.ts", requireCleanParse = false) {
-  const ts = loadTypeScriptCompiler();
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    String(text || ""),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const lexicalDiagnosticCodes = new Set([1002, 1010, 1160, 1161]);
-  const diagnostics = sourceFile.parseDiagnostics || [];
-  const lexicalFailure = diagnostics.some((diagnostic) =>
-    lexicalDiagnosticCodes.has(diagnostic.code) || (diagnostic.code === 1005 && diagnostic.start >= text.length));
-  if (lexicalFailure || (requireCleanParse && diagnostics.length)) {
-    throw new SyntaxError(`invalid TypeScript syntax in ${fileName}`);
-  }
-  return { ts, sourceFile };
+  const normalizedText = String(text || "");
+  return cachedByText(typescriptParseCache, `${requireCleanParse ? "strict" : "loose"}\0${normalizedText}`, () => {
+    const ts = loadTypeScriptCompiler();
+    const sourceFile = ts.createSourceFile(
+      fileName,
+      normalizedText,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const lexicalDiagnosticCodes = new Set([1002, 1010, 1160, 1161]);
+    const diagnostics = sourceFile.parseDiagnostics || [];
+    const lexicalFailure = diagnostics.some((diagnostic) =>
+      lexicalDiagnosticCodes.has(diagnostic.code) || (diagnostic.code === 1005 && diagnostic.start >= normalizedText.length));
+    if (lexicalFailure || (requireCleanParse && diagnostics.length)) {
+      throw new SyntaxError(`invalid TypeScript syntax in ${fileName}`);
+    }
+    return { ts, sourceFile };
+  });
 }
 
 function maskTypeScriptCommentsAndStrings(text) {
   text = String(text || "");
-  const { ts, sourceFile } = parseTypeScriptForAudit(text);
-  const masked = text.split("");
-  const lineTerminator = (character) => ["\n", "\r", "\u2028", "\u2029"].includes(character);
-  const blank = (start, end) => {
-    for (let index = Math.max(0, start); index < Math.min(end, masked.length); index += 1) {
-      if (!lineTerminator(masked[index])) masked[index] = " ";
-    }
-  };
-  const commentRanges = new Map();
-  const collectCommentsAt = (position) => {
-    for (const range of [
-      ...(ts.getLeadingCommentRanges(text, position) || []),
-      ...(ts.getTrailingCommentRanges(text, position) || []),
-    ]) {
-      commentRanges.set(`${range.pos}:${range.end}`, range);
-    }
-  };
-  const visit = (node) => {
-    collectCommentsAt(node.pos);
-    collectCommentsAt(node.end);
-    for (const child of node.getChildren(sourceFile)) visit(child);
-  };
-  collectCommentsAt(0);
-  collectCommentsAt(text.length);
-  visit(sourceFile);
-  for (const range of commentRanges.values()) blank(range.pos, range.end);
+  return cachedByText(maskedTypeScriptCache, text, () => {
+    const { ts, sourceFile } = parseTypeScriptForAudit(text);
+    const masked = text.split("");
+    const lineTerminator = (character) => ["\n", "\r", "\u2028", "\u2029"].includes(character);
+    const blank = (start, end) => {
+      for (let index = Math.max(0, start); index < Math.min(end, masked.length); index += 1) {
+        if (!lineTerminator(masked[index])) masked[index] = " ";
+      }
+    };
+    const commentRanges = new Map();
+    const collectCommentsAt = (position) => {
+      for (const range of [
+        ...(ts.getLeadingCommentRanges(text, position) || []),
+        ...(ts.getTrailingCommentRanges(text, position) || []),
+      ]) {
+        commentRanges.set(`${range.pos}:${range.end}`, range);
+      }
+    };
+    const visit = (node) => {
+      collectCommentsAt(node.pos);
+      collectCommentsAt(node.end);
+      for (const child of node.getChildren(sourceFile)) visit(child);
+    };
+    collectCommentsAt(0);
+    collectCommentsAt(text.length);
+    visit(sourceFile);
+    for (const range of commentRanges.values()) blank(range.pos, range.end);
 
-  const maskLiteralNode = (node) => {
-    const start = node.getStart(sourceFile);
-    const end = node.end;
-    if (node.kind === ts.SyntaxKind.StringLiteral || node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
-      blank(start + 1, end - 1);
-      return;
-    }
-    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
-      const literal = text.slice(start, end);
-      const closingSlash = literal.lastIndexOf("/");
-      if (closingSlash <= 0) throw new SyntaxError("invalid regular expression literal");
-      blank(start + 1, start + closingSlash);
-      blank(start + closingSlash + 1, end);
-      return;
-    }
-    if (node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle) {
-      blank(start + 1, end - 2);
-      return;
-    }
-    if (node.kind === ts.SyntaxKind.TemplateTail) blank(start + 1, end - 1);
-  };
-  const visitLiterals = (node) => {
-    maskLiteralNode(node);
-    ts.forEachChild(node, visitLiterals);
-  };
-  visitLiterals(sourceFile);
-  return masked.join("");
+    const maskLiteralNode = (node) => {
+      const start = node.getStart(sourceFile);
+      const end = node.end;
+      if (node.kind === ts.SyntaxKind.StringLiteral || node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
+        blank(start + 1, end - 1);
+        return;
+      }
+      if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+        const literal = text.slice(start, end);
+        const closingSlash = literal.lastIndexOf("/");
+        if (closingSlash <= 0) throw new SyntaxError("invalid regular expression literal");
+        blank(start + 1, start + closingSlash);
+        blank(start + closingSlash + 1, end);
+        return;
+      }
+      if (node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle) {
+        blank(start + 1, end - 2);
+        return;
+      }
+      if (node.kind === ts.SyntaxKind.TemplateTail) blank(start + 1, end - 1);
+    };
+    const visitLiterals = (node) => {
+      maskLiteralNode(node);
+      ts.forEachChild(node, visitLiterals);
+    };
+    visitLiterals(sourceFile);
+    return masked.join("");
+  });
 }
 
 function maskTypeScriptForDecoratorAudit(text) {
@@ -2422,54 +2656,58 @@ function isNonBindingPropertyName(ts, identifier) {
 }
 
 function criticalImportBindingFailures(text, fileName, specifications) {
-  const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName);
-  const failures = [];
-  for (const specification of specifications) {
-    const matchingImports = [];
-    for (const statement of sourceFile.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
-        statement.moduleSpecifier.text !== specification.source || !statement.importClause) continue;
-      if (statement.importClause.isTypeOnly) continue;
-      if (specification.kind === "default" && statement.importClause.name?.text === specification.name) {
-        matchingImports.push(statement.importClause.name);
-      }
-      const bindings = statement.importClause.namedBindings;
-      if (specification.kind === "named" && bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
-          if (!element.isTypeOnly && !element.propertyName && element.name.text === specification.name) {
-            matchingImports.push(element.name);
+  text = String(text || "");
+  const specificationKey = specifications.map((item) => `${item.name}:${item.source}:${item.kind}:${item.usage}`).join("|");
+  return [...cachedByText(criticalImportBindingCache, `${specificationKey}\0${text}`, () => {
+    const { ts, sourceFile } = parseTypeScriptForAudit(text, fileName);
+    const failures = [];
+    for (const specification of specifications) {
+      const matchingImports = [];
+      for (const statement of sourceFile.statements) {
+        if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
+          statement.moduleSpecifier.text !== specification.source || !statement.importClause) continue;
+        if (statement.importClause.isTypeOnly) continue;
+        if (specification.kind === "default" && statement.importClause.name?.text === specification.name) {
+          matchingImports.push(statement.importClause.name);
+        }
+        const bindings = statement.importClause.namedBindings;
+        if (specification.kind === "named" && bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) {
+            if (!element.isTypeOnly && !element.propertyName && element.name.text === specification.name) {
+              matchingImports.push(element.name);
+            }
           }
         }
       }
+      if (matchingImports.length !== 1) {
+        failures.push(`${specification.name}-import`);
+        continue;
+      }
+      const importedIdentifier = matchingImports[0];
+      const identifiers = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) && node.text === specification.name);
+      const usageAllowed = (identifier) => {
+        if (identifier === importedIdentifier) return true;
+        const parent = identifier.parent;
+        if (isNonBindingPropertyName(ts, identifier)) return true;
+        if (specification.usage === "call") return ts.isCallExpression(parent) && parent.expression === identifier;
+        if (specification.usage === "namespace") {
+          return (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+            parent.expression === identifier && !isWriteTarget(ts, identifier);
+        }
+        if (specification.usage === "decorator") {
+          return ts.isCallExpression(parent) && parent.expression === identifier && ts.isDecorator(parent.parent);
+        }
+        if (specification.usage === "guard") {
+          return ts.isCallExpression(parent) && parent.arguments.includes(identifier) &&
+            ts.isIdentifier(parent.expression) && parent.expression.text === "UseGuards" && ts.isDecorator(parent.parent);
+        }
+        if (specification.usage === "type") return ts.isTypeReferenceNode(parent) && parent.typeName === identifier;
+        return false;
+      };
+      if (identifiers.some((identifier) => !usageAllowed(identifier))) failures.push(`${specification.name}-usage`);
     }
-    if (matchingImports.length !== 1) {
-      failures.push(`${specification.name}-import`);
-      continue;
-    }
-    const importedIdentifier = matchingImports[0];
-    const identifiers = astNodes(ts, sourceFile, (node) => ts.isIdentifier(node) && node.text === specification.name);
-    const usageAllowed = (identifier) => {
-      if (identifier === importedIdentifier) return true;
-      const parent = identifier.parent;
-      if (isNonBindingPropertyName(ts, identifier)) return true;
-      if (specification.usage === "call") return ts.isCallExpression(parent) && parent.expression === identifier;
-      if (specification.usage === "namespace") {
-        return (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
-          parent.expression === identifier && !isWriteTarget(ts, identifier);
-      }
-      if (specification.usage === "decorator") {
-        return ts.isCallExpression(parent) && parent.expression === identifier && ts.isDecorator(parent.parent);
-      }
-      if (specification.usage === "guard") {
-        return ts.isCallExpression(parent) && parent.arguments.includes(identifier) &&
-          ts.isIdentifier(parent.expression) && parent.expression.text === "UseGuards" && ts.isDecorator(parent.parent);
-      }
-      if (specification.usage === "type") return ts.isTypeReferenceNode(parent) && parent.typeName === identifier;
-      return false;
-    };
-    if (identifiers.some((identifier) => !usageAllowed(identifier))) failures.push(`${specification.name}-usage`);
-  }
-  return failures;
+    return failures;
+  })];
 }
 
 function exactNamedImportFailure(text, fileName, source, expectedNames) {
@@ -3803,7 +4041,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                   seedTriggers.push(trigger,
                     ...(objectFunctionDelegateSeedTriggers.get(delegatedName) || new Set()));
                   for (const path of objectFunctionDelegateTriggerPaths.get(delegatedName) || []) {
-                    innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                    innerTriggerPaths.push({
+                      leaf: path.leaf,
+                      seeds: appendUniqueAuditTrigger(path.seeds, trigger),
+                    });
                   }
                 } else {
                   innerTriggers.push(trigger);
@@ -3831,7 +4072,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                   seedTriggers.push(use.readTrigger,
                     ...(objectFunctionDelegateSeedTriggers.get(use.memberName) || new Set()));
                   for (const path of objectFunctionDelegateTriggerPaths.get(use.memberName) || []) {
-                    innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, use.readTrigger] });
+                    innerTriggerPaths.push({
+                      leaf: path.leaf,
+                      seeds: appendUniqueAuditTrigger(path.seeds, use.readTrigger),
+                    });
                   }
                 } else {
                   innerTriggers.push(use.readTrigger);
@@ -3847,7 +4091,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                     ...(objectFunctionDelegateSeedTriggers.get(use.memberName) || new Set()));
                   for (const path of objectFunctionDelegateTriggerPaths.get(use.memberName) || []) {
                     for (const trigger of use.callTriggers) {
-                      innerTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                      innerTriggerPaths.push({
+                        leaf: path.leaf,
+                        seeds: appendUniqueAuditTrigger(path.seeds, trigger),
+                      });
                     }
                   }
                 } else {
@@ -4152,7 +4399,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                     memberSeedTriggers.push(trigger,
                       ...(delegateSeedTriggers.get(delegatedName) || new Set()));
                     for (const path of delegateTriggerPaths.get(delegatedName) || []) {
-                      memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                      memberTriggerPaths.push({
+                        leaf: path.leaf,
+                        seeds: appendUniqueAuditTrigger(path.seeds, trigger),
+                      });
                     }
                   } else {
                     memberTriggers.push(trigger);
@@ -4190,7 +4440,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                   memberSeedTriggers.push(use.readTrigger,
                     ...(delegateSeedTriggers.get(use.memberName) || new Set()));
                   for (const path of delegateTriggerPaths.get(use.memberName) || []) {
-                    memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, use.readTrigger] });
+                    memberTriggerPaths.push({
+                      leaf: path.leaf,
+                      seeds: appendUniqueAuditTrigger(path.seeds, use.readTrigger),
+                    });
                   }
                 } else {
                   memberTriggers.push(use.readTrigger);
@@ -4206,7 +4459,10 @@ function criticalClassSymbolFailures(ts, sourceFile, targetClass, className, pro
                     ...(delegateSeedTriggers.get(use.memberName) || new Set()));
                   for (const path of delegateTriggerPaths.get(use.memberName) || []) {
                     for (const trigger of use.callTriggers) {
-                      memberTriggerPaths.push({ leaf: path.leaf, seeds: [...path.seeds, trigger] });
+                      memberTriggerPaths.push({
+                        leaf: path.leaf,
+                        seeds: appendUniqueAuditTrigger(path.seeds, trigger),
+                      });
                     }
                   }
                 } else {
@@ -5165,46 +5421,53 @@ const CRITICAL_AST_SECTION_IDS = new Set([
 ]);
 
 function criticalSectionAstInspection(sectionId, text) {
-  const { ts, sourceFile } = parseTypeScriptForAudit(text, `${sectionId}.audit.ts`, true);
-  if (sectionId === "local-notification-effect-replay" || sectionId === "notification-effect-dispatch") {
-    const isLocal = sectionId === "local-notification-effect-replay";
-    const className = isLocal ? "LocalStoreService" : "NotificationsService";
-    const methodName = isLocal ? "createNotification" : "create";
-    const classes = astNodes(ts, sourceFile, (node) => ts.isClassDeclaration(node) &&
-      ts.isIdentifier(node.name) && node.name.text === className);
-    if (classes.length !== 1) return { range: null, failures: ["target-class-count"] };
-    const targetClass = classes[0];
-    const methods = targetClass.members.filter((node) => ts.isMethodDeclaration(node) &&
-      ts.isIdentifier(node.name) && node.name.text === methodName && node.body);
-    if (methods.length !== 1) return { range: null, failures: ["method-count"] };
-    const failures = isLocal
-      ? localNotificationAstFailures(ts, sourceFile, methods[0])
-      : prismaNotificationDispatchAstFailures(ts, sourceFile, methods[0]);
-    failures.push(...criticalClassSymbolFailures(
-      ts,
-      sourceFile,
-      targetClass,
-      className,
-      isLocal ? ["createNotification"] : ["create", "createPrismaNotificationOnce"],
-    ));
-    return { range: { start: methods[0].getStart(sourceFile), end: methods[0].end }, failures };
-  }
-  const functions = sourceFile.statements.filter((statement) => ts.isFunctionDeclaration(statement) &&
-    statement.name?.text === "ownedLocalStoreLockHandle" && statement.body);
-  if (functions.length !== 1) return { range: null, failures: ["function-count"] };
-  const statement = functions[0];
-  const failures = localStoreLockAstFailures(ts, sourceFile, statement);
-  failures.push(...ownedLockSymbolFailures(ts, sourceFile, statement));
-  if (sectionId === "local-store-lock-release") {
-    const releaseProperties = astNodes(ts, statement, (node) => ts.isPropertyAssignment(node) &&
-      ts.isIdentifier(node.name) && node.name.text === "release");
-    if (releaseProperties.length !== 1) return { range: null, failures: [...failures, "release-property-count"] };
-    return {
-      range: { start: releaseProperties[0].getStart(sourceFile), end: releaseProperties[0].end },
-      failures,
-    };
-  }
-  return { range: { start: statement.getStart(sourceFile), end: statement.end }, failures };
+  text = String(text || "");
+  const cached = cachedByText(criticalSectionInspectionCache, `${sectionId}\0${text}`, () => {
+    const { ts, sourceFile } = parseTypeScriptForAudit(text, `${sectionId}.audit.ts`, true);
+    if (sectionId === "local-notification-effect-replay" || sectionId === "notification-effect-dispatch") {
+      const isLocal = sectionId === "local-notification-effect-replay";
+      const className = isLocal ? "LocalStoreService" : "NotificationsService";
+      const methodName = isLocal ? "createNotification" : "create";
+      const classes = astNodes(ts, sourceFile, (node) => ts.isClassDeclaration(node) &&
+        ts.isIdentifier(node.name) && node.name.text === className);
+      if (classes.length !== 1) return { range: null, failures: ["target-class-count"] };
+      const targetClass = classes[0];
+      const methods = targetClass.members.filter((node) => ts.isMethodDeclaration(node) &&
+        ts.isIdentifier(node.name) && node.name.text === methodName && node.body);
+      if (methods.length !== 1) return { range: null, failures: ["method-count"] };
+      const failures = isLocal
+        ? localNotificationAstFailures(ts, sourceFile, methods[0])
+        : prismaNotificationDispatchAstFailures(ts, sourceFile, methods[0]);
+      failures.push(...criticalClassSymbolFailures(
+        ts,
+        sourceFile,
+        targetClass,
+        className,
+        isLocal ? ["createNotification"] : ["create", "createPrismaNotificationOnce"],
+      ));
+      return { range: { start: methods[0].getStart(sourceFile), end: methods[0].end }, failures };
+    }
+    const functions = sourceFile.statements.filter((statement) => ts.isFunctionDeclaration(statement) &&
+      statement.name?.text === "ownedLocalStoreLockHandle" && statement.body);
+    if (functions.length !== 1) return { range: null, failures: ["function-count"] };
+    const statement = functions[0];
+    const failures = localStoreLockAstFailures(ts, sourceFile, statement);
+    failures.push(...ownedLockSymbolFailures(ts, sourceFile, statement));
+    if (sectionId === "local-store-lock-release") {
+      const releaseProperties = astNodes(ts, statement, (node) => ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) && node.name.text === "release");
+      if (releaseProperties.length !== 1) return { range: null, failures: [...failures, "release-property-count"] };
+      return {
+        range: { start: releaseProperties[0].getStart(sourceFile), end: releaseProperties[0].end },
+        failures,
+      };
+    }
+    return { range: { start: statement.getStart(sourceFile), end: statement.end }, failures };
+  });
+  return {
+    range: cached.range ? { ...cached.range } : null,
+    failures: [...cached.failures],
+  };
 }
 
 function extractLegacyBalancedBlockRange(text, startPattern) {
@@ -5370,7 +5633,10 @@ function ordersControllerAstFailures(text) {
   }
   const expectedMethods = [
     ["list", [["Get", []]]],
+    ["getById", [["Get", [stringArgument(":id")]]]],
     ["confirmationPreview", [["Get", [stringArgument(":id/confirmation-preview")]]]],
+    ["followupPreview", [["Get", [stringArgument(":id/followup-preview")]]]],
+    ["listAfterSales", [["Get", [stringArgument(":id/after-sales")]]]],
     ["createFromQuote", [
       ["Post", [stringArgument("from-quote/:quoteId")]],
       ["RequireOperatorCapability", [stringArgument("manage_design_executions")]],
@@ -5378,6 +5644,18 @@ function ordersControllerAstFailures(text) {
     ["update", [
       ["Post", [stringArgument(":id/update")]],
       ["RequireOperatorCapability", [stringArgument("manage_design_executions")]],
+    ]],
+    ["updateFulfillment", [
+      ["Post", [stringArgument(":id/fulfillment")]],
+      ["RequireOperatorCapability", [stringArgument("manage_order_fulfillment")]],
+    ]],
+    ["createAfterSales", [
+      ["Post", [stringArgument(":id/after-sales")]],
+      ["RequireOperatorCapability", [stringArgument("manage_order_fulfillment")]],
+    ]],
+    ["resolveAfterSales", [
+      ["Post", [stringArgument(":id/after-sales/:caseId/resolve")]],
+      ["RequireOperatorCapability", [stringArgument("manage_order_fulfillment")]],
     ]],
     ["reviseSelection", [
       ["Post", [stringArgument(":id/revise-selection")]],
@@ -5399,6 +5677,34 @@ function ordersControllerAstFailures(text) {
       failures.push(`orders-method-${index + 1}-shape`);
     }
   }
+  const getByIdMethod = methods[1];
+  if (!getByIdMethod || !getByIdMethod.body) return [...failures, "get-by-id-method-shape"];
+  const expectedGetByIdParameters = [
+    ["id", "string", false, [["Param", [stringArgument("id")]]]],
+    ["wechatAccountId", "string", true, [["Query", [stringArgument("wechatAccountId")]]]],
+    ["conversationId", "string", true, [["Query", [stringArgument("conversationId")]]]],
+    ["customerId", "string", true, [["Query", [stringArgument("customerId")]]]],
+  ];
+  if (getByIdMethod.parameters.length !== expectedGetByIdParameters.length) {
+    failures.push("get-by-id-parameter-count");
+  }
+  for (const [index, [name, expectedType, optional, expectedDecorators]] of expectedGetByIdParameters.entries()) {
+    const parameter = getByIdMethod.parameters[index];
+    if (!parameter || !ts.isIdentifier(parameter.name) || parameter.name.text !== name ||
+      !parameter.type || compactAstText(sourceFile, parameter.type) !== expectedType ||
+      Boolean(parameter.questionToken) !== optional || !decoratorsMatch(parameter, expectedDecorators) ||
+      parameter.initializer || parameter.dotDotDotToken || (ts.getModifiers(parameter) || []).length) {
+      failures.push(`get-by-id-parameter-${index + 1}-shape`);
+    }
+  }
+  if (getByIdMethod.body.statements.length !== 1 || !ts.isReturnStatement(getByIdMethod.body.statements[0]) ||
+    !getByIdMethod.body.statements[0].expression ||
+    !exactCallExpression(ts, sourceFile, getByIdMethod.body.statements[0].expression, "this.orders.getById", [
+      "id",
+      "{expectedWechatAccountId:wechatAccountId,expectedConversationId:conversationId,expectedCustomerId:customerId,}",
+    ])) {
+    failures.push("get-by-id-return-shape");
+  }
   failures.push(...criticalClassSymbolFailures(
     ts,
     sourceFile,
@@ -5414,13 +5720,16 @@ function ordersControllerAstFailures(text) {
     }
   }
   const everyPostDecorator = astNodes(ts, sourceFile, (node) => ts.isDecorator(node) && postDecorator(node));
-  const expectedRoutes = ["from-quote/:quoteId", ":id/update", ":id/revise-selection"];
+  const expectedRoutes = ["from-quote/:quoteId", ":id/update", ":id/fulfillment", ":id/after-sales", ":id/after-sales/:caseId/resolve", ":id/revise-selection"];
   const expectedRouteMethods = new Map([
     ["from-quote/:quoteId", "createFromQuote"],
     [":id/update", "update"],
+    [":id/fulfillment", "updateFulfillment"],
+    [":id/after-sales", "createAfterSales"],
+    [":id/after-sales/:caseId/resolve", "resolveAfterSales"],
     [":id/revise-selection", "reviseSelection"],
   ]);
-  if (routes.length !== 3 || everyPostDecorator.length !== 3 ||
+  if (routes.length !== 6 || everyPostDecorator.length !== 6 ||
     expectedRoutes.some((route) => routes.filter((entry) => entry.route === route).length !== 1) ||
     routes.some((entry) => entry.route === null || !ts.isIdentifier(entry.member.name) ||
       expectedRouteMethods.get(entry.route) !== entry.member.name.text)) {
@@ -5430,7 +5739,7 @@ function ordersControllerAstFailures(text) {
   const validPostIdentifier = (identifier) =>
     ts.isImportSpecifier(identifier.parent) ||
     (ts.isCallExpression(identifier.parent) && identifier.parent.expression === identifier && ts.isDecorator(identifier.parent.parent));
-  if (postIdentifiers.length !== 4 || postIdentifiers.some((identifier) => !validPostIdentifier(identifier))) {
+  if (postIdentifiers.length !== 7 || postIdentifiers.some((identifier) => !validPostIdentifier(identifier))) {
     failures.push("post-identifier-usage");
   }
   const updateRoutes = routes.filter((entry) => entry.route === ":id/update");
@@ -5480,6 +5789,67 @@ function ordersControllerAstFailures(text) {
       failures.push(`update-projection-${index + 1}-shape`);
     }
   }
+  const fulfillmentRoutes = routes.filter((entry) => entry.route === ":id/fulfillment");
+  if (fulfillmentRoutes.length !== 1 || !ts.isMethodDeclaration(fulfillmentRoutes[0].member) ||
+    !fulfillmentRoutes[0].member.body) return [...failures, "fulfillment-method-shape"];
+  const fulfillmentMethod = fulfillmentRoutes[0].member;
+  const expectedFulfillmentParameters = [
+    ["id", "string", [["Param", [stringArgument("id")]]]],
+    [
+      "payload",
+      "{status?:string;productionStatus?:string;productionDueAt?:string;carrier?:string;trackingNo?:string;shippedAt?:string;deliveredAt?:string;customerNotes?:string;owner?:string;operationKey?:string}&ExpectedIdentityPayload",
+      [["Body", []]],
+    ],
+    ["principal", "TrustedOperatorPrincipal", [["TrustedOperator", []]]],
+  ];
+  if (fulfillmentMethod.parameters.length !== expectedFulfillmentParameters.length) {
+    failures.push("fulfillment-parameter-count");
+  }
+  for (const [index, [name, expectedType, expectedDecorators]] of expectedFulfillmentParameters.entries()) {
+    const parameter = fulfillmentMethod.parameters[index];
+    if (!parameter || !ts.isIdentifier(parameter.name) || parameter.name.text !== name ||
+      !parameter.type || compactAstText(sourceFile, parameter.type) !== expectedType ||
+      !decoratorsMatch(parameter, expectedDecorators) || parameter.questionToken || parameter.initializer ||
+      parameter.dotDotDotToken || (ts.getModifiers(parameter) || []).length) {
+      failures.push(`fulfillment-parameter-${index + 1}-shape`);
+    }
+  }
+  if (fulfillmentMethod.body.statements.length !== 1 || !ts.isReturnStatement(fulfillmentMethod.body.statements[0])) {
+    return [...failures, "fulfillment-body-statement-count"];
+  }
+  const fulfillmentReturn = fulfillmentMethod.body.statements[0];
+  if (!fulfillmentReturn.expression || !ts.isCallExpression(fulfillmentReturn.expression) ||
+    compactAstText(sourceFile, fulfillmentReturn.expression.expression) !== "this.orders.updateFulfillment" ||
+    fulfillmentReturn.expression.arguments.length !== 2 || compactAstText(sourceFile, fulfillmentReturn.expression.arguments[0]) !== "id" ||
+    !ts.isObjectLiteralExpression(fulfillmentReturn.expression.arguments[1])) {
+    return [...failures, "fulfillment-return-call-shape"];
+  }
+  const fulfillmentProjection = fulfillmentReturn.expression.arguments[1];
+  const expectedFulfillmentProjection = [
+    ["status", "payload?.status"],
+    ["productionStatus", "payload?.productionStatus"],
+    ["productionDueAt", "payload?.productionDueAt"],
+    ["carrier", "payload?.carrier"],
+    ["trackingNo", "payload?.trackingNo"],
+    ["shippedAt", "payload?.shippedAt"],
+    ["deliveredAt", "payload?.deliveredAt"],
+    ["customerNotes", "payload?.customerNotes"],
+    ["expectedWechatAccountId", "payload?.expectedWechatAccountId"],
+    ["expectedConversationId", "payload?.expectedConversationId"],
+    ["expectedCustomerId", "payload?.expectedCustomerId"],
+    ["operationKey", "payload?.operationKey"],
+    ["owner", "principal.id"],
+  ];
+  if (fulfillmentProjection.properties.length !== expectedFulfillmentProjection.length) {
+    failures.push("fulfillment-projection-count");
+  }
+  for (const [index, [name, value]] of expectedFulfillmentProjection.entries()) {
+    const property = fulfillmentProjection.properties[index];
+    if (!property || !ts.isPropertyAssignment(property) || property.name.getText(sourceFile) !== name ||
+      compactAstText(sourceFile, property.initializer) !== value) {
+      failures.push(`fulfillment-projection-${index + 1}-shape`);
+    }
+  }
   const reviseRoutes = routes.filter((entry) => entry.route === ":id/revise-selection");
   if (reviseRoutes.length !== 1 || !ts.isMethodDeclaration(reviseRoutes[0].member) ||
     !reviseRoutes[0].member.body) return [...failures, "revise-selection-method-shape"];
@@ -5522,6 +5892,7 @@ function highRiskOperatorRouteResults(root) {
     assets: "desktop/apps/api/src/assets/assets.controller.ts",
     catalog: "desktop/apps/api/src/catalog/catalog.controller.ts",
     conversationOperations: "desktop/apps/api/src/conversation-ops/conversation-operations.controller.ts",
+    delivery: "desktop/apps/api/src/delivery/delivery-readiness.controller.ts",
     notifications: "desktop/apps/api/src/notifications/notifications.controller.ts",
     orders: "desktop/apps/api/src/orders/orders.controller.ts",
     wechat: "desktop/apps/api/src/wechat/wechat.controller.ts",
@@ -5589,12 +5960,20 @@ function highRiskOperatorRouteResults(root) {
       issues.push({ label, path: sourcePath(text), missing: failures.missing, forbidden: [] });
     }
   };
+  const checkForbiddenSource = (label, text, forbiddenPatterns) => {
+    const failures = patternFailures(text, [], forbiddenPatterns);
+    forbidden.push(...failures.forbidden.map((item) => `${label}-${item}`));
+    if (failures.forbidden.length) {
+      issues.push({ label, path: sourcePath(text), missing: [], forbidden: failures.forbidden });
+    }
+  };
 
   for (const [label, sourceKey] of [
     ["agents-class", "agents"],
     ["ai-providers-class", "aiProviders"],
     ["assets-class", "assets"],
     ["catalog-class", "catalog"],
+    ["delivery-class", "delivery"],
     ["notifications-class", "notifications"],
     ["quotes-class", "quotes"],
     ["routing-class", "routing"],
@@ -5665,30 +6044,9 @@ function highRiskOperatorRouteResults(root) {
       /@UseGuards\(OperatorAccessGuard\)/,
     ]);
   }
-  for (const [label, routePattern] of [
-    ["wechat-bridge-outbox", /@Get\(["']bridge\/outbox["']\)/],
-    ["wechat-bridge-dispatch", /@Get\(["']bridge\/dispatch["']\)/],
-    ["wechat-bridge-status", /@Get\(["']bridge\/status["']\)/],
-    ["wechat-bridge-inbox-scan", /@Post\(["']bridge\/inbox\/scan["']\)/],
-  ]) {
-    check(label, sources.wechat, routePattern, [
-      /@RequireOperatorCapability\(["']view_console["']\)/,
-      /@UseGuards\(WechatBridgeAccessGuard\)/,
-    ]);
-  }
-  for (const [label, routePattern] of [
-    ["wechat-window-snapshots", /@Get\(["']window-snapshots["']\)/],
-    ["wechat-window-observer-status", /@Get\(["']window-observer\/status["']\)/],
-    ["wechat-window-inbox-scan", /@Post\(["']window-snapshots\/inbox\/scan["']\)/],
-  ]) {
-    check(label, sources.wechat, routePattern, [
-      /@RequireOperatorCapability\(["']view_console["']\)/,
-      /@UseGuards\(WechatWindowObserverAccessGuard\)/,
-    ]);
-  }
-  check("wechat-bridge-ack-dedicated", sources.wechat, /@Post\(["']send-tasks\/:id\/bridge-ack["']\)/, [], [
-    /@RequireOperatorCapability\(/,
-    /@UseGuards\((?:OperatorAccessGuard|WechatBridgeAccessGuard|WechatWindowObserverAccessGuard)\)/,
+  checkForbiddenSource("wechat-removed-legacy-api", sources.wechat, [
+    /\b(?:listBridgeOutbox|listBridgeDispatch|getBridgeStatus|scanBridgeInbox|listWindowSnapshots|getWindowObserverStatus|captureWindowObserverOnce|scanWindowSnapshotInbox|createDemoWindowSnapshot|validateWithCurrentWindow|markSent|markSentWithCurrentWindow|acknowledgeBridgeSend)\s*\(/,
+    /@(?:Get|Post)\(["'](?:bridge\/|window-snapshots|window-observer\/|send-tasks\/:id\/bridge-ack)/,
   ]);
 
   check("wechat-work-sync", sources.wechatWork, /@Post\(["']kf\/sync["']\)/, [
@@ -6264,29 +6622,101 @@ function capabilityTruthResults(root) {
   ];
 }
 
-function externalEvidenceResults() {
-  return [
-    result("external.windows_signing", "Windows 正式签名与安装验收", STATUS.BLOCKED, "需要企业代码签名证书、目标 Windows 安装/卸载和 SmartScreen 证据。", { external: true }),
-    result("external.staging", "真实预发布环境", STATUS.BLOCKED, "需要预发布账号、密钥、HTTPS、数据库迁移和只读就绪报告。", { external: true }),
-    result("external.channels", "真实渠道联调", STATUS.BLOCKED, "需要企业微信/设计平台授权账号与真实回调验收；不得由离线审计发消息。", { external: true }),
-    result("external.personal_wechat", "个人微信现场硬件与会话", STATUS.BLOCKED, "需要授权 Windows 会话、目标微信版本、登录账号和 UI Automation 现场证据。", { external: true }),
-    result("external.database_recovery", "隔离数据库恢复演练", STATUS.BLOCKED, "需要数据库负责人提供独立 rehearsal/sandbox 目标并显式确认执行。", { external: true }),
-  ];
+function externalEvidenceResults(resultIds = null) {
+  return filterRequestedResults([
+    result("external.windows_signing", "Windows 正式签名与安装验收", STATUS.BLOCKED, "需要企业代码签名证书、目标 Windows 安装/卸载和 SmartScreen 证据；这不是仓库代码缺陷。", externalBlockerEvidence([
+      "企业代码签名证书和签名机/CI 记录",
+      "目标 Windows 安装、卸载和 SmartScreen 验收报告",
+      "安装包 SHA-256 与签名校验输出",
+    ])),
+    result("external.staging", "真实预发布环境", STATUS.BLOCKED, "需要预发布账号、密钥、HTTPS、数据库迁移和只读就绪报告；这不是仓库代码缺陷。", externalBlockerEvidence([
+      "ICP/HTTPS 预发布域名",
+      "隔离 PostgreSQL/Redis 与迁移记录",
+      "只读 staging readiness 报告",
+    ])),
+    result("external.channels", "真实渠道联调", STATUS.BLOCKED, "需要企业微信/设计平台授权账号与真实回调验收；不得由离线审计发消息，这不是仓库代码缺陷。", externalBlockerEvidence([
+      "企业微信客服 HTTPS 回调、Token 和 EncodingAESKey 验收",
+      "sync_msg 到 send_msg 的受控链路证据",
+      "臻希 AI 真实授权账号和只读 readiness 报告",
+    ])),
+    result("legacy.personal_wechat_disabled", "个人微信遗留通道默认禁用", STATUS.PASS, "当前产品范围只保留企业微信；个人微信现场硬件与会话不再作为发布阻塞项。", { external: false, productMode: "enterprise_wechat_only" }),
+    result("external.database_recovery", "隔离数据库恢复演练", STATUS.BLOCKED, "需要数据库负责人提供独立 rehearsal/sandbox 目标并显式确认执行；这不是仓库代码缺陷。", externalBlockerEvidence([
+      "独立 rehearsal/sandbox 数据库目标",
+      "备份、恢复、迁移和一致性检查输出",
+      "数据库负责人确认记录",
+    ])),
+  ], resultIds);
+}
+
+function externalBlockerEvidence(requiredEvidence) {
+  return {
+    external: true,
+    localCodeDefect: false,
+    blocksProductionRelease: true,
+    closureRequiresExternalEvidence: true,
+    requiredEvidence,
+  };
+}
+
+function isExternalAuditResult(item) {
+  return item?.evidence?.external === true || String(item?.id || "").startsWith("external.");
+}
+
+function completionVerdict(results) {
+  const failed = results.filter((item) => item.status === STATUS.FAIL);
+  const blocked = results.filter((item) => item.status === STATUS.BLOCKED);
+  const externalBlocked = blocked.filter(isExternalAuditResult);
+  const internalBlocked = blocked.filter((item) => !isExternalAuditResult(item));
+  let state = "local_verified";
+  if (failed.length) state = "local_failed";
+  else if (internalBlocked.length) state = "local_blocked";
+  else if (externalBlocked.length) state = "local_verified_external_blocked";
+  return {
+    state,
+    localCodeDefectCount: failed.length,
+    internalBlockerCount: internalBlocked.length,
+    externalBlockerCount: externalBlocked.length,
+    productionReleaseAllowed: state === "local_verified",
+    externalBlockerIds: externalBlocked.map((item) => item.id),
+    internalBlockerIds: internalBlocked.map((item) => item.id),
+    summary: completionVerdictSummary(state, failed.length, internalBlocked.length, externalBlocked.length),
+  };
+}
+
+function completionVerdictSummary(state, failed, internalBlocked, externalBlocked) {
+  if (state === "local_failed") return `仓库内仍有 ${failed} 个 FAIL，必须先修复本地实现或证据解析。`;
+  if (state === "local_blocked") return `仓库内仍有 ${internalBlocked} 个非外部 BLOCKED，需要先补齐本地证据或冻结范围。`;
+  if (state === "local_verified_external_blocked") return `仓库内 FAIL=0，剩余 ${externalBlocked} 个 BLOCKED 均需要真实外部证据关闭，不应被解释成代码残缺。`;
+  return "仓库内完成度审计已闭环，未发现 FAIL 或 BLOCKED。";
 }
 
 function buildAudit(root, options = {}) {
   const resolvedRoot = path.resolve(root);
-  const results = [
-    ...artifactResults(resolvedRoot),
-    ...contractResults(resolvedRoot),
-    ...highRiskOperatorRouteResults(resolvedRoot),
-    ...designReconciliationResults(resolvedRoot),
-    plannedScopeResult(resolvedRoot),
-    placeholderResult(resolvedRoot),
-    ...localStoreInventoryResults(resolvedRoot),
-    ...capabilityTruthResults(resolvedRoot),
-    ...(options.includeExternal === false ? [] : externalEvidenceResults()),
-  ];
+  const resultIds = normalizeAuditResultIds(options);
+  const results = [];
+  results.push(...artifactResults(resolvedRoot, resultIds));
+  results.push(...contractResults(resolvedRoot, resultIds));
+  if (wantsResult(resultIds, "contract.high_risk_operator_routes")) {
+    results.push(...highRiskOperatorRouteResults(resolvedRoot));
+  }
+  if (wantsAnyResult(resultIds, [
+    "contract.design_execution_reconciliation_ui",
+    "contract.design_execution_public_view",
+    "contract.design_execution_list_identity",
+    "contract.design_execution_resolution_boundaries",
+  ])) {
+    results.push(...filterRequestedResults(designReconciliationResults(resolvedRoot), resultIds));
+  }
+  if (wantsResult(resultIds, PLANNED_CHANNEL_SCOPE.id)) results.push(plannedScopeResult(resolvedRoot));
+  if (wantsResult(resultIds, "source.production_placeholders")) results.push(placeholderResult(resolvedRoot));
+  if (wantsAnyResult(resultIds, FIXED_LOCAL_INVENTORY.map((item) => item.id))) {
+    results.push(...filterRequestedResults(localStoreInventoryResults(resolvedRoot), resultIds));
+  }
+  if (wantsResult(resultIds, "capability.image_fingerprint")) {
+    results.push(...capabilityTruthResults(resolvedRoot));
+  }
+  if (options.includeExternal !== false) results.push(...externalEvidenceResults(resultIds));
+  assertRequestedResultsResolved(resultIds, results);
   const status = aggregateStatus(results);
   const counts = Object.fromEntries(Object.values(STATUS).map((value) => [value, results.filter((item) => item.status === value).length]));
   return {
@@ -6309,6 +6739,7 @@ function buildAudit(root, options = {}) {
       pathsAreRepositoryRelative: true,
       reportPath: "desktop/.runtime/project-completion-audit/latest.{json,md}",
     },
+    completionVerdict: completionVerdict(results),
     results,
   };
 }
@@ -6326,6 +6757,14 @@ function toMarkdown(report) {
     `- 模式：${report.mode}`,
     `- 汇总：PASS ${report.counts.PASS} / BLOCKED ${report.counts.BLOCKED} / FAIL ${report.counts.FAIL}`,
     "- 安全边界：无网络、无命令执行、无数据库连接、无真实发送，不读取 `.env` 或其他密钥文件。",
+    "",
+    "## 本地完成判定",
+    "",
+    `- 状态：\`${report.completionVerdict.state}\``,
+    `- 代码失败：${report.completionVerdict.localCodeDefectCount}`,
+    `- 本地阻塞：${report.completionVerdict.internalBlockerCount}`,
+    `- 外部阻塞：${report.completionVerdict.externalBlockerCount}`,
+    `- 结论：${report.completionVerdict.summary}`,
     "",
     "| 状态 | 检查项 | 结论 | 证据路径 |",
     "| --- | --- | --- | --- |",
@@ -6397,6 +6836,7 @@ module.exports = {
   aggregateStatus,
   absoluteFrom,
   buildAudit,
+  clearAuditAnalysisCaches,
   loadTypeScriptCompilerFromDependencyRoot,
   maskTypeScriptCommentsAndStrings,
   parseArgs,

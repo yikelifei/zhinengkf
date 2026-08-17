@@ -78,6 +78,7 @@ test("database URL policy rejects defaults and unsafe recovery targets", () => {
   assert.equal(parseDatabaseUrl("mysql://app:strong@localhost/app", "源").status, STATUS.FAIL);
   assert.equal(parseDatabaseUrl("postgresql://app:strong@db.acme.cn/app", "源").status, STATUS.BLOCKED);
   assert.equal(parseDatabaseUrl("postgresql://app:strong@db.acme.cn/app?sslmode=verify-full", "源").status, STATUS.PASS);
+  assert.equal(parseDatabaseUrl("postgresql://app:strong@staging-db.internal/app?sslmode=verify-full", "源").evidence.hostClass, "private");
 
   const same = inspectSafety({
     DATABASE_RECOVERY_SOURCE_URL: "postgresql://app:source@127.0.0.1:5432/smart_kefu_rehearsal",
@@ -179,7 +180,9 @@ test("successful rehearsal records only redacted versions, hash, migration and c
     assert.equal(serialized.includes(secret), false);
   }
   assert.equal(calls.some((item) => item.args.some((arg) => String(arg).includes("postgresql://"))), false);
-  assert.equal(calls.find((item) => item.stage === "restore").args.at(-1), path.join(runDirectory, "rehearsal.dump"));
+  const restoreCall = calls.find((item) => item.stage === "restore");
+  assert.deepEqual(restoreCall.args.slice(0, 2), ["--dbname", "smart_kefu_rehearsal"]);
+  assert.equal(restoreCall.args.at(-1), path.join(runDirectory, "rehearsal.dump"));
 });
 
 test("restore command failures are FAIL and temporary backup is removed", async (t) => {

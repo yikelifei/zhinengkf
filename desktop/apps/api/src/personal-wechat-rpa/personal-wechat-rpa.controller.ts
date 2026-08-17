@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Param, Post, UseGuards } from "@nestjs/
 import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
 import {
   PersonalWechatRpaInboundPayload,
+  PersonalWechatRpaConversationIdentity,
   PersonalWechatRpaInstanceInput,
   PersonalWechatRpaService,
 } from "./personal-wechat-rpa.service";
@@ -41,6 +42,13 @@ export class PersonalWechatRpaController {
   @UseGuards(OperatorAccessGuard)
   disableInstance(@Param("wechatAccountId") wechatAccountId: string) {
     return this.personalWechatRpa.disableInstance(wechatAccountId);
+  }
+
+  @Post("conversations/prepare")
+  @RequireOperatorCapability("approve_send")
+  @UseGuards(OperatorAccessGuard)
+  prepareConversation(@Body() payload: PersonalWechatRpaConversationIdentity) {
+    return this.personalWechatRpa.prepareConversation(payload || {});
   }
 
   @Post("inbound")

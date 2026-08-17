@@ -36,8 +36,10 @@ type ConversationOperationsPanelProps = {
   conversationTitle?: string;
   operations: ConversationOperationsView | null;
   currentOperator: string;
+  readState?: "unknown" | "loading" | "ready" | "refreshing" | "stale";
   busy?: boolean;
   error?: string;
+  onRetry?: () => void;
   onSave: (patch: ConversationOperationsPatch) => Promise<void> | void;
 };
 
@@ -59,8 +61,10 @@ export function ConversationOperationsPanel({
   conversationTitle,
   operations,
   currentOperator,
+  readState = operations ? "ready" : "unknown",
   busy = false,
   error,
+  onRetry,
   onSave,
 }: ConversationOperationsPanelProps) {
   const [assignee, setAssignee] = useState("");
@@ -107,15 +111,23 @@ export function ConversationOperationsPanel({
   }
 
   if (!operations) {
+    const unavailableCopy = readState === "loading"
+      ? "正在读取负责人、优先级、处理状态与 SLA。"
+      : readState === "ready"
+        ? "读取成功，但当前会话尚未建立分配与 SLA 记录，不能直接提交空白默认值。"
+        : "分配与 SLA 尚未成功读取，不能据此认定当前会话未分配或未设置时限。";
     return (
       <section className={styles.panel} aria-label="会话分配与服务时限">
         <div className={styles.header}>
           <div>
             <strong>会话分配与 SLA</strong>
-            <span>选择客户会话后可设置负责人、优先级和处理时限。</span>
+            <span>{unavailableCopy}</span>
           </div>
         </div>
-        <div className={styles.empty}>尚未载入会话运营状态。</div>
+        <div className={error ? styles.error : styles.empty} role={error ? "alert" : "status"}>
+          {error || unavailableCopy}
+          {onRetry && readState !== "loading" ? <button type="button" className={styles.clearButton} data-action-id="conversations-assignment-retry" aria-label="重新读取会话分配与服务时限" onClick={onRetry} disabled={readState === "refreshing"}>重新读取</button> : null}
+        </div>
       </section>
     );
   }
@@ -190,7 +202,9 @@ export function ConversationOperationsPanel({
           SLA 配置需要修复：{operations.configurationIssues.join("、")}
         </div>
       ) : null}
-      {error ? <div className={styles.error} role="alert">{error}</div> : null}
+      {error && readState !== "stale" ? <div className={styles.error} role="alert">{error}</div> : null}
+      {readState === "refreshing" ? <div className={styles.warning} role="status"><Clock3 size={15} aria-hidden="true" />正在刷新分配与 SLA，当前显示上次成功结果；刷新完成前已禁用保存。</div> : null}
+      {readState === "stale" ? <div className={styles.warning} role="alert"><AlertTriangle size={15} aria-hidden="true" /><span>当前显示上次成功读取的分配与 SLA，最新刷新失败；重新读取前已禁用保存。{error ? `原因：${error}` : ""}</span>{onRetry ? <button type="button" className={styles.clearButton} data-action-id="conversations-assignment-refresh-stale" aria-label="重新读取会话分配与服务时限" onClick={onRetry}>重新读取</button> : null}</div> : null}
 
       <div className={styles.footer}>
         <button type="button" className={styles.clearButton} data-action-id="conversations-assignment-clear" aria-label="取消当前会话分配" onClick={() => setAssignee("")} disabled={busy || !assignee}>

@@ -70,7 +70,7 @@ function makeJob(id = "design-1") {
     status: "draft",
     designType: "bundle_render",
     renderStyle: "真实产品摆拍",
-    outputCount: 6,
+    outputCount: 4,
     budget: { mode: "per_box", totalAmount: 1000, quantity: 10 },
     bundle: { items: [{ skuCode: "SKU-1", name: "Gift" }] },
     requirements: { useRealSkuImages: false },
@@ -193,12 +193,12 @@ function completedCallback(externalJobId = "external-callback-1") {
     requestId: "design-create:design-1:1111111111111111",
     externalJobId,
     status: "completed",
-    images: [{
-      imageId: "candidate_1",
-      downloadUrl: "https://design.example.test/candidate_1.png",
+    images: Array.from({ length: 4 }, (_, index) => ({
+      imageId: `candidate_${index + 1}`,
+      downloadUrl: `https://design.example.test/candidate_${index + 1}.png`,
       width: 1024,
       height: 1024,
-    }],
+    })),
   };
 }
 
@@ -317,7 +317,7 @@ test("revision concurrency allocates one number, one stable requestId and one wa
   });
 });
 
-test("concurrent completed callbacks claim once and commit one image and notification", async () => {
+test("concurrent completed callbacks claim once and commit four images and one notification", async () => {
   await withLocalStandard(async () => {
     const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "design-callback-storage-"));
     const previousStorageRoot = appConfig.localStorageRoot;
@@ -328,7 +328,7 @@ test("concurrent completed callbacks claim once and commit one image and notific
       fixture.store.updateDesignJob("design-1", {
         externalJobId: "external-callback-1",
         status: "submitted",
-        outputCount: 1,
+        outputCount: 4,
         manualQcRequired: false,
       });
       const payload = completedCallback();
@@ -337,10 +337,10 @@ test("concurrent completed callbacks claim once and commit one image and notific
         fixture.service.handleDesignPlatformCallback(payload),
       ]);
       assert.equal(first.id, second.id);
-      assert.equal(callbackFiles.saveCount(), 1);
+      assert.equal(callbackFiles.saveCount(), 4);
       assert.equal(
         fixture.store.getDesignJob("design-1").images.length,
-        1,
+        4,
         JSON.stringify(fixture.store.listNotifications().map((notice) => notice.title)),
       );
       assert.equal(fixture.store.getDesignJob("design-1").callbackStatus, "settled");
@@ -368,7 +368,7 @@ test("completed and failed callbacks for one external job share the completed wi
       fixture.store.updateDesignJob("design-1", {
         externalJobId: "external-callback-1",
         status: "submitted",
-        outputCount: 1,
+        outputCount: 4,
         manualQcRequired: false,
       });
       const completed = fixture.service.handleDesignPlatformCallback(completedCallback());
@@ -380,7 +380,7 @@ test("completed and failed callbacks for one external job share the completed wi
       assert.equal(job.callbackStatus, "settled");
       assert.notEqual(job.status, "failed");
       assert.equal(fixture.externalPayloads.length, 0);
-      assert.equal(fixture.store.getDesignJob("design-1").images.length, 1);
+      assert.equal(fixture.store.getDesignJob("design-1").images.length, 4);
     } finally {
       appConfig.localStorageRoot = previousStorageRoot;
       fs.rmSync(fixture.tempDir, { recursive: true, force: true });
@@ -408,7 +408,7 @@ test("cancellation claimed during a completed callback prevents image commit and
       fixture.store.updateDesignJob("design-1", {
         externalJobId: "external-callback-1",
         status: "submitted",
-        outputCount: 1,
+        outputCount: 4,
         manualQcRequired: false,
       });
       const completed = fixture.service.handleDesignPlatformCallback(completedCallback());
@@ -446,7 +446,7 @@ test("concurrent failed callbacks settle once and start at most one retry", asyn
       fixture.store.updateDesignJob("design-1", {
         externalJobId: "external-callback-1",
         status: "submitted",
-        outputCount: 1,
+        outputCount: 4,
       });
       const payload = failedCallback();
       await Promise.all([
@@ -474,7 +474,7 @@ function createPrismaCallbackRaceFixture(storageRoot, gate) {
     ...makeJob(),
     externalJobId: "external-callback-1",
     status: "submitted",
-    outputCount: 1,
+    outputCount: 4,
     manualQcRequired: false,
     images: [],
     callbackOperationKey: null,
@@ -571,7 +571,7 @@ test("fresh Prisma cross-process completed callbacks leave the first claim in pr
     gate.resolve();
     await first;
     assert.equal(getJob().callbackStatus, "settled");
-    assert.equal(persistedImages.length, 1);
+    assert.equal(persistedImages.length, 4);
     assert.equal(notices.filter((notice) => notice[1] === "设计图已生成").length, 1);
   });
 });
@@ -588,7 +588,7 @@ test("fresh Prisma cross-process completed-vs-failed callbacks preserve the comp
     await first;
     assert.equal(getJob().callbackStatus, "settled");
     assert.notEqual(getJob().status, "failed");
-    assert.equal(persistedImages.length, 1);
+    assert.equal(persistedImages.length, 4);
     assert.equal(notices.filter((notice) => notice[1] === "设计平台出图失败").length, 0);
   });
 });

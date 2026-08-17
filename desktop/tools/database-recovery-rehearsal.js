@@ -13,6 +13,7 @@ const SCHEMA_VERSION = "smart_kefu_database_recovery_rehearsal_v2";
 const CONFIRMATION_PREFIX = "RESTORE ISOLATED REHEARSAL DATABASE:";
 const SAFE_TARGET_PATTERN = /(?:^|[_-])(?:rehearsal|restore[_-]?drill|recovery[_-]?drill|sandbox)(?:\d+)?(?:$|[_-])/i;
 const PRODUCTION_PATTERN = /(?:^|[.\-_])(?:prod(?:uction)?|live)(?:\d+)?(?:$|[.\-_])/i;
+const PRIVATE_DNS_SUFFIX_PATTERN = /(?:^|\.)(?:corp|internal|intranet|lan|localdomain)$/i;
 const COUNT_SQL = [
   "SELECT",
   "  (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE')::text",
@@ -47,7 +48,7 @@ function isLoopbackHost(hostname) {
 function hostClass(hostname) {
   const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
   if (isLoopbackHost(host)) return "loopback";
-  if (host.endsWith(".local") || !host.includes(".")) return "private";
+  if (host.endsWith(".local") || PRIVATE_DNS_SUFFIX_PATTERN.test(host) || !host.includes(".")) return "private";
   if (/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)) return "private";
   return "public";
 }
@@ -319,7 +320,23 @@ async function collectDatabaseRecoveryRehearsal(options = {}) {
     const backup = { sha256: sha256File(backupFile), bytes: fs.statSync(backupFile).size, format: "custom" };
     results.push(result("rehearsal.backup", "临时备份", STATUS.PASS, "备份已生成并完成 SHA-256 校验。", backup));
 
-    const restore = runSpec(runCommand, "restore", tools.pgRestore, ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--exit-on-error", backupFile], root, targetEnv);
+    const restore = runSpec(
+      runCommand,
+      "restore",
+      tools.pgRestore,
+      [
+        "--dbname",
+        safety.target.connection.database,
+        "--clean",
+        "--if-exists",
+        "--no-owner",
+        "--no-privileges",
+        "--exit-on-error",
+        backupFile,
+      ],
+      root,
+      targetEnv,
+    );
     commandsExecuted += 1;
     if (!commandSucceeded(restore)) {
       results.push(result("rehearsal.restore", "隔离恢复", STATUS.FAIL, "pg_restore 在隔离演练库执行失败。", { commandExitCode: restore?.status ?? null }));

@@ -8,10 +8,15 @@ import {
   canonicalDesktopProxyPath,
   createWebReadinessProof,
   evaluateDesktopSessionProof,
+  evaluateLocalBrowserApiAccess,
   isForbiddenWebProxyIngress,
   requiresDesktopSessionProof,
   verifyApiReadinessProof,
 } from "../../../lib/desktop-session-proof";
+
+const { MAX_DESKTOP_API_JSON_BODY_BYTES } = require("../../../../../../packages/runtime/desktop-request-limits") as {
+  MAX_DESKTOP_API_JSON_BODY_BYTES: number;
+};
 
 const INTERNAL_API_TOKEN_HEADER = "x-internal-api-token";
 const INTERNAL_API_TOKEN_PATTERN = /^[a-f0-9]{64}$/i;
@@ -46,7 +51,11 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
       request.headers.get("cookie"),
       process.env.DESKTOP_WEB_SESSION_PROOF,
     );
-    if (!desktopSession.allowed) {
+    const localBrowser = evaluateLocalBrowserApiAccess(request.url, request.headers, {
+      allowLocalBrowserWebApi: process.env.ALLOW_LOCAL_BROWSER_WEB_API,
+      nodeEnv: process.env.NODE_ENV,
+    });
+    if (!desktopSession.allowed && !localBrowser.allowed) {
       return jsonError(403, desktopSession.reason, "A verified Electron desktop session is required.");
     }
   }
@@ -62,19 +71,29 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
 
   const headers = buildDesktopApiUpstreamHeaders(request.headers, token, INTERNAL_API_TOKEN_HEADER);
   const method = request.method.toUpperCase();
+  const hasBody = method !== "GET" && method !== "HEAD";
+  if (hasBody && advertisedBodyExceedsLimit(request.headers.get("content-length"))) {
+    return jsonError(413, "desktop_api_body_too_large", "The desktop API request body is too large.");
+  }
   const desktopSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim();
   const isReadinessHealth = method === "GET" && canonicalPath.path === "health";
   if (isReadinessHealth) headers.set(READINESS_CHALLENGE_HEADER, desktopSessionProof);
 
   try {
-    const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+    const body = hasBody ? await request.arrayBuffer() : undefined;
+    if (body && body.byteLength > MAX_DESKTOP_API_JSON_BODY_BYTES) {
+      return jsonError(413, "desktop_api_body_too_large", "The desktop API request body is too large.");
+    }
+    // Reading the incoming body can close the client request and abort its signal even
+    // though the body was received successfully. Reusing that signal cancels every
+    // loopback POST before it reaches the API. Forward the buffered body independently.
+    const upstreamBody = body && body.byteLength ? Buffer.from(body) : undefined;
     const upstream = await fetch(upstreamUrl, {
       method,
       headers,
-      body: body && body.byteLength ? body : undefined,
+      body: upstreamBody,
       cache: "no-store",
       redirect: "manual",
-      signal: request.signal,
     });
     const responseHeaders = new Headers(upstream.headers);
     for (const header of RESPONSE_HEADERS_TO_REMOVE) responseHeaders.delete(header);
@@ -98,6 +117,12 @@ async function proxyDesktopApi(request: Request, context: ApiProxyContext) {
   }
 }
 
+function advertisedBodyExceedsLimit(value: string | null) {
+  if (!value) return false;
+  const bytes = Number(value);
+  return Number.isFinite(bytes) && bytes >= 0 && bytes > MAX_DESKTOP_API_JSON_BODY_BYTES;
+}
+
 function bindPackagedReadinessBody(body: Buffer, internalSecret: string, desktopSessionProof: string, upstreamOk: boolean) {
   if (!upstreamOk) return body;
   try {
@@ -118,7 +143,18 @@ function validPort(value: string | undefined, fallback: number) {
 }
 
 function jsonError(status: number, code: string, message: string) {
-  const error = status === 503 ? "Service Unavailable" : status === 403 ? "Forbidden" : status === 404 ? "Not Found" : status === 400 ? "Bad Request" : "Bad Gateway";
+  const error =
+    status === 503
+      ? "Service Unavailable"
+      : status === 413
+        ? "Payload Too Large"
+        : status === 403
+          ? "Forbidden"
+          : status === 404
+            ? "Not Found"
+            : status === 400
+              ? "Bad Request"
+              : "Bad Gateway";
   return Response.json({ statusCode: status, error, code, message }, { status });
 }
 

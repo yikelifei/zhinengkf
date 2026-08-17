@@ -5,15 +5,34 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { assertExpectedIdentity, ExpectedIdentityPayload } from "../shared/identity-expectation";
+import {
+  assertExactOperationReplay,
+  createOperationFingerprint,
+  deterministicOperationId,
+  isUniqueConstraintError,
+  normalizeOperationKey,
+  readRequestOperationMetadata,
+  requestOperationMetadata,
+} from "../shared/operation-idempotency";
 
 const {
   buildOrderConfirmationCustomerMessage,
+  buildOrderFollowupCustomerMessage,
   buildOrderDraftFromQuote,
   cleanOrderDraftPatch,
+  evaluateOrderFulfillmentTransition,
   evaluateLowValueOrderDraftFromQuote,
+  isValidCarrier,
+  isValidTrackingNo,
+  normalizeDesignImageSnapshot,
+  normalizeCarrier,
+  normalizeTrackingNo,
   quotePatchForOrderDraft,
   validateOrderDraftQuoteBinding,
 } = require(path.join(process.cwd(), "packages", "rules"));
+
+const AFTER_SALES_CREATE_DECISION = "after_sales_case_created";
+const AFTER_SALES_RESOLVE_DECISION = "after_sales_case_resolved";
 
 @Injectable()
 export class OrdersService {
@@ -38,8 +57,11 @@ export class OrdersService {
     return this.attachOrderSendTasks(orders);
   }
 
-  async getById(id: string) {
-    return this.getOrderDraft(id);
+  async getById(id: string, expected: ExpectedIdentityPayload = {}) {
+    const order = await this.getOrderDraft(id);
+    if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
+    return order;
   }
 
   async confirmationPreview(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -54,6 +76,244 @@ export class OrdersService {
     };
   }
 
+  async followupPreview(id: string, type: "production" | "delivery" = "production", expected: ExpectedIdentityPayload = {}) {
+    const order = await this.getOrderDraft(id);
+    if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
+    const followupType = type === "delivery" ? "delivery" : "production";
+    return {
+      orderDraft: order,
+      type: followupType,
+      message: this.buildOrderFollowupMessage(order, followupType),
+      warnings: this.orderFollowupPreviewWarnings(order, followupType),
+    };
+  }
+
+  async listAfterSalesCases(id: string, expected: ExpectedIdentityPayload = {}) {
+    const order = await this.getOrderDraft(id);
+    if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
+    const logs = await this.listAfterSalesReviewLogs(id);
+    return buildAfterSalesCasesFromLogs(logs, order);
+  }
+
+  async createAfterSalesCase(id: string, payload: AfterSalesCreatePatch & ExpectedIdentityPayload = {}) {
+    const operationKey = normalizeOperationKey(payload?.operationKey, "operationKey");
+    const current = await this.getOrderDraft(id);
+    if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(current, payload, "order draft");
+
+    const type = normalizeAfterSalesType(payload.type);
+    const reason = cleanAfterSalesText(payload.reason, 800);
+    if (!reason) throw new BadRequestException("售后申请必须填写客户问题、证据或处理原因。");
+    const requestedAmountCny = normalizeAfterSalesAmount(payload.requestedAmountCny);
+    if (["refund", "compensation"].includes(type) && (requestedAmountCny === null || requestedAmountCny <= 0)) {
+      throw new BadRequestException("退款或补偿售后必须填写大于 0 的申请金额。");
+    }
+
+    const paymentSummary = await this.afterSalesPaymentSummary(current);
+    if (requestedAmountCny !== null && requestedAmountCny > paymentSummary.refundableAmountCny + 0.0001) {
+      throw new BadRequestException(`售后申请金额超过可退金额：可退 ${paymentSummary.refundableAmountCny} 元。`);
+    }
+
+    const effectKey = `after-sales-case:${operationKey}`;
+    const caseId = deterministicOperationId("after_sales_case", effectKey);
+    const requestOperation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "after-sales-case-create",
+        afterSalesOperationIdentity(id, current, payload),
+        {
+          type,
+          reason,
+          requestedAmountCny,
+          evidenceReference: cleanAfterSalesText(payload.evidenceReference, 300),
+          desiredResolution: cleanAfterSalesText(payload.desiredResolution, 500),
+        },
+      ),
+    );
+
+    const existing = await this.findReviewLogByEffectKey(effectKey);
+    if (existing) {
+      assertExactOperationReplay(readRequestOperationMetadata(existing.metadata), requestOperation, "after-sales case");
+      return buildAfterSalesCaseFromCreateLog(existing, current);
+    }
+
+    const reviewLog = await this.createReviewLog({
+      targetType: "order_draft",
+      targetId: id,
+      decision: AFTER_SALES_CREATE_DECISION,
+      reviewer: payload.owner || "人工客服",
+      note: `after_sales_created:${type}`,
+      beforeStatus: String(current.status || ""),
+      afterStatus: "open",
+      metadata: {
+        effectKey,
+        requestOperation,
+        source: "manual_order_after_sales",
+        caseId,
+        status: "open",
+        type,
+        reason,
+        requestedAmountCny,
+        evidenceReference: cleanAfterSalesText(payload.evidenceReference, 300),
+        desiredResolution: cleanAfterSalesText(payload.desiredResolution, 500),
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId || null,
+        designJobId: current.designJobId || null,
+        paymentSummary,
+      },
+    });
+
+    await this.notifications.create(
+      "warning",
+      "订单售后待处理",
+      `订单 ${id} 已创建售后 case，类型：${afterSalesTypeLabel(type)}。`,
+      {
+        effectKey: `${effectKey}:notification`,
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId,
+        designJobId: current.designJobId,
+        wechatAccountId: current.wechatAccountId,
+        conversationId: current.conversationId,
+        customerId: current.customerId,
+        afterSalesCaseId: caseId,
+      },
+    );
+
+    return buildAfterSalesCaseFromCreateLog(reviewLog, current);
+  }
+
+  async resolveAfterSalesCase(
+    id: string,
+    caseId: string,
+    payload: AfterSalesResolvePatch & ExpectedIdentityPayload = {},
+  ) {
+    const operationKey = normalizeOperationKey(payload?.operationKey, "operationKey");
+    const current = await this.getOrderDraft(id);
+    if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(current, payload, "order draft");
+
+    const cases = await this.listAfterSalesCases(id, payload);
+    const afterSalesCase = cases.find((item: any) => item.id === caseId);
+    if (!afterSalesCase) throw new BadRequestException(`没有找到售后 case：${caseId}`);
+
+    const resolutionType = normalizeAfterSalesResolutionType(payload.resolutionType);
+    const approvedAmountCny = normalizeAfterSalesAmount(payload.approvedAmountCny);
+    const note = cleanAfterSalesText(payload.note, 1000);
+    const replacementCarrier = normalizeCarrier(cleanAfterSalesText(payload.replacementCarrier, 120));
+    const replacementTrackingNo = normalizeTrackingNo(cleanAfterSalesText(payload.replacementTrackingNo, 120));
+
+    if (["refund", "compensation"].includes(resolutionType) && (approvedAmountCny === null || approvedAmountCny <= 0)) {
+      throw new BadRequestException("退款或补偿处理必须填写大于 0 的实际金额。");
+    }
+    if (["refund", "compensation"].includes(resolutionType) && !cleanAfterSalesText(payload.refundMethod, 120)) {
+      throw new BadRequestException("退款或补偿处理必须填写实际退款方式。");
+    }
+    if (["refund", "compensation"].includes(resolutionType) && !cleanAfterSalesText(payload.refundReference, 160)) {
+      throw new BadRequestException("退款或补偿处理必须填写可核验的退款凭证号。");
+    }
+    if (resolutionType === "replacement" && (!replacementCarrier || !replacementTrackingNo)) {
+      throw new BadRequestException("记录补发完成必须填写物流公司和可核验的补发物流单号；尚未发出时请保持 case 待处理。");
+    }
+    if (resolutionType === "replacement" && (!isValidCarrier(replacementCarrier) || !isValidTrackingNo(replacementTrackingNo))) {
+      throw new BadRequestException("补发物流公司或物流单号格式不正确；请填写真实承运方和至少 6 位、包含数字的可核验单号。");
+    }
+
+    const paymentSummary = await this.afterSalesPaymentSummary(current);
+    if (approvedAmountCny !== null && approvedAmountCny > paymentSummary.refundableAmountCny + 0.0001) {
+      throw new BadRequestException(`售后处理金额超过可退金额：可退 ${paymentSummary.refundableAmountCny} 元。`);
+    }
+
+    const effectKey = `after-sales-resolve:${caseId}:${operationKey}`;
+    const requestOperation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "after-sales-case-resolve",
+        afterSalesOperationIdentity(id, current, payload),
+        {
+          caseId,
+          resolutionType,
+          approvedAmountCny,
+          refundMethod: cleanAfterSalesText(payload.refundMethod, 120),
+          refundReference: cleanAfterSalesText(payload.refundReference, 160),
+          replacementCarrier,
+          replacementTrackingNo,
+          note,
+        },
+      ),
+    );
+
+    const existing = await this.findReviewLogByEffectKey(effectKey);
+    if (existing) {
+      assertExactOperationReplay(readRequestOperationMetadata(existing.metadata), requestOperation, "after-sales resolution");
+      return (await this.listAfterSalesCases(id, payload)).find((item: any) => item.id === caseId);
+    }
+    if (afterSalesCase.status !== "open") throw new BadRequestException("售后 case 已处理，不能重复提交新的处理结论。");
+
+    let paymentEvent: any = null;
+    if (["refund", "compensation"].includes(resolutionType) && approvedAmountCny !== null && approvedAmountCny > 0) {
+      paymentEvent = await this.recordAfterSalesRefundEvent(current, {
+        amountCny: approvedAmountCny,
+        idempotencyKey: `after-sales-refund:${caseId}:${operationKey}`,
+        method: cleanAfterSalesText(payload.refundMethod, 120),
+        proofReference: cleanAfterSalesText(payload.refundReference, 160),
+        reviewer: payload.owner || "人工客服",
+        note: note || `售后 ${caseId} 已记录${resolutionType === "refund" ? "退款" : "补偿"}。`,
+      });
+    }
+
+    const status = afterSalesStatusForResolution(resolutionType);
+    const reviewLog = await this.createReviewLog({
+      targetType: "order_draft",
+      targetId: id,
+      decision: AFTER_SALES_RESOLVE_DECISION,
+      reviewer: payload.owner || "人工客服",
+      note: `after_sales_resolved:${resolutionType}`,
+      beforeStatus: "open",
+      afterStatus: status,
+      metadata: {
+        effectKey,
+        requestOperation,
+        source: "manual_order_after_sales_resolution",
+        caseId,
+        status,
+        resolutionType,
+        approvedAmountCny,
+        refundMethod: cleanAfterSalesText(payload.refundMethod, 120),
+        refundReference: cleanAfterSalesText(payload.refundReference, 160),
+        replacementCarrier,
+        replacementTrackingNo,
+        note,
+        paymentEventId: paymentEvent?.id || null,
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId || null,
+        designJobId: current.designJobId || null,
+        paymentSummary: await this.afterSalesPaymentSummary(current),
+      },
+    });
+    assertExactOperationReplay(readRequestOperationMetadata(reviewLog.metadata), requestOperation, "after-sales resolution");
+
+    await this.notifications.create(
+      "info",
+      "订单售后内部结论已记录",
+      `订单 ${id} 的售后 case 已记录内部处理结论：${afterSalesResolutionLabel(resolutionType)}；仍需核对客户回访结果。`,
+      {
+        effectKey: `${effectKey}:notification`,
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId,
+        designJobId: current.designJobId,
+        wechatAccountId: current.wechatAccountId,
+        conversationId: current.conversationId,
+        customerId: current.customerId,
+        afterSalesCaseId: caseId,
+        paymentEventId: paymentEvent?.id || null,
+      },
+    );
+
+    return (await this.listAfterSalesCases(id, payload)).find((item: any) => item.id === caseId);
+  }
+
   async createFromQuote(quoteId: string, expected: ExpectedIdentityPayload = {}) {
     const quote = await this.getQuote(quoteId);
     if (!quote) throw new BadRequestException(`没有找到报价草稿：${quoteId}`);
@@ -64,6 +324,7 @@ export class OrdersService {
       const missing = decision.missing?.length ? `，缺少：${decision.missing.map(orderDraftMissingLabel).join("、")}` : "";
       throw new BadRequestException(`报价还不能生成订单草稿：${orderDraftDecisionReasonLabel(decision.reason)}${missing}`);
     }
+    await this.assertQuotePaymentLedgerForOrderCreation(quote, decision.orderDraft);
 
     const orderDraft = appConfig.useLocalStore
       ? this.localStore.upsertOrderDraftFromQuote(quoteId, decision.orderDraft)
@@ -92,6 +353,68 @@ export class OrdersService {
     return this.updateOrderDraft(id, patch || {});
   }
 
+  async updateFulfillment(id: string, patch: OrderFulfillmentUpdatePatch & ExpectedIdentityPayload) {
+    const operationKey = normalizeOperationKey(patch?.operationKey, "operationKey");
+    const { operationKey: _operationKey, ...trustedPatch } = patch || {};
+    const current = await this.getOrderDraft(id);
+    if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(current, trustedPatch, "order draft");
+
+    const data = cleanOrderDraftPatch(trustedPatch || {});
+    if (!Object.keys(data).length) {
+      throw new BadRequestException("订单履约保存没有可更新字段");
+    }
+
+    const effectKey = `order-fulfillment:${operationKey}`;
+    const requestOperation = requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(
+        "order-fulfillment-update",
+        {
+          orderDraftId: id,
+          wechatAccountId: current.wechatAccountId || null,
+          conversationId: current.conversationId || null,
+          customerId: current.customerId || null,
+          expectedWechatAccountId: trustedPatch.expectedWechatAccountId || null,
+          expectedConversationId: trustedPatch.expectedConversationId || null,
+          expectedCustomerId: trustedPatch.expectedCustomerId || null,
+        },
+        data,
+      ),
+    );
+
+    const existing = await this.findReviewLogByEffectKey(effectKey);
+    if (existing) {
+      assertExactOperationReplay(readRequestOperationMetadata(existing.metadata), requestOperation, "order fulfillment");
+      return this.getById(id, trustedPatch);
+    }
+
+    const updated = await this.updateOrderDraft(id, trustedPatch, {
+      notificationEffectKey: `${effectKey}:notification`,
+    });
+    const reviewLog = await this.createReviewLog({
+      targetType: "order",
+      targetId: id,
+      decision: "order_fulfillment_update",
+      reviewer: data.owner || trustedPatch.owner || "system",
+      note: orderFulfillmentReviewNote(data),
+      beforeStatus: String(current.status || ""),
+      afterStatus: String(updated.status || current.status || ""),
+      metadata: {
+        effectKey,
+        requestOperation,
+        source: "manual_order_fulfillment",
+        orderDraftId: id,
+        quoteDraftId: current.quoteDraftId || null,
+        changedFields: Object.keys(data),
+        before: orderFulfillmentSnapshot(current),
+        after: orderFulfillmentSnapshot(updated),
+      },
+    });
+    assertExactOperationReplay(readRequestOperationMetadata(reviewLog.metadata), requestOperation, "order fulfillment");
+    return updated;
+  }
+
   async updateFromAutomation(
     id: string,
     patch: OrderDraftUpdatePatch & ExpectedIdentityPayload,
@@ -113,7 +436,10 @@ export class OrdersService {
     if (!patch || !["deposit_paid", "paid"].includes(String(patch.paymentStatus || ""))) {
       throw new BadRequestException("付款凭证核验只允许记录定金或全款。");
     }
-    return this.updateOrderDraft(id, { ...patch, status: "confirmed" });
+    const current = await this.getOrderDraft(id);
+    if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    const status = ["processing", "fulfilled"].includes(String(current.status || "")) ? current.status : "confirmed";
+    return this.updateOrderDraft(id, { ...patch, status });
   }
 
   private async updateOrderDraft(
@@ -129,8 +455,10 @@ export class OrdersService {
     if (!Object.keys(data).length) {
       throw new BadRequestException("订单草稿没有可更新的字段，请至少修改状态、备注或跟进人。");
     }
-    assertOrderStatusPaymentReady(current, data);
     assertOrderStatusCommercialReady(current, data);
+    assertOrderStatusPaymentReady(current, data);
+    await this.assertOrderPaymentLedgerForExecution(current, data);
+    assertOrderFulfillmentTransition(current, data);
 
     const quotePatch = quotePatchForOrderDraft(current, data);
     if (current.quoteDraftId && Object.keys(quotePatch).length) {
@@ -209,7 +537,7 @@ export class OrdersService {
     const note = payload.note || `客户重新选择第 ${selectedImage.position || ""} 张效果图，订单回到待确认。`;
     const orderPatch = {
       selectedImageId: selectedImage.id,
-      selectedImageSnapshot: selectedImage,
+      selectedImageSnapshot: normalizeDesignImageSnapshot(selectedImage),
       status: "draft",
       owner: payload.owner || current.owner || "人工客服",
       customerNotes: note,
@@ -308,6 +636,10 @@ export class OrdersService {
           },
         },
       },
+      paymentEvents: {
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      },
     });
   }
 
@@ -334,7 +666,15 @@ export class OrdersService {
               images: true,
             },
           },
+          paymentEvents: {
+            orderBy: { createdAt: "desc" },
+            take: 20,
+          },
         },
+      },
+      paymentEvents: {
+        orderBy: { createdAt: "desc" },
+        take: 20,
       },
       selectedImage: true,
     };
@@ -363,13 +703,33 @@ export class OrdersService {
     });
   }
 
+  private buildOrderFollowupMessage(order: any, type: "production" | "delivery") {
+    const context = this.buildOrderMessageContext(order);
+    return buildOrderFollowupCustomerMessage({
+      type,
+      customerName: context.customerName,
+      scene: context.scene,
+      quantity: order.quantity,
+      totalPrice: order.totalPrice,
+      paymentStatus: orderDraftPaymentStatus(order),
+      leadTimeDays: maxLeadTimeDays(context.items),
+      productionStatus: order.productionStatus,
+      productionDueAt: order.productionDueAt,
+      carrier: order.carrier,
+      trackingNo: order.trackingNo,
+      shippedAt: order.shippedAt,
+      deliveredAt: order.deliveredAt,
+      items: context.items,
+    });
+  }
+
   private buildOrderMessageContext(order: any) {
     const designJob = order.designJob || order.quoteDraft?.designJob || {};
     const bundleSnapshot = order.bundleSnapshot || {};
-    const items = Array.isArray(designJob?.bundle?.items)
-      ? designJob.bundle.items
-      : Array.isArray((bundleSnapshot as any).items)
-        ? (bundleSnapshot as any).items
+    const items = Array.isArray((bundleSnapshot as any).items)
+      ? (bundleSnapshot as any).items
+      : Array.isArray(designJob?.bundle?.items)
+        ? designJob.bundle.items
         : [];
     return {
       customerName: order.customer?.name || order.quoteDraft?.customer?.name,
@@ -380,9 +740,33 @@ export class OrdersService {
   }
 
   private orderConfirmationPreviewWarnings(order: any) {
+    const warnings = this.orderBasePreviewWarnings(order);
+    if (order.confirmationSendTaskId || order.confirmationSendTask) warnings.push("订单确认消息已进入发送队列");
+    return warnings;
+  }
+
+  private orderFollowupPreviewWarnings(order: any, type: "production" | "delivery") {
+    const warnings = this.orderBasePreviewWarnings(order);
+    const hasProductionFacts = Boolean(order.productionStatus || order.productionDueAt);
+    const hasDeliveryFacts = Boolean(order.carrier || order.trackingNo || order.shippedAt || order.deliveredAt);
+    if (type === "production" && !hasProductionFacts) {
+      warnings.push("还没有生产状态或预计完成时间，文案会按谨慎的备货/排产跟进表达");
+    }
+    if (type === "delivery" && !hasDeliveryFacts) {
+      warnings.push("还没有物流公司、单号或发货时间，文案不会假装已经发货");
+    }
+    if (type === "production" && (order.productionFollowupSendTaskId || order.productionFollowupSendTask)) {
+      warnings.push("生产跟进消息已进入发送队列");
+    }
+    if (type === "delivery" && (order.deliveryFollowupSendTaskId || order.deliveryFollowupSendTask)) {
+      warnings.push("发货跟进消息已进入发送队列");
+    }
+    return warnings;
+  }
+
+  private orderBasePreviewWarnings(order: any) {
     const warnings: string[] = [];
     if (order.status === "cancelled") warnings.push("订单已取消");
-    if (order.confirmationSendTaskId || order.confirmationSendTask) warnings.push("订单确认消息已进入发送队列");
     if (!orderDraftSelectedImageId(order)) warnings.push("订单还没有选图");
     if (!order.wechatAccountId) warnings.push("订单缺少微信账号");
     if (!order.customerId) warnings.push("订单缺少客户绑定");
@@ -403,7 +787,7 @@ export class OrdersService {
   }
 
   private orderSelectedImage(order: any) {
-    return order?.selectedImage || order?.quoteDraft?.selectedImage || order?.selectedImageSnapshot || null;
+    return order?.selectedImageSnapshot || order?.selectedImage || order?.quoteDraft?.selectedImage || null;
   }
 
   private assertCreatedOrderDraftBinding(orderDraft: any, quote: any) {
@@ -595,6 +979,7 @@ export class OrdersService {
       take: Math.min(quoteDraftIds.length * 10, 500),
     });
     for (const order of orders) {
+      order.paymentEvents = mergeOrderPaymentEvents(order);
       const confirmationSendTask = tasks.find((task: any) => this.isOrderConfirmationSendTask(task, order)) || null;
       const followupSendTasks = tasks.filter((task: any) => this.isOrderFollowupSendTask(task, order));
       const followupSendTask = followupSendTasks[0] || null;
@@ -650,6 +1035,119 @@ export class OrdersService {
     return (this.prisma as any).quoteDraft.update({ where: { id }, data: patch });
   }
 
+  private async assertQuotePaymentLedgerForOrderCreation(quote: any, orderDraft: any) {
+    const paymentStatus = String(orderDraft?.paymentStatus || quote?.paymentStatus || "unpaid");
+    if (paymentStatus === "unpaid") return;
+    const paymentEvents = await this.listPaymentEventsForQuote(quote?.id);
+    const verifiedAmount = sumVerifiedPaymentEvents(paymentEvents);
+    if (verifiedAmount <= 0) {
+      throw new BadRequestException("报价付款状态缺少已核验付款流水，不能生成已付款订单；请先从报价页核验付款凭证。");
+    }
+    if (paymentStatus !== "paid") return;
+    const totalPrice = normalizePaymentAmount(orderDraft?.totalPrice ?? quote?.totalPrice);
+    if (totalPrice === null || totalPrice <= 0) {
+      throw new BadRequestException("报价总额无效，不能生成全款订单。");
+    }
+    if (verifiedAmount + 0.0001 >= totalPrice) return;
+    throw new BadRequestException(`报价全款流水金额不足，订单总额 ${totalPrice} 元，已核验 ${verifiedAmount} 元。`);
+  }
+
+  private async assertOrderPaymentLedgerForExecution(current: any, patch: OrderDraftUpdatePatch) {
+    const nextStatus = String(patch.status || current?.status || "");
+    const nextProductionStatus = String(patch.productionStatus || current?.productionStatus || "not_started");
+    const enteringExecution =
+      ["processing", "fulfilled"].includes(nextStatus) ||
+      ["in_production", "quality_check", "ready_to_ship", "shipped", "delivered"].includes(nextProductionStatus);
+    if (!enteringExecution) return;
+
+    const paymentStatus = orderDraftPaymentStatus(current, patch);
+    if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+      throw new BadRequestException("订单进入生产或交付前必须先核验定金或全款付款凭证。");
+    }
+    const verifiedAmount = sumVerifiedPaymentEvents(await this.listPaymentEventsForQuote(current?.quoteDraftId));
+    if (verifiedAmount <= 0) {
+      throw new BadRequestException("订单进入生产或交付前缺少已核验付款流水，不能只依赖付款状态字段。");
+    }
+
+    const requiresFullPayment = nextStatus === "fulfilled" || nextProductionStatus === "delivered";
+    if (!requiresFullPayment) return;
+    if (paymentStatus !== "paid") {
+      throw new BadRequestException("订单交付完成前必须核验全款付款凭证。");
+    }
+    const totalPrice = normalizePaymentAmount(current?.totalPrice ?? current?.quoteDraft?.totalPrice);
+    if (totalPrice === null || totalPrice <= 0) {
+      throw new BadRequestException("订单总额无效，不能完成交付。");
+    }
+    if (verifiedAmount + 0.0001 >= totalPrice) return;
+    throw new BadRequestException(`订单全款流水金额不足，订单总额 ${totalPrice} 元，已核验 ${verifiedAmount} 元。`);
+  }
+
+  private async listPaymentEventsForQuote(quoteDraftId: string) {
+    const quoteId = String(quoteDraftId || "").trim();
+    if (!quoteId) return [];
+    if (appConfig.useLocalStore) {
+      if (typeof this.localStore.listPaymentEvents !== "function") return [];
+      return this.localStore.listPaymentEvents({ quoteDraftId: quoteId });
+    }
+    const prisma = this.prisma as any;
+    if (typeof prisma.paymentEvent?.findMany !== "function") return [];
+    return prisma.paymentEvent.findMany({
+      where: { quoteDraftId: quoteId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  private async afterSalesPaymentSummary(order: any) {
+    const events = await this.listPaymentEventsForQuote(order?.quoteDraftId);
+    const paidAmountCny = sumVerifiedPaymentEvents(events);
+    const refundedAmountCny = sumRefundedPaymentEvents(events);
+    return {
+      paidAmountCny,
+      refundedAmountCny,
+      refundableAmountCny: Math.max(0, Math.round((paidAmountCny - refundedAmountCny) * 100) / 100),
+    };
+  }
+
+  private async recordAfterSalesRefundEvent(order: any, payload: {
+    amountCny: number;
+    idempotencyKey: string;
+    method: string;
+    proofReference: string;
+    reviewer: string;
+    note: string;
+  }) {
+    const eventPayload = {
+      quoteDraftId: order.quoteDraftId,
+      orderDraftId: order.id,
+      customerId: order.customerId,
+      conversationId: order.conversationId,
+      wechatAccountId: order.wechatAccountId,
+      paymentStatus: "refunded",
+      amountCny: payload.amountCny,
+      method: payload.method,
+      proofReference: payload.proofReference,
+      reviewer: payload.reviewer,
+      note: payload.note,
+      source: "manual_after_sales_refund",
+      idempotencyKey: payload.idempotencyKey,
+    };
+    if (appConfig.useLocalStore) return this.localStore.recordPaymentEvent(eventPayload);
+
+    const prisma = this.prisma as any;
+    if (typeof prisma.paymentEvent?.findUnique === "function") {
+      const existing = await prisma.paymentEvent.findUnique({ where: { idempotencyKey: payload.idempotencyKey } });
+      if (existing) return existing;
+    }
+    try {
+      return await prisma.paymentEvent.create({ data: eventPayload });
+    } catch (error) {
+      if (!isUniqueConstraintError(error) || typeof prisma.paymentEvent?.findUnique !== "function") throw error;
+      const winner = await prisma.paymentEvent.findUnique({ where: { idempotencyKey: payload.idempotencyKey } });
+      if (!winner) throw error;
+      return winner;
+    }
+  }
+
   private async updatePrismaOrderAndQuoteWithSendInvalidation(
     id: string,
     data: OrderDraftUpdatePatch,
@@ -663,8 +1161,10 @@ export class OrdersService {
       });
       if (!transactionCurrent) throw new BadRequestException(`没有找到订单草稿：${id}`);
       assertExpectedIdentity(transactionCurrent, expected, "order draft");
-      assertOrderStatusPaymentReady(transactionCurrent, data);
       assertOrderStatusCommercialReady(transactionCurrent, data);
+      assertOrderStatusPaymentReady(transactionCurrent, data);
+      await this.assertOrderPaymentLedgerForExecution(transactionCurrent, data);
+      assertOrderFulfillmentTransition(transactionCurrent, data);
 
       const quotePatch = quotePatchForOrderDraft(transactionCurrent, data);
       if (transactionCurrent.quoteDraftId && Object.keys(quotePatch).length) {
@@ -797,7 +1297,50 @@ export class OrdersService {
     metadata?: Record<string, unknown>;
   }) {
     if (appConfig.useLocalStore) return this.localStore.createReviewLog(payload);
-    return (this.prisma as any).reviewLog.create({ data: payload });
+    const prisma = this.prisma as any;
+    const effectKey = String(payload.metadata?.effectKey || "").trim();
+    const effectId = effectKey ? deterministicOperationId("review", effectKey) : "";
+    if (effectId && typeof prisma.reviewLog.findUnique === "function") {
+      const existing = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (existing) return existing;
+    }
+    try {
+      return await prisma.reviewLog.create({ data: effectId ? { id: effectId, ...payload } : payload });
+    } catch (error) {
+      if (!effectId || !isUniqueConstraintError(error) || typeof prisma.reviewLog.findUnique !== "function") throw error;
+      const winner = await prisma.reviewLog.findUnique({ where: { id: effectId } });
+      if (!winner) throw error;
+      return winner;
+    }
+  }
+
+  private async findReviewLogByEffectKey(effectKey: string) {
+    const id = deterministicOperationId("review", effectKey);
+    if (appConfig.useLocalStore) return this.localStore.getReviewLog(id);
+    const prisma = this.prisma as any;
+    if (typeof prisma.reviewLog.findUnique !== "function") return null;
+    return prisma.reviewLog.findUnique({ where: { id } });
+  }
+
+  private async listAfterSalesReviewLogs(orderDraftId: string) {
+    if (appConfig.useLocalStore) {
+      return this.localStore
+        .listReviewLogs({ limit: 300 })
+        .filter((log: any) => log.targetType === "order_draft")
+        .filter((log: any) => log.targetId === orderDraftId)
+        .filter((log: any) => [AFTER_SALES_CREATE_DECISION, AFTER_SALES_RESOLVE_DECISION].includes(log.decision));
+    }
+    const prisma = this.prisma as any;
+    if (typeof prisma.reviewLog?.findMany !== "function") return [];
+    return prisma.reviewLog.findMany({
+      where: {
+        targetType: "order_draft",
+        targetId: orderDraftId,
+        decision: { in: [AFTER_SALES_CREATE_DECISION, AFTER_SALES_RESOLVE_DECISION] },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 300,
+    });
   }
 
   private async listQuotes(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
@@ -844,6 +1387,12 @@ export class OrdersService {
       profit: draft.profit,
       status: draft.status,
       paymentStatus: draft.paymentStatus,
+      productionStatus: draft.productionStatus || "not_started",
+      productionDueAt: draft.productionDueAt || "",
+      carrier: draft.carrier || "",
+      trackingNo: draft.trackingNo || "",
+      shippedAt: draft.shippedAt || "",
+      deliveredAt: draft.deliveredAt || "",
       customerNotes: draft.customerNotes || "",
       owner: draft.owner || "",
       bundleSnapshot: draft.bundleSnapshot || {},
@@ -869,6 +1418,169 @@ function orderSendTaskLabel(label: string) {
     "delivery followup": "发货跟进发送任务",
   };
   return labels[label] || "订单发送任务";
+}
+
+function mergeOrderPaymentEvents(order: any) {
+  const byId = new Map<string, any>();
+  for (const event of [
+    ...(Array.isArray(order?.paymentEvents) ? order.paymentEvents : []),
+    ...(Array.isArray(order?.quoteDraft?.paymentEvents) ? order.quoteDraft.paymentEvents : []),
+  ]) {
+    const key = String(event?.id || event?.idempotencyKey || "");
+    if (!key || byId.has(key)) continue;
+    byId.set(key, event);
+  }
+  return [...byId.values()].sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+}
+
+function sumVerifiedPaymentEvents(events: any[]) {
+  return Math.round(
+    events
+      .filter((event) => ["deposit_paid", "paid"].includes(String(event?.paymentStatus || "")))
+      .reduce((sum, event) => sum + (normalizePaymentAmount(event?.amountCny) || 0), 0) * 100,
+  ) / 100;
+}
+
+function sumRefundedPaymentEvents(events: any[]) {
+  return Math.round(
+    events
+      .filter((event) => String(event?.paymentStatus || "") === "refunded")
+      .reduce((sum, event) => sum + (normalizePaymentAmount(event?.amountCny) || 0), 0) * 100,
+  ) / 100;
+}
+
+function normalizePaymentAmount(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount * 100) / 100;
+}
+
+function normalizeAfterSalesAmount(value: unknown) {
+  const amount = normalizePaymentAmount(value);
+  if (amount === null) return null;
+  if (amount < 0) throw new BadRequestException("售后金额必须是非负数字。");
+  return amount;
+}
+
+function cleanAfterSalesText(value: unknown, max = 500) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function normalizeAfterSalesType(value: unknown) {
+  const type = cleanAfterSalesText(value, 40) || "other";
+  if (["refund", "replacement", "return", "compensation", "other"].includes(type)) return type;
+  throw new BadRequestException("售后类型只能是 refund、replacement、return、compensation 或 other。");
+}
+
+function normalizeAfterSalesResolutionType(value: unknown) {
+  const type = cleanAfterSalesText(value, 40) || "manual_resolution";
+  if (["refund", "replacement", "reject", "compensation", "customer_cancelled", "manual_resolution"].includes(type)) return type;
+  throw new BadRequestException("售后处理类型不正确。");
+}
+
+function afterSalesStatusForResolution(type: string) {
+  if (type === "reject") return "rejected";
+  if (type === "customer_cancelled") return "cancelled";
+  return "resolved";
+}
+
+function afterSalesTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    refund: "退款",
+    replacement: "补发",
+    return: "退货",
+    compensation: "补偿",
+    other: "其他",
+  };
+  return labels[type] || type;
+}
+
+function afterSalesResolutionLabel(type: string) {
+  const labels: Record<string, string> = {
+    refund: "已退款",
+    replacement: "已补发",
+    reject: "已拒绝",
+    compensation: "已补偿",
+    customer_cancelled: "客户取消",
+    manual_resolution: "人工处理",
+  };
+  return labels[type] || type;
+}
+
+function afterSalesOperationIdentity(id: string, order: any, expected: ExpectedIdentityPayload) {
+  return {
+    orderDraftId: id,
+    quoteDraftId: order?.quoteDraftId || null,
+    wechatAccountId: order?.wechatAccountId || null,
+    conversationId: order?.conversationId || null,
+    customerId: order?.customerId || null,
+    expectedWechatAccountId: expected?.expectedWechatAccountId || null,
+    expectedConversationId: expected?.expectedConversationId || null,
+    expectedCustomerId: expected?.expectedCustomerId || null,
+  };
+}
+
+function buildAfterSalesCasesFromLogs(logs: any[], order: any) {
+  const createLogs = logs.filter((log) => log.decision === AFTER_SALES_CREATE_DECISION);
+  const resolutionByCaseId = new Map<string, any>();
+  for (const log of logs.filter((item) => item.decision === AFTER_SALES_RESOLVE_DECISION)) {
+    const caseId = String(log?.metadata?.caseId || "");
+    if (!caseId) continue;
+    const previous = resolutionByCaseId.get(caseId);
+    if (!previous || String(log.createdAt || "").localeCompare(String(previous.createdAt || "")) > 0) {
+      resolutionByCaseId.set(caseId, log);
+    }
+  }
+  return createLogs
+    .map((log) => buildAfterSalesCaseFromCreateLog(log, order, resolutionByCaseId.get(String(log?.metadata?.caseId || ""))))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+function buildAfterSalesCaseFromCreateLog(createLog: any, order: any, resolutionLog?: any) {
+  const metadata = createLog?.metadata && typeof createLog.metadata === "object" ? createLog.metadata : {};
+  const resolutionMetadata =
+    resolutionLog?.metadata && typeof resolutionLog.metadata === "object" ? resolutionLog.metadata : null;
+  const type = String(metadata.type || "other");
+  const resolutionType = resolutionMetadata ? String(resolutionMetadata.resolutionType || "manual_resolution") : "";
+  return {
+    id: String(metadata.caseId || createLog.id),
+    orderDraftId: String(metadata.orderDraftId || order?.id || createLog.targetId || ""),
+    quoteDraftId: metadata.quoteDraftId || order?.quoteDraftId || null,
+    designJobId: metadata.designJobId || order?.designJobId || null,
+    status: resolutionMetadata?.status || metadata.status || "open",
+    type,
+    typeLabel: afterSalesTypeLabel(type),
+    reason: metadata.reason || "",
+    requestedAmountCny: metadata.requestedAmountCny ?? null,
+    evidenceReference: metadata.evidenceReference || "",
+    desiredResolution: metadata.desiredResolution || "",
+    paymentSummary: resolutionMetadata?.paymentSummary || metadata.paymentSummary || null,
+    createdBy: createLog.reviewer || "",
+    createdAt: toAfterSalesDateString(createLog.createdAt),
+    updatedAt: toAfterSalesDateString(resolutionLog?.createdAt || createLog.createdAt),
+    resolution: resolutionMetadata
+      ? {
+          type: resolutionType,
+          typeLabel: afterSalesResolutionLabel(resolutionType),
+          approvedAmountCny: resolutionMetadata.approvedAmountCny ?? null,
+          refundMethod: resolutionMetadata.refundMethod || "",
+          refundReference: resolutionMetadata.refundReference || "",
+          replacementCarrier: resolutionMetadata.replacementCarrier || "",
+          replacementTrackingNo: resolutionMetadata.replacementTrackingNo || "",
+          note: resolutionMetadata.note || "",
+          paymentEventId: resolutionMetadata.paymentEventId || null,
+          resolvedBy: resolutionLog.reviewer || "",
+          resolvedAt: toAfterSalesDateString(resolutionLog.createdAt),
+        }
+      : null,
+  };
+}
+
+function toAfterSalesDateString(value: unknown) {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }
 
 function sendTaskStatusLabel(status: string) {
@@ -958,6 +1670,33 @@ function orderDraftSelectedImageId(order: any) {
   return order?.selectedImageId || order?.quoteDraft?.selectedImageId || "";
 }
 
+function orderFulfillmentSnapshot(order: any) {
+  return {
+    status: order?.status || "",
+    paymentStatus: orderDraftPaymentStatus(order),
+    productionStatus: order?.productionStatus || "",
+    productionDueAt: order?.productionDueAt || "",
+    carrier: order?.carrier || "",
+    trackingNo: order?.trackingNo || "",
+    shippedAt: order?.shippedAt || "",
+    deliveredAt: order?.deliveredAt || "",
+    customerNotes: order?.customerNotes || "",
+    owner: order?.owner || "",
+  };
+}
+
+function orderFulfillmentReviewNote(data: Record<string, unknown>) {
+  const fields = Object.keys(data).filter((field) => field !== "owner");
+  return fields.length ? `order_fulfillment_update:${fields.join(",")}` : "order_fulfillment_update";
+}
+
+function maxLeadTimeDays(items: any[] = []) {
+  return items.reduce((max, item) => {
+    const value = Number(item?.leadTimeDays || item?.leadTime || item?.deliveryDays || 0);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
+}
+
 function assertOrderStatusCommercialReady(current: any, patch: OrderDraftUpdatePatch) {
   const nextStatus = patch.status || current?.status || "";
   if (!["processing", "fulfilled"].includes(nextStatus)) return;
@@ -974,10 +1713,102 @@ function assertOrderStatusCommercialReady(current: any, patch: OrderDraftUpdateP
   }
 }
 
+function assertOrderFulfillmentTransition(current: any, patch: OrderDraftUpdatePatch) {
+  const decision = evaluateOrderFulfillmentTransition(current, patch);
+  if (decision.ok) return;
+  const reason = String(decision.reason || "");
+  const missing = Array.isArray(decision.missing) && decision.missing.length
+    ? `，缺少：${decision.missing.map(orderFulfillmentMissingLabel).join("、")}`
+    : "";
+  const invalid = Array.isArray(decision.invalid) && decision.invalid.length
+    ? `，请检查：${decision.invalid.map(orderFulfillmentMissingLabel).join("、")}`
+    : "";
+  if (reason === "order_status_regression") {
+    throw new BadRequestException(`订单状态不能从 ${decision.currentStatus} 跳转到 ${decision.nextStatus}。`);
+  }
+  if (reason === "production_status_regression") {
+    throw new BadRequestException(
+      `生产状态不能从 ${decision.currentProductionStatus} 跳转到 ${decision.nextProductionStatus}。`,
+    );
+  }
+  if (reason === "fulfilled_requires_full_payment") {
+    throw new BadRequestException(`订单完成前必须记录全款已付${missing}。`);
+  }
+  if (reason === "shipment_facts_missing") {
+    throw new BadRequestException(`订单发货前必须记录物流事实${missing}。`);
+  }
+  if (reason === "shipment_facts_invalid") {
+    throw new BadRequestException(`订单发货物流信息格式不正确${invalid}。物流单号请填写真实承运方单号；自提可不填物流单号。`);
+  }
+  if (reason === "delivery_fact_missing") {
+    throw new BadRequestException(`订单签收前必须记录交付事实${missing}。`);
+  }
+  if (reason === "delivery_fact_invalid") {
+    throw new BadRequestException(`订单签收时间格式不正确${invalid}。`);
+  }
+  if (reason === "delivery_before_shipment") {
+    throw new BadRequestException("订单签收时间不能早于发货时间。");
+  }
+  if (reason === "fulfilled_requires_delivery") {
+    throw new BadRequestException(`订单完成前必须记录已签收履约事实${missing}。`);
+  }
+  if (reason === "delivery_package_missing") {
+    throw new BadRequestException(`订单完成前必须保留可交付资料包${missing}；请先确认客户选图和商品组合快照。`);
+  }
+  throw new BadRequestException(`订单履约状态不合法：${reason || "unknown"}`);
+}
+
+function orderFulfillmentMissingLabel(field: string) {
+  const labels: Record<string, string> = {
+    paymentStatus: "全款付款状态",
+    productionStatus: "生产状态",
+    carrier: "物流公司",
+    trackingNo: "物流单号",
+    shippedAt: "发货时间",
+    deliveredAt: "签收/交付时间",
+    selectedImageId: "客户确认效果图",
+    selectedImageSnapshot: "客户确认效果图快照",
+    bundleSnapshot: "商品组合交付包",
+  };
+  return labels[field] || field;
+}
+
 type OrderDraftUpdatePatch = {
   status?: string;
   paymentStatus?: string;
+  productionStatus?: string;
+  productionDueAt?: string;
+  carrier?: string;
+  trackingNo?: string;
+  shippedAt?: string;
+  deliveredAt?: string;
   customerNotes?: string;
+  owner?: string;
+};
+
+type OrderFulfillmentUpdatePatch = OrderDraftUpdatePatch & {
+  operationKey?: string;
+};
+
+type AfterSalesCreatePatch = {
+  operationKey?: string;
+  type?: string;
+  reason?: string;
+  requestedAmountCny?: number | string;
+  evidenceReference?: string;
+  desiredResolution?: string;
+  owner?: string;
+};
+
+type AfterSalesResolvePatch = {
+  operationKey?: string;
+  resolutionType?: string;
+  approvedAmountCny?: number | string;
+  refundMethod?: string;
+  refundReference?: string;
+  replacementCarrier?: string;
+  replacementTrackingNo?: string;
+  note?: string;
   owner?: string;
 };
 

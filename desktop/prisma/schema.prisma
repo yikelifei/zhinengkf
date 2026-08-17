@@ -132,6 +132,7 @@ model WechatAccount {
 model Customer {
   id            String         @id @default(cuid())
   name          String
+  avatarUrl     String?
   wechatId      String?
   personalWechatRpaBindingKey String? @unique
   phone         String?
@@ -387,6 +388,7 @@ model DesignAsset {
   localPath       String
   normalizedLocalPath String? @unique
   sizeBytes       Int?
+  role            String?
   source          String
   wechatAccountId String?
   conversationId  String?
@@ -565,6 +567,7 @@ model QuoteDraft {
   customer        Customer              @relation(fields: [customerId], references: [id])
   selectedImage   DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
   orderDraft      OrderDraft?
+  paymentEvents   PaymentEvent[]
 
   @@index([status, createdAt])
   @@index([sendTaskId])
@@ -585,6 +588,12 @@ model OrderDraft {
   profit                Decimal               @db.Decimal(12, 2)
   status                String                @default("draft")
   paymentStatus         PaymentStatus         @default(unpaid)
+  productionStatus      String                @default("not_started")
+  productionDueAt       String?
+  carrier               String?
+  trackingNo            String?
+  shippedAt             String?
+  deliveredAt           String?
   bundleSnapshot        Json?
   selectedImageSnapshot Json?
   customerNotes         String?
@@ -597,10 +606,36 @@ model OrderDraft {
   conversation          Conversation          @relation(fields: [conversationId], references: [id])
   wechatAccount         WechatAccount         @relation(fields: [wechatAccountId], references: [id])
   selectedImage         DesignImageCandidate? @relation(fields: [selectedImageId], references: [id])
+  paymentEvents         PaymentEvent[]
 
   @@index([status, createdAt])
   @@index([customerId, createdAt])
   @@index([designJobId])
+  @@index([productionStatus, updatedAt])
+}
+
+model PaymentEvent {
+  id             String        @id @default(cuid())
+  quoteDraftId   String
+  orderDraftId   String?
+  customerId     String
+  conversationId String?
+  wechatAccountId String?
+  paymentStatus PaymentStatus
+  amountCny      Decimal?      @db.Decimal(12, 2)
+  method         String?
+  proofReference String?
+  reviewer       String?
+  note           String?
+  source         String        @default("manual_payment_proof")
+  idempotencyKey String        @unique
+  createdAt      DateTime      @default(now())
+  quoteDraft     QuoteDraft    @relation(fields: [quoteDraftId], references: [id])
+  orderDraft     OrderDraft?   @relation(fields: [orderDraftId], references: [id])
+
+  @@index([quoteDraftId, createdAt])
+  @@index([orderDraftId, createdAt])
+  @@index([customerId, createdAt])
 }
 
 model WechatSendTask {
@@ -821,6 +856,11 @@ model KnowledgeEntry {
   content        String                @db.Text
   tags           Json?
   qualityScore   Int?
+  status         String                @default("review")
+  reviewer       String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+  reviewHistory  Json?
   customerId     String?
   conversationId String?
   wechatAccountId String?
@@ -832,6 +872,7 @@ model KnowledgeEntry {
 
   @@index([agentId])
   @@index([sourceType, sourceId])
+  @@index([agentId, status])
   @@index([agentId, wechatAccountId, conversationId, customerId, qualityScore])
 }
 
@@ -866,6 +907,8 @@ model RouteEvaluation {
   appliedSkills  Json?
   knowledgeMatches Json?
   replyDraft     Json?
+  learningInsight Json?
+  conversionAssessment Json?
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
   agent          CustomerServiceAgent? @relation(fields: [agentId], references: [id])

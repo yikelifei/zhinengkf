@@ -8,6 +8,7 @@ import {
   assertExactOperationReplay,
   assertStoredOperationIdentityReplay,
   createChatImportOperationFingerprint,
+  createOperationFingerprint,
   deterministicOperationId,
   isUniqueConstraintError,
   normalizeOperationKey,
@@ -17,7 +18,13 @@ import {
 } from "../shared/operation-idempotency";
 
 const rules = require(path.join(process.cwd(), "packages", "rules"));
-const { evaluateTrainingSampleQuality, isSceneClarificationReply, normalizeTrainingSampleStatus, trainingSampleReviewNote } = rules;
+const {
+  buildConversationLearningInsight,
+  evaluateTrainingSampleQuality,
+  isSceneClarificationReply,
+  normalizeTrainingSampleStatus,
+  trainingSampleReviewNote,
+} = rules;
 
 export type OperationsIdentity = {
   wechatAccountId?: string;
@@ -77,6 +84,19 @@ export class PrismaOperationsService {
     );
   }
 
+  async resolveKnowledgeImportAgent(client: PrismaLike, row: any) {
+    const agentId = String(row?.agentId || "").trim();
+    const agentKey = String(row?.agentKey || "").trim();
+    if (agentId) return client.customerServiceAgent.findUnique({ where: { id: agentId } });
+    if (agentKey) {
+      return (
+        (await client.customerServiceAgent.findUnique({ where: { key: agentKey } })) ||
+        (await client.customerServiceAgent.findUnique({ where: { id: agentKey } }))
+      );
+    }
+    return null;
+  }
+
   async listChatImports(filter: OperationsIdentity = {}) {
     const rows = await this.prisma.chatImport.findMany({
       where: identityWhere(filter),
@@ -93,17 +113,167 @@ export class PrismaOperationsService {
     return rows.map((sample: any) => serialize({ ...sample, quality: evaluateTrainingSampleQuality(sample) }));
   }
 
-  async listKnowledgeEntries(filter: OperationsIdentity & { agentId?: string } = {}) {
+  async getTrainingSample(id: string, filter: OperationsIdentity & { agentId?: string } = {}) {
+    const sample = await this.prisma.trainingSample.findFirst({
+      where: { id, ...identityWhere(filter), ...(filter.agentId ? { agentId: filter.agentId } : {}) },
+    });
+    return sample ? serialize({ ...sample, quality: evaluateTrainingSampleQuality(sample) }) : null;
+  }
+
+  async listKnowledgeEntries(filter: OperationsIdentity & { agentId?: string; includeReview?: boolean } = {}) {
     const rows = await this.prisma.knowledgeEntry.findMany({
-      where: { ...identityWhere(filter), ...(filter.agentId ? { agentId: filter.agentId } : {}) },
+      where: { ...(filter.agentId ? { agentId: filter.agentId } : {}) },
       include: { trainingSample: true },
       orderBy: [{ qualityScore: "desc" }, { createdAt: "desc" }],
     });
     return rows
-      .filter((row: any) => recordVisibleForIdentity(row, filter))
-      .filter((row: any) => !row.trainingSample || String(row.trainingSample.status || "ready") === "ready")
+      .filter((row: any) => knowledgeVisibleForIdentity(row, filter))
+      .filter((row: any) => filter.includeReview || !row.trainingSample || String(row.trainingSample.status || "ready") === "ready")
+      .filter((row: any) => filter.includeReview || normalizeKnowledgeEntryStatus(row) === "ready")
       .filter((row: any) => !row.trainingSample || !isSceneClarificationReply(row.trainingSample.idealReply))
       .map(({ trainingSample: _sample, ...row }: any) => serialize(row));
+  }
+
+  async importKnowledgeEntries(rows: any[] = [], context: OperationsIdentity & { operationKey?: string; source?: string } = {}) {
+    return this.prisma.$transaction(async (tx: PrismaLike) => {
+      const identity = await this.resolveIdentity(tx, context, "knowledge import");
+      const source = String(context.source || "manual_knowledge_import").trim() || "manual_knowledge_import";
+      const operationKey = context.operationKey ? normalizeOperationKey(context.operationKey, "knowledge import operationKey") : "";
+      const importOperation = operationKey
+        ? buildPrismaKnowledgeImportOperation(operationKey, identity.fields, source, rows)
+        : null;
+      const existingImportLog = importOperation ? await findPrismaReviewLogByEffectKey(tx, importOperation.effectKey) : null;
+      if (existingImportLog) {
+        assertExactOperationReplay(
+          readRequestOperationMetadata(existingImportLog.metadata),
+          importOperation!.operation,
+          "knowledge import",
+        );
+        const importedIds = Array.isArray(existingImportLog.metadata?.knowledgeEntryIds)
+          ? existingImportLog.metadata.knowledgeEntryIds.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+          : [];
+        const existingEntries = importedIds.length
+          ? await tx.knowledgeEntry.findMany({ where: { id: { in: importedIds } } })
+          : [];
+        const byId = new Map(existingEntries.map((entry: any) => [entry.id, entry]));
+        return serialize({
+          count: importedIds.filter((id: string) => byId.has(id)).length,
+          results: importedIds.map((id: string) => byId.get(id)).filter(Boolean),
+          skipped: Array.isArray(existingImportLog.metadata?.skipped) ? existingImportLog.metadata.skipped : [],
+          reviewLog: existingImportLog,
+          failed: String(existingImportLog.afterStatus || "") === "failed",
+        });
+      }
+      const results: any[] = [];
+      const skipped: any[] = [];
+      for (const [index, row] of (Array.isArray(rows) ? rows : []).entries()) {
+        const agent = await this.resolveKnowledgeImportAgent(tx, row);
+        if ((row.agentId || row.agentKey) && !agent) {
+          skipped.push({ index, title: row.title, reason: "agent_not_found" });
+          continue;
+        }
+        const entryId = operationKey ? deterministicOperationId("knowledge_manual", operationKey, index) : undefined;
+        const createData = {
+          ...(entryId ? { id: entryId } : {}),
+          agentId: agent?.id || null,
+          trainingSampleId: null,
+          sourceType: "manual_knowledge_import",
+          sourceId: source,
+          ...identity.fields,
+          identityBinding: identity.binding,
+          title: String(row.title || "").trim(),
+          content: String(row.content || "").trim(),
+          tags: jsonValue(normalizeKnowledgeImportTags(row.tags, agent?.key)),
+          qualityScore: Number.isFinite(Number(row.qualityScore)) ? Math.max(0, Math.min(100, Math.round(Number(row.qualityScore)))) : 70,
+          status: "review",
+          reviewer: null,
+          reviewNote: "manual knowledge import requires human review before reply use",
+          reviewedAt: null,
+          reviewHistory: jsonValue([]),
+        };
+        const updateData = { ...createData };
+        delete (updateData as any).id;
+        delete (updateData as any).status;
+        delete (updateData as any).reviewer;
+        delete (updateData as any).reviewNote;
+        delete (updateData as any).reviewedAt;
+        delete (updateData as any).reviewHistory;
+        const saved = entryId
+          ? await tx.knowledgeEntry.upsert({ where: { id: entryId }, create: createData, update: updateData })
+          : await tx.knowledgeEntry.create({ data: createData });
+        results.push(saved);
+      }
+      let reviewLog: any = null;
+      if (results.length || skipped.length) {
+        const failed = results.length === 0;
+        reviewLog = await tx.reviewLog.create({ data: {
+          ...(importOperation ? { id: deterministicOperationId("review", importOperation.effectKey) } : {}),
+          targetType: "knowledge_import",
+          targetId: operationKey || results[0]?.id || `failed:${source}:${new Date().toISOString()}`,
+          decision: failed ? "import_manual_knowledge_failed" : "import_manual_knowledge",
+          reviewer: "operator",
+          note: failed
+            ? `Manual knowledge import from ${source} did not save any entries; fix skipped rows and retry.`
+            : `Imported ${results.length} manual knowledge entries from ${source}; low score entries still need review before skill application.`,
+          beforeStatus: "",
+          afterStatus: failed ? "failed" : "imported",
+          metadata: jsonValue({
+            source,
+            count: results.length,
+            skippedCount: skipped.length,
+            skipped,
+            ...(failed ? { failure: { phase: "write_failed", reason: "no_importable_rows" } } : {}),
+            knowledgeEntryIds: results.map((entry) => entry.id),
+            ...identity.fields,
+            ...(importOperation ? { effectKey: importOperation.effectKey, requestOperation: importOperation.operation } : {}),
+          }),
+        }});
+      }
+      return serialize({ count: results.length, results, skipped, ...(reviewLog ? { reviewLog, failed: results.length === 0 } : {}) });
+    });
+  }
+
+  async recordKnowledgeImportFailure(parsed: any = {}, context: OperationsIdentity & { operationKey?: string; source?: string; phase?: string } = {}) {
+    return this.prisma.$transaction(async (tx: PrismaLike) => {
+      const identity = await this.resolveIdentity(tx, context, "knowledge import failure");
+      const source = String(context.source || "manual_knowledge_import").trim() || "manual_knowledge_import";
+      const operationKey = context.operationKey ? normalizeOperationKey(context.operationKey, "knowledge import operationKey") : "";
+      const importOperation = operationKey
+        ? buildPrismaKnowledgeImportFailureOperation(operationKey, identity.fields, source, parsed, context.phase || "parse_failed")
+        : null;
+      const existingImportLog = importOperation ? await findPrismaReviewLogByEffectKey(tx, importOperation.effectKey) : null;
+      if (existingImportLog) {
+        assertExactOperationReplay(
+          readRequestOperationMetadata(existingImportLog.metadata),
+          importOperation!.operation,
+          "knowledge import failure",
+        );
+        return serialize(existingImportLog);
+      }
+      const now = new Date();
+      const failure = normalizeKnowledgeImportFailure(parsed, context.phase || "parse_failed");
+      const reviewLog = await tx.reviewLog.create({ data: {
+        ...(importOperation ? { id: deterministicOperationId("review", importOperation.effectKey) } : {}),
+        targetType: "knowledge_import",
+        targetId: operationKey || `failed:${source}:${now.toISOString()}`,
+        decision: "import_manual_knowledge_failed",
+        reviewer: "operator",
+        note: `Manual knowledge import from ${source} failed before saving entries; fix the source file and retry.`,
+        beforeStatus: "",
+        afterStatus: "failed",
+        metadata: jsonValue({
+          source,
+          count: 0,
+          skippedCount: failure.errors.length,
+          skipped: failure.errors,
+          failure,
+          knowledgeEntryIds: [],
+          ...identity.fields,
+          ...(importOperation ? { effectKey: importOperation.effectKey, requestOperation: importOperation.operation } : {}),
+        }),
+      }});
+      return serialize(reviewLog);
+    });
   }
 
   async listRouteEvaluations(filter: OperationsIdentity = {}) {
@@ -145,6 +315,12 @@ export class PrismaOperationsService {
         appliedSkills: jsonValue(result.appliedSkills || []),
         knowledgeMatches: jsonValue(result.knowledgeMatches || []),
         replyDraft: jsonValue(result.replyDraft),
+        learningInsight: jsonValue(result.learningInsight || buildConversationLearningInsight({
+          text: payload.text || "",
+          route: result,
+          messageId: payload.messageId || null,
+        })),
+        conversionAssessment: jsonValue(result.conversionAssessment),
       }});
       return serialize({ ...route, agent });
     });
@@ -230,6 +406,11 @@ export class PrismaOperationsService {
         content: `客户：${before.text}\n正确场景：${scene}\n正确 Agent：${agent.name || agent.key}\n备注：${note}`,
         tags: jsonValue([scene, agent.key, "场景纠正", ...inferSkillHints({ question: before.text, answer: idealReply })]),
         qualityScore: 95,
+        status: "ready",
+        reviewer,
+        reviewNote: note,
+        reviewedAt: now,
+        reviewHistory: jsonValue([{ status: "ready", reviewer, note, reviewedAt: now.toISOString() }]),
       }});
       const reviewLog = await tx.reviewLog.create({ data: {
         targetType: "route_evaluation", targetId: id, decision: "correct_scene", reviewer, note,
@@ -282,6 +463,7 @@ export class PrismaOperationsService {
           warnings: jsonValue(parsed.warnings || []), ...identity.fields, identityBinding,
         }});
         const importedSamples: any[] = [];
+        const reviewRequired = String(payload?.reviewMode || "score_based") === "required";
         for (const [pairIndex, pair] of pairs.entries()) {
           const agent = requestedAgent || await this.getAgentByKey(pair.agentKey || "general", tx);
           const customerText = String(pair.customerText || pair.question || "").trim();
@@ -292,16 +474,33 @@ export class PrismaOperationsService {
             importId: record.id, agentId: agent?.id || null, agentKey: agent?.key || pair.agentKey || "general",
             ...identity.fields, identityBinding, scene: pair.scene || "未分类",
             sceneScore: Number(pair.sceneScore || 0), sceneScores: jsonValue(pair.sceneScores || []), matchedKeywords: jsonValue(pair.matchedKeywords || []),
-            sceneCheck: jsonValue(pair.sceneCheck), customerText, idealReply, score, status: score >= 70 ? "ready" : "review",
+            sceneCheck: jsonValue(pair.sceneCheck), customerText, idealReply, score, status: reviewRequired ? "review" : score >= 70 ? "ready" : "review",
             skillHints: jsonValue(inferSkillHints(pair)), sourceType: "chat_import",
             sourceLineStart: integerOrNull(pair.sourceLineStart), sourceLineEnd: integerOrNull(pair.sourceLineEnd),
           }});
           importedSamples.push(sample);
+          const knowledgeStatus = String(sample.status || "review") === "ready" ? "ready" : "review";
+          const knowledgeReviewedAt = knowledgeStatus === "ready" ? new Date() : null;
+          const knowledgeEntryReviewNote =
+            knowledgeStatus === "ready"
+              ? "chat import score met auto-ready threshold"
+              : reviewRequired
+                ? "chat import requires human review before reply use"
+                : "chat import score requires human review before reply use";
           await tx.knowledgeEntry.create({ data: {
             id: deterministicOperationId("knowledge", operationKey, pairIndex),
             agentId: sample.agentId, trainingSampleId: sample.id, sourceType: "chat_import", sourceId: sample.id,
             ...identity.fields, identityBinding, title: `${sample.scene}：${customerText.slice(0, 28)}`,
             content: `客户：${customerText}\n客服：${idealReply}`, tags: jsonValue([sample.scene, sample.agentKey, ...inferSkillHints(pair)]), qualityScore: score,
+            status: knowledgeStatus,
+            reviewer: knowledgeStatus === "ready" ? "system" : null,
+            reviewNote: knowledgeEntryReviewNote,
+            reviewedAt: knowledgeReviewedAt,
+            reviewHistory: jsonValue(
+              knowledgeReviewedAt
+                ? [{ status: knowledgeStatus, reviewer: "system", note: knowledgeEntryReviewNote, reviewedAt: knowledgeReviewedAt.toISOString() }]
+                : [],
+            ),
           }});
         }
         const sceneSummary = summarizeSceneChecks(importedSamples);
@@ -321,6 +520,204 @@ export class PrismaOperationsService {
 
   async reviewTrainingSample(id: string, payload: any = {}) {
     return this.prisma.$transaction((tx: PrismaLike) => this.reviewTrainingSampleTx(tx, id, payload));
+  }
+
+  async listConversationLearningBundles(filter: OperationsIdentity = {}, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(Math.floor(Number(limit || 50)), 100));
+    if (filter.conversationId && (!filter.wechatAccountId || !filter.customerId)) {
+      throw new BadRequestException("conversation learning requires complete conversation identity");
+    }
+    const conversations = await this.prisma.conversation.findMany({
+      where: {
+        ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+        ...(filter.conversationId ? { id: filter.conversationId } : {}),
+        ...(filter.customerId ? { customerId: filter.customerId } : {}),
+      },
+      include: {
+        customer: true,
+        wechatAccount: true,
+        messages: {
+          where: { direction: { in: ["inbound", "outbound"] } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 500,
+        },
+        orderDrafts: true,
+        designJobs: { include: { quoteDrafts: true } },
+      },
+      orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
+      take: safeLimit,
+    });
+    const conversationIds = conversations.map((item: any) => item.id);
+    const routes = conversationIds.length
+      ? await this.prisma.routeEvaluation.findMany({
+        where: { conversationId: { in: conversationIds } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      })
+      : [];
+    return serialize(conversations.map((conversation: any) => ({
+      conversation: {
+        ...conversation,
+        messages: undefined,
+        orderDrafts: undefined,
+        designJobs: undefined,
+      },
+      messages: [...conversation.messages].reverse(),
+      routes: routes.filter((route: any) => route.conversationId === conversation.id),
+      quotes: conversation.designJobs.flatMap((job: any) => job.quoteDrafts || []),
+      orders: conversation.orderDrafts || [],
+    })));
+  }
+
+  async confirmConversationOutcome(conversationId: string, payload: any = {}) {
+    return this.prisma.$transaction(async (tx: PrismaLike) => {
+      const conversation = await tx.conversation.findUnique({ where: { id: conversationId } });
+      if (!conversation) throw new NotFoundException(`conversation not found: ${conversationId}`);
+      const identity = {
+        wechatAccountId: String(payload.expectedWechatAccountId || payload.wechatAccountId || ""),
+        conversationId,
+        customerId: String(payload.expectedCustomerId || payload.customerId || ""),
+      };
+      assertCompleteIdentity(conversation, identity, "conversation outcome confirmation");
+      if (payload.expectedConversationId && payload.expectedConversationId !== conversationId) {
+        throw new BadRequestException("conversation outcome confirmation identity mismatch: conversationId");
+      }
+      const outcome = normalizeConversationOutcome(payload.outcome);
+      const reviewOperation = buildPrismaReviewOperation(
+        "conversation-outcome",
+        conversationId,
+        payload,
+        "conversation outcome operationKey",
+      );
+      if (!reviewOperation) throw new BadRequestException("conversation outcome operationKey is required");
+      const existingReviewLog = await findPrismaReviewLogByEffectKey(tx, reviewOperation.effectKey);
+      const route = await tx.routeEvaluation.findFirst({
+        where: { conversationId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      if (!route) throw new NotFoundException(`conversation route evaluation not found: ${conversationId}`);
+      if (existingReviewLog) {
+        assertExactOperationReplay(
+          readRequestOperationMetadata(existingReviewLog.metadata),
+          reviewOperation.operation,
+          "conversation outcome confirmation",
+        );
+        return serialize({ route, reviewLog: existingReviewLog, confirmedOutcome: route.conversionAssessment?.confirmedOutcome || null });
+      }
+      const now = new Date();
+      const confirmedOutcome = {
+        outcome,
+        reasonCode: String(payload.reasonCode || "").trim() || null,
+        note: String(payload.note || "").trim() || null,
+        reviewer: String(payload.reviewer || "operator").trim() || "operator",
+        confirmedAt: now.toISOString(),
+      };
+      const updatedRoute = await tx.routeEvaluation.update({
+        where: { id: route.id },
+        data: {
+          conversionAssessment: jsonValue({
+            ...(route.conversionAssessment || {}),
+            schema: "conversion_assessment_confirmation_v1",
+            confirmedOutcome,
+          }),
+        },
+      });
+      const reviewLog = await tx.reviewLog.create({ data: {
+        id: deterministicOperationId("review", reviewOperation.effectKey),
+        targetType: "conversation",
+        targetId: conversationId,
+        decision: "confirm_conversion_outcome",
+        reviewer: confirmedOutcome.reviewer,
+        note: confirmedOutcome.note,
+        beforeStatus: "unconfirmed",
+        afterStatus: outcome,
+        metadata: jsonValue({
+          effectKey: reviewOperation.effectKey,
+          requestOperation: reviewOperation.operation,
+          routeEvaluationId: route.id,
+          reasonCode: confirmedOutcome.reasonCode,
+          ...identity,
+        }),
+      }});
+      return serialize({ route: updatedRoute, reviewLog, confirmedOutcome });
+    });
+  }
+
+  async reviewKnowledgeEntry(id: string, payload: any = {}) {
+    return this.prisma.$transaction(async (tx: PrismaLike) => {
+      const before = await tx.knowledgeEntry.findUnique({ where: { id } });
+      if (!before) throw new NotFoundException(`knowledge entry not found: ${id}`);
+      assertExpectedIdentity(before, payload, "knowledge entry");
+      const status = normalizeKnowledgeReviewStatus(payload.status);
+      const reviewer = String(payload.reviewer || "人工客服").trim() || "人工客服";
+      const note = String(payload.note || knowledgeReviewNote(status)).trim();
+      const reviewOperation = buildPrismaReviewOperation(
+        "knowledge-entry-review",
+        id,
+        payload,
+        "knowledge entry review operationKey",
+      );
+      const existingReviewLog = reviewOperation ? await findPrismaReviewLogByEffectKey(tx, reviewOperation.effectKey) : null;
+      if (existingReviewLog) {
+        assertExactOperationReplay(
+          readRequestOperationMetadata(existingReviewLog.metadata),
+          reviewOperation!.operation,
+          "knowledge entry review",
+        );
+        return serialize({ knowledgeEntry: before, reviewLog: existingReviewLog });
+      }
+      let agent = before.agentId ? await tx.customerServiceAgent.findUnique({ where: { id: before.agentId } }) : null;
+      if (payload.agentId) agent = await tx.customerServiceAgent.findUnique({ where: { id: payload.agentId } });
+      if (payload.agentKey) agent = await tx.customerServiceAgent.findUnique({ where: { key: payload.agentKey } });
+      if ((payload.agentId || payload.agentKey) && !agent) {
+        throw new BadRequestException(`knowledge entry agent not found: ${payload.agentId || payload.agentKey}`);
+      }
+      const now = new Date();
+      const nextTags = payload.tags !== undefined
+        ? normalizeKnowledgeImportTags(payload.tags, agent?.key)
+        : normalizeKnowledgeImportTags(before.tags);
+      const nextEntry = {
+        ...before,
+        agentId: agent?.id || before.agentId || null,
+        title: payload.title !== undefined ? textOr(payload.title, before.title || "") : before.title || "",
+        content: payload.content !== undefined ? textOr(payload.content, before.content || "") : before.content || "",
+        tags: nextTags,
+        qualityScore: payload.qualityScore !== undefined ? clampKnowledgeScore(payload.qualityScore, before.qualityScore) : clampKnowledgeScore(before.qualityScore, 70),
+        status,
+      };
+      assertKnowledgeEntryReadyForReview(nextEntry, status);
+      const data: any = {
+        status,
+        reviewer,
+        reviewNote: note,
+        reviewedAt: now,
+        reviewHistory: jsonValue(appendKnowledgeReviewHistory(before.reviewHistory, { status, reviewer, note, reviewedAt: now.toISOString() })),
+      };
+      if (agent) data.agentId = agent.id;
+      if (payload.title !== undefined) data.title = nextEntry.title;
+      if (payload.content !== undefined) data.content = nextEntry.content;
+      if (payload.tags !== undefined) data.tags = jsonValue(nextTags);
+      if (payload.qualityScore !== undefined) data.qualityScore = nextEntry.qualityScore;
+      const knowledgeEntry = await tx.knowledgeEntry.update({ where: { id }, data });
+      const reviewLog = await tx.reviewLog.create({ data: {
+        ...(reviewOperation ? { id: deterministicOperationId("review", reviewOperation.effectKey) } : {}),
+        targetType: "knowledge_entry",
+        targetId: id,
+        decision: status === "ready" ? "approve_knowledge_entry" : status === "rejected" ? "reject_knowledge_entry" : "mark_knowledge_entry_review",
+        reviewer,
+        note,
+        beforeStatus: normalizeKnowledgeEntryStatus(before),
+        afterStatus: status,
+        metadata: jsonValue({
+          source: "knowledge_entry_review",
+          sourceType: knowledgeEntry.sourceType,
+          sourceId: knowledgeEntry.sourceId,
+          agentId: knowledgeEntry.agentId,
+          ...identityFields(knowledgeEntry),
+          ...(reviewOperation ? { effectKey: reviewOperation.effectKey, requestOperation: reviewOperation.operation } : {}),
+        }),
+      }});
+      return serialize({ knowledgeEntry, reviewLog });
+    });
   }
 
   private replayChatImport(record: any, operation: RequestOperationMetadata) {
@@ -357,6 +754,21 @@ export class PrismaOperationsService {
     if (payload.agentId) agent = await tx.customerServiceAgent.findUnique({ where: { id: payload.agentId } });
     if (payload.agentKey) agent = await tx.customerServiceAgent.findUnique({ where: { key: payload.agentKey } });
     if ((payload.agentId || payload.agentKey) && !agent) throw new BadRequestException(`training sample agent not found: ${payload.agentId || payload.agentKey}`);
+    const reviewOperation = buildPrismaReviewOperation(
+      "training-sample-review",
+      id,
+      payload,
+      "training sample review operationKey",
+    );
+    const existingReviewLog = reviewOperation ? await findPrismaReviewLogByEffectKey(tx, reviewOperation.effectKey) : null;
+    if (existingReviewLog) {
+      assertExactOperationReplay(
+        readRequestOperationMetadata(existingReviewLog.metadata),
+        reviewOperation!.operation,
+        "training sample review",
+      );
+      return serialize({ sample: { ...before, quality: evaluateTrainingSampleQuality(before) }, reviewLog: existingReviewLog });
+    }
     const now = new Date();
     const history = Array.isArray(before.reviewHistory) ? before.reviewHistory : [];
     const data: any = {
@@ -380,12 +792,25 @@ export class PrismaOperationsService {
       agentId: sample.agentId, title: `${sample.scene || "未分类"}：${String(sample.customerText || "").slice(0, 28)}`,
       content: `客户：${sample.customerText}\n客服：${sample.idealReply}`,
       tags: jsonValue([sample.scene, sample.agentKey, ...jsonStrings(sample.skillHints)].filter(Boolean)), qualityScore: sample.score,
+      status,
+      reviewer,
+      reviewNote: note,
+      reviewedAt: now,
+      reviewHistory: jsonValue(appendKnowledgeReviewHistory(entry.reviewHistory, { status, reviewer, note, reviewedAt: now.toISOString() })),
     }});
     const reviewLog = await tx.reviewLog.create({ data: {
+      ...(reviewOperation ? { id: deterministicOperationId("review", reviewOperation.effectKey) } : {}),
       targetType: "training_sample", targetId: id,
       decision: status === "ready" ? "approve_training_sample" : status === "rejected" ? "reject_training_sample" : "mark_training_sample_review",
       reviewer, note, beforeStatus: before.status || "ready", afterStatus: status,
-      metadata: jsonValue({ source: "training_sample_review", agentKey: sample.agentKey, scene: sample.scene, sourceType: sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : "manual"), ...identityFields(sample) }),
+      metadata: jsonValue({
+        source: "training_sample_review",
+        agentKey: sample.agentKey,
+        scene: sample.scene,
+        sourceType: sample.sourceType || (sample.sourceRouteId ? "route_correction" : sample.importId ? "chat_import" : "manual"),
+        ...identityFields(sample),
+        ...(reviewOperation ? { effectKey: reviewOperation.effectKey, requestOperation: reviewOperation.operation } : {}),
+      }),
     }});
     if (sample.importId) await this.refreshImportSummary(tx, sample.importId);
     return serialize({ sample: { ...sample, quality: evaluateTrainingSampleQuality(sample) }, reviewLog });
@@ -638,4 +1063,124 @@ function clampScore(value: any, fallback: any) { const score = Number(value); re
 function normalizeSkillHints(value: any) { const raw = Array.isArray(value) ? value : String(value || "").split(/[,、;；|]/); return unique(raw.map((item) => String(item || "").trim()).filter(Boolean)); }
 function inferSkillHints(pair: any) { const text = `${pair.question || pair.customerText || ""}\n${pair.answer || pair.idealReply || ""}`; if (isSceneClarificationReply(pair.answer || pair.idealReply)) return ["防乱回复"]; const hints = []; if (/预算|价格|总预算|每盒|每份/.test(text)) hints.push("预算澄清"); if (/效果图|设计|logo|摆拍/i.test(text)) hints.push("设计需求确认"); if (/发货|快递|物流|签收/.test(text)) hints.push("物流安抚"); if (/退款|退货|换货|补发/.test(text)) hints.push("售后方案"); if (/亲|您|帮您|这边|建议|麻烦/.test(text)) hints.push("高情商话术"); return unique(hints); }
 function summarizeSceneChecks(samples: any[]) { const summary: any = { sampleCount: samples.length, clearCount: 0, weakCount: 0, ambiguousCount: 0, unmatchedCount: 0, sceneUncertainCount: 0, readyCount: 0, reviewCount: 0, rejectedCount: 0 }; for (const sample of samples) { const sceneStatus = String(sample?.sceneCheck?.status || ""); if (sceneStatus === "clear") summary.clearCount += 1; if (sceneStatus === "weak") summary.weakCount += 1; if (sceneStatus === "ambiguous") summary.ambiguousCount += 1; if (sceneStatus === "unmatched") summary.unmatchedCount += 1; const status = String(sample.status || "ready"); if (status === "ready") summary.readyCount += 1; if (status === "review") summary.reviewCount += 1; if (status === "rejected") summary.rejectedCount += 1; } summary.sceneUncertainCount = summary.weakCount + summary.ambiguousCount + summary.unmatchedCount; return summary; }
+function normalizeKnowledgeImportTags(value: any, agentKey?: string) { const raw = Array.isArray(value) ? value : String(value || "").split(/[,、;；|]/); const tags = unique(raw.map((item) => String(item || "").trim()).filter(Boolean)); if (agentKey) tags.push(agentKey); return unique(tags); }
+function normalizeKnowledgeReviewStatus(value: any) { const status = String(value || "").trim(); if (status === "ready" || status === "review" || status === "rejected") return status; throw new BadRequestException("knowledge status must be one of ready, review, rejected"); }
+function normalizeKnowledgeEntryStatus(entry: any) {
+  const explicit = String(entry?.status || "").trim();
+  if (explicit === "ready" || explicit === "review" || explicit === "rejected") return explicit;
+  if (entry?.sourceType === "starter_knowledge") return "ready";
+  if (entry?.trainingSample) return String(entry.trainingSample.status || "ready") === "ready" ? "ready" : String(entry.trainingSample.status || "review");
+  if (entry?.sourceType === "chat_import" || entry?.sourceType === "route_correction") return "ready";
+  return "review";
+}
+
+function knowledgeVisibleForIdentity(record: any, filter: OperationsIdentity = {}) {
+  const scope = sharedIdentity([record]);
+  if (scope === null) return false;
+  if (!hasIdentity(scope)) return true;
+  if (!hasIdentity(filter)) return false;
+  return (scope.wechatAccountId ? scope.wechatAccountId === filter.wechatAccountId : true)
+    && (scope.conversationId ? scope.conversationId === filter.conversationId : true)
+    && (scope.customerId ? scope.customerId === filter.customerId : true);
+}
+function knowledgeReviewNote(status: string) { if (status === "ready") return "knowledge entry approved for reply retrieval"; if (status === "rejected") return "knowledge entry disabled from reply retrieval"; return "knowledge entry kept in review"; }
+function normalizeConversationOutcome(value: unknown) { const outcome = String(value || "").trim().toLowerCase(); if (outcome === "won" || outcome === "lost" || outcome === "ongoing") return outcome; throw new BadRequestException("outcome must be one of won, lost, ongoing"); }
+function appendKnowledgeReviewHistory(value: any, item: Record<string, unknown>) { return [...(Array.isArray(value) ? value : []), item].slice(-50); }
+function clampKnowledgeScore(value: any, fallback: any) { const score = Number(value); if (!Number.isFinite(score)) return Number.isFinite(Number(fallback)) ? Number(fallback) : 70; return Math.max(0, Math.min(100, Math.round(score))); }
+function assertKnowledgeEntryReadyForReview(entry: any, status: string) {
+  if (status !== "ready") return;
+  const blockers: string[] = [];
+  if (!String(entry?.agentId || "").trim()) blockers.push("missing_agent");
+  if (!String(entry?.title || "").trim()) blockers.push("missing_title");
+  if (String(entry?.content || "").trim().length < 20) blockers.push("short_content");
+  if (Number(entry?.qualityScore || 0) < 60) blockers.push("low_quality_score");
+  if (!normalizeKnowledgeImportTags(entry?.tags).length) blockers.push("missing_tags");
+  if (blockers.length) throw new BadRequestException(`knowledge entry cannot be marked ready: ${blockers.join(", ")}`);
+}
+async function findPrismaReviewLogByEffectKey(client: PrismaLike, effectKey: string) {
+  const key = String(effectKey || "").trim();
+  if (!key || typeof client?.reviewLog?.findFirst !== "function") return null;
+  return client.reviewLog.findFirst({
+    where: { metadata: { path: ["effectKey"], equals: key } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+function buildPrismaReviewOperation(scope: string, targetId: string, payload: any, label: string) {
+  if (!payload?.operationKey) return null;
+  const operationKey = normalizeOperationKey(payload.operationKey, label);
+  const effectKey = `${scope}:${operationKey}:${targetId}`;
+  const { operationKey: _operationKey, ...reviewPayload } = payload || {};
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      operationKey,
+      createOperationFingerprint(scope, {
+        targetId,
+        expectedWechatAccountId: reviewPayload.expectedWechatAccountId || null,
+        expectedConversationId: reviewPayload.expectedConversationId || null,
+        expectedCustomerId: reviewPayload.expectedCustomerId || null,
+      }, reviewPayload),
+    ),
+  };
+}
+function buildPrismaKnowledgeImportOperation(operationKey: string, identity: any, source: string, rows: any[] = []) {
+  const key = normalizeOperationKey(operationKey, "knowledge import operationKey");
+  const effectKey = `knowledge-import:${key}`;
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      key,
+      createOperationFingerprint("knowledge-import", {
+        source,
+        customerId: identity?.customerId || null,
+        conversationId: identity?.conversationId || null,
+        wechatAccountId: identity?.wechatAccountId || null,
+      }, { rows: Array.isArray(rows) ? rows : [] }),
+    ),
+  };
+}
+function buildPrismaKnowledgeImportFailureOperation(operationKey: string, identity: any, source: string, parsed: any, phase: string) {
+  const key = normalizeOperationKey(operationKey, "knowledge import operationKey");
+  const effectKey = `knowledge-import:${key}`;
+  return {
+    effectKey,
+    operation: requestOperationMetadata(
+      key,
+      createOperationFingerprint("knowledge-import", {
+        source,
+        customerId: identity?.customerId || null,
+        conversationId: identity?.conversationId || null,
+        wechatAccountId: identity?.wechatAccountId || null,
+      }, { failure: normalizeKnowledgeImportFailure(parsed, phase) }),
+    ),
+  };
+}
+function normalizeKnowledgeImportFailure(parsed: any = {}, phase = "parse_failed") {
+  return {
+    phase: String(phase || "parse_failed"),
+    ok: Boolean(parsed?.ok),
+    importedCount: Number(parsed?.importedCount || 0),
+    skippedCount: Number(parsed?.skippedCount || 0),
+    errors: normalizeKnowledgeImportErrors(parsed?.errors),
+    missingRequiredFields: normalizeKnowledgeImportFields(parsed?.missingRequiredFields),
+    blockers: Array.isArray(parsed?.acceptance?.blockers)
+      ? parsed.acceptance.blockers.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 20)
+      : [],
+  };
+}
+function normalizeKnowledgeImportErrors(value: any) {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, 50)
+    .map((item) => ({
+      line: Number.isFinite(Number(item?.line)) ? Number(item.line) : null,
+      message: String(item?.message || item || "").trim(),
+    }))
+    .filter((item) => item.message);
+}
+function normalizeKnowledgeImportFields(value: any) {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, 20)
+    .map((item) => typeof item === "string" ? item : String(item?.field || item?.label || "").trim())
+    .filter(Boolean);
+}
 function serialize(value: any): any { if (value instanceof Date) return value.toISOString(); if (Array.isArray(value)) return value.map(serialize); if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, serialize(item)])); return value; }

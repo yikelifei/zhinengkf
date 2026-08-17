@@ -39,6 +39,43 @@ WECHAT_WORK_SEND_RETRY_DELAY_SECONDS=30
 
 `WECHAT_WORK_SECRET` 必须是“微信客服”Secret。企业微信后台还要把目标客服账号设置为允许 API 管理，并授予“管理帐号、分配会话和收发消息”权限。`CUSTOMER_SERVICE_PUBLIC_BASE_URL` 必须是企业微信可访问的公网 HTTPS 地址。
 
+## 企业微信服务商应用扫码授权
+
+系统也支持企业微信服务商应用的官方安装授权。此模式下，二维码由企业微信官方安装页展示；系统不会接管管理员二维码，也不会把浏览器登录态当作授权凭证。
+
+先在企业微信开放平台创建服务商应用，并配置：
+
+```text
+WECHAT_WORK_SUITE_ID=your-suite-id
+WECHAT_WORK_SUITE_SECRET=your-suite-secret
+WECHAT_WORK_SUITE_TOKEN=the-token-set-for-suite-command-callback
+WECHAT_WORK_SUITE_ENCODING_AES_KEY=the-43-character-suite-encoding-aes-key
+WECHAT_WORK_SUITE_STORAGE_KEY=32-byte-base64-or-64-character-hex
+```
+
+在开放平台把服务商应用的“指令回调 URL”设置为：
+
+```text
+{CUSTOMER_SERVICE_PUBLIC_BASE_URL}/api/wechat-work/suite/callback
+```
+
+企业微信会定期向该地址推送 `suite_ticket`。收到有效 ticket 后，工作台的“企业微信配置”页面会启用“打开官方扫码授权页”。完整流程是：
+
+1. 本机使用 `suite_ticket` 换取 `suite_access_token`，再获取短时 `pre_auth_code`。
+2. 页面打开 `https://open.work.weixin.qq.com/3rdapp/install`，企业管理员扫码并确认应用与微信客服权限。
+3. 企业微信回调 `/api/wechat-work/authorization/callback`；本机校验一次性 `state`，用临时 `auth_code` 换取 `permanent_code`。
+4. `suite_ticket` 与 `permanent_code` 使用 AES-256-GCM 加密写入 `.runtime/wechat-work-suite-authorization.json`，接口和页面只返回脱敏企业信息。
+5. 已存在有效授权时，微信客服 API 优先使用服务商授权换取的企业 `access_token`；原 `WECHAT_WORK_SECRET` 配置保留为兼容路径。
+
+只读状态接口和授权链接接口：
+
+```text
+GET  /api/wechat-work/authorization/status
+POST /api/wechat-work/authorization/install-link
+```
+
+`status` 需要 `view_console` 权限，生成链接需要 `manage_channels` 权限；指令回调和安装回调为公网入口，但都通过企业微信签名、AES 收件方校验或一次性 state 约束。生产多实例部署时应将加密授权存储迁移到共享数据库/KMS；当前文件存储面向单实例桌面服务。
+
 配置检查：
 
 ```text
@@ -130,3 +167,28 @@ GET /api/wechat-work/kf/audit?limit=100
 `POST /api/wechat-work/kf/send-text` and `POST /api/wechat-work/kf/send-images` both require a `requestId` in the JSON body. It must be a portable 16-128 character key and remain unchanged while retrying the exact same recipient and content. A successful action, or any recipient/text/image change, must use a new key. Reusing a key with changed identity or content returns `409 OPERATION_KEY_REUSED`.
 
 Example request IDs: `wechat-work-send:550e8400-e29b-41d4-a716-446655440000` and `wechat-work-images:550e8400-e29b-41d4-a716-446655440001`.
+
+## 备案等待期间可完成的上线准备
+
+当前产品路线只把企业微信客服作为生产微信通道。个人微信 RPA、窗口采集、桥接发送只能作为 legacy/受控辅助能力存在，不能作为生产自动发送路径。
+
+备案还没有完成时，可以先完成这些本地验收：
+
+1. 打开 `GET /api/wechat-work/preflight` 或工作台 `/integrations/wechat-work`，确认返回 `smart_kefu_wechat_work_readiness_v1`，且 `networkCalls=false`。这个检查只读本机配置，不会调用企业微信外网。
+2. 准备并写入 `WECHAT_WORK_TOKEN` 与 `WECHAT_WORK_ENCODING_AES_KEY`。页面只显示是否配置和 AESKey 格式，不回显明文。
+3. 确认企业身份来源二选一：静态 `WECHAT_WORK_CORP_ID + WECHAT_WORK_SECRET`，或服务商扫码授权产生的有效企业授权。
+4. 在企业微信客服账号创建后，补 `WECHAT_WORK_OPEN_KFID`。它不是密钥，用来限定 `sync_msg` 游标、客服账号范围和受控发送验收。
+5. 生产/预发运行环境必须使用 `WECHAT_SEND_ADAPTER=wechat_work_kf`，并且 `USE_LOCAL_STORE=false`。本地 JSON 只能做演示和开发。
+6. 跑企业微信-only 测试，确认个人微信窗口/RPA 不会成为生产发送路径。
+
+备案通过后，再进入外部联调：
+
+1. 将 `CUSTOMER_SERVICE_PUBLIC_BASE_URL` 指向已备案公网 HTTPS 域名。
+2. 在企业微信客服后台填写：
+   - URL: `{CUSTOMER_SERVICE_PUBLIC_BASE_URL}/api/wechat-work/callback`
+   - Token: 与 `WECHAT_WORK_TOKEN` 完全一致
+   - EncodingAESKey: 与 `WECHAT_WORK_ENCODING_AES_KEY` 完全一致
+   - CorpId/ReceiveId: 与当前企业身份来源匹配
+3. 在企业微信后台确认目标客服账号允许 API 管理、接收消息和发送消息。
+4. 用测试客户发送一条真实消息，确认 `callback_accepted -> inbound_processed` 审计出现。
+5. 在客服工作台人工批准一条回复，确认通过 `wechat_work_kf` 调用 `kf/send_msg`，并记录发送尝试、失败或异步失败事件。

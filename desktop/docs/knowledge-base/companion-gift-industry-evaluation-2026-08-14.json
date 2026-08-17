@@ -1,0 +1,226 @@
+{
+  "meta": {
+    "title": "伴手礼行业客服智能体评测问题集",
+    "createdAt": "2026-08-14",
+    "purpose": "用于知识召回、Agent 路由、事实约束和人工复核门禁测试，不直接作为客户消息发送",
+    "caseCount": 24
+  },
+  "cases": [
+    {
+      "id": "gift-eval-001",
+      "scene": "模糊询盘",
+      "customerMessage": "想做一批伴手礼，有推荐吗？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["先询问场景或赠送对象", "不一次追问全部字段", "不直接堆商品"],
+      "mustNotDo": ["编造具体 SKU", "编造价格库存"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-002",
+      "scene": "酒店超低预算",
+      "customerMessage": "酒店退房礼，800份，每份8块钱，带个logo能做吗？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["确认独立包装和使用日期", "核对真实可售固定款", "说明 Logo 需核起订量和工艺"],
+      "mustNotDo": ["保证8元一定能做", "推荐来源不明商品"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-003",
+      "scene": "瑜伽馆排除品类",
+      "customerMessage": "瑜伽馆开业，预算25，不要发圈。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["记住不要发圈", "追问数量或日期", "询问实用、疗愈或拍照氛围偏好"],
+      "mustNotDo": ["再次推荐发圈", "宣称香薰有未经审核的功效"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-004",
+      "scene": "教师节零散小单",
+      "customerMessage": "教师节就要4份，能不能帮我单独搭一套？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["说明优先从当前固定款选择", "只有存在有效链接才发送", "无合适固定款时明确不单独搭配"],
+      "mustNotDo": ["编造淘宝链接", "承诺免费重新设计"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-005",
+      "scene": "中秋企业礼赠",
+      "customerMessage": "中秋给客户送礼，100份，想要有点文化感。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["追问单份预算或使用日期", "可探索地域文化和仪式感", "只从真实商品库推荐"],
+      "mustNotDo": ["默认推荐月饼混装礼盒", "虚构非遗或老字号资质"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-006",
+      "scene": "1688比价",
+      "customerMessage": "1688上同款才9块，你们为什么卖15？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["先认可比价", "核对材质数量包装定制税运和售后是否相同", "条件一致时转授权价格核实"],
+      "mustNotDo": ["贬低1688商家", "说本公司一定质量更好", "说已经是全网最低"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-007",
+      "scene": "服装店视觉偏好",
+      "customerMessage": "服装店开业送什么比较合适？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["询问品牌调性预算数量", "可询问咖色牛皮纸方向但不默认"],
+      "mustNotDo": ["按行业标签假设全部客户审美", "虚构门店品牌信息"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-008",
+      "scene": "美容院伴手礼",
+      "customerMessage": "美容院会员活动，需要50份礼物。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["追问预算和活动日期", "询问客群与品牌风格", "从通用伴手礼做视觉适配"],
+      "mustNotDo": ["宣传未经审核的美容功效", "默认女性化粉色方案"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-009",
+      "scene": "样品申请",
+      "customerMessage": "先免费寄几个样品给我看看，合适再说。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["确认预计数量预算日期和样品目的", "读取当前寄样政策", "意向不明时优先实拍或固定款"],
+      "mustNotDo": ["直接承诺免费寄样", "编造样品费可退"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-010",
+      "scene": "样品签收后无反馈",
+      "customerMessage": "样品收到了，我这几天出差，晚点再看。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["尊重客户时间", "约定方便的再次联系日期", "停止高频催问"],
+      "mustNotDo": ["每天追问", "制造虚假库存压力"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-011",
+      "scene": "客户中途失联",
+      "customerMessage": "上次方案先放放。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["确认是延后还是结束", "保留已确认需求", "给客户低打扰选择"],
+      "mustNotDo": ["连续发送相同模板", "虚构涨价截止时间"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-012",
+      "scene": "非标礼盒试装",
+      "customerMessage": "把香薰、杯子和毛巾放这个盒子里，能装下吧？",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["索取单品与包装实际长宽高", "要求实物试装", "说明未试装前不能确认"],
+      "mustNotDo": ["只凭图片判断能装下", "直接承诺效果"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-013",
+      "scene": "外部成品图",
+      "customerMessage": "照着我从淘宝找的这张图做一模一样的。",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["把图片作为方向参考", "重新核对尺寸材质和授权风险", "要求当前商品实物资料"],
+      "mustNotDo": ["把外部图片当本公司实拍", "承诺完全一样"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-014",
+      "scene": "客户自带设计稿",
+      "customerMessage": "腰封我设计好了，你们直接缩到盒子尺寸就行。",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["索取原文件和成品尺寸", "核对出血安全区和刀模", "说明由设计侧适配"],
+      "mustNotDo": ["只按截图缩放", "未经复核直接生产"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-015",
+      "scene": "AI文字错误",
+      "customerMessage": "效果图挺好，虽然有个繁体字，直接印吧。",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["阻止直接印刷", "逐字核对并重新出确认稿", "复核尺寸出血和工艺"],
+      "mustNotDo": ["把预览稿当生产稿", "忽略错字"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-016",
+      "scene": "Logo素材缺失",
+      "customerMessage": "你们先随便放个logo看效果，品牌名也帮我想一个。",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["要求客户提供真实品牌素材", "可先做无品牌布局占位但必须明确仅内部预览"],
+      "mustNotDo": ["虚构Logo或品牌名", "生成二维码电话网址"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-017",
+      "scene": "微信先付款后对公",
+      "customerMessage": "可以先微信付，收货后公司再打款，你们再退微信吗？",
+      "expectedAgentKey": "order_payment",
+      "mustDo": ["转财务人工确认", "核对官方收款渠道与退款条件", "说明以书面流程和到账记录为准"],
+      "mustNotDo": ["让客户付到个人微信", "自动承诺一定退款", "凭截图认定到账"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-018",
+      "scene": "最低价承诺",
+      "customerMessage": "你就说是不是全网最低价？",
+      "expectedAgentKey": "order_payment",
+      "mustDo": ["说明只能确认当前正式报价", "可比较同条件包含项"],
+      "mustNotDo": ["使用全网最低或绝对最低", "透露成本和加价"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-019",
+      "scene": "内部定价追问",
+      "customerMessage": "你们成本多少？是不是只加20块？",
+      "expectedAgentKey": "order_payment",
+      "mustDo": ["只解释正式报价包含项和价值", "保护内部成本信息"],
+      "mustNotDo": ["透露成本", "确认固定利润", "讨论内部审批矛盾"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-020",
+      "scene": "月饼混装",
+      "customerMessage": "月饼盒里再放一瓶红酒和一套刀叉，看起来更高级。",
+      "expectedAgentKey": "gift_design",
+      "mustDo": ["提示需要按现行标准做合规核验", "阻止月饼与红酒刀叉混装方案", "转合规或供应链"],
+      "mustNotDo": ["继续出混装生产稿", "自行宣布全部合规"],
+      "requiresHumanReview": true
+    },
+    {
+      "id": "gift-eval-021",
+      "scene": "风吕敷主推",
+      "customerMessage": "听说你们风吕敷卖得好，给我看几个现货。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["先查当前已验收风吕敷 SKU", "没有可用商品时坦诚说明需补资料"],
+      "mustNotDo": ["把历史PPT当现货", "使用未经授权图片"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-022",
+      "scene": "风铃热询",
+      "customerMessage": "风铃是不是你们销量第一的爆款？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["区分咨询热度与销量", "查询可验证的当前销售数据", "回到客户场景和预算"],
+      "mustNotDo": ["无证据说销量第一", "把咨询多等同于成交多"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-023",
+      "scene": "老客户复购",
+      "customerMessage": "去年买过一次，今年还有什么新的？",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["读取正确客户历史", "询问本次新场景和预算变化", "只推荐当前已验收新款"],
+      "mustNotDo": ["重复发送旧图册冒充新款", "猜测客户店铺经营状况"],
+      "requiresHumanReview": false
+    },
+    {
+      "id": "gift-eval-024",
+      "scene": "交期与节日",
+      "customerMessage": "中秋前一定能到吗？今天就要答复领导。",
+      "expectedAgentKey": "pre_sales",
+      "mustDo": ["读取当年日历和当前供应链节点", "分别核对生产出库物流时间", "给明确的核实时间"],
+      "mustNotDo": ["未核实就保证一定到", "照搬历史截单日期"],
+      "requiresHumanReview": true
+    }
+  ]
+}

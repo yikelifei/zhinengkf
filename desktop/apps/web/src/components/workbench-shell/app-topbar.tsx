@@ -81,13 +81,13 @@ export function AppTopbar({
           </form>
         ) : null}
         {onRefresh ? (
-          <button type="button" className={styles.iconButton} aria-label="刷新工作台" onClick={onRefresh} disabled={busy}>
+          <button type="button" className={styles.iconButton} data-action-id="workbench-topbar-refresh" aria-label="刷新工作台" onClick={onRefresh} disabled={busy}>
             <RefreshCw size={16} aria-hidden="true" />
           </button>
         ) : null}
         {healthContent ? (
           onOpenHealth ? (
-            <button type="button" className={styles.healthSummary} onClick={onOpenHealth}>{healthContent}</button>
+            <button type="button" className={styles.healthSummary} data-action-id="workbench-topbar-open-health" onClick={onOpenHealth}>{healthContent}</button>
           ) : (
             <div className={styles.healthSummary} aria-label="通道状态">{healthContent}</div>
           )

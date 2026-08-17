@@ -1,0 +1,37 @@
+{
+  "batch": "wechat_kb_小石_20260814094610586_7133e7",
+  "policy": "Only sanitized adjacent customer-service turns are eligible. Ready samples must be self-contained and must not depend on current prices, stock, lead time, payment policy, attachments, or unverified product facts.",
+  "decisions": [
+    { "sourcePairId": "xiaoshi_session_003:8", "status": "ready", "note": "议价时先确认使用时间和地区，不承诺具体优惠。" },
+    { "sourcePairId": "xiaoshi_session_008:13", "status": "ready", "note": "删减单品后先确认其余搭配范围，再重新核价。" },
+    { "sourcePairId": "xiaoshi_session_006:4", "status": "ready", "note": "客户觉得贵时先问预算，并说明礼品可以调整。" },
+    { "sourcePairId": "xiaoshi_session_006:18", "status": "ready", "agentKey": "pre_sales", "note": "把客户对太可爱的否定反馈翻译成简单款偏好。" },
+    { "sourcePairId": "xiaoshi_session_004:2", "status": "ready", "agentKey": "pre_sales", "note": "只问价格时先补数量。" },
+    { "sourcePairId": "xiaoshi_session_005:9", "status": "ready", "note": "客户要求让价时先确认数量。" },
+    { "sourcePairId": "xiaoshi_session_005:28", "status": "ready", "agentKey": "pre_sales", "note": "继续压价时用极短问题补数量。" },
+    { "sourcePairId": "xiaoshi_session_001:3", "status": "ready", "agentKey": "pre_sales", "note": "客户要求换内搭时先确认采购数量。" },
+    { "sourcePairId": "xiaoshi_session_008:8", "status": "ready", "note": "主题伴手礼询价先问数量。" },
+    { "sourcePairId": "xiaoshi_session_008:19", "status": "ready", "note": "客户明确组合改动后继续确认预期价格。" },
+    { "sourcePairId": "xiaoshi_session_006:28", "status": "ready", "agentKey": "pre_sales", "note": "客户明确不购买时简短收口并保留后续联系。" },
+
+    { "sourcePairId": "xiaoshi_session_006:21", "status": "review", "note": "包含具体腰封定制能力，启用前需核对当前工艺。" },
+    { "sourcePairId": "xiaoshi_session_006:5", "status": "review", "agentKey": "pre_sales", "note": "包含特定预算可做的可行性判断，需结合实时商品库。" },
+    { "sourcePairId": "xiaoshi_session_006:15", "status": "review", "agentKey": "gift_design", "note": "包含具体组合与包装成本判断，需结合当前商品和包装尺寸。" },
+    { "sourcePairId": "xiaoshi_session_001:6", "status": "review", "agentKey": "gift_design", "note": "包含具体替换品建议，需核对当前库存和适配性。" },
+    { "sourcePairId": "xiaoshi_session_007:3", "status": "review", "agentKey": "pre_sales", "note": "包装和挂件范围依赖前序附件。" },
+    { "sourcePairId": "xiaoshi_session_007:11", "status": "review", "agentKey": "pre_sales", "note": "报价范围澄清合理，但客户问题依赖附件。" },
+    { "sourcePairId": "xiaoshi_session_006:22", "status": "review", "agentKey": "pre_sales", "note": "包含具体笔款信息，需核对当前商品。" },
+    { "sourcePairId": "xiaoshi_session_008:32", "status": "review", "agentKey": "pre_sales", "note": "样品对比问题依赖客户图片。" },
+    { "sourcePairId": "xiaoshi_session_008:44", "status": "review", "agentKey": "pre_sales", "note": "要求补拍包内和底部是好逻辑，但当前问题只有附件。" },
+    { "sourcePairId": "xiaoshi_session_008:42", "status": "review", "agentKey": "pre_sales", "note": "质量核验需要更多实拍图，但上下文不完整。" },
+    { "sourcePairId": "xiaoshi_session_002:7", "status": "review", "agentKey": "pre_sales", "note": "包含具体手作步骤，需核对商品教程。" },
+    { "sourcePairId": "xiaoshi_session_003:10", "status": "review", "agentKey": "logistics_exception", "note": "不保证加急的边界合理，但仓库状态具有时效性。" },
+    { "sourcePairId": "xiaoshi_session_003:1", "status": "review", "note": "回复依赖后续产品册附件。" },
+    { "sourcePairId": "xiaoshi_session_006:14", "status": "review", "note": "超预算判断依赖前序预算上下文。" },
+    { "sourcePairId": "xiaoshi_session_006:17", "status": "review", "agentKey": "gift_design", "note": "混装建议需核对商品、数量和交付规则。" },
+    { "sourcePairId": "xiaoshi_session_005:3", "status": "review", "note": "同色包存在不同搭配的判断依赖附件。" },
+    { "sourcePairId": "xiaoshi_session_008:46", "status": "review", "agentKey": "pre_sales", "note": "找厂家核实的流程可参考，但资源声明和具体商品需验证。" },
+    { "sourcePairId": "xiaoshi_session_001:2", "status": "review", "agentKey": "pre_sales", "note": "回复主要依赖产品册附件。" },
+    { "sourcePairId": "xiaoshi_session_002:20", "status": "review", "agentKey": "pre_sales", "note": "散发定义可参考，但末尾含一次性交期判断。" }
+  ]
+}

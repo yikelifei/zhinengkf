@@ -36,46 +36,30 @@ test("integration feature barrel exports route-ready independent page modules", 
     "WechatWorkPreflightPage",
     "WechatWorkConfigurationPage",
     "WechatWorkFlowPage",
-    "WindowEvidencePage",
-    "PersonalWechatInboundDrillPage",
-    "PersonalWechatInstancesPage",
-    "PersonalWechatInstanceConfigPage",
-    "PersonalWechatControlPage",
-    "PersonalWechatSafetyPage",
   ]) {
     assert.match(source, new RegExp(`\\b${page}\\b`));
   }
+  assert.doesNotMatch(source, /PersonalWechat|WindowEvidencePage/);
 });
 
 test("integration controllers reuse existing production components and real contracts", () => {
-  const instances = read("features/integrations/personal-wechat-instances-page.tsx");
-  const instanceConfig = read("features/integrations/personal-wechat-instance-config-page.tsx");
-  const control = read("features/integrations/personal-wechat-control-page.tsx");
-  const safety = read("features/integrations/personal-wechat-safety-page.tsx");
   const channels = read("features/integrations/channels-status-page.tsx");
   const preflight = read("features/integrations/wechat-work-preflight-page.tsx");
   const configuration = read("features/integrations/wechat-work-configuration-page.tsx");
   const flow = read("features/integrations/wechat-work-flow-page.tsx");
-  const windowEvidence = read("features/integrations/window-evidence-page.tsx");
-  const inboundDrill = read("features/integrations/personal-wechat-inbound-drill-page.tsx");
 
-  assert.match(instances, /getPersonalWechatRpaRegistry/);
-  assert.doesNotMatch(instances, /savePersonalWechatRpaInstance|disablePersonalWechatRpaInstance/);
-  assert.match(instanceConfig, /validatePersonalWechatRpaInstance/);
-  assert.match(instanceConfig, /savePersonalWechatRpaInstance/);
-  assert.match(instanceConfig, /disablePersonalWechatRpaInstance/);
-  assert.doesNotMatch(control, /getSendTasks|PersonalWechatWorkspace/);
-  assert.match(safety, /不确定投递继续禁止自动重试/);
-  assert.doesNotMatch(safety, /MessageSafetyGovernance/);
   assert.match(channels, /loadWechatChannelStatus/);
+  assert.match(channels, /channel\.key === "work_wechat"/);
+  assert.doesNotMatch(channels, /personal_wechat:|mini_program/);
   assert.match(preflight, /getWechatWorkProductionPreflight/);
   assert.match(configuration, /readiness\.local\.checks/);
   assert.match(flow, /status\.visualFlow/);
-  assert.match(windowEvidence, /captureWindowObserverOnce/);
-  assert.doesNotMatch(windowEvidence, /scanWindowSnapshotInbox|testWechatChannelInbound/);
-  assert.match(inboundDrill, /testWechatChannelInbound\("personal_wechat"/);
-  assert.match(inboundDrill, /identityExpectation\(identity\)/);
-  assert.match(inboundDrill, /confirmed/);
+});
+
+test("integration notices accept rich content without invalid paragraph nesting", () => {
+  const featurePage = read("features/integrations/feature-page.tsx");
+  assert.match(featurePage, /<div className=\{styles\.noticeBody\}>\{children\}<\/div>/);
+  assert.doesNotMatch(featurePage, /<p>\{children\}<\/p>/);
 });
 
 test("send feature barrel exports queue, blocked, read-only diagnostics, and diagnostic operations", () => {
@@ -94,24 +78,33 @@ test("send pages preserve identity binding, explicit confirmation, and fail-clos
   assert.match(queue, /validateSendTaskCurrentWindow/);
   assert.match(queue, /executeSendTask/);
   assert.match(queue, /processSafeSendQueue/);
+  assert.match(queue, /cancelSendTask/);
+  assert.match(queue, /isTrustedDesktopSessionError/);
+  assert.match(queue, /sessionBlocked/);
+  assert.match(queue, /需要可信桌面会话/);
+  assert.match(queue, /\[\.\.\.new Set\(errors\)\]/);
   assert.match(queue, /identityExpectation\(task\)/);
   assert.match(queue, /pendingConfirmation/);
   assert.match(queue, /canExecuteSendTask/);
+  assert.match(queue, /blockedByEarlierTask/);
+  assert.match(queue, /确认取消待发送任务/);
   assert.match(blocked, /requeueSendTask/);
   assert.match(blocked, /cancelSendTask/);
   assert.match(blocked, /identityExpectation\(task\)/);
   assert.match(blocked, /pendingConfirmation/);
   assert.match(policy, /manualLocked/);
+  assert.match(policy, /isManualReplySendTask/);
+  assert.match(policy, /task\.payload\?\.source === "manual_reply"/);
+  assert.match(policy, /isManualLocked\(task\) && !isManualReplySendTask\(task\)/);
   assert.match(policy, /blockedByRoutingPolicy/);
   assert.match(policy, /guardSnapshot\?\.status === "passed"/);
   assert.match(policy, /task\.status === "sending"/);
 });
 
-test("read-only diagnostics, send scans, window evidence, and inbound drill are separate responsibilities", () => {
+test("read-only diagnostics and send scans stay separate from Enterprise WeChat setup", () => {
   const diagnostics = read("features/send/send-diagnostics-page.tsx");
   const operations = read("features/send/send-diagnostics-operations-page.tsx");
-  const windowEvidence = read("features/integrations/window-evidence-page.tsx");
-  const inboundDrill = read("features/integrations/personal-wechat-inbound-drill-page.tsx");
+  const configuration = read("features/integrations/wechat-work-configuration-page.tsx");
   assert.match(diagnostics, /Promise\.allSettled/);
   assert.match(diagnostics, /getBridgeStatus/);
   assert.match(diagnostics, /getBridgeOutbox/);
@@ -121,10 +114,18 @@ test("read-only diagnostics, send scans, window evidence, and inbound drill are 
   assert.match(operations, /scanSendOperations/);
   assert.match(operations, /scanBridgeInbox/);
   assert.doesNotMatch(operations, /scanWindowSnapshotInbox|captureWindowObserverOnce/);
-  assert.match(windowEvidence, /captureWindowObserverOnce/);
-  assert.doesNotMatch(windowEvidence, /scanWindowSnapshotInbox|testWechatChannelInbound/);
-  assert.match(inboundDrill, /testWechatChannelInbound\("personal_wechat"/);
-  assert.doesNotMatch(inboundDrill, /scanWindowSnapshotInbox|captureWindowObserverOnce/);
+  assert.match(operations, /\/integrations\/wechat-work\/flow/);
+  assert.doesNotMatch(operations, /\/integrations\/personal-wechat|个人微信窗口|窗口收件页/);
+  assert.doesNotMatch(diagnostics + operations, /桥接回执|微信桥接|真实微信窗口|窗口证据|等待桥接/);
+  assert.match(diagnostics + operations, /企业微信发送回执/);
+  assert.match(configuration, /createWechatWorkAuthorizationInstallLink/);
+  assert.doesNotMatch(configuration, /captureWindowObserverOnce|testWechatChannelInbound/);
+});
+
+test("training import examples stay aligned to Enterprise WeChat only delivery", () => {
+  const source = read("features/training/training-import-page.tsx");
+  assert.match(source, /placeholder="可选，如企业微信客服"/);
+  assert.doesNotMatch(source, /placeholder="可选，如个人微信"/);
 });
 
 test("new production feature controllers contain no demo, wrong-window, timeout injection, or global load", () => {

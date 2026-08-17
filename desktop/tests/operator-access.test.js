@@ -27,6 +27,7 @@ const { RoutingController } = require("../apps/api/src/routing/routing.controlle
 const { TrainingController } = require("../apps/api/src/training/training.controller");
 const { WechatController } = require("../apps/api/src/wechat/wechat.controller");
 const { WechatWorkController } = require("../apps/api/src/wechat-work/wechat-work.controller");
+const { WechatWorkAuthorizationController } = require("../apps/api/src/wechat-work/wechat-work-authorization.controller");
 const { PersonalWechatRpaController } = require("../apps/api/src/personal-wechat-rpa/personal-wechat-rpa.controller");
 const { OperatorAccessController } = require("../apps/api/src/operator-access/operator-access.controller");
 const {
@@ -58,7 +59,9 @@ test("policy defines the complete conservative role and capability matrix", () =
     "reply_conversations",
     "approve_send",
     "manage_design_executions",
+    "manage_order_fulfillment",
     "manage_training",
+    "execute_agent_skills",
     "manage_roles",
   ]);
   assert.deepEqual([...OPERATOR_CAPABILITY_MATRIX.admin], [...OPERATOR_CAPABILITIES]);
@@ -69,7 +72,9 @@ test("policy defines the complete conservative role and capability matrix", () =
     "reply_conversations",
     "approve_send",
     "manage_design_executions",
+    "manage_order_fulfillment",
     "manage_training",
+    "execute_agent_skills",
   ]);
   assert.deepEqual([...OPERATOR_CAPABILITY_MATRIX.agent], ["view_console", "reply_conversations"]);
   assert.deepEqual([...OPERATOR_CAPABILITY_MATRIX.read_only], ["view_console"]);
@@ -335,6 +340,8 @@ test("high-risk operator routes use the existing capability matrix while dedicat
     [WechatWorkController, "sendCustomerServiceImages", "approve_send"],
     [WechatWorkController, "dispatchCustomerServiceText", "approve_send"],
     [WechatWorkController, "listAuditLogs", "view_console"],
+    [WechatWorkAuthorizationController, "getAuthorizationStatus", "view_console"],
+    [WechatWorkAuthorizationController, "createAuthorizationInstallLink", "manage_channels"],
     [ReviewsController, "reviewDesignJob", "approve_send"],
     [ReviewsController, "reviewQuote", "approve_send"],
     [ReviewsController, "reviewOrder", "approve_send"],
@@ -367,10 +374,18 @@ test("high-risk operator routes use the existing capability matrix while dedicat
       `WechatWorkController.${methodName} must remain public`,
     );
   }
+  for (const methodName of ["handleAuthorizationRedirect", "verifySuiteCallback", "handleSuiteCallback"]) {
+    assert.equal(
+      Reflect.getMetadata(OPERATOR_CAPABILITY_METADATA, WechatWorkAuthorizationController.prototype[methodName]),
+      undefined,
+      `WechatWorkAuthorizationController.${methodName} must remain public`,
+    );
+  }
 
   const guard = new OperatorAccessGuard(new Reflector(), new OperatorAccessService());
   for (const [controllerClass, methodName] of [
     [WechatWorkController, "dispatchCustomerServiceText"],
+    [WechatWorkAuthorizationController, "createAuthorizationInstallLink"],
     [ReviewsController, "reviewOrder"],
     [QuotesController, "verifyPaymentProof"],
     [AutomationController, "runOnce"],
@@ -550,6 +565,9 @@ test("remaining operator-facing mutation controllers require a trusted local ses
     [NotificationsController, "createDemo", "manage_training"],
     [OrdersController, "createFromQuote", "manage_design_executions"],
     [OrdersController, "update", "manage_design_executions"],
+    [OrdersController, "updateFulfillment", "manage_order_fulfillment"],
+    [OrdersController, "createAfterSales", "manage_order_fulfillment"],
+    [OrdersController, "resolveAfterSales", "manage_order_fulfillment"],
     [OrdersController, "reviseSelection", "manage_design_executions"],
     [QuotesController, "update", "manage_design_executions"],
     [QuotesController, "reviseSelection", "manage_design_executions"],
@@ -567,6 +585,9 @@ test("remaining operator-facing mutation controllers require a trusted local ses
     [CatalogController, "upsertSku"],
     [NotificationsController, "markRead"],
     [OrdersController, "update"],
+    [OrdersController, "updateFulfillment"],
+    [OrdersController, "createAfterSales"],
+    [OrdersController, "resolveAfterSales"],
     [QuotesController, "update"],
     [RoutingController, "correctEvaluation"],
   ]) {
@@ -605,6 +626,9 @@ test("generic quote and order mutations bind owner to the trusted operator", asy
   });
   const orders = new OrdersController({
     update: async (...args) => calls.push(["order-update", ...args]),
+    updateFulfillment: async (...args) => calls.push(["order-fulfillment", ...args]),
+    createAfterSalesCase: async (...args) => calls.push(["order-after-sales-create", ...args]),
+    resolveAfterSalesCase: async (...args) => calls.push(["order-after-sales-resolve", ...args]),
     reviseSelectedImage: async (...args) => calls.push(["order-revise", ...args]),
   });
   const forged = { owner: "attacker", actor: "attacker", operator: "attacker", reviewer: "attacker" };
@@ -612,10 +636,14 @@ test("generic quote and order mutations bind owner to the trusted operator", asy
   await quotes.update("quote-1", { ...forged, status: "manual_review" }, LOCAL_ADMIN_PRINCIPAL);
   await quotes.reviseSelection("quote-1", { ...forged, selectedImageId: "image-1" }, LOCAL_ADMIN_PRINCIPAL);
   await orders.update("order-1", { ...forged, status: "processing" }, LOCAL_ADMIN_PRINCIPAL);
+  await orders.updateFulfillment("order-1", { ...forged, operationKey: "order-fulfillment:test", productionStatus: "in_production" }, LOCAL_ADMIN_PRINCIPAL);
+  await orders.createAfterSales("order-1", { ...forged, operationKey: "order-after-sales-create:test", type: "replacement", reason: "破损补发" }, LOCAL_ADMIN_PRINCIPAL);
+  await orders.resolveAfterSales("order-1", "case-1", { ...forged, operationKey: "order-after-sales-resolve:test", resolutionType: "replacement", replacementTrackingNo: "SF1000" }, LOCAL_ADMIN_PRINCIPAL);
   await orders.reviseSelection("order-1", { ...forged, selectedImageId: "image-1" }, LOCAL_ADMIN_PRINCIPAL);
 
-  assert.equal(calls.length, 4);
-  for (const [name, _id, payload] of calls) {
+  assert.equal(calls.length, 7);
+  for (const [name, ...args] of calls) {
+    const payload = args.findLast((item) => item && typeof item === "object" && !Array.isArray(item));
     assert.equal(payload.owner, "local_admin", name);
     assert.equal(payload.actor, undefined, name);
     assert.equal(payload.operator, undefined, name);

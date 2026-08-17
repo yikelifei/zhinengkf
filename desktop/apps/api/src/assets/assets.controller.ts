@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, Res, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Res, UseGuards } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { AssetsService } from "./assets.service";
 import { UploadAssetPayload } from "./assets.types";
@@ -38,6 +38,23 @@ export class AssetsController {
     @Res() reply: FastifyReply,
   ) {
     const file = await this.assets.readLocalAsset(localPath, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+    applySafeLocalFileHeaders(reply, file);
+    return reply.send(file.stream);
+  }
+
+  @Get(":id/local-file")
+  async localFileById(
+    @Param("id") assetId: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("conversationId") conversationId: string,
+    @Query("customerId") customerId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const file = await this.assets.readLocalAssetById(assetId, {
       expectedWechatAccountId: wechatAccountId,
       expectedConversationId: conversationId,
       expectedCustomerId: customerId,

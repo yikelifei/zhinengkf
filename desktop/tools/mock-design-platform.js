@@ -17,6 +17,19 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true, service: "mock-design-platform" });
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+    const body = await readJson(req);
+    const content = mockCustomerServiceReply(body);
+    return json(res, {
+      id: `mock-chat-${randomUUID()}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: String(body.model || "local-acceptance-text"),
+      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+  }
+
   if (req.method === "POST" && url.pathname === "/v1/design-jobs") {
     const body = await readJson(req);
     const requestId = String(body.requestId || "").trim();
@@ -164,7 +177,7 @@ function json(res, payload, status = 200) {
 
 function image(res, mimeType = "image/png") {
   const png1x1 = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAHUlEQVQ4jWPQqLjznxLMMGrA/9EwuDMaBhXDIgwAswh7H8STHfwAAAAASUVORK5CYII=",
     "base64",
   );
   res.writeHead(200, { "Content-Type": mimeType, "Content-Length": png1x1.length });
@@ -191,6 +204,22 @@ function stableJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+
+function mockCustomerServiceReply(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const prompt = [...messages]
+    .reverse()
+    .find((item) => item?.role === "user" && String(item?.content || "").includes("规则基准回复："))?.content || "";
+  const baseline = String(prompt).match(/规则基准回复：([^\n]+)/)?.[1]?.trim() || "当前事项已记录，请继续按页面提示处理。";
+  const requiredTerms = String(prompt).match(/必须逐字保留的已核实信息：([^\n]+)/)?.[1]
+    ?.split("、")
+    .map((item) => item.trim())
+    .filter(Boolean) || [];
+  const reply = requiredTerms.length
+    ? `订单进度已经更新：${requiredTerms.join("、")}。请您留意当前订单和物流记录，有问题可以继续在这里沟通。`
+    : `这边已经为您核对完成，当前情况是：${baseline} 后续有新的进度，我会继续在这里同步。`;
+  return reply.length <= 200 ? reply : baseline.slice(0, 200);
 }
 
 function notifyCallback(job, callback) {

@@ -18,6 +18,8 @@ const {
   matchImageFingerprint,
   matchTextSelection,
   nextStatusAfterDesignCompleted,
+  normalizeBundleSnapshot,
+  normalizeDesignImageSnapshot,
   parseBudget,
   planCustomerImageSelection,
   recommendBundle,
@@ -226,6 +228,138 @@ test("applies SKU matching rules when recommending bundle items", () => {
   assert.deepEqual(result.items.map((item) => item.skuCode), ["BOX-A", "TEA-A", "CARD-A"]);
   assert.equal(result.items.some((item) => item.skuCode === "SNACK-A"), false);
   assert.equal(result.totals.salePrice, 150);
+});
+
+test("does not treat a delivery date as gift quantity", () => {
+  const budget = parseBudget("主要送客户，8月30日前，需要 Logo 和贺卡");
+  assert.equal(budget.quantity, null);
+  assert.equal(budget.perUnitAmount, null);
+  assert.equal(budget.totalAmount, null);
+});
+
+test("keeps a quoted quantity separate from an unspecified product price", () => {
+  const budget = parseBudget("这个礼盒多少钱，100套能优惠吗？");
+
+  assert.equal(budget.quantity, 100);
+  assert.equal(budget.perUnitAmount, null);
+  assert.equal(budget.totalAmount, null);
+});
+
+test("anchors manually selected catalog image skus in bundle recommendation", () => {
+  const base = {
+    costPrice: 10,
+    stock: 40,
+    sceneTags: ["vip"],
+    dimensions: { lengthCm: 8, widthCm: 6, heightCm: 2 },
+    weightGram: 100,
+    leadTimeDays: 3,
+    mainImagePath: "E:\\zhinengkefu\\desktop\\storage\\assets\\sku\\image.png",
+  };
+  const result = recommendBundle({
+    budget: { perUnitAmount: 240, quantity: 10 },
+    scene: "vip",
+    maxItems: 3,
+    requireImages: true,
+    selectedSkuCodes: ["BOX-SELECTED", "ITEM-SELECTED"],
+    skus: [
+      { ...base, skuCode: "BOX-AUTO", name: "Auto box", type: "gift_box", salePrice: 50, priority: 99, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...base, skuCode: "BOX-SELECTED", name: "Selected box", type: "gift_box", salePrice: 70, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...base, skuCode: "ITEM-AUTO", name: "Auto item", type: "item", salePrice: 40, priority: 99 },
+      { ...base, skuCode: "ITEM-SELECTED", name: "Selected item", type: "item", salePrice: 90 },
+    ],
+  });
+
+  assert.deepEqual(result.items.map((item) => item.skuCode).slice(0, 2), ["BOX-SELECTED", "ITEM-SELECTED"]);
+  assert.ok(result.items.every((item) => item.mainImagePath));
+  assert.equal(result.warnings.some((warning) => String(warning).includes("selected_sku_missing_image")), false);
+});
+
+test("requires product images when recommending image-based bundle candidates", () => {
+  const ready = {
+    costPrice: 10,
+    stock: 30,
+    sceneTags: ["vip"],
+    dimensions: { lengthCm: 8, widthCm: 6, heightCm: 2 },
+    weightGram: 100,
+    leadTimeDays: 3,
+  };
+  const result = recommendBundle({
+    budget: { perUnitAmount: 180, quantity: 10 },
+    scene: "vip",
+    maxItems: 2,
+    requireImages: true,
+    selectedSkuCodes: ["ITEM-NO-IMAGE"],
+    skus: [
+      { ...ready, skuCode: "BOX-NO-IMAGE", name: "No image box", type: "gift_box", salePrice: 40, priority: 100, dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...ready, skuCode: "BOX-WITH-IMAGE", name: "Image box", type: "gift_box", salePrice: 60, mainImagePath: "E:\\zhinengkefu\\desktop\\storage\\assets\\sku\\box.png", dimensions: { lengthCm: 30, widthCm: 20, heightCm: 8 }, weightGram: 500 },
+      { ...ready, skuCode: "ITEM-NO-IMAGE", name: "No image item", type: "item", salePrice: 40, priority: 100 },
+      { ...ready, skuCode: "ITEM-WITH-IMAGE", name: "Image item", type: "item", salePrice: 80, mainImagePath: "E:\\zhinengkefu\\desktop\\storage\\assets\\sku\\item.png" },
+    ],
+  });
+
+  assert.deepEqual(result.items.map((item) => item.skuCode), ["BOX-WITH-IMAGE", "ITEM-WITH-IMAGE"]);
+  assert.ok(result.warnings.some((warning) => String(warning).includes("selected_sku_missing_image")));
+  assert.ok(result.warnings.some((warning) => String(warning).includes("image_missing_skus_excluded")));
+});
+
+test("normalizes bundle and design image snapshots without narrowing recommendation items", () => {
+  const result = recommendBundle({
+    budget: { perUnitAmount: 180, quantity: 10 },
+    scene: "vip",
+    skus: [
+      {
+        id: "sku_box_1",
+        skuCode: "BOX-A",
+        name: "Box A",
+        type: "gift_box",
+        category: "boxes",
+        salePrice: 60,
+        costPrice: 30,
+        stock: 20,
+        sceneTags: ["vip"],
+        mainImagePath: "E:\\zhinengkefu\\desktop\\storage\\assets\\box-a.png",
+        angleImages: ["E:\\zhinengkefu\\desktop\\storage\\assets\\box-a-side.png"],
+        matchingRules: { preferWith: ["TEA-A"] },
+      },
+      {
+        id: "sku_tea_1",
+        skuCode: "TEA-A",
+        name: "Tea A",
+        type: "item",
+        salePrice: 90,
+        costPrice: 50,
+        stock: 20,
+        sceneTags: ["vip"],
+        mainImagePath: "E:\\zhinengkefu\\desktop\\storage\\assets\\tea-a.png",
+      },
+    ],
+  });
+
+  assert.equal(result.items[0].matchingRules.preferWith[0], "TEA-A");
+  assert.equal(result.items[0].mainImagePath.includes("box-a.png"), true);
+
+  const bundleSnapshot = normalizeBundleSnapshot(result);
+  assert.equal(bundleSnapshot.schemaVersion, "bundle_snapshot_v1");
+  assert.equal(bundleSnapshot.items[0].skuCode, "BOX-A");
+  assert.equal(bundleSnapshot.items[0].mainImagePath.includes("box-a.png"), true);
+  assert.equal(bundleSnapshot.items[0].angleImages[0].includes("box-a-side.png"), true);
+  assert.equal(bundleSnapshot.items[0].imageRefs.length, 2);
+  assert.equal(bundleSnapshot.items[0].matchingRules, undefined);
+
+  const imageSnapshot = normalizeDesignImageSnapshot({
+    id: "image_1",
+    imageId: "candidate_1",
+    designJobId: "design_1",
+    position: 1,
+    localPath: "E:\\zhinengkefu\\desktop\\storage\\design-images\\candidate_1.png",
+    downloadUrl: "https://example.test/candidate_1.png",
+    fingerprint: "dhash64:v1:abcd",
+    transient: { shouldNotLeak: true },
+  });
+  assert.equal(imageSnapshot.schemaVersion, "design_image_snapshot_v1");
+  assert.equal(imageSnapshot.imageId, "candidate_1");
+  assert.equal(imageSnapshot.localPath.includes("candidate_1.png"), true);
+  assert.equal(imageSnapshot.transient, undefined);
 });
 
 test("skips SKU when required matching companion is unavailable", () => {
@@ -485,23 +619,23 @@ test("perceptual matching fails closed for ties, narrow gaps, mixed algorithms, 
 });
 
 test("builds warm waiting message", () => {
-  const text = buildWaitingMessage({ customerName: "王总", scene: "员工福利", outputCount: 6 });
+  const text = buildWaitingMessage({ customerName: "王总", scene: "员工福利" });
   assert.match(text, /王总/);
-  assert.match(text, /6张/);
+  assert.match(text, /4张/);
 });
 
-test("validates formal first-round design output count", () => {
-  const ready = inspectDesignOutputCount(6);
+test("requires exactly four customer design candidates per round", () => {
+  const ready = inspectDesignOutputCount(4);
   assert.equal(ready.ok, true);
-  assert.equal(ready.requested, 6);
+  assert.equal(ready.requested, 4);
   assert.equal(ready.min, 4);
-  assert.equal(ready.max, 6);
+  assert.equal(ready.max, 4);
 
   const tooFew = inspectDesignOutputCount(3);
   assert.equal(tooFew.ok, false);
   assert.equal(tooFew.reason, "output_count_below_minimum");
 
-  const tooMany = inspectDesignOutputCount(7);
+  const tooMany = inspectDesignOutputCount(5);
   assert.equal(tooMany.ok, false);
   assert.equal(tooMany.reason, "output_count_above_maximum");
 

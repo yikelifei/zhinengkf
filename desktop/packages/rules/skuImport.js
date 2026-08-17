@@ -35,7 +35,7 @@ class SkuImportError extends Error {
 }
 
 const HEADER_MAP = {
-  skuCode: ["sku", "sku编号", "sku编码", "商品编号", "商品编码", "编码", "货号", "sku缂栧彿", "sku缂栫爜", "鍟嗗搧缂栧彿", "缂栫爜", "璐у彿"],
+  skuCode: ["sku", "skuCode", "sku code", "SKU Code", "sku编号", "sku编码", "商品编号", "商品编码", "编码", "货号", "sku缂栧彿", "sku缂栫爜", "鍟嗗搧缂栧彿", "缂栫爜", "璐у彿"],
   name: ["商品名称", "名称", "品名", "商品名", "name", "鍟嗗搧鍚嶇О", "鍚嶇О", "鍝佸悕"],
   type: ["商品类型", "类型", "type", "鍟嗗搧绫诲瀷", "绫诲瀷"],
   category: ["分类", "类目", "品类", "category", "鍒嗙被", "绫荤洰"],

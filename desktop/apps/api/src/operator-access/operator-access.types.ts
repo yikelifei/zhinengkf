@@ -6,7 +6,9 @@ export const OPERATOR_CAPABILITIES = [
   "reply_conversations",
   "approve_send",
   "manage_design_executions",
+  "manage_order_fulfillment",
   "manage_training",
+  "execute_agent_skills",
   "manage_roles",
 ] as const;
 

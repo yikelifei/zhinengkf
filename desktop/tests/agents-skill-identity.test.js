@@ -10,8 +10,14 @@ require("ts-node").register({
 });
 
 const { AgentsService } = require("../apps/api/src/agents/agents.service");
+const { appConfig } = require("../apps/api/src/shared/app-config");
 
-test("agent skill list forwards selected identity filters", () => {
+test("agent skill list forwards selected identity filters", (t) => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  t.after(() => {
+    appConfig.useLocalStore = previousUseLocalStore;
+  });
   const calls = [];
   const localStore = {
     listAgents: (filter = {}) => {

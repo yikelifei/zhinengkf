@@ -23,6 +23,20 @@ export class QuotesController {
     return this.quotes.list({ wechatAccountId, conversationId, customerId });
   }
 
+  @Get(":id")
+  getById(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.quotes.getById(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
+
   @Get(":id/preview")
   preview(
     @Param("id") id: string,
@@ -112,6 +126,9 @@ export class QuotesController {
     @Body()
     payload: {
       paymentStatus?: "deposit_paid" | "paid";
+      amountCny?: number | string;
+      method?: string;
+      proofReference?: string;
       owner?: string;
       note?: string;
       operationKey?: string;

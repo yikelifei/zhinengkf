@@ -1,0 +1,180 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+
+const root = path.resolve(__dirname, "..");
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+
+test("design jobs list exposes a real create route", () => {
+  const list = read("apps/web/src/features/design/design-jobs-page.tsx");
+  const route = read("apps/web/src/app/design/jobs/new/page.tsx");
+  const manifest = read("apps/web/src/app/route-manifest.ts");
+
+  assert.match(list, /href="\/design\/jobs\/new"/);
+  assert.match(list, /data-action-id="design-jobs-open-create"/);
+  assert.match(route, /routeId="designJobCreate"/);
+  assert.match(route, /<DesignJobCreatePage/);
+  assert.match(manifest, /designJobCreate/);
+  assert.match(manifest, /不直接提交远端出图/);
+});
+
+test("design job create page uses the production API instead of demo helpers", () => {
+  const page = read("apps/web/src/features/design/design-job-create-page.tsx");
+  const form = read("apps/web/src/features/design/design-job-create-form.tsx");
+  const source = `${page}\n${form}`;
+  const assetHelper = read("apps/web/src/features/design/design-job-create-assets.ts");
+  const readinessPanel = read("apps/web/src/features/design/design-job-create-readiness-panel.tsx");
+  const api = read("apps/web/src/lib/api.ts");
+
+  assert.match(source, /getWechatConversations/);
+  assert.match(source, /reserveClientOperation\(\s*"design-job"/);
+  assert.match(source, /createDesignJob\(\{/);
+  assert.match(source, /ensureCustomerReferenceAsset/);
+  assert.match(source, /designJobCreateReadiness\(form, bundleRecommendation, identityReady\)/);
+  assert.match(source, /const dataFresh = !loadError/);
+  assert.match(source, /requiredReady = readiness\.ok && dataFresh/);
+  assert.match(source, /disabled=\{busy \|\| !canPrepare\}/);
+  assert.match(source, /<DesignJobCreateReadinessPanel readiness=\{readiness\}/);
+  assert.match(readinessPanel, /data-readiness-code=\{check\.code\}/);
+  assert.match(assetHelper, /uploadAsset/);
+  assert.match(source, /customerAssetUrl/);
+  assert.match(source, /placeholder="https:\/\/\.\.\. 或 data:image\/\.\.\."/);
+  assert.match(source, /productImageUrl/);
+  assert.doesNotMatch(source, /createDemoDesignJob|demo-timeout|demo-failure/);
+  assert.match(api, /export async function createDesignJob/);
+  assert.match(api, /postJsonWithNetworkRetry<DesignJob>\("\/design-jobs"/);
+});
+
+test("design job create page can select customer assets without hand-entering image urls", () => {
+  const page = read("apps/web/src/features/design/design-job-create-page.tsx");
+  const form = read("apps/web/src/features/design/design-job-create-form.tsx");
+  const source = `${page}\n${form}`;
+  const assetHelper = read("apps/web/src/features/design/design-job-create-assets.ts");
+  const picker = read("apps/web/src/features/design/design-job-create-asset-picker.tsx");
+  const css = read("apps/web/src/features/design/design-pages.module.css");
+
+  assert.match(source, /<DesignJobCreateAssetPicker/);
+  assert.match(source, /selectedCustomerAssetId=\{form\.customerAssetId\}/);
+  assert.match(source, /selectedProductAssetId=\{form\.productAssetId\}/);
+  assert.match(source, /initialAssetId=\{initialIdentityFilters\.assetId\}/);
+  assert.match(source, /initialAssetRole=\{initialIdentityFilters\.assetRole\}/);
+  assert.match(source, /onApply=\{onApplyAsset\}/);
+  assert.match(picker, /selectedCustomerAssetId\?: string/);
+  assert.match(picker, /selectedProductAssetId\?: string/);
+  assert.match(picker, /initialAssetId\?: string/);
+  assert.match(picker, /initialAssetRole\?: string/);
+  assert.match(picker, /appliedInitialAssetRef/);
+  assert.match(picker, /initialAssetTarget\(asset, initialAssetRole\)/);
+  assert.match(picker, /getAssets\("customer", targetConversation\.customerId/);
+  assert.match(picker, /localAssetUrl\(asset\.localPath, identityExpectation\)/);
+  assert.match(picker, /type DesignJobCreateAssetSelection/);
+  assert.match(picker, /assetRequestRef\.current !== requestId/);
+  assert.match(picker, /records\.filter\(\(asset\) => asset\.mimeType\?\.startsWith\("image\/"\)\)/);
+  assert.match(picker, /DESIGN_ASSET_ROLE_FILTERS/);
+  assert.match(picker, /filterDesignAssetsByRole\(customerAssets, selectedRoleFilter\)/);
+  assert.match(picker, /assetRoleSupportsTarget\(asset, "customer"\)/);
+  assert.match(picker, /assetRoleSupportsTarget\(asset, "product"\)/);
+  assert.match(picker, /selectedAsCustomer = asset\.id === selectedCustomerAssetId/);
+  assert.match(picker, /selectedAsProduct = asset\.id === selectedProductAssetId/);
+  assert.match(picker, /data-selected=\{selected \|\| undefined\}/);
+  assert.match(picker, /aria-pressed=\{selectedAsCustomer\}/);
+  assert.match(picker, /aria-pressed=\{selectedAsProduct\}/);
+  assert.match(picker, /已用作参考图/);
+  assert.match(picker, /已用作商品图/);
+  assert.match(picker, /assetRoleLabel\(asset\.role\)/);
+  assert.match(picker, /disabled=\{busy \|\| !customerAllowed\}/);
+  assert.match(picker, /disabled=\{busy \|\| !productAllowed\}/);
+  assert.match(picker, /data-action-id="design-job-create-refresh-assets"/);
+  assert.match(picker, /data-action-id="design-job-create-use-customer-asset"/);
+  assert.match(picker, /data-action-id="design-job-create-use-product-asset"/);
+  assert.match(picker, /className=\{styles\.assetPreviewImage\}/);
+  assert.match(source, /customerAssetId: target === "customer" \? selection\.id/);
+  assert.match(source, /productAssetId: target === "product" \? selection\.id/);
+  assert.match(source, /ensureCustomerReferenceAsset\(form, selectedConversation\)/);
+  assert.match(assetHelper, /ownerType: "customer"/);
+  assert.match(assetHelper, /role: "reference"/);
+  assert.match(source, /assetIds: selectedAssetIds/);
+  assert.match(source, /assets: \[\]/);
+  assert.match(css, /\.assetPicker/);
+  assert.match(css, /\.assetPreviewImage/);
+  assert.match(css, /\.assetPickerActions button/);
+  assert.match(css, /\.compactSelect/);
+});
+
+test("design asset role model separates customer references from product images", () => {
+  const roleModel = read("apps/web/src/features/design/design-asset-role.ts");
+
+  assert.match(roleModel, /customer_logo[\s\S]*targets: \["customer"\]/);
+  assert.match(roleModel, /reference[\s\S]*targets: \["customer"\]/);
+  assert.match(roleModel, /product_image[\s\S]*targets: \["product"\]/);
+  assert.match(roleModel, /sku_image[\s\S]*targets: \["product"\]/);
+  assert.match(roleModel, /normalizeDesignAssetRole/);
+  assert.match(roleModel, /filterDesignAssetsByRole/);
+});
+
+test("design job create page can apply catalog skus and bundle recommendations", () => {
+  const page = read("apps/web/src/features/design/design-job-create-page.tsx");
+  const form = read("apps/web/src/features/design/design-job-create-form.tsx");
+  const source = `${page}\n${form}`;
+  const picker = read("apps/web/src/features/design/design-job-create-catalog-picker.tsx");
+  const model = read("apps/web/src/features/design/design-job-create-model.ts");
+  const api = read("apps/web/src/features/design/api.ts");
+  const css = read("apps/web/src/features/design/design-pages.module.css");
+
+  assert.match(source, /<DesignJobCreateCatalogPicker/);
+  assert.match(source, /bundleRecommendation, setBundleRecommendation/);
+  assert.match(source, /designJobBundleFromForm\(form, bundleRecommendation\)/);
+  assert.match(picker, /getSkus\(false\)/);
+  assert.match(picker, /selectedSkuCodes, setSelectedSkuCodes/);
+  assert.match(picker, /selectedSkuCodeSet/);
+  assert.match(picker, /selectedSkus/);
+  assert.match(picker, /toggleSkuSelection/);
+  assert.match(picker, /selectedSkuCodes,/);
+  assert.match(picker, /requireImages: true/);
+  assert.match(picker, /catalogSelectionFromSku\(sku\)/);
+  assert.match(picker, /catalogSelectionFromRecommendation\(result\)/);
+  assert.match(picker, /CatalogSelectionBoard/);
+  assert.match(picker, /data-selected-sku-count/);
+  assert.match(picker, /DesignReferenceImage/);
+  assert.match(picker, /designReferenceImageSrc/);
+  assert.match(picker, /className=\{styles\.catalogPreviewImage\}/);
+  assert.match(picker, /className=\{styles\.bundlePreviewGrid\}/);
+  assert.match(picker, /data-action-id="design-job-create-refresh-catalog"/);
+  assert.match(picker, /data-action-id="design-job-create-recommend-bundle"/);
+  assert.match(picker, /design-job-create-toggle-catalog-sku-/);
+  assert.match(picker, /design-job-create-remove-selected-sku-/);
+  assert.match(picker, /data-action-id="design-job-create-use-catalog-sku"/);
+  assert.match(model, /firstSkuImage/);
+  assert.match(model, /designJobCreateReadiness/);
+  assert.match(model, /customerReferenceReadyForCreate\(form\)/);
+  assert.match(model, /isUploadableCustomerReferenceSource/);
+  assert.match(model, /isUsableDesignImageReference/);
+  assert.match(model, /code: "customer_reference_image"/);
+  assert.match(model, /code: "product_image"/);
+  assert.match(model, /code: "bundle_images"/);
+  assert.match(model, /isLoopbackDesignReferenceUrl/);
+  assert.match(model, /image\.startsWith\("\/local-assets\/"\)/);
+  assert.match(model, /image\.startsWith\("\/generated\/"\)/);
+  assert.doesNotMatch(model, /image\.startsWith\("\/"\) return true/);
+  assert.match(model, /mainImageUrl/);
+  assert.match(model, /imagePath/);
+  assert.match(model, /productImage/);
+  assert.match(model, /skuImageUrl/);
+  assert.match(model, /primaryImage/);
+  assert.match(model, /multiAngleImages/);
+  assert.match(model, /storage\[\\\\\/\]/);
+  assert.match(model, /giftBox: recommendation\.items\.find/);
+  assert.match(model, /automation: recommendation\.automation \|\| null/);
+  assert.match(model, /mainImagePath: image/);
+  assert.match(api, /getSkus/);
+  assert.match(api, /recommendBundle/);
+  assert.match(css, /\.catalogPicker/);
+  assert.match(css, /\.catalogSelectionBoard/);
+  assert.match(css, /\.catalogSelectionList/);
+  assert.match(css, /\.catalogPreviewImage/);
+  assert.match(css, /\.bundlePreviewGrid/);
+  assert.match(css, /\.searchField input/);
+});

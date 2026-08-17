@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const WebSocket = require("next/dist/compiled/ws");
 
 main().catch((error) => {
   console.error(error?.stack || error);
@@ -29,22 +30,32 @@ async function main() {
     [
       "--headless=new",
       "--disable-gpu",
+      "--disable-gpu-compositing",
+      "--disable-gpu-sandbox",
+      "--disable-accelerated-2d-canvas",
+      "--disable-accelerated-video-decode",
+      "--disable-zero-copy",
+      "--disable-crash-reporter",
+      "--disable-extensions",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
-      "--disable-features=Translate,BackForwardCache",
+      "--disable-features=Translate,BackForwardCache,DawnGraphite,SkiaGraphite,UseSkiaRenderer,Vulkan,WebGPU,VizDisplayCompositor",
+      "--use-angle=swiftshader",
+      "--use-gl=swiftshader",
+      "--no-sandbox",
+      "--remote-allow-origins=*",
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${profileDir}`,
       "about:blank",
     ],
     { stdio: "ignore", windowsHide: true },
   );
+  edge.unref();
 
   try {
     const version = await waitForJson(`http://127.0.0.1:${port}/json/version`, 60, 250);
-    const page = await createPage(port, options.url);
-    const wsUrl = page.webSocketDebuggerUrl || version.webSocketDebuggerUrl;
-    if (!wsUrl) throw new Error("Edge DevTools websocket URL was not available.");
+    const wsUrl = normalizeDebuggerWebsocketUrl(version.webSocketDebuggerUrl, port);
     await captureWithCdp(wsUrl, options);
   } finally {
     terminateProcessTree(edge.pid);
@@ -56,12 +67,16 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg.startsWith("--")) continue;
-    const key = arg.slice(2);
+    const key = camelCaseOption(arg.slice(2));
     const value = args[index + 1] && !args[index + 1].startsWith("--") ? args[++index] : "true";
     if (key === "width" || key === "height") result[key] = Number(value);
     else result[key] = value;
   }
   return result;
+}
+
+function camelCaseOption(value) {
+  return String(value || "").replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
 function findEdgePath() {
@@ -124,59 +139,123 @@ function requestJson(url, options = {}) {
   });
 }
 
-async function createPage(port, url) {
-  try {
-    return await requestJson(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: "PUT" });
-  } catch {
-    const pages = await requestJson(`http://127.0.0.1:${port}/json/list`);
-    const page = (Array.isArray(pages) ? pages : []).find((item) => item.type === "page");
-    if (!page) throw new Error("No Edge page target was available.");
-    return page;
-  }
+function normalizeDebuggerWebsocketUrl(value, port) {
+  if (!value) throw new Error("Edge DevTools websocket URL was not available.");
+  const url = new URL(value);
+  url.hostname = "127.0.0.1";
+  url.port = String(port);
+  return url.href;
 }
 
 async function captureWithCdp(wsUrl, options) {
   const socket = new WebSocket(wsUrl);
   let nextId = 1;
+  let sessionId = "";
   const pending = new Map();
   const events = [];
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
+    const raw = typeof event.data === "string" ? event.data : event.data?.toString("utf8");
+    const message = JSON.parse(raw);
     if (message.id && pending.has(message.id)) {
-      const { resolve, reject } = pending.get(message.id);
+      const { resolve, reject, timer } = pending.get(message.id);
       pending.delete(message.id);
+      clearTimeout(timer);
       if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
       else resolve(message.result || {});
       return;
     }
     if (message.method) events.push(message.method);
   });
+  const rejectPending = (error) => {
+    for (const { reject } of pending.values()) reject(error);
+    pending.clear();
+  };
   await new Promise((resolve, reject) => {
     socket.addEventListener("open", resolve, { once: true });
     socket.addEventListener("error", reject, { once: true });
   });
+  socket.addEventListener("error", () => {
+    rejectPending(new Error("Edge DevTools websocket failed during capture."));
+  });
+  socket.addEventListener("close", () => {
+    rejectPending(new Error("Edge DevTools websocket closed before screenshot capture completed."));
+  });
 
-  const send = (method, params = {}) =>
+  const send = (method, params = {}, timeoutMs = 20000) =>
     new Promise((resolve, reject) => {
       const id = nextId++;
-      pending.set(id, { resolve, reject });
-      socket.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP ${method} timed out.`));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      const payload = { id, method, params };
+      if (sessionId) payload.sessionId = sessionId;
+      socket.send(JSON.stringify(payload));
     });
 
+  const target = await send("Target.createTarget", { url: "about:blank" });
+  if (!target.targetId) throw new Error("Edge did not return a targetId for screenshot capture.");
+  const attached = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+  if (!attached.sessionId) throw new Error("Edge did not return a CDP sessionId for screenshot capture.");
+  sessionId = attached.sessionId;
   await send("Page.enable");
   await send("Runtime.enable");
+  await send("Network.enable");
   await send("Emulation.setDeviceMetricsOverride", {
     width: options.width,
     height: options.height,
     deviceScaleFactor: 1,
     mobile: options.width <= 600,
   });
+  const cookie = parseCookieOption(options.cookie);
+  if (cookie) {
+    await send("Network.setCookie", {
+      name: cookie.name,
+      value: cookie.value,
+      url: new URL(options.url).origin,
+    });
+  }
   await send("Page.navigate", { url: options.url });
   await waitForEvent(events, "Page.loadEventFired", 80, 250);
   await sleep(Number(options.delay || 2500));
+  const expression = readEvaluationExpression(options);
+  if (expression) {
+    const result = await send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      timeout: Number(options.evaluateTimeout || 15000),
+    });
+    if (result.exceptionDetails) {
+      const exception = result.exceptionDetails.exception || {};
+      const message = exception.description || exception.value || result.exceptionDetails.text || "screenshot evaluation failed";
+      throw new Error(message);
+    }
+    await sleep(Number(options.afterEvaluateDelay || 1500));
+  }
   const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true });
-  fs.writeFileSync(options.output, Buffer.from(screenshot.data, "base64"));
-  socket.close();
+  const buffer = Buffer.from(screenshot.data, "base64");
+  fs.writeFileSync(options.output, buffer);
+  console.log(`[screenshot] wrote ${path.resolve(options.output)} (${buffer.length} bytes)`);
+  if (typeof socket.terminate === "function") socket.terminate();
+  else socket.close();
+}
+
+function readEvaluationExpression(options) {
+  if (options.evaluateFile) return fs.readFileSync(path.resolve(options.evaluateFile), "utf8");
+  return String(options.evaluate || "").trim();
+}
+
+function parseCookieOption(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const separator = text.indexOf("=");
+  if (separator <= 0) return null;
+  const name = text.slice(0, separator).trim();
+  const cookieValue = text.slice(separator + 1).trim();
+  if (!name || !cookieValue) return null;
+  return { name, value: cookieValue };
 }
 
 async function waitForEvent(events, eventName, attempts, delayMs) {
@@ -189,7 +268,7 @@ async function waitForEvent(events, eventName, attempts, delayMs) {
 function terminateProcessTree(pid) {
   if (!pid) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 5000 });
     return;
   }
   try {

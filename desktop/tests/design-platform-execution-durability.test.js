@@ -20,6 +20,11 @@ const { LocalStoreService } = require("../apps/api/src/local-store/local-store.s
 const { NotificationsService } = require("../apps/api/src/notifications/notifications.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAICAIAAACkr0LiAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAD0lEQVR4nGOowA0YhoEcAE90ZUHwfJsHAAAAAElFTkSuQmCC",
+  "base64",
+);
+
 function artPayload() {
   return {
     requestId: "business-request-must-not-reach-remote",
@@ -63,30 +68,82 @@ function localFixture(t) {
   return { root, localStore, job };
 }
 
-test("client uses stable execution requestId and classifies timeout, reset, 5xx and malformed 2xx as outcome_unknown", async (t) => {
+test("client dispatches exactly four stable one-candidate slots concurrently", async (t) => {
   const previousAdapter = appConfig.designPlatformAdapter;
   appConfig.designPlatformAdapter = "art_image_local";
   t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
   const client = new DesignPlatformClient();
   const seen = [];
-  const failures = [
-    new axios.AxiosError("timeout", "ECONNABORTED"),
-    new axios.AxiosError("reset", "ECONNRESET"),
-    new axios.AxiosError("server", "ERR_BAD_RESPONSE", undefined, undefined, { status: 503, data: {} }),
-  ];
+  let active = 0;
+  let maxActive = 0;
   client.http.post = async (_url, body) => {
-    seen.push(body.requestId);
-    const failure = failures.shift();
-    if (failure) throw failure;
-    return { status: 200, data: { ok: true, data: { unexpected: true } } };
+    seen.push(body);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setImmediate(resolve));
+    active -= 1;
+    const slot = Number(String(body.requestId).split(":").at(-1));
+    return {
+      status: 200,
+      data: { ok: true, data: { results: [{ status: "success", url: `/generated/candidate-${slot}.png` }] } },
+    };
   };
 
-  for (let index = 0; index < 4; index += 1) {
-    const result = await client.executeArtImageLocalGeneration(artPayload(), "art_stable_request_1");
+  const result = await client.executeArtImageLocalGeneration(artPayload(), "art_stable_request_1");
+  assert.equal(result.status, "completed");
+  assert.equal(result.images.length, 4);
+  assert.equal(maxActive, 4);
+  assert.deepEqual(seen.map((body) => body.requestId), [
+    "art_stable_request_1:slot:1",
+    "art_stable_request_1:slot:2",
+    "art_stable_request_1:slot:3",
+    "art_stable_request_1:slot:4",
+  ]);
+  assert.ok(seen.every((body) => body.count === 1 && body.concurrency === 1));
+  assert.ok(seen.every((body) => Array.isArray(body.prompts) && body.prompts.length === 1));
+  assert.equal(new Set(seen.map((body) => body.prompt)).size, 4);
+});
+
+test("one uncertain candidate slot blocks automatic retry after exactly four dispatched slots", async (t) => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
+  const failures = [
+    { name: "timeout", error: new axios.AxiosError("timeout", "ECONNABORTED") },
+    { name: "reset", error: new axios.AxiosError("reset", "ECONNRESET") },
+    { name: "server", error: new axios.AxiosError("server", "ERR_BAD_RESPONSE", undefined, undefined, { status: 503, data: {} }) },
+    { name: "malformed", malformed: true },
+  ];
+  for (const failure of failures) {
+    const client = new DesignPlatformClient();
+    const seen = [];
+    client.http.post = async (_url, body) => {
+      seen.push(body.requestId);
+      if (String(body.requestId).endsWith(":slot:2")) {
+        if (failure.malformed) return { status: 200, data: { ok: true, data: { unexpected: true } } };
+        throw failure.error;
+      }
+      return { status: 200, data: { ok: true, data: { results: [{ status: "success", url: "/generated/ok.png" }] } } };
+    };
+    const result = await client.executeArtImageLocalGeneration(artPayload(), `art_${failure.name}`);
     assert.equal(result.status, "outcome_unknown");
     assert.equal(result.refundStatus, "unknown");
+    assert.match(result.errorMessage, /automatic retry is blocked/);
+    assert.equal(seen.length, 4);
+    assert.equal(new Set(seen).size, 4);
   }
-  assert.deepEqual(seen, Array(4).fill("art_stable_request_1"));
+});
+
+test("art image local results are only read from durable execution state", async (t) => {
+  const previousAdapter = appConfig.designPlatformAdapter;
+  appConfig.designPlatformAdapter = "art_image_local";
+  t.after(() => { appConfig.designPlatformAdapter = previousAdapter; });
+  const client = new DesignPlatformClient();
+
+  await assert.rejects(
+    () => client.getDesignJobResults("art_job_1"),
+    /art_image_local results must be read from durable execution: art_job_1/,
+  );
 });
 
 test("local request build failure is pre-dispatch and cannot invent a refund obligation", async (t) => {
@@ -137,19 +194,25 @@ test("real refund shapes map succeeded, failed and credit bypass without inventi
     });
     const result = await client.executeArtImageLocalGeneration(artPayload(), `art_refund_${index}`);
     assert.equal(result.refundStatus, expected[index]);
-    assert.equal(result.refundSummary.requestedCredits, refunds[index].requestedCredits);
+    assert.equal(result.refundSummary.requestedCredits, refunds[index].requestedCredits * 4);
     assert.equal(result.refundSummary.alreadyRefunded, refunds[index].alreadyRefunded);
   }
 
-  client.http.post = async () => ({
-    status: 200,
-    data: { ok: true, data: {
-      results: [{ status: "success", url: "/generated/one.png" }, { status: "failed", error: "second failed" }],
-      refund: { status: "failed", requestedCredits: 1, reason: "rpc_failed" },
-    } },
-  });
+  client.http.post = async (_url, body) => String(body.requestId).endsWith(":slot:2")
+    ? {
+        status: 200,
+        data: { ok: true, data: {
+          results: [{ status: "failed", error: "second failed" }],
+          refund: { status: "failed", requestedCredits: 1, reason: "rpc_failed" },
+        } },
+      }
+    : {
+        status: 200,
+        data: { ok: true, data: { results: [{ status: "success", url: `/generated/${body.requestId}.png` }] } },
+      };
   const partial = await client.executeArtImageLocalGeneration(artPayload(), "art_partial_refund_failed");
   assert.equal(partial.status, "completed");
+  assert.equal(partial.images.length, 3);
   assert.equal(partial.refundStatus, "failed");
 });
 
@@ -217,6 +280,174 @@ test("duplicate submit persists prepared/dispatching/generating before one POST 
   assert.equal(localStore.listDesignPlatformExecutions({ designJobId: job.id }).length, 1);
   assert.equal(localStore.getDesignJob(job.id).status, "manual_review");
   await assert.rejects(() => service.retry(job.id), /explicit manual resolution/);
+});
+
+test("verified local artifacts recover a generating execution without another provider dispatch", async (t) => {
+  const { localStore, job } = localFixture(t);
+  const executions = new DesignPlatformExecutionService({}, localStore);
+  const begun = await executions.begin({ designJobId: job.id, attemptNo: 1 });
+  await executions.claimDispatch(begun.execution.id);
+  await executions.markGenerating(begun.execution.id);
+  const images = [{ imageId: "candidate_1", downloadUrl: "http://127.0.0.1:3000/generated/recovered.png", width: 1024, height: 1024 }];
+
+  const recovered = await executions.recoverVerifiedCompletion({
+    executionId: begun.execution.id,
+    images,
+    refundStatus: "credit_bypass",
+  });
+  assert.equal(recovered.status, "completed");
+  assert.equal(recovered.acceptanceStatus, "pending");
+  assert.equal(recovered.imageCount, 1);
+  assert.deepEqual(recovered.images, images);
+  assert.equal(localStore.getDesignJob(job.id).status, "generating");
+
+  const replay = await executions.recoverVerifiedCompletion({
+    executionId: begun.execution.id,
+    images,
+    refundStatus: "credit_bypass",
+  });
+  assert.equal(replay.id, recovered.id);
+
+  localStore.transitionDesignPlatformExecution(
+    begun.execution.id,
+    { status: "completed", acceptanceStatus: "pending" },
+    { acceptanceStatus: "manual_review", resolvedAt: new Date().toISOString() },
+    { status: "manual_review", errorMessage: "local acceptance failed" },
+  );
+  const resumed = await executions.recoverVerifiedCompletion({
+    executionId: begun.execution.id,
+    images,
+    refundStatus: "credit_bypass",
+  });
+  assert.equal(resumed.acceptanceStatus, "pending");
+  assert.equal(resumed.resolvedAt, null);
+  assert.equal(localStore.getDesignJob(job.id).status, "generating");
+});
+
+test("formal local art image submit uploads customer and SKU images to Zhenxi before saving candidates", async (t) => {
+  const previous = snapshotConfig();
+  const { root, localStore } = localFixture(t);
+  const sourceDir = path.join(root, "source-images");
+  const savedDir = path.join(root, "saved-design-images");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  const sourceFiles = {
+    customer: path.join(sourceDir, "customer-logo.png"),
+    box: path.join(sourceDir, "gift-box.png"),
+    sku: path.join(sourceDir, "tea-sku.png"),
+  };
+  for (const filePath of Object.values(sourceFiles)) fs.writeFileSync(filePath, PNG_BYTES);
+
+  const asset = localStore.createDesignAsset({
+    ownerType: "customer",
+    ownerId: "customer_demo_1",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    role: "customer_logo",
+    fileName: "customer-logo.png",
+    mimeType: "image/png",
+    localPath: sourceFiles.customer,
+    sizeBytes: PNG_BYTES.length,
+    source: "contract_test",
+  });
+  const job = localStore.createDesignJob({
+    requestId: "request-zhenxi-contract-submit",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    budget: { mode: "per_box", perUnitAmount: 200, quantity: 20, totalAmount: 4000 },
+    scene: "employee gifts",
+    customerText: "make a real gift box product photo with this logo and these SKUs",
+    bundle: {
+      giftBox: {
+        skuCode: "BOX-IMG",
+        name: "Gift box",
+        mainImagePath: sourceFiles.box,
+      },
+      items: [
+        {
+          skuCode: "TEA-IMG",
+          name: "Tea SKU",
+          quantity: 1,
+          salePrice: 120,
+          imagePath: sourceFiles.sku,
+        },
+      ],
+    },
+    requirements: { useRealSkuImages: true },
+    assetIds: [asset.id],
+    outputCount: 4,
+    renderStyle: "real product photo",
+    status: "draft",
+  });
+  const seen = [];
+  const client = DesignPlatformClient.createForTesting(zhenxiContractAdapter(seen));
+  const executions = new DesignPlatformExecutionService({}, localStore);
+  const notifications = { create: async () => ({}) };
+  const storage = {
+    saveDesignImage: async (_designJobId, imageId, downloadUrl) => {
+      fs.mkdirSync(savedDir, { recursive: true });
+      assert.match(downloadUrl, /^http:\/\/127\.0\.0\.1:3000\/generated\/candidate-\d+\.png$/);
+      const localPath = path.join(savedDir, `${imageId}.png`);
+      fs.writeFileSync(localPath, PNG_BYTES);
+      return localPath;
+    },
+  };
+  const wechat = {
+    enqueueTextMessage: async () => ({}),
+    setConversationManualLock: async () => ({ blockedSendTasks: [], inFlightSendTasks: [] }),
+  };
+
+  try {
+    Object.assign(appConfig, {
+      useLocalStore: true,
+      designPlatformAdapter: "art_image_local",
+      designPlatformBaseUrl: "http://127.0.0.1:3000",
+      designPlatformAccessToken: "contract-access-token",
+      designPlatformAccessTokenOrigin: "http://127.0.0.1:3000",
+      designPlatformCookie: "contract=session",
+      designPlatformCookieOrigin: "http://127.0.0.1:3000",
+      designPlatformDeviceId: "contract-device",
+      designPlatformDeviceIdOrigin: "http://127.0.0.1:3000",
+    });
+    const service = new DesignJobsService({}, client, localStore, notifications, storage, wechat, {}, {}, executions);
+    service.assertDesignPlatformPreflight = async () => ({ ok: true });
+
+    await service.submit(job.id, { operationKey: "test-zhenxi-contract-submit-1" });
+    await drainActiveExecutions(service);
+
+    const uploads = seen.filter((item) => item.url === "api/local-assets");
+    assert.equal(uploads[0].fileName, "customer-logo.png");
+    assert.deepEqual(uploads.map((item) => item.fileName).sort(), ["customer-logo.png", "gift-box.png", "tea-sku.png"].sort());
+    assert.ok(uploads.every((item) => item.authorization === "Bearer contract-access-token"));
+    assert.ok(uploads.every((item) => item.cookie === "contract=session"));
+    assert.ok(uploads.every((item) => item.deviceId === "contract-device"));
+
+    const generate = seen.filter((item) => item.url === "api/local-generate");
+    assert.equal(generate.length, 4, "one local-generate request must be dispatched for each candidate slot");
+    const executionRequestId = localStore.listDesignPlatformExecutions({ designJobId: job.id })[0].requestId;
+    assert.deepEqual(generate.map((item) => item.body.requestId), [1, 2, 3, 4].map((slot) => `${executionRequestId}:slot:${slot}`));
+    assert.ok(generate.every((item) => item.body.count === 1 && item.body.concurrency === 1));
+    assert.ok(generate.every((item) => Array.isArray(item.body.prompts) && item.body.prompts.length === 1));
+    assert.ok(generate.every((item) => JSON.stringify(item.body.objectRefs.sort()) === JSON.stringify([
+      "/local-assets/customer-logo.png",
+      "/local-assets/gift-box.png",
+      "/local-assets/tea-sku.png",
+    ].sort())));
+    assert.ok(generate.every((item) => item.authorization === "Bearer contract-access-token"));
+    assert.ok(generate.every((item) => item.cookie === "contract=session"));
+    assert.ok(generate.every((item) => item.deviceId === "contract-device"));
+
+    const finalJob = localStore.getDesignJob(job.id);
+    assert.equal(finalJob.status, "quick_confirm");
+    assert.equal(finalJob.images.length, 4);
+    assert.ok(finalJob.images.every((image) => image.localPath && fs.existsSync(image.localPath)));
+    const execution = localStore.listDesignPlatformExecutions({ designJobId: job.id })[0];
+    assert.equal(execution.status, "completed");
+    assert.equal(execution.acceptanceStatus, "accepted");
+  } finally {
+    Object.assign(appConfig, previous);
+  }
 });
 
 test("21 minute timeout scan protects a live durable execution and never permits a second POST", async (t) => {
@@ -533,6 +764,27 @@ test("prepared cancellation through DesignJobsService is terminal locally and ne
   assert.equal(postCount, 0);
   assert.equal(remoteCancelCount, 0);
   assert.equal(localStore.getDesignPlatformExecution(begun.execution.id).status, "cancelled");
+  service.onModuleDestroy();
+});
+
+test("started Zhenxi generation cannot be cancelled after billing begins", async (t) => {
+  const { localStore, job } = localFixture(t);
+  const executions = new DesignPlatformExecutionService({}, localStore);
+  const begun = await executions.begin({ designJobId: job.id, attemptNo: 1 });
+  await executions.claimDispatch(begun.execution.id);
+  await executions.markGenerating(begun.execution.id);
+  const service = new DesignJobsService(
+    {}, { isArtImageLocalAdapter: () => true }, localStore, { create: async () => ({}) }, {},
+    { setConversationManualLock: async () => ({ blockedSendTasks: [], inFlightSendTasks: [] }) },
+    {}, {}, executions,
+  );
+
+  await assert.rejects(
+    () => service.cancel(job.id),
+    (error) => error?.response?.code === "DESIGN_GENERATION_ALREADY_STARTED",
+  );
+  assert.equal(localStore.getDesignPlatformExecution(begun.execution.id).status, "generating");
+  assert.notEqual(localStore.getDesignJob(job.id).status, "cancelled");
   service.onModuleDestroy();
 });
 
@@ -865,7 +1117,7 @@ test("partial success with unsafe refund resumes acceptance after trusted refund
   assert.equal(localStore.listDesignPlatformExecutions({ designJobId: job.id }).length, 1);
 });
 
-test("safe refunded terminal failure retries at most once with a new stable execution", async (t) => {
+test("refunded terminal failure still requires explicit human retry because generation was billed", async (t) => {
   const { localStore, job } = localFixture(t);
   const executions = new DesignPlatformExecutionService({}, localStore);
   let postCount = 0;
@@ -890,11 +1142,11 @@ test("safe refunded terminal failure retries at most once with a new stable exec
   for (let index = 0; index < 10 && service.activeExecutionPromises.size; index += 1) {
     await Promise.all([...service.activeExecutionPromises.values()]);
   }
-  assert.equal(postCount, 2);
+  assert.equal(postCount, 1);
   const rows = localStore.listDesignPlatformExecutions({ designJobId: job.id });
-  assert.equal(rows.length, 2);
-  assert.notEqual(rows[0].requestId, rows[1].requestId);
-  assert.equal(localStore.getDesignJob(job.id).retryCount, 1);
+  assert.equal(rows.length, 1);
+  assert.equal(localStore.getDesignJob(job.id).retryCount, 0);
+  assert.equal(localStore.getDesignJob(job.id).status, "manual_review");
 });
 
 test("explicit unknown resolution enforces job identity and unblocks only manual retry", async (t) => {
@@ -1242,3 +1494,92 @@ test("Prisma begin transaction rolls back execution if business state update fai
   assert.equal(state.executions.length, 0);
   assert.equal(state.job.status, "draft");
 });
+
+function zhenxiContractAdapter(seen) {
+  return async (config) => {
+    const method = String(config.method || "get").toUpperCase();
+    if (config.url === "api/local-assets" && method === "POST") {
+      const fileName = multipartFileName(config.data);
+      const record = captureRequest(config, { fileName });
+      seen.push(record);
+      return {
+        data: {
+          ok: true,
+          data: {
+            url: `/local-assets/${fileName}`,
+            fileName,
+            mimeType: "image/png",
+            size: Buffer.isBuffer(config.data) ? config.data.length : 0,
+          },
+        },
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        config,
+        request: {},
+      };
+    }
+    if (config.url === "api/local-generate" && method === "POST") {
+      const body = parseJsonBody(config.data);
+      seen.push(captureRequest(config, { body }));
+      const slot = Number(/:slot:(\d+)$/.exec(String(body.requestId || ""))?.[1] || 1);
+      return {
+        data: {
+          ok: true,
+          data: {
+            results: Array.from({ length: Number(body.count || 1) }, () => ({
+              status: "success",
+              url: `/generated/candidate-${slot}.png`,
+            })),
+            refund: { status: "not_required", reason: "all_success" },
+          },
+        },
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        config,
+        request: {},
+      };
+    }
+    throw new Error(`unexpected Zhenxi contract request: ${method} ${config.url}`);
+  };
+}
+
+function captureRequest(config, extra = {}) {
+  return {
+    method: String(config.method || "get").toUpperCase(),
+    url: config.url,
+    authorization: requestHeader(config, "authorization"),
+    cookie: requestHeader(config, "cookie"),
+    deviceId: requestHeader(config, "x-art-device-id"),
+    ...extra,
+  };
+}
+
+function requestHeader(config, name) {
+  const value = typeof config.headers?.get === "function" ? config.headers.get(name) : config.headers?.[name];
+  return value === null ? undefined : value;
+}
+
+function multipartFileName(data) {
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data || "");
+  const match = /filename="([^"]+)"/.exec(text);
+  if (!match) throw new Error("multipart request did not include a file name");
+  return match[1];
+}
+
+function parseJsonBody(data) {
+  if (Buffer.isBuffer(data)) return JSON.parse(data.toString("utf8"));
+  if (typeof data === "string") return JSON.parse(data);
+  return data || {};
+}
+
+async function drainActiveExecutions(service) {
+  for (let index = 0; index < 10 && service.activeExecutionPromises.size; index += 1) {
+    await Promise.all([...service.activeExecutionPromises.values()]);
+  }
+}
+
+function snapshotConfig() {
+  return { ...appConfig };
+}

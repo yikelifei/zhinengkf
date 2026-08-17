@@ -13,6 +13,7 @@ const {
   absoluteFrom,
   aggregateStatus,
   buildAudit,
+  clearAuditAnalysisCaches,
   loadTypeScriptCompilerFromDependencyRoot,
   maskTypeScriptCommentsAndStrings,
   toMarkdown,
@@ -25,6 +26,50 @@ function write(root, relative, content = "fixture evidence\n", append = false) {
   if (append) fs.appendFileSync(target, content, "utf8");
   else fs.writeFileSync(target, content, "utf8");
   return target;
+}
+
+function buildAuditResult(root, id, options = {}) {
+  const report = buildAudit(root, { includeExternal: false, ...options, resultIds: [id] });
+  const result = report.results.find((item) => item.id === id);
+  assert.ok(result, `missing audit result: ${id}`);
+  return result;
+}
+
+function debugCompletionAuditMutation(message) {
+  if (!process.env.DEBUG_COMPLETION_AUDIT_MUTATIONS) return;
+  const line = `[completion-audit-mutation] ${message}\n`;
+  process.stderr.write(line);
+  if (process.env.DEBUG_COMPLETION_AUDIT_MUTATIONS_FILE) {
+    fs.appendFileSync(process.env.DEBUG_COMPLETION_AUDIT_MUTATIONS_FILE, line, "utf8");
+  }
+}
+
+test("audit analysis caches can be released between exhaustive source mutations", () => {
+  maskTypeScriptCommentsAndStrings('const cacheProbe = "fixture";');
+  assert.ok(clearAuditAnalysisCaches() > 0);
+  assert.equal(clearAuditAnalysisCaches(), 0);
+});
+
+function replaceOrdersUpdateBlock(source, mutateBlock) {
+  const startMarker = '  @Post(":id/update")';
+  const endMarker = '  @Post(":id/fulfillment")';
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, "orders update block is missing");
+  const block = source.slice(start, end);
+  const mutatedBlock = mutateBlock(block);
+  assert.notEqual(mutatedBlock, block, "orders update block mutation did not change the block");
+  return `${source.slice(0, start)}${mutatedBlock}${source.slice(end)}`;
+}
+
+function replaceOrdersReviseSelectionBlock(source, mutateBlock) {
+  const startMarker = '  @Post(":id/revise-selection")';
+  const start = source.indexOf(startMarker);
+  assert.ok(start >= 0, "orders revise-selection block is missing");
+  const block = source.slice(start);
+  const mutatedBlock = mutateBlock(block);
+  assert.notEqual(mutatedBlock, block, "orders revise-selection block mutation did not change the block");
+  return `${source.slice(0, start)}${mutatedBlock}`;
 }
 
 test("TypeScript audit masking preserves layout and hides escaped strings, templates and comments", () => {
@@ -157,13 +202,51 @@ function createPassingFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-audit-fixture-"));
   for (const artifact of REQUIRED_ARTIFACTS) write(root, artifact.file);
   write(root, ".gitignore", "desktop/.runtime/\n");
-  write(root, "desktop/package.json", JSON.stringify({ dependencies: { sharp: "0.34.5" }, scripts: {
-    "test": "node --test --test-concurrency=1 tests/*.test.js",
+  write(root, "desktop/package.json", JSON.stringify({ dependencies: { sharp: "0.35.3" }, scripts: {
+    "test": "node tools/run-node-tests.js",
     "release:gate": "x", "staging:readiness": "x", "database:recovery:plan": "x",
     "database:recovery:execute": "x", "package:win:test": "x", "package:win:signed": "x",
     "ci:release-quality": "x", "project:completion:audit": "x",
+    "delivery:freeze-plan": "node tools/release-candidate-freeze-plan.js",
     "prisma:agents:init": "node tools/initialize-prisma-agents.js",
   }}));
+  write(root, "desktop/tools/run-node-tests.js", `
+const args = process.argv.slice(2);
+const testFiles = args.length ? args : ["tests/*.test.js"];
+spawnSync(process.execPath, ["--test", "--test-concurrency=1", ...testFiles], {
+  env: { ...process.env, USE_LOCAL_STORE: "true", DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700" },
+  shell: false,
+});
+`);
+  write(root, "desktop/tools/release-candidate-freeze-plan.js", `
+const SCHEMA_VERSION = "smart_kefu_release_candidate_freeze_plan_v1";
+const sourceHandoff = {};
+const summary = { requiresCleanReleaseWorkspace: true };
+const branchPlans = [
+  { branchName: "codex/rc-foundation-governance" },
+  { branchName: "codex/rc-core-product-flow" },
+  { branchName: "codex/rc-enterprise-wechat-channel" },
+  { branchName: "compat-personal-wechat-quarantine" },
+];
+module.exports = { SCHEMA_VERSION, sourceHandoff, summary, branchPlans };
+`);
+  write(root, "desktop/tools/delivery-handoff-bundle.js", `
+function buildCommandPlan() {
+  return [{ command: "npm run delivery:freeze-plan" }];
+}
+function readFreezePlan(runtimeRoot) {
+  return path.join(runtimeRoot, "release-candidate-freeze-plan", "latest.json");
+}
+summarizeGenericReport("release.freeze_plan");
+`);
+  write(root, "desktop/apps/api/src/delivery/delivery-readiness.service.ts", `
+const DELIVERY_FREEZE_PLAN_COMMAND = "npm.cmd run delivery:freeze-plan";
+const EVIDENCE_REPORTS = [{
+  id: "release_freeze_plan",
+  relativePath: "release-candidate-freeze-plan/latest.json",
+  command: DELIVERY_FREEZE_PLAN_COMMAND,
+}];
+`);
   write(root, "desktop/electron-builder.yml", "asar: true\nextraResources:\n  - from: x\nwin:\n  target: nsis\n");
   write(root, ".github/workflows/windows-quality.yml", `permissions:
   contents: read
@@ -309,6 +392,10 @@ function atomicWritePrivateJson(filePath, value) { const temporaryPath = filePat
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'claimQueuedSendTaskAndCreateAttempt(); error instanceof WechatBridgeOutboxError && error.deliveryState === "failed"; failureStage = error instanceof WechatBridgeOutboxError; deliveryUnknownReason = knownNotSent ? null : "adapter_execution_exception"; automaticRetryBlocked: !knownNotSent; expectedAttemptStatus: "started";\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-send-adapter.service.ts", 'class WechatBridgeOutboxError extends Error {}\nstage: "outbox_mkdir"; deliveryState: published ? "unknown" : "failed"; attemptId: context.attemptId;\n');
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", `
+function resolvedSendAdapterName(adapter) { return adapter || "dry_run"; }
+function assertEnterpriseWechatOnlySendAdapter(adapter) {
+  if (resolvedSendAdapterName(adapter) === "windows_bridge") throw new Error("enterprise WeChat only");
+}
 @Get("accounts")
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
@@ -336,45 +423,23 @@ listSendAttempts() {}
 @Get("send-adapter")
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
-getSendAdapter() {}
+getSendAdapter(adapter) { assertEnterpriseWechatOnlySendAdapter(adapter); }
 @Get("channels/status")
 @RequireOperatorCapability("view_console")
 @UseGuards(OperatorAccessGuard)
 getChannelStatus() {}
-@Get("bridge/outbox")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatBridgeAccessGuard)
-listBridgeOutbox() {}
-@Get("bridge/dispatch")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatBridgeAccessGuard)
-listBridgeDispatch() {}
-@Get("bridge/status")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatBridgeAccessGuard)
-getBridgeStatus() {}
-@Post("bridge/inbox/scan")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatBridgeAccessGuard)
-scanBridgeInbox() {}
-@Get("window-snapshots")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatWindowObserverAccessGuard)
-listWindowSnapshots() {}
-@Get("window-observer/status")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatWindowObserverAccessGuard)
-getWindowObserverStatus() {}
-@Post("window-snapshots/inbox/scan")
-@RequireOperatorCapability("view_console")
-@UseGuards(WechatWindowObserverAccessGuard)
-scanWindowSnapshotInbox() {}
+@Post("channels/:channel/inbound/test")
+@RequireOperatorCapability("approve_send")
+@UseGuards(OperatorAccessGuard)
+processChannelInboundTest(channel) { if (channel !== "work_wechat") throw new BadRequestException("only work_wechat is supported"); }
 @Post("inbound/messages")
 @RequireOperatorCapability("approve_send")
 @UseGuards(OperatorAccessGuard)
 processInboundMessage(@Body() payload, @TrustedOperator() _principal) {}
-  @Post("send-tasks/:id/bridge-ack")
-  acknowledgeBridgeSend() {}
+  @Post("send-tasks/process-safe-queue")
+  processSafeSendQueue(payload) { assertEnterpriseWechatOnlySendAdapter(payload?.adapter); }
+  @Post("send-tasks/:id/execute")
+  executeSend(id, payload) { assertEnterpriseWechatOnlySendAdapter(payload?.adapter); }
   @Post("send-tasks/:id/resolve-delivery")
   @RequireOperatorCapability("approve_send")
   @UseGuards(OperatorAccessGuard)
@@ -385,7 +450,8 @@ validateSendTask(
   @Body() payload: ExpectedIdentityPayload,
 ) {}
 `);
-  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest(value) { return { operationKey: stringOrUndefined(value.operationKey) }; }\nenqueueManualReply(payload) { normalizeOperationKey(payload.operationKey, "operationKey"); }\ncreateDemoSendTask(payload: { operationKey: string }) { normalizeOperationKey(payload?.operationKey, "operationKey"); return this.createLocalSendTask({ operationKey, customerId: conversation.customerId }); }\ncreatePrismaDemoSendTask(payload) { return this.persistence.createSendTask({ operationKey: payload.operationKey, customerId: conversation.customerId }); }\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'queueOrderConfirmationWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderConfirmation();\nqueueOrderFollowupWithProvenance(orderDraftId, manualOrderQueueRequest(payload), null) { normalizeOperationKey(payload.operationKey, "operationKey"); }\nqueueLowValueOrderFollowup();\nbuildLowValueOrderAutomation();\norderDraftId: String(order.id);\nquoteDraftId: String(order.quoteDraftId || "");\nqueuedBy: "low_value_automation";\nfunction manualOrderQueueRequest(value) { return { operationKey: stringOrUndefined(value.operationKey) }; }\nenqueueManualReply(payload) { normalizeOperationKey(payload.operationKey, "operationKey"); }\ncreateDemoSendTask(payload: { operationKey: string }) { assertDemoDataMutationAllowed("demo send task"); normalizeOperationKey(payload?.operationKey, "operationKey"); return this.createLocalSendTask({ operationKey, customerId: conversation.customerId }); }\ncreatePrismaDemoSendTask(payload) { return this.persistence.createSendTask({ operationKey: payload.operationKey, customerId: conversation.customerId }); }\n', true);
+  write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'createDemoWindowSnapshot(payload) { assertDemoDataMutationAllowed("demo window snapshot"); return this.persistence.createWindowSnapshot(payload); }\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'buildOrderSendContext();\norderContext: params.orderContext;\nthis.orderSendContext(task);\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat.controller.ts", 'queueOrderConfirmation(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, owner: principal.id, operationKey: payload?.operationKey });\nqueueOrderFollowup(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, type: payload?.type, owner: principal.id, operationKey: payload?.operationKey });\nsetConversationManualLock(id, { expectedWechatAccountId: payload?.expectedWechatAccountId, expectedConversationId: payload?.expectedConversationId, expectedCustomerId: payload?.expectedCustomerId, locked: payload?.locked, reviewer: principal.id, reason: payload?.reason, note: payload?.note });\n@Post("send-tasks/demo")\ncreateDemoSendTask(payload: { operationKey: string }) { return this.wechat.createDemoSendTask(payload); }\n', true);
   write(root, "desktop/apps/api/src/wechat/wechat-dispatch.service.ts", 'withInboundEffectLease(); hydrateCompletedInboundReplay(); inboundSelectionRecovery(); "high_value_image_selection"; "low_value_image_selection"; "selection_committed"; "high-value inbound selection recovery lost its durable design job binding"; "low-value inbound selection recovery lost its durable quote binding"; commitInboundHighValueSelection();\n', true);
@@ -429,14 +495,15 @@ export class ConversationOperationsController {
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.service.ts", "REGISTRY_VERSION; readRegistryState(); writeRegistryDocument(); PersonalWechatRpaPersistence; this.persistence.listBindings(); this.persistence.listAudit(); this.persistence.upsertBinding(); this.persistence.recordAudit(); assertProductionIdentity();\n");
   write(root, "desktop/apps/api/src/personal-wechat-rpa/personal-wechat-rpa.persistence.ts", "prisma.$transaction(); hydrateBinding(); sanitizeError();\n");
   write(root, "desktop/prisma/schema.prisma", "enum ConversationChannel { personal_wechat work_wechat }\nmodel PersonalWechatRpaBinding {}\nmodel PersonalWechatRpaAuditLog {}\nmodel WechatWorkSyncCursor {}\nmodel SkuChangeLog { changedFields Json before Json? }\nmodel DesignAsset { normalizedLocalPath String? @unique }\npersonalWechatOwnerWxId String? @unique\npersonalWechatRpaBindingKey String? @unique\n");
-  write(root, "desktop/apps/api/src/catalog/catalog.service.ts", 'this.prisma.$transaction(); tx.skuChangeLog.create(); changedFields; reason: context.reason; reason: "no_change"; skuChangeLog.findMany();\n');
-  write(root, "desktop/apps/api/src/assets/assets.service.ts", 'normalizedLocalPath; await fs.realpath(input); local asset path must be absolute; this.prisma.conversation.findFirst(); normalizedLocalPath: normalized; ambiguous persisted identities; no unambiguous persisted identity;\n');
+  write(root, "desktop/apps/api/src/catalog/catalog.service.ts", 'this.prisma.$transaction(); tx.skuChangeLog.create(); changedFields; reason: context.reason; reason: "no_change"; skuChangeLog.findMany();\nasync createDemoSkuImages() { assertDemoDataMutationAllowed("demo SKU images"); }\n');
+  write(root, "desktop/apps/api/src/assets/assets.service.ts", 'normalizedLocalPath; await fs.realpath(input); local asset path must be absolute; this.prisma.conversation.findFirst(); normalizedLocalPath: normalized; ambiguous persisted identities; no unambiguous persisted identity;\nasync createDemoCustomerLogo() { assertDemoDataMutationAllowed("demo customer logo"); }\n');
   write(root, "desktop/apps/api/src/storage/storage.service.ts", 'MAX_IMAGE_FINGERPRINT_BYTES; assertAssetSize(decodeBase64(params.base64)); Buffer.byteLength(params.text, "utf8"); normalizeAssetUrl(params.url); timeout: appConfig.designPlatformTimeoutMs; maxContentLength: MAX_IMAGE_FINGERPRINT_BYTES; maxBodyLength: MAX_IMAGE_FINGERPRINT_BYTES; isCanonicalBase64Text; asset URL must use http(s); inspectSafeAssetContent(); downloadBoundedBytes(); assertCanonicalStoragePath();\n');
   write(root, "desktop/apps/api/src/storage/safe-download.ts", 'resolvePublicDownloadTarget(); if (url.username || url.password) throw new Error(); lookup(hostname, { all: true, verbatim: true }); resolved.some((item) => !isPublicAddress(item.address)); createPinnedLookup(); maxRedirects: 0; proxy: false; 169.254.0.0; 2001:db8::;\n');
   write(root, "desktop/apps/api/src/storage/asset-content-security.ts", 'sharp(buffer); %PDF-; ACTIVE_PDF_PATTERN; new TextDecoder("utf-8", { fatal: true }); ACTIVE_TEXT_PATTERN; asset fileName extension does not match file content; asset mimeType does not match file content; kind: "pdf", mimeType: "application/pdf", extension: ".pdf", inlineSafe: false;\n');
   write(root, "desktop/apps/api/src/storage/local-file-response.ts", 'X-Content-Type-Options; nosniff; Content-Security-Policy; sandbox; Content-Disposition; "attachment";\n');
   write(root, "desktop/docs/DESIGN_PLATFORM_CONTRACT.md", "DNS rebinding; Content-Disposition; realpath; 不再作为“部署侧未决”项冒充已完成;\n");
-  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: `${effectRoot}:handoff-review`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);\nasync create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }\n');
+  write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", 'buildLegacyImageIdentityHash(); legacyIdentityHash; normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: `${effectRoot}:handoff-review`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);\nasync create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }\nprivate minimumRequiredInitialImageCount(job: any) { return CUSTOMER_DESIGN_CANDIDATE_COUNT; }\nconst requiredCandidateImageCount = this.minimumRequiredInitialImageCount(job); if (images.length !== requiredCandidateImageCount) {}\nprivate minimumRequiredLocalImageCount(job: any) { return this.minimumRequiredInitialImageCount(job); }\nif (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) { throw new Error(`design job must have exactly ${CUSTOMER_DESIGN_CANDIDATE_COUNT} candidate images before sending`); }\n');
+  write(root, "desktop/packages/rules/lowValueAutomation.js", 'const { CUSTOMER_DESIGN_CANDIDATE_COUNT, inspectBundleAutomationReadiness } = require("./designWorkflow");\nif (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) { return skip("candidate_count_mismatch", [`images:${CUSTOMER_DESIGN_CANDIDATE_COUNT}`]); }\nif (sendableImages.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) { return skip("missing_images", ["images"]); }\n');
   write(root, "desktop/apps/api/src/shared/image-fingerprint.ts", 'import sharp from "sharp";\nconst IMAGE_FINGERPRINT_ALGORITHM = "dhash64:v1";\nsharp().rotate().flatten({}).greyscale().resize(9, 8);\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-api.client.ts", 'fetch(`/cgi-bin/media/get?media_id=${encodeURIComponent(mediaId)}`); errcode === 40007; errcode === 41006; errcode === 45009; retry_exhausted;\n');
   write(root, "desktop/apps/api/src/wechat-work/wechat-work-inbound-media.ts", 'MAX_WECHAT_WORK_INBOUND_IMAGE_BYTES; LOCAL_STORAGE_ROOT; fs.link(temporaryPath, finalPath); inspectExistingImage();\n');
@@ -499,12 +566,17 @@ function isResumableCompletedExecution(execution) {
 `);
   write(root, "desktop/apps/api/src/integrations/design-platform/design-platform.client.ts", 'requestId: externalJobId; MALFORMED_SUCCESS_RESPONSE; ECONNABORTED; ECONNRESET; Number(error.response?.status || 0) >= 500; art_image_local results must be read from durable execution; maxRedirects: 0; config.maxRedirects = 0; assertTrustedDesignPlatformTarget(config.baseURL, config.url); config.adapter = this.guardedAdapter; config.transformRequest = copyTransform(trustedTransformRequest); delete config.transport; config.proxy = false; AxiosHeaders.from(config.headers); headers.delete("Authorization"); createForTesting(transport: AxiosAdapter); response.status >= 300 && response.status < 400; DESIGN_PLATFORM_REDIRECT_BLOCKED;\n');
   write(root, "desktop/apps/web/src/lib/desktop-session-proof.ts", 'DESKTOP_SESSION_COOKIE; timingSafeEqual(); requiresDesktopSessionProof(); return true; headers.delete("cookie"); headers.set(internalApiTokenHeader, internalApiToken);\n');
-  write(root, "desktop/apps/api/src/shared/app-config.ts", 'DESIGN_PLATFORM_ALLOWED_ORIGINS; designPlatformAccessTokenOrigin; designPlatformCookieOrigin; designPlatformApiKeyOrigin; designPlatformDeviceIdOrigin; hasIndependentDesignPlatformCallbackApiKey(); timingSafeEqual();\n');
+  write(root, "desktop/apps/api/src/shared/app-config.ts", 'export const appConfig = { allowDemoDataMutations: booleanEnv("ALLOW_DEMO_DATA_MUTATIONS", process.env.NODE_ENV !== "production" && process.env.USE_LOCAL_STORE !== "false") };\nDESIGN_PLATFORM_ALLOWED_ORIGINS; designPlatformAccessTokenOrigin; designPlatformCookieOrigin; designPlatformApiKeyOrigin; designPlatformDeviceIdOrigin; hasIndependentDesignPlatformCallbackApiKey(); timingSafeEqual();\n');
+  write(root, "desktop/apps/api/src/shared/demo-data-boundary.ts", 'DEMO_DATA_MUTATION_BLOCKED_CODE; appConfig.allowDemoDataMutations; ForbiddenException;\n');
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.service.ts", `
 buildLegacyImageIdentityHash(); legacyIdentityHash; design_platform_callback_auth;
 hasIndependentDesignPlatformCallbackApiKey(); severity: "error"; assertDesignPlatformPreflight();
 normalizeOperationKey(payload?.operationKey); findUnique({ where: { requestId } }); isUniqueConstraintError(error); activeCreateEffectPromises; requirements.createEffects; effectKey: \`\${effectRoot}:handoff-review\`; completedAt: new Date().toISOString(); deterministicOperationId("review", effectKey);
 async create(payload: CreateDesignJobPayload) { const existing = findUnique({ where: { requestId } }); if (existing) return this.completeDesignJobCreateEffects(existing, operation, readiness); const identity = await this.validateCreateIdentity(payload); }
+private minimumRequiredInitialImageCount(job: any) { return CUSTOMER_DESIGN_CANDIDATE_COUNT; }
+const requiredCandidateImageCount = this.minimumRequiredInitialImageCount(job); if (images.length !== requiredCandidateImageCount) {}
+private minimumRequiredLocalImageCount(job: any) { return this.minimumRequiredInitialImageCount(job); }
+if (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT) { throw new Error(\`design job must have exactly \${CUSTOMER_DESIGN_CANDIDATE_COUNT} candidate images before sending\`); }
 const DESIGN_CALLBACK_CLAIM_LEASE_MS = 1;
 function designSubmitOperation() {}
 normalizeOperationKey(payload.operationKey, "design revision operationKey");
@@ -512,6 +584,12 @@ function claimDesignCallback() { this.localStore.claimDesignJobCallback(); prism
 function markDesignCallbackOutcomeUnknown() { return { callbackStatus: "outcome_unknown" }; }
 function commitDesignCallbackCompletion() { return prisma.$transaction(() => {}); }
 class DesignJobsService {
+  createTimeoutDemo() {
+    assertDemoDataMutationAllowed("timeout design demo");
+  }
+  createFailureDemo() {
+    assertDemoDataMutationAllowed("failure design demo");
+  }
   async listExecutions(id, expected) {
     if (!expected.expectedWechatAccountId || !expected.expectedConversationId || !expected.expectedCustomerId) throw new Error("complete identity required");
     const job = await this.getById(id);
@@ -526,6 +604,7 @@ class DesignJobsService {
   }
 }
 `);
+  write(root, "desktop/tools/run-product-acceptance.js", 'const serviceEnv = { ALLOW_DEMO_DATA_MUTATIONS: "1" };\n');
   write(root, "desktop/apps/api/src/design-jobs/design-jobs.controller.ts", `
 @Controller("design-jobs")
 @RequireOperatorCapability("view_console")
@@ -642,9 +721,10 @@ resolutionAction(execution.availableResolution);
 function postJsonWithNetworkRetry(path, body) { const serializedBody = JSON.stringify(body); }
 function createClientOperationKey() {}
 const requestPayload: { operationKey: string } = {};
-export async function getDesignJobs() { const response = await fetch("/design-jobs"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
-export async function getSkus() { const response = await fetch("/catalog/skus"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
-export async function getAssets() { const response = await fetch("/assets"); if (!response.ok) throw new Error(\`api \${response.status}\`); return response.json(); }
+async function apiResponseError(response) { return new Error(\`api \${response.status}\`); }
+export async function getDesignJobs() { const response = await fetch("/design-jobs"); if (!response.ok) throw await apiResponseError(response); return response.json(); }
+export async function getSkus() { const response = await fetch("/catalog/skus"); if (!response.ok) throw await apiResponseError(response); return response.json(); }
+export async function getAssets() { const response = await fetch("/assets"); if (!response.ok) throw await apiResponseError(response); return response.json(); }
 export async function createDemoDesignJob(identity, assetIds, operationKey: string) {}
 export async function createDemoSendTask(conversationId, operationKey: string, wechatAccountId, expected, text) {
   return postJsonWithNetworkRetry<SendTask>("/wechat/send-tasks/demo", {
@@ -898,6 +978,12 @@ export class AgentsController { @Get() list() {} }
 @UseGuards(OperatorAccessGuard)
 export class AiProviderController { @Get("status") status() {} }
 `);
+  write(root, "desktop/apps/api/src/delivery/delivery-readiness.controller.ts", `
+@Controller("delivery/readiness")
+@RequireOperatorCapability("view_console")
+@UseGuards(OperatorAccessGuard)
+export class DeliveryReadinessController { @Get() getReadiness() {} }
+`);
   write(root, "desktop/apps/api/src/catalog/catalog.controller.ts", `
 @Controller("catalog")
 @RequireOperatorCapability("view_console")
@@ -936,7 +1022,21 @@ import { TrustedOperatorPrincipal } from "../operator-access/operator-access.typ
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
   @Get() list() {}
+  @Get(":id")
+  getById(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.orders.getById(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
   @Get(":id/confirmation-preview") confirmationPreview() {}
+  @Get(":id/followup-preview") followupPreview() {}
   @Post("from-quote/:quoteId")
   @RequireOperatorCapability("manage_design_executions")
   createFromQuote(@Param("quoteId") quoteId: string, @Body() payload: ExpectedIdentityPayload = {}) {}
@@ -953,6 +1053,29 @@ export class OrdersController {
       expectedWechatAccountId: payload?.expectedWechatAccountId,
       expectedConversationId: payload?.expectedConversationId,
       expectedCustomerId: payload?.expectedCustomerId,
+      owner: principal.id,
+    });
+  }
+  @Post(":id/fulfillment")
+  @RequireOperatorCapability("manage_order_fulfillment")
+  updateFulfillment(
+    @Param("id") id: string,
+    @Body() payload: { status?: string; productionStatus?: string; productionDueAt?: string; carrier?: string; trackingNo?: string; shippedAt?: string; deliveredAt?: string; customerNotes?: string; owner?: string; operationKey?: string } & ExpectedIdentityPayload,
+    @TrustedOperator() principal: TrustedOperatorPrincipal,
+  ) {
+    return this.orders.updateFulfillment(id, {
+      status: payload?.status,
+      productionStatus: payload?.productionStatus,
+      productionDueAt: payload?.productionDueAt,
+      carrier: payload?.carrier,
+      trackingNo: payload?.trackingNo,
+      shippedAt: payload?.shippedAt,
+      deliveredAt: payload?.deliveredAt,
+      customerNotes: payload?.customerNotes,
+      expectedWechatAccountId: payload?.expectedWechatAccountId,
+      expectedConversationId: payload?.expectedConversationId,
+      expectedCustomerId: payload?.expectedCustomerId,
+      operationKey: payload?.operationKey,
       owner: principal.id,
     });
   }
@@ -1040,6 +1163,7 @@ export class TrainingController {
   appendInboundAuditSemanticFixture(root);
   const repositoryRoot = path.resolve(__dirname, "..", "..");
   for (const relative of [
+    "desktop/apps/api/src/orders/orders.controller.ts",
     "desktop/apps/api/src/local-store/local-store.service.ts",
     "desktop/apps/api/src/notifications/notifications.service.ts",
     "desktop/apps/api/src/shared/notification-idempotency.ts",
@@ -1378,10 +1502,43 @@ test("completion audit fixture reaches local PASS without network, commands or s
   assert.doesNotMatch(source, /node:child_process|\bspawnSync\b|\bexecFileSync\b|\bfetch\s*\(|require\(["']node:https?["']\)|process\.env/);
 });
 
+test("completion audit rejects any relaxation of the four-image design round", () => {
+  const root = createPassingFixture();
+  const serviceContractId = "contract.design_candidate_round_exact_count";
+  const automationContractId = "contract.low_value_design_exact_candidate_count";
+  assert.equal(buildAuditResult(root, serviceContractId).status, STATUS.PASS);
+  assert.equal(buildAuditResult(root, automationContractId).status, STATUS.PASS);
+
+  const servicePath = path.join(root, "desktop", "apps", "api", "src", "design-jobs", "design-jobs.service.ts");
+  const serviceSource = fs.readFileSync(servicePath, "utf8");
+  fs.writeFileSync(
+    servicePath,
+    serviceSource.replace(
+      "if (images.length !== requiredCandidateImageCount)",
+      "if (images.length < requiredCandidateImageCount)",
+    ),
+    "utf8",
+  );
+  assert.equal(buildAuditResult(root, serviceContractId).status, STATUS.FAIL);
+
+  const automationPath = path.join(root, "desktop", "packages", "rules", "lowValueAutomation.js");
+  const automationSource = fs.readFileSync(automationPath, "utf8");
+  fs.writeFileSync(
+    automationPath,
+    automationSource.replace(
+      "if (images.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT)",
+      "if (images.length < CUSTOMER_DESIGN_CANDIDATE_COUNT)",
+    ),
+    "utf8",
+  );
+  assert.equal(buildAuditResult(root, automationContractId).status, STATUS.FAIL);
+});
+
 test("completion audit checks real inbound recovery function boundaries, helpers, identity and lease CAS", async (t) => {
   const baselineRoot = createRealInboundFixture();
-  const baseline = buildAudit(baselineRoot, { includeExternal: false });
-  assert.equal(baseline.results.find((item) => item.id === "contract.inbound_effect_recovery").status, STATUS.PASS);
+  debugCompletionAuditMutation("baseline start");
+  assert.equal(buildAuditResult(baselineRoot, "contract.inbound_effect_recovery").status, STATUS.PASS);
+  debugCompletionAuditMutation("baseline done");
 
   const dispatchFile = "desktop/apps/api/src/wechat/wechat-dispatch.service.ts";
   const localStoreFile = "desktop/apps/api/src/local-store/local-store.service.ts";
@@ -3128,8 +3285,29 @@ wave69bGetterSetterDelegate.entry = 1;`],
     ...mutations.slice(-recentMutationCount),
     ...mutations.slice(0, -recentMutationCount),
   ];
-  for (const [mutationIndex, mutation] of orderedMutations.entries()) {
-    const root = createRealInboundFixture();
+  const defaultMutationNames = new Set([
+    "low-value atomic helper call renamed",
+    "quote acceptance atomic helper calls renamed",
+    "local fs default import cannot become type-only",
+    "local notification effect replay gate disabled",
+    "local notification effect replay identity removed",
+    "Prisma notification effect replay dispatch disabled",
+    "cross-process lock owner fence disabled",
+    "lock release cannot throw before unlinking its owner file",
+    "same-name setter delegates to getter observes critical runtime state",
+    "same-name getter delegates to setter observes critical runtime state",
+  ]);
+  const runDeepMutations = process.env.COMPLETION_AUDIT_DEEP_MUTATIONS === "1";
+  const selectedMutations = runDeepMutations
+    ? orderedMutations
+    : orderedMutations.filter((mutation, index) => index < 16 || defaultMutationNames.has(mutation.name));
+  if (!runDeepMutations) {
+    t.diagnostic(`running ${selectedMutations.length}/${orderedMutations.length} representative inbound audit mutations; set COMPLETION_AUDIT_DEEP_MUTATIONS=1 for the exhaustive set`);
+  }
+  clearAuditAnalysisCaches();
+  for (const [mutationIndex, mutation] of selectedMutations.entries()) {
+    debugCompletionAuditMutation(`${mutationIndex + 1}/${selectedMutations.length} ${mutation.name}`);
+    const root = baselineRoot;
     const target = path.join(root, ...mutation.file.split("/"));
     const source = fs.readFileSync(target, "utf8");
     const start = mutation.anchor ? source.indexOf(mutation.anchor) : 0;
@@ -3147,19 +3325,23 @@ wave69bGetterSetterDelegate.entry = 1;`],
         ? source.split(mutation.from).join(mutation.to)
         : `${source.slice(0, occurrence)}${mutation.to}${source.slice(occurrence + mutation.from.length)}`;
     }
-    fs.writeFileSync(target, mutated, "utf8");
-    const report = buildAudit(root, { includeExternal: false });
-    const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
-    assert.equal(contract.status, STATUS.FAIL, mutation.name);
-    assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0, mutation.name);
-    if (mutation.expectedFailure) {
-      assert.ok(
-        contract.evidence.missing.some((item) => item.includes(mutation.expectedFailure)),
-        `${mutation.name}: ${JSON.stringify(contract.evidence)}`,
-      );
+    try {
+      fs.writeFileSync(target, mutated, "utf8");
+      const contract = buildAuditResult(root, "contract.inbound_effect_recovery");
+      assert.equal(contract.status, STATUS.FAIL, mutation.name);
+      assert.ok(contract.evidence.missing.length + contract.evidence.forbidden.length > 0, mutation.name);
+      if (mutation.expectedFailure) {
+        assert.ok(
+          contract.evidence.missing.some((item) => item.includes(mutation.expectedFailure)),
+          `${mutation.name}: ${JSON.stringify(contract.evidence)}`,
+        );
+      }
+    } finally {
+      fs.writeFileSync(target, source, "utf8");
+      clearAuditAnalysisCaches();
     }
     if ((mutationIndex + 1) % 8 === 0) {
-      t.diagnostic(`mutation progress ${mutationIndex + 1}/${orderedMutations.length}`);
+      t.diagnostic(`mutation progress ${mutationIndex + 1}/${selectedMutations.length}`);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
@@ -3864,8 +4046,7 @@ ${notifications}`,
       "utf8",
     );
 
-    const report = buildAudit(root, { includeExternal: false });
-    const contract = report.results.find((item) => item.id === "contract.inbound_effect_recovery");
+    const contract = buildAuditResult(root, "contract.inbound_effect_recovery");
     assert.equal(contract.status, STATUS.PASS, JSON.stringify(contract.evidence));
   }
 });
@@ -3878,8 +4059,7 @@ test("completion audit models static this destructuring in sibling callables", (
     const root = createRealInboundFixture();
     const target = path.join(root, notificationsFile);
     fs.writeFileSync(target, `${fs.readFileSync(target, "utf8")}\n${statement}\n`, "utf8");
-    return buildAudit(root, { includeExternal: false }).results
-      .find((item) => item.id === "contract.inbound_effect_recovery");
+    return buildAuditResult(root, "contract.inbound_effect_recovery");
   };
   const failures = [
     ["class direct renamed binding", `let classDestructuredDirectPrototype: any = {};
@@ -3978,8 +4158,7 @@ test("completion audit hardens object accessor delegates and captured callable t
     const root = createRealInboundFixture();
     const target = path.join(root, notificationsFile);
     fs.writeFileSync(target, `${fs.readFileSync(target, "utf8")}\n${statement}\n`, "utf8");
-    return buildAudit(root, { includeExternal: false }).results
-      .find((item) => item.id === "contract.inbound_effect_recovery");
+    return buildAuditResult(root, "contract.inbound_effect_recovery");
   };
   const failures = [
     ["object getter destructuring read", `let objectGetterDestructuredPrototype: any = {};
@@ -4799,7 +4978,8 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       name: "Orders revise-selection trusted payload must exclude browser owner",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
-        return source.replace("      owner: _untrustedOwner,\r\n", "");
+        return replaceOrdersReviseSelectionBlock(source, (block) =>
+          block.replace(/      owner: _untrustedOwner,\r?\n/, ""));
       },
     },
     {
@@ -4917,6 +5097,23 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       },
     },
     {
+      name: "Orders get-by-id must preserve account identity query",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace(
+          /(return this\.orders\.getById\(id, \{\r?\n)\s+expectedWechatAccountId: wechatAccountId,\r?\n/,
+          "$1",
+        );
+      },
+    },
+    {
+      name: "Orders get-by-id cannot return the list endpoint",
+      file: "desktop/apps/api/src/orders/orders.controller.ts",
+      mutate(source) {
+        return source.replace("return this.orders.getById(id, {", "return this.orders.list({");
+      },
+    },
+    {
       name: "TrustedOperator cannot shadow its operator-access import",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
@@ -4957,27 +5154,26 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       name: "orders update id parameter decorator argument changed",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
-        return source.replace(
-          /@Param\("id"\) id: string,\r?\n    @Body\(\) payload: \{ status\?/,
-          '@Param("other") id: string,\n    @Body() payload: { status?',
-        );
+        return replaceOrdersUpdateBlock(source, (block) =>
+          block.replace('@Param("id") id: string,', '@Param("other") id: string,'));
       },
     },
     {
       name: "orders update body decorator gains an argument",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
-        return source.replace("@Body() payload: { status?", '@Body("payload") payload: { status?');
+        return source.replace(
+          /@Body\(\)\s*\r?\n\s*payload: \{ status\?/,
+          '@Body("payload")\n    payload: { status?',
+        );
       },
     },
     {
       name: "orders update id parameter becomes optional",
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
-        return source.replace(
-          /@Param\("id"\) id: string,\r?\n    @Body\(\) payload: \{ status\?/,
-          '@Param("id") id?: string,\n    @Body() payload: { status?',
-        );
+        return replaceOrdersUpdateBlock(source, (block) =>
+          block.replace('@Param("id") id: string,', '@Param("id") id?: string,'));
       },
     },
     {
@@ -4985,8 +5181,8 @@ test("completion audit fails when high-risk route guards, trusted actors or publ
       file: "desktop/apps/api/src/orders/orders.controller.ts",
       mutate(source) {
         return source.replace(
-          "@Body() payload: { status?: string; customerNotes?: string; owner?: string } & ExpectedIdentityPayload,",
-          "@Body() payload: any,",
+          /@Body\(\)\s*\r?\n\s*payload: \{ status\?: string; customerNotes\?: string; owner\?: string \} & ExpectedIdentityPayload,/,
+          "@Body()\n    payload: any,",
         );
       },
     },
@@ -5190,11 +5386,14 @@ test("completion audit detects payment and routing correction boundary drift", (
   }
 });
 
-test("external signing, staging, channel, recovery and hardware evidence aggregate to BLOCKED", () => {
+test("external signing, staging, channel and recovery evidence aggregate to BLOCKED", () => {
   const report = buildAudit(createPassingFixture());
   assert.equal(report.status, STATUS.BLOCKED);
   assert.equal(report.counts.FAIL, 0);
-  assert.equal(report.counts.BLOCKED, 5);
+  assert.equal(report.counts.BLOCKED, 4);
+  const legacyPersonal = report.results.find((item) => item.id === "legacy.personal_wechat_disabled");
+  assert.equal(legacyPersonal.status, STATUS.PASS);
+  assert.equal(legacyPersonal.evidence.productMode, "enterprise_wechat_only");
   assert.equal(EXIT_CODE[STATUS.BLOCKED], 2);
 });
 
@@ -5633,6 +5832,98 @@ test("planned channel placeholders are allowed only with planned status, fail-cl
   assert.equal(report.results.find((item) => item.id === "source.production_placeholders").status, STATUS.FAIL);
 });
 
+test("completion audit requires demo data mutation production boundary", () => {
+  const root = createPassingFixture();
+  let result = buildAuditResult(root, "contract.demo_data_mutation_boundary");
+  assert.equal(result.status, STATUS.PASS);
+
+  const assetServicePath = path.join(root, "desktop", "apps", "api", "src", "assets", "assets.service.ts");
+  fs.writeFileSync(
+    assetServicePath,
+    fs.readFileSync(assetServicePath, "utf8").replace('assertDemoDataMutationAllowed("demo customer logo");', ""),
+    "utf8",
+  );
+
+  result = buildAuditResult(root, "contract.demo_data_mutation_boundary");
+  assert.equal(result.status, STATUS.FAIL);
+  assert.ok(result.evidence.missing.some((item) => item.startsWith("assets-demo-logo:")));
+});
+
+test("completion audit requires release freeze plan wiring", () => {
+  const root = createPassingFixture();
+  for (const id of [
+    "release.freeze_plan",
+    "contract.release_freeze_plan_closure",
+    "contract.release_freeze_plan_handoff",
+    "contract.release_freeze_plan_readiness",
+  ]) {
+    assert.equal(buildAuditResult(root, id).status, STATUS.PASS, id);
+  }
+
+  const packagePath = path.join(root, "desktop", "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+  delete packageJson.scripts["delivery:freeze-plan"];
+  fs.writeFileSync(packagePath, JSON.stringify(packageJson), "utf8");
+  assert.equal(buildAuditResult(root, "contract.package_scripts").status, STATUS.FAIL);
+
+  const handoffPath = path.join(root, "desktop", "tools", "delivery-handoff-bundle.js");
+  fs.writeFileSync(
+    handoffPath,
+    fs.readFileSync(handoffPath, "utf8").replace('command: "npm run delivery:freeze-plan"', 'command: "npm run delivery:handoff"'),
+    "utf8",
+  );
+  assert.equal(buildAuditResult(root, "contract.release_freeze_plan_handoff").status, STATUS.FAIL);
+
+  const readinessPath = path.join(root, "desktop", "apps", "api", "src", "delivery", "delivery-readiness.service.ts");
+  fs.writeFileSync(
+    readinessPath,
+    fs.readFileSync(readinessPath, "utf8").replace('id: "release_freeze_plan"', 'id: "delivery_handoff"'),
+    "utf8",
+  );
+  assert.equal(buildAuditResult(root, "contract.release_freeze_plan_readiness").status, STATUS.FAIL);
+});
+
+test("completion audit requires the isolated deterministic Node test runner", () => {
+  const root = createPassingFixture();
+  assert.equal(buildAuditResult(root, "contract.package_scripts").status, STATUS.PASS);
+  assert.equal(buildAuditResult(root, "contract.node_test_runner").status, STATUS.PASS);
+
+  const runnerPath = path.join(root, "desktop", "tools", "run-node-tests.js");
+  fs.writeFileSync(
+    runnerPath,
+    fs.readFileSync(runnerPath, "utf8").replace('DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3700"', ""),
+    "utf8",
+  );
+  assert.equal(buildAuditResult(root, "contract.node_test_runner").status, STATUS.FAIL);
+});
+
+test("completion audit requires enterprise WeChat-only API surface guards", () => {
+  const root = createPassingFixture();
+  assert.equal(buildAuditResult(root, "contract.enterprise_wechat_only_api_surface").status, STATUS.PASS);
+
+  const controllerPath = path.join(root, "desktop", "apps", "api", "src", "wechat", "wechat.controller.ts");
+  fs.writeFileSync(
+    controllerPath,
+    fs
+      .readFileSync(controllerPath, "utf8")
+      .replace('if (resolvedSendAdapterName(adapter) === "windows_bridge") throw new Error("enterprise WeChat only");', ""),
+    "utf8",
+  );
+
+  const result = buildAuditResult(root, "contract.enterprise_wechat_only_api_surface");
+  assert.equal(result.status, STATUS.FAIL);
+  assert.ok(result.evidence.missing.length > 0);
+
+  fs.writeFileSync(
+    controllerPath,
+    `${fs.readFileSync(controllerPath, "utf8")}\n@Get("bridge/outbox")\nlistBridgeOutbox() {}\n`,
+    "utf8",
+  );
+  const legacyResult = buildAuditResult(root, "contract.enterprise_wechat_only_api_surface");
+  assert.equal(legacyResult.status, STATUS.FAIL);
+  assert.ok(legacyResult.evidence.forbidden.length > 0);
+});
+
 test("Prisma Agent initializer must keep zero-write plan, explicit confirmation and redacted catch", () => {
   const root = createPassingFixture();
   let report = buildAudit(root, { includeExternal: false });
@@ -5665,6 +5956,10 @@ test("report output is confined to the ignored runtime path and remains sanitize
   const expected = path.join(root, "desktop", ".runtime", "project-completion-audit");
   assert.equal(path.dirname(files.jsonPath), expected);
   assert.equal(path.dirname(files.markdownPath), expected);
+  assert.equal(report.completionVerdict.state, "local_verified_external_blocked");
+  assert.equal(report.completionVerdict.localCodeDefectCount, 0);
+  assert.equal(report.completionVerdict.externalBlockerCount, 4);
+  assert.equal(report.completionVerdict.productionReleaseAllowed, false);
   assert.match(fs.readFileSync(files.markdownPath, "utf8"), /项目完成度真值审计/);
   assert.equal(fs.readFileSync(files.jsonPath, "utf8").includes(root), false);
   assert.equal(report.scope.reportPath, "desktop/.runtime/project-completion-audit/latest.{json,md}");

@@ -18,11 +18,32 @@ test("queues low-value completed design images for safe sending", () => {
     isHighValue: false,
     wechatAccountId: "wechat_1",
     conversationId: "conversation_1",
-    images: [{ id: "image_1", localPath: "storage/results/1.png" }],
+    images: [1, 2, 3, 4].map((position) => ({
+      id: `image_${position}`,
+      localPath: `storage/results/${position}.png`,
+    })),
   });
 
   assert.equal(decision.ok, true);
   assert.equal(decision.action, "queue_design_images");
+});
+
+test("does not auto-send an incomplete candidate round", () => {
+  const decision = evaluateLowValueDesignImageSend({
+    id: "design_incomplete_round",
+    status: "quick_confirm",
+    isHighValue: false,
+    wechatAccountId: "wechat_1",
+    conversationId: "conversation_1",
+    images: [1, 2, 3].map((position) => ({
+      id: `image_${position}`,
+      localPath: `storage/results/${position}.png`,
+    })),
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "candidate_count_mismatch");
+  assert.deepEqual(decision.missing, ["images:4"]);
 });
 
 test("does not auto-send high-value design images", () => {
@@ -262,30 +283,10 @@ test("does not queue quote when bundle automation is blocked", () => {
   assert.deepEqual(decision.missing, ["size_unknown"]);
 });
 
-test("creates low-value order draft after quote is sent", () => {
+test("creates low-value order draft after quote is accepted and payment is verified", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
-    status: "sent",
-    paymentStatus: "unpaid",
-    selectedImageId: "image_1",
-    totalPrice: 9000,
-    profit: 3600,
-    designJob: {
-      id: "design_1",
-      isHighValue: false,
-      wechatAccountId: "wechat_1",
-      conversationId: "conversation_1",
-    },
-  });
-
-  assert.equal(decision.ok, true);
-  assert.equal(decision.action, "create_order_draft");
-});
-
-test("creates low-value order draft after deposit is marked", () => {
-  const decision = evaluateLowValueOrderDraftFromQuote({
-    id: "quote_1",
-    status: "send_queued",
+    status: "accepted",
     paymentStatus: "deposit_paid",
     selectedImageId: "image_1",
     totalPrice: 9000,
@@ -302,10 +303,50 @@ test("creates low-value order draft after deposit is marked", () => {
   assert.equal(decision.action, "create_order_draft");
 });
 
-test("does not create order draft for high-value quote automatically", () => {
+test("does not create order draft for a merely sent quote", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
     status: "sent",
+    paymentStatus: "unpaid",
+    selectedImageId: "image_1",
+    totalPrice: 9000,
+    profit: 3600,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "status_not_ready");
+});
+
+test("does not create low-value order draft before quote acceptance even if deposit is marked", () => {
+  const decision = evaluateLowValueOrderDraftFromQuote({
+    id: "quote_1",
+    status: "send_queued",
+    paymentStatus: "deposit_paid",
+    selectedImageId: "image_1",
+    totalPrice: 9000,
+    profit: 3600,
+    designJob: {
+      id: "design_1",
+      isHighValue: false,
+      wechatAccountId: "wechat_1",
+      conversationId: "conversation_1",
+    },
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.reason, "status_not_ready");
+});
+
+test("does not create order draft for high-value quote automatically", () => {
+  const decision = evaluateLowValueOrderDraftFromQuote({
+    id: "quote_1",
+    status: "accepted",
     paymentStatus: "unpaid",
     selectedImageId: "image_1",
     totalPrice: 12000,
@@ -325,7 +366,7 @@ test("does not create order draft for high-value quote automatically", () => {
 test("does not create order draft when quote per-unit price is high value", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
-    status: "sent",
+    status: "accepted",
     paymentStatus: "unpaid",
     selectedImageId: "image_1",
     unitPrice: 10000,
@@ -346,7 +387,7 @@ test("does not create order draft when quote per-unit price is high value", () =
 test("does not create order draft when design job budget is high value", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
-    status: "sent",
+    status: "accepted",
     paymentStatus: "unpaid",
     selectedImageId: "image_1",
     totalPrice: 9000,
@@ -367,7 +408,7 @@ test("does not create order draft when design job budget is high value", () => {
 test("does not create order draft automatically when conversation is manually locked", () => {
   const decision = evaluateLowValueOrderDraftFromQuote({
     id: "quote_1",
-    status: "sent",
+    status: "accepted",
     paymentStatus: "unpaid",
     selectedImageId: "image_1",
     totalPrice: 9000,

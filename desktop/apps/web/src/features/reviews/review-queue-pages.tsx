@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { IdentityFilters } from "../../lib/api";
 import styles from "../governance-pages.module.css";
+import { reviewIdentityHref } from "./review-handoff";
 import { formatReviewDate, formatReviewMoney, useReviewCenter } from "./review-page-shared";
 
 type QueueKind = "design" | "quotes" | "orders";
@@ -40,10 +41,11 @@ export function ReviewOrdersQueuePage(props: ReviewQueuePageProps) {
 }
 
 function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kind: QueueKind }) {
-  const { center, loaded, busy, error, refresh } = useReviewCenter(identityFilters);
+  const { center, loaded, busy, error, sessionBlocked, refresh } = useReviewCenter(identityFilters);
   const items = toQueueItems(kind, center);
   const copy = queueCopy[kind];
   const titleId = "review-" + kind + "-queue-title";
+  const detailHref = (id: string) => reviewIdentityHref("/reviews/" + kind + "/" + encodeURIComponent(id), identityFilters);
 
   return (
     <section className={styles.page} aria-labelledby={titleId} aria-busy={busy}>
@@ -65,6 +67,12 @@ function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kin
         </button>
       </header>
 
+      {sessionBlocked ? (
+        <div className={styles.notice + " " + styles.noticeWarning} role="alert">
+          <strong>需要可信桌面会话</strong>
+          <p>请从臻希智能客服桌面端窗口打开审核队列；如果已经在桌面端，请刷新页面或重启客服启动器。</p>
+        </div>
+      ) : null}
       {error ? <div className={styles.notice + " " + styles.noticeError} role="alert">{error}</div> : null}
       <section className={styles.panel} aria-label={copy.title}>
         <header className={styles.panelHeader}><div><h2>待选择对象</h2><p>{loaded ? `共 ${items.length} 项；列表不提供审核写操作。` : "队列尚未成功读取。"}</p></div></header>
@@ -78,7 +86,7 @@ function ReviewQueuePage({ identityFilters, kind }: ReviewQueuePageProps & { kin
                     <span className={styles.badge}>{item.status}</span>
                   </div>
                   <div className={styles.recordMeta}><span>{formatReviewDate(item.updatedAt)}</span></div>
-                  <Link className={styles.primaryButton} href={"/reviews/" + kind + "/" + encodeURIComponent(item.id)}>
+                  <Link className={styles.primaryButton} href={detailHref(item.id)}>
                     打开审核决策
                   </Link>
                 </article>

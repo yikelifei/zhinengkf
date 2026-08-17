@@ -12,10 +12,17 @@ import type {
 export type BeginDesignPlatformExecutionInput = {
   designJobId: string;
   designRevisionId?: string | null;
+  adapter?: string;
   attemptNo: number;
   retryCount?: number;
   revisionRetryCount?: number;
   revisionNumber?: number;
+};
+
+export type RecoverVerifiedDesignPlatformCompletionInput = {
+  executionId: string;
+  images: Array<Record<string, unknown>>;
+  refundStatus: "credit_bypass" | "not_required" | "refunded";
 };
 
 const ACTIVE_EXECUTION_STATUSES = ["prepared", "dispatching", "generating", "cancel_requested"] as const;
@@ -73,16 +80,18 @@ export class DesignPlatformExecutionService {
     return [input.designJobId, input.designRevisionId || "initial", String(input.attemptNo)].join(":");
   }
 
-  externalJobId(operationKey: string) {
-    return `art_${createHash("sha256").update(operationKey, "utf8").digest("hex").slice(0, 28)}`;
+  externalJobId(operationKey: string, adapter = appConfig.designPlatformAdapter) {
+    const prefix = adapter === "zhenxi_external" ? "zhenxi" : "art";
+    return `${prefix}_${createHash("sha256").update(operationKey, "utf8").digest("hex").slice(0, 28)}`;
   }
 
   async begin(input: BeginDesignPlatformExecutionInput) {
     const operationKey = this.operationKey(input);
-    const externalJobId = this.externalJobId(operationKey);
+    const adapter = String(input.adapter || appConfig.designPlatformAdapter || "art_image_local");
+    const externalJobId = this.externalJobId(operationKey, adapter);
     const requestId = externalJobId;
     const scopeKey = [input.designJobId, input.designRevisionId || "initial"].join(":");
-    const payload = { ...input, operationKey, externalJobId, requestId, scopeKey, processRunId: this.processRunId };
+    const payload = { ...input, adapter, operationKey, externalJobId, requestId, scopeKey, processRunId: this.processRunId };
     if (appConfig.useLocalStore) return this.localStore.beginDesignPlatformExecution(payload);
 
     const prisma = this.prisma as any;
@@ -116,7 +125,7 @@ export class DesignPlatformExecutionService {
           externalJobId,
           requestId,
           scopeKey,
-          adapter: "art_image_local",
+          adapter,
           designJobId: job.id,
           designRevisionId: revision?.id || null,
           attemptNo: input.attemptNo,
@@ -345,6 +354,67 @@ export class DesignPlatformExecutionService {
     }
     const stored = await this.markOutcomeUnknown(executionId, outcome.errorCode, outcome.errorMessage, outcome.httpStatus);
     return stored || this.recordCancelledOutcome(executionId, outcome);
+  }
+
+  async recoverVerifiedCompletion(input: RecoverVerifiedDesignPlatformCompletionInput) {
+    const images = sanitizeImages(input.images || []);
+    if (!images.length || images.some((image) => !image.downloadUrl)) {
+      throw new Error("verified completion requires at least one valid image URL");
+    }
+    if (!RETRY_SAFE_REFUND_STATUSES.includes(input.refundStatus)) {
+      throw new Error("verified completion requires a safe refund status");
+    }
+    const execution = await this.get(input.executionId);
+    if (!execution) throw new Error(`design platform execution not found: ${input.executionId}`);
+    if (execution.status === "completed") {
+      const currentImages = sanitizeImages(Array.isArray(execution.images) ? execution.images : []);
+      if (JSON.stringify(currentImages) !== JSON.stringify(images) || execution.refundStatus !== input.refundStatus) {
+        throw new Error("completed design platform execution does not match verified recovery evidence");
+      }
+      if (execution.acceptanceStatus === "manual_review") {
+        const resumed = await this.transition(
+          execution.id,
+          { status: "completed", acceptanceStatus: "manual_review" },
+          {
+            acceptanceStatus: "pending",
+            errorMessage: null,
+            processRunId: this.processRunId,
+            acceptedAt: null,
+            resolvedAt: null,
+          },
+          { status: "generating", errorMessage: "" },
+        );
+        if (!resumed) throw new Error("verified completion acceptance recovery lost its execution state race");
+        return resumed;
+      }
+      return execution;
+    }
+    if (!["generating", "outcome_unknown"].includes(execution.status) || execution.resolvedAt) {
+      throw new Error("only an active or unresolved unknown execution can recover verified images");
+    }
+    const recovered = await this.transition(
+      execution.id,
+      { status: execution.status },
+      {
+        status: "completed",
+        acceptanceStatus: "pending",
+        refundStatus: input.refundStatus,
+        imageCount: images.length,
+        images,
+        refundSummary: { reason: "operator_verified_local_artifacts", requestedCredits: 0 },
+        errorCode: null,
+        errorCategory: null,
+        errorMessage: null,
+        responseHttpStatus: 200,
+        processRunId: this.processRunId,
+        completedAt: timestamp(),
+        acceptedAt: null,
+        resolvedAt: null,
+      },
+      { status: "generating", errorMessage: "" },
+    );
+    if (!recovered) throw new Error("verified completion recovery lost its execution state race");
+    return recovered;
   }
 
   private async recordCancelledOutcome(executionId: string, outcome: ArtImageLocalGenerationOutcome) {

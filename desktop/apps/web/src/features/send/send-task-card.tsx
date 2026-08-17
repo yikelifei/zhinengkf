@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import type { SendTask } from "../../lib/api";
 import { sendStatusLabel, taskCustomerLabel, taskMessagePreview } from "./send-policy";
@@ -37,8 +38,65 @@ export function SendTaskCard({ task, hint, actions }: { task: SendTask; hint?: s
       {hint ? <div className={styles.taskHint} role="status">{hint}</div> : null}
       {task.errorMessage ? <p className={styles.dangerText}>{task.errorMessage}</p> : null}
       {actions ? <div className={styles.taskActions}>{actions}</div> : null}
+      <SendTaskBusinessContext task={task} />
     </article>
   );
+}
+
+export function SendTaskBusinessContext({ task }: { task: SendTask }) {
+  const targets = buildSendTaskBusinessTargets(task);
+  if (!targets.length) return null;
+  return (
+    <section className={styles.businessContext} aria-label="发送任务后续业务处理">
+      <div>
+        <strong>处理完发送状态后</strong>
+        <p>继续回到订单、报价或客户会话完成业务，不要把“已入队”当成客户已收到。</p>
+      </div>
+      <div className={styles.buttonRow}>
+        {targets.map((target) => (
+          <Link className={styles.secondaryLink} href={target.href} data-action-id={`send.task.business.${target.kind}`} key={`${target.kind}:${target.href}`}>
+            {target.label}
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function buildSendTaskBusinessTargets(task: SendTask) {
+  const targets: Array<{ kind: string; href: string; label: string }> = [];
+  const orderDraftId = stringPayload(task, "orderDraftId");
+  const quoteDraftId = stringPayload(task, "quoteDraftId");
+  if (orderDraftId) {
+    targets.push({ kind: "order", href: `/sales/orders/${encodeURIComponent(orderDraftId)}`, label: "返回订单交付" });
+  } else if (quoteDraftId) {
+    targets.push({ kind: "quote", href: `/sales/quotes/${encodeURIComponent(quoteDraftId)}`, label: "返回报价处理" });
+  }
+  if (task.conversationId) {
+    targets.push({ kind: "conversation", href: `/conversations/${encodeURIComponent(task.conversationId)}`, label: "回到客户会话" });
+  }
+  const customerId = taskCustomerId(task);
+  const customerVisible = task.guardSnapshot?.manualDeliveryResolution?.resolution === "confirmed_sent"
+    || task.guardSnapshot?.wechatWorkDeliveryState === "confirmed_sent";
+  if (customerVisible && task.wechatAccountId && task.conversationId && customerId) {
+    const params = new URLSearchParams({
+      wechatAccountId: task.wechatAccountId,
+      conversationId: task.conversationId,
+      customerId,
+    });
+    targets.push({ kind: "learning", href: `/training/overview?${params.toString()}`, label: "沉淀本次结果" });
+  }
+  return targets;
+}
+
+function stringPayload(task: SendTask, key: string) {
+  const value = task.payload?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function taskCustomerId(task: SendTask) {
+  const value = task.conversation?.customerId || task.payload?.customerId;
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 export function SendConfirmation({

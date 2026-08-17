@@ -47,12 +47,8 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   const channelsPage = readProjectFile("apps/web/src/features/integrations/channels-status-page.tsx");
   const flowPage = readProjectFile("apps/web/src/features/integrations/wechat-work-flow-page.tsx");
   const preflightPage = readProjectFile("apps/web/src/features/integrations/wechat-work-preflight-page.tsx");
-  const windowPage = readProjectFile("apps/web/src/features/integrations/window-evidence-page.tsx");
-  const inboundPage = readProjectFile("apps/web/src/features/integrations/personal-wechat-inbound-drill-page.tsx");
   const channelsRoute = readProjectFile("apps/web/src/app/integrations/channels/page.tsx");
   const preflightRoute = readProjectFile("apps/web/src/app/integrations/wechat-work/page.tsx");
-  const windowRoute = readProjectFile("apps/web/src/app/integrations/personal-wechat/window-inbound/page.tsx");
-  const inboundRoute = readProjectFile("apps/web/src/app/integrations/personal-wechat/inbound-drill/page.tsx");
   const styles = readProjectFile("apps/web/src/features/integrations/integration-pages.module.css");
   const statusSection = sliceBetween(service, /function channelStatus\(/, /function maskSecret/);
 
@@ -71,17 +67,14 @@ test("wechat channel status distinguishes runtime from real send adapter readine
   assert.match(preflightPage, /readiness && !readiness\.productionReady/);
   assert.match(preflightPage, /不把离线检查误报为上线成功/);
   assert.doesNotMatch(preflightPage, /startAutomation|executeSend/);
-  assert.match(inboundPage, /identityExpectation\(identity\)/);
-  assert.match(inboundPage, /wechatAccountId\.trim\(\) && conversationId\.trim\(\) && customerId\.trim\(\)/);
-  assert.match(inboundPage, /confirmed/);
-  assert.match(inboundPage, /data-action-id="integrations\.personal-wechat\.inbound-drill\.submit"/);
-  assert.doesNotMatch(inboundPage, /captureWindowObserverOnce|scanWindowSnapshotInbox/);
-  assert.match(windowPage, /data-action-id="integrations\.window\.capture-current"/);
-  assert.doesNotMatch(windowPage, /testWechatChannelInbound/);
   assert.match(channelsRoute, /routeId="integrationChannels"[\s\S]*<ChannelsStatusPage/);
   assert.match(preflightRoute, /routeId="wechatWorkChannels"[\s\S]*<WechatWorkPreflightPage/);
-  assert.match(windowRoute, /routeId="personalWechatInbound"[\s\S]*<WindowEvidencePage/);
-  assert.match(inboundRoute, /routeId="personalWechatInboundDrill"[\s\S]*<PersonalWechatInboundDrillPage/);
+  for (const retiredRoute of [
+    "apps/web/src/app/integrations/personal-wechat/window-inbound/page.tsx",
+    "apps/web/src/app/integrations/personal-wechat/inbound-drill/page.tsx",
+  ]) {
+    assert.equal(fs.existsSync(path.join(__dirname, "..", retiredRoute)), false);
+  }
   assert.match(styles, /\.page button \{[\s\S]*min-height: 44px/);
   assert.match(styles, /@media \(max-width: 520px\)[\s\S]*grid-template-columns: 1fr/);
 });
@@ -389,8 +382,8 @@ test("manual mutation APIs carry and enforce expected conversation identity", ()
   assert.match(wechatService, /wechatAccountId: order\.wechatAccountId/);
   assert.match(wechatService, /conversationId: order\.conversationId/);
   assert.match(wechatService, /customerId: order\.customerId/);
-  assert.match(wechatService, /return \{ orderDraft: updatedOrder, sendTask, message, notification \}/);
-  assert.match(wechatService, /return \{ orderDraft: await this\.orders\.getById\(order\.id\), sendTask, message, notification \}/);
+  assert.match(wechatService, /return \{ orderDraft: updatedOrder, sendTask, message: sendTask\?\.payload\?\.text \|\| message, notification \}/);
+  assert.match(wechatService, /orderDraft: await this\.orders\.getById\(order\.id\),[\s\S]*message: sendTask\?\.payload\?\.text \|\| message,[\s\S]*notification/);
   assert.match(wechatService, /queueOrderFollowup\([\s\S]*selectedImage: this\.orderSelectedImage\(order\)/);
   assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload/);
   assert.match(wechatService, /private expectedIdentityFromOrder\(order: any\): ExpectedIdentityPayload[\s\S]*expectedWechatAccountId: order\?\.wechatAccountId/);
@@ -447,25 +440,15 @@ test("manual send operation scans are scoped by selected conversation identity",
   assert.match(service, /const autoRetriedLowValue: any\[\] = \[\]/);
   assert.match(service, /autoRetriedLowValue: autoRetriedLowValue\.length/);
   assert.match(service, /tasks: \{[\s\S]*autoRetriedLowValue/);
-  assert.match(service, /processSafeSendQueue\(params: \{ adapter\?: string; limit\?: number; automationOnly\?: boolean \} & IdentityFilter = \{\}\)/);
+  assert.match(service, /processSafeSendQueue\(params: \{[\s\S]*?adapter\?: string;[\s\S]*?limit\?: number;[\s\S]*?automationOnly\?: boolean;[\s\S]*?inboundReplyOnly\?: boolean;[\s\S]*?\} & IdentityFilter = \{\}\)/);
   assert.match(service, /listSendTasks\(\{[\s\S]*wechatAccountId: params\.wechatAccountId,[\s\S]*conversationId: params\.conversationId,[\s\S]*customerId: params\.customerId,[\s\S]*\}\)/);
 });
 
-test("bridge outbox, dispatch and status are scoped by selected conversation identity", () => {
-  const api = readProjectFile("apps/web/src/lib/api.ts");
+test("retired bridge routes stay private while internal evidence remains identity-scoped", () => {
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
 
-  assert.match(api, /export async function getBridgeOutbox\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /\/wechat\/bridge\/outbox\$\{identityQuery\(filters\)\}/);
-  assert.match(api, /export type BridgeDispatchResult/);
-  assert.match(api, /export async function getBridgeDispatch\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /\/wechat\/bridge\/dispatch\$\{identityQuery\(filters\)\}/);
-  assert.match(api, /export async function getBridgeStatus\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /\/wechat\/bridge\/status\$\{identityQuery\(filters\)\}/);
-  assert.match(controller, /listBridgeOutbox\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeOutbox\(\{ wechatAccountId, conversationId, customerId \}\)/);
-  assert.match(controller, /listBridgeDispatch\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listBridgeDispatch\(\{ wechatAccountId, conversationId, customerId \}\)/);
-  assert.match(controller, /getBridgeStatus\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.getBridgeStatus\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.doesNotMatch(controller, /@Get\("bridge\/(?:outbox|dispatch|status)"\)/);
   assert.match(service, /type IdentityFilter = \{/);
   assert.match(service, /getBridgeStatus\(filter: IdentityFilter = \{\}\)/);
   assert.match(service, /const outbox = this\.listBridgeOutbox\(filter\)/);
@@ -476,8 +459,6 @@ test("bridge outbox, dispatch and status are scoped by selected conversation ide
   assert.match(service, /requiredBeforeSend:\s*Array\.isArray\(preflight\.requiredBeforeSend\)/);
   assert.match(service, /rejectIfWindowChanged:\s*preflight\.rejectIfWindowChanged === true/);
   assert.match(service, /expired:\s*this\.isBridgeDispatchEntryStale/);
-  assert.match(api, /expiresAt\?: string/);
-  assert.match(api, /expired\?: boolean/);
   assert.match(service, /isBridgeDispatchEntryStale\(entry\)/);
   assert.match(service, /Date\.parse\(String\(entry\?\.expiresAt \|\| ""\)\)/);
   assert.match(service, /sendBridgeAckTimeoutMinutes \* 60/);
@@ -488,15 +469,12 @@ test("bridge outbox, dispatch and status are scoped by selected conversation ide
   assert.match(service, /actualCustomerId/);
 });
 
-test("wechat window snapshots are scoped by selected conversation identity", () => {
-  const api = readProjectFile("apps/web/src/lib/api.ts");
+test("retired window snapshot route stays private while stored evidence remains identity-scoped", () => {
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const store = readProjectFile("apps/api/src/local-store/local-store.service.ts");
 
-  assert.match(api, /export async function getWechatWindowSnapshots\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /\/wechat\/window-snapshots\$\{identityQuery\(filters\)\}/);
-  assert.match(controller, /listWindowSnapshots\([\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string[\s\S]*return this\.wechat\.listWindowSnapshots\(\{ wechatAccountId, conversationId, customerId \}\)/);
+  assert.doesNotMatch(controller, /@Get\("window-snapshots"\)/);
   assert.match(service, /listWindowSnapshots\(filter: IdentityFilter = \{\}\)/);
   assert.match(service, /return this\.localStore\.listWechatWindowSnapshots\(filter\)/);
   assert.match(store, /listWechatWindowSnapshots\(filter: \(IdentityListFilter & \{ limit\?: number \}\) \| number = \{\}\)/);
@@ -535,12 +513,13 @@ test("notifications and review center are scoped by selected conversation identi
   assert.match(api, /params\.set\("unreadOnly", unreadOnly \? "true" : "false"\)/);
   assert.match(api, /export async function getReviewCenter\(filters: IdentityFilters = \{\}\)/);
   assert.match(api, /export type ReviewCenter = \{[\s\S]*orderDrafts: OrderDraft\[\]/);
+  const nonOkThrow = /if \(!response\.ok\) throw (?:await apiResponseError\(response\)|new Error\(`api \$\{response\.status\}`\))/;
   assert.match(reviewRead, /\/reviews\$\{identityQuery\(filters\)\}/);
-  assert.match(reviewRead, /if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\)/);
+  assert.match(reviewRead, nonOkThrow);
   assert.match(reviewRead, /return response\.json\(\)/);
   assert.doesNotMatch(reviewRead, /catch\s*\(|designJobs:\s*\[\]/);
   assert.match(notificationsRead, /identityQuery\(filters\)/);
-  assert.match(notificationsRead, /if \(!response\.ok\) throw new Error\(`api \$\{response\.status\}`\)/);
+  assert.match(notificationsRead, nonOkThrow);
   assert.match(notificationsRead, /return response\.json\(\)/);
   assert.doesNotMatch(notificationsRead, /catch\s*\(|return\s*\[\]/);
   assert.match(notificationsController, /@Query\("wechatAccountId"\) wechatAccountId\?: string/);
@@ -865,8 +844,7 @@ test("design assets and conversation manual locks carry expected identity", () =
   );
   assert.match(validateSendTaskController, /@Body\(\) payload: ExpectedIdentityPayload/);
   assert.doesNotMatch(validateSendTaskController, /\b(?:activeWindow|mode)\b/);
-  assert.match(wechatController, /validateWithCurrentWindow\(@Param\("id"\) id: string, @Body\(\) payload: ExpectedIdentityPayload = \{\}\)/);
-  assert.match(wechatController, /this\.wechat\.validateSendTaskWithCurrentWindow\(id, payload \|\| \{\}\)/);
+  assert.doesNotMatch(wechatController, /@Post\("send-tasks\/:id\/validate-current-window"\)/);
   assert.match(wechatController, /listSendAttempts\([\s\S]*@Query\("sendTaskId"\) sendTaskId\?: string,[\s\S]*@Query\("wechatAccountId"\) wechatAccountId\?: string,[\s\S]*@Query\("conversationId"\) conversationId\?: string,[\s\S]*@Query\("customerId"\) customerId\?: string/);
   assert.match(wechatController, /this\.wechat\.listSendAttempts\(\{ sendTaskId, wechatAccountId, conversationId, customerId \}\)/);
   assert.match(wechatService, /setConversationManualLock\([\s\S]*\} & ExpectedIdentityPayload = \{\}/);
@@ -883,7 +861,10 @@ test("design assets and conversation manual locks carry expected identity", () =
   assert.match(validateSendTaskService, /validateSendTask\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
   assert.match(validateSendTaskService, /this\.validateSendTaskWithCurrentWindow\(id, expected\)/);
   assert.doesNotMatch(validateSendTaskService, /\b(?:activeWindow|mode)\b/);
-  assert.match(wechatService, /validateSendTaskWithCurrentWindow\(id: string, expected: ExpectedIdentityPayload = \{\}\)/);
+  assert.match(
+    wechatService,
+    /validateSendTaskWithCurrentWindow\([\s\S]*id: string,[\s\S]*expected: ExpectedIdentityPayload = \{\},[\s\S]*allowManualPriority\?: boolean[\s\S]*\)/,
+  );
   assert.match(wechatService, /assertExpectedIdentity\(task, expected, "send task"\)/);
   assert.match(wechatService, /listSendAttempts\(filter: \{ sendTaskId\?: string; wechatAccountId\?: string; conversationId\?: string; customerId\?: string \} = \{\}\)/);
   assert.match(wechatService, /if \(filter\.sendTaskId\) \{[\s\S]*this\.assertSendAttemptListIdentity\(filter\)/);
@@ -937,13 +918,17 @@ test("routing decisions and chat imports stay bound to selected conversation ide
   assert.match(wechatService, /customerId\?: string/);
   assert.match(wechatService, /wechatAccountId: conversation\.wechatAccountId/);
   assert.match(wechatService, /this\.localStore\.listKnowledgeEntries\(\{[\s\S]*agentId: agent\.id,[\s\S]*wechatAccountId: conversation\.wechatAccountId,[\s\S]*conversationId: conversation\.id,[\s\S]*customerId: conversation\.customerId,[\s\S]*\}\)/);
+  assert.match(wechatService, /knowledgeEntry\.findMany\(\{[\s\S]*where: \{ agentId: agent\.id, status: "ready" \}/);
+  assert.match(wechatService, /include: \{ trainingSample: true \}/);
+  assert.match(wechatService, /knowledgeEntryVisibleForConversation\(entry, conversation\)/);
+  assert.match(wechatService, /isSceneClarificationReply\(entry\.trainingSample\.idealReply\)/);
   assert.match(wechatService, /findPendingSceneClarificationContext\(this\.localStore\.listRouteEvaluations\(\{ conversationId \}\), conversationId\)/);
   assert.match(store, /listRouteEvaluations\(filter: IdentityListFilter = \{\}\)/);
   assert.match(store, /\.filter\(\(route\) => this\.matchesIdentityFilter\(route, filter\)\)/);
   assert.match(store, /listChatImports\(filter: IdentityListFilter = \{\}\)/);
   assert.match(store, /\.filter\(\(chatImport\) => this\.matchesIdentityFilter\(chatImport, filter\)\)/);
-  assert.match(store, /listKnowledgeEntries\(filter: string \| \(\{ agentId\?: string \} & IdentityListFilter\) = \{\}\)/);
-  assert.match(store, /\.filter\(\(entry\) => this\.matchesIdentityFilter\(entry, options\)\)/);
+  assert.match(store, /listKnowledgeEntries\(filter: string \| \(\{ agentId\?: string; includeReview\?: boolean \} & IdentityListFilter\) = \{\}\)/);
+  assert.match(store, /\.filter\(\(entry\) => this\.matchesKnowledgeIdentityFilter\(entry, options\)\)/);
 });
 
 test("training sample review actions carry and enforce expected conversation identity", () => {
@@ -958,7 +943,7 @@ test("training sample review actions carry and enforce expected conversation ide
   assert.match(api, /getTrainingSamples\(filters: \{[\s\S]*\} & IdentityFilters = \{\}\)/);
   assert.match(api, /params\.set\("wechatAccountId", filters\.wechatAccountId\)/);
   assert.match(api, /export async function getTrainingOverview\(filters: IdentityFilters = \{\}\)/);
-  assert.match(api, /\/training\/overview\$\{identityQuery\(filters\)\}/);
+  assert.match(api, /\/training\/overview\$\{trainingQuery\(filters\)\}/);
   assert.match(api, /getSkillSuggestions\(filters: \(\{ agentId\?: string; minScore\?: number \} & IdentityFilters\) \| string = \{\}\)/);
   assert.match(api, /params\.set\("conversationId", options\.conversationId\)/);
   assert.match(api, /applySkillSuggestions\([\s\S]*\} & IdentityFilters = \{\}/);
@@ -1247,13 +1232,16 @@ test("quote and order APIs filter records by next-step actionability", () => {
   assert.match(wechatDispatchService, /this\.assertOrderPaymentReadyForSend\(order, "order confirmation"\)/);
   assert.match(wechatDispatchService, /this\.assertOrderPaymentReadyForSend\(order, "order follow-up"\)/);
   assert.match(wechatDispatchService, /private orderPaymentStatus\(order: any\)[\s\S]*order\?\.paymentStatus \|\| order\?\.quoteDraft\?\.paymentStatus \|\| "unpaid"/);
-  assert.match(wechatDispatchService, /buildOrderConfirmationCustomerMessage\([\s\S]*const paymentStatus = this\.orderPaymentStatus\(order\)[\s\S]*paymentStatus,/);
-  assert.match(wechatDispatchService, /buildOrderFollowupCustomerMessage\([\s\S]*const paymentStatus = this\.orderPaymentStatus\(order\)[\s\S]*paymentStatus,/);
+  assert.match(wechatDispatchService, /const paymentStatus = this\.orderPaymentStatus\(order\)[\s\S]*buildOrderConfirmationCustomerMessage\([\s\S]*paymentStatus,/);
+  assert.match(wechatDispatchService, /const paymentStatus = this\.orderPaymentStatus\(order\)[\s\S]*buildOrderFollowupCustomerMessage\([\s\S]*paymentStatus,/);
   assert.match(wechatDispatchService, /source: "order_confirmation"[\s\S]*paymentStatus,/);
   assert.match(wechatDispatchService, /source: "order_followup"[\s\S]*paymentStatus,/);
   assert.match(wechatDispatchService, /function assertOrderPaymentReadyForSend|private assertOrderPaymentReadyForSend/);
-  assert.match(wechatDispatchService, /const paymentStatus = this\.orderPaymentStatus\(order\)/);
-  assert.match(wechatDispatchService, /paymentStatus === "deposit_paid" \|\| paymentStatus === "paid"/);
+  assert.match(wechatDispatchService, /const payment = orderPaymentLedgerState\(order\)/);
+  assert.match(wechatDispatchService, /if \(payment\.ready\) return/);
+  assert.match(wechatDispatchService, /orderPaymentLedgerNotReadyBeforeSend/);
+  assert.match(wechatDispatchService, /verifiedPaymentAmount: payment\.verifiedAmount/);
+  assert.match(wechatDispatchService, /ready: totalAmount !== null && totalAmount > 0 && verifiedAmount \+ 0\.0001 >= totalAmount/);
   assert.match(wechatDispatchService, /需要先核验定金或全款，不能进入微信发送队列/);
   assert.match(wechatDispatchService, /需要先绑定客户选中的效果图，不能进入微信发送队列/);
   assert.match(wechatDispatchService, /private assertOrderProfitReadyForSend\(order: any, context: string\)/);
@@ -1589,7 +1577,7 @@ test("bridge file proof and archive paths use realpath regular-file checks", () 
   assert.match(sendAdapter, /fs\.realpathSync\(resolved\)/);
 });
 
-test("bridge inbox scan forwards acknowledgement protocol version", () => {
+test("internal bridge inbox scan preserves protocol fields without exposing an ack route", () => {
   const service = readProjectFile("apps/api/src/wechat/wechat-dispatch.service.ts");
   const controller = readProjectFile("apps/api/src/wechat/wechat.controller.ts");
   const scanSection = service.slice(
@@ -1605,7 +1593,7 @@ test("bridge inbox scan forwards acknowledgement protocol version", () => {
   assert.match(scanSection, /protocolVersion:\s*typeof data\.protocolVersion === "string" \? data\.protocolVersion : undefined/);
   assert.match(scanSection, /ackToken:\s*typeof data\.ackToken === "string" \? data\.ackToken : undefined/);
   assert.match(scanSection, /taskId:\s*typeof data\.taskId === "string"/);
-  assert.match(controllerAckSection, /taskId\?: string/);
+  assert.equal(controllerAckSection, "");
 });
 
 test("bridge inbox scan keeps system provenance after external ack metadata", () => {

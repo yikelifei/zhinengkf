@@ -112,6 +112,43 @@ test("public-network downloader rejects credentials and every local, private, li
   assert.equal(requests, 0);
 });
 
+test("loopback image downloads require an explicit acceptance origin and keep redirects fenced", async () => {
+  const requests = [];
+  const request = async (url, config) => {
+    requests.push({ url, config });
+    return { status: 200, headers: {}, data: VALID_PNG };
+  };
+
+  const bytes = await downloadBoundedBytes(
+    "http://127.0.0.1:3700/files/result.png",
+    safeDownloadOptions({ allowLoopbackOrigins: ["http://127.0.0.1:3700"] }),
+    { request },
+  );
+
+  assert.deepEqual(bytes, VALID_PNG);
+  assert.equal(requests.length, 1);
+
+  await assert.rejects(
+    () => downloadBoundedBytes(
+      "http://127.0.0.1:3701/files/result.png",
+      safeDownloadOptions({ allowLoopbackOrigins: ["http://127.0.0.1:3700"] }),
+      { request },
+    ),
+    /public addresses/i,
+  );
+
+  await assert.rejects(
+    () => downloadBoundedBytes(
+      "http://127.0.0.1:3700/files/result.png",
+      safeDownloadOptions({ allowLoopbackOrigins: ["http://127.0.0.1:3700"] }),
+      {
+        request: async () => ({ status: 302, headers: { location: "http://127.0.0.1:3701/files/result.png" }, data: Buffer.alloc(0) }),
+      },
+    ),
+    /public addresses/i,
+  );
+});
+
 test("redirects are revalidated per hop and design credentials stay on the configured origin", async () => {
   const dnsCalls = [];
   const requests = [];

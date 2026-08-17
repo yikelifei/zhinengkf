@@ -2,11 +2,16 @@ import { Injectable } from "@nestjs/common";
 import { CatalogService } from "../catalog/catalog.service";
 import { DesignJobsService } from "../design-jobs/design-jobs.service";
 import { DesignPlatformClient } from "../integrations/design-platform/design-platform.client";
+import {
+  supportsZhenxiCustomerCopyGeneration,
+  supportsZhenxiCustomerImageGeneration,
+} from "../integrations/design-platform/design-platform-readiness";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { OrdersService } from "../orders/orders.service";
 import { appConfig } from "../shared/app-config";
 import { rules } from "../shared/rules";
 import { WechatDispatchService } from "../wechat/wechat-dispatch.service";
+import { WechatWorkService } from "../wechat-work/wechat-work.service";
 
 const { isHighValueBudget } = rules;
 
@@ -296,7 +301,9 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     };
   }
 
+  const customerTools = (run.results.customerToolAutomation || {}) as any;
   const lowValue = (run.results.lowValueAutomation || {}) as any;
+  const customerToolSendQueue = (run.results.processCustomerToolSendQueue || {}) as any;
   const sendQueue = (run.results.processLowValueSendQueue || {}) as any;
   const directOrderDraft = (run.results.scanLowValueOrderDrafts || {}) as any;
   const directOrderConfirmation = (run.results.scanLowValueOrderConfirmations || {}) as any;
@@ -308,9 +315,15 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     {
       key: "design",
       label: "出图推进",
-      completed: countNestedArray(lowValue, ["autoSubmit", "submitted"]),
-      blocked: countNestedArray(lowValue, ["autoSubmit", "skipped"]),
-      failed: countNestedArray(lowValue, ["autoSubmit", "failed"]),
+      completed:
+        countNestedArray(customerTools, ["autoSubmit", "submitted"]) +
+        countNestedArray(lowValue, ["autoSubmit", "submitted"]),
+      blocked:
+        countNestedArray(customerTools, ["autoSubmit", "skipped"]) +
+        countNestedArray(lowValue, ["autoSubmit", "skipped"]),
+      failed:
+        countNestedArray(customerTools, ["autoSubmit", "failed"]) +
+        countNestedArray(lowValue, ["autoSubmit", "failed"]),
       detail: "把资料完整的低价值草稿提交给设计平台。",
       action: "草稿被跳过时，优先补预算、搭配、素材和客户用途。",
       tone: "idle",
@@ -318,9 +331,15 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     {
       key: "imageSend",
       label: "图片发送",
-      completed: countNestedArray(lowValue, ["imageSend", "queued"]),
-      blocked: countNestedArray(lowValue, ["imageSend", "skipped"]),
-      failed: countNestedArray(lowValue, ["imageSend", "failed"]),
+      completed:
+        countNestedArray(customerTools, ["imageSend", "queued"]) +
+        countNestedArray(lowValue, ["imageSend", "queued"]),
+      blocked:
+        countNestedArray(customerTools, ["imageSend", "skipped"]) +
+        countNestedArray(lowValue, ["imageSend", "skipped"]),
+      failed:
+        countNestedArray(customerTools, ["imageSend", "failed"]) +
+        countNestedArray(lowValue, ["imageSend", "failed"]),
       detail: "把已完成且低价值的候选图放入安全发送队列。",
       action: "图片未入队时，检查客户是否已人工接管、候选图是否完整、任务是否变高价值。",
       tone: "idle",
@@ -380,15 +399,22 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     {
       key: "safeSend",
       label: "安全发送",
-      completed: countArray(sendQueue, "processed") + countArrayOrNumber(sendOperations, "autoRetriedLowValue"),
-      blocked: countArray(sendQueue, "blocked") + countArrayOrNumber(sendOperations, "staleQueued"),
+      completed:
+        countArray(customerToolSendQueue, "processed") +
+        countArray(sendQueue, "processed") +
+        countArrayOrNumber(sendOperations, "autoRetriedLowValue"),
+      blocked:
+        countArray(customerToolSendQueue, "blocked") +
+        countArray(sendQueue, "blocked") +
+        countArrayOrNumber(sendOperations, "staleQueued"),
       failed:
+        countArray(customerToolSendQueue, "failed") +
         countArray(sendQueue, "failed") +
         countArrayOrNumber(sendOperations, "bridgeTimedOut") +
         countArrayOrNumber(sendOperations, "bridgeOutboxBroken") +
         countArrayOrNumber(sendOperations, "bridgeDispatchExpired"),
-      detail: "按微信账号和会话身份校验后，再推进发送任务。",
-      action: "发送被拦截时，先检查微信账号、当前聊天对象、最近消息和人工锁。",
+      detail: "按企业微信账号、会话和客户身份校验后，再推进发送任务。",
+      action: "发送被拦截时，先检查企业微信账号映射、会话身份、最近客户消息和人工锁。",
       tone: "idle",
     },
     {
@@ -401,7 +427,7 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
       blocked: 0,
       failed: countArray(timeouts, "failed") + countArray(timeouts, "pollErrors"),
       detail: "先轮询找回回调丢失的出图，再把仍超时的任务转提醒或人工处理。",
-      action: "超时或轮询错误增加时，检查设计平台状态、回调地址、微信桥接和发送回执扫描。",
+      action: "超时或轮询错误增加时，检查设计平台状态、回调地址、企业微信发送适配器和发送回执扫描。",
       tone: "idle",
     },
   ];
@@ -423,7 +449,7 @@ function buildAutomationStageSummary(run: AutomationRun): AutomationStageSummary
     nextAction: failed
       ? "先处理失败步骤，再重新跑一轮低价值自动化。"
       : needsManualSendAttention
-        ? "先打开订单和发送中心，核对失败/拦截原因；确认客户、微信窗口和付款状态后，由人工重排或继续人工跟进。"
+        ? "先打开订单和发送中心，核对失败/拦截原因；确认客户身份、企业微信发送任务和付款状态后，由人工重排或继续人工跟进。"
       : firstProblem
         ? firstProblem.action
         : progressed
@@ -443,6 +469,7 @@ export class AutomationService {
   private lastRun: AutomationRun | null = null;
   private recentRuns: AutomationRun[] = [];
   private runCount = 0;
+  private lastFullSweepAt = 0;
 
   constructor(
     private readonly designJobs: DesignJobsService,
@@ -451,6 +478,7 @@ export class AutomationService {
     private readonly store?: LocalStoreService,
     private readonly catalog?: CatalogService,
     private readonly designPlatform?: DesignPlatformClient,
+    private readonly wechatWork?: WechatWorkService,
   ) {
     this.recentRuns = this.store?.listAutomationRuns(10) || [];
     this.lastRun = this.recentRuns[0] || null;
@@ -487,8 +515,15 @@ export class AutomationService {
       nextRunAt: this.nextRunAt,
       intervalMs: Math.max(3000, appConfig.lowValueAutomationIntervalMs),
       processSendQueue: appConfig.lowValueAutomationProcessSendQueue,
+      processInboundReplyQueue: true,
+      syncWechatWork: appConfig.wechatWorkAutoSyncEnabled,
+      wechatWorkSyncLimit: appConfig.wechatWorkAutoSyncLimit,
+      wechatWorkSyncAccountsPerRun: appConfig.wechatWorkAutoSyncAccountsPerRun,
       sendQueueLimit: appConfig.lowValueAutomationSendQueueLimit,
+      sendPerAccountLimit: appConfig.lowValueAutomationSendPerAccountLimit,
       pollLimit: appConfig.lowValueAutomationPollLimit,
+      fullSweepIntervalMs: this.fullSweepIntervalMs(),
+      lastFullSweepAt: this.lastFullSweepAt ? new Date(this.lastFullSweepAt).toISOString() : null,
       runCount: this.runCount,
       lastRun: this.lastRun,
       recentRuns: this.recentRuns,
@@ -516,6 +551,7 @@ export class AutomationService {
     });
 
     const catalogAudit = this.catalog ? await this.safeCatalogAudit() : null;
+    await yieldAutomationEventLoop();
     const catalogStructureIssueCount = Number(catalogAudit?.catalogStructureIssueCount || 0);
     const blockingRepairCount = Number(catalogAudit?.blockingRepairCount || 0);
     checks.push({
@@ -534,6 +570,7 @@ export class AutomationService {
     });
 
     const designPlatformHealth = await this.safeDesignPlatformHealth();
+    await yieldAutomationEventLoop();
     checks.push({
       key: "design_platform",
       label: "设计平台在线",
@@ -543,11 +580,41 @@ export class AutomationService {
       action: designPlatformHealth.ok ? undefined : "出图会转人工或等待重试，先启动设计平台再跑自动化。",
     });
 
+    const mcpEnabled = process.env.ZHENXI_MCP_ENABLED !== "0";
+    const zhenxiImageGenerationEnabled = supportsZhenxiCustomerImageGeneration(
+      appConfig.designPlatformAdapter,
+      mcpEnabled,
+    );
+    const zhenxiCopyGenerationEnabled = supportsZhenxiCustomerCopyGeneration(
+      appConfig.designPlatformAdapter,
+      mcpEnabled,
+    );
+    const zhenxiGenerationReady = zhenxiImageGenerationEnabled && designPlatformHealth.ok;
+    checks.push({
+      key: "zhenxi_customer_generation",
+      label: "臻希 AI 客户设计",
+      ok: zhenxiGenerationReady,
+      severity: zhenxiGenerationReady ? "info" : "warning",
+      detail: zhenxiGenerationReady
+        ? zhenxiCopyGenerationEnabled
+          ? "臻希 AI 已接管客户文案和图片生成任务。"
+          : "臻希 AI 本地工作台已接管客户图片生成；客服文案继续使用已配置的文本模型。"
+        : "臻希 AI 尚未完成接管；客户设计任务会保留在队列中，不会误投到模拟或其他设计平台。",
+      action: zhenxiGenerationReady
+        ? undefined
+        : "先在设计设置中完成臻希 AI 登录、激活和连接验证，再切换为臻希 AI 适配器。",
+    });
+
     const designJobs = await this.safeListDesignJobs();
+    await yieldAutomationEventLoop();
     const sendTasks = this.store?.listSendTasks?.() || [];
+    await yieldAutomationEventLoop();
     const conversations = this.store?.listConversations?.() || [];
+    await yieldAutomationEventLoop();
     const quoteDrafts = this.store?.listQuoteDrafts?.() || [];
+    await yieldAutomationEventLoop();
     const orderDrafts = this.store?.listOrderDrafts?.() || [];
+    await yieldAutomationEventLoop();
     const isLowValueDesignJob = (job: any) => !job.isHighValue && !isHighValueBudget(job.budget, appConfig.highValueAmountCny);
     const isHighValueAmount = (total?: unknown, unit?: unknown) => {
       const totalAmount = Number(total || 0);
@@ -593,7 +660,7 @@ export class AutomationService {
       severity: pendingSendTasks.length > Math.max(1, appConfig.lowValueAutomationSendQueueLimit * 3) ? "warning" : "info",
       detail: `待处理发送任务 ${pendingSendTasks.length} 个，每轮最多处理 ${appConfig.lowValueAutomationSendQueueLimit} 个。`,
       action: pendingSendTasks.length > Math.max(1, appConfig.lowValueAutomationSendQueueLimit * 3)
-        ? "先确认微信窗口和回执扫描，避免队列越堆越多。"
+        ? "先确认企业微信发送任务和回执扫描，避免队列越堆越多。"
         : undefined,
     });
 
@@ -623,6 +690,22 @@ export class AutomationService {
         catalogReadyCount: Number(catalogAudit?.readyCount || 0),
         catalogBlockingRepairCount: blockingRepairCount,
       },
+    };
+  }
+
+  private async customerToolReadiness() {
+    const designPlatformHealth = await this.safeDesignPlatformHealth();
+    const imageGenerationSupported = supportsZhenxiCustomerImageGeneration(
+      appConfig.designPlatformAdapter,
+      process.env.ZHENXI_MCP_ENABLED !== "0",
+    );
+    return {
+      ready: appConfig.lowValueAutomationEnabled && imageGenerationSupported && designPlatformHealth.ok,
+      automationEnabled: appConfig.lowValueAutomationEnabled,
+      adapter: appConfig.designPlatformAdapter,
+      imageGenerationSupported,
+      designPlatformHealthy: designPlatformHealth.ok,
+      ...(designPlatformHealth.errorMessage ? { errorMessage: designPlatformHealth.errorMessage } : {}),
     };
   }
 
@@ -656,7 +739,55 @@ export class AutomationService {
     };
 
     try {
+      if (appConfig.wechatWorkAutoSyncEnabled && this.wechatWork) {
+        await this.captureStep(run, "syncWechatWorkInbound", () =>
+          this.wechatWork!.syncAllCustomerServiceAccounts({
+            limit: appConfig.wechatWorkAutoSyncLimit,
+            maxAccounts: appConfig.wechatWorkAutoSyncAccountsPerRun,
+          }),
+        );
+      }
       await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
+      await this.captureStep(run, "processInboundReplyQueue", () =>
+        this.wechatDispatch.processSafeSendQueue({
+          limit: appConfig.lowValueAutomationSendQueueLimit,
+          perAccountLimit: appConfig.lowValueAutomationSendPerAccountLimit,
+          automationOnly: true,
+          inboundReplyOnly: true,
+          ...filter,
+        }),
+      );
+      const customerToolReadiness = await this.customerToolReadiness();
+      run.results.customerToolReadiness = customerToolReadiness;
+      if (customerToolReadiness.ready) {
+        await this.captureStep(run, "customerToolAutomation", () =>
+          this.designJobs.runCustomerToolAutomation(filter),
+        );
+        if (appConfig.lowValueAutomationProcessSendQueue) {
+          await this.captureStep(run, "processCustomerToolSendQueue", () =>
+            this.wechatDispatch.processSafeSendQueue({
+              limit: appConfig.lowValueAutomationSendQueueLimit,
+              perAccountLimit: appConfig.lowValueAutomationSendPerAccountLimit,
+              automationOnly: true,
+              customerToolOnly: true,
+              ...filter,
+            }),
+          );
+        }
+      }
+      if (!this.shouldRunFullSweep(trigger)) {
+        run.results.cadence = {
+          fullSweep: false,
+          reason: "interval_quick_lane",
+          nextFullSweepAt: new Date(this.lastFullSweepAt + this.fullSweepIntervalMs()).toISOString(),
+        };
+        return run;
+      }
+      this.lastFullSweepAt = Date.now();
+      run.results.cadence = {
+        fullSweep: true,
+        reason: trigger === "interval" ? "interval_full_sweep_due" : "explicit_run",
+      };
       const readiness = await this.readiness();
       run.results.readiness = readiness;
       if (!readiness.ready) {
@@ -668,7 +799,9 @@ export class AutomationService {
       await this.captureStep(run, "pollActiveResults", () =>
         this.designJobs.pollActiveResults(appConfig.lowValueAutomationPollLimit, filter),
       );
-      await this.captureStep(run, "lowValueAutomation", () => this.designJobs.runLowValueAutomation(filter));
+      await this.captureStep(run, "lowValueAutomation", () =>
+        this.designJobs.runLowValueAutomation(filter, { includeCustomerTools: false }),
+      );
       await this.captureStep(run, "scanLowValueOrderDrafts", () => this.orders.scanLowValueAutoOrderDrafts(filter));
       await this.captureStep(run, "scanLowValueOrderConfirmations", () =>
         this.wechatDispatch.scanLowValueOrderConfirmations(filter),
@@ -681,6 +814,7 @@ export class AutomationService {
         await this.captureStep(run, "processLowValueSendQueue", () =>
           this.wechatDispatch.processSafeSendQueue({
             limit: appConfig.lowValueAutomationSendQueueLimit,
+            perAccountLimit: appConfig.lowValueAutomationSendPerAccountLimit,
             automationOnly: true,
             ...filter,
           }),
@@ -734,6 +868,8 @@ export class AutomationService {
         durationMs: Date.now() - startedAt,
         errorMessage,
       });
+    } finally {
+      await yieldAutomationEventLoop();
     }
   }
 
@@ -765,4 +901,16 @@ export class AutomationService {
       return [];
     }
   }
+
+  private fullSweepIntervalMs() {
+    return Math.max(60_000, Math.max(3000, appConfig.lowValueAutomationIntervalMs) * 4);
+  }
+
+  private shouldRunFullSweep(trigger: AutomationRun["trigger"]) {
+    return trigger !== "interval" || !this.lastFullSweepAt || Date.now() - this.lastFullSweepAt >= this.fullSweepIntervalMs();
+  }
+}
+
+function yieldAutomationEventLoop() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }

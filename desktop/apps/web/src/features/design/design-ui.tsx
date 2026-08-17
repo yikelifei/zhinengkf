@@ -70,5 +70,34 @@ export function formatDesignDate(value?: string) {
 
 export function errorText(error: unknown, fallback: string) {
   const detail = error instanceof Error ? error.message.trim() : typeof error === "string" ? error.trim() : "";
-  return detail ? `${fallback}：${detail}` : fallback;
+  const message = detail ? `${fallback}：${detail}` : fallback;
+  const hint = designPlatformActionHint(`${fallback} ${detail}`);
+  return hint ? `${message}。${hint}` : message;
+}
+
+function designPlatformActionHint(value: string) {
+  const text = value.toLowerCase();
+  if (!/(设计|臻希|design|zhenxi|formal|activation|device|template|credit|api\s*(401|403)|http\s*(401|403))/.test(text)) {
+    return "";
+  }
+  if (/trusted_local_session|trusted desktop|可信会话/.test(text)) return "";
+  if (/device_binding_conflict|device binding conflict|设备.*(冲突|不匹配|已绑定)/.test(text)) {
+    return "处理：到 /design/activation 使用当前客服设备 ID 重新激活，或确认臻希 AI 后台的设备绑定";
+  }
+  if (/activation_required|activation|device.*required|missing device|设备.*(未激活|激活|required|不能为空|缺少)/.test(text)) {
+    return "处理：先到 /design/activation 生成或填写设备 ID，并用臻希 AI 管理员激活码完成激活";
+  }
+  if (/formal_auth_required|unauthorized|not logged in|auth|login|token|cookie|api\s*401|http\s*401|未登录|登录态|凭证/.test(text)) {
+    return "处理：设备激活后到 /design/account 登录臻希 AI 账号，再回到当前页面刷新";
+  }
+  if (/template_access_denied|template|模板/.test(text)) {
+    return "处理：在臻希 AI 后台给当前账号开通对应模板权限，再重新预检";
+  }
+  if (/insufficient|credit|quota|balance|积分|额度|余额/.test(text)) {
+    return "处理：在臻希 AI 后台检查账号额度和扣费记录，额度恢复后重新提交";
+  }
+  if (/api\s*403|http\s*403|forbidden|permission|权限/.test(text)) {
+    return "处理：确认当前是臻希智能客服桌面端窗口，并检查操作员权限、设备激活和臻希 AI 登录状态";
+  }
+  return "";
 }

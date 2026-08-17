@@ -9,6 +9,7 @@ import {
   type TrainingSample,
   type TrainingSampleQualityApiFilter,
 } from "../../lib/api";
+import { completeClientOperation, reserveClientOperation, type PendingClientOperation } from "../../lib/client-operation-key";
 import styles from "../governance-pages.module.css";
 import {
   formatTrainingScore,
@@ -18,6 +19,13 @@ import {
   sampleStatusLabel,
   type SampleReviewStatus,
 } from "./training-review-model";
+import { useTrustedOperator } from "../governance/trusted-operator";
+import { TrainingIdentityScopeNotice } from "./training-identity-navigation";
+import {
+  resolveTrainingHistoryRead,
+  scopedTrainingHistoryValue,
+  unknownTrainingHistoryRead,
+} from "./training-import-history-read-state";
 
 type PendingSampleReview = {
   ids: string[];
@@ -30,8 +38,7 @@ export type TrainingReviewPageProps = {
 };
 
 export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReviewPageProps) {
-  const [samples, setSamples] = useState<TrainingSample[]>([]);
-  const [samplesLoaded, setSamplesLoaded] = useState(false);
+  const [samplesRead, setSamplesRead] = useState(() => unknownTrainingHistoryRead<TrainingSample[]>([]));
   const [qualityFilter, setQualityFilter] = useState<TrainingSampleQualityApiFilter>("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [note, setNote] = useState("");
@@ -40,35 +47,55 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingSampleReview | null>(null);
   const refreshSequence = useRef(0);
+  const pendingOperationRef = useRef<PendingClientOperation | null>(null);
   const stableIdentityFilters = useMemo<IdentityFilters>(() => ({
+    agentId: identityFilters?.agentId,
     wechatAccountId: identityFilters?.wechatAccountId,
     conversationId: identityFilters?.conversationId,
     customerId: identityFilters?.customerId,
-  }), [identityFilters?.conversationId, identityFilters?.customerId, identityFilters?.wechatAccountId]);
-  const operator = reviewer?.trim() || "";
+  }), [identityFilters?.agentId, identityFilters?.conversationId, identityFilters?.customerId, identityFilters?.wechatAccountId]);
+  const scopeKey = useMemo(
+    () => JSON.stringify({ identity: stableIdentityFilters, qualityFilter }),
+    [qualityFilter, stableIdentityFilters],
+  );
+  const samples = scopedTrainingHistoryValue(samplesRead, scopeKey, [] as TrainingSample[]);
+  const readState = samplesRead.scopeKey === scopeKey ? samplesRead.status : "unknown";
+  const samplesLoaded = readState !== "unknown";
+  const trustedOperator = useTrustedOperator(reviewer);
+  const operator = trustedOperator.reviewer;
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
     setBusy(true);
     setError("");
-    setSamplesLoaded(false);
     try {
       const nextSamples = await getTrainingSamples({ ...stableIdentityFilters, quality: qualityFilter, limit: 200 });
       if (sequence !== refreshSequence.current) return;
-      setSamples(nextSamples);
-      setSamplesLoaded(true);
+      setSamplesRead((current) => resolveTrainingHistoryRead(
+        current,
+        scopeKey,
+        { status: "fulfilled", value: nextSamples },
+        [],
+      ));
       setSelectedIds(new Set());
       setPendingConfirmation(null);
     } catch (caught) {
       if (sequence !== refreshSequence.current) return;
-      setSamples([]);
+      setSamplesRead((current) => resolveTrainingHistoryRead(
+        current,
+        scopeKey,
+        { status: "rejected", reason: caught },
+        [],
+      ));
       setError(caught instanceof Error ? caught.message : "训练样本读取失败。");
     } finally {
       if (sequence === refreshSequence.current) setBusy(false);
     }
-  }, [qualityFilter, stableIdentityFilters]);
+  }, [qualityFilter, scopeKey, stableIdentityFilters]);
 
   useEffect(() => {
+    setSelectedIds(new Set());
+    setPendingConfirmation(null);
     void refresh();
     return () => {
       refreshSequence.current += 1;
@@ -92,6 +119,10 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
   const requestReview = (targets: TrainingSample[], status: SampleReviewStatus) => {
     setError("");
     setNotice("");
+    if (readState !== "ready") {
+      setError("当前身份范围的样本未完成可信读取，不能提交复核。");
+      return;
+    }
     if (!targets.length) {
       setError("请先选择需要复核的样本。");
       return;
@@ -101,7 +132,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       return;
     }
     if (status === "ready" && targets.some((sample) => !isReadyEligible(sample))) {
-      setError("所选样本包含 needsReview、blocked 或其他未明确安全的数据，不能标记为可用。");
+      setError("所选样本包含需复核、已阻断或其他未明确安全的数据，不能标记为可用。");
       return;
     }
     setPendingConfirmation({ ids: targets.map((sample) => sample.id), status });
@@ -109,6 +140,11 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
 
   const confirmReview = useCallback(async () => {
     if (!pendingConfirmation) return;
+    if (readState !== "ready") {
+      setError("确认前样本读取状态已变化，已阻止提交；请刷新后重新选择。");
+      setPendingConfirmation(null);
+      return;
+    }
     const targets = samples.filter((sample) => pendingConfirmation.ids.includes(sample.id));
     if (targets.length !== pendingConfirmation.ids.length) {
       setError("样本列表已经变化，请刷新后重新选择。");
@@ -128,13 +164,20 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
       const expectedBySampleId = Object.fromEntries(
         targets.map((sample) => [sample.id, identityExpectation(sample)]),
       );
-      await batchReviewTrainingSamples({
+      const requestPayload = {
         sampleIds: targets.map((sample) => sample.id),
         status: pendingConfirmation.status,
         reviewer: operator,
         note: note.trim(),
         expectedBySampleId,
+      };
+      const operation = reserveClientOperation("review-action", requestPayload, pendingOperationRef.current);
+      pendingOperationRef.current = operation;
+      await batchReviewTrainingSamples({
+        ...requestPayload,
+        operationKey: operation.key,
       });
+      pendingOperationRef.current = completeClientOperation(pendingOperationRef.current, operation.key);
       setNotice(`已提交 ${targets.length} 条样本的“${sampleStatusLabel(pendingConfirmation.status)}”复核结果。`);
       setPendingConfirmation(null);
       setNote("");
@@ -145,10 +188,10 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
     } finally {
       setBusy(false);
     }
-  }, [note, operator, pendingConfirmation, refresh, samples]);
+  }, [note, operator, pendingConfirmation, readState, refresh, samples]);
 
   return (
-    <section className={styles.page} aria-labelledby="training-review-title" aria-busy={busy}>
+    <section className={styles.page} aria-labelledby="training-review-title" aria-busy={busy || trustedOperator.busy}>
       <header className={styles.pageHeader}>
         <div className={styles.heading}>
           <span className={styles.eyebrow}>Training</span>
@@ -169,7 +212,13 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
 
       {error ? <div className={`${styles.notice} ${styles.noticeError}`} role="alert">{error}</div> : null}
       {notice ? <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">{notice}</div> : null}
+      {readState === "stale" ? (
+        <div className={`${styles.notice} ${styles.noticeWarning}`} role="status">
+          刷新失败，当前仅展示同一身份范围上次成功读取的样本；复核操作已禁用。
+        </div>
+      ) : null}
       {!operator ? <div className={`${styles.notice} ${styles.noticeWarning}`} role="alert">未连接可信复核人，本页保持只读。复核人必须由宿主身份系统传入。</div> : null}
+      <TrainingIdentityScopeNotice identityFilters={stableIdentityFilters} />
 
       <section className={styles.panel} aria-labelledby="training-review-controls-title">
         <header className={styles.panelHeader}><div><h2 id="training-review-controls-title">复核信息</h2><p>批量操作仅作用于人工勾选的记录。</p></div></header>
@@ -202,7 +251,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 data-action-id="training-review-batch-ready-request"
                 aria-label="请求将所选样本标记为可用"
                 onClick={() => requestReview(selectedSamples, "ready")}
-                disabled={busy || !operator || !note.trim() || !selectedSamples.length || selectedSamples.some((sample) => !isReadyEligible(sample))}
+                disabled={readState !== "ready" || busy || !operator || !note.trim() || !selectedSamples.length || selectedSamples.some((sample) => !isReadyEligible(sample))}
               >
                 所选标记可用
               </button>
@@ -212,7 +261,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 data-action-id="training-review-batch-review-request"
                 aria-label="请求将所选样本保持待复核"
                 onClick={() => requestReview(selectedSamples, "review")}
-                disabled={busy || !operator || !note.trim() || !selectedSamples.length}
+                disabled={readState !== "ready" || busy || !operator || !note.trim() || !selectedSamples.length}
               >
                 所选保持复核
               </button>
@@ -222,7 +271,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                 data-action-id="training-review-batch-reject-request"
                 aria-label="请求驳回所选训练样本"
                 onClick={() => requestReview(selectedSamples, "rejected")}
-                disabled={busy || !operator || !note.trim() || !selectedSamples.length}
+                disabled={readState !== "ready" || busy || !operator || !note.trim() || !selectedSamples.length}
               >
                 驳回所选
               </button>
@@ -248,6 +297,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
                           checked={selectedIds.has(sample.id)}
                           onChange={(event) => toggleSelection(sample.id, event.target.checked)}
                           aria-label={`选择训练样本${sample.id}`}
+                          disabled={readState !== "ready" || busy}
                         />
                         <span><strong>{sample.scene || "未识别场景"}</strong><small> · {sample.agentKey}</small></span>
                       </label>
@@ -288,7 +338,7 @@ export function TrainingReviewPage({ identityFilters, reviewer }: TrainingReview
               data-action-id="training-review-confirm"
               aria-label="确认提交训练样本复核"
               onClick={() => void confirmReview()}
-              disabled={busy}
+              disabled={readState !== "ready" || busy}
             >
               确认提交
             </button>

@@ -20,7 +20,10 @@ test("design platform callback endpoint is surfaced in config UI and submit payl
   );
   const appConfigSource = read("apps", "api", "src", "shared", "app-config.ts");
   const webApiSource = read("apps", "web", "src", "lib", "api.ts");
-  const webPageSource = read("apps", "web", "src", "features", "design", "design-settings-page.tsx");
+  const webConfigUiSource = [
+    read("apps", "web", "src", "features", "design", "design-settings-page.tsx"),
+    read("apps", "web", "src", "features", "design", "design-settings-status-panel.tsx"),
+  ].join("\n");
   const mockPlatformSource = read("tools", "mock-design-platform.js");
 
   assert.match(appConfigSource, /customerServicePublicBaseUrl/);
@@ -34,8 +37,8 @@ test("design platform callback endpoint is surfaced in config UI and submit payl
   assert.match(mockPlatformSource, /notifyCallback\(current, body\.callback\)/);
   assert.match(webApiSource, /callbackUrl\?: string/);
   assert.match(webApiSource, /hasCallbackApiKey\?: boolean/);
-  assert.match(webPageSource, /出图完成回调地址/);
-  assert.match(webPageSource, /回调签名/);
+  assert.match(webConfigUiSource, /出图完成回调地址/);
+  assert.match(webConfigUiSource, /回调签名/);
 });
 
 function read(...segments) {

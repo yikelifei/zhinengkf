@@ -1,5 +1,7 @@
 # Windows WeChat Bridge Protocol
 
+> Legacy only: the current deliverable product uses Enterprise WeChat official customer-service APIs. This protocol is retained for historical safety tests and is not part of the Enterprise-WeChat-only customer rollout, default product acceptance, or staging evidence bundle.
+
 This protocol connects the customer-service platform to a separate local Windows WeChat bridge program.
 
 The bridge program may read outbox files and write acknowledgement files. It must not modify the database directly, skip platform-side send guards, or mark a task as sent without a validated acknowledgement.

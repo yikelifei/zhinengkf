@@ -54,6 +54,9 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(smokeDevStack, /url: `http:\/\/127\.0\.0\.1:\$\{webPort\}\/`/);
   assert.match(smokeDevStack, /"dev", "apps\/web", "-p", String\(webPort\), "--hostname", "127\.0\.0\.1"/);
   assert.match(checkDevStartup, /const wechatSnapshotsUrl = `http:\/\/127\.0\.0\.1:\$\{apiPort\}\/api\/wechat\/window-snapshots`;/);
+  assert.match(checkDevStartup, /const legacyPersonalWechatMode = process\.env\.WECHAT_PRODUCT_MODE === "legacy_personal_wechat";/);
+  assert.match(checkDevStartup, /if \(!legacyPersonalWechatMode\) \{/);
+  assert.match(checkDevStartup, /\[skip\] WeChat window snapshots: legacy personal WeChat disabled/);
   assert.match(checkDevStartup, /readWechatWindowObserverProofToken/);
   assert.match(checkDevStartup, /if \(url !== wechatSnapshotsUrl\) return \{\};/);
   assert.match(checkDevStartup, /"x-wechat-window-observer-token": readWechatWindowObserverProofToken\(observerProofFile\)/);
@@ -70,6 +73,10 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(checkDevStartup, /findStableRuntimeHeartbeatProcess\(\)/);
   assert.match(checkDevStartup, /tools\/stable-runtime-launcher\.js/);
   assert.match(checkDevStartup, /function findKeepAliveHeartbeatProcess\(\)/);
+  assert.match(checkDevStartup, /Array\.isArray\(heartbeat\.args\)/);
+  assert.match(checkDevStartup, /heartbeat\.args\.includes\(modeArg\)/);
+  assert.match(checkDevStartup, /function processIsRunning\(pid\)/);
+  assert.match(checkDevStartup, /heartbeat-owned tools\/start-dev-ports\.js/);
   assert.match(checkDevStartup, /Date\.now\(\) - updatedAt > 30_000/);
   assert.match(checkDevStartup, /Keep-alive supervisor/);
   assert.match(checkDevStartup, /ports:repair so the app is started and supervised/);
@@ -80,9 +87,10 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(stableDoctor, /repair-stable-desktop\.cmd/);
   assert.match(stableDoctor, /start-stable-desktop-foreground\.cmd/);
   assert.match(stableDoctor, /stop-stable-desktop\.cmd/);
+  assert.match(stableDoctor, /repair continues in the background and no command window needs to stay open/);
+  assert.doesNotMatch(stableDoctor, /C:\\Users\\27808\\Desktop\\zhinengkefu/);
   assert.match(stableDoctor, /const webStandaloneServerPath = path\.join\(desktopRoot, "apps", "web", "\.next", "standalone", "apps", "web", "server\.js"\)/);
-  assert.match(stableDoctor, /const wechatBridgeWorkerStatusFile = path\.join\(runtimeDir, "wechat-bridge-worker-status\.json"\)/);
-  assert.match(stableDoctor, /const wechatWindowObserverStatusFile = path\.join\(runtimeDir, "wechat-window-observer-status\.json"\)/);
+  assert.doesNotMatch(stableDoctor, /wechat-bridge-worker-status|wechat-window-observer-status/);
   assert.match(stableDoctor, /stableRuntimeLauncherFromHeartbeat\(\)/);
   assert.match(stableDoctor, /fs\.readFileSync\(keepAliveHeartbeatFile, "utf8"\)/);
   assert.match(stableDoctor, /const heartbeatIsFresh = Number\.isFinite\(ageMs\) && ageMs <= 30000;/);
@@ -93,10 +101,7 @@ test("developer startup scripts default to the current design mode", () => {
   assert.match(stableDoctor, /const nextCliPath = path\.join\(desktopRoot, "node_modules", "next", "dist", "bin", "next"\)/);
   assert.match(stableDoctor, /const nextStartServerPath = path\.join\(desktopRoot, "node_modules", "next", "dist", "server", "lib", "start-server\.js"\)/);
   assert.match(stableDoctor, /function checkWebStartable\(\)/);
-  assert.match(stableDoctor, /checkWechatWorkerStatus\("WeChat bridge worker", wechatBridgeWorkerStatusFile, "tools\/wechat-bridge-worker\.js"/);
-  assert.match(stableDoctor, /mode === "noop" \|\| mode === "dispatch"/);
-  assert.match(stableDoctor, /checkWechatWorkerStatus\("WeChat window observer", wechatWindowObserverStatusFile, "tools\/wechat-window-observer\.js"\)/);
-  assert.match(stableDoctor, /function checkWechatWorkerStatus\(label, statusFile, commandMarker/);
+  assert.doesNotMatch(stableDoctor, /WeChat bridge worker|WeChat window observer/);
   assert.match(stableDoctor, /standalone build missing; Next dev fallback available/);
   assert.match(stableDoctor, /expected = \[webRuntimeServerPath, nextCliPath, nextStartServerPath\]\.map\(normalizePathText\)/);
   assert.match(stableDoctor, /path\.join\(report\.runtimeDir, "logs"\)/);
@@ -128,6 +133,7 @@ test("startup tools keep explicit design mode and preserve current real mode for
   const portsStackStarter = readText("tools/ports-stack-starter.js");
   const desktopServiceSupervisor = readText("tools/desktop-service-supervisor.js");
   const repairDevStartupSource = readText("tools/repair-dev-startup.js");
+  const stableLauncher = readText("tools/stable-runtime-launcher.js");
   assert.match(startDevPorts, /const requestedMockDesignMode = args\.has\("--mock-design"\);/);
   assert.match(startDevPorts, /const requestedRealDesignMode = args\.has\("--real-design"\);/);
   assert.match(startDevPorts, /main\(\)\.catch\(\(error\) => \{\s+logFatal\("main", error, \{ exit: false \}\);/);
@@ -239,6 +245,8 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /--supervisor-child/);
   assert.match(startDevPorts, /Services are already owned by another launcher; exiting duplicate keep-alive/);
   assert.match(startDevPorts, /const shouldReuseRealDesignMode =/);
+  assert.match(startDevPorts, /const defaultZhenxiAiDesktopBaseUrl = "http:\/\/127\.0\.0\.1:3000";/);
+  assert.match(startDevPorts, /const deprecatedZhenxiAiDesktopBaseUrl = "http:\/\/127\.0\.0\.1:31870";/);
   assert.match(startDevPorts, /existingDesignPlatformAdapter === "art_image_local"/);
   assert.match(startDevPorts, /preferredDesignMode === "real"/);
   assert.match(startDevPorts, /fs\.existsSync\(realModeLockFile\)/);
@@ -254,6 +262,8 @@ test("startup tools keep explicit design mode and preserve current real mode for
     startDevPorts,
     /\(requestedRealDesignMode \|\| shouldReuseRealDesignMode\) && !forceMockDesignMode \? "art_image_local" : "standard_v1";/,
   );
+  assert.match(portsStackStarter, /const defaultZhenxiAiDesktopBaseUrl = "http:\/\/127\.0\.0\.1:3000";/);
+  assert.match(readText("tools/check-dev-startup.js"), /http:\/\/127\.0\.0\.1:3000/);
   assert.match(startDevPorts, /waitForStableServiceReady\(service, serviceReadyTimeoutMs\(service\)\)/);
   assert.match(startDevPorts, /async function waitForStableServiceReady\(service, timeoutMs\)/);
   assert.match(startDevPorts, /function serviceReadyTimeoutMs\(service\)/);
@@ -333,6 +343,8 @@ test("startup tools keep explicit design mode and preserve current real mode for
   assert.match(startDevPorts, /renderWindowsWrapperEnvironment\(service\.name, serviceEnv\(service\)\)/);
   assert.match(startDevPorts, /LOW_VALUE_AUTOMATION_ENABLED: process\.env\.LOW_VALUE_AUTOMATION_ENABLED \|\| "true"/);
   assert.match(startDevPorts, /LOW_VALUE_AUTOMATION_RUN_ON_START: process\.env\.LOW_VALUE_AUTOMATION_RUN_ON_START \|\| "true"/);
+  assert.match(stableLauncher, /SMART_KEFU_RUNTIME_TARGET: process\.env\.SMART_KEFU_RUNTIME_TARGET \|\| "desktop"/);
+  assert.match(stableLauncher, /LOW_VALUE_AUTOMATION_MODE: process\.env\.LOW_VALUE_AUTOMATION_MODE \|\| "interval"/);
   assert.match(startDevPorts, /function cmdSetEnv\(key, value\)/);
   assert.match(startDevPorts, /if \(keepAliveLauncher\) \{/);
   assert.match(startDevPorts, /function startManagedChild\(service, stdoutPath, stderrPath, launcherLogPath, wrapperPath, launchCommandOverride\)/);
@@ -512,7 +524,8 @@ test("stop script recognizes child service command lines", () => {
   assert.match(stopDevPorts, /fs\.rmSync\(keepAliveHeartbeatFile, \{ force: true \}\);/);
   assert.match(stopDevPorts, /fs\.rmSync\(stackStarterRealLockFile, \{ force: true \}\);/);
   assert.match(stopDevPorts, /fs\.rmSync\(stackStarterMockLockFile, \{ force: true \}\);/);
-  assert.match(stopDevPorts, /clearRuntimeDesignModeConfig\(\);/);
+  assert.match(stopDevPorts, /const preserveDesignPlatformConfig = process\.env\.PRESERVE_DESIGN_PLATFORM_CONFIG === "1"/);
+  assert.match(stopDevPorts, /if \(!preserveDesignPlatformConfig\) clearRuntimeDesignModeConfig\(\);/);
   assert.match(stopDevPorts, /function clearRuntimeDesignModeConfig\(\)/);
   assert.match(stopDevPorts, /delete config\[key\]/);
   assert.match(stopDevPorts, /designPlatformAccessToken/);
@@ -526,6 +539,20 @@ test("stop script recognizes child service command lines", () => {
   assert.match(stopDevPorts, /keepalive-stable-desktop\.cmd/);
   assert.match(stopDevPorts, /tools\/stable-runtime-launcher\.js/);
   assert.match(stopDevPorts, /stable-runtime-launcher-local\.js/);
+  assert.match(stopDevPorts, /E:\\\\zhinengkefu-ui-versions\\\\modular\\\\desktop/);
+  assert.match(stopDevPorts, /E:\\\\zhinengkefu-ui-versions\\\\modular\\\\\.runtime\\\\ui-versions\\\\runtime-modular/);
+  assert.match(stopDevPorts, /STALE_DESKTOP_ROOTS/);
+  assert.match(stopDevPorts, /STALE_DESKTOP_RUNTIME_DIRS/);
+  assert.match(stopDevPorts, /const supervisorStopRequestFile = path\.join\(runtimeDir, "desktop-supervisor-stop-request"\)/);
+  assert.match(stopDevPorts, /const stableRuntimeStopRequestFile = path\.join\(runtimeDir, "stable-runtime-stop-request"\)/);
+  assert.match(stopDevPorts, /function writeStopRequestFiles\(\)/);
+  assert.match(stopDevPorts, /writeStopRequestPair\(runtimeDir, value, \{ warn: true \}\)/);
+  assert.match(stopDevPorts, /writeStopRequestPair\(targetRuntimeDir, value, \{ warn: false \}\)/);
+  assert.match(stopDevPorts, /path\.join\(targetRuntimeDir, "desktop-supervisor-stop-request"\)/);
+  assert.match(stopDevPorts, /path\.join\(targetRuntimeDir, "stable-runtime-stop-request"\)/);
+  assert.match(stopDevPorts, /function findManagedAcceptancePids\(\)/);
+  assert.match(stopDevPorts, /tools\/run-product-acceptance\.js/);
+  assert.match(stopDevPorts, /\[stop:acceptance\] pid=\$\{pid\}/);
   assert.match(stopDevPorts, /const stableRuntimeTaskName = "zhinengkefu_stable_runtime"/);
   assert.match(stopDevPorts, /SystemRoot \|\| "C:\\\\Windows", "System32", "schtasks\.exe"/);
   assert.match(stopDevPorts, /\[\"\/End\", \"\/TN\", stableRuntimeTaskName\]/);
@@ -825,6 +852,15 @@ test("double click startup bat files use stable launcher scripts", () => {
   assert.match(stableKeepalivePs1, /function Start-StableSupervisorProcess/);
   assert.match(stableKeepalivePs1, /STABLE_KEEPALIVE_SUPERVISOR = "1"/);
   assert.match(stableKeepalivePs1, /function Invoke-StableSupervisorLoop/);
+  assert.match(stableKeepalivePs1, /function Enter-StableSupervisorMutex/);
+  assert.match(stableKeepalivePs1, /Local\\ZhinengKefuStableKeepalive-/);
+  assert.match(stableKeepalivePs1, /duplicate stable keepalive supervisor skipped/);
+  assert.match(stableKeepalivePs1, /stable keepalive supervisor observed stop request before startup/);
+  assert.ok(
+    stableKeepalivePs1.indexOf("if ($SupervisorMode)") <
+      stableKeepalivePs1.indexOf("Remove-Item -Force -ErrorAction Stop -Path $StopRequestFile"),
+    "supervisor children must honor the stop request before the explicit launcher may clear it",
+  );
   assert.match(stableKeepalivePs1, /stable runtime launcher missing; restarting/);
   assert.match(stableKeepalivePs1, /if \(\$SupervisorMode\)/);
   assert.match(stableKeepalivePs1, /Start-StableSupervisorProcess/);
@@ -848,18 +884,28 @@ test("double click startup bat files use stable launcher scripts", () => {
   const stableStop = readText("stop-stable-desktop.cmd");
   assert.match(stableStop, /if not defined DESKTOP_RUNTIME_DIR set "DESKTOP_RUNTIME_DIR=%DESKTOP_ROOT%\\\.runtime-stable"/);
   assert.match(stableStop, /FORCE_PORTS_SWEEP=1/);
+  assert.match(stableStop, /PRESERVE_DESIGN_PLATFORM_CONFIG=1/);
   assert.match(stableStop, /schtasks\.exe \/Delete \/TN zhinengkefu_stable_runtime \/F/);
   assert.match(stableStop, /ports:stop/);
   const stableRepair = readText("repair-stable-desktop.cmd");
-  assert.match(stableRepair, /stop-stable-desktop\.cmd/);
-  assert.match(stableRepair, /start-stable-desktop-foreground\.cmd/);
-  assert.match(stableRepair, /Keep this window open/);
+  assert.match(stableRepair, /start-hidden-stable-app\.ps1" -Mode repair/);
+  assert.doesNotMatch(stableRepair, /start-stable-desktop-foreground\.cmd|Keep this window open|pause/i);
   const stableLaunch = readText("launch-stable-desktop-app.cmd");
-  assert.match(stableLaunch, /start-stable-desktop\.cmd/);
-  assert.match(stableLaunch, /repair-stable-desktop\.cmd/);
-  assert.doesNotMatch(stableLaunch, /keep that service window open/);
-  assert.match(stableLaunch, /pause/);
-  assert.match(stableLaunch, /node tools\\launch-stable-electron\.js/);
+  assert.match(stableLaunch, /start-hidden-stable-app\.ps1" -Mode open/);
+  assert.doesNotMatch(stableLaunch, /start-stable-desktop\.cmd|repair-stable-desktop\.cmd|pause/i);
+  const hiddenStableStart = readText("tools/start-hidden-stable-app.ps1");
+  assert.match(hiddenStableStart, /Start-Process `[^]*-FilePath \$Node[^]*-WindowStyle Hidden/);
+  assert.match(hiddenStableStart, /tools\\stable-app-launcher\.js/);
+  const stableAppLauncher = readText("tools/stable-app-launcher.js");
+  assert.match(stableAppLauncher, /fs\.openSync\(lockFile, "wx", 0o600\)/);
+  assert.match(stableAppLauncher, /duplicate launch skipped/);
+  assert.match(stableAppLauncher, /stop-stable-desktop\.cmd/);
+  assert.match(stableAppLauncher, /start-stable-desktop\.cmd/);
+  assert.match(stableAppLauncher, /stable-desktop-doctor\.js/);
+  assert.match(stableAppLauncher, /launch-stable-electron\.js/);
+  assert.match(stableAppLauncher, /DESKTOP_ROOT: root/);
+  assert.match(stableAppLauncher, /DESKTOP_RUNTIME_DIR: runtimeDir/);
+  assert.match(stableAppLauncher, /windowsHide: true/);
   const stableLogs = readText("logs-stable-desktop.cmd");
   assert.match(stableLogs, /set "LOG_DIR=%DESKTOP_RUNTIME_DIR%\\logs"/);
   assert.match(stableLogs, /Get-ChildItem/);
@@ -937,6 +983,7 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   }
 
   const stableLaunch = readText("launch-stable-desktop-app.cmd");
+  const stableAppLauncher = readText("tools/stable-app-launcher.js");
   const stableStart = readText("start-stable-desktop.cmd");
   const stableKeepalive = readText("keepalive-stable-desktop.cmd");
   const stableForeground = readText("start-stable-desktop-foreground.cmd");
@@ -946,19 +993,21 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   const dependencyBootstrap = readText("prepare-stable-dependencies.cmd");
   const personalWechatRpaSetup = readText("tools/setup-personal-wechat-rpa.ps1");
   const personalWechatRpaHost = readText("tools/personal-wechat-rpa-host/Program.cs");
-  assert.match(stableLaunch, /WEB_URL=http:\/\/127\.0\.0\.1:3100\/overview/);
+  assert.match(stableLaunch, /start-hidden-stable-app\.ps1" -Mode open/);
   assert.match(electronMain, /process\.env\.WEB_URL \|\| "http:\/\/127\.0\.0\.1:3100\/overview"/);
   assert.match(stableKeepalivePs1, /Test-StableHttp "http:\/\/127\.0\.0\.1:3100\/overview"/);
   assert.match(personalWechatRpaSetup, /\$env:DESKTOP_RUNTIME_DIR/);
   assert.match(personalWechatRpaSetup, /GetFullPath\(\$env:DESKTOP_RUNTIME_DIR\)/);
   assert.match(personalWechatRpaSetup, /automationMode = "ocr"/);
+  assert.match(personalWechatRpaSetup, /\[string\]\$WechatAccountId/);
+  assert.match(personalWechatRpaSetup, /registryVersion = "personal_wechat_rpa_registry_v1"/);
   assert.match(personalWechatRpaHost, /HasOcrIdentityFragments\(profileTextBlocks, config\.OwnerWxId\)/);
   assert.match(personalWechatRpaHost, /prefixLength >= 9/);
   assert.match(personalWechatRpaHost, /AccountsConfigWriter\.RefreshIdentity\(config\.AccountsConfigPath, result\.Target\)/);
   assert.match(personalWechatRpaHost, /ApplyIdentity\(account, identity\)/);
+  assert.match(personalWechatRpaHost, /MergePhysicalAccountBindings\(accounts, physicalAccounts, account\)/);
 
   for (const [relativePath, source] of [
-    ["launch-stable-desktop-app.cmd", stableLaunch],
     ["start-stable-desktop.cmd", stableStart],
     ["keepalive-stable-desktop.cmd", stableKeepalive],
     ["start-stable-desktop-foreground.cmd", stableForeground],
@@ -969,13 +1018,16 @@ test("stable startup entrypoints resolve the active worktree and stay fail-close
   assert.match(stableKeepalivePs1, /\$env:STABLE_WECHAT_BRIDGE_MODE = "dispatch"/);
   assert.match(stableKeepalivePs1, /\$env:STABLE_PERSONAL_WECHAT_SEND = "0"/);
   assert.doesNotMatch(stableKeepalivePs1, /if \(\$env:STABLE_PERSONAL_WECHAT_SEND\)/);
-  for (const source of [stableLaunch, stableStart, stableKeepalive, stableForeground]) {
+  for (const source of [stableStart, stableKeepalive, stableForeground]) {
     assert.match(source, /prepare-stable-dependencies\.cmd/);
   }
+  assert.match(stableAppLauncher, /prepare-stable-dependencies\.cmd/);
+  assert.match(stableAppLauncher, /DESKTOP_ROOT: root/);
+  assert.match(stableAppLauncher, /DESKTOP_RUNTIME_DIR: runtimeDir/);
   assert.match(dependencyBootstrap, /resolve-worktree-node-modules\.js/);
   assert.match(dependencyResolver, /function resolveWorktreeNodeModules\(root\)/);
   assert.doesNotMatch(dependencyResolver, /D:\\zhinengkefu|C:\\Users\\27808/i);
-  assert.match(stableLaunch, /node tools\\launch-stable-electron\.js/);
+  assert.match(stableAppLauncher, /launch-stable-electron\.js/);
 });
 
 test("stable runtime launcher owns one stable runtime and required services", () => {
@@ -1007,17 +1059,7 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /web standalone build incomplete; using Next dev server fallback/);
   assert.match(stableRuntime, /\{ name: "design-platform-mock", command: process\.execPath, args: \[path\.join\(root, "tools", "mock-design-platform\.js"\)\], port: ports\.mock, expected: normalize\(path\.join\(root, "tools", "mock-design-platform\.js"\)\) \}/);
   assert.match(stableRuntime, /\{ name: "api", command: process\.execPath, args: \[path\.join\(root, "dist", "apps", "api", "main\.js"\)\], port: ports\.api, expected: normalize\(path\.join\(root, "dist", "apps", "api", "main\.js"\)\) \}/);
-  assert.match(stableRuntime, /processServiceSpec\("wechat-window-observer", \[path\.join\(root, "tools", "wechat-window-observer\.js"\), "--watch", "--scan"\]/);
-  assert.match(stableRuntime, /processServiceSpec\("wechat-bridge-worker", \[path\.join\(root, "tools", "wechat-bridge-worker\.js"\), "--watch"\]/);
-  assert.match(stableRuntime, /BRIDGE_MODE: process\.env\.STABLE_WECHAT_BRIDGE_MODE \|\| "dispatch"/);
-  assert.match(stableRuntime, /BRIDGE_ACK_TRANSPORT: process\.env\.BRIDGE_ACK_TRANSPORT \|\| "file_scan"/);
-  assert.match(stableRuntime, /processServiceSpec\("personal-wechat-bridge", \[path\.join\(root, "tools", "personal-wechat-bridge\.js"\), "--watch"\]/);
-  assert.match(stableRuntime, /personalWechatRpaServiceSpec\(\)/);
-  assert.match(stableRuntime, /PersonalWechatRpaHost\.dll/);
-  assert.match(stableRuntime, /personal-wechat-send\.enabled/);
-  assert.match(stableRuntime, /personalWechatSendEnabled \? "1"/);
-  assert.match(stableRuntime, /PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path\.join\(runtimeDir, "personal-wechat-accounts\.json"\)/);
-  assert.match(stableRuntime, /PERSONAL_WECHAT_SEND: personalWechatSendEnabled \? "1" : process\.env\.STABLE_PERSONAL_WECHAT_SEND \|\| process\.env\.PERSONAL_WECHAT_SEND \|\| "0"/);
+  assert.doesNotMatch(stableRuntime, /wechat-window-observer|wechat-bridge-worker|personal-wechat|PERSONAL_WECHAT|legacy_personal_wechat/);
   assert.match(stableRuntime, /for \(const spec of specs\) ensureService\(spec\);/);
   assert.match(stableRuntime, /killStaleRuntimeProcesses\(\);/);
   assert.match(stableRuntime, /setInterval\(\(\) => \{[\s\S]*stop request received; stopping[\s\S]*killStaleRuntimeProcesses\(\);[\s\S]*for \(const spec of specs\) ensureService\(spec\);[\s\S]*\}, 5000\);/);
@@ -1028,14 +1070,17 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /existing && isPidAlive\(existing\.pid\) && process\.platform === "win32" && spec\.port/);
   assert.match(stableRuntime, /function startWindowsWrappedPortService\(spec\)/);
   assert.match(stableRuntime, /function buildWindowsPortServiceWrapper\(spec\)/);
+  assert.match(stableRuntime, /wrapper prepared at \$\{wrapperPath\}; launching direct hidden service process/);
+  assert.match(stableRuntime, /const child = spawn\(spec\.command, spec\.args/);
+  assert.match(stableRuntime, /direct service pid=\$\{child\.pid\}/);
+  assert.doesNotMatch(stableRuntime, /spawn\("cmd\.exe", \["\/d", "\/c", wrapperPath\]/);
   assert.match(stableRuntime, /const windowsProcessQueryTimeoutMs = positiveNumber\(process\.env\.WINDOWS_PROCESS_QUERY_TIMEOUT_MS, 1000\)/);
   assert.match(stableRuntime, /function findLegacyRuntimeProcesses\(\)[\s\S]*timeout: windowsProcessQueryTimeoutMs/);
   assert.match(stableRuntime, /check-loopback-port\.js/);
   assert.match(stableRuntime, /\$\{spec\.port\}/);
   assert.doesNotMatch(stableRuntime, /netstat\.exe -ano -p TCP/);
   assert.doesNotMatch(stableRuntime, /Get-NetTCPConnection -LocalAddress 127\.0\.0\.1/);
-  assert.match(stableRuntime, /:restart/);
-  assert.match(stableRuntime, /goto restart/);
+  assert.doesNotMatch(stableRuntime, /":restart"|"goto restart"/);
   const stableSessionDoctor = readText("tools/stable-desktop-doctor.js");
   assert.match(stableSessionDoctor, /readDesktopWebSessionProof\(desktopWebSessionFile\)/);
   assert.match(stableSessionDoctor, /smart_kefu_desktop_session=\$\{proof\}/);
@@ -1050,14 +1095,15 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function processServiceSpec\(name, args, env = \{\}\)/);
   assert.match(stableRuntime, /LOW_VALUE_AUTOMATION_ENABLED: "true"/);
   assert.match(stableRuntime, /LOW_VALUE_AUTOMATION_RUN_ON_START: "true"/);
-  assert.match(stableRuntime, /WECHAT_BRIDGE_OUTBOX_DIR: path\.join\(runtimeDir, "wechat-outbox"\)/);
-  assert.match(stableRuntime, /WECHAT_BRIDGE_INBOX_DIR: path\.join\(runtimeDir, "wechat-inbox"\)/);
-  assert.match(stableRuntime, /WECHAT_BRIDGE_DISPATCH_DIR: path\.join\(runtimeDir, "wechat-dispatch"\)/);
-  assert.match(stableRuntime, /WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path\.join\(runtimeDir, "wechat-window-snapshots"\)/);
-  assert.match(stableRuntime, /DESIGN_PLATFORM_ADAPTER: "standard_v1"/);
-  assert.match(stableRuntime, /DESIGN_PLATFORM_BASE_URL: `http:\/\/127\.0\.0\.1:\$\{ports\.mock\}`/);
+  assert.doesNotMatch(stableRuntime, /WECHAT_BRIDGE_(?:OUTBOX|INBOX|DISPATCH)_DIR/);
+  assert.doesNotMatch(stableRuntime, /WECHAT_WINDOW_SNAPSHOT_INBOX_DIR/);
+  assert.match(stableRuntime, /delete baseEnv\.DESIGN_PLATFORM_ADAPTER/);
+  assert.match(stableRuntime, /delete baseEnv\.DESIGN_PLATFORM_BASE_URL/);
   assert.match(stableRuntime, /writeWebRuntimeServer\(\)/);
-  assert.match(stableRuntime, /writeDesignConfig\(\)/);
+  assert.match(stableRuntime, /ensureDesignConfig\(\)/);
+  assert.match(stableRuntime, /validPersistedDesignConfig\(existing\)/);
+  assert.match(stableRuntime, /designPlatformAdapter: "standard_v1"/);
+  assert.match(stableRuntime, /designPlatformBaseUrl: `http:\/\/127\.0\.0\.1:\$\{ports\.mock\}`/);
   assert.match(stableRuntime, /writeHeartbeat\(\)/);
   assert.match(stableRuntime, /const existing = children\.get\(spec\.name\);/);
   assert.match(stableRuntime, /if \(existing && owners\.includes\(existing\.pid\)\) return;/);
@@ -1088,7 +1134,9 @@ test("stable runtime launcher owns one stable runtime and required services", ()
   assert.match(stableRuntime, /function killPid\(pid\)/);
   assert.match(stableRuntime, /function closeFd\(value\)/);
   assert.match(stableRuntime, /removed stale launcher pid file/);
-  assert.match(stableRuntime, /if \(!isPidAlive\(existingPid\)\)/);
+  assert.match(stableRuntime, /const existingIsAlive = existingPid > 0 && isPidAlive\(existingPid\)/);
+  assert.match(stableRuntime, /fs\.openSync\(lockFile, "wx", 0o600\)/);
+  assert.match(stableRuntime, /exiting duplicate/);
   assert.match(stableRuntime, /function openServiceLogForAppend\(name, streamName\)/);
   assert.match(stableRuntime, /return "ignore";/);
   assert.match(stableRuntime, /function append\(name, message\) \{[\s\S]*try \{[\s\S]*fs\.appendFileSync/);
@@ -1124,7 +1172,7 @@ test("electron startup failure points beginners to stable repair script", () => 
   assert.match(stableElectron, /electronArgs\.push\(`--user-data-dir=\$\{userDataDir\}`\)/);
   assert.match(stableElectron, /spawn\(electronPath, electronArgs/);
   assert.match(electronMain, /repair-stable-desktop\.cmd/);
-  assert.match(electronMain, /保持服务窗口打开/);
+  assert.match(electronMain, /修复会在后台完成，无需保持命令窗口打开/);
   assert.doesNotMatch(electronMain, /璇峰厛杩愯 start-stable-desktop\.cmd/);
 });
 
@@ -1133,6 +1181,8 @@ test("modular desktop has an isolated named runtime entrypoint", () => {
   const status = readText("status-isolated-modular-desktop.cmd");
   const stop = readText("stop-isolated-modular-desktop.cmd");
   const resolver = readText("tools/resolve-ui-version-runtime.js");
+  const shortcutRepair = readText("tools/repair-desktop-shortcuts.ps1");
+  const packageJson = readText("package.json");
   assert.match(launch, /resolve-ui-version-runtime\.js" modular/);
   assert.match(launch, /WEB_PORT=3110/);
   assert.match(launch, /API_PORT=3210/);
@@ -1143,6 +1193,14 @@ test("modular desktop has an isolated named runtime entrypoint", () => {
   assert.match(stop, /stop-stable-desktop\.cmd/);
   assert.match(resolver, /--git-common-dir/);
   assert.match(resolver, /"\.runtime", "ui-versions", `runtime-\$\{profile\}`/);
+  assert.match(shortcutRepair, /E:\\zhinengkefu-ui-versions\\modular/);
+  assert.match(shortcutRepair, /launch-isolated-modular-desktop\.cmd/);
+  assert.match(shortcutRepair, /-WindowStyle Hidden/);
+  assert.match(shortcutRepair, /GetFolderPath\("Startup"\)/);
+  assert.match(
+    packageJson,
+    /"windows:repair-shortcuts": "powershell\.exe -NoProfile -ExecutionPolicy Bypass -File tools\/repair-desktop-shortcuts\.ps1"/,
+  );
 });
 
 test("port stack launcher blocks mock when real mode is active and starts supervised services", () => {
@@ -1182,7 +1240,7 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(launcher, /designPlatformAdapter === "art_image_local"/);
   assert.match(launcher, /health\?\.adapter === "art_image_local"/);
   assert.match(launcher, /api\/integrations\/design-platform\/health/);
-  assert.match(launcher, /function getJson\(url, timeoutMs = 1500\)/);
+  assert.match(launcher, /function getJson\(url, timeoutMs = 1500, headers = \{\}\)/);
   assert.match(launcher, /if \(await activeStackMatchesRequestedMode\(\)\) \{/);
   assert.match(launcher, /design stack is already running; skipping duplicate launch/);
   assert.match(launcher, /if \(!\(await acquireStackStarterLockOrWait\(\)\)\) return;/);
@@ -1315,6 +1373,11 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(supervisorPs1, /\$env:PORTS_STACK_STARTER_PID = \[string\]\$PID/);
   assert.match(supervisorPs1, /\$env:PORTS_STACK_STARTER_MODE = \$Mode/);
   assert.match(supervisorPs1, /\$env:PRESERVE_REAL_MODE_LOCK = "1"/);
+  assert.match(supervisorPs1, /\$SupervisorStopRequestFile = Join-Path \$RuntimeDir "desktop-supervisor-stop-request"/);
+  assert.match(supervisorPs1, /\$StableStopRequestFile = Join-Path \$RuntimeDir "stable-runtime-stop-request"/);
+  assert.match(supervisorPs1, /function Test-SupervisorStopRequested/);
+  assert.match(supervisorPs1, /function Clear-SupervisorStopRequests/);
+  assert.match(supervisorPs1, /if exist ""\$SupervisorStopRequestFile"" exit \/b 0/);
   assert.match(supervisorPs1, /ConvertTo-CmdEnvLine "ALLOW_REAL_DESIGN_START" "1"/);
   assert.match(supervisorPs1, /ConvertTo-CmdEnvLine "ALLOW_REAL_DESIGN_LAUNCH" "1"/);
   assert.match(supervisorPs1, /ConvertTo-CmdEnvLine "CONFIRM_REAL_DESIGN_SWITCH" "1"/);
@@ -1355,6 +1418,12 @@ test("port stack launcher blocks mock when real mode is active and starts superv
   assert.match(supervisorJs, /const designPlatformConfigFile = path\.join\(runtimeDir, "design-platform-config\.json"\);/);
   assert.match(supervisorJs, /const preferredDesignModeFile = path\.join\(runtimeDir, "preferred-design-mode\.json"\);/);
   assert.match(supervisorJs, /const keepAliveHeartbeatFile = path\.join\(runtimeDir, "keep-alive\.json"\);/);
+  assert.match(supervisorJs, /const supervisorStopRequestFile = path\.join\(runtimeDir, "desktop-supervisor-stop-request"\);/);
+  assert.match(supervisorJs, /const stableStopRequestFile = path\.join\(runtimeDir, "stable-runtime-stop-request"\);/);
+  assert.match(supervisorJs, /function supervisorStopRequested\(\)/);
+  assert.match(supervisorJs, /function clearSupervisorStopRequests\(\)/);
+  assert.match(supervisorJs, /supervisor stop request exists; exiting loop/);
+  assert.match(supervisorJs, /if exist \$\{cmdQuote\(supervisorStopRequestFile\)\} exit \/b 0/);
   assert.match(supervisorJs, /\(\(runtimeConfigLooksRealDesignMode\(\) \|\| preferredDesignModeIsReal\(\)\) && process\.env\.FORCE_MOCK_DESIGN_START !== "1"\)/);
   assert.match(supervisorJs, /function preferredDesignModeIsReal\(\)/);
   assert.match(supervisorJs, /function writePreferredDesignMode\(mode\)/);
@@ -1526,9 +1595,9 @@ test("wechat window observer proof is runtime-generated and scoped only to API p
   assert.match(session, /randomBytes\(32\)\.toString\("hex"\)/);
   assert.match(session, /TRUSTED_SERVICE_NAMES = new Set\(\["api", "wechat-window-observer"\]\)/);
   assert.match(session, /withoutWechatWindowObserverProof/);
-  assert.match(startDev, /wechatWindowObserverServiceEnv\(internalEnv, service\?\.name, observerProofSession\.tokenFile\)/);
+  assert.match(startDev, /wechatWindowObserverServiceEnv\(desktopSessionEnv, service\?\.name, observerProofSession\.tokenFile\)/);
   assert.match(stackStarter, /createWechatWindowObserverProofSession\(runtimeDir/);
-  assert.match(stableRuntime, /createWechatWindowObserverProofSession\(runtimeDir/);
+  assert.doesNotMatch(stableRuntime, /createWechatWindowObserverProofSession|wechatWindowObserverServiceEnv/);
   assert.match(safeWorkers, /readWechatWindowObserverProofToken\(observerProofFile\)/);
   assert.match(acceptance, /wechatWindowObserverServiceEnv\(serviceEnv, "api", observerProofSession\.tokenFile\)/);
   assert.match(acceptance, /withoutWechatWindowObserverProof\(process\.env\)/);
@@ -1549,7 +1618,7 @@ test("wechat bridge runtime token is generated separately and scoped away from W
   assert.match(startDev, /ensureWechatBridgeServiceSession\(runtimeDir\)/);
   assert.match(startDev, /wechatBridgeServiceEnv\(observerEnv, service\?\.name, bridgeServiceSession\.tokenFile\)/);
   assert.match(stackStarter, /WECHAT_BRIDGE_SERVICE_TOKEN_FILE: bridgeServiceSession\.tokenFile/);
-  assert.match(stableRuntime, /createWechatBridgeServiceSession\(runtimeDir/);
+  assert.doesNotMatch(stableRuntime, /createWechatBridgeServiceSession|wechatBridgeServiceEnv/);
   assert.match(safeWorkers, /wechatBridgeServiceEnv\(observerEnv, service\.name, bridgeServiceSession\.tokenFile\)/);
   assert.match(bridgeWorker, /readWechatBridgeServiceToken\(config\.bridgeServiceTokenFile\)/);
   assert.match(personalBridge, /readWechatBridgeServiceToken\(config\.bridgeServiceTokenFile\)/);
@@ -1604,6 +1673,9 @@ test("web build script refuses to build while dev web port is occupied", () => {
   assert.match(buildWeb, /function webBuildIsStale\(\)/);
   assert.match(buildWeb, /function pathHasFileNewerThan\(target, timestamp\)/);
   assert.match(buildWeb, /after existing standalone sync/);
+  assert.match(buildWeb, /function restoreNextEnvTypes\(\)/);
+  assert.match(buildWeb, /import "\.\/\.next\/types\/routes\.d\.ts";/);
+  assert.doesNotMatch(buildWeb, /\.next\/dev\/types\/routes/);
   assert.match(buildWeb, /path\.join\("static", buildId, "_ssgManifest\.js"\)/);
   assert.match(buildWeb, /path\.join\("server", "pages-manifest\.json"\)/);
   assert.match(buildWeb, /run\(process\.execPath, \["tools\/sync-web-standalone-assets\.js"\]\)/);

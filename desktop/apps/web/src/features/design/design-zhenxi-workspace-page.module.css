@@ -1,0 +1,235 @@
+.page {
+  display: grid;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--wk-color-background);
+}
+
+.header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid var(--wk-color-border);
+  padding: 14px 18px;
+  background: var(--wk-color-surface);
+}
+
+.titleRow,
+.actions,
+.status,
+.syncStrip {
+  display: flex;
+  align-items: center;
+}
+
+.titleRow {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.header h1 {
+  margin: 0;
+  color: var(--wk-color-text-primary);
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.header p {
+  margin: 5px 0 0;
+  color: var(--wk-color-text-secondary);
+  font-size: 13px;
+}
+
+.status {
+  min-height: 26px;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status[data-tone="ready"] {
+  color: var(--wk-color-success-text);
+  background: var(--wk-color-success-soft);
+}
+
+.status[data-tone="warning"] {
+  color: var(--wk-color-warning-text);
+  background: var(--wk-color-warning-soft);
+}
+
+.status[data-tone="danger"] {
+  color: var(--wk-color-danger-text);
+  background: var(--wk-color-danger-soft);
+}
+
+.actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.actions button,
+.actions a,
+.emptyState button,
+.emptyState a {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--wk-color-border-strong);
+  border-radius: var(--wk-radius-md);
+  padding: 0 11px;
+  color: var(--wk-color-text-primary);
+  background: var(--wk-color-surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.actions button:hover,
+.actions a:hover,
+.emptyState button:hover,
+.emptyState a:hover {
+  border-color: var(--wk-color-brand);
+  color: var(--wk-color-brand-active);
+}
+
+.actions button:disabled,
+.emptyState button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.syncStrip {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  border-bottom: 1px solid var(--wk-color-border);
+  padding: 8px 18px;
+  color: var(--wk-color-text-secondary);
+  background: var(--wk-color-surface-subtle);
+  font-size: 12px;
+}
+
+.syncStrip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.syncStrip b {
+  margin-right: 5px;
+  color: var(--wk-color-text-primary);
+}
+
+.notice,
+.error,
+.activationNotice {
+  border-bottom: 1px solid var(--wk-color-border);
+  padding: 8px 18px;
+  font-size: 12px;
+}
+
+.activationNotice {
+  color: var(--wk-color-warning-text);
+  background: var(--wk-color-warning-soft);
+}
+
+.feedback {
+  min-width: 0;
+  min-height: 0;
+}
+
+.notice {
+  color: var(--wk-color-success-text);
+  background: var(--wk-color-success-soft);
+}
+
+.error {
+  color: var(--wk-color-danger-text);
+  background: var(--wk-color-danger-soft);
+}
+
+.embeddedHost {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wk-color-surface);
+}
+
+.emptyState,
+.loadingState {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wk-color-text-secondary);
+}
+
+.emptyState {
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  text-align: center;
+}
+
+.emptyState h2,
+.emptyState p {
+  margin: 0;
+}
+
+.emptyState h2 {
+  color: var(--wk-color-text-primary);
+  font-size: 18px;
+}
+
+.emptyState p {
+  max-width: 620px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.loadingState {
+  gap: 8px;
+  font-size: 13px;
+}
+
+.loadingState svg {
+  animation: zhenxiWorkspaceSpin 1s linear infinite;
+}
+
+.embeddedHost[data-embedded-ready="true"] .loadingState {
+  visibility: hidden;
+}
+
+@keyframes zhenxiWorkspaceSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .actions {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .actions button,
+  .actions a {
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+}

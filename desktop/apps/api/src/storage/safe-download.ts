@@ -14,6 +14,7 @@ export type SafeDownloadOptions = {
   maxContentLength: number;
   maxBodyLength: number;
   headersForUrl?: (url: string) => Record<string, string>;
+  allowLoopbackOrigins?: string[];
 };
 
 export type SafeDownloadRuntime = {
@@ -37,7 +38,7 @@ export async function downloadBoundedBytes(
   let currentUrl = sourceUrl;
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-    const target = await resolvePublicDownloadTarget(currentUrl, lookup);
+    const target = await resolvePublicDownloadTarget(currentUrl, lookup, options.allowLoopbackOrigins);
     const pinnedLookup = createPinnedLookup(target.hostname, target.addresses);
     const agent = target.url.protocol === "https:"
       ? new https.Agent({ lookup: pinnedLookup })
@@ -88,6 +89,7 @@ export async function downloadBoundedBytes(
 export async function resolvePublicDownloadTarget(
   input: string,
   lookup: typeof dns.lookup = dns.lookup,
+  allowLoopbackOrigins: string[] = [],
 ): Promise<{ url: URL; hostname: string; addresses: ResolvedAddress[] }> {
   let url: URL;
   try {
@@ -100,7 +102,8 @@ export async function resolvePublicDownloadTarget(
   }
   if (url.username || url.password) throw new BadRequestException("asset URL credentials are forbidden");
   const hostname = normalizeHostname(url.hostname);
-  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost")) {
+  const allowLoopback = isAllowedLoopbackOrigin(url, allowLoopbackOrigins);
+  if (!hostname || ((hostname === "localhost" || hostname.endsWith(".localhost")) && !allowLoopback)) {
     throw new BadRequestException("asset URL must resolve only to public addresses");
   }
 
@@ -114,10 +117,25 @@ export async function resolvePublicDownloadTarget(
     if (error instanceof BadRequestException) throw error;
     throw new BadRequestException("asset URL DNS resolution did not produce public addresses");
   }
-  if (!resolved.length || resolved.some((item) => !isPublicAddress(item.address))) {
+  if (!resolved.length || resolved.some((item) => !isPublicAddress(item.address) && !(allowLoopback && isLoopbackAddress(item.address)))) {
     throw new BadRequestException("asset URL must resolve only to public addresses");
   }
   return { url, hostname, addresses: resolved };
+}
+
+function isAllowedLoopbackOrigin(url: URL, allowedOrigins: string[]): boolean {
+  if (!allowedOrigins.length || !isLoopbackHostname(url.hostname)) return false;
+  return allowedOrigins.map(strictOrigin).filter(Boolean).includes(url.origin);
+}
+
+function strictOrigin(value: string): string {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.origin;
+  } catch {
+    return "";
+  }
 }
 
 function normalizeLookupResults(value: unknown): ResolvedAddress[] {
@@ -199,6 +217,29 @@ function isPublicIpv4(address: string): boolean {
     ["224.0.0.0", 4],
     ["240.0.0.0", 4],
   ].some(([base, bits]) => ipv4PrefixMatch(value, String(base), Number(bits)));
+}
+
+function isLoopbackHostname(input: string): boolean {
+  const hostname = normalizeHostname(input);
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
+  return isLoopbackAddress(hostname);
+}
+
+function isLoopbackAddress(input: string): boolean {
+  const address = normalizeHostname(input);
+  const family = net.isIP(address);
+  if (family === 4) return ipv4PrefixMatch(ipv4Value(address), "127.0.0.0", 8);
+  if (family !== 6) return false;
+  const words = parseIpv6Words(address);
+  if (!words) return false;
+  return matchesIpv6Prefix(words, "::1", 128)
+    || (matchesIpv6Prefix(words, "::ffff:0:0", 96)
+      && ipv4PrefixMatch(((words[6] << 16) + words[7]) >>> 0, "127.0.0.0", 8));
+}
+
+function ipv4Value(address: string): number {
+  const octets = address.split(".").map(Number);
+  return (((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]) >>> 0;
 }
 
 function ipv4PrefixMatch(value: number, base: string, bits: number) {

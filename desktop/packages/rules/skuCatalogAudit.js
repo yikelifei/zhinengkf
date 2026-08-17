@@ -234,6 +234,9 @@ function auditSkuCatalog(skus = [], options = {}) {
     bundleSizeRiskCount,
     bundleAutomationRiskCount,
   });
+  const dataReadiness = options.includeDataReadiness
+    ? summarizeSkuDataReadiness(skuList, options.changeLogs)
+    : undefined;
   return {
     total: skuList.length,
     readyCount: Math.max(0, skuList.length - issueRowKeys.size),
@@ -289,9 +292,78 @@ function auditSkuCatalog(skus = [], options = {}) {
     repairQueueCount: repairQueue.length,
     blockingRepairCount,
     commercialReadiness,
+    ...(dataReadiness ? { dataReadiness } : {}),
     repairQueue,
     issues,
   };
+}
+
+function summarizeSkuDataReadiness(skus = [], changeLogs = []) {
+  const activeSkus = (Array.isArray(skus) ? skus : []).filter((sku) => sku?.isActive !== false);
+  const operatorSources = new Set(["manual_form", "import_confirm", "manual_create", "manual_upsert", "bulk_import"]);
+  const operatorProvidedCodes = new Set(
+    (Array.isArray(changeLogs) ? changeLogs : [])
+      .filter((log) => operatorSources.has(String(log?.source || "")))
+      .map((log) => String(log?.skuCode || "").trim())
+      .filter(Boolean),
+  );
+  const demoImageCodes = new Set(
+    activeSkus
+      .filter((sku) => [sku?.mainImagePath, ...(Array.isArray(sku?.angleImages) ? sku.angleImages : [])]
+        .some(isDemoSkuImageReference))
+      .map((sku) => String(sku?.skuCode || "").trim())
+      .filter(Boolean),
+  );
+  const operatorProvidedCount = activeSkus.filter((sku) => operatorProvidedCodes.has(String(sku?.skuCode || "").trim())).length;
+  const customerReplyEligibleSkuCodes = activeSkus.filter((sku) => {
+    const code = String(sku?.skuCode || "").trim();
+    return operatorProvidedCodes.has(code)
+      && Boolean(String(sku?.mainImagePath || "").trim())
+      && !demoImageCodes.has(code);
+  }).map((sku) => String(sku?.skuCode || "").trim());
+  const customerReplyEligibleCount = customerReplyEligibleSkuCodes.length;
+  const demoImageCount = demoImageCodes.size;
+  const unverifiedCount = Math.max(0, activeSkus.length - customerReplyEligibleCount);
+  const level = activeSkus.length === 0
+    ? "empty"
+    : customerReplyEligibleCount === activeSkus.length
+      ? "verified"
+      : customerReplyEligibleCount > 0
+        ? "partial"
+        : "test_only";
+  const blockers = [];
+  if (!activeSkus.length) blockers.push("商品库为空");
+  if (operatorProvidedCount < activeSkus.length) blockers.push(`${activeSkus.length - operatorProvidedCount} 个 SKU 没有人工表单或导入来源记录`);
+  if (demoImageCount) blockers.push(`${demoImageCount} 个 SKU 仍使用演示图片`);
+  const nextActions = [];
+  if (operatorProvidedCount < activeSkus.length) nextActions.push("通过商品导入页写入真实 SKU、售价、库存、供应商和交期");
+  if (demoImageCount) nextActions.push("替换演示图片为真实商品主图和多角度图");
+  return {
+    level,
+    totalCount: activeSkus.length,
+    operatorProvidedCount,
+    demoImageCount,
+    customerReplyEligibleCount,
+    customerReplyEligibleSkuCodes,
+    unverifiedCount,
+    internalTestReady: activeSkus.length > 0,
+    customerReplyReady: activeSkus.length > 0 && customerReplyEligibleCount === activeSkus.length,
+    summary: level === "verified"
+      ? "全部在售 SKU 均有人工导入来源且未使用演示图片，可进入客户回复验收。"
+      : level === "partial"
+        ? "部分商品已具备真实数据来源，其余商品仍只适合内部测试。"
+        : level === "test_only"
+          ? "目录结构可用于员工测试，但没有 SKU 完成真实数据来源与真实图片验收。"
+          : "商品库为空，不能进行商品事实回复。",
+    blockers,
+    nextActions,
+  };
+}
+
+function isDemoSkuImageReference(value) {
+  const normalized = String(value || "").trim().replace(/\\/g, "/").toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes("/starter-skus/") || /(?:^|[-_.])demo(?:[-_.]|$)/.test(normalized.split("/").pop() || "");
 }
 
 function addIssue(issues, sku, severity, code, message, details = {}) {
@@ -967,4 +1039,5 @@ module.exports = {
   auditSkuCatalog,
   buildSkuRepairQueue,
   isLikelyImageBuffer,
+  summarizeSkuDataReadiness,
 };

@@ -23,6 +23,48 @@ export class ReviewsController {
     return this.reviews.list({ wechatAccountId, conversationId, customerId });
   }
 
+  @Get("design-jobs/:id")
+  getDesignJob(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.reviews.getDesignJob(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
+
+  @Get("quotes/:id")
+  getQuote(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.reviews.getQuote(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
+
+  @Get("orders/:id")
+  getOrder(
+    @Param("id") id: string,
+    @Query("wechatAccountId") wechatAccountId?: string,
+    @Query("conversationId") conversationId?: string,
+    @Query("customerId") customerId?: string,
+  ) {
+    return this.reviews.getOrder(id, {
+      expectedWechatAccountId: wechatAccountId,
+      expectedConversationId: conversationId,
+      expectedCustomerId: customerId,
+    });
+  }
+
   @Post("design-jobs/:id")
   @RequireOperatorCapability("approve_send")
   reviewDesignJob(

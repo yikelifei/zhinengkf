@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "matrixVersion": "2026-07-13",
+  "matrixVersion": "2026-07-25-enterprise-wechat-only",
   "defaultMode": "local-safe",
   "modeDefinitions": {
     "mock": "独立临时数据、NestJS API、Next.js Web 与本地模拟设计平台；不访问真实外部系统。",
-    "local-safe": "包含 mock，并验证本机安全队列、企微加密回调、个人微信 dispatch/no-send 和 CRM 回归；不真实发信、不确认付款。",
-    "real-external": "只读探测真实设计平台、企业微信配置和个人微信桥接就绪度；必须显式传入 --allow-external-readiness。"
+    "local-safe": "包含 mock，并验证本机安全队列、企业微信加密回调、CRM 回归和内部付款凭证台账；不真实发信、不调用外部支付网关、不启动个人微信。",
+    "real-external": "只读探测真实设计平台和企业微信配置就绪度；必须显式传入 --allow-external-readiness；不探测个人微信。"
   },
   "requiredCapabilities": [
     "api_web_startup",
@@ -13,17 +13,23 @@
     "inbound_message",
     "manual_reply_safe_queue",
     "wechat_work_callback_safety",
-    "personal_wechat_dry_run",
     "design_job",
     "crm",
+    "commerce_lifecycle_journey",
+    "commerce_lifecycle_contracts",
+    "training_governance_contracts",
+    "training_agent_ai_journey",
     "automation_rules",
     "mobile_390_layout"
   ],
   "safetyPolicy": {
     "defaultNetworkScope": "loopback-only",
     "realMessageSend": "forbidden",
-    "paymentMutation": "forbidden",
+    "paymentMutation": "external_forbidden_internal_ledger_allowed",
     "legacyDirectWechatSend": "forbidden",
+    "allowedInternalPaymentMutations": [
+      "/api/quotes/:id/verify-payment-proof"
+    ],
     "allowedLocalAdapters": [
       "dry_run",
       "windows_bridge_dispatch_only"
@@ -33,7 +39,6 @@
       "/api/wechat/send-tasks/:id/mark-sent",
       "/api/wechat/send-tasks/:id/mark-sent-current-window",
       "/api/wechat/send-tasks/:id/bridge-ack",
-      "/api/quotes/:id/verify-payment-proof",
       "/api/chat/send"
     ],
     "forcedEnvironment": {
@@ -72,18 +77,7 @@
       "titleZh": "人工回复安全入队（现有发送队列入口）",
       "sideEffectClass": "local-ephemeral",
       "mutatesExternal": false,
-      "acceptance": "显式三元身份校验后只生成 queued 任务，不生成发送尝试、不标记 sent。",
-      "knownLimit": "当前自由文本入口复用 send-tasks/demo 验收夹具；旧版 /api/chat/send 会直接操作微信，因此默认验收明确禁用。"
-    },
-    {
-      "id": "LSF-PERSONAL-BRIDGE-001",
-      "capability": "personal_wechat_dry_run",
-      "mode": "local-safe",
-      "handler": "personal_bridge_no_send",
-      "titleZh": "个人微信桥接 dispatch/no-send",
-      "sideEffectClass": "local-ephemeral",
-      "mutatesExternal": false,
-      "acceptance": "安全闸门通过后仅写 outbox/dispatch；个人微信桥接在 PERSONAL_WECHAT_SEND=0 时只观察并跳过，无 ack、无 sent。"
+      "acceptance": "真实会话人工回复接口在显式三元身份校验后只生成 manual_reply queued 任务，不生成发送尝试、不标记 sent。"
     },
     {
       "id": "MCK-INBOUND-001",
@@ -140,10 +134,50 @@
       "capability": "acceptance_infrastructure",
       "mode": "local-safe",
       "handler": "contract_regression",
-      "titleZh": "身份、入站、桥接、自动化契约回归",
+      "titleZh": "身份、企业微信入站、自动化契约回归",
       "sideEffectClass": "temp-files-only",
       "mutatesExternal": false,
-      "acceptance": "复用现有 Node 测试，不建立平行业务实现。"
+      "acceptance": "复用身份绑定、企业微信入站鉴权、企业微信生产就绪度和自动化 Node 测试，不建立平行业务实现。"
+    },
+    {
+      "id": "LSF-COMMERCE-JOURNEY-001",
+      "capability": "commerce_lifecycle_journey",
+      "mode": "local-safe",
+      "handler": "commerce_lifecycle_journey",
+      "titleZh": "Commerce lifecycle local-safe end-to-end journey",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "Creates a customer-bound design job, submits it to the local mock design platform, selects a candidate image, creates a quote, records an internal payment-proof ledger event, confirms the order, advances production, shipment and delivery, and only queues Enterprise WeChat customer messages without real payment gateway calls or real sending."
+    },
+    {
+      "id": "LSF-COMMERCE-001",
+      "capability": "commerce_lifecycle_contracts",
+      "mode": "local-safe",
+      "handler": "commerce_contract_regression",
+      "titleZh": "Commerce lifecycle contract regression",
+      "sideEffectClass": "temp-files-only",
+      "mutatesExternal": false,
+      "acceptance": "Reuses design creation, quote creation, internal payment-event ledger, payment boundary, order fulfillment state machine, follow-up messaging and commerce page responsibility tests without real external payment confirmation or message sending."
+    },
+    {
+      "id": "LSF-TRAINING-GOVERNANCE-001",
+      "capability": "training_governance_contracts",
+      "mode": "local-safe",
+      "handler": "training_governance_regression",
+      "titleZh": "Training and trusted-operator governance regression",
+      "sideEffectClass": "temp-files-only",
+      "mutatesExternal": false,
+      "acceptance": "Reuses chat training, scoped samples, agent skill suggestions, training overview, trusted-operator policy and high-risk route guard tests without real message sending or external mutation."
+    },
+    {
+      "id": "LSF-TRAINING-AGENT-AI-001",
+      "capability": "training_agent_ai_journey",
+      "mode": "local-safe",
+      "handler": "training_agent_ai_journey",
+      "titleZh": "Training to Agent reply local-safe journey",
+      "sideEffectClass": "local-ephemeral",
+      "mutatesExternal": false,
+      "acceptance": "Imports a customer-bound chat transcript, reviews the sample into ready training memory, applies scoped Agent skill suggestions, verifies same-identity Agent reply drafting and knowledge matching through the inbound workflow, verifies cross-identity skill isolation, and proves AI provider failure falls back to the rule draft without real sending."
     },
     {
       "id": "MCK-UI390-001",
@@ -183,21 +217,6 @@
         "企业微信 Corp ID、Secret、Token、EncodingAESKey、OpenKfId",
         "企业微信可达的公网 HTTPS 回调地址",
         "external_userid 到本地客户/会话的正式映射"
-      ]
-    },
-    {
-      "id": "EXT-PERSONAL-001",
-      "capability": "personal_wechat_dry_run",
-      "mode": "real-external",
-      "handler": "external_personal_wechat_readiness",
-      "titleZh": "真实个人微信桥接只读就绪探测",
-      "sideEffectClass": "read-only-external",
-      "mutatesExternal": false,
-      "acceptance": "通道和桥接 worker 报告就绪；不粘贴、不按回车、不写 sent ack。",
-      "externalDependencies": [
-        "已登录且经授权的个人微信 PC 客户端",
-        "可核验当前账号与聊天对象的窗口观察能力",
-        "人工确认后的真实桥接发送授权"
       ]
     }
   ]

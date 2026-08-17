@@ -4,10 +4,10 @@ import type { ReactNode } from "react";
 export type WorkspaceSectionId =
   | "overview-center"
   | "conversation-center"
+  | "wecom-workspace"
   | "routing-center"
   | "send-center"
   | "wechat-channel-center"
-  | "personal-wechat-center"
   | "design-platform-config"
   | "asset-center"
   | "design-center"

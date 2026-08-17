@@ -1,0 +1,824 @@
+{
+  "meta": {
+    "title": "小石客服第二批脱敏原话人工精选样本",
+    "createdAt": "2026-08-14T10:03:54.251Z",
+    "sourceBatch": "wechat_kb_小石_20260814094610586_7133e7",
+    "sourceSessionCount": 8,
+    "sourceTurnPairCount": 261,
+    "selectedSampleCount": 30,
+    "excludedPairCount": 231,
+    "exactDuplicateCount": 0,
+    "reviewMode": "required",
+    "statement": "客服回复来自原聊天相邻消息，仅做隐私脱敏；没有改写为标准答案。"
+  },
+  "counts": {
+    "ready": 11,
+    "review": 19
+  },
+  "agentCounts": {
+    "pre_sales": 25,
+    "gift_design": 4,
+    "logistics_exception": 1
+  },
+  "duplicates": [],
+  "samples": [
+    {
+      "id": "xiaoshi_curated_b2_001",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_003",
+        "pairId": "xiaoshi_session_003:8",
+        "lineStart": 42,
+        "lineEnd": 43
+      },
+      "customerMessages": [
+        "价格能优惠吗"
+      ],
+      "humanReplyMessages": [
+        "您什么时候需要呢，咱这边是哪里的"
+      ],
+      "customerText": "价格能优惠吗",
+      "humanReply": "您什么时候需要呢，咱这边是哪里的",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "议价时先确认使用时间和地区，不承诺具体优惠。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_002",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:13",
+        "lineStart": 62,
+        "lineEnd": 65
+      },
+      "customerMessages": [
+        "[附件]",
+        "左边巧克力取消 多少钱"
+      ],
+      "humanReplyMessages": [
+        "还要漫威的盲盒嘛",
+        "种子还要么"
+      ],
+      "customerText": "[附件]\n左边巧克力取消 多少钱",
+      "humanReply": "还要漫威的盲盒嘛\n种子还要么",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "删减单品后先确认其余搭配范围，再重新核价。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_003",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:4",
+        "lineStart": 17,
+        "lineEnd": 19
+      },
+      "customerMessages": [
+        "好贵[捂脸]",
+        "行，我再看看吧"
+      ],
+      "humanReplyMessages": [
+        "咱这边预算多少，礼品可以调整"
+      ],
+      "customerText": "好贵[捂脸]\n行，我再看看吧",
+      "humanReply": "咱这边预算多少，礼品可以调整",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 73,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "客户觉得贵时先问预算，并说明礼品可以调整。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_004",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:18",
+        "lineStart": 103,
+        "lineEnd": 105
+      },
+      "customerMessages": [
+        "不想要这款笔记本",
+        "太可爱我是这个意思"
+      ],
+      "humanReplyMessages": [
+        "哦哦要简单款哈"
+      ],
+      "customerText": "不想要这款笔记本\n太可爱我是这个意思",
+      "humanReply": "哦哦要简单款哈",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 51,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "把客户对太可爱的否定反馈翻译成简单款偏好。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_005",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_004",
+        "pairId": "xiaoshi_session_004:2",
+        "lineStart": 4,
+        "lineEnd": 6
+      },
+      "customerMessages": [
+        "[附件]",
+        "这款怎么卖的"
+      ],
+      "humanReplyMessages": [
+        "您要多少份呀"
+      ],
+      "customerText": "[附件]\n这款怎么卖的",
+      "humanReply": "您要多少份呀",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 51,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "只问价格时先补数量。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_006",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_005",
+        "pairId": "xiaoshi_session_005:9",
+        "lineStart": 49,
+        "lineEnd": 50
+      },
+      "customerMessages": [
+        "那你也让点儿，咱们也干的也挺多。我要是买好了，我就多给你介绍几个顾客"
+      ],
+      "humanReplyMessages": [
+        "您要多少呀"
+      ],
+      "customerText": "那你也让点儿，咱们也干的也挺多。我要是买好了，我就多给你介绍几个顾客",
+      "humanReply": "您要多少呀",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 51,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "客户要求让价时先确认数量。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_007",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_005",
+        "pairId": "xiaoshi_session_005:28",
+        "lineStart": 137,
+        "lineEnd": 138
+      },
+      "customerMessages": [
+        "再便宜点"
+      ],
+      "humanReplyMessages": [
+        "多少份"
+      ],
+      "customerText": "再便宜点",
+      "humanReply": "多少份",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 36,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "继续压价时用极短问题补数量。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_008",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_001",
+        "pairId": "xiaoshi_session_001:3",
+        "lineStart": 15,
+        "lineEnd": 18
+      },
+      "customerMessages": [
+        "[附件]",
+        "[附件]",
+        "要这种袋子，里面的东西可以更换一下吗"
+      ],
+      "humanReplyMessages": [
+        "您要多少呀"
+      ],
+      "customerText": "[附件]\n[附件]\n要这种袋子，里面的东西可以更换一下吗",
+      "humanReply": "您要多少呀",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 51,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "客户要求换内搭时先确认采购数量。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_009",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:8",
+        "lineStart": 31,
+        "lineEnd": 35
+      },
+      "customerMessages": [
+        "[附件]",
+        "这个做一份多少钱啊",
+        "你们有漫威主题的伴手礼",
+        "娃百日宴的回礼"
+      ],
+      "humanReplyMessages": [
+        "您要多少呀"
+      ],
+      "customerText": "[附件]\n这个做一份多少钱啊\n你们有漫威主题的伴手礼\n娃百日宴的回礼",
+      "humanReply": "您要多少呀",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 66,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "主题伴手礼询价先问数量。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_010",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:19",
+        "lineStart": 87,
+        "lineEnd": 89
+      },
+      "customerMessages": [
+        "[附件]",
+        "就是这个巧克力取消 种子换盲盒 外面加卡片和漫威挂饰"
+      ],
+      "humanReplyMessages": [
+        "您预期价格多少呢"
+      ],
+      "customerText": "[附件]\n就是这个巧克力取消 种子换盲盒 外面加卡片和漫威挂饰",
+      "humanReply": "您预期价格多少呢",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 57,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "客户明确组合改动后继续确认预期价格。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_011",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:28",
+        "lineStart": 161,
+        "lineEnd": 163
+      },
+      "customerMessages": [
+        "不定了，班费有点拮据"
+      ],
+      "humanReplyMessages": [
+        "好呢",
+        "以后有需要再来找我哈"
+      ],
+      "customerText": "不定了，班费有点拮据",
+      "humanReply": "好呢\n以后有需要再来找我哈",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 69,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "ready",
+      "reviewNote": "客户明确不购买时简短收口并保留后续联系。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_012",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:21",
+        "lineStart": 123,
+        "lineEnd": 126
+      },
+      "customerMessages": [
+        "下边这种笔记本，也能给加个青春不散场的标签吗"
+      ],
+      "humanReplyMessages": [
+        "那个是腰封定做的",
+        "可以",
+        "我们自己做的"
+      ],
+      "customerText": "下边这种笔记本，也能给加个青春不散场的标签吗",
+      "humanReply": "那个是腰封定做的\n可以\n我们自己做的",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 78,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含具体腰封定制能力，启用前需核对当前工艺。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_013",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:5",
+        "lineStart": 21,
+        "lineEnd": 22
+      },
+      "customerMessages": [
+        "三四十"
+      ],
+      "humanReplyMessages": [
+        "可以做的，需要调换产品"
+      ],
+      "customerText": "三四十",
+      "humanReply": "可以做的，需要调换产品",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 55,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含特定预算可做的可行性判断，需结合实时商品库。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_014",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:15",
+        "lineStart": 87,
+        "lineEnd": 90
+      },
+      "customerMessages": [
+        "那如果再去掉水壶呢"
+      ],
+      "humanReplyMessages": [
+        "用两个包装比较浪费",
+        "包包+本子+笔直接这样可以",
+        "选个性价比高一点的本子和笔"
+      ],
+      "customerText": "那如果再去掉水壶呢",
+      "humanReply": "用两个包装比较浪费\n包包+本子+笔直接这样可以\n选个性价比高一点的本子和笔",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 69,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含具体组合与包装成本判断，需结合当前商品和包装尺寸。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_015",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_001",
+        "pairId": "xiaoshi_session_001:6",
+        "lineStart": 30,
+        "lineEnd": 32
+      },
+      "customerMessages": [
+        "[引用消息] 这个把里面的粽子换掉 - 李洳宣: [引用附件]"
+      ],
+      "humanReplyMessages": [
+        "艾草锤，香薰挂件，包包",
+        "换眼罩可以吗"
+      ],
+      "customerText": "[引用消息] 这个把里面的粽子换掉 - 李洳宣: [引用附件]",
+      "humanReply": "艾草锤，香薰挂件，包包\n换眼罩可以吗",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 69,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含具体替换品建议，需核对当前库存和适配性。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_016",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_007",
+        "pairId": "xiaoshi_session_007:3",
+        "lineStart": 14,
+        "lineEnd": 16
+      },
+      "customerMessages": [
+        "光买外包装呢"
+      ],
+      "humanReplyMessages": [
+        "您要几个包",
+        "还有挂件"
+      ],
+      "customerText": "光买外包装呢",
+      "humanReply": "您要几个包\n还有挂件",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 63,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包装和挂件范围依赖前序附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_017",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_007",
+        "pairId": "xiaoshi_session_007:11",
+        "lineStart": 47,
+        "lineEnd": 51
+      },
+      "customerMessages": [
+        "[附件]",
+        "这哥成本多少",
+        "[附件]",
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "只要包装吗"
+      ],
+      "customerText": "[附件]\n这哥成本多少\n[附件]\n[附件]",
+      "humanReply": "只要包装吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 72,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "报价范围澄清合理，但客户问题依赖附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_018",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:22",
+        "lineStart": 128,
+        "lineEnd": 131
+      },
+      "customerMessages": [
+        "笔是就那一种吗？"
+      ],
+      "humanReplyMessages": [
+        "有别的，想要什么笔",
+        "中性笔一只",
+        "黑色那种"
+      ],
+      "customerText": "笔是就那一种吗？",
+      "humanReply": "有别的，想要什么笔\n中性笔一只\n黑色那种",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 63,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含具体笔款信息，需核对当前商品。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_019",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:32",
+        "lineStart": 139,
+        "lineEnd": 142
+      },
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "一模一样吗",
+        "给您寄过样品吗",
+        "[附件]"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "一模一样吗\n给您寄过样品吗\n[附件]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 76,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "样品对比问题依赖客户图片。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_020",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:44",
+        "lineStart": 203,
+        "lineEnd": 205
+      },
+      "customerMessages": [
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "亲你把里面东西拿出来我看看",
+        "拍一下包里面底部"
+      ],
+      "customerText": "[附件]",
+      "humanReply": "亲你把里面东西拿出来我看看\n拍一下包里面底部",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 55,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "要求补拍包内和底部是好逻辑，但当前问题只有附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_021",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:42",
+        "lineStart": 195,
+        "lineEnd": 198
+      },
+      "customerMessages": [
+        "对的",
+        "品质怎样"
+      ],
+      "humanReplyMessages": [
+        "我找一下货",
+        "你最好把照片给我多拍一下"
+      ],
+      "customerText": "对的\n品质怎样",
+      "humanReply": "我找一下货\n你最好把照片给我多拍一下",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 63,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "质量核验需要更多实拍图，但上下文不完整。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_022",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_002",
+        "pairId": "xiaoshi_session_002:7",
+        "lineStart": 27,
+        "lineEnd": 28
+      },
+      "customerMessages": [
+        "操作方便吗"
+      ],
+      "humanReplyMessages": [
+        "很方便，只需要把螺钿粘上去，照灯就可以，小朋友也可以做"
+      ],
+      "customerText": "操作方便吗",
+      "humanReply": "很方便，只需要把螺钿粘上去，照灯就可以，小朋友也可以做",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 67,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "包含具体手作步骤，需核对商品教程。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_023",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_003",
+        "pairId": "xiaoshi_session_003:10",
+        "lineStart": 49,
+        "lineEnd": 50
+      },
+      "customerMessages": [
+        "能加急吗"
+      ],
+      "humanReplyMessages": [
+        "现在仓库单子太多了这个不能保证，尽快加急"
+      ],
+      "customerText": "能加急吗",
+      "humanReply": "现在仓库单子太多了这个不能保证，尽快加急",
+      "scene": "物流异常",
+      "agentKey": "logistics_exception",
+      "score": 55,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "不保证加急的边界合理，但仓库状态具有时效性。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_024",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_003",
+        "pairId": "xiaoshi_session_003:1",
+        "lineStart": 3,
+        "lineEnd": 8
+      },
+      "customerMessages": [
+        "我先看看要什么"
+      ],
+      "humanReplyMessages": [
+        "我们这边是定制伴手礼的，我先发您一些产品册看一下哈",
+        "[附件] pdf]",
+        "[附件] pptx]",
+        "[附件] pdf]",
+        "[附件] pptx]"
+      ],
+      "customerText": "我先看看要什么",
+      "humanReply": "我们这边是定制伴手礼的，我先发您一些产品册看一下哈\n[附件] pdf]\n[附件] pptx]\n[附件] pdf]\n[附件] pptx]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "回复依赖后续产品册附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_025",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:14",
+        "lineStart": 84,
+        "lineEnd": 85
+      },
+      "customerMessages": [
+        "双肩包，水壶，再能来个这个套盒里只需要放一个本子一支笔就行"
+      ],
+      "humanReplyMessages": [
+        "[捂脸]超预算啦"
+      ],
+      "customerText": "双肩包，水壶，再能来个这个套盒里只需要放一个本子一支笔就行",
+      "humanReply": "[捂脸]超预算啦",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 61,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "超预算判断依赖前序预算上下文。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_026",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_006",
+        "pairId": "xiaoshi_session_006:17",
+        "lineStart": 98,
+        "lineEnd": 101
+      },
+      "customerMessages": [
+        "对[捂脸]"
+      ],
+      "humanReplyMessages": [
+        "您要哪一款可以选一个",
+        "也可以选两三款掺和一下",
+        "到时候随机放"
+      ],
+      "customerText": "对[捂脸]",
+      "humanReply": "您要哪一款可以选一个\n也可以选两三款掺和一下\n到时候随机放",
+      "scene": "礼盒设计",
+      "agentKey": "gift_design",
+      "score": 61,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "混装建议需核对商品、数量和交付规则。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_027",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_005",
+        "pairId": "xiaoshi_session_005:3",
+        "lineStart": 13,
+        "lineEnd": 20
+      },
+      "customerMessages": [
+        "我发那个黄色的那个多少钱呀"
+      ],
+      "humanReplyMessages": [
+        "里面的单品您给我发一下",
+        "黄色的包搭配的单品不一样哈",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]",
+        "[附件]"
+      ],
+      "customerText": "我发那个黄色的那个多少钱呀",
+      "humanReply": "里面的单品您给我发一下\n黄色的包搭配的单品不一样哈\n[附件]\n[附件]\n[附件]\n[附件]\n[附件]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 84,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "同色包存在不同搭配的判断依赖附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_028",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_008",
+        "pairId": "xiaoshi_session_008:46",
+        "lineStart": 211,
+        "lineEnd": 214
+      },
+      "customerMessages": [
+        "这个质量是很好的",
+        "[附件]"
+      ],
+      "humanReplyMessages": [
+        "好的我看一下",
+        "我们之前有很多厂家的资源能做这款包，我需要找一下厂家的联系方式，这边需要您先等一下，可以吗"
+      ],
+      "customerText": "这个质量是很好的\n[附件]",
+      "humanReply": "好的我看一下\n我们之前有很多厂家的资源能做这款包，我需要找一下厂家的联系方式，这边需要您先等一下，可以吗",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 75,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "找厂家核实的流程可参考，但资源声明和具体商品需验证。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_029",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_001",
+        "pairId": "xiaoshi_session_001:2",
+        "lineStart": 8,
+        "lineEnd": 13
+      },
+      "customerMessages": [
+        "50以下"
+      ],
+      "humanReplyMessages": [
+        "[附件] pdf]",
+        "您看下这个哈",
+        "[附件] pdf]",
+        "[附件] pdf]",
+        "[附件] pdf]"
+      ],
+      "customerText": "50以下",
+      "humanReply": "[附件] pdf]\n您看下这个哈\n[附件] pdf]\n[附件] pdf]\n[附件] pdf]",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 61,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "回复主要依赖产品册附件。"
+    },
+    {
+      "id": "xiaoshi_curated_b2_030",
+      "sourceRef": {
+        "batch": "wechat_kb_小石_20260814094610586_7133e7",
+        "session": "xiaoshi_session_002",
+        "pairId": "xiaoshi_session_002:20",
+        "lineStart": 90,
+        "lineEnd": 93
+      },
+      "customerMessages": [
+        "散发是什么"
+      ],
+      "humanReplyMessages": [
+        "就是吧单品分开发您",
+        "自己组装，一般选一些简单款式比较简单的",
+        "不过今天订整套发应该还来得及"
+      ],
+      "customerText": "散发是什么",
+      "humanReply": "就是吧单品分开发您\n自己组装，一般选一些简单款式比较简单的\n不过今天订整套发应该还来得及",
+      "scene": "售前转化",
+      "agentKey": "pre_sales",
+      "score": 61,
+      "authenticity": "sanitized_verbatim",
+      "editing": "Privacy sanitization only; the human reply was not rewritten.",
+      "status": "review",
+      "reviewNote": "散发定义可参考，但末尾含一次性交期判断。"
+    }
+  ]
+}

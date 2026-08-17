@@ -38,14 +38,17 @@ const services = [
   },
 ];
 
-main().catch((error) => {
-  console.error(error?.stack || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
 
 async function main() {
   fs.mkdirSync(logsDir, { recursive: true });
   writeRuntimeConfig();
+  await assertNoPreexistingListeners(services);
 
   const children = [];
   try {
@@ -54,13 +57,15 @@ async function main() {
     }
 
     let failed = false;
-    for (const service of services) {
-      const ok = await waitForHealth(service.url, timeoutMs);
-      if (ok) {
+    for (let index = 0; index < services.length; index += 1) {
+      const service = services[index];
+      const child = children[index];
+      const health = await waitForServiceHealth(service, child, timeoutMs);
+      if (health.ok) {
         console.log(`[ok] ${service.label}: ${service.url}`);
       } else {
         failed = true;
-        console.log(`[fail] ${service.label}: ${service.url}`);
+        console.log(`[fail] ${service.label}: ${service.url} (${health.reason})`);
         printTail(path.join(logsDir, `smoke-${service.name}.err.log`));
         printTail(path.join(logsDir, `smoke-${service.name}.out.log`));
       }
@@ -76,6 +81,18 @@ async function main() {
       stopProcessTree(child.pid);
     }
   }
+}
+
+async function assertNoPreexistingListeners(targetServices = services) {
+  const occupied = [];
+  for (const service of targetServices) {
+    if (await isHealthy(service.url)) occupied.push(service);
+  }
+  if (!occupied.length) return;
+  const summary = occupied.map((service) => `${service.label} ${service.url}`).join("; ");
+  throw new Error(
+    `Smoke target already responds before smoke start: ${summary}. Stop the existing stack or set WEB_PORT/API_PORT/MOCK_DESIGN_PLATFORM_PORT to free ports.`,
+  );
 }
 
 function startService(service) {
@@ -99,12 +116,19 @@ function startService(service) {
 }
 
 async function waitForHealth(url, timeout) {
+  return (await waitForServiceHealth({ label: url, url }, { exitCode: null }, timeout)).ok;
+}
+
+async function waitForServiceHealth(service, child, timeout) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
-    if (await isHealthy(url)) return true;
+    if (child.exitCode !== null) {
+      return { ok: false, reason: `process exited with code ${child.exitCode}` };
+    }
+    if (await isHealthy(service.url)) return { ok: true };
     await sleep(500);
   }
-  return false;
+  return { ok: false, reason: `timed out after ${timeout}ms` };
 }
 
 function isHealthy(url) {
@@ -139,6 +163,8 @@ function defaultEnv() {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
     USE_LOCAL_STORE: process.env.USE_LOCAL_STORE || "true",
+    SMART_KEFU_RUNTIME_TARGET: process.env.SMART_KEFU_RUNTIME_TARGET || "desktop",
+    LOW_VALUE_AUTOMATION_MODE: process.env.LOW_VALUE_AUTOMATION_MODE || "interval",
     WEB_PORT: String(webPort),
     API_PORT: String(apiPort),
     MOCK_DESIGN_PLATFORM_PORT: String(mockPort),
@@ -184,3 +210,11 @@ function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
 }
+
+module.exports = {
+  assertNoPreexistingListeners,
+  isHealthy,
+  main,
+  waitForHealth,
+  waitForServiceHealth,
+};

@@ -74,6 +74,29 @@ test("LocalStore claim is durable before adapter execution and arbitrary adapter
   assert.equal(restarted.localStore.listSendAttempts({ sendTaskId: task.id }).length, 1);
 });
 
+test("operator can abandon an unknown delivery without claiming sent or not sent", async (t) => {
+  const fixture = setupFixture(t);
+  const task = createReadyTask(fixture.localStore, "obsolete clarification with unknown delivery");
+  fixture.sendAdapter.execute = () => {
+    throw new Error("injected uncertain adapter result");
+  };
+
+  fixture.service.executeSend(task.id, { adapter: "windows_bridge" });
+  const resolved = await fixture.service.resolveUnknownSendDelivery(task.id, {
+    operationKey: "abandon-local-adapter-unknown-1",
+    resolution: "abandoned_unknown",
+    reason: "obsolete test clarification; preserve unknown delivery and continue the account queue",
+    ...expectedIdentity(),
+  }, "test-operator");
+
+  assert.equal(resolved.status, "cancelled");
+  assert.equal(resolved.guardSnapshot.deliveryState, "abandoned_unknown");
+  assert.equal(resolved.guardSnapshot.manualReviewRequired, false);
+  assert.equal(resolved.guardSnapshot.automaticRetryBlocked, false);
+  assert.equal(resolved.guardSnapshot.manualDeliveryResolution.resolution, "abandoned_unknown");
+  assert.equal(fixture.localStore.getLatestSendAttempt(task.id).status, "cancelled");
+});
+
 test("real outbox parent-file write failure settles task and attempt as failed and permits explicit requeue", async (t) => {
   const fixture = setupFixture(t);
   const task = createReadyTask(fixture.localStore, "outbox parent is a regular file");

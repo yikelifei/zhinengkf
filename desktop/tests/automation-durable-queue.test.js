@@ -164,6 +164,28 @@ test("production rejects an explicit interval mode instead of starting a local t
   assert.equal(result.stdout.includes("secret"), false);
 });
 
+test("packaged desktop runtime can use local interval automation without weakening server production defaults", () => {
+  const script = [
+    'require("ts-node").register({transpileOnly:true,compilerOptions:{module:"CommonJS"}});',
+    'const {appConfig}=require("./apps/api/src/shared/app-config");',
+    'process.stdout.write(JSON.stringify({mode:appConfig.lowValueAutomationMode}));',
+  ].join("");
+  const result = spawnSync(process.execPath, ["-e", script], {
+    cwd: path.resolve(__dirname, ".."),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      SMART_KEFU_RUNTIME_TARGET: "desktop",
+      DESKTOP_ENV_FILE: path.join(__dirname, "missing-production.env"),
+      LOW_VALUE_AUTOMATION_MODE: "",
+      LOW_VALUE_AUTOMATION_REDIS_URL: "",
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { mode: "interval" });
+});
+
 test("durable start upserts one scheduler, sets global concurrency one, and never configures job retry", async () => {
   const fake = createFakeFactory();
   const runtime = new AutomationQueueRuntime(durableConfig(), async () => ({ trigger: "interval", errors: [] }), fake.factory);

@@ -9,6 +9,10 @@ const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
 const component = read("apps/web/src/components/operations-overview.tsx");
+const overviewPage = read("apps/web/src/features/overview/overview-page.tsx");
+const overviewData = read("apps/web/src/features/overview/use-overview-data.ts");
+const overviewRoute = read("apps/web/src/app/overview-route-feature.tsx");
+const automationPresentation = read("apps/web/src/features/overview/automation-status-presentation.ts");
 const css = read("apps/web/src/components/operations-overview.module.css");
 
 test("operations overview exposes an accessible overview-center workspace", () => {
@@ -28,6 +32,8 @@ test("overview follows the dense Tencent-style operational information hierarchy
   assert.match(component, /className=\{styles\.insightGrid\}/);
   assert.match(component, /渠道状态/);
   assert.match(component, /待处理事项/);
+  assert.match(component, /上线计划/);
+  assert.match(component, /企业微信上线计划/);
   assert.match(component, /自动化与训练/);
   assert.doesNotMatch(component, /快捷操作|quickActions|footerActions/);
   assert.match(component, /最近会话/);
@@ -42,6 +48,9 @@ test("channels, actions, metrics, and conversations are rendered from caller-own
   assert.match(component, /channels\.length\s*\?\s*channels\.map\(\(channel\)\s*=>/);
   assert.match(component, /actions\.reduce\(\(sum, item\)\s*=>\s*sum \+ Number\(item\.count \|\| 0\), 0\)/);
   assert.match(component, /actions\.length\s*\?\s*actions\.map\(\(action\)\s*=>/);
+  assert.match(component, /launchLoaded \? \(/);
+  assert.match(component, /launchItems\.map\(\(item\)\s*=>/);
+  assert.match(component, /\{item\.action\}/);
   assert.match(component, /metrics\.map\(\(metric\)\s*=>/);
   assert.match(component, /conversations\.length\s*\?\s*\(/);
   assert.match(component, /conversations\.map\(\(conversation\)\s*=>/);
@@ -60,6 +69,7 @@ test("overview actions delegate refresh, navigation, conversation, and automatio
   assert.match(component, /onClick=\{conversation\.onOpen\}/);
   assert.match(component, /onClick=\{onOpenConversations\}/);
   assert.match(component, /onClick=\{onOpenChannels\}/);
+  assert.match(component, /onClick=\{onOpenLaunchPlan\}/);
   assert.match(component, /onClick=\{onRunAutomation\}\s+disabled=\{busy\}/);
 
   assert.equal(
@@ -71,6 +81,24 @@ test("overview actions delegate refresh, navigation, conversation, and automatio
     (component.match(/onClick=\{onOpenChannels\}/g) || []).length >= 2,
     "channel management should remain reachable from populated and empty states",
   );
+});
+
+test("overview surfaces delivery readiness as a first-screen production handoff signal", () => {
+  assert.match(overviewData, /getDeliveryReadiness/);
+  assert.match(overviewPage, /type OverviewDestination =[\s\S]*\|\s*"delivery"/);
+  assert.match(overviewPage, /id:\s*"delivery-readiness"/);
+  assert.match(overviewPage, /onClick:\s*\(\)\s*=>\s*navigate\("delivery"\)/);
+  assert.match(overviewPage, /id:\s*"delivery"/);
+  assert.match(overviewPage, /deliveryReadiness !== null/);
+  assert.match(overviewRoute, /delivery:\s*"\/settings\/delivery-readiness"/);
+});
+
+test("overview distinguishes durable scheduling from the optional in-process loop", () => {
+  assert.match(overviewPage, /automationOverviewPresentation/);
+  assert.match(automationPresentation, /持久调度运行中/);
+  assert.match(automationPresentation, /status\.mode === "durable"/);
+  assert.match(automationPresentation, /进程内循环无需保持激活/);
+  assert.doesNotMatch(overviewPage, /automationStatus\?\.active \? "周期自动化运行中" : automationStatus \? "周期自动化已停止"/);
 });
 
 test("component contains no embedded demo records or mock operational metrics", () => {

@@ -27,7 +27,7 @@ test("art image local status cannot use process memory and requires durable exec
   }
 });
 
-test("art image local request accepts loopback local asset references", async () => {
+test("art image local request accepts loopback local asset references and enforces four candidates", async () => {
   const client = new DesignPlatformClient();
   const request = await client.buildArtImageLocalRequest({
     requestId: "request-loopback-refs",
@@ -61,7 +61,8 @@ test("art image local request accepts loopback local asset references", async ()
     requirements: { useRealSkuImages: true },
   });
 
-  assert.equal(request.count, 6);
+  assert.equal(request.count, 4);
+  assert.equal(request.concurrency, 4);
   assert.ok(request.objectRefs.includes("http://127.0.0.1:3000/local-assets/customer-logo.png"));
   assert.ok(request.objectRefs.includes("http://127.0.0.1:3000/local-assets/box-a.png"));
   assert.ok(request.objectRefs.includes("http://localhost:3000/generated/tea-a.png"));

@@ -24,6 +24,7 @@ const {
 const { waitForUrl } = require("../tools/smoke-packaged-api");
 const {
   SCHEMA_VERSION,
+  checkPortableExecutable,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
   sha256FileStream,
@@ -113,6 +114,10 @@ test("packaged services resolve from resources while mutable data resolves under
 
   assert.match(paths.apiEntry, /resources[\\/]services[\\/]api[\\/]main\.js$/);
   assert.match(paths.webEntry, /resources[\\/]services[\\/]web[\\/]apps[\\/]web[\\/]server\.js$/);
+  assert.match(
+    paths.zhenxiMcpServerPath,
+    /resources[\\/]services[\\/]runtime-root[\\/]packages[\\/]mcp[\\/]zhenxi-ai-server\.mjs$/,
+  );
   assert.match(paths.storageDir, /AppData[\\/]Roaming[\\/]Smart Kefu[\\/]storage$/);
   assert.match(paths.readOnlyRoot, /resources[\\/]services[\\/]runtime-root$/);
   assert.doesNotMatch(paths.storageDir, /Program Files[\\/]Smart Kefu[\\/]storage$/);
@@ -131,6 +136,11 @@ test("packaged API and Web receive isolated environments and one trusted token",
   assert.equal(env.INTERNAL_API_TOKEN, token);
   assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(env.NODE_ENV, "production");
+  assert.equal(env.SMART_KEFU_RUNTIME_TARGET, "desktop");
+  assert.match(
+    env.ZHENXI_MCP_SERVER_PATH,
+    /resources[\\/]services[\\/]runtime-root[\\/]packages[\\/]mcp[\\/]zhenxi-ai-server\.mjs$/,
+  );
   assert.match(env.DESKTOP_RUNTIME_DIR, /AppData[\\/]Roaming[\\/]Smart Kefu[\\/]runtime$/);
   assert.match(env.DESKTOP_ENV_FILE, /AppData[\\/]Roaming[\\/]Smart Kefu[\\/]config[\\/]runtime\.env$/);
   assert.match(env.NODE_PATH, /app\.asar[\\/]node_modules/);
@@ -153,29 +163,66 @@ test("electron-builder uses explicit application and service whitelists", () => 
   const config = fs.readFileSync(path.join(root, "electron-builder.yml"), "utf8");
   assert.match(config, /asar: true/);
   assert.match(config, /apps\/electron\/packaged-runtime\.js/);
+  assert.match(config, /apps\/electron\/desktop-session-refresh\.js/);
   assert.match(config, /\.package-provenance\.json/);
   assert.match(config, /packages\/runtime\/service-environment\.js/);
   assert.match(config, /from: dist\/apps\/api/);
   assert.match(config, /from: apps\/web\/\.next\/standalone/);
   assert.match(config, /from: packages\/rules/);
+  assert.match(config, /from: packages\/mcp/);
+  assert.match(config, /to: services\/runtime-root\/packages\/mcp/);
   assert.match(config, /from: tools\/wechat-window-observer\.js/);
   assert.match(config, /from: \.\.\/config\/settings\.yaml/);
   assert.match(config, /to: services\/runtime-root\/config\/settings\.yaml/);
-  assert.match(config, /from: node_modules\/@prisma\/client/);
+  assert.match(config, /extraFiles:/);
+  assert.match(config, /from: packages\/runtime/);
+  assert.match(config, /to: packages\/runtime/);
   assert.match(config, /from: node_modules\/\.prisma\/client/);
-  assert.match(config, /from: node_modules\/sharp/);
-  assert.match(config, /from: node_modules\/@img\/sharp-win32-x64/);
+  assert.match(config, /from: \.package-runtime\/node_modules/);
+  assert.match(config, /to: services\/runtime-root\/node_modules/);
   for (const exclusion of ["!.env", "!.runtime/**", "!storage/**", "!logs/**", "!*.log"]) {
     assert.ok(config.includes(exclusion), `missing exclusion ${exclusion}`);
   }
   assert.match(config, /from: dist\/apps\/api[\s\S]*?filter:\s*\n\s*- '\*\*\/\*\.js'/);
   assert.doesNotMatch(config, /^\s*- \*\*\/\*\s*$/m);
+
+  const verifier = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
+  assert.match(verifier, /\/apps\/electron\/desktop-session-refresh\.js/);
+});
+
+test("NSIS may use a valid x86 bootstrap while the packaged application remains x64-only", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-pe-contract-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const writePe = (name, machine, optionalMagic) => {
+    const file = path.join(directory, name);
+    const content = Buffer.alloc(128);
+    content.write("MZ", 0, "ascii");
+    content.writeUInt32LE(64, 0x3c);
+    content.write("PE\0\0", 64, "binary");
+    content.writeUInt16LE(machine, 68);
+    content.writeUInt16LE(optionalMagic, 88);
+    fs.writeFileSync(file, content);
+    return file;
+  };
+  const x86 = writePe("installer.exe", 0x14c, 0x10b);
+  const x64 = writePe("application.exe", 0x8664, 0x20b);
+  const installerChecks = [];
+  const applicationChecks = [];
+  const rejectedChecks = [];
+  checkPortableExecutable(installerChecks, "installer", x86, ["x86", "x64"]);
+  checkPortableExecutable(applicationChecks, "application", x64);
+  checkPortableExecutable(rejectedChecks, "application", x86);
+  assert.equal(installerChecks[0].status, "PASS");
+  assert.equal(applicationChecks[0].status, "PASS");
+  assert.equal(rejectedChecks[0].status, "FAIL");
 });
 
 test("package scripts pin the official builder and separate unsigned test from signed release", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   assert.equal(packageJson.devDependencies["electron-builder"], "26.15.3");
   assert.equal(packageJson.devDependencies.electron, "42.5.0");
+  assert.equal(packageJson.dependencies["@modelcontextprotocol/sdk"], "^1.30.0");
+  assert.equal(packageJson.dependencies.zod, "^4.4.3");
   assert.match(packageJson.scripts["package:win:test"], /build-windows-package\.js$/);
   assert.match(packageJson.scripts["package:win:signed"], /--signed$/);
 
@@ -183,10 +230,12 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /prisma:generate/);
   assert.match(buildScript, /build:api/);
   assert.match(buildScript, /build:web/);
+  assert.match(buildScript, /prepare-packaged-runtime-dependencies\.js/);
+  assert.match(buildScript, /\.package-runtime[\s\S]*node_modules[\s\S]*tslib[\s\S]*tslib\.js/);
   assert.match(buildScript, /FORCE_WEB_CLEAN_BUILD: "1"/);
   assert.match(buildScript, /process\.env\.npm_execpath/);
   assert.match(buildScript, /smoke-packaged-api\.js/);
-  assert.match(buildScript, /sharp-win32-x64\.node/);
+  assert.match(buildScript, /sharp-win32-x64-0\.35\.3\.node/);
   assert.match(buildScript, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
   assert.match(buildScript, /ELECTRON_BUILDER_CACHE/);
   assert.match(buildScript, /CSC_LINK or WIN_CSC_SUBJECT_NAME/);
@@ -195,11 +244,29 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /Repository HEAD changed/);
 });
 
+test("packaged runtime dependency staging copies the production dependency closure", () => {
+  const source = fs.readFileSync(path.join(root, "tools", "prepare-packaged-runtime-dependencies.js"), "utf8");
+  assert.match(source, /packageRoot\.dependencies/);
+  assert.match(source, /lockEntry\.dependencies/);
+  assert.match(source, /lockEntry\.optionalDependencies/);
+  assert.match(source, /lockEntry\.peerDependencies/);
+  assert.match(source, /function findDependencyPackageKey\(packageLock, parentKey, dependencyName\)/);
+  assert.match(source, /`\$\{parentKey\}\/node_modules\/\$\{dependencyName\}`/);
+  assert.match(source, /function copyDependencyDirectory\(source, target\)/);
+  assert.match(source, /function linkOrCopyFile\(source, target\)/);
+  assert.match(source, /fs\.linkSync\(source, target\)/);
+  assert.match(source, /fs\.copyFileSync\(source, target\)/);
+  assert.match(source, /smart_kefu_packaged_runtime_dependencies_v1/);
+  assert.match(source, /module\.exports/);
+});
+
 test("packaged smoke waits for child shutdown before another build can replace resources", () => {
   const smoke = fs.readFileSync(path.join(root, "tools", "smoke-packaged-api.js"), "utf8");
-  assert.match(smoke, /await Promise\.all\(processes\.reverse\(\)\.map\(stopChild\)\)/);
+  assert.match(smoke, /SMART_KEFU_RUNTIME_TARGET: "desktop"/);
+  assert.match(smoke, /for \(const child of processes\.reverse\(\)\) await stopChild\(child\)/);
   assert.match(smoke, /child\.once\("exit"/);
   assert.match(smoke, /terminateProcessTree\(child\)/);
+  assert.match(smoke, /child\.kill\(\) && await waitForChildExit\(child, 3000\)/);
   assert.match(smoke, /createSmokeWorkspace\(\)/);
   assert.doesNotMatch(smoke, /PACKAGED_SMOKE_RUNTIME_DIR/);
   assert.doesNotMatch(smoke, /fs\.rmSync\(smokeRoot/);
@@ -209,6 +276,9 @@ test("packaged smoke waits for child shutdown before another build can replace r
   const chain = fs.readFileSync(path.join(root, "tools", "windows-evidence-chain.js"), "utf8");
   assert.match(chain, /trustedWindowsSystemTool\("taskkill\.exe"\)/);
   assert.match(chain, /\["\/PID", String\(pid\), "\/T", "\/F"\]/);
+  assert.match(chain, /child\.kill\(\)/);
+  assert.match(chain, /await waitForProcessExit\(pid, process\.platform === "win32" \? 3000 : 1000\)/);
+  assert.match(chain, /await waitForProcessExit\(pid, 15000\)/);
   assert.match(chain, /await waitForProcessExit\(pid\)/);
   assert.match(smoke, /require\(\"sharp\"\)/);
   assert.match(smoke, /dhash64:v1:0000000000000000/);

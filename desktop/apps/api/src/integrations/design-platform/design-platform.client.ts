@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import axios, {
   AxiosAdapter,
   AxiosHeaders,
@@ -13,9 +13,13 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { appConfig } from "../../shared/app-config";
 import { rules } from "../../shared/rules";
+import {
+  ZhenxiMcpClientService,
+  ZhenxiMcpToolError,
+} from "../zhenxi-mcp/zhenxi-mcp-client.service";
 import { DesignPlatformJobPayload } from "./design-platform.types";
 
-const { inspectRealDesignReferences } = rules;
+const { CUSTOMER_DESIGN_CANDIDATE_COUNT, inspectRealDesignReferences } = rules;
 
 const trustedValidateStatus = (status: number) => status >= 200 && status < 300;
 
@@ -59,11 +63,50 @@ export type ArtImageLocalGenerationOutcome =
       httpStatus?: number;
     };
 
+export type ZhenxiCopyGenerationOutcome =
+  | { status: "completed"; prompts: string[]; selectedPrompt: string; requestId: string }
+  | { status: "failed" | "outcome_unknown"; prompts: []; errorCode: string; errorMessage: string; requestId: string };
+
 type ArtImageLocalResult = {
   url?: string | null;
   status?: "success" | "failed" | string;
   error?: string;
   prompt?: string;
+};
+
+type ArtImageLocalSlotOutcome =
+  | {
+      status: "completed";
+      slot: number;
+      image: DesignImageResult;
+      refundStatus: "not_required" | "credit_bypass" | "refunded" | "failed" | "unknown";
+      refundSummary?: Record<string, unknown>;
+      httpStatus: number;
+    }
+  | {
+      status: "failed";
+      slot: number;
+      refundStatus: "refunded" | "not_required" | "credit_bypass" | "failed" | "unknown";
+      refundSummary?: Record<string, unknown>;
+      errorCode: string;
+      errorMessage: string;
+      httpStatus: number;
+    }
+  | {
+      status: "outcome_unknown";
+      slot: number;
+      refundStatus: "unknown";
+      errorCode: string;
+      errorMessage: string;
+      httpStatus?: number;
+    };
+
+type ZhenxiExternalMultipartFile = {
+  fieldName: string;
+  fileName: string;
+  mimeType: string;
+  buffer: Buffer;
+  localPath?: string;
 };
 
 type ArtImageLocalActivationStatus = {
@@ -136,7 +179,7 @@ export class DesignPlatformClient {
   private transport: AxiosAdapter;
   private readonly guardedAdapter: AxiosAdapter;
 
-  constructor() {
+  constructor(@Optional() private readonly zhenxiMcp?: ZhenxiMcpClientService) {
     this.transport = axios.getAdapter(axios.defaults.adapter);
     this.guardedAdapter = async (config) => {
       this.applyTrustedRequestBoundary(config);
@@ -179,6 +222,62 @@ export class DesignPlatformClient {
     });
   }
 
+  async generateZhenxiCopy(input: {
+    prompt: string;
+    requestId: string;
+    module: "poster_copy" | "xiaohongshu" | "detail_page" | "video_script";
+    ratio?: string;
+  }): Promise<ZhenxiCopyGenerationOutcome> {
+    if (!this.zhenxiMcp?.enabled()) {
+      return {
+        status: "failed",
+        prompts: [],
+        requestId: input.requestId,
+        errorCode: "ZHENXI_MCP_DISABLED",
+        errorMessage: "Zhenxi MCP is disabled",
+      };
+    }
+    try {
+      const health = await this.zhenxiMcp.health();
+      if (health.reachable !== true) {
+        throw new ZhenxiMcpToolError("Zhenxi AI is not ready", { code: "ZHENXI_HEALTH_NOT_READY" });
+      }
+      const result = await this.zhenxiMcp.generateCopy({
+        brief: input.prompt,
+        requestId: input.requestId,
+        module: input.module,
+        ratio: input.ratio || appConfig.designPlatformImageRatio,
+      });
+      const prompts = Array.isArray(result.prompts)
+        ? result.prompts.map((value) => String(value || "").trim()).filter(Boolean)
+        : [];
+      if (!prompts.length) {
+        return {
+          status: "outcome_unknown",
+          prompts: [],
+          requestId: input.requestId,
+          errorCode: "ZHENXI_COPY_RESULT_INVALID",
+          errorMessage: "Zhenxi AI returned no usable copy result",
+        };
+      }
+      return {
+        status: "completed",
+        prompts,
+        selectedPrompt: String(result.selectedPrompt || prompts[0]),
+        requestId: String(result.requestId || input.requestId),
+      };
+    } catch (error) {
+      const known = error instanceof ZhenxiMcpToolError ? error : null;
+      return {
+        status: known?.outcomeUnknown ? "outcome_unknown" : "failed",
+        prompts: [],
+        requestId: input.requestId,
+        errorCode: known?.code || "ZHENXI_COPY_FAILED",
+        errorMessage: known?.message || this.publicErrorMessage(error),
+      };
+    }
+  }
+
   static createForTesting(transport: AxiosAdapter) {
     if (typeof transport !== "function") {
       throw new TypeError("design platform test transport must be an Axios adapter function");
@@ -189,9 +288,22 @@ export class DesignPlatformClient {
   }
 
   async health() {
-    if (this.useArtImageLocalAdapter()) {
+    if (this.useZhenxiExternalAdapter()) {
+      if (!this.zhenxiMcp?.enabled()) {
+        throw new Error("Zhenxi MCP is disabled; release generation cannot use a direct external API fallback");
+      }
+      return {
+        adapter: appConfig.designPlatformAdapter,
+        ...(await this.zhenxiMcp.health()),
+        transport: "mcp_stdio",
+      };
+    }
+    if (this.useZhenxiAiLoopbackAdapter()) {
       const response = await this.http.get("api/health");
-      const data = this.unwrapApiData(response.data);
+      const unwrapped = this.unwrapApiData(response.data);
+      const data = this.useArtImageLocalAdapter()
+        ? await this.enrichArtImageLocalHealth(unwrapped, this.http)
+        : unwrapped;
       return {
         adapter: appConfig.designPlatformAdapter,
         ...(isRecord(data) ? data : { data }),
@@ -203,9 +315,22 @@ export class DesignPlatformClient {
   }
 
   async publicHealth() {
-    if (this.useArtImageLocalAdapter()) {
+    if (this.useZhenxiExternalAdapter()) {
+      if (!this.zhenxiMcp?.enabled()) {
+        throw new Error("Zhenxi MCP is disabled; release generation cannot use a direct external API fallback");
+      }
+      return {
+        adapter: appConfig.designPlatformAdapter,
+        ...(await this.zhenxiMcp.health()),
+        transport: "mcp_stdio",
+      };
+    }
+    if (this.useZhenxiAiLoopbackAdapter()) {
       const response = await this.publicHttp.get("api/health");
-      const data = this.unwrapApiData(response.data);
+      const unwrapped = this.unwrapApiData(response.data);
+      const data = this.useArtImageLocalAdapter()
+        ? await this.enrichArtImageLocalHealth(unwrapped, this.publicHttp)
+        : unwrapped;
       return {
         adapter: appConfig.designPlatformAdapter,
         ...(isRecord(data) ? data : { data }),
@@ -216,13 +341,13 @@ export class DesignPlatformClient {
     return response.data;
   }
 
-  async getArtImageLocalAuthSession(): Promise<ArtImageLocalAuthSession> {
+  async getArtImageLocalAuthSession(deviceId = ""): Promise<ArtImageLocalAuthSession> {
     if (!this.useArtImageLocalAdapter()) {
       return { required: false, authenticated: true, reason: "not_required" };
     }
 
     try {
-      const response = await this.http.get("api/auth/session");
+      const response = await this.http.get("api/auth/session", artImageLocalDeviceHeaders(deviceId));
       const data = this.unwrapApiData(response.data) as Record<string, unknown>;
       return {
         required: true,
@@ -245,12 +370,12 @@ export class DesignPlatformClient {
     }
   }
 
-  async getArtImageLocalActivationStatus(): Promise<ArtImageLocalActivationStatus> {
+  async getArtImageLocalActivationStatus(deviceId = ""): Promise<ArtImageLocalActivationStatus> {
     if (!this.useArtImageLocalAdapter()) {
       return { required: false, active: true, reason: "not_required" };
     }
 
-    const response = await this.http.get("api/activation/status");
+    const response = await this.http.get("api/activation/status", artImageLocalDeviceHeaders(deviceId));
     return this.unwrapApiData(response.data) as ArtImageLocalActivationStatus;
   }
 
@@ -266,17 +391,11 @@ export class DesignPlatformClient {
       throw new Error("email, password and deviceId are required for design platform login");
     }
 
-    const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
     const response = await this.http.post(
       "api/auth/login",
       { email, password, deviceId },
       {
-        headers: {
-          "x-art-client": "art-ai-studio",
-          "x-art-device-id": deviceId,
-          Origin: base,
-          Referer: `${base}/`,
-        },
+        headers: artImageLocalServerHeaders(deviceId),
       },
     );
     const data = this.unwrapApiData(response.data) as Record<string, unknown>;
@@ -305,25 +424,19 @@ export class DesignPlatformClient {
       throw new Error("activation code and deviceId are required for design platform activation");
     }
 
-    const base = appConfig.designPlatformBaseUrl.replace(/\/+$/, "");
     const response = await this.http.post(
       "api/activation/redeem",
       { code, deviceId, deviceLabel },
       {
-        headers: {
-          "x-art-client": "art-ai-studio",
-          "x-art-device-id": deviceId,
-          Origin: base,
-          Referer: `${base}/`,
-        },
+        headers: artImageLocalServerHeaders(deviceId),
       },
     );
     return this.unwrapApiData(response.data);
   }
 
   async createDesignJob(payload: DesignPlatformJobPayload) {
-    if (this.useArtImageLocalAdapter()) {
-      throw new Error("art_image_local generation must be dispatched through DesignPlatformExecutionService");
+    if (this.useDurableGenerationAdapter()) {
+      throw new Error(`${appConfig.designPlatformAdapter} generation must be dispatched through DesignPlatformExecutionService`);
     }
 
     const response = await this.http.post("v1/design-jobs", payload);
@@ -334,14 +447,17 @@ export class DesignPlatformClient {
     if (this.useArtImageLocalAdapter()) {
       return this.uploadArtImageLocalAsset(payload);
     }
+    if (this.useZhenxiExternalAdapter()) {
+      return this.prepareZhenxiExternalAsset(payload);
+    }
 
     const response = await this.http.post("v1/assets/upload", payload);
     return response.data;
   }
 
   async getDesignJob(externalJobId: string) {
-    if (this.useArtImageLocalAdapter()) {
-      throw new Error(`art_image_local status must be read from durable execution: ${externalJobId}`);
+    if (this.useDurableGenerationAdapter()) {
+      throw new Error(`${appConfig.designPlatformAdapter} status must be read from durable execution: ${externalJobId}`);
     }
 
     const response = await this.http.get(`v1/design-jobs/${encodeURIComponent(externalJobId)}`);
@@ -352,13 +468,16 @@ export class DesignPlatformClient {
     if (this.useArtImageLocalAdapter()) {
       throw new Error(`art_image_local results must be read from durable execution: ${externalJobId}`);
     }
+    if (this.useZhenxiExternalAdapter()) {
+      throw new Error(`zhenxi_external results must be read from durable execution: ${externalJobId}`);
+    }
 
     const response = await this.http.get(`v1/design-jobs/${encodeURIComponent(externalJobId)}/results`);
     return response.data;
   }
 
   async cancelDesignJob(externalJobId: string) {
-    if (this.useArtImageLocalAdapter()) {
+    if (this.useDurableGenerationAdapter()) {
       return {
         externalJobId,
         status: "cancelled",
@@ -374,8 +493,24 @@ export class DesignPlatformClient {
     return this.useArtImageLocalAdapter();
   }
 
+  isDurableGenerationAdapter() {
+    return this.useDurableGenerationAdapter();
+  }
+
   private useArtImageLocalAdapter() {
     return appConfig.designPlatformAdapter === "art_image_local";
+  }
+
+  private useZhenxiExternalAdapter() {
+    return appConfig.designPlatformAdapter === "zhenxi_external";
+  }
+
+  private useZhenxiAiLoopbackAdapter() {
+    return this.useArtImageLocalAdapter() || this.useZhenxiExternalAdapter();
+  }
+
+  private useDurableGenerationAdapter() {
+    return this.useArtImageLocalAdapter() || this.useZhenxiExternalAdapter();
   }
 
   private applyTrustedRequestBoundary(config: InternalAxiosRequestConfig) {
@@ -463,93 +598,474 @@ export class DesignPlatformClient {
     };
   }
 
+  private async prepareZhenxiExternalAsset(payload: Record<string, unknown>) {
+    const localPath = typeof payload.localPath === "string" ? payload.localPath : "";
+    if (!localPath || !path.isAbsolute(localPath)) {
+      throw new Error("asset localPath is required for zhenxi_external adapter");
+    }
+
+    const fileName = sanitizeMultipartFileName(
+      String(payload.fileName || path.basename(localPath) || `${randomUUID()}.png`),
+    );
+    const mimeType = inferMimeType(String(payload.mimeType || ""), fileName, localPath);
+    const buffer = await readFile(localPath);
+    return {
+      assetId: localPath,
+      remoteAssetId: localPath,
+      url: localPath,
+      localPath,
+      fileName,
+      mimeType,
+      size: buffer.length,
+    };
+  }
+
+  private async enrichArtImageLocalHealth(data: unknown, http: AxiosInstance) {
+    if (!isRecord(data)) return data;
+    const localDemo = isRecord(data.localDemo) ? data.localDemo : {};
+    if (typeof localDemo.localGenerateEnabled === "boolean") return data;
+
+    const localGenerateEnabled = await this.probeArtImageLocalGenerateEndpoint(http);
+    if (typeof localGenerateEnabled !== "boolean") return data;
+    return {
+      ...data,
+      localDemo: {
+        ...localDemo,
+        localGenerateEnabled,
+      },
+    };
+  }
+
+  private async probeArtImageLocalGenerateEndpoint(http: AxiosInstance): Promise<boolean | null> {
+    try {
+      const response = await http.request({ method: "OPTIONS", url: "api/local-generate" });
+      return artImageLocalGenerateAvailabilityFromHeaders(response.headers);
+    } catch (error) {
+      if (!axios.isAxiosError(error) || !error.response) return null;
+      const availability = artImageLocalGenerateAvailabilityFromHeaders(error.response.headers);
+      if (typeof availability === "boolean") return availability;
+      if (error.response.status === 404) return false;
+      return null;
+    }
+  }
+
   async executeArtImageLocalGeneration(
     payload: DesignPlatformJobPayload,
     externalJobId: string,
   ): Promise<ArtImageLocalGenerationOutcome> {
+    let requestBody: Awaited<ReturnType<DesignPlatformClient["buildArtImageLocalRequest"]>>;
     try {
-      const requestBody = await this.buildArtImageLocalRequest({ ...payload, requestId: externalJobId });
-      const response = await this.http.post("api/local-generate", requestBody);
+      requestBody = await this.buildArtImageLocalRequest({ ...payload, requestId: externalJobId });
+    } catch (error) {
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: "not_required",
+        errorCode: "LOCAL_REQUEST_BUILD_FAILED",
+        errorMessage: this.publicErrorMessage(error),
+        httpStatus: 0,
+      };
+    }
+
+    const slotOutcomes = await Promise.all(
+      Array.from({ length: CUSTOMER_DESIGN_CANDIDATE_COUNT }, (_, index) =>
+        this.executeArtImageLocalSlot(requestBody, externalJobId, index + 1),
+      ),
+    );
+    const unknown = slotOutcomes.find((outcome) => outcome.status === "outcome_unknown");
+    if (unknown?.status === "outcome_unknown") {
+      return {
+        status: "outcome_unknown",
+        images: [],
+        refundStatus: "unknown",
+        errorCode: unknown.errorCode,
+        errorMessage: `candidate slot ${unknown.slot} outcome is unknown; automatic retry is blocked: ${unknown.errorMessage}`,
+        ...(unknown.httpStatus ? { httpStatus: unknown.httpStatus } : {}),
+      };
+    }
+
+    const knownOutcomes = slotOutcomes.filter(
+      (outcome): outcome is Exclude<ArtImageLocalSlotOutcome, { status: "outcome_unknown" }> =>
+        outcome.status !== "outcome_unknown",
+    );
+    const refund = aggregateArtImageSlotRefunds(knownOutcomes);
+    const successful = knownOutcomes.filter(
+      (outcome): outcome is Extract<ArtImageLocalSlotOutcome, { status: "completed" }> => outcome.status === "completed",
+    );
+    const httpStatus = Math.max(0, ...knownOutcomes.map((outcome) => Number(outcome.httpStatus || 0)));
+    if (!successful.length) {
+      const failed = knownOutcomes.filter(
+        (outcome): outcome is Extract<ArtImageLocalSlotOutcome, { status: "failed" }> => outcome.status === "failed",
+      );
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: refund.status,
+        refundSummary: refund.summary,
+        errorCode: "MACHINE_TERMINAL_ALL_FAILED",
+        errorMessage: failed.map((outcome) => `slot ${outcome.slot}: ${outcome.errorMessage}`).join("; "),
+        httpStatus,
+      };
+    }
+
+    return {
+      status: "completed",
+      images: successful.map((outcome) => outcome.image),
+      refundStatus: refund.status,
+      refundSummary: refund.summary,
+      httpStatus,
+    };
+  }
+
+  private async executeArtImageLocalSlot(
+    requestBody: Awaited<ReturnType<DesignPlatformClient["buildArtImageLocalRequest"]>>,
+    externalJobId: string,
+    slot: number,
+  ): Promise<ArtImageLocalSlotOutcome> {
+    const prompts = Array.isArray(requestBody.prompts) ? requestBody.prompts : [];
+    const prompt = String(prompts[slot - 1] || requestBody.prompt || "").trim();
+    const slotRequest = {
+      ...requestBody,
+      requestId: `${externalJobId}:slot:${slot}`,
+      prompt,
+      prompts: [prompt],
+      count: 1,
+      concurrency: 1,
+    };
+    try {
+      const response = await this.http.post("api/local-generate", slotRequest);
       const data = this.unwrapApiData(response.data) as { results?: ArtImageLocalResult[]; credits?: unknown; refund?: unknown };
-      if (!isRecord(data) || !Array.isArray(data.results)) {
+      if (!isRecord(data) || !Array.isArray(data.results) || data.results.length !== 1) {
         return {
           status: "outcome_unknown",
-          images: [],
+          slot,
           refundStatus: "unknown",
-          errorCode: "MALFORMED_SUCCESS_RESPONSE",
-          errorMessage: "design platform returned malformed 2xx response; acceptance and refund are unknown",
+          errorCode: "MALFORMED_SLOT_SUCCESS_RESPONSE",
+          errorMessage: "design platform did not return exactly one result for the dispatched candidate slot",
           httpStatus: Number(response.status || 200),
         };
       }
       // Run the existing recursive sanitizer as a defense-in-depth assertion; durable storage uses a stricter field whitelist.
       void sanitizeArtImageLocalRaw(data);
-      const results = data.results;
-      const successful = results.filter((item) => item.status === "success" && item.url);
+      const [result] = data.results;
       const refund = artImageRefundOutcome(data);
-
-      if (!successful.length) {
-        const firstError = results.find((item) => item.error)?.error || "design platform returned no generated images";
+      if (result.status === "success" && result.url) {
+        const dimensions = parseImageSize(appConfig.designPlatformImageSize);
         return {
-          status: "failed",
-          images: [],
-          refundStatus: refund.status,
+          status: "completed",
+          slot,
+          image: {
+            imageId: `candidate_${slot}`,
+            downloadUrl: this.absoluteDesignPlatformUrl(String(result.url)),
+            width: dimensions.width,
+            height: dimensions.height,
+          },
+          refundStatus: refund.status === "unknown" ? "not_required" : refund.status,
           refundSummary: refund.summary,
-          errorCode: "MACHINE_TERMINAL_ALL_FAILED",
-          errorMessage: firstError,
           httpStatus: Number(response.status || 200),
         };
       }
-
+      if (result.status === "failed") {
+        return {
+          status: "failed",
+          slot,
+          refundStatus: refund.status,
+          refundSummary: refund.summary,
+          errorCode: "MACHINE_TERMINAL_SLOT_FAILED",
+          errorMessage: result.error || "design platform returned no generated image for this candidate slot",
+          httpStatus: Number(response.status || 200),
+        };
+      }
       return {
-        status: "completed",
-        images: successful.map((item, index) => ({
-          imageId: `candidate_${index + 1}`,
-          downloadUrl: this.absoluteDesignPlatformUrl(String(item.url)),
-          width: parseImageSize(appConfig.designPlatformImageSize).width,
-          height: parseImageSize(appConfig.designPlatformImageSize).height,
-        })),
-        refundStatus:
-          successful.length === results.length && refund.status === "unknown"
-            ? "not_required"
-            : refund.status,
-        refundSummary: refund.summary,
+        status: "outcome_unknown",
+        slot,
+        refundStatus: "unknown",
+        errorCode: "MALFORMED_SLOT_SUCCESS_RESPONSE",
+        errorMessage: "design platform returned a candidate result without a verifiable terminal status and URL",
         httpStatus: Number(response.status || 200),
       };
     } catch (error) {
-      if (!axios.isAxiosError(error)) {
+      const uncertainTransport = isUncertainArtImageDispatchError(error);
+      if (!uncertainTransport && axios.isAxiosError(error) && error.response) {
+        const responseData = isRecord(error.response.data) ? error.response.data : {};
+        const refund = artImageRefundOutcome(responseData);
+        return {
+          status: "failed",
+          slot,
+          refundStatus: refund.status,
+          ...(refund.summary ? { refundSummary: refund.summary } : {}),
+          errorCode: artImageErrorCode(error),
+          errorMessage: this.publicErrorMessage(error),
+          httpStatus: Number(error.response.status || 0),
+        };
+      }
+      return {
+        status: "outcome_unknown",
+        slot,
+        refundStatus: "unknown",
+        errorCode: axios.isAxiosError(error) ? artImageErrorCode(error) : "LOCAL_GENERATION_DISPATCH_OUTCOME_UNKNOWN",
+        errorMessage: this.publicErrorMessage(error),
+        ...(axios.isAxiosError(error) && error.response?.status ? { httpStatus: error.response.status } : {}),
+      };
+    }
+  }
+
+  async executeDurableGeneration(
+    payload: DesignPlatformJobPayload,
+    externalJobId: string,
+  ): Promise<ArtImageLocalGenerationOutcome> {
+    if (this.useZhenxiExternalAdapter()) return this.executeZhenxiExternalGeneration(payload, externalJobId);
+    return this.executeArtImageLocalGeneration(payload, externalJobId);
+  }
+
+  private async executeZhenxiExternalGeneration(
+    payload: DesignPlatformJobPayload,
+    externalJobId: string,
+  ): Promise<ArtImageLocalGenerationOutcome> {
+    if (!this.zhenxiMcp?.enabled()) {
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: "not_required",
+        errorCode: "ZHENXI_MCP_DISABLED",
+        errorMessage: "Zhenxi MCP is disabled; direct external API fallback is prohibited",
+        httpStatus: 0,
+      };
+    }
+    return this.executeZhenxiExternalGenerationViaMcp(payload, externalJobId);
+  }
+
+  private async executeZhenxiExternalGenerationViaMcp(
+    payload: DesignPlatformJobPayload,
+    externalJobId: string,
+  ): Promise<ArtImageLocalGenerationOutcome> {
+    try {
+      if (payload.designType === "zhenxi_image" && payload.requirements?.useRealSkuImages === false) {
+        const settings = zhenxiImageSettings(payload);
+        const data = await this.zhenxiMcp!.generateNativeImages({
+          prompt: buildDesignPrompt(payload),
+          count: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+          size: settings.size,
+          ratio: settings.ratio,
+          requestId: externalJobId,
+          cardType: "空白模板",
+          templateGroupKey: "blank",
+        });
+        return this.zhenxiNativeOutcome(data, settings.size);
+      }
+      const request = await this.buildZhenxiExternalMcpRequest({ ...payload, requestId: externalJobId });
+      const data = await this.zhenxiMcp!.generateDesign(request);
+      return this.zhenxiExternalOutcome(data, 200, request.size);
+    } catch (error) {
+      if (error instanceof ZhenxiMcpToolError) {
+        if (error.outcomeUnknown) {
+          return {
+            status: "outcome_unknown",
+            images: [],
+            refundStatus: "unknown",
+            errorCode: error.code,
+            errorMessage: error.message,
+            ...(error.status ? { httpStatus: error.status } : {}),
+          };
+        }
         return {
           status: "failed",
           images: [],
           refundStatus: "not_required",
-          errorCode: "LOCAL_REQUEST_BUILD_FAILED",
-          errorMessage: this.publicErrorMessage(error),
-          httpStatus: 0,
-        };
-      }
-      if (isUncertainArtImageError(error)) {
-        return {
-          status: "outcome_unknown",
-          images: [],
-          refundStatus: "unknown",
-          errorCode: artImageErrorCode(error),
-          errorMessage: this.publicErrorMessage(error),
-          ...(axios.isAxiosError(error) && error.response?.status ? { httpStatus: error.response.status } : {}),
+          errorCode: error.code,
+          errorMessage: error.message,
+          httpStatus: error.status,
         };
       }
       return {
         status: "failed",
         images: [],
-        refundStatus: "unknown",
-        errorCode: artImageErrorCode(error),
+        refundStatus: "not_required",
+        errorCode: "ZHENXI_MCP_REQUEST_BUILD_FAILED",
         errorMessage: this.publicErrorMessage(error),
-        httpStatus: axios.isAxiosError(error) ? Number(error.response?.status || 0) : 0,
+        httpStatus: 0,
       };
     }
   }
 
+  private zhenxiExternalOutcome(
+    data: Record<string, unknown>,
+    httpStatus: number,
+    imageSize = appConfig.designPlatformImageSize,
+  ): ArtImageLocalGenerationOutcome {
+    if (!isRecord(data) || !Array.isArray(data.images)) {
+      return {
+        status: "outcome_unknown",
+        images: [],
+        refundStatus: "unknown",
+        errorCode: "MALFORMED_SUCCESS_RESPONSE",
+        errorMessage: "zhenxi external API returned malformed 2xx response; acceptance and refund are unknown",
+        httpStatus,
+      };
+    }
+
+    void sanitizeArtImageLocalRaw(data);
+    const results = data.images as ArtImageLocalResult[];
+    const successful = results.filter((item) => item.status === "success" && item.url);
+    const refund = artImageRefundOutcome(data);
+    if (!successful.length) {
+      const firstError = results.find((item) => item.error)?.error || "zhenxi external API returned no generated images";
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: refund.status,
+        refundSummary: refund.summary,
+        errorCode: "MACHINE_TERMINAL_ALL_FAILED",
+        errorMessage: firstError,
+        httpStatus,
+      };
+    }
+
+    return {
+      status: "completed",
+      images: successful.map((item, index) => ({
+        imageId: `candidate_${index + 1}`,
+        downloadUrl: this.absoluteDesignPlatformUrl(String(item.url)),
+        width: parseImageSize(imageSize).width,
+        height: parseImageSize(imageSize).height,
+      })),
+      refundStatus:
+        successful.length === results.length && refund.status === "unknown"
+          ? "not_required"
+          : refund.status,
+      refundSummary: refund.summary,
+      httpStatus,
+    };
+  }
+
+  private zhenxiNativeOutcome(data: Record<string, unknown>, imageSize: string): ArtImageLocalGenerationOutcome {
+    const responses = Array.isArray(data.results)
+      ? data.results.map((entry) => isRecord(entry) ? entry : {})
+      : [{ status: 201, body: data }];
+    const urls = responses
+      .filter((entry) => Number(entry.status || 0) >= 200 && Number(entry.status || 0) < 300)
+      .map((entry) => firstGeneratedImageUrl(isRecord(entry.body) ? entry.body : entry))
+      .filter((value): value is string => Boolean(value));
+    if (!urls.length) {
+      return {
+        status: "outcome_unknown",
+        images: [],
+        refundStatus: "unknown",
+        errorCode: "ZHENXI_NATIVE_RESULT_INVALID",
+        errorMessage: "Zhenxi native MCP returned no verifiable image URL; automatic retry is blocked",
+        httpStatus: 200,
+      };
+    }
+    const dimensions = parseImageSize(imageSize);
+    return {
+      status: "completed",
+      images: urls.map((url, index) => ({
+        imageId: `candidate_${index + 1}`,
+        downloadUrl: this.absoluteDesignPlatformUrl(url),
+        width: dimensions.width,
+        height: dimensions.height,
+      })),
+      refundStatus: "not_required",
+      httpStatus: 200,
+    };
+  }
+
+  private async buildZhenxiExternalRequest(payload: DesignPlatformJobPayload) {
+    const prompt = buildDesignPrompt(payload);
+    const count = CUSTOMER_DESIGN_CANDIDATE_COUNT;
+    const settings = zhenxiImageSettings(payload);
+    const failedAssets = payload.assets.filter((asset) => asset.uploadError);
+    if (failedAssets.length) {
+      throw new Error(`design asset upload failed: ${failedAssets.map((asset) => asset.fileName || asset.assetId).join(", ")}`);
+    }
+
+    const requiresRealImages = payload.requirements?.useRealSkuImages !== false;
+    if (requiresRealImages) {
+      const realRefs = inspectRealDesignReferences({
+        assets: payload.assets,
+        bundle: payload.bundle,
+        requireCustomerAssets: true,
+        requireCompleteBundle: payload.designType !== "zhenxi_image",
+      });
+      if (!realRefs.usableAssetCount) {
+        throw new Error("customer reference image is required for real design generation");
+      }
+      if (payload.designType !== "zhenxi_image" && !realRefs.bundleRefs.length) {
+        throw new Error("SKU or gift-box image is required for real design generation");
+      }
+      if (payload.designType !== "zhenxi_image" && realRefs.unusableBundleImageCount) {
+        throw new Error("every SKU and gift-box item must have a usable PNG/JPG/WebP image before design generation");
+      }
+    }
+
+    const files = await this.zhenxiExternalFiles(payload.assets);
+    if (!files.length) {
+      throw new Error("zhenxi external API requires at least one uploaded reference image file");
+    }
+    if (files.length > 10) {
+      throw new Error("zhenxi external API accepts at most 10 reference image files; reduce SKU/gift-box/customer images before generation");
+    }
+
+    return {
+      body: buildMultipartFormData(
+        {
+          requestId: payload.requestId,
+          prompt,
+          count: String(count),
+          size: settings.size,
+          ratio: settings.ratio,
+          cardType: "空白模板",
+          templateGroupKey: "blank",
+        },
+        files,
+      ),
+      count,
+      referencePaths: files.map((file) => file.localPath).filter((value): value is string => Boolean(value)),
+    };
+  }
+
+  private async buildZhenxiExternalMcpRequest(payload: DesignPlatformJobPayload) {
+    const request = await this.buildZhenxiExternalRequest(payload);
+    const settings = zhenxiImageSettings(payload);
+    return {
+      prompt: buildDesignPrompt(payload),
+      count: request.count,
+      size: settings.size,
+      ratio: settings.ratio,
+      referencePaths: request.referencePaths,
+      requestId: payload.requestId,
+      cardType: "空白模板",
+      templateGroupKey: "blank",
+      copyModule: zhenxiCopyModule(payload),
+    };
+  }
+
+  private async zhenxiExternalFiles(assets: Array<Record<string, unknown>>): Promise<ZhenxiExternalMultipartFile[]> {
+    const files: ZhenxiExternalMultipartFile[] = [];
+    const seen = new Set<string>();
+    for (const asset of assets) {
+      const localPath = String(asset.localPath || asset.filePath || asset.path || "").trim();
+      if (!localPath || !path.isAbsolute(localPath)) continue;
+      const normalized = path.resolve(localPath);
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const fileName = sanitizeMultipartFileName(String(asset.fileName || path.basename(normalized) || `${randomUUID()}.png`));
+      const mimeType = inferMimeType(String(asset.mimeType || ""), fileName, normalized);
+      files.push({
+        fieldName: "files",
+        fileName,
+        mimeType,
+        buffer: await readFile(normalized),
+        localPath: normalized,
+      });
+    }
+    return files;
+  }
+
   private async buildArtImageLocalRequest(payload: DesignPlatformJobPayload) {
     const prompt = buildGiftBoxPrompt(payload);
-    const count = clampInteger(payload.outputCount || appConfig.defaultOutputCount, 1, 6);
+    const count = CUSTOMER_DESIGN_CANDIDATE_COUNT;
     const failedAssets = payload.assets.filter((asset) => asset.uploadError);
     if (failedAssets.length) {
       throw new Error(`design asset upload failed: ${failedAssets.map((asset) => asset.fileName || asset.assetId).join(", ")}`);
@@ -587,6 +1103,7 @@ export class DesignPlatformClient {
       prompt,
       prompts: Array.from({ length: count }, (_, index) => `${prompt}\n\n候选图 ${index + 1}：构图、角度和背景要和其他候选图不同，但商品、礼盒和素材必须一致。`),
       count,
+      concurrency: count,
       size: appConfig.designPlatformImageSize,
       ratio: appConfig.designPlatformImageRatio,
       category: "gift_box",
@@ -645,6 +1162,87 @@ export class DesignPlatformClient {
     }
     return error instanceof Error ? error.message : "unknown design platform error";
   }
+}
+
+function buildDesignPrompt(payload: DesignPlatformJobPayload) {
+  if (payload.designType !== "zhenxi_image") return buildGiftBoxPrompt(payload);
+  const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
+  const prompt = String(zhenxi.prompt || payload.customerText || "").trim();
+  const capability = String(zhenxi.capability || payload.scene || "图片设计").trim();
+  const deliverableLabel = String(zhenxi.deliverableLabel || zhenxi.deliverable || "").trim();
+  const exactCopy = String(zhenxi.copyText || "").trim();
+  const physicalSize = String(zhenxi.physicalSize || "").trim();
+  const logoMode = String(zhenxi.logoMode || "").trim();
+  const visualContentMode = String(zhenxi.visualContentMode || "").trim();
+  const exactCopyOnly = zhenxi.exactCopyOnly === true;
+  const forbidInventedProducts = zhenxi.forbidInventedProducts !== false;
+  const settings = zhenxiImageSettings(payload);
+  const assetCount = payload.assets.filter((asset) => !asset.uploadError).length;
+  return [
+    `设计类型：${capability}`,
+    deliverableLabel ? `交付物：${deliverableLabel}，只制作这一项，不要擅自增加贺卡、吊牌、腰封或其他物料。` : "",
+    `客户原始需求：${prompt}`,
+    exactCopy ? `必须逐字使用以下客户文案，不得改写、增删、转繁体或生成乱码：${exactCopy}` : "",
+    exactCopy ? "指定中文必须使用端正、清晰、结构正确的印刷字形；不得用会改变偏旁、笔画或字义的变形艺术字。" : "",
+    exactCopyOnly ? "除上述指定文案外，画面中禁止出现任何其他汉字、英文、数字、占位文字或装饰性伪文字。" : "",
+    physicalSize ? `实际成品尺寸：${physicalSize}；构图和文字安全边距必须适配这个尺寸。` : "",
+    logoMode === "none" ? "客户明确不放 Logo，禁止添加任何 Logo 或虚构品牌标识。" : "",
+    assetCount ? `参考素材：共 ${assetCount} 张。必须保留素材中的真实产品、人物、Logo、包装和文字，不得擅自替换。` : "本次没有参考素材，只按客户明确描述创作。",
+    visualContentMode === "graphic_only"
+      ? "画面内容模式：纯平面视觉。不得出现或虚构商品、礼盒、包装、杯子、雨伞、毛巾、文具及其他实物产品。"
+      : "",
+    visualContentMode === "real_product"
+      ? "画面内容模式：真实商品展示。只能使用参考素材和已选商品库中的商品，外观、颜色、数量、包装关系必须一致。"
+      : "",
+    forbidInventedProducts && visualContentMode !== "real_product"
+      ? "未提供真实商品素材，禁止为了丰富画面自行增加任何商品或包装。"
+      : "",
+    `输出尺寸：${settings.size}；画幅比例：${settings.ratio}。`,
+    zhenxi.transparent === true ? "背景必须透明。" : "背景按客户需求处理。",
+    "必须高清、无水印。",
+    "成品必须达到可直接发客户确认的商业设计条件：主体完整、文字在安全区内、手机缩略图可读、不得只是无信息的通用占位背景。",
+    "不得虚构客户未提供的 Logo、品牌或组织名、行动号召、预约或联系方式区域、二维码、电话、微信号或网址。",
+    "一次生成 4 张彼此可区分、但都严格符合上述需求的候选设计稿。",
+    payload.revision ? `修改要求：${JSON.stringify(payload.revision)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function zhenxiImageSettings(payload: DesignPlatformJobPayload) {
+  const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
+  const requestedSize = String(zhenxi.size || "").trim();
+  const requestedRatio = String(zhenxi.ratio || "").trim();
+  return {
+    size: /^\d{2,5}x\d{2,5}$/i.test(requestedSize) ? requestedSize : appConfig.designPlatformImageSize,
+    ratio: /^\d{1,2}:\d{1,2}$/i.test(requestedRatio) ? requestedRatio : appConfig.designPlatformImageRatio,
+  };
+}
+
+function zhenxiCopyModule(payload: DesignPlatformJobPayload): "poster_copy" | "xiaohongshu" | "detail_page" {
+  const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
+  const module = String(zhenxi.copyModule || "poster_copy");
+  return ["xiaohongshu", "detail_page"].includes(module) ? module as "xiaohongshu" | "detail_page" : "poster_copy";
+}
+
+function firstGeneratedImageUrl(value: unknown, depth = 0): string {
+  if (depth > 6 || value === null || value === undefined) return "";
+  if (typeof value === "string") return /^https?:\/\//i.test(value) || value.startsWith("/") ? value : "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = firstGeneratedImageUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (!isRecord(value)) return "";
+  for (const key of ["file_url", "fileUrl", "image_url", "imageUrl", "url"]) {
+    const found = firstGeneratedImageUrl(value[key], depth + 1);
+    if (found) return found;
+  }
+  for (const key of ["result", "data", "content", "images", "outputs"]) {
+    const found = firstGeneratedImageUrl(value[key], depth + 1);
+    if (found) return found;
+  }
+  return "";
 }
 
 function buildGiftBoxPrompt(payload: DesignPlatformJobPayload) {
@@ -797,21 +1395,45 @@ function cookieHeaderFromSetCookie(value: unknown) {
 }
 
 function buildMultipartBody(fieldName: string, fileName: string, mimeType: string, file: Buffer) {
+  return buildMultipartFormData({}, [{ fieldName, fileName, mimeType, buffer: file }]);
+}
+
+function buildMultipartFormData(fields: Record<string, string>, files: ZhenxiExternalMultipartFile[]) {
   const boundary = `----smart-kefu-${randomUUID()}`;
-  const head = Buffer.from(
-    [
+  const chunks: Buffer[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    chunks.push(
+      Buffer.from(
+        [
+          `--${boundary}`,
+          `Content-Disposition: form-data; name="${sanitizeMultipartFieldName(name)}"`,
+          "",
+          value,
+          "",
+        ].join("\r\n"),
+      ),
+    );
+  }
+  for (const file of files) {
+    chunks.push(Buffer.from([
       `--${boundary}`,
-      `Content-Disposition: form-data; name="${fieldName}"; filename="${fileName}"`,
-      `Content-Type: ${mimeType}`,
+      `Content-Disposition: form-data; name="${sanitizeMultipartFieldName(file.fieldName)}"; filename="${file.fileName}"`,
+      `Content-Type: ${file.mimeType}`,
       "",
       "",
-    ].join("\r\n"),
-  );
-  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    ].join("\r\n")));
+    chunks.push(file.buffer);
+    chunks.push(Buffer.from("\r\n"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return {
     boundary,
-    buffer: Buffer.concat([head, file, tail]),
+    buffer: Buffer.concat(chunks),
   };
+}
+
+function sanitizeMultipartFieldName(fieldName: string) {
+  return fieldName.replace(/[\r\n"\\]/g, "_").slice(0, 80) || "field";
 }
 
 function parseImageSize(size: string) {
@@ -821,12 +1443,6 @@ function parseImageSize(size: string) {
     width: Number(match[1]) || 1024,
     height: Number(match[2]) || 1024,
   };
-}
-
-function clampInteger(value: number, min: number, max: number) {
-  const normalized = Math.floor(Number(value));
-  if (!Number.isFinite(normalized)) return min;
-  return Math.min(Math.max(normalized, min), max);
 }
 
 function artImageRefundOutcome(data: Record<string, unknown>): {
@@ -865,19 +1481,64 @@ function artImageRefundOutcome(data: Record<string, unknown>): {
   return { status, ...(Object.keys(summary).length ? { summary } : {}) };
 }
 
-function isUncertainArtImageError(error: unknown) {
-  if (!axios.isAxiosError(error)) return false;
-  const code = String(error.code || "").toUpperCase();
-  if (["ECONNABORTED", "ETIMEDOUT", "ECONNRESET"].includes(code)) return true;
-  return Number(error.response?.status || 0) >= 500;
+function aggregateArtImageSlotRefunds(
+  outcomes: Array<Exclude<ArtImageLocalSlotOutcome, { status: "outcome_unknown" }>>,
+): {
+  status: "refunded" | "not_required" | "credit_bypass" | "failed" | "unknown";
+  summary?: Record<string, unknown>;
+} {
+  const statuses = outcomes.map((outcome) => outcome.refundStatus);
+  const status = statuses.includes("failed")
+    ? "failed"
+    : statuses.includes("unknown")
+      ? "unknown"
+      : statuses.includes("refunded")
+        ? "refunded"
+        : statuses.includes("credit_bypass")
+          ? "credit_bypass"
+          : "not_required";
+  const summaries: Array<Record<string, unknown> & { slot: number }> = outcomes.flatMap((outcome) =>
+    outcome.refundSummary ? [{ slot: outcome.slot, ...outcome.refundSummary }] : [],
+  );
+  if (!summaries.length) return { status };
+
+  const summary: Record<string, unknown> = {
+    slotRefunds: summaries.map((item) => ({
+      slot: item.slot,
+      ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
+      ...(typeof item.alreadyRefunded === "boolean" ? { alreadyRefunded: item.alreadyRefunded } : {}),
+    })),
+  };
+  for (const field of ["requestedCredits", "refundedCredits", "chargedCredits"] as const) {
+    const values = summaries.map((item) => Number(item[field])).filter(Number.isFinite);
+    if (values.length) summary[field] = values.reduce((total, value) => total + value, 0);
+  }
+  const alreadyRefunded = summaries
+    .map((item) => item.alreadyRefunded)
+    .filter((value): value is boolean => typeof value === "boolean");
+  if (alreadyRefunded.length) summary.alreadyRefunded = alreadyRefunded.every(Boolean);
+  const reasons = [...new Set(summaries.map((item) => String(item.reason || "").trim()).filter(Boolean))];
+  if (reasons.length) summary.reason = reasons.length === 1 ? reasons[0] : "mixed_slot_outcomes";
+  return { status, summary };
 }
 
 function artImageErrorCode(error: unknown) {
   if (!axios.isAxiosError(error)) return "LOCAL_REQUEST_BUILD_FAILED";
+  const responseData = error.response?.data as any;
+  const platformCode = String(responseData?.error?.code || responseData?.code || "").trim();
+  if (platformCode) return platformCode.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
   const code = String(error.code || "").trim();
   if (code) return code.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
   if (error.response?.status) return `HTTP_${error.response.status}`;
   return "DESIGN_PLATFORM_REQUEST_FAILED";
+}
+
+function isUncertainArtImageDispatchError(error: unknown) {
+  if (!axios.isAxiosError(error)) return true;
+  const code = String(error.code || "").trim().toUpperCase();
+  if (code === "ECONNABORTED" || code === "ECONNRESET") return true;
+  if (!error.response) return true;
+  return Number(error.response?.status || 0) >= 500;
 }
 
 export function designPlatformCredentialsForTarget(
@@ -888,6 +1549,21 @@ export function designPlatformCredentialsForTarget(
   try {
     const targetOrigin = new URL(String(requestUrl || ""), String(baseUrl || appConfig.designPlatformBaseUrl)).origin;
     const configuredBaseOrigin = new URL(appConfig.designPlatformBaseUrl).origin;
+    if (appConfig.designPlatformAdapter === "zhenxi_external") {
+      const apiKey =
+        appConfig.designPlatformApiKey && targetOrigin === appConfig.designPlatformApiKeyOrigin
+          ? appConfig.designPlatformApiKey
+          : "";
+      const compatibleAccessToken =
+        appConfig.designPlatformAccessToken && targetOrigin === appConfig.designPlatformAccessTokenOrigin
+          ? appConfig.designPlatformAccessToken
+          : "";
+      return {
+        authorization: apiKey || compatibleAccessToken ? `Bearer ${apiKey || compatibleAccessToken}` : "",
+        cookie: "",
+        deviceId: "",
+      };
+    }
     const accessToken =
       appConfig.designPlatformAccessToken && targetOrigin === appConfig.designPlatformAccessTokenOrigin
         ? appConfig.designPlatformAccessToken
@@ -926,8 +1602,57 @@ function trustedDesignPlatformBaseUrl() {
   return base;
 }
 
+function artImageLocalDeviceHeaders(deviceId: string) {
+  const explicitDeviceId = String(deviceId || "").trim();
+  return explicitDeviceId
+    ? {
+        headers: {
+          "x-art-device-id": explicitDeviceId,
+        },
+      }
+    : undefined;
+}
+
+function artImageLocalServerHeaders(deviceId: string) {
+  return {
+    "x-art-client": "zhenxi-ai",
+    "x-art-device-id": deviceId,
+  };
+}
+
 function acceptsExplicitDeviceId(requestUrl: string | undefined) {
-  return requestUrl === "api/auth/login" || requestUrl === "api/activation/redeem";
+  return (
+    requestUrl === "api/auth/login" ||
+    requestUrl === "api/auth/session" ||
+    requestUrl === "api/activation/redeem" ||
+    requestUrl === "api/activation/status"
+  );
+}
+
+function artImageLocalGenerateAvailabilityFromHeaders(headers: unknown): boolean | null {
+  const allow = responseHeaderValue(headers, "allow");
+  if (!allow) return null;
+  return /\bPOST\b/i.test(allow);
+}
+
+function responseHeaderValue(headers: unknown, name: string) {
+  if (!headers) return "";
+  const getter = (headers as { get?: (key: string) => unknown }).get;
+  if (typeof getter === "function") {
+    const value = getter.call(headers, name);
+    if (value !== undefined && value !== null) return stringifyHeaderValue(value);
+  }
+  if (!isRecord(headers)) return "";
+  const normalized = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === normalized) return stringifyHeaderValue(value);
+  }
+  return "";
+}
+
+function stringifyHeaderValue(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
+  return String(value || "");
 }
 
 function assertTrustedDesignPlatformTarget(baseUrl: string | undefined, requestUrl: string | undefined) {

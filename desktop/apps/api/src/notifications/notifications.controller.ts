@@ -43,11 +43,10 @@ export class NotificationsController {
   @Post("demo")
   @RequireOperatorCapability("manage_training")
   createDemo(@Body() body: { level?: string; title?: string; body?: string }) {
-    return this.notifications.create(
+    return this.notifications.createDemo(
       body?.level || "info",
       body?.title || "演示提醒",
       body?.body || "这是一条站内提醒演示，用来验证提醒中心的读取和已读流程。",
-      { source: "demo" },
     );
   }
 }

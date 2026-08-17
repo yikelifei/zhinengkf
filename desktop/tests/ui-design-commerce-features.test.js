@@ -41,6 +41,17 @@ test("design exports one page per operator goal", () => {
     assert.match(source, new RegExp(`\\b${api}\\b`));
   }
   assert.doesNotMatch(source, /createDemo|createFailureDemo|createTimeoutDemo|return\s+\[\]/i);
+
+  const settings = read("apps/web/src/features/design/design-settings-page.tsx");
+  const statusPanel = read("apps/web/src/features/design/design-settings-status-panel.tsx");
+  const quickConnect = read("apps/web/src/features/design/design-settings-zhenxi-quick-connect.tsx");
+  assert.match(settings, /DesignSettingsStatusPanel/);
+  assert.match(statusPanel, /DesignSettingsZhenxiQuickConnect/);
+  assert.match(settings, /setAdapter\("art_image_local"\)/);
+  assert.match(quickConnect, /design-settings-open-zhenxi-ai-app/);
+  assert.match(quickConnect, /links\.localCandidateBaseUrls/);
+  assert.match(quickConnect, /links\.primaryAppUrl/);
+  assert.match(quickConnect, /data-action-id=\{`design-settings-use-zhenxi-local-/);
 });
 
 test("catalog exports separate product, repair, import, audit, and bundle pages", () => {
@@ -96,7 +107,7 @@ test("sales keeps quote and order controllers independent", () => {
   assert.match(quotes, /queueQuoteSend/);
   assert.match(quotes, /createOrderDraftFromQuote/);
   assert.match(orders, /getOrderDrafts/);
-  assert.match(orders, /updateOrderDraft/);
+  assert.match(orders, /updateOrderFulfillment/);
   assert.match(orders, /queueOrderConfirmation/);
   assert.match(orders, /queueOrderFollowup/);
   assert.match(`${quotes}\n${orders}`, /identityExpectation/);

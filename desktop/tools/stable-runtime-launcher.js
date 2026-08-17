@@ -8,21 +8,13 @@ const {
   internalApiServiceEnv,
 } = require("./internal-api-session");
 const {
-  createWechatWindowObserverProofSession,
-  wechatWindowObserverServiceEnv,
-} = require("./wechat-window-observer-session");
-const {
-  createWechatBridgeServiceSession,
-  wechatBridgeServiceEnv,
-} = require("./wechat-bridge-service-session");
-const {
   createDesktopWebSession,
   desktopWebSessionServiceEnv,
   resolveDesktopWebSessionFile,
 } = require("./desktop-web-session");
 const { commandLineReferencesNestedLegacyRuntime } = require("./stable-runtime-process-classifier");
 const { renderWindowsWrapperEnvironment, selectServiceEnvironment } = require("../packages/runtime/service-environment");
-const { atomicWritePrivateJson } = require("./private-runtime-file");
+const { atomicWritePrivateJson, readPrivateJsonFile } = require("./private-runtime-file");
 
 const root = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR ? path.resolve(process.env.DESKTOP_RUNTIME_DIR) : path.join(root, ".runtime-stable");
@@ -33,11 +25,6 @@ const stopRequestFile = path.join(runtimeDir, "stable-runtime-stop-request");
 const localStoreFile = path.join(runtimeDir, "local-store.json");
 const storageRoot = path.join(runtimeDir, "storage");
 const designConfigFile = path.join(runtimeDir, "design-platform-config.json");
-const personalWechatRpaConfigFile = path.join(runtimeDir, "personal-wechat-rpa.json");
-const personalWechatSendMarkerFile = path.join(runtimeDir, "personal-wechat-send.enabled");
-const personalWechatSendEnabled = fs.existsSync(personalWechatSendMarkerFile);
-const personalWechatRpaDotnetPath = path.join(root, "..", ".runtime", "toolchains", "dotnet-complete", "dotnet.exe");
-const personalWechatRpaHostPath = path.join(root, "tools", "personal-wechat-rpa-host", "bin", "Release", "net10.0-windows", "PersonalWechatRpaHost.dll");
 const webRuntimeServerPath = path.join(runtimeDir, "web-standalone-server.js");
 const webStandaloneServerPath = path.join(root, "apps", "web", ".next", "standalone", "apps", "web", "server.js");
 const webNextDir = path.join(root, "apps", "web", ".next");
@@ -46,12 +33,6 @@ const internalApiToken = ensureInternalApiToken();
 const desktopWebSession = {
   sessionFile: resolveDesktopWebSessionFile(runtimeDir),
 };
-const observerProofSession = {
-  tokenFile: path.resolve(process.env.WECHAT_WINDOW_OBSERVER_PROOF_FILE || path.join(runtimeDir, "wechat-window-observer-proof.key")),
-};
-const bridgeServiceSession = {
-  tokenFile: path.resolve(process.env.WECHAT_BRIDGE_SERVICE_TOKEN_FILE || path.join(runtimeDir, "wechat-bridge-service.key")),
-};
 
 const ports = {
   web: Number(process.env.WEB_PORT || 3100),
@@ -59,36 +40,14 @@ const ports = {
   mock: Number(process.env.MOCK_DESIGN_PLATFORM_PORT || 3700),
 };
 const windowsProcessQueryTimeoutMs = positiveNumber(process.env.WINDOWS_PROCESS_QUERY_TIMEOUT_MS, 1000);
-
 const specs = [
   webServiceSpec(),
   { name: "design-platform-mock", command: process.execPath, args: [path.join(root, "tools", "mock-design-platform.js")], port: ports.mock, expected: normalize(path.join(root, "tools", "mock-design-platform.js")) },
   { name: "api", command: process.execPath, args: [path.join(root, "dist", "apps", "api", "main.js")], port: ports.api, expected: normalize(path.join(root, "dist", "apps", "api", "main.js")) },
-  processServiceSpec("wechat-window-observer", [path.join(root, "tools", "wechat-window-observer.js"), "--watch", "--scan"], {
-    WECHAT_WINDOW_OBSERVER_API_BASE: `http://127.0.0.1:${ports.api}/api`,
-    WECHAT_WINDOW_OBSERVER_SCAN: "true",
-  }),
-  processServiceSpec("wechat-bridge-worker", [path.join(root, "tools", "wechat-bridge-worker.js"), "--watch"], {
-    BRIDGE_API_BASE: `http://127.0.0.1:${ports.api}/api`,
-    BRIDGE_MODE: process.env.STABLE_WECHAT_BRIDGE_MODE || "dispatch",
-    BRIDGE_ACK_TRANSPORT: process.env.BRIDGE_ACK_TRANSPORT || "file_scan",
-  }),
-  personalWechatRpaServiceSpec(),
-  processServiceSpec("personal-wechat-bridge", [path.join(root, "tools", "personal-wechat-bridge.js"), "--watch"], {
-    PERSONAL_WECHAT_API_BASE: `http://127.0.0.1:${ports.api}/api`,
-    WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
-    WECHAT_BRIDGE_INBOX_DIR: path.join(runtimeDir, "wechat-inbox"),
-    WECHAT_BRIDGE_LOCK_DIR: path.join(runtimeDir, "wechat-bridge-locks"),
-    PERSONAL_WECHAT_BLOCKED_DIR: path.join(runtimeDir, "personal-wechat-blocked"),
-    PERSONAL_WECHAT_BRIDGE_STATUS_FILE: path.join(runtimeDir, "personal-wechat-bridge-status.json"),
-    PERSONAL_WECHAT_ACCOUNTS_CONFIG_FILE: path.join(runtimeDir, "personal-wechat-accounts.json"),
-    PERSONAL_WECHAT_DRIVER: process.env.PERSONAL_WECHAT_DRIVER || "wechatauto_rpa",
-    PERSONAL_WECHAT_RPA_CONFIG_FILE: personalWechatRpaConfigFile,
-    PERSONAL_WECHAT_SEND: personalWechatSendEnabled ? "1" : process.env.STABLE_PERSONAL_WECHAT_SEND || process.env.PERSONAL_WECHAT_SEND || "0",
-  }),
 ].filter(Boolean);
 
 const children = new Map();
+let launcherLockOwned = false;
 const runtimeKeepAlive = setInterval(() => undefined, 60000);
 runtimeKeepAlive.ref();
 fs.mkdirSync(logsDir, { recursive: true });
@@ -99,14 +58,12 @@ if (fs.existsSync(stopRequestFile)) {
 }
 acquireSingleInstanceLock();
 Object.assign(desktopWebSession, createDesktopWebSession(runtimeDir, { sessionFile: desktopWebSession.sessionFile }));
-Object.assign(observerProofSession, createWechatWindowObserverProofSession(runtimeDir, { tokenFile: observerProofSession.tokenFile }));
-Object.assign(bridgeServiceSession, createWechatBridgeServiceSession(runtimeDir, { tokenFile: bridgeServiceSession.tokenFile }));
 if (specs[0].args[0] === webRuntimeServerPath) {
   writeWebRuntimeServer();
 } else {
   append("web", "web standalone build incomplete; using Next dev server fallback");
 }
-writeDesignConfig();
+ensureDesignConfig();
 writeHeartbeat();
 setInterval(writeHeartbeat, 5000);
 
@@ -231,25 +188,31 @@ function startService(spec) {
 function startWindowsWrappedPortService(spec) {
   const wrapperPath = path.join(runtimeDir, `run-${spec.name}.cmd`);
   fs.writeFileSync(wrapperPath, buildWindowsPortServiceWrapper(spec), "utf8");
+  const out = openServiceLogForAppend(spec.name, "out");
+  const err = openServiceLogForAppend(spec.name, "err");
   try {
-    append(spec.name, `starting wrapper ${wrapperPath}`);
-    const child = spawn("cmd.exe", ["/d", "/c", wrapperPath], {
+    append(spec.name, `wrapper prepared at ${wrapperPath}; launching direct hidden service process`);
+    const child = spawn(spec.command, spec.args, {
       cwd: root,
       env: serviceEnv(spec.port || ports.api, spec.name, spec.env),
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", out, err],
       windowsHide: true,
     });
     children.set(spec.name, child);
-    append(spec.name, `wrapper pid=${child.pid}`);
+    append(spec.name, `direct service pid=${child.pid}`);
     child.unref();
+    closeFd(out);
+    closeFd(err);
     child.once("exit", (code, signal) => {
       const current = children.get(spec.name);
       if (current === child) children.delete(spec.name);
-      append(spec.name, `wrapper exited code=${code ?? ""} signal=${signal ?? ""}`);
+      append(spec.name, `direct service exited code=${code ?? ""} signal=${signal ?? ""}`);
     });
   } catch (error) {
-    append(spec.name, `wrapper start failed: ${error?.stack || error?.message || error}`);
+    closeFd(out);
+    closeFd(err);
+    append(spec.name, `direct service start failed: ${error?.stack || error?.message || error}`);
   }
 }
 
@@ -259,20 +222,14 @@ function buildWindowsPortServiceWrapper(spec) {
     "setlocal",
     `cd /d ${cmdQuote(root)}`,
     ...renderWindowsWrapperEnvironment(spec.name, serviceEnv(spec.port, spec.name, spec.env)),
-    ":restart",
     `if exist ${cmdQuote(stopRequestFile)} exit /b 0`,
     `${cmdQuote(process.execPath)} ${cmdQuote(path.join(root, "tools", "check-loopback-port.js"))} ${spec.port}`,
-    "if not errorlevel 1 (",
-    "  timeout /t 2 /nobreak >nul",
-    "  goto restart",
-    ")",
+    "if not errorlevel 1 exit /b 0",
     `echo [%date% %time%] launching ${spec.name} >> ${cmdQuote(path.join(logsDir, `${spec.name}.launcher.log`))}`,
     `${cmdQuote(spec.command)} ${spec.args.map(cmdQuote).join(" ")} >> ${cmdQuote(path.join(logsDir, `${spec.name}.out.log`))} 2>> ${cmdQuote(path.join(logsDir, `${spec.name}.err.log`))}`,
     "set SERVICE_EXIT_CODE=%ERRORLEVEL%",
     `echo [%date% %time%] ${spec.name} exited with %SERVICE_EXIT_CODE% >> ${cmdQuote(path.join(logsDir, `${spec.name}.launcher.log`))}`,
-    `if exist ${cmdQuote(stopRequestFile)} exit /b %SERVICE_EXIT_CODE%`,
-    "timeout /t 2 /nobreak >nul",
-    "goto restart",
+    "exit /b %SERVICE_EXIT_CODE%",
     "",
   ].join("\r\n");
 }
@@ -283,21 +240,6 @@ function cmdQuote(value) {
 
 function processServiceSpec(name, args, env = {}) {
   return { name, type: "process", command: process.execPath, args, expected: normalize(args[0]), env };
-}
-
-function personalWechatRpaServiceSpec() {
-  if (!fs.existsSync(personalWechatRpaConfigFile) || !fs.existsSync(personalWechatRpaDotnetPath) || !fs.existsSync(personalWechatRpaHostPath)) {
-    return null;
-  }
-  const config = readJsonFile(personalWechatRpaConfigFile) || {};
-  const mode = String(config.automationMode || "ocr").trim().toLowerCase() === "sdk" ? "--watch" : "--ocr-watch";
-  return {
-    name: "personal-wechat-rpa-host",
-    command: personalWechatRpaDotnetPath,
-    args: [personalWechatRpaHostPath, mode, "--config", personalWechatRpaConfigFile],
-    port: positiveNumber(config.port, 3211),
-    expected: [normalize(personalWechatRpaHostPath), normalize(personalWechatRpaConfigFile)],
-  };
 }
 
 function openServiceLogForAppend(name, streamName) {
@@ -333,63 +275,80 @@ function webStandaloneBuildReady() {
 }
 
 function serviceEnv(port, serviceName, overrides = {}) {
-  const internalEnv = internalApiServiceEnv({
+  const baseEnv = {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: "1",
     FORCE_WEB_CLEAN_BUILD: "0",
+    ALLOW_LOCAL_BROWSER_WEB_API: process.env.ALLOW_LOCAL_BROWSER_WEB_API === "0" ? "0" : "1",
+    SMART_KEFU_RUNTIME_TARGET: process.env.SMART_KEFU_RUNTIME_TARGET || "desktop",
     USE_LOCAL_STORE: "true",
     DESKTOP_RUNTIME_DIR: runtimeDir,
     LOCAL_STORE_FILE: localStoreFile,
     LOCAL_STORAGE_ROOT: storageRoot,
     LOW_VALUE_AUTOMATION_ENABLED: "true",
+    LOW_VALUE_AUTOMATION_MODE: process.env.LOW_VALUE_AUTOMATION_MODE || "interval",
     LOW_VALUE_AUTOMATION_RUN_ON_START: "true",
     PORT: String(port),
     WEB_PORT: String(ports.web),
     API_PORT: String(ports.api),
     MOCK_DESIGN_PLATFORM_PORT: String(ports.mock),
     DESIGN_PLATFORM_RUNTIME_CONFIG: designConfigFile,
-    DESIGN_PLATFORM_ADAPTER: "standard_v1",
-    DESIGN_PLATFORM_BASE_URL: `http://127.0.0.1:${ports.mock}`,
-    WECHAT_BRIDGE_OUTBOX_DIR: path.join(runtimeDir, "wechat-outbox"),
-    WECHAT_BRIDGE_INBOX_DIR: path.join(runtimeDir, "wechat-inbox"),
-    WECHAT_BRIDGE_DISPATCH_DIR: path.join(runtimeDir, "wechat-dispatch"),
-    WECHAT_BRIDGE_LOCK_DIR: path.join(runtimeDir, "wechat-bridge-locks"),
-    WECHAT_BRIDGE_WORKER_STATUS_FILE: path.join(runtimeDir, "wechat-bridge-worker-status.json"),
-    WECHAT_WINDOW_SNAPSHOT_INBOX_DIR: path.join(runtimeDir, "wechat-window-snapshots"),
-    WECHAT_WINDOW_OBSERVER_STATUS_FILE: path.join(runtimeDir, "wechat-window-observer-status.json"),
-  }, serviceName, internalApiToken);
+  };
+  delete baseEnv.DESIGN_PLATFORM_ADAPTER;
+  delete baseEnv.DESIGN_PLATFORM_BASE_URL;
+  const internalEnv = internalApiServiceEnv(baseEnv, serviceName, internalApiToken);
   const desktopSessionEnv = desktopWebSessionServiceEnv(internalEnv, serviceName, desktopWebSession.proof);
-  const observerEnv = wechatWindowObserverServiceEnv(desktopSessionEnv, serviceName, observerProofSession.tokenFile);
-  return selectServiceEnvironment(
-    serviceName,
-    wechatBridgeServiceEnv(observerEnv, serviceName, bridgeServiceSession.tokenFile),
-    overrides,
-  );
+  return selectServiceEnvironment(serviceName, desktopSessionEnv, overrides);
 }
 
 function acquireSingleInstanceLock() {
   fs.mkdirSync(runtimeDir, { recursive: true });
-  try {
-    const existingPid = Number(fs.readFileSync(lockFile, "utf8").trim());
-    if (Number.isFinite(existingPid) && existingPid > 0) {
-      if (!isPidAlive(existingPid)) {
-        fs.rmSync(lockFile, { force: true });
-        append("stable-runtime", `removed stale launcher pid file pid=${existingPid}`);
-      } else if (isCurrentStableRuntimeLauncher(existingPid)) {
-        console.log(`[stable-runtime] existing launcher pid=${existingPid}; exiting`);
-        process.exit(0);
-      } else {
-        fs.rmSync(lockFile, { force: true });
-        append("stable-runtime", `removed stale launcher pid file with stale heartbeat pid=${existingPid}`);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600);
+      try {
+        fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
+      } finally {
+        fs.closeSync(fd);
       }
+      launcherLockOwned = true;
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const existingPid = readLockPid();
+      const existingIsAlive = existingPid > 0 && isPidAlive(existingPid);
+      const lockAgeMs = fileAgeMs(lockFile);
+      if (existingIsAlive || (!existingPid && lockAgeMs < 5000)) {
+        console.log(`[stable-runtime] existing launcher pid=${existingPid || "initializing"}; exiting duplicate`);
+        process.exit(0);
+      }
+      fs.rmSync(lockFile, { force: true });
+      append("stable-runtime", `removed stale launcher pid file pid=${existingPid || "unknown"} ageMs=${Math.round(lockAgeMs)}`);
     }
-  } catch {}
-  fs.writeFileSync(lockFile, `${process.pid}\n`, "utf8");
+  }
+  if (!launcherLockOwned) throw new Error(`could not acquire stable runtime lock: ${lockFile}`);
   process.on("exit", () => {
     try {
-      if (fs.readFileSync(lockFile, "utf8").trim() === String(process.pid)) fs.rmSync(lockFile, { force: true });
+      if (launcherLockOwned && fs.readFileSync(lockFile, "utf8").trim() === String(process.pid)) fs.rmSync(lockFile, { force: true });
     } catch {}
   });
+}
+
+function readLockPid() {
+  try {
+    const pid = Number(fs.readFileSync(lockFile, "utf8").trim());
+    return Number.isFinite(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function fileAgeMs(filePath) {
+  try {
+    return Math.max(0, Date.now() - fs.statSync(filePath).mtimeMs);
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 function isCurrentStableRuntimeLauncher(pid) {
@@ -436,13 +395,6 @@ function ownerMatches(pid, expected) {
 }
 
 function portHealthMatches(spec) {
-  if (spec.name === "personal-wechat-rpa-host") {
-    const config = readJsonFile(personalWechatRpaConfigFile) || {};
-    const token = String(config.token || "").trim();
-    if (!token) return false;
-    const json = requestJson(`http://127.0.0.1:${spec.port}/health`, [`x-personal-wechat-rpa-token: ${token}`]);
-    return json?.ok === true && json?.status === "watching" && json?.target?.accountNickname === config.accountNickname;
-  }
   if (spec.name === "api") {
     const json = requestJson(`http://127.0.0.1:${spec.port}/api/health`);
     return normalize(json?.localStore?.path) === normalize(localStoreFile);
@@ -606,12 +558,28 @@ function writeHeartbeat() {
   fs.writeFileSync(heartbeatFile, `${JSON.stringify({ pid: process.pid, mode: "mock", args: ["stable-runtime-launcher"], updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
 }
 
-function writeDesignConfig() {
+function ensureDesignConfig() {
+  const existing = readPrivateJsonFile(designConfigFile, null);
+  if (validPersistedDesignConfig(existing)) {
+    append("stable-runtime", `preserving design platform config adapter=${existing.designPlatformAdapter} baseUrl=${existing.designPlatformBaseUrl}`);
+    return;
+  }
   atomicWritePrivateJson(designConfigFile, {
     designPlatformAdapter: "standard_v1",
     designPlatformBaseUrl: `http://127.0.0.1:${ports.mock}`,
     updatedAt: new Date().toISOString(),
   });
+}
+
+function validPersistedDesignConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!["standard_v1", "art_image_local", "zhenxi_external"].includes(value.designPlatformAdapter)) return false;
+  try {
+    const baseUrl = new URL(String(value.designPlatformBaseUrl || ""));
+    return baseUrl.protocol === "http:" || baseUrl.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function writeWebRuntimeServer() {

@@ -30,6 +30,19 @@ test("mock design platform returns a reachable uploaded asset url", async () => 
     const replayedJob = await postJson(port, "/v1/design-jobs", { outputCount: 2, requestId: "mock-replay-request-1" });
     assert.equal(replayedJob.externalJobId, firstJob.externalJobId);
 
+    const completion = await postJson(port, "/v1/chat/completions", {
+      model: "local-acceptance-text",
+      messages: [{
+        role: "user",
+        content: "规则基准回复：订单已确认，请留意后续进度。\n必须逐字保留的已核实信息：订单号-123456、已付款",
+      }],
+    });
+    assert.equal(
+      completion.choices[0].message.content,
+      "订单进度已经更新：订单号-123456、已付款。请您留意当前订单和物流记录，有问题可以继续在这里沟通。",
+    );
+    assert.equal(completion.choices[0].finish_reason, "stop");
+
     const uploaded = await postJson(port, "/v1/assets/upload", {
       assetId: "sku-asset-1",
       fileName: "sku.png",

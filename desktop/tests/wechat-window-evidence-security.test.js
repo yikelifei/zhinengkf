@@ -178,16 +178,18 @@ test("observer proof session rotates an existing key without leaving temp or bac
   assert.deepEqual(fs.readdirSync(runtimeDir), [path.basename(second.tokenFile)]);
 });
 
-test("snapshot routes and launchers keep the observer proof fail-closed and non-browser-writable", () => {
+test("retired snapshot routes stay absent from the stable production surface", () => {
   const root = path.resolve(__dirname, "..");
   const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
   const controller = read("apps/api/src/wechat/wechat.controller.ts");
   const service = read("apps/api/src/wechat/wechat-dispatch.service.ts");
   const observer = read("tools/wechat-window-observer.js");
   const webApi = read("apps/web/src/lib/api.ts");
+  const stableLauncher = read("tools/stable-runtime-launcher.js");
 
   assert.doesNotMatch(controller, /@Post\("window-snapshots"\)/);
-  assert.match(controller, /@Post\("window-snapshots\/inbox\/scan"\)/);
+  assert.doesNotMatch(controller, /@(?:Get|Post)\("(?:window-snapshots|window-observer)/);
+  assert.doesNotMatch(stableLauncher, /wechat-window-observer|WECHAT_WINDOW_OBSERVER_PROOF_FILE/);
   assert.match(service, /verifyWechatWindowObserverEvidence/);
   assert.match(service, /claimJsonInboxFile/);
   assert.match(service, /observer evidence replay rejected/);
@@ -214,7 +216,6 @@ test("snapshot routes and launchers keep the observer proof fail-closed and non-
     "tools/start-dev-ports.js",
     "tools/ports-stack-starter.js",
     "tools/desktop-service-supervisor.js",
-    "tools/stable-runtime-launcher.js",
     "tools/start-wechat-safe-workers.js",
     "tools/run-product-acceptance.js",
   ]) {

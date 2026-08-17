@@ -6,9 +6,13 @@ import type { ConversationsFeatureApi } from "./api";
 import { ConversationPageState } from "./conversation-page-state";
 import styles from "./conversation-pages.module.css";
 import { useConversationsController } from "./use-conversations-controller";
+import {
+  conversationRouteHref,
+  type ConversationListNavigationState,
+} from "./conversation-navigation";
 
-export function ConversationListPage({ api }: { api?: ConversationsFeatureApi }) {
-  const controller = useConversationsController(api, null, "list");
+export function ConversationListPage({ api, initialNavigation }: { api?: ConversationsFeatureApi; initialNavigation?: ConversationListNavigationState }) {
+  const controller = useConversationsController(api, null, "list", { initialListNavigation: initialNavigation });
   if (controller.accessPhase === "loading") {
     return <ConversationPageState title="正在确认会话访问权限" detail="权限确认后才会读取会话列表。" />;
   }
@@ -20,6 +24,14 @@ export function ConversationListPage({ api }: { api?: ConversationsFeatureApi })
   }
 
   const inbox = controller.inbox;
+  const currentNavigation: ConversationListNavigationState = {
+    search: inbox.search,
+    scope: inbox.scope,
+    channel: inbox.channel,
+    status: inbox.status,
+    sort: inbox.sort,
+    page: inbox.page,
+  };
   return (
     <section className={styles.page} aria-labelledby="conversation-list-title" aria-busy={inbox.loading || undefined}>
       <header className={styles.header}>
@@ -67,7 +79,7 @@ export function ConversationListPage({ api }: { api?: ConversationsFeatureApi })
         ) : null}
         <div className={styles.list}>
           {inbox.conversations.map((conversation) => (
-            <Link className={styles.row} href={"/conversations/" + encodeURIComponent(conversation.id)} key={conversation.id}>
+            <Link className={styles.row} data-action-id={"conversations.list-" + conversation.id + ".open"} href={conversationRouteHref("/conversations/" + encodeURIComponent(conversation.id), conversation, currentNavigation)} key={conversation.id}>
               <div className={styles.rowHeader}>
                 <h2>{conversation.title}</h2>
                 <span>{conversation.updatedAtLabel}</span>

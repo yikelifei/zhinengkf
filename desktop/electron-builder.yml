@@ -10,6 +10,9 @@ files:
   - apps/electron/main.js
   - apps/electron/preload.js
   - apps/electron/packaged-runtime.js
+  - apps/electron/desktop-session-refresh.js
+  - apps/electron/zhenxi-embedded-view.js
+  - apps/electron/zhenxi-embedded-preload.js
   - packages/runtime/packaged-readiness-proof.js
   - packages/runtime/service-environment.js
   - package.json
@@ -46,41 +49,30 @@ extraResources:
     filter:
       - '**/*.js'
       - package.json
+  - from: packages/mcp
+    to: services/runtime-root/packages/mcp
+    filter:
+      - '**/*.mjs'
   - from: tools/wechat-window-observer.js
     to: services/runtime-root/tools/wechat-window-observer.js
   - from: ../config/settings.yaml
     to: services/runtime-root/config/settings.yaml
-  - from: node_modules/@prisma/client
-    to: services/runtime-root/node_modules/@prisma/client
-    filter:
-      - '**/*'
-      - '!**/*.map'
   - from: node_modules/.prisma/client
     to: services/runtime-root/node_modules/.prisma/client
     filter:
       - '**/*'
       - '!**/*.map'
-  - from: node_modules/sharp
-    to: services/runtime-root/node_modules/sharp
+  - from: .package-runtime/node_modules
+    to: services/runtime-root/node_modules
     filter:
       - '**/*'
       - '!**/*.map'
-  - from: node_modules/@img/colour
-    to: services/runtime-root/node_modules/@img/colour
+
+extraFiles:
+  - from: packages/runtime
+    to: packages/runtime
     filter:
-      - '**/*'
-  - from: node_modules/@img/sharp-win32-x64
-    to: services/runtime-root/node_modules/@img/sharp-win32-x64
-    filter:
-      - '**/*'
-  - from: node_modules/detect-libc
-    to: services/runtime-root/node_modules/detect-libc
-    filter:
-      - '**/*'
-  - from: node_modules/semver
-    to: services/runtime-root/node_modules/semver
-    filter:
-      - '**/*'
+      - '*.js'
 
 win:
   target:
