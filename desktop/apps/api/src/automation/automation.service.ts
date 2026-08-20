@@ -748,6 +748,7 @@ export class AutomationService {
         );
       }
       await this.captureStep(run, "scanTimeouts", () => this.designJobs.scanTimeouts(filter));
+      await this.captureStep(run, "scanSendOperations", () => this.wechatDispatch.scanSendOperations(filter));
       await this.captureStep(run, "processInboundReplyQueue", () =>
         this.wechatDispatch.processSafeSendQueue({
           limit: appConfig.lowValueAutomationSendQueueLimit,
@@ -809,7 +810,6 @@ export class AutomationService {
       await this.captureStep(run, "scanLowValueOrderFollowups", () =>
         this.wechatDispatch.scanLowValueOrderFollowups(filter),
       );
-      await this.captureStep(run, "scanSendOperations", () => this.wechatDispatch.scanSendOperations(filter));
       if (appConfig.lowValueAutomationProcessSendQueue) {
         await this.captureStep(run, "processLowValueSendQueue", () =>
           this.wechatDispatch.processSafeSendQueue({

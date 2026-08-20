@@ -5,19 +5,40 @@ const test = require("node:test");
 
 const { planZhenxiCustomerRequest } = require("../packages/rules");
 
-test("asks only for the missing information required by the requested creative item", () => {
+test("starts a greeting card with generated copy and the default vertical custom template", () => {
   const plan = planZhenxiCustomerRequest({
     text: "给我做一张贺卡，不要吊牌，也不要腰封",
     requestContextId: "msg-card-1",
   });
 
-  assert.equal(plan.kind, "clarify");
+  assert.equal(plan.kind, "image");
   assert.deepEqual(plan.requestedDeliverables, ["greeting_card"]);
-  assert.deepEqual(new Set(plan.missingFields), new Set(["copy_text", "logo_decision", "finished_size"]));
-  assert.match(plan.replyText, /文案/);
-  assert.match(plan.replyText, /Logo/);
-  assert.match(plan.replyText, /成品尺寸/);
+  assert.deepEqual(plan.missingFields, []);
+  assert.equal(plan.logoMode, "none");
+  assert.equal(plan.orientation, "vertical");
+  assert.equal(plan.designRequests[0].cardType, "贺卡自定义模板");
+  assert.equal(plan.designRequests[0].templateGroupKey, "card");
+  assert.equal(plan.designRequests[0].canvasSize, "1063x1535");
+  assert.equal(plan.designRequests[0].copyCount, 4);
+  assert.equal(plan.designRequests[0].outputCount, 4);
+  assert.match(plan.replyText, /先生成 4 条文案方案/);
   assert.doesNotMatch(plan.replyText, /吊牌|腰封/);
+});
+
+test("keeps a card redesign box size as a packaging constraint", () => {
+  const plan = planZhenxiCustomerRequest({
+    text: "再设计一下这个卡片，盒子是 15*15*6的",
+    requestContextId: "msg-card-box-1",
+  });
+
+  assert.equal(plan.kind, "image");
+  assert.deepEqual(plan.requestedDeliverables, ["greeting_card"]);
+  assert.equal(plan.packageBoxSize, "15×15×6（未注明单位）");
+  assert.equal(plan.physicalSize, "");
+  assert.equal(plan.size, "");
+  assert.equal(plan.designRequests[0].packageBoxSize, "15×15×6（未注明单位）");
+  assert.match(plan.designRequests[0].prompt, /配套盒子尺寸：15×15×6（未注明单位）/);
+  assert.match(plan.designRequests[0].prompt, /不是贺卡成品尺寸/);
 });
 
 test("continues a pending creative conversation and preserves exact customer copy", () => {
@@ -37,10 +58,12 @@ test("continues a pending creative conversation and preserves exact customer cop
   assert.equal(ready.logoMode, "none");
   assert.equal(ready.physicalSize, "90×54mm");
   assert.equal(ready.ratio, "5:3");
+  assert.equal(ready.orientation, "horizontal");
   assert.equal(ready.designRequests.length, 1);
   assert.equal(ready.designRequests[0].deliverable, "greeting_card");
   assert.equal(ready.designRequests[0].outputCount, 4);
   assert.equal(ready.designRequests[0].copyText, "老师，节日快乐");
+  assert.equal(ready.designRequests[0].canvasSize, "1535x1063");
   assert.deepEqual(ready.designRequests[0].assetIds, []);
 
   const spacedReply = planZhenxiCustomerRequest({
@@ -108,17 +131,93 @@ test("turns a copy-only hotel opening poster into a grounded production specific
   assert.match(plan.designRequests[0].prompt, /不展示或虚构任何商品/);
 });
 
-test("asks one grounded question before charging for an ambiguous product-context poster", () => {
+test("defaults a poster without an explicit product instruction to graphic-only generation", () => {
   const plan = planZhenxiCustomerRequest({
     text: "做一张酒店开业伴手礼活动海报，文案“开业有礼”，不放Logo，尺寸1024x1024",
     requestContextId: "msg-poster-ambiguous-1",
   });
 
-  assert.equal(plan.kind, "clarify");
+  assert.equal(plan.kind, "image");
   assert.deepEqual(plan.requestedDeliverables, ["poster"]);
-  assert.deepEqual(plan.missingFields, ["visual_content_mode"]);
-  assert.match(plan.replyText, /纯文字氛围/);
-  assert.match(plan.replyText, /展示实际商品/);
+  assert.deepEqual(plan.missingFields, []);
+  assert.equal(plan.visualContentMode, "graphic_only");
+  assert.equal(plan.designRequests[0].cardType, "海报自定义模板");
+  assert.equal(plan.designRequests[0].canvasSize, "1024x1024");
+});
+
+test("maps every mature material to its Zhenxi custom template and vertical default size", () => {
+  const cases = [
+    ["做一张活动海报", "poster", "海报自定义模板", "poster", "poster", "2480x3508"],
+    ["做一张贺卡", "greeting_card", "贺卡自定义模板", "card", "card", "1063x1535"],
+    ["做一个吊牌", "hang_tag", "吊牌自定义模板", "hangtag", "packaging", "650x1063"],
+    ["做一个腰封", "belly_band", "腰封自定义模板", "waistband", "packaging", "950x2800"],
+  ];
+  for (const [text, deliverable, cardType, templateGroupKey, category, canvasSize] of cases) {
+    const plan = planZhenxiCustomerRequest({ text });
+    const request = plan.designRequests[0];
+    assert.equal(plan.kind, "image");
+    assert.equal(request.deliverable, deliverable);
+    assert.equal(request.cardType, cardType);
+    assert.equal(request.templateGroupKey, templateGroupKey);
+    assert.equal(request.category, category);
+    assert.equal(request.canvasSize, canvasSize);
+    assert.equal(request.copyCount, 4);
+    assert.equal(request.outputCount, 4);
+  }
+});
+
+test("swaps the configured vertical canvas when the customer requests a horizontal composition", () => {
+  const plan = planZhenxiCustomerRequest({ text: "做一个横版腰封，简约节日风格" });
+  assert.equal(plan.orientation, "horizontal");
+  assert.equal(plan.designRequests[0].canvasSize, "2800x950");
+  assert.match(plan.designRequests[0].prompt, /构图方向：横向/);
+});
+
+test("uses a 1:1 canvas when the requested greeting-card style is square", () => {
+  const plan = planZhenxiCustomerRequest({
+    text: "做一张贺卡，参考款式里的贺卡是正方形的",
+    requestContextId: "msg-square-card-1",
+  });
+
+  assert.equal(plan.orientation, "square");
+  assert.equal(plan.ratio, "1:1");
+  assert.equal(plan.designRequests[0].canvasSize, "1:1");
+  assert.equal(plan.designRequests[0].ratio, "1:1");
+  assert.match(plan.designRequests[0].prompt, /构图方向：正方形（1:1）/);
+});
+
+test("turns greeting-card size clarification into a square purple Zhenxi card request", () => {
+  const plan = planZhenxiCustomerRequest({
+    text: "尺寸是盒子的尺寸，图片里面是方形的贺卡，也就是1：1的尺寸，主题颜色是紫色",
+    requestContextId: "msg-square-purple-card-1",
+  });
+
+  assert.equal(plan.kind, "image");
+  assert.deepEqual(plan.requestedDeliverables, ["greeting_card"]);
+  assert.equal(plan.orientation, "square");
+  assert.equal(plan.ratio, "1:1");
+  assert.equal(plan.physicalSize, "");
+  assert.equal(plan.packageBoxSize, "");
+  assert.equal(plan.designRequests[0].canvasSize, "1:1");
+  assert.equal(plan.designRequests[0].outputCount, 4);
+  assert.match(plan.designRequests[0].prompt, /本轮补充要求：尺寸是盒子的尺寸/);
+  assert.match(plan.designRequests[0].prompt, /主题颜色是紫色/);
+});
+
+test("updates a pending greeting card to 1:1 from the visual model material outline", () => {
+  const pending = planZhenxiCustomerRequest({
+    text: "给我做一张教师节贺卡",
+    requestContextId: "msg-square-card-2",
+  });
+  const plan = planZhenxiCustomerRequest({
+    text: "客户发送图片。视觉模型提取到：物料类型为贺卡；贺卡外轮廓：正方形（1:1）。",
+    previousPlan: pending,
+    requestContextId: "msg-square-card-3",
+  });
+
+  assert.equal(plan.orientation, "square");
+  assert.equal(plan.ratio, "1:1");
+  assert.equal(plan.designRequests[0].canvasSize, "1:1");
 });
 
 test("requires real product sources before a product poster can enter paid generation", () => {

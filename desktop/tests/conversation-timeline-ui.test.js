@@ -74,8 +74,14 @@ test("manual direct delivery stays on the guarded send adapter path", () => {
   const service = read("apps/api/src/wechat/wechat-dispatch.service.ts");
   assert.match(client, /execute-manual-reply/);
   assert.match(controller, /executeManualReplyNow\(id, payload \|\| \{\}\)/);
+  const manualControllerSection = controller.slice(
+    controller.indexOf('@Post("send-tasks/:id/execute-manual-reply")'),
+    controller.indexOf('@Post("send-tasks/:id/requeue")'),
+  );
+  assert.match(manualControllerSection, /@RequireOperatorCapability\("reply_conversations"\)/);
+  assert.doesNotMatch(manualControllerSection, /@RequireOperatorCapability\("approve_send"\)/);
   assert.match(service, /if \(!isManualReplySendTask\(task\)\)/);
-  assert.match(service, /task\.conversation\?\.manualLocked !== true/);
+  assert.doesNotMatch(service, /the conversation must be under manual takeover before a direct manual reply/);
   assert.match(service, /item\.status === "sending" && item\.id !== task\.id/);
   assert.match(service, /adapter: "wechat_work_kf"/);
   const manualSection = service.slice(service.indexOf("  async executeManualReplyNow"), service.indexOf("  executeSend(", service.indexOf("  async executeManualReplyNow")));
@@ -109,6 +115,27 @@ test("conversation timeline keeps live updates visible and uses real customer av
   assert.match(thread, /stickToLatestRef/);
 });
 
+test("WeCom timeline renders each official message type without a generic attachment fallback", () => {
+  const model = read("apps/web/src/features/conversations/model.ts");
+  const thread = read("apps/web/src/components/conversation-workbench/conversation-thread-pane.tsx");
+  const content = read("apps/web/src/components/conversation-workbench/conversation-timeline-content.tsx");
+  const api = read("apps/web/src/lib/api.ts");
+
+  assert.match(model, /localConversationAttachmentUrl/);
+  assert.match(model, /content:\s*item\.messageType/);
+  assert.match(api, /conversations\/\$\{encodeURIComponent\(values\[0\]\)\}\/messages/);
+  assert.match(thread, /ConversationTimelineStructuredContent/);
+  assert.match(content, /content\.type === "location"/);
+  assert.match(content, /content\.type === "link"/);
+  assert.match(content, /content\.type === "business_card"/);
+  assert.match(content, /content\.type === "miniprogram"/);
+  assert.match(content, /content\.type === "product"/);
+  assert.match(content, /content\.type === "msgmenu"/);
+  assert.match(content, /<audio controls/);
+  assert.match(content, /<video className=\{styles\.videoAttachment\} controls/);
+  assert.doesNotMatch(content, />附件<|附件 \$\{attachment\.name\}/);
+});
+
 test("conversation messages render without waiting for AI, read-state, or profile enrichment", () => {
   const controller = read("apps/web/src/features/conversations/use-conversations-controller.ts");
   const effectStart = controller.indexOf('    const timelineRequest = api.getConversationTimeline(identity);');
@@ -135,7 +162,7 @@ test("the detail route owns message reading and guards read mutations by detail 
   const page = read("apps/web/src/features/conversations/conversation-detail-page.tsx");
   const controller = read("apps/web/src/features/conversations/use-conversations-controller.ts");
 
-  assert.match(page, /本页只负责阅读消息、生成辅助建议并提交人工回复/);
+  assert.match(page, /人工需要补充时直接输入并发送/);
   assert.match(page, /<ConversationThreadPane/);
   assert.match(controller, /mode !== "detail" \|\| !selectedConversation \|\| accessPhase !== "ready"/);
   assert.match(controller, /api\.markConversationMessagesRead\(identity\)/);

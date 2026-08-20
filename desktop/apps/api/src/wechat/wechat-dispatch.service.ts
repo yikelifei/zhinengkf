@@ -7,7 +7,7 @@ import path from "node:path";
 import { AiProviderService, type AiSuggestionInput } from "../ai/ai-provider.service";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { NotificationsService } from "../notifications/notifications.service";
-import { OrdersService } from "../orders/orders.service";
+import { createOrderDraftBusinessFingerprint, OrdersService } from "../orders/orders.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
 import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
@@ -31,9 +31,14 @@ import {
 import { rules } from "../shared/rules";
 import {
   prepareWechatWorkImageFile,
-  resolveWechatWorkImageFile,
   resolveWechatWorkMaterialFile,
 } from "../wechat-work/wechat-work-media";
+import { maxWechatWorkInboundMediaBytes } from "../wechat-work/wechat-work-inbound-media";
+import {
+  isWechatWorkEventReplyPayloadKind,
+  normalizeWechatWorkEventMsgMenu,
+  normalizeWechatWorkQueuedMessagesFromTaskPayload,
+} from "../wechat-work/wechat-work-outbound-message";
 import {
   WechatBridgeOutboxError,
   WechatSendAdapterService,
@@ -231,6 +236,7 @@ const {
   buildSendQueueSkipAdvice,
   buildInboundReplyText,
   buildOrderConfirmationCustomerMessage,
+  buildOrderDraftFromQuote,
   buildOrderFollowupCustomerMessage,
   classifyTrainingSampleUsage,
   createWechatWindowObserverAttestation,
@@ -268,6 +274,7 @@ const {
 const BRIDGE_OUTBOX_VERSION = "wechat_bridge_outbox_v1";
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
 const INBOUND_OPERATION_LEASE_MS = 5 * 60 * 1000;
+const BUSINESS_RISK_CONTROLS_DISABLED = true;
 
 type IdentityFilter = {
   wechatAccountId?: string;
@@ -610,11 +617,12 @@ export class WechatDispatchService {
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue confirmation");
     }
-    this.assertOrderConversationUnlocked(order, "order confirmation");
-    this.assertOrderPaymentReadyForSend(order, "order confirmation");
+    const bypassBusinessRisk = shouldBypassBusinessRiskForOrderAutomation(provenance);
+    this.assertOrderConversationUnlocked(order, "order confirmation", { bypassBusinessRisk });
+    this.assertOrderPaymentReadyForSend(order, "order confirmation", { bypassBusinessRisk });
     this.assertOrderHasCompleteSendIdentity(order);
     this.assertOrderHasSelectedImageForSend(order, "order confirmation");
-    this.assertOrderProfitReadyForSend(order, "order confirmation");
+    this.assertOrderProfitReadyForSend(order, "order confirmation", { bypassBusinessRisk });
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -627,7 +635,7 @@ export class WechatDispatchService {
     if (!binding.ok) {
       throw new BadRequestException(`order confirmation binding invalid: ${binding.reason}`);
     }
-    this.assertHighValueOrderHasManualRelease(order, payload, "high value order confirmation");
+    this.assertHighValueOrderHasManualRelease(order, payload, "high value order confirmation", { bypassBusinessRisk });
 
     const bundleSnapshot = order.bundleSnapshot || {};
     const items = Array.isArray(designJob?.bundle?.items)
@@ -723,11 +731,12 @@ export class WechatDispatchService {
     if (order.status === "cancelled") {
       throw new BadRequestException("cancelled order draft cannot queue follow-up");
     }
-    this.assertOrderConversationUnlocked(order, "order follow-up");
-    this.assertOrderPaymentReadyForSend(order, "order follow-up");
+    const bypassBusinessRisk = shouldBypassBusinessRiskForOrderAutomation(provenance);
+    this.assertOrderConversationUnlocked(order, "order follow-up", { bypassBusinessRisk });
+    this.assertOrderPaymentReadyForSend(order, "order follow-up", { bypassBusinessRisk });
     this.assertOrderHasCompleteSendIdentity(order);
     this.assertOrderHasSelectedImageForSend(order, "order follow-up");
-    this.assertOrderProfitReadyForSend(order, "order follow-up");
+    this.assertOrderProfitReadyForSend(order, "order follow-up", { bypassBusinessRisk });
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -740,7 +749,7 @@ export class WechatDispatchService {
     if (!binding.ok) {
       throw new BadRequestException(`order follow-up binding invalid: ${binding.reason}`);
     }
-    this.assertHighValueOrderHasManualRelease(order, payload, "high value order follow-up");
+    this.assertHighValueOrderHasManualRelease(order, payload, "high value order follow-up", { bypassBusinessRisk });
 
     const context = this.buildOrderMessageContext(order);
     const followupType = payload.type || (order.status === "fulfilled" ? "delivery" : "production");
@@ -881,7 +890,8 @@ export class WechatDispatchService {
     throw new BadRequestException(`${orderSendContextLabel(context)}需要先绑定客户选中的效果图，不能进入微信发送队列。`);
   }
 
-  private assertOrderPaymentReadyForSend(order: any, context: string) {
+  private assertOrderPaymentReadyForSend(order: any, context: string, options: { bypassBusinessRisk?: boolean } = {}) {
+    if (options.bypassBusinessRisk) return;
     const payment = orderPaymentLedgerState(order);
     if (payment.ready) return;
     if (payment.status === "deposit_paid" || payment.status === "paid") {
@@ -892,12 +902,14 @@ export class WechatDispatchService {
     throw new BadRequestException(`${orderSendContextLabel(context)}需要先核验定金或全款，不能进入微信发送队列。`);
   }
 
-  private assertOrderProfitReadyForSend(order: any, context: string) {
+  private assertOrderProfitReadyForSend(order: any, context: string, options: { bypassBusinessRisk?: boolean } = {}) {
+    if (options.bypassBusinessRisk) return;
     if (Number(order?.profit || 0) >= 0) return;
     throw new BadRequestException(`${orderSendContextLabel(context)}发现订单利润为负，必须人工确认报价和成本后再发送。`);
   }
 
-  private assertOrderConversationUnlocked(order: any, context: string) {
+  private assertOrderConversationUnlocked(order: any, context: string, options: { bypassBusinessRisk?: boolean } = {}) {
+    if (options.bypassBusinessRisk) return;
     const conversationId = String(order?.conversationId || order?.conversation?.id || order?.designJob?.conversationId || "");
     const currentConversation =
       appConfig.useLocalStore && conversationId
@@ -937,11 +949,12 @@ export class WechatDispatchService {
       },
       "order draft",
     );
-    this.assertOrderConversationUnlocked(order, context);
-    this.assertOrderPaymentReadyForSend(order, context);
+    const bypassBusinessRisk = shouldBypassBusinessRiskForOrderTask(task);
+    this.assertOrderConversationUnlocked(order, context, { bypassBusinessRisk });
+    this.assertOrderPaymentReadyForSend(order, context, { bypassBusinessRisk });
     this.assertOrderHasCompleteSendIdentity(order);
     this.assertOrderHasSelectedImageForSend(order, context);
-    this.assertOrderProfitReadyForSend(order, context);
+    this.assertOrderProfitReadyForSend(order, context, { bypassBusinessRisk });
 
     const designJob = order.designJob || order.quoteDraft?.designJob || null;
     const binding = validateOrderDraftQuoteBinding({
@@ -961,6 +974,7 @@ export class WechatDispatchService {
     | { ok: false; reason: string; message: string; routingPolicy: Record<string, unknown>; lane: string } {
     const routingPolicy = isPlainObject(task?.payload?.routingPolicy) ? task.payload.routingPolicy : null;
     if (!routingPolicy) return { ok: true };
+    if (businessRiskControlsDisabled()) return { ok: true, routingPolicy };
 
     const internalTestAllowed = internalTestAutoReplyAllowedForIdentity({
       wechatAccountId: task?.wechatAccountId,
@@ -1035,7 +1049,9 @@ export class WechatDispatchService {
     order: any,
     payload: { releaseManualLock?: boolean; releaseReason?: string },
     context: string,
+    options: { bypassBusinessRisk?: boolean } = {},
   ) {
+    if (options.bypassBusinessRisk) return;
     if (!this.isHighValueOrder(order)) return;
     if (!payload.releaseManualLock) {
       throw new BadRequestException("高价值订单必须先由人工审核，不能走自动或普通发送队列。");
@@ -1044,7 +1060,8 @@ export class WechatDispatchService {
   }
 
   private isHighValueOrder(order: any) {
-    const threshold = Number(appConfig.highValueAmountCny || 10000);
+    if (businessRiskControlsDisabled()) return false;
+    const threshold = effectiveHighValueAmountCny();
     const quote = order?.quoteDraft || {};
     const designJob = order?.designJob || quote?.designJob || {};
     if (Boolean(order?.isHighValue) || Boolean(quote?.isHighValue) || Boolean(designJob?.isHighValue)) return true;
@@ -1128,7 +1145,7 @@ export class WechatDispatchService {
 
     for (const order of orders as any[]) {
       const decision = evaluateLowValueOrderConfirmationSend(order, {
-        highValueAmountCny: appConfig.highValueAmountCny,
+        ...lowValueAutomationOptions(),
       });
       if (!decision.ok) {
         result.skipped.push({
@@ -1185,7 +1202,7 @@ export class WechatDispatchService {
       const existingFollowupTypes = await this.listOrderFollowupTypes(order);
       const attentionFollowupTypes = await this.listOrderAttentionFollowupTypes(order);
       const decision = evaluateLowValueOrderFollowupSend(order, {
-        highValueAmountCny: appConfig.highValueAmountCny,
+        ...lowValueAutomationOptions(),
         existingFollowupTypes,
         attentionFollowupTypes,
       });
@@ -1296,6 +1313,64 @@ export class WechatDispatchService {
     return { queued: true, task };
   }
 
+  async readConversationTimelineAttachment(
+    filter: IdentityFilter,
+    messageIdValue: string,
+    attachmentIdValue: string,
+  ) {
+    const messageId = String(messageIdValue || "").trim();
+    const attachmentId = String(attachmentIdValue || "").trim();
+    if (!messageId || !attachmentId) throw new NotFoundException("conversation attachment not found");
+    const timeline = await this.persistence.listConversationTimeline({ ...filter, limit: 500 });
+    const message = (Array.isArray(timeline) ? timeline : []).find((item: any) => String(item?.id || "") === messageId);
+    const attachment = (Array.isArray(message?.attachments) ? message.attachments : [])
+      .find((item: any) => String(item?.id || "") === attachmentId);
+    const kind = String(attachment?.kind || attachment?.msgtype || "").toLowerCase();
+    const localPath = String(attachment?.localPath || attachment?.path || attachment?.filePath || "").trim();
+    if (
+      !message
+      || !attachment
+      || attachment.source !== "wechat_work_kf"
+      || !["image", "voice", "video", "file"].includes(kind)
+      || !localPath
+      || (attachment.msgid && String(attachment.msgid) !== String(message.externalId || ""))
+    ) {
+      throw new NotFoundException("conversation attachment not found");
+    }
+    const storageRoot = await fs.promises.realpath(path.resolve(appConfig.localStorageRoot));
+    const inboundRoot = await fs.promises.realpath(path.join(storageRoot, "wechat-work", "inbound"));
+    const canonicalPath = await fs.promises.realpath(path.resolve(localPath));
+    const relativeToStorage = path.relative(storageRoot, canonicalPath);
+    const relativeToInbound = path.relative(inboundRoot, canonicalPath);
+    if (
+      !relativeToStorage
+      || relativeToStorage.startsWith("..")
+      || path.isAbsolute(relativeToStorage)
+      || !relativeToInbound
+      || relativeToInbound.startsWith("..")
+      || path.isAbsolute(relativeToInbound)
+    ) {
+      throw new NotFoundException("conversation attachment not found");
+    }
+    const stat = await fs.promises.stat(canonicalPath);
+    const maximum = maxWechatWorkInboundMediaBytes(kind as "image" | "voice" | "video" | "file");
+    if (!stat.isFile() || stat.size <= 0 || stat.size > maximum) {
+      throw new NotFoundException("conversation attachment not found");
+    }
+    const recordedSize = Number(attachment.sizeBytes || attachment.size || 0);
+    if (recordedSize > 0 && recordedSize !== stat.size) {
+      throw new NotFoundException("conversation attachment failed integrity validation");
+    }
+    const mimeType = String(attachment.mimeType || attachment.type || "application/octet-stream").toLowerCase();
+    return {
+      stream: fs.createReadStream(canonicalPath),
+      mimeType: /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mimeType) ? mimeType : "application/octet-stream",
+      sizeBytes: stat.size,
+      fileName: String(attachment.fileName || attachment.name || path.basename(canonicalPath)),
+      inlineSafe: kind !== "file",
+    };
+  }
+
   private async enqueueManualReplyWithAttachments(
     conversation: any,
     params: { operationKey: string; text: string; assetIds: string[]; queuedBy: string },
@@ -1330,6 +1405,7 @@ export class WechatDispatchService {
       wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
       customerId: conversation.customerId,
+      manualReply: true,
     });
     return this.persistence.createSendTask({
       operationKey: params.operationKey,
@@ -1476,10 +1552,14 @@ export class WechatDispatchService {
     conversationId?: string;
     customerId?: string;
     text: string;
+    messageType?: string;
+    messageContent?: Record<string, unknown> | null;
+    messageDisplayText?: string;
     externalId: string;
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
     mediaUnderstanding?: Record<string, unknown>;
+    handledServiceAction?: Record<string, unknown>;
     createdAt?: string;
     inboundOperationId?: string;
     inboundClaimToken?: string;
@@ -1488,6 +1568,7 @@ export class WechatDispatchService {
   }) {
     const externalId = String(payload.externalId || "").trim();
     if (!externalId) throw new BadRequestException("externalId is required");
+    const handledServiceAction = sanitizeHandledServiceAction(payload.handledServiceAction);
     const safeAssetIds = sanitizeInboundOperationAssetIds(payload.assetIds, { rejectInvalid: true });
     if (!appConfig.useLocalStore) return this.processPrismaInboundMessage(payload);
     const conversation = this.resolveInboundConversation(payload);
@@ -1527,8 +1608,16 @@ export class WechatDispatchService {
       assetIds,
       metadata: {
         assetIds,
+        ...(payload.messageType ? {
+          wechatWorkMessage: {
+            type: String(payload.messageType),
+            content: payload.messageContent || null,
+            displayText: String(payload.messageDisplayText || ""),
+          },
+        } : {}),
         ...(payload.inboundCaptureSource ? { inboundCaptureSource: payload.inboundCaptureSource } : {}),
         ...(payload.mediaUnderstanding ? { mediaUnderstanding: payload.mediaUnderstanding } : {}),
+        ...(handledServiceAction ? { handledServiceAction } : {}),
       },
     };
     this.validateInboundAssetBinding(conversation, assetIds);
@@ -1542,6 +1631,7 @@ export class WechatDispatchService {
       });
       return created;
     });
+    await this.supersedePriorInboundReplyTasks(conversation, message.id);
     const routingDraft = this.localStore.withReadSnapshot(() => {
       const identity = {
         wechatAccountId: conversation.wechatAccountId,
@@ -1553,6 +1643,7 @@ export class WechatDispatchService {
       const followupContext = findPendingFieldQuestionContext(recentRoutes, conversation.id);
       const budgetContext = latestConversationBudgetContext(recentRoutes);
       const salesContext = latestConversationSalesContext(recentRoutes);
+      const activeBusinessState = this.buildLocalConversationBusinessRiskState(identity);
       const sceneMemory = this.listSceneMemorySamples(identity);
       const routeBase = evaluateAgentRoute(
         {
@@ -1562,7 +1653,7 @@ export class WechatDispatchService {
           clarificationContext,
           followupContext,
         },
-        { highValueAmountCny: appConfig.highValueAmountCny, sceneMemory, budgetContext, salesContext },
+        { highValueAmountCny: effectiveHighValueAmountCny(), sceneMemory, budgetContext, salesContext },
       );
       const agent = this.localStore.getAgentByKey(routeBase.agentKey);
       const skills = agent?.id ? this.localStore.listAgentSkills(agent.id, identity) : [];
@@ -1609,10 +1700,10 @@ export class WechatDispatchService {
         }),
         payload.mediaUnderstanding,
       );
-      return { governedRouteBase, draft, catalogDataReadiness, bundleRecommendation, zhenxiRequest };
+      return { governedRouteBase, draft, catalogDataReadiness, bundleRecommendation, zhenxiRequest, recentRoutes, activeBusinessState };
     });
-    const { governedRouteBase, draft, catalogDataReadiness, bundleRecommendation, zhenxiRequest } = routingDraft;
-    const aiAssistance = await this.buildAiAssistedInboundDraft({
+    const { governedRouteBase, draft, catalogDataReadiness, bundleRecommendation, zhenxiRequest, recentRoutes, activeBusinessState } = routingDraft;
+    const aiAssistance = handledServiceAction ? null : await this.buildAiAssistedInboundDraft({
       conversation,
       route: governedRouteBase,
       draft,
@@ -1644,9 +1735,10 @@ export class WechatDispatchService {
             source: aiAssistance?.used ? "ai_assisted" : draft.replyDraft?.source,
             ruleSuggestedReply: draft.suggestedReply,
             aiAssistance,
-            catalogDataReadiness,
-            mediaUnderstanding: payload.mediaUnderstanding || null,
-            customerToolPlan: zhenxiRequest || null,
+          catalogDataReadiness,
+          mediaUnderstanding: payload.mediaUnderstanding || null,
+          handledServiceAction,
+          customerToolPlan: zhenxiRequest || null,
           },
         },
       );
@@ -1654,41 +1746,17 @@ export class WechatDispatchService {
       stage: "routed",
       routeEvaluationId: route.id,
     });
-    if (conversation.manualLocked) {
-      const plan = planInboundAutomation({
-        route: { ...route, conversationManualLocked: true },
-        conversationManualLocked: true,
-        internalTestAutoReply: internalTestAutoReplyAllowedForIdentity({
-          wechatAccountId: conversation.wechatAccountId,
-          conversationId: conversation.id,
-          customerId: conversation.customerId,
-        }),
-      });
-      const result: any = {
+    if (handledServiceAction) {
+      return await this.completeInboundProcessing(inboundOperation.id, claimToken, {
         message,
         route,
-        plan,
+        plan: buildHandledServiceActionPlan(handledServiceAction),
         sendTask: null,
         designJob: null,
         notification: null,
         bundleRecommendation: null,
-      };
-      result.notification = await this.withInboundEffectLease(inboundOperation.id, claimToken, () => this.notifications.create(
-        "warning",
-        "人工接管会话收到新消息",
-        `${conversation.title}：客户有新消息，请人工继续处理。`,
-        {
-          wechatAccountId: conversation.wechatAccountId,
-          conversationId: conversation.id,
-          customerId: conversation.customerId,
-          routeId: route.id,
-          reason: plan.reason,
-          effectKey: `${inboundOperation.id}:manual-lock-notification`,
-        },
-      ));
-      return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
+      });
     }
-
     const imageSelectionResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
       this.handleInboundImageSelection({
         operationId: inboundOperation.id,
@@ -1718,6 +1786,9 @@ export class WechatDispatchService {
       assetIds,
       bundleRecommendation,
       zhenxiRequest,
+      customerText: payload.text || "",
+      recentRoutes,
+      activeBusinessState,
       internalTestAutoReply: internalTestAutoReplyAllowedForIdentity({
         wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
@@ -1735,34 +1806,12 @@ export class WechatDispatchService {
     };
 
     if (plan.shouldNotifyHuman) {
-      if (plan.shouldQueueReply && plan.shouldLockConversation === false) {
-        result.notification = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
-          this.notifications.create(
-            "warning",
-            "高价值客户需求已自动确认",
-            `${conversation.title}：已排队发送安全确认；正式方案、价格和履约承诺仍需人工核对。`,
-            {
-              wechatAccountId: conversation.wechatAccountId,
-              conversationId: conversation.id,
-              customerId: conversation.customerId,
-              routeId: route.id,
-              reason: plan.reason,
-              acknowledgementOnly: true,
-              effectKey: `${inboundOperation.id}:guided-review-notification`,
-            },
-          ));
-      } else {
-        const effects = await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
-        const manualLock = await this.lockConversationForManualReview(conversation, {
-          reviewer: "system",
-          reason: plan.reason,
-          effectKey: `${inboundOperation.id}:manual-review-lock`,
-        });
-        const notification = await this.notifications.create(
+      result.notification = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
+        this.notifications.create(
           "warning",
-          "客户消息需要人工处理",
-          manualLock.blockedSendTasks.length
-            ? `${conversation.title}：${plan.reason}。已暂停 ${manualLock.blockedSendTasks.length} 个待发送任务。`
+          plan.shouldQueueReply ? "智能客服已先回复，人工可补充" : "客户消息需要人工关注",
+          plan.shouldQueueReply
+            ? `${conversation.title}：已排队发送智能客服安全回复；人工可直接补充。`
             : `${conversation.title}：${plan.reason}`,
           {
             wechatAccountId: conversation.wechatAccountId,
@@ -1770,17 +1819,10 @@ export class WechatDispatchService {
             customerId: conversation.customerId,
             routeId: route.id,
             reason: plan.reason,
-            blockedSendTaskIds: manualLock.blockedSendTasks.map((task: any) => task.id),
-            inFlightSendTaskIds: manualLock.inFlightSendTasks.map((task: any) => task.id),
-            effectKey: `${inboundOperation.id}:manual-review-notification`,
+            acknowledgementOnly: Boolean(plan.acknowledgementOnly),
+            effectKey: `${inboundOperation.id}:smart-reply-notification`,
           },
-        );
-        return { manualLock, notification };
-      });
-        result.manualLock = effects.manualLock;
-        result.notification = effects.notification;
-        return await this.completeInboundProcessing(inboundOperation.id, claimToken, result);
-      }
+        ));
     }
 
     await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
@@ -1841,9 +1883,15 @@ export class WechatDispatchService {
       customerId: String(payload?.customerId || ""),
       wechatAccountId: String(payload?.wechatAccountId || ""),
       text: String(payload?.text || ""),
+      messageType: String(payload?.messageType || ""),
+      messageContent: payload?.messageContent && typeof payload.messageContent === "object"
+        ? payload.messageContent
+        : null,
+      messageDisplayText: String(payload?.messageDisplayText || ""),
       externalId: String(payload?.externalId || ""),
       attachments: sanitizeInboundOperationAttachments(payload?.attachments),
       mediaUnderstanding: sanitizeInboundMediaUnderstanding(payload?.mediaUnderstanding),
+      handledServiceAction: sanitizeHandledServiceAction(payload?.handledServiceAction),
       assetIds: sanitizeInboundOperationAssetIds(payload?.assetIds),
       createdAt: payload?.createdAt || null,
     };
@@ -2041,7 +2089,6 @@ export class WechatDispatchService {
     const safeModelActions = new Set(["auto_agent", "collect_info"]);
     if (
       !this.aiProviders
-      || input.conversation.manualLocked
       || !safeModelActions.has(String(input.route.action || ""))
     ) return null;
     if (input.route?.basicAnswer && String(input.draft?.suggestedReply || "").trim()) {
@@ -2063,6 +2110,15 @@ export class WechatDispatchService {
         reason: "approved_xiaoshi_verbatim",
         historyTurns: 0,
         authority: "reviewed_human_verbatim",
+      };
+    }
+    if (isDeterministicSceneClarification(input.route, input.draft)) {
+      return {
+        used: false,
+        text: String(input.draft.suggestedReply || "").trim(),
+        reason: "deterministic_scene_clarification",
+        historyTurns: 0,
+        authority: "deterministic_scene_clarification",
       };
     }
     const conversationalFallbackAuthority = xiaoshiConversationalFallbackAuthority(input.route, input.draft);
@@ -2191,6 +2247,27 @@ export class WechatDispatchService {
       replyDraft: route.replyDraft || {},
       knowledgeMatches,
     };
+    const replyDraft = route.replyDraft || {};
+    const isGeneralHandoffFallback = String(route.agentKey || "") === "general"
+      && String(replyDraft.nextAction || "") === "handoff_to_human"
+      && knowledgeMatches.length === 0
+      && !(Array.isArray(route.riskFlags) && route.riskFlags.length > 0)
+      && replyDraft?.styleProfile?.activeForAgent !== true;
+    if (isGeneralHandoffFallback) {
+      return {
+        suggestedReply: ruleSuggestion,
+        sourceText: String(latestInbound.text || "").trim(),
+        knowledgeMatches,
+        appliedSkills,
+        ai: {
+          provider: "rule_fallback",
+          model: "safe_rule_suggestion",
+          attempts: 0,
+          qualityRepairs: 0,
+          historyTurns: 0,
+        },
+      };
+    }
     const conversationHistory = await this.buildAiConversationHistory(conversation, latestInbound.id);
     const antiTemplateGuidance = timeline.some((item: any) =>
       item.direction === "inbound" && /(不要.*(?:一样|重复)|太假|像机器人|答非所问|没回答|套话|重复回复)/.test(String(item.text || "")),
@@ -2233,9 +2310,20 @@ export class WechatDispatchService {
           historyTurns: conversationHistory.length,
         },
       };
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      throw new BadRequestException("AI reply suggestion generation failed; no fallback copy was inserted");
+    } catch {
+      return {
+        suggestedReply: ruleSuggestion,
+        sourceText: String(latestInbound.text || "").trim(),
+        knowledgeMatches,
+        appliedSkills,
+        ai: {
+          provider: "rule_fallback",
+          model: "safe_rule_suggestion",
+          attempts: 0,
+          qualityRepairs: 0,
+          historyTurns: conversationHistory.length,
+        },
+      };
     }
   }
 
@@ -2266,10 +2354,14 @@ export class WechatDispatchService {
     conversationId?: string;
     customerId?: string;
     text: string;
+    messageType?: string;
+    messageContent?: Record<string, unknown> | null;
+    messageDisplayText?: string;
     externalId?: string;
     assetIds?: string[];
     attachments?: Array<Record<string, unknown>>;
     mediaUnderstanding?: Record<string, unknown>;
+    handledServiceAction?: Record<string, unknown>;
     createdAt?: string;
     inboundOperationId?: string;
     inboundClaimToken?: string;
@@ -2290,6 +2382,7 @@ export class WechatDispatchService {
     }
 
     const safeAssetIds = sanitizeInboundOperationAssetIds(payload.assetIds, { rejectInvalid: true });
+    const handledServiceAction = sanitizeHandledServiceAction(payload.handledServiceAction);
     const assetIds = normalizeAssetIds([...safeAssetIds, ...(payload.attachments || [])]);
     if (assetIds.length) {
       const assets = await (this.prisma as any).designAsset.findMany({ where: { id: { in: assetIds } } });
@@ -2346,8 +2439,16 @@ export class WechatDispatchService {
       createdAt: payload.createdAt,
       metadata: {
         assetIds,
+        ...(payload.messageType ? {
+          wechatWorkMessage: {
+            type: String(payload.messageType),
+            content: payload.messageContent || null,
+            displayText: String(payload.messageDisplayText || ""),
+          },
+        } : {}),
         ...(payload.inboundCaptureSource ? { inboundCaptureSource: payload.inboundCaptureSource } : {}),
         ...(payload.mediaUnderstanding ? { mediaUnderstanding: payload.mediaUnderstanding } : {}),
+        ...(handledServiceAction ? { handledServiceAction } : {}),
       },
     });
     await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
@@ -2356,6 +2457,7 @@ export class WechatDispatchService {
       customerId: conversation.customerId,
       conversationId: conversation.id,
     });
+    await this.supersedePriorInboundReplyTasks(conversation, message.id);
     const priorRoutes = await this.persistence.listRouteEvaluations({
       wechatAccountId: conversation.wechatAccountId,
       conversationId: conversation.id,
@@ -2372,7 +2474,7 @@ export class WechatDispatchService {
         followupContext: findPendingFieldQuestionContext(priorRoutes, conversation.id),
       },
       {
-        highValueAmountCny: appConfig.highValueAmountCny,
+        highValueAmountCny: effectiveHighValueAmountCny(),
         sceneMemory: [],
         budgetContext: latestConversationBudgetContext(priorRoutes),
         salesContext: latestConversationSalesContext(priorRoutes),
@@ -2466,7 +2568,7 @@ export class WechatDispatchService {
       }),
       payload.mediaUnderstanding,
     );
-    const aiAssistance = await this.buildAiAssistedInboundDraft({
+    const aiAssistance = handledServiceAction ? null : await this.buildAiAssistedInboundDraft({
       conversation,
       route: governedRouteBase,
       draft,
@@ -2504,15 +2606,28 @@ export class WechatDispatchService {
           source: aiAssistance?.used ? "ai_assisted" : draft.replyDraft?.source,
           ruleSuggestedReply: draft.suggestedReply,
           aiAssistance,
-          catalogDataReadiness,
-          mediaUnderstanding: payload.mediaUnderstanding || null,
-          customerToolPlan: zhenxiRequest || null,
+            catalogDataReadiness,
+            mediaUnderstanding: payload.mediaUnderstanding || null,
+            handledServiceAction,
+            customerToolPlan: zhenxiRequest || null,
         },
     });
     await this.persistence.advanceInboundOperation(inboundOperation.id, claimToken, {
       stage: "routed",
       routeEvaluationId: route.id,
     });
+    if (handledServiceAction) {
+      return await this.completeInboundProcessing(inboundOperation.id, claimToken, {
+        message,
+        route,
+        plan: buildHandledServiceActionPlan(handledServiceAction),
+        sendTask: null,
+        designJob: null,
+        designJobs: [],
+        notification: null,
+        bundleRecommendation: null,
+      });
+    }
     const selectionResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
       this.handlePrismaInboundImageSelection({
         operationId: inboundOperation.id,
@@ -2524,12 +2639,26 @@ export class WechatDispatchService {
         payload,
       }));
     if (selectionResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, selectionResult);
+    const quoteAcceptanceResult = await this.withInboundEffectLease(inboundOperation.id, claimToken, () =>
+      this.handlePrismaInboundQuoteAcceptance({
+        operationId: inboundOperation.id,
+        claimToken,
+        operationResult: inboundOperation.result,
+        conversation,
+        message,
+        route,
+        payload,
+      }));
+    if (quoteAcceptanceResult) return await this.completeInboundProcessing(inboundOperation.id, claimToken, quoteAcceptanceResult);
+    const activeBusinessState = await this.buildPrismaConversationBusinessRiskState(conversation);
     const plan = enforceAiPolishedReplyPlan(planInboundAutomation({
-      route: conversation.manualLocked ? { ...route, conversationManualLocked: true } : route,
-      conversationManualLocked: Boolean(conversation.manualLocked),
+      route,
       assetIds,
       bundleRecommendation,
       zhenxiRequest,
+      customerText: payload.text || "",
+      recentRoutes: priorRoutes,
+      activeBusinessState,
       internalTestAutoReply: internalTestAutoReplyAllowedForIdentity({
         wechatAccountId: conversation.wechatAccountId,
         conversationId: conversation.id,
@@ -2541,7 +2670,7 @@ export class WechatDispatchService {
     let designJobs: any[] = [];
     let notification: any = null;
     await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
-      if (!conversation.manualLocked && plan.shouldCreateDesignJob) {
+      if (plan.shouldCreateDesignJob) {
         for (const designRequest of customerToolDesignRequests(plan.zhenxiRequest)) {
           designJobs.push(await this.createPrismaDesignDraftFromInbound({
             operationId: inboundOperation.id,
@@ -2557,7 +2686,7 @@ export class WechatDispatchService {
         }
         designJob = designJobs[0] || null;
       }
-      if (!conversation.manualLocked && plan.shouldQueueReply) {
+      if (plan.shouldQueueReply) {
         const sendBinding = await this.assertSendTaskBinding({
           wechatAccountId: conversation.wechatAccountId,
           conversationId: conversation.id,
@@ -2593,10 +2722,10 @@ export class WechatDispatchService {
           },
         });
       }
-      if (plan.shouldNotifyHuman || conversation.manualLocked) {
+      if (plan.shouldNotifyHuman) {
         notification = await this.notifications.create(
           "warning",
-          conversation.manualLocked ? "人工接管会话收到新消息" : "客户消息需要人工处理",
+          "智能客服已先回复，人工可补充",
           `${conversation.title || conversation.id}：${plan.reason}`,
           {
             wechatAccountId: conversation.wechatAccountId,
@@ -2874,7 +3003,7 @@ export class WechatDispatchService {
           return { job: nextJob, quote: null };
         }
         const pricing = prismaQuotePricing(job);
-        const quoteStatus = pricing.highValue || !inspectBundleAutomationReadiness(job.bundle || {}).ok
+        const quoteStatus = !businessRiskControlsDisabled() && (pricing.highValue || !inspectBundleAutomationReadiness(job.bundle || {}).ok)
           ? "manual_review"
           : "auto_sent";
         const quoteData = {
@@ -3008,7 +3137,7 @@ export class WechatDispatchService {
   }
 
   private async tryQueuePrismaLowValueQuoteAfterSelection(quote: any, designJob: any) {
-    const decision = evaluateLowValueQuoteSend(quote, { highValueAmountCny: appConfig.highValueAmountCny });
+    const decision = evaluateLowValueQuoteSend(quote, lowValueAutomationOptions());
     if (!decision.ok) return { decision, quote, sendTask: null };
     const text = buildQuoteCustomerMessage({
       customerName: quote.customer?.name,
@@ -3408,8 +3537,9 @@ export class WechatDispatchService {
     });
   }
 
-  listSendTasks(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
-    return appConfig.useLocalStore ? this.localStore.listSendTasks(filter) : this.persistence.listSendTasks(filter);
+  async listSendTasks(filter: { wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
+    const tasks = appConfig.useLocalStore ? this.localStore.listSendTasks(filter) : await this.persistence.listSendTasks(filter);
+    return tasks.map((task: any) => redactOperatorSendTask(task));
   }
 
   listSendAttempts(filter: { sendTaskId?: string; wechatAccountId?: string; conversationId?: string; customerId?: string } = {}) {
@@ -3511,6 +3641,23 @@ export class WechatDispatchService {
     const pendingSendCount = officialSendTasks.filter((task: any) =>
       ["queued", "sending", "pending_ack"].includes(String(task.status || "")),
     ).length;
+    const queuedSendCount = officialSendTasks.filter((task: any) => String(task.status || "") === "queued").length;
+    const inFlightSendCount = officialSendTasks.filter((task: any) =>
+      ["sending", "pending_ack"].includes(String(task.status || "")),
+    ).length;
+    const unknownDeliveryCount = officialSendTasks.filter((task: any) =>
+      this.hasUnknownSendDelivery(task, task.latestAttempt || task.attempts?.[0]),
+    ).length;
+    const knownInFlightSendCount = officialSendTasks.filter((task: any) =>
+      ["sending", "pending_ack"].includes(String(task.status || ""))
+      && !this.hasUnknownSendDelivery(task, task.latestAttempt || task.attempts?.[0]),
+    ).length;
+    const blockedSendCount = officialSendTasks.filter((task: any) => String(task.status || "") === "blocked").length;
+    const failedSendCount = officialSendTasks.filter((task: any) => String(task.status || "") === "failed").length;
+    const sendAttentionCount = officialSendTasks.filter((task: any) =>
+      ["blocked", "failed", "dry_run", "uncertain"].includes(String(task.status || ""))
+      || this.hasUnknownSendDelivery(task, task.latestAttempt || task.attempts?.[0]),
+    ).length;
     const manualLockedCount = officialConversations.filter((conversation: any) => conversation.manualLocked).length;
     const activeAccountCount = officialAccounts.filter((account: any) => account.isActive !== false).length;
 
@@ -3593,6 +3740,13 @@ export class WechatDispatchService {
           conversations: officialConversations.length,
           latestRoutes: officialRouteEvaluations.length,
           pendingSendTasks: pendingSendCount,
+          queuedSendTasks: queuedSendCount,
+          inFlightSendTasks: inFlightSendCount,
+          knownInFlightSendTasks: knownInFlightSendCount,
+          unknownDeliveryTasks: unknownDeliveryCount,
+          blockedSendTasks: blockedSendCount,
+          failedSendTasks: failedSendCount,
+          sendAttentionTasks: sendAttentionCount,
         },
         checks: workChecks,
       },
@@ -3628,6 +3782,13 @@ export class WechatDispatchService {
         needsSendAdapter: channels.filter((channel) => channel.status === "needs_send_adapter").length,
         needsConfig: channels.filter((channel) => channel.status === "needs_config").length,
         pendingSendTasks: pendingSendCount,
+        queuedSendTasks: queuedSendCount,
+        inFlightSendTasks: inFlightSendCount,
+        knownInFlightSendTasks: knownInFlightSendCount,
+        unknownDeliveryTasks: unknownDeliveryCount,
+        blockedSendTasks: blockedSendCount,
+        failedSendTasks: failedSendCount,
+        sendAttentionTasks: sendAttentionCount,
         manualLockedConversations: manualLockedCount,
       },
       channels,
@@ -4081,6 +4242,7 @@ export class WechatDispatchService {
     const bridgeOutboxBroken: any[] = [];
     const bridgeDispatchExpired: any[] = [];
     const wechatWorkDeliveryUnknown: any[] = [];
+    const wechatWorkFailedRecovered: any[] = [];
     const autoRetriedLowValue: any[] = [];
     const alerted: any[] = [];
     const staleQueued: any[] = [];
@@ -4089,6 +4251,17 @@ export class WechatDispatchService {
       if (task.status === "sending") {
         const pendingAttempt = this.localStore.getLatestSendAttempt(task.id, { status: "started" });
         if (pendingAttempt?.adapter === "wechat_work_kf") {
+          const recoveredFailure = this.recoverKnownWechatWorkStartedFailure(task, pendingAttempt, now);
+          if (recoveredFailure) {
+            wechatWorkFailedRecovered.push(recoveredFailure);
+            alerted.push(recoveredFailure);
+            await this.notifications.create("error", "Enterprise WeChat send failed", recoveredFailure.errorMessage || "Enterprise WeChat returned a deterministic send failure.", {
+              sendTaskId: recoveredFailure.id,
+              wechatAccountId: recoveredFailure.wechatAccountId,
+              conversationId: recoveredFailure.conversationId,
+            });
+            continue;
+          }
           if (!isOlderThan(
             pendingAttempt.startedAt || pendingAttempt.createdAt,
             now,
@@ -4222,7 +4395,7 @@ export class WechatDispatchService {
       if (task.status === "failed" && isLowValueAutomationTask(task)) {
         const retryCount = Number(task.guardSnapshot?.lowValueAutoRetryCount || 0);
         const retryBlocked = task.guardSnapshot?.automaticRetryBlocked === true
-          || task.guardSnapshot?.manualReviewRequired === true
+          || (!businessRiskControlsDisabled() && task.guardSnapshot?.manualReviewRequired === true)
           || Boolean(task.guardSnapshot?.cancelRequestedAt);
         if (!retryBlocked && Number.isFinite(retryCount) && retryCount < 1) {
           const reason = task.errorMessage
@@ -4282,7 +4455,7 @@ export class WechatDispatchService {
       }
 
       if (["blocked", "failed"].includes(task.status) && task.guardSnapshot?.opsAlertedStatus !== task.status) {
-        const blockedByRoutingPolicy = Boolean(task.guardSnapshot?.blockedByRoutingPolicy);
+        const blockedByRoutingPolicy = !businessRiskControlsDisabled() && Boolean(task.guardSnapshot?.blockedByRoutingPolicy);
         const routingPolicy = isPlainObject(task.guardSnapshot?.routingPolicy) ? task.guardSnapshot.routingPolicy : null;
         const routingPolicyLane = String(task.guardSnapshot?.routingPolicyLane || routingPolicy?.lane || "");
         this.localStore.updateSendTask(task.id, {
@@ -4327,6 +4500,7 @@ export class WechatDispatchService {
       bridgeOutboxBroken: bridgeOutboxBroken.length,
       bridgeDispatchExpired: bridgeDispatchExpired.length,
       wechatWorkDeliveryUnknown: wechatWorkDeliveryUnknown.length,
+      wechatWorkFailedRecovered: wechatWorkFailedRecovered.length,
       autoRetriedLowValue: autoRetriedLowValue.length,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
@@ -4335,6 +4509,7 @@ export class WechatDispatchService {
         bridgeOutboxBroken,
         bridgeDispatchExpired,
         wechatWorkDeliveryUnknown,
+        wechatWorkFailedRecovered,
         autoRetriedLowValue,
         staleQueued,
         alerted,
@@ -4389,6 +4564,17 @@ export class WechatDispatchService {
         continue;
       }
 
+      const superseded = await this.supersedeStaleInboundReplyTask(freshTask);
+      if (superseded) {
+        skipped.push({
+          sendTaskId: freshTask.id,
+          wechatAccountId: freshTask.wechatAccountId,
+          reason: superseded.reason,
+          latestInboundMessageId: superseded.latestInboundMessageId,
+        });
+        continue;
+      }
+
       if (isHighValueLowValueAutomationTask(freshTask)) {
         const blockedTask = this.blockSendTask(freshTask.id, "低价值自动化发送任务已达到高价值线，已转人工确认。", {
           failedKeys: ["manualReviewRequired"],
@@ -4402,7 +4588,7 @@ export class WechatDispatchService {
         continue;
       }
 
-      if (freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask)) {
+      if (!businessRiskControlsDisabled() && freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask)) {
         const advice = buildSendQueueSkipAdvice({
           reason: "conversation_manual_locked",
           task: freshTask,
@@ -4677,7 +4863,16 @@ export class WechatDispatchService {
         skipped.push({ sendTaskId: task.id, reason: "task_no_longer_queued" });
         continue;
       }
-      const manualLockBlocksTask = freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask);
+      const superseded = await this.supersedeStaleInboundReplyTask(freshTask);
+      if (superseded) {
+        skipped.push({
+          sendTaskId: freshTask.id,
+          reason: superseded.reason,
+          latestInboundMessageId: superseded.latestInboundMessageId,
+        });
+        continue;
+      }
+      const manualLockBlocksTask = !businessRiskControlsDisabled() && freshTask.conversation?.manualLocked && !isManualReplySendTask(freshTask);
       if (manualLockBlocksTask || isHighValueLowValueAutomationTask(freshTask)) {
         const reason = manualLockBlocksTask
           ? "会话已人工接管，自动发送暂停。"
@@ -4849,21 +5044,24 @@ export class WechatDispatchService {
     const prisma = this.prisma as any;
     const conversation = await prisma.conversation.findUnique({ where: { id: params.conversationId } });
     const quoteDraft = params.quoteDraftId
-      ? await prisma.quoteDraft.findUnique({ where: { id: params.quoteDraftId } })
+      ? typeof prisma.quoteDraft?.findUnique === "function"
+        ? await prisma.quoteDraft.findUnique({ where: { id: params.quoteDraftId } })
+        : await prisma.quoteDraft.findFirst({ where: { id: params.quoteDraftId } })
       : null;
     const designJobId = params.designJobId || quoteDraft?.designJobId || null;
-    const designJob = designJobId ? await prisma.designJob.findUnique({ where: { id: designJobId } }) : null;
+    const designJob = designJobId
+      ? typeof prisma.designJob?.findUnique === "function"
+        ? await prisma.designJob.findUnique({ where: { id: designJobId } })
+        : await prisma.designJob.findFirst({ where: { id: designJobId } })
+      : null;
     return { conversation, designJob, quoteDraft };
   }
 
-  private async assertConversationCanQueueSend(conversationId: string, options: { allowManualReply?: boolean } = {}) {
+  private async assertConversationCanQueueSend(conversationId: string, _options: { allowManualReply?: boolean } = {}) {
     const conversation = appConfig.useLocalStore
       ? this.localStore.listConversations().find((item) => item.id === conversationId)
       : await this.prisma.conversation.findUnique({ where: { id: conversationId } });
     if (!conversation) throw new BadRequestException(`conversation not found: ${conversationId}`);
-    if (conversation.manualLocked && !options.allowManualReply) {
-      throw new BadRequestException("会话已人工接管，解除锁定后才能创建新的发送任务。");
-    }
   }
 
   validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) {
@@ -4974,9 +5172,23 @@ export class WechatDispatchService {
   }
 
   async executeQueuedSend(id: string, params: { adapter?: string } & ExpectedIdentityPayload = {}) {
-    const result = await this.executeSend(id, params);
-    if (result.attempt?.adapter !== "wechat_work_kf" || result.task?.status !== "sending") return result;
-    return this.completeWechatWorkKfSend(result);
+    try {
+      const result = await this.executeSend(id, params);
+      if (result.attempt?.adapter !== "wechat_work_kf" || result.task?.status !== "sending") return result;
+      return await this.completeWechatWorkKfSend(result);
+    } finally {
+      await this.clearWechatWorkEventCredentialSecretFromTask(id);
+    }
+  }
+
+  private async clearWechatWorkEventCredentialSecretFromTask(id: string) {
+    const task = await this.persistence.getSendTask(id);
+    const payload = task?.payload && typeof task.payload === "object" ? { ...task.payload } : null;
+    if (!payload || !isWechatWorkEventReplyPayloadKind(payload.kind) || !("eventCodeSecret" in payload)) return task;
+    delete payload.eventCodeSecret;
+    payload.eventCredentialSecretClearedAt = new Date().toISOString();
+    payload.eventCredentialSecretStored = false;
+    return this.persistence.updateSendTask(id, { payload });
   }
 
   async executeManualReplyNow(id: string, params: ExpectedIdentityPayload = {}) {
@@ -4985,9 +5197,6 @@ export class WechatDispatchService {
     assertExpectedIdentity(task, params, "send task");
     if (!isManualReplySendTask(task)) {
       throw new BadRequestException("only a trusted manual reply can be sent directly from the conversation page");
-    }
-    if (task.conversation?.manualLocked !== true) {
-      throw new BadRequestException("the conversation must be under manual takeover before a direct manual reply");
     }
     const accountTasks = await this.persistence.listSendTasks({ wechatAccountId: task.wechatAccountId });
     const inFlight = accountTasks.find((item: any) => item.status === "sending" && item.id !== task.id);
@@ -5161,6 +5370,15 @@ export class WechatDispatchService {
         },
         startedAt,
       },
+      claimGuard: {
+        requireAccountQueueHead: true,
+        wechatAccountId: String(validated.wechatAccountId || ""),
+        conversationId: String(validated.conversationId || ""),
+        customerId: String(validated.customerId || validated.conversation?.customerId || ""),
+        ...(isInboundReplyAutomationTask(validated) ? {
+          latestInboundMessageId: String(validated.payload?.inboundMessageId || ""),
+        } : {}),
+      },
     });
     if (!claimed) throw new BadRequestException("send task was claimed by another worker");
 
@@ -5262,21 +5480,17 @@ export class WechatDispatchService {
       conversationId: task.conversationId,
       customerId: task.conversation?.customerId || task.customerId,
     });
-    const text = String(task.payload?.textBeforeImages || task.payload?.textBeforeFiles || task.payload?.text || "").trim();
-    const imagePaths = Array.isArray(task.payload?.imagePaths) ? task.payload.imagePaths.filter(Boolean) : [];
-    const filePaths = Array.isArray(task.payload?.filePaths) ? task.payload.filePaths.filter(Boolean) : [];
-    const imageValidation = validateWechatWorkImagePaths(imagePaths);
-    const fileValidation = validateWechatWorkMaterialPaths(filePaths);
-    const messageCount = (text ? 1 : 0) + imagePaths.length + filePaths.length;
+    const messageValidation = validateWechatWorkKfPayloadForGuard(task.payload);
     const checks = [
       { key: "wechatWorkBinding", passed: Boolean(binding), detail: binding ? "mapping found" : "mapping missing" },
       { key: "wechatWorkCorpId", passed: Boolean(appConfig.wechatWorkCorpId), detail: "WECHAT_WORK_CORP_ID" },
       { key: "wechatWorkSecret", passed: Boolean(appConfig.wechatWorkSecret), detail: "WECHAT_WORK_SECRET" },
-      { key: "messagePayload", passed: messageCount > 0, detail: "text, imagePaths, and/or filePaths" },
-      { key: "textLength", passed: !text || Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
-      { key: "imageFiles", passed: imageValidation.ok, detail: imageValidation.detail },
-      { key: "materialFiles", passed: fileValidation.ok, detail: fileValidation.detail },
-      { key: "messageCount", passed: messageCount <= 5, detail: "maximum 5 ordered messages" },
+      {
+        key: "messagePayload",
+        passed: messageValidation.ok,
+        detail: messageValidation.detail,
+      },
+      { key: "messageCount", passed: messageValidation.messageCount <= 5, detail: "maximum 5 ordered messages" },
     ];
     const failedKeys = checks.filter((item) => !item.passed).map((item) => item.key);
     if (failedKeys.length) {
@@ -5312,21 +5526,17 @@ export class WechatDispatchService {
       conversationId: task.conversationId,
       customerId: task.conversation?.customerId || task.customerId,
     });
-    const text = String(task.payload?.textBeforeImages || task.payload?.textBeforeFiles || task.payload?.text || "").trim();
-    const imagePaths = Array.isArray(task.payload?.imagePaths) ? task.payload.imagePaths.filter(Boolean) : [];
-    const filePaths = Array.isArray(task.payload?.filePaths) ? task.payload.filePaths.filter(Boolean) : [];
-    const imageValidation = validateWechatWorkImagePaths(imagePaths);
-    const fileValidation = validateWechatWorkMaterialPaths(filePaths);
-    const messageCount = (text ? 1 : 0) + imagePaths.length + filePaths.length;
+    const messageValidation = validateWechatWorkKfPayloadForGuard(task.payload);
     const checks = [
       { key: "wechatWorkBinding", passed: Boolean(binding), detail: binding ? "mapping found" : "mapping missing" },
       { key: "wechatWorkCorpId", passed: Boolean(appConfig.wechatWorkCorpId), detail: "WECHAT_WORK_CORP_ID" },
       { key: "wechatWorkSecret", passed: Boolean(appConfig.wechatWorkSecret), detail: "WECHAT_WORK_SECRET" },
-      { key: "messagePayload", passed: messageCount > 0, detail: "text, imagePaths, and/or filePaths" },
-      { key: "textLength", passed: !text || Buffer.byteLength(text, "utf8") <= 2048, detail: "maximum 2048 UTF-8 bytes" },
-      { key: "imageFiles", passed: imageValidation.ok, detail: imageValidation.detail },
-      { key: "materialFiles", passed: fileValidation.ok, detail: fileValidation.detail },
-      { key: "messageCount", passed: messageCount <= 5, detail: "maximum 5 ordered messages" },
+      {
+        key: "messagePayload",
+        passed: messageValidation.ok,
+        detail: messageValidation.detail,
+      },
+      { key: "messageCount", passed: messageValidation.messageCount <= 5, detail: "maximum 5 ordered messages" },
     ];
     const failedKeys = checks.filter((item) => !item.passed).map((item) => item.key);
     return this.persistence.updateSendTask(id, {
@@ -5484,7 +5694,7 @@ export class WechatDispatchService {
         return { ...result, task: liveTask, attempt: liveAttempt, retryScheduled: false, stateChanged: true };
       }
       const retrySuppressed = liveTask.guardSnapshot?.automaticRetryBlocked === true
-        || liveTask.guardSnapshot?.manualReviewRequired === true
+        || (!businessRiskControlsDisabled() && liveTask.guardSnapshot?.manualReviewRequired === true)
         || Boolean(liveTask.guardSnapshot?.cancelRequestedAt);
       const retryScheduled = !retrySuppressed && deliveryFailure.retrySafe && attemptNumber < appConfig.wechatWorkSendMaxAttempts;
       const deliveryUnknown = !retryScheduled && deliveryFailure.deliveryState !== "failed";
@@ -5701,7 +5911,7 @@ export class WechatDispatchService {
         return { ...result, task: liveTask, attempt: liveAttempt, retryScheduled: false, stateChanged: true };
       }
       const retrySuppressed = liveTask.guardSnapshot?.automaticRetryBlocked === true
-        || liveTask.guardSnapshot?.manualReviewRequired === true
+        || (!businessRiskControlsDisabled() && liveTask.guardSnapshot?.manualReviewRequired === true)
         || Boolean(liveTask.guardSnapshot?.cancelRequestedAt);
       const retryScheduled = !retrySuppressed && deliveryFailure.retrySafe && attemptNumber < appConfig.wechatWorkSendMaxAttempts;
       const deliveryUnknown = !retryScheduled && deliveryFailure.deliveryState !== "failed";
@@ -5904,6 +6114,15 @@ export class WechatDispatchService {
         payloadSummary,
         metadata: { adapter, guardSnapshot: validated.guardSnapshot || null },
         startedAt,
+      },
+      claimGuard: {
+        requireAccountQueueHead: true,
+        wechatAccountId: String(validated.wechatAccountId || ""),
+        conversationId: String(validated.conversationId || ""),
+        customerId: String(validated.customerId || validated.conversation?.customerId || ""),
+        ...(isInboundReplyAutomationTask(validated) ? {
+          latestInboundMessageId: String(validated.payload?.inboundMessageId || ""),
+        } : {}),
       },
     });
     if (!claimed) throw new BadRequestException("send task was claimed by another worker");
@@ -6109,7 +6328,8 @@ export class WechatDispatchService {
         paymentStatus,
       };
     }
-    if (paymentStatus !== "deposit_paid" && paymentStatus !== "paid") {
+    const bypassBusinessRisk = shouldBypassBusinessRiskForOrderTask(task);
+    if (!bypassBusinessRisk && paymentStatus !== "deposit_paid" && paymentStatus !== "paid") {
       return {
         ok: false as const,
         reason: "orderPaymentNotReadyBeforeSend",
@@ -6119,7 +6339,7 @@ export class WechatDispatchService {
         paymentStatus,
       };
     }
-    if (!payment.ready) {
+    if (!bypassBusinessRisk && !payment.ready) {
       return {
         ok: false as const,
         reason: "orderPaymentLedgerNotReadyBeforeSend",
@@ -6190,14 +6410,15 @@ export class WechatDispatchService {
 
     const routingState = this.validateQueuedRoutingPolicySendState(task);
     if (!routingState.ok) return routingState;
-    if (!options.allowManualLock && task.conversation?.manualLocked && !isManualReplySendTask(task)) {
+    const bypassBusinessRisk = shouldBypassBusinessRiskForOrderTask(task);
+    if (!bypassBusinessRisk && !options.allowManualLock && task.conversation?.manualLocked && !isManualReplySendTask(task)) {
       return {
         ok: false as const,
         reason: "conversationManualLocked",
         message: "conversation is manually locked and only an explicit manual reply may be sent",
       };
     }
-    if (isHighValueLowValueAutomationTask(task)) {
+    if (!bypassBusinessRisk && isHighValueLowValueAutomationTask(task)) {
       return {
         ok: false as const,
         reason: "manualReviewRequired",
@@ -6221,7 +6442,7 @@ export class WechatDispatchService {
         return { ok: false as const, reason: "orderCancelledBeforeSend", message: "order was cancelled before durable send completion" };
       }
       const paymentStatus = String(order.paymentStatus || order.quoteDraft?.paymentStatus || "");
-      if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+      if (!bypassBusinessRisk && !["deposit_paid", "paid"].includes(paymentStatus)) {
         return { ok: false as const, reason: "orderPaymentNotReadyBeforeSend", message: "order payment is no longer verified" };
       }
     } else {
@@ -6260,7 +6481,7 @@ export class WechatDispatchService {
             wechatAccountId: task.wechatAccountId,
             conversationId: task.conversationId,
             status: { not: "cancelled" },
-            paymentStatus: { in: ["deposit_paid", "paid"] },
+            ...(shouldBypassBusinessRiskForOrderTask(task) ? {} : { paymentStatus: { in: ["deposit_paid", "paid"] } }),
           },
           data: { customerNotes: order.customerNotes },
           required: true,
@@ -6281,7 +6502,10 @@ export class WechatDispatchService {
           conversationId: task.conversationId,
           customerNotes: order.customerNotes,
           ...(outcome === "requeued"
-            ? { status: { not: "cancelled" }, paymentStatus: { in: ["deposit_paid", "paid"] } }
+            ? {
+                status: { not: "cancelled" },
+                ...(shouldBypassBusinessRiskForOrderTask(task) ? {} : { paymentStatus: { in: ["deposit_paid", "paid"] } }),
+              }
             : {}),
         },
         data: {
@@ -6946,6 +7170,82 @@ export class WechatDispatchService {
     return { ...completed, changed: true, reason: "async_failure_settled" };
   }
 
+  private async supersedeStaleInboundReplyTask(task: any) {
+    if (!isInboundReplyAutomationTask(task)) return null;
+    const inboundMessageId = String(task?.payload?.inboundMessageId || "").trim();
+    if (!inboundMessageId) return null;
+    const identity = {
+      wechatAccountId: String(task.wechatAccountId || ""),
+      conversationId: String(task.conversationId || ""),
+      customerId: String(task.customerId || task.conversation?.customerId || ""),
+    };
+    const timeline = await this.persistence.listConversationTimeline({ ...identity, limit: 100 });
+    const inboundMessages = (Array.isArray(timeline) ? timeline : [])
+      .filter((item: any) => item?.direction === "inbound");
+    const currentInbound = inboundMessages.find((item: any) => String(item.id || "") === inboundMessageId) || null;
+    const currentCreatedAt = Date.parse(String(currentInbound?.createdAt || ""));
+    const latestInbound = currentInbound
+      ? inboundMessages
+        .filter((item: any) => Date.parse(String(item.createdAt || "")) > currentCreatedAt)
+        .sort((left: any, right: any) => Date.parse(String(right.createdAt || "")) - Date.parse(String(left.createdAt || "")))[0]
+        || currentInbound
+      : null;
+    const expired = isOlderThan(
+      task.queuedAt || task.createdAt,
+      new Date(),
+      appConfig.sendQueueStaleMinutes,
+    );
+    if (latestInbound?.id === inboundMessageId && !expired) return null;
+    const reason = expired ? "inbound_reply_expired" : "inbound_reply_superseded";
+    const message = expired
+      ? "自动回复排队过久，已取消以避免占用新的客户发送窗口。"
+      : "客户已发送更新消息，旧自动回复已取消。";
+    const updated = await this.persistence.updateSendTask(task.id, {
+      status: "cancelled",
+      errorMessage: message,
+      guardSnapshot: {
+        ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
+        status: "cancelled",
+        reason,
+        failedKeys: [reason],
+        inboundMessageId,
+        latestInboundMessageId: latestInbound?.id || null,
+        supersededAt: new Date().toISOString(),
+      },
+    });
+    return { task: updated, reason, latestInboundMessageId: latestInbound?.id || null };
+  }
+
+  private async supersedePriorInboundReplyTasks(conversation: any, currentMessageId: string) {
+    const identity = {
+      wechatAccountId: String(conversation.wechatAccountId || ""),
+      conversationId: String(conversation.id || ""),
+      customerId: String(conversation.customerId || ""),
+    };
+    const tasks = await this.persistence.listSendTasks(identity);
+    const priorTasks = (Array.isArray(tasks) ? tasks : []).filter((task: any) => (
+      task?.status === "queued"
+      && isInboundReplyAutomationTask(task)
+      && String(task?.payload?.inboundMessageId || "") !== currentMessageId
+    ));
+    for (const task of priorTasks) {
+      await this.persistence.updateSendTask(task.id, {
+        status: "cancelled",
+        errorMessage: "客户已发送更新消息，旧自动回复已取消。",
+        guardSnapshot: {
+          ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
+          status: "cancelled",
+          reason: "inbound_reply_superseded",
+          failedKeys: ["inbound_reply_superseded"],
+          inboundMessageId: String(task?.payload?.inboundMessageId || "") || null,
+          latestInboundMessageId: currentMessageId,
+          supersededAt: new Date().toISOString(),
+        },
+      });
+    }
+    return priorTasks.length;
+  }
+
   private blockSendTask(id: string, reason: string, guardSnapshot: Record<string, unknown>) {
     const task = this.localStore.getSendTask(id);
     if (!task) throw new Error(`send task not found: ${id}`);
@@ -7042,6 +7342,67 @@ export class WechatDispatchService {
       .filter((sample: any) => isSceneMemorySample(sample))
       .sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
       .slice(0, 200);
+  }
+
+  private buildLocalConversationBusinessRiskState(identity: IdentityFilter = {}) {
+    return summarizeConversationBusinessRiskState({
+      quotes: this.localStore.listQuoteDrafts(identity),
+      orders: this.localStore.listOrderDrafts(identity),
+      payments: this.localStore.listPaymentEvents(identity),
+      reviewLogs: this.localStore.listReviewLogs({ ...identity, limit: 20 }),
+    });
+  }
+
+  private async buildPrismaConversationBusinessRiskState(conversation: any) {
+    const prisma = this.prisma as any;
+    if (!conversation?.id || !conversation?.customerId) return summarizeConversationBusinessRiskState({});
+    const identity = {
+      customerId: conversation.customerId,
+      conversationId: conversation.id,
+      wechatAccountId: conversation.wechatAccountId || undefined,
+    };
+    const [quotes, orders, payments, reviewLogs] = await Promise.all([
+      prisma.quoteDraft.findMany({
+        where: {
+          customerId: identity.customerId,
+          designJob: {
+            conversationId: identity.conversationId,
+            ...(identity.wechatAccountId ? { wechatAccountId: identity.wechatAccountId } : {}),
+          },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 20,
+      }),
+      prisma.orderDraft.findMany({
+        where: {
+          customerId: identity.customerId,
+          conversationId: identity.conversationId,
+          ...(identity.wechatAccountId ? { wechatAccountId: identity.wechatAccountId } : {}),
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 20,
+      }),
+      prisma.paymentEvent.findMany({
+        where: {
+          customerId: identity.customerId,
+          conversationId: identity.conversationId,
+          ...(identity.wechatAccountId ? { wechatAccountId: identity.wechatAccountId } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      prisma.reviewLog.findMany({
+        where: {
+          OR: [
+            { targetType: "conversation", targetId: identity.conversationId },
+            { targetType: "customer", targetId: identity.customerId },
+          ],
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+    ]);
+    return summarizeConversationBusinessRiskState({ quotes, orders, payments, reviewLogs });
   }
 
   private recommendGiftBundle(route: any, text: string, sourceSkus: any[] = this.localStore.listSkus()) {
@@ -7148,9 +7509,15 @@ export class WechatDispatchService {
             capability: request.capability || "",
             prompt: String(request.prompt || params.customerText || ""),
             outputCount: isCopy ? 1 : CUSTOMER_DESIGN_CANDIDATE_COUNT,
+            copyCount: Number(request.copyCount || (isCopy ? 1 : CUSTOMER_DESIGN_CANDIDATE_COUNT)),
             referenceRequired: Boolean(request.referenceRequired),
             size: String(request.size || ""),
             ratio: String(request.ratio || ""),
+            canvasSize: String(request.canvasSize || ""),
+            orientation: String(request.orientation || ""),
+            category: String(request.category || ""),
+            templateGroupKey: String(request.templateGroupKey || ""),
+            cardType: String(request.cardType || ""),
             transparent: Boolean(request.transparent),
             deliverable: String(request.deliverable || ""),
             deliverableLabel: String(request.deliverableLabel || ""),
@@ -7544,7 +7911,8 @@ export class WechatDispatchService {
       selectedImageId: String(selectedImageId),
       feedback,
       recoveryEffect,
-      highValueAmountCny: appConfig.highValueAmountCny,
+      highValueAmountCny: effectiveHighValueAmountCny(),
+      businessRiskControlsDisabled: businessRiskControlsDisabled(),
     });
     return this.finishLocalLowValueSelection(
       params,
@@ -7668,6 +8036,315 @@ export class WechatDispatchService {
     };
   }
 
+  private async handlePrismaInboundQuoteAcceptance(params: {
+    operationId: string;
+    claimToken: string;
+    operationResult?: unknown;
+    conversation: any;
+    message: any;
+    route: any;
+    payload: { text?: string; assetIds?: string[]; attachments?: Array<Record<string, unknown>> };
+  }) {
+    const recovery = inboundQuoteAcceptanceRecovery(params.operationResult);
+    if (recovery) {
+      const recoveredQuote = await (this.prisma as any).quoteDraft.findFirst({
+        where: {
+          id: recovery.quoteDraftId,
+          customerId: params.conversation.customerId,
+          designJob: {
+            conversationId: params.conversation.id,
+            wechatAccountId: params.conversation.wechatAccountId,
+          },
+        },
+        include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+      });
+      if (!recoveredQuote || !this.jobMatchesConversationIdentity(recoveredQuote.designJob, params.conversation)) {
+        throw new BadRequestException("Prisma inbound quote acceptance recovery lost its durable quote binding");
+      }
+      const committedRecovery = recovery.phase === "quote_and_order_committed";
+      const recoveredOrder = committedRecovery
+        ? recoveredQuote.orderDraft || null
+        : await this.orders.createFromQuote(recoveredQuote.id, {
+            expectedWechatAccountId: params.conversation.wechatAccountId,
+            expectedConversationId: params.conversation.id,
+            expectedCustomerId: params.conversation.customerId,
+          }, {
+            inboundFence: {
+              operationId: params.operationId,
+              claimToken: params.claimToken,
+              leaseExpiresAt: this.nextInboundLeaseExpiry(),
+              businessRiskControlsDisabled: businessRiskControlsDisabled(),
+              operationResult: isPlainObject(params.operationResult) ? params.operationResult : {},
+              recoveryEffect: {
+                kind: "low_value_quote_acceptance",
+                quoteDraftId: recoveredQuote.id,
+                action: recovery.acceptancePlan.action,
+                acceptancePlan: durableJsonSnapshot(recovery.acceptancePlan),
+                routeEvaluationId: recovery.routeEvaluationId || params.route.id,
+                orderBusinessFingerprint: recovery.orderBusinessFingerprint,
+              },
+              orderBusinessFingerprint: recovery.orderBusinessFingerprint,
+            },
+            notificationEffectKey: `${params.operationId}:order-draft-created-notification`,
+            businessRiskControlsDisabled: businessRiskControlsDisabled(),
+          });
+      if (
+        !recoveredOrder
+        || (committedRecovery && recovery.orderDraftId !== recoveredOrder.id)
+        || String(recoveredOrder?.quoteDraftId || "") !== String(recoveredQuote.id)
+        || String(recoveredOrder?.wechatAccountId || "") !== String(params.conversation.wechatAccountId || "")
+        || String(recoveredOrder?.conversationId || "") !== String(params.conversation.id || "")
+        || String(recoveredOrder?.customerId || "") !== String(params.conversation.customerId || "")
+      ) {
+        throw new BadRequestException("Prisma inbound quote acceptance recovery lost its durable order binding");
+      }
+      if (
+        recovery.orderBusinessFingerprint
+        && createOrderDraftBusinessFingerprint(recoveredOrder) !== recovery.orderBusinessFingerprint
+      ) {
+        throw new BadRequestException("Prisma inbound quote acceptance recovery order fingerprint changed");
+      }
+      return this.finishLocalQuoteAcceptance(
+        { ...params, orderCreatedNotificationAlreadySent: !committedRecovery },
+        recoveredQuote,
+        recoveredOrder,
+        recovery.acceptancePlan,
+      );
+    }
+    const quote = await (this.prisma as any).quoteDraft.findFirst({
+      where: {
+        customerId: params.conversation.customerId,
+        selectedImageId: { not: null },
+        designJob: {
+          conversationId: params.conversation.id,
+          wechatAccountId: params.conversation.wechatAccountId,
+        },
+      },
+      include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    });
+    const existingOrderDraft = quote?.orderDraft || null;
+    let acceptancePlan = planInboundQuoteAcceptance(
+      { text: params.payload.text || "", quote, existingOrderDraft },
+      quoteAcceptanceOptions(),
+    );
+
+    const review = async (reason: string, title: string, body: string, note: string) => {
+      if (!quote) return null;
+      const reviewQuote = await (this.prisma as any).quoteDraft.update({
+        where: { id: quote.id },
+        data: {
+          status: "manual_review",
+          owner: quote.owner || "人工客服",
+          customerNotes: appendCustomerNote(quote.customerNotes, note),
+        },
+        include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+      });
+      const notification = await this.createInboundQuoteReview(params.conversation, params.route, reviewQuote, {
+        operationId: params.operationId,
+        reason,
+        title,
+        body,
+      });
+      return {
+        message: params.message,
+        route: params.route,
+        plan: {
+          type: reason === "payment_proof_needs_manual_verification"
+            ? "quote_payment_proof_manual_review"
+            : reason === "payment_claim_needs_manual_verification"
+              ? "quote_payment_claim_manual_review"
+              : "quote_acceptance_manual_review",
+          reason,
+          shouldNotifyHuman: true,
+          shouldCreateDesignJob: false,
+          shouldQueueReply: false,
+        },
+        sendTask: null,
+        designJob: reviewQuote.designJob || null,
+        notification,
+        bundleRecommendation: null,
+        quote: reviewQuote,
+        orderDraft: existingOrderDraft,
+        quoteAcceptance: { ...acceptancePlan, ok: false, hasIntent: true, reason },
+      };
+    };
+
+    if (acceptancePlan.reason === "no_quote_acceptance_intent") {
+      if (!quote || !this.hasInboundPaymentProof(params.payload)) return null;
+      if (businessRiskControlsDisabled()) return null;
+      return review(
+        "payment_proof_needs_manual_verification",
+        "客户发送付款凭证，需要人工核验",
+        "客户消息带有付款凭证，但系统没有服务端收款流水，未自动修改付款状态。",
+        "客户发送付款凭证，需要人工核验金额和收款状态。",
+      );
+    }
+    if (!quote && acceptancePlan.reason === "missing_active_quote") return null;
+
+    if (!businessRiskControlsDisabled() && acceptancePlan.ok && this.hasInboundPaymentProof(params.payload)) {
+      return review(
+        "payment_proof_needs_manual_verification",
+        "客户发送付款凭证，需要人工核验",
+        "客户文字确认付款并附带凭证，但系统没有服务端收款流水，未自动修改付款状态。",
+        "客户文字说明已付款并发送凭证，需要人工核验金额和收款账户。",
+      );
+    }
+
+    const claimedPaymentStatus = acceptancePlan.ok
+      ? claimedPaymentStatusFromAcceptancePlan(acceptancePlan)
+      : "";
+    if (!businessRiskControlsDisabled() && claimedPaymentStatus) {
+      if (acceptancePlan.action === "update_existing_order_payment") {
+        return review(
+          "payment_claim_needs_manual_verification",
+          "客户声称已付款，需要人工核验",
+          "客户声称已经付款，但系统没有服务端付款流水，未自动修改订单付款状态。",
+          "客户声称已付款，但没有服务端付款凭证或核验流水，需要人工核验后再标记付款。",
+        );
+      }
+      acceptancePlan = downgradeUnverifiedPaymentClaimAcceptancePlan(acceptancePlan, claimedPaymentStatus);
+    }
+
+    if (!acceptancePlan.ok) {
+      if (acceptancePlan.reason === "order_payment_already_recorded") return null;
+      if (businessRiskControlsDisabled()) return null;
+      return review(
+        acceptancePlan.reason,
+        "客户疑似确认报价，需要人工核查",
+        "客户消息像是在确认报价或付款，但当前报价状态不适合自动成单。",
+        "客户疑似确认报价，当前状态不适合自动成单。",
+      );
+    }
+
+    if (acceptancePlan.action !== "accept_quote_and_create_order") {
+      if (businessRiskControlsDisabled()) return null;
+      return review(
+        "payment_claim_needs_manual_verification",
+        "客户付款状态需要人工核验",
+        "系统未找到可验证的付款流水，未自动修改订单付款状态。",
+        "付款状态缺少服务端核验流水。",
+      );
+    }
+
+    const pendingRecoveryBase = {
+      kind: "low_value_quote_acceptance",
+      phase: "quote_committed_pending_order",
+      quoteDraftId: quote.id,
+      action: acceptancePlan.action,
+      acceptancePlan: durableJsonSnapshot(acceptancePlan),
+      routeEvaluationId: params.route.id,
+    };
+    const quoteCommit = await (this.prisma as any).$transaction(async (tx: any) => {
+      const leaseExpiresAt = new Date(this.nextInboundLeaseExpiry());
+      const fenced = await tx.inboundMessageOperation.updateMany({
+        where: {
+          id: params.operationId,
+          status: "processing",
+          claimToken: params.claimToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: { leaseExpiresAt },
+      });
+      if (fenced.count !== 1) {
+        throw new InboundLeaseLostError("inbound operation lease changed before quote acceptance commit");
+      }
+      const quoteLock = await tx.quoteDraft.updateMany({
+        where: { id: quote.id, customerId: params.conversation.customerId },
+        data: { updatedAt: new Date() },
+      });
+      if (quoteLock.count !== 1) {
+        throw new BadRequestException("quote acceptance identity changed before lock");
+      }
+      const currentQuote = await tx.quoteDraft.findFirst({
+        where: {
+          id: quote.id,
+          customerId: params.conversation.customerId,
+          selectedImageId: { not: null },
+          designJob: {
+            conversationId: params.conversation.id,
+            wechatAccountId: params.conversation.wechatAccountId,
+          },
+        },
+        include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+      });
+      if (!currentQuote) throw new BadRequestException("quote acceptance identity changed before commit");
+      let currentPlan = planInboundQuoteAcceptance(
+        { text: params.payload.text || "", quote: currentQuote, existingOrderDraft: currentQuote.orderDraft || null },
+        quoteAcceptanceOptions(),
+      );
+      const currentClaimedPaymentStatus = currentPlan.ok
+        ? claimedPaymentStatusFromAcceptancePlan(currentPlan)
+        : "";
+      if (!businessRiskControlsDisabled() && currentClaimedPaymentStatus) {
+        currentPlan = downgradeUnverifiedPaymentClaimAcceptancePlan(currentPlan, currentClaimedPaymentStatus);
+      }
+      if (
+        !currentPlan.ok
+        || currentPlan.action !== "accept_quote_and_create_order"
+        || JSON.stringify(durableJsonSnapshot(currentPlan.quotePatch)) !== JSON.stringify(durableJsonSnapshot(acceptancePlan.quotePatch))
+      ) {
+        throw new BadRequestException("quote acceptance state changed before commit");
+      }
+      const updatedQuote = await tx.quoteDraft.update({
+        where: { id: currentQuote.id },
+        data: currentPlan.quotePatch,
+        include: { customer: true, selectedImage: true, designJob: true, orderDraft: true },
+      });
+      const orderDecision = buildOrderDraftFromQuote(updatedQuote);
+      if (!orderDecision.ok) {
+        throw new BadRequestException("accepted quote cannot produce a stable order draft");
+      }
+      const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(orderDecision.orderDraft);
+      const pendingRecoveryEffect = {
+        ...pendingRecoveryBase,
+        orderBusinessFingerprint,
+      };
+      const marked = await tx.inboundMessageOperation.updateMany({
+        where: {
+          id: params.operationId,
+          status: "processing",
+          claimToken: params.claimToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: {
+          result: {
+            ...(isPlainObject(params.operationResult) ? params.operationResult : {}),
+            recoveryEffect: pendingRecoveryEffect,
+          },
+          leaseExpiresAt,
+        },
+      });
+      if (marked.count !== 1) {
+        throw new InboundLeaseLostError("inbound operation lease changed during quote acceptance commit");
+      }
+      return { updatedQuote, pendingRecoveryEffect, orderBusinessFingerprint };
+    });
+    const orderDraft = await this.orders.createFromQuote(quoteCommit.updatedQuote.id, {
+      expectedWechatAccountId: params.conversation.wechatAccountId,
+      expectedConversationId: params.conversation.id,
+      expectedCustomerId: params.conversation.customerId,
+    }, {
+      inboundFence: {
+        operationId: params.operationId,
+        claimToken: params.claimToken,
+        leaseExpiresAt: this.nextInboundLeaseExpiry(),
+        businessRiskControlsDisabled: businessRiskControlsDisabled(),
+        operationResult: isPlainObject(params.operationResult) ? params.operationResult : {},
+        recoveryEffect: quoteCommit.pendingRecoveryEffect,
+        orderBusinessFingerprint: quoteCommit.orderBusinessFingerprint,
+      },
+      notificationEffectKey: `${params.operationId}:order-draft-created-notification`,
+      businessRiskControlsDisabled: businessRiskControlsDisabled(),
+    });
+    return this.finishLocalQuoteAcceptance(
+      { ...params, orderCreatedNotificationAlreadySent: true },
+      quoteCommit.updatedQuote,
+      orderDraft,
+      acceptancePlan,
+    );
+  }
+
   private async handleInboundQuoteAcceptance(params: {
     operationId: string;
     claimToken: string;
@@ -7679,6 +8356,9 @@ export class WechatDispatchService {
   }) {
     const recovery = inboundQuoteAcceptanceRecovery(params.operationResult);
     if (recovery) {
+      if (recovery.phase !== "quote_and_order_committed" || !recovery.orderDraftId) {
+        throw new BadRequestException("local inbound quote acceptance recovery marker has no committed order");
+      }
       const quote = this.localStore.getQuoteDraft(recovery.quoteDraftId);
       const orderDraft = this.localStore.getOrderDraft(recovery.orderDraftId);
       if (!quote || !this.jobMatchesConversationIdentity(quote.designJob, params.conversation)) {
@@ -7693,6 +8373,9 @@ export class WechatDispatchService {
       ) {
         throw new BadRequestException("inbound quote acceptance recovery lost its durable order binding");
       }
+      if (createOrderDraftBusinessFingerprint(orderDraft) !== recovery.orderBusinessFingerprint) {
+        throw new BadRequestException("inbound quote acceptance recovery order fingerprint changed");
+      }
       return this.finishLocalQuoteAcceptance(params, quote, orderDraft, recovery.acceptancePlan);
     }
     const quote = this.findLatestQuoteForConversation(params.conversation);
@@ -7705,11 +8388,12 @@ export class WechatDispatchService {
         quote,
         existingOrderDraft,
       },
-      { highValueAmountCny: appConfig.highValueAmountCny },
+      quoteAcceptanceOptions(),
     );
 
     if (acceptancePlan.reason === "no_quote_acceptance_intent") {
       if (!quote || !this.hasInboundPaymentProof(params.payload)) return null;
+      if (businessRiskControlsDisabled()) return null;
       const reviewQuote = this.localStore.updateQuoteDraft(quote.id, {
         status: "manual_review",
         owner: quote.owner || "人工客服",
@@ -7749,6 +8433,7 @@ export class WechatDispatchService {
 
     if (
       quote &&
+      !businessRiskControlsDisabled() &&
       acceptancePlan.ok &&
       this.hasInboundPaymentProof(params.payload) &&
       ["deposit_paid", "paid"].includes(
@@ -7794,7 +8479,7 @@ export class WechatDispatchService {
     }
 
     const unverifiedClaimedPaymentStatus =
-      quote && acceptancePlan.ok && !this.hasInboundPaymentProof(params.payload)
+      quote && acceptancePlan.ok && !businessRiskControlsDisabled() && !this.hasInboundPaymentProof(params.payload)
         ? claimedPaymentStatusFromAcceptancePlan(acceptancePlan)
         : "";
     if (quote && unverifiedClaimedPaymentStatus) {
@@ -7869,6 +8554,7 @@ export class WechatDispatchService {
 
     if (!acceptancePlan.ok) {
       if (acceptancePlan.reason === "order_payment_already_recorded") return null;
+      if (businessRiskControlsDisabled()) return null;
       result.notification = await this.createInboundQuoteReview(params.conversation, params.route, quote, {
         operationId: params.operationId,
         reason: acceptancePlan.reason,
@@ -7877,6 +8563,14 @@ export class WechatDispatchService {
       });
       return result;
     }
+
+    const expectedOrderDraft = acceptancePlan.action === "update_existing_order_payment"
+      ? { ...(existingOrderDraft || {}), ...(acceptancePlan.orderPatch || {}) }
+      : buildOrderDraftFromQuote({ ...quote, ...(acceptancePlan.quotePatch || {}) }).orderDraft;
+    if (!expectedOrderDraft) {
+      throw new BadRequestException("quote acceptance cannot produce a stable order fingerprint");
+    }
+    const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(expectedOrderDraft);
 
     if (acceptancePlan.action === "update_existing_order_payment") {
       const orderDraftId = acceptancePlan.orderDraftId || existingOrderDraft?.id;
@@ -7895,6 +8589,7 @@ export class WechatDispatchService {
           action: acceptancePlan.action,
           acceptancePlan: durableJsonSnapshot(acceptancePlan),
           routeEvaluationId: params.route.id,
+          orderBusinessFingerprint,
         },
       });
       return this.finishLocalQuoteAcceptance(params, committed.quote, committed.orderDraft, acceptancePlan);
@@ -7913,13 +8608,14 @@ export class WechatDispatchService {
         action: acceptancePlan.action,
         acceptancePlan: durableJsonSnapshot(acceptancePlan),
         routeEvaluationId: params.route.id,
+        orderBusinessFingerprint,
       },
     });
     return this.finishLocalQuoteAcceptance(params, committed.quote, committed.orderDraft, acceptancePlan);
   }
 
   private async finishLocalQuoteAcceptance(
-    params: { operationId: string; conversation: any; message: any; route: any },
+    params: { operationId: string; conversation: any; message: any; route: any; orderCreatedNotificationAlreadySent?: boolean },
     quote: any,
     orderDraft: any,
     acceptancePlan: any,
@@ -7943,11 +8639,11 @@ export class WechatDispatchService {
       orderDraft,
       quoteAcceptance: acceptancePlan,
     };
-    if (!updatingExistingOrder) {
+    if (!updatingExistingOrder && !params.orderCreatedNotificationAlreadySent) {
       await this.notifications.create(
         "info",
         "订单草稿已生成",
-        `客户 ${quote.customer?.name || quote.customerId} 的报价已生成订单草稿，金额 ${orderDraft.totalPrice} 元。`,
+        `报价 ${quote.id} 已生成订单草稿 ${orderDraft.id}，金额 ${orderDraft.totalPrice} 元。`,
         {
           effectKey: `${params.operationId}:order-draft-created-notification`,
           orderDraftId: orderDraft.id,
@@ -7961,7 +8657,7 @@ export class WechatDispatchService {
     }
 
     let confirmationDecision = evaluateLowValueOrderConfirmationSend(result.orderDraft, {
-      highValueAmountCny: appConfig.highValueAmountCny,
+      ...lowValueAutomationOptions(),
     });
     const existingConfirmationTask = result.orderDraft.confirmationSendTask || null;
     if (existingConfirmationTask && confirmationDecision.reason === "already_queued") {
@@ -8050,7 +8746,7 @@ export class WechatDispatchService {
 
   private async tryQueueLowValueQuoteAfterSelection(quote: any) {
     const decision = evaluateLowValueQuoteSend(quote, {
-      highValueAmountCny: appConfig.highValueAmountCny,
+      ...lowValueAutomationOptions(),
     });
     if (!decision.ok) return { decision, quote, sendTask: null };
 
@@ -8224,8 +8920,9 @@ export class WechatDispatchService {
   }
 
   private shouldManualReviewSelectedJob(job: any) {
+    if (businessRiskControlsDisabled()) return false;
     if (job.isHighValue) return true;
-    const threshold = Number(appConfig.highValueAmountCny || 10000);
+    const threshold = effectiveHighValueAmountCny();
     return isHighValueBudget(job.budget || {}, threshold);
   }
 
@@ -8291,6 +8988,15 @@ export class WechatDispatchService {
     conversation: any,
     options: { reviewer?: string; reason?: string; effectKey?: string } = {},
   ) {
+    if (businessRiskControlsDisabled()) {
+      return {
+        conversation,
+        blockedSendTasks: [],
+        inFlightSendTasks: [],
+        reason: options.reason || "manual_review",
+        log: null,
+      };
+    }
     const manualLock = await this.setConversationManualLock(conversation.id, {
       expectedWechatAccountId: conversation.wechatAccountId,
       expectedConversationId: conversation.id,
@@ -8354,9 +9060,9 @@ export class WechatDispatchService {
     }
 
     const prisma = this.prisma as any;
-    const tasks = await prisma.wechatSendTask.findMany({
+    const tasks = (await prisma.wechatSendTask.findMany({
       where: { conversationId: conversation.id, status: "queued" },
-    });
+    })).filter((task: any) => !isManualReplySendTask(task));
     const blocked: any[] = [];
     for (const task of tasks) {
       blocked.push(
@@ -8572,6 +9278,54 @@ export class WechatDispatchService {
       deliveryResolvedAt: settledAt,
       deliveryResolutionSource: source,
     };
+  }
+
+  private recoverKnownWechatWorkStartedFailure(task: any, pendingAttempt: any, now: Date) {
+    const failure = describeKnownWechatWorkStartedFailure(pendingAttempt);
+    if (!failure) return null;
+    const recoveredAt = now.toISOString();
+    const attempt = this.localStore.updateSendAttempt(pendingAttempt.id, {
+      status: "failed",
+      errorMessage: failure.errorMessage,
+      completedAt: pendingAttempt.completedAt || recoveredAt,
+      metadata: {
+        ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
+        bridgeState: "api_failed_recovered",
+        deliveryState: "failed",
+        failureStage: failure.failureStage,
+        automaticRetryBlocked: true,
+        manualReviewRequired: false,
+        recoveredAt,
+      },
+    });
+    const updatedTask = this.localStore.updateSendTask(task.id, {
+      status: "failed",
+      sentAt: null,
+      errorMessage: failure.errorMessage,
+      guardSnapshot: {
+        ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
+        status: "failed",
+        deliveryState: "failed",
+        wechatWorkDeliveryState: "failed",
+        automaticRetryBlocked: true,
+        manualReviewRequired: false,
+        wechatWorkStartedFailureRecoveredAt: recoveredAt,
+        wechatWorkFailureStage: failure.failureStage,
+        opsAlertedStatus: "failed",
+        opsAlertedAt: recoveredAt,
+      },
+    });
+    this.localStore.recordWechatWorkAudit({
+      action: "send_api_failed_recovered",
+      status: "failed",
+      sendTaskId: task.id,
+      sendAttemptId: attempt.id,
+      errorMessage: failure.errorMessage,
+      deliveryState: "failed",
+      failureStage: failure.failureStage,
+      automaticRetryBlocked: true,
+    });
+    return updatedTask;
   }
 
   private requireExactSendTaskIdentity(task: any, payload: ExpectedIdentityPayload) {
@@ -9465,23 +10219,82 @@ function inboundSelectionRecovery(value: unknown) {
 function inboundQuoteAcceptanceRecovery(value: unknown) {
   const result = isPlainObject(value) ? value : {};
   const effect = isPlainObject(result.recoveryEffect) ? result.recoveryEffect : {};
-  if (effect.kind !== "low_value_quote_acceptance" || effect.phase !== "quote_and_order_committed") return null;
+  if (
+    effect.kind !== "low_value_quote_acceptance"
+    || !["quote_committed_pending_order", "quote_and_order_committed"].includes(String(effect.phase || ""))
+  ) return null;
+  const phase = String(effect.phase);
   const quoteDraftId = String(effect.quoteDraftId || "").trim();
   const orderDraftId = String(effect.orderDraftId || "").trim();
+  const orderBusinessFingerprint = String(effect.orderBusinessFingerprint || "").trim();
   const acceptancePlan = isPlainObject(effect.acceptancePlan) ? effect.acceptancePlan : null;
-  if (!quoteDraftId || !orderDraftId || !acceptancePlan?.action || !acceptancePlan?.reason) {
+  if (
+    !quoteDraftId
+    || !/^[a-f0-9]{64}$/i.test(orderBusinessFingerprint)
+    || (phase === "quote_and_order_committed" && !orderDraftId)
+    || !acceptancePlan?.action
+    || !acceptancePlan?.reason
+  ) {
     throw new BadRequestException("inbound quote acceptance recovery marker is incomplete");
   }
   if (!["accept_quote_and_create_order", "update_existing_order_payment"].includes(String(acceptancePlan.action))) {
     throw new BadRequestException("inbound quote acceptance recovery marker has an invalid action");
   }
-  return { quoteDraftId, orderDraftId, acceptancePlan };
+  return {
+    phase,
+    quoteDraftId,
+    orderDraftId: orderDraftId || null,
+    orderBusinessFingerprint,
+    acceptancePlan,
+    routeEvaluationId: String(effect.routeEvaluationId || "").trim() || null,
+  };
 }
 
 function isOlderThan(value: unknown, now: Date, minutes: number) {
   const time = new Date(String(value || ""));
   if (Number.isNaN(time.getTime())) return false;
   return now.getTime() - time.getTime() > minutes * 60 * 1000;
+}
+
+function describeKnownWechatWorkStartedFailure(attempt: any) {
+  const metadata = isPlainObject(attempt?.metadata) ? attempt.metadata : {};
+  if (Array.isArray(metadata.acceptedMessageIds) && metadata.acceptedMessageIds.length) return null;
+  const errorMessage = firstNonEmptyText(
+    attempt?.errorMessage,
+    metadata.errorMessage,
+    metadata.errmsg,
+    metadata.reason,
+  );
+  const evidence = [
+    errorMessage,
+    metadata.deliveryState,
+    metadata.bridgeState,
+    metadata.failureStage,
+    metadata.errcode,
+    metadata.errorCode,
+  ].map((value) => String(value || "")).join(" ");
+  if (String(metadata.deliveryState || "").toLowerCase() === "failed") {
+    return {
+      errorMessage: errorMessage || "Enterprise WeChat send attempt already recorded failed delivery.",
+      failureStage: firstNonEmptyText(metadata.failureStage, "wechat_work_started_failure_recovery"),
+    };
+  }
+  if (/(?:fetch failed|socket|timeout|network|econnreset|etimedout|delivery_unknown|unknown|partial)/i.test(evidence)) return null;
+  if (/(?:95001|send msg count limit|95018|session status invalid|wechat work send_msg failed|send_msg failed)/i.test(evidence)) {
+    return {
+      errorMessage: errorMessage || "Enterprise WeChat send_msg failed before delivery was accepted.",
+      failureStage: firstNonEmptyText(metadata.failureStage, "wechat_work_started_failure_recovery"),
+    };
+  }
+  return null;
+}
+
+function firstNonEmptyText(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function designSelectionRevisionSignature(job: any) {
@@ -9510,14 +10323,14 @@ function prismaQuotePricing(job: any) {
   const quantity = Math.max(1, Number(job?.budget?.quantity || 1));
   const totalPrice = unitPrice * quantity;
   const totalCost = unitCost * quantity;
-  const threshold = Number(appConfig.highValueAmountCny || 10000);
+  const threshold = effectiveHighValueAmountCny();
   return {
     quantity,
     unitPrice,
     totalPrice,
     totalCost,
     profit: totalPrice - totalCost,
-    highValue: totalPrice >= threshold || unitPrice >= threshold,
+    highValue: !businessRiskControlsDisabled() && (totalPrice >= threshold || unitPrice >= threshold),
   };
 }
 
@@ -9602,6 +10415,66 @@ function stringOrUndefined(value: unknown) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function redactOperatorSendTask(task: any) {
+  if (!task || typeof task !== "object") return task;
+  return {
+    ...task,
+    payload: redactWechatWorkEventPayload(task.payload),
+    guardSnapshot: redactWechatWorkEventPayload(task.guardSnapshot),
+    attempts: Array.isArray(task.attempts)
+      ? task.attempts.map((attempt: any) => ({
+          ...attempt,
+          payloadSummary: redactWechatWorkEventPayload(attempt?.payloadSummary),
+          metadata: redactWechatWorkEventPayload(attempt?.metadata),
+        }))
+      : task.attempts,
+    latestAttempt: task.latestAttempt
+      ? {
+          ...task.latestAttempt,
+          payloadSummary: redactWechatWorkEventPayload(task.latestAttempt.payloadSummary),
+          metadata: redactWechatWorkEventPayload(task.latestAttempt.metadata),
+        }
+      : task.latestAttempt,
+  };
+}
+
+function redactWechatWorkEventPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactWechatWorkEventPayload(item));
+  if (!isPlainObject(value)) return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/^(eventCode|eventCodeSecret|code|msgCode|welcomeCode)$/i.test(key) || /_(code|secret)$/i.test(key)) {
+      result.sensitiveCredentialRedacted = true;
+      continue;
+    }
+    result[key] = redactWechatWorkEventPayload(entry);
+  }
+  return result;
+}
+
+function sanitizeHandledServiceAction(value: unknown) {
+  if (!isPlainObject(value)) return null;
+  const type = String(value.type || "").trim();
+  if (!new Set(["customer_upgrade_qr_recovered", "customer_upgrade_qr_queued"]).has(type)) return null;
+  return {
+    type,
+    status: type === "customer_upgrade_qr_queued" ? "queued" : "completed",
+    referenceId: String(value.referenceId || "").trim().slice(0, 200) || null,
+  };
+}
+
+function buildHandledServiceActionPlan(action: Record<string, unknown>) {
+  return {
+    type: action.status === "queued" ? "service_action_queued" : "service_action_completed",
+    reason: String(action.type || "service_action_completed"),
+    shouldQueueReply: false,
+    shouldCreateDesignJob: false,
+    shouldNotifyHuman: false,
+    shouldLockConversation: false,
+    handledServiceAction: action,
+  };
 }
 
 function sanitizeInboundMediaUnderstanding(value: unknown) {
@@ -9921,21 +10794,6 @@ function validateBridgeSendPlanActions(actions: unknown[]) {
   return { ok: true, reason: "send plan actions are valid" };
 }
 
-function validateWechatWorkImagePaths(imagePaths: unknown[]) {
-  try {
-    for (const imagePath of imagePaths) resolveWechatWorkImageFile(imagePath);
-    return {
-      ok: true,
-      detail: imagePaths.length ? `${imagePaths.length} image file(s) passed local storage validation` : "no images",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      detail: error instanceof Error ? error.message : "wechat work image validation failed",
-    };
-  }
-}
-
 function describeWechatWorkDeliveryFailure(error: unknown) {
   if (error instanceof WechatWorkKfDeliveryError) {
     return {
@@ -9955,6 +10813,42 @@ function describeWechatWorkDeliveryFailure(error: unknown) {
   };
 }
 
+function validateWechatWorkKfPayloadForGuard(payload: any) {
+  try {
+    if (isWechatWorkEventReplyPayloadKind(payload?.kind)) {
+      if (!payload?.eventCodeSecret) {
+        return { ok: false, detail: "event credential secret missing", messageCount: 0 };
+      }
+      const expiresAt = Date.parse(String(payload.eventCredentialExpiresAt || ""));
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        return { ok: false, detail: "event credential expired", messageCount: 0 };
+      }
+      if (payload.kind === "wechat_work_event_text") {
+        const text = String(payload.text || "").trim();
+        if (!text) return { ok: false, detail: "event text is required", messageCount: 0 };
+        if (Buffer.byteLength(text, "utf8") > 2048) {
+          return { ok: false, detail: "event text exceeds 2048 UTF-8 bytes", messageCount: 1 };
+        }
+        return { ok: true, detail: "event text payload", messageCount: 1 };
+      }
+      normalizeWechatWorkEventMsgMenu(payload.msgmenu);
+      return { ok: true, detail: "event msgmenu payload", messageCount: 1 };
+    }
+    const messages = normalizeWechatWorkQueuedMessagesFromTaskPayload(payload);
+    return {
+      ok: messages.length > 0,
+      detail: "official customer-service message payload",
+      messageCount: messages.length,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : "message payload validation failed",
+      messageCount: 0,
+    };
+  }
+}
+
 function appendCustomerNote(current: unknown, next: string) {
   const existing = String(current || "").trim();
   const note = String(next || "").trim();
@@ -9962,21 +10856,6 @@ function appendCustomerNote(current: unknown, next: string) {
   if (!existing) return note;
   if (existing.includes(note)) return existing;
   return `${existing} ${note}`;
-}
-
-function validateWechatWorkMaterialPaths(filePaths: unknown[]) {
-  try {
-    for (const filePath of filePaths) resolveWechatWorkMaterialFile(filePath);
-    return {
-      ok: true,
-      detail: filePaths.length ? `${filePaths.length} material file(s) passed local storage validation` : "no material files",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      detail: error instanceof Error ? error.message : "wechat work material validation failed",
-    };
-  }
 }
 
 function claimedPaymentStatusFromAcceptancePlan(plan: any) {
@@ -10369,9 +11248,11 @@ function enforceAiPolishedReplyPlan(plan: any, route: any, aiProviderInjected: b
   // low-risk clarification fallback even when AI polishing is unavailable.
   // External customers remain fail-closed below.
   if (plan.internalTestOverride === true) return plan;
+  if (plan.reason === "low_risk_generic_followup" && plan.deterministicReply === true) return plan;
   if (plan.zhenxiRequest) return plan;
   if (route?.replyDraft?.aiAssistance?.used === true) return plan;
   if (route?.replyDraft?.aiAssistance?.authority === "deterministic_basic_answer") return plan;
+  if (route?.replyDraft?.aiAssistance?.authority === "deterministic_scene_clarification") return plan;
   if (route?.replyDraft?.aiAssistance?.authority === "deterministic_repetition_guard") return plan;
   if (route?.replyDraft?.aiAssistance?.authority === "deterministic_direct_customer_answer") return plan;
   if (route?.replyDraft?.aiAssistance?.authority === "deterministic_xiaoshi_clarification") return plan;
@@ -10414,6 +11295,18 @@ function isDeterministicXiaoshiClarification(route: any, draft: any) {
     && /[?？呀呢]$/.test(reply);
 }
 
+function isDeterministicSceneClarification(route: any, draft: any) {
+  const reply = String(draft?.suggestedReply || "").trim();
+  const expected = String(route?.sceneClarification?.question || "").trim();
+  return route?.action === "collect_info"
+    && route?.isHighValue !== true
+    && !(route?.riskFlags || []).length
+    && route?.sceneClarification?.required === true
+    && (route?.missingFields || []).includes("scene_clarification")
+    && reply.length > 0
+    && reply === expected;
+}
+
 function isDeterministicXiaoshiCatalogReply(route: any, draft: any) {
   const reply = String(draft?.suggestedReply || "").trim();
   const recommendation = draft?.replyDraft?.catalog?.recommendation;
@@ -10440,6 +11333,125 @@ function internalTestAutoReplyAllowedForIdentity(identity: {
     [appConfig.wechatInternalTestAutoReplyCustomerIds, identity.customerId],
   ];
   return checks.every(([allowed, value]) => allowed.length > 0 && allowed.includes(String(value || "").trim()));
+}
+
+function businessRiskControlsDisabled() {
+  return BUSINESS_RISK_CONTROLS_DISABLED;
+}
+
+function effectiveHighValueAmountCny() {
+  return businessRiskControlsDisabled()
+    ? Number.MAX_SAFE_INTEGER
+    : Number(appConfig.highValueAmountCny || 10000);
+}
+
+function lowValueAutomationOptions() {
+  return {
+    highValueAmountCny: effectiveHighValueAmountCny(),
+    businessRiskControlsDisabled: businessRiskControlsDisabled(),
+  };
+}
+
+function quoteAcceptanceOptions() {
+  return {
+    highValueAmountCny: effectiveHighValueAmountCny(),
+    businessRiskControlsDisabled: businessRiskControlsDisabled(),
+  };
+}
+
+function shouldBypassBusinessRiskForOrderAutomation(provenance: LowValueOrderAutomationProvenance | null | undefined) {
+  if (!businessRiskControlsDisabled()) return false;
+  if (!provenance || typeof provenance !== "object") return false;
+  return [
+    "order_confirmation",
+    "order_followup",
+    "low_value_quote_acceptance",
+    "low_value_quote_payment_update",
+  ].includes(String(provenance.source || ""));
+}
+
+function shouldBypassBusinessRiskForOrderTask(task: any) {
+  if (!businessRiskControlsDisabled()) return false;
+  const automation = task?.guardSnapshot?.automation || {};
+  return automation.valueLevel === "low" && [
+    "order_confirmation",
+    "order_followup",
+    "low_value_quote_acceptance",
+    "low_value_quote_payment_update",
+  ].includes(String(automation.source || ""));
+}
+
+function summarizeConversationBusinessRiskState(input: {
+  quotes?: any[];
+  orders?: any[];
+  payments?: any[];
+  reviewLogs?: any[];
+} = {}) {
+  const quotes = Array.isArray(input.quotes) ? input.quotes : [];
+  const orders = Array.isArray(input.orders) ? input.orders : [];
+  const payments = Array.isArray(input.payments) ? input.payments : [];
+  const reviewLogs = Array.isArray(input.reviewLogs) ? input.reviewLogs : [];
+  const activeQuotes = quotes.filter(isActiveBusinessQuote);
+  const activeOrders = orders.filter(isActiveBusinessOrder);
+  const pendingPayments = [
+    ...quotes.filter((quote) => isPendingPaymentStatus(quote?.paymentStatus)),
+    ...orders.filter((order) => isPendingPaymentStatus(order?.paymentStatus)),
+    ...payments.filter((event) => isPendingPaymentStatus(event?.paymentStatus)),
+  ];
+  const reviewText = reviewLogs.map((log) => [
+    log?.decision,
+    log?.note,
+    log?.beforeStatus,
+    log?.afterStatus,
+    JSON.stringify(log?.metadata || {}),
+  ].join(" ")).join(" ");
+  const hasAfterSales = orders.some((order) => /售后|退款|退货|换货|赔偿|after.?sales|refund|return/i.test([
+    order?.status,
+    order?.productionStatus,
+    order?.customerNotes,
+  ].join(" "))) || /售后|退款|退货|换货|赔偿|after.?sales|refund|return/i.test(reviewText);
+  const hasComplaint = /投诉|报警|律师|纠纷|赔偿|complaint|dispute|lawyer/i.test(reviewText);
+  const reasons = [
+    activeQuotes.length ? "active_quote" : "",
+    activeOrders.length ? "active_order" : "",
+    pendingPayments.length ? "payment_pending" : "",
+    hasAfterSales ? "after_sales" : "",
+    hasComplaint ? "complaint" : "",
+  ].filter(Boolean);
+  return {
+    hasActiveQuote: activeQuotes.length > 0,
+    hasActiveOrder: activeOrders.length > 0,
+    hasPaymentPending: pendingPayments.length > 0,
+    hasAfterSales,
+    hasComplaint,
+    activeQuoteCount: activeQuotes.length,
+    activeOrderCount: activeOrders.length,
+    paymentPendingCount: pendingPayments.length,
+    activeRiskCount: reasons.length,
+    reasons,
+  };
+}
+
+function isActiveBusinessQuote(quote: any) {
+  const status = String(quote?.status || "").toLowerCase();
+  if (["cancelled", "canceled", "rejected", "expired", "closed", "void"].includes(status)) return false;
+  if (["paid", "converted", "ordered", "completed"].includes(status)) return false;
+  return Boolean(quote?.id) || status.length > 0 || isPendingPaymentStatus(quote?.paymentStatus);
+}
+
+function isActiveBusinessOrder(order: any) {
+  const status = String(order?.status || "").toLowerCase();
+  const productionStatus = String(order?.productionStatus || "").toLowerCase();
+  if (["cancelled", "canceled", "rejected", "closed", "void"].includes(status)) return false;
+  if (["completed", "delivered", "finished"].includes(status) && !isPendingPaymentStatus(order?.paymentStatus)) return false;
+  if (["shipping", "shipped", "in_production", "production", "not_started"].includes(productionStatus)) return true;
+  return Boolean(order?.id) || status.length > 0 || isPendingPaymentStatus(order?.paymentStatus);
+}
+
+function isPendingPaymentStatus(value: unknown) {
+  const status = String(value || "").toLowerCase();
+  if (!status) return false;
+  return !["paid", "fully_paid", "settled", "refunded", "not_required"].includes(status);
 }
 
 function isLowValueAutomationTask(task: any) {
@@ -10493,12 +11505,14 @@ function roundRobinSendTasksByAccount<T extends { wechatAccountId?: unknown }>(t
 }
 
 function isHighValueLowValueAutomationTask(task: any) {
+  if (businessRiskControlsDisabled()) return false;
   const automation = task?.guardSnapshot?.automation || {};
   return automation.valueLevel === "low" && isHighValueAutomationTask(task);
 }
 
 function isHighValueAutomationTask(task: any) {
-  const threshold = Number(appConfig.highValueAmountCny || 10000);
+  if (businessRiskControlsDisabled()) return false;
+  const threshold = effectiveHighValueAmountCny();
   const designJob = task?.designJob || task?.quoteDraft?.designJob || task?.orderDraft?.designJob || task?.orderDraft?.quoteDraft?.designJob || {};
   const quote = task?.quoteDraft || task?.orderDraft?.quoteDraft || {};
   const order = task?.orderDraft || {};

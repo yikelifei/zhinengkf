@@ -468,7 +468,6 @@ export function useConversationsController(
     scopeOptions: [
       { value: "all", label: "全部", count: scopeEligibleConversations.length },
       { value: "unread", label: "未读", count: scopeEligibleConversations.filter((item) => Number(item.unreadCount || 0) > 0).length },
-      { value: "manual", label: "人工接管", count: scopeEligibleConversations.filter((item) => item.manualLocked).length },
     ],
     channel: filters.channel,
     channelOptions,
@@ -679,7 +678,7 @@ export function useConversationsController(
         return [...current.filter((item) => item.id !== optimistic.id), optimistic]
           .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
       });
-      setReplyFeedback(`回复已进入发送队列，可继续处理其他消息。任务 ${queued.task.id} 正在发送。`);
+      setReplyFeedback(`回复已创建安全发送任务并正在直接发送。任务 ${queued.task.id} 正在等待企业微信回执。`);
       setReplyBusy(false);
       void (async () => {
         let deliverySummary: string;
@@ -749,11 +748,11 @@ export function useConversationsController(
   const requestManualLockChange = useCallback(() => {
     if (!selectedConversation) return;
     if (!canReply || !currentOperator) {
-      setActionError("当前操作员没有回复会话权限，不能变更人工接管状态。");
+      setActionError("当前操作员没有回复会话权限，不能变更人工补充状态。");
       return;
     }
     if (!hasCompleteConversationIdentity(selectedConversation)) {
-      setActionError("当前会话缺少账号、会话或客户身份，不能人工接管；请先重新同步官方会话。");
+      setActionError("当前会话缺少账号、会话或客户身份，不能变更人工补充状态；请先重新同步官方会话。");
       return;
     }
     setActionError("");
@@ -766,7 +765,7 @@ export function useConversationsController(
     if (!conversation || target === null || !canReply || !currentOperator) return;
     if (!hasCompleteConversationIdentity(conversation)) {
       setManualLockTarget(null);
-      setActionError("当前会话身份不完整，人工接管状态没有变更。");
+      setActionError("当前会话身份不完整，人工补充状态没有变更。");
       return;
     }
     setManualLockTarget(null);
@@ -778,15 +777,15 @@ export function useConversationsController(
         locked: target,
         reviewer: currentOperator,
         reason: target ? "manual_takeover_from_conversations_feature" : "manual_resolution_from_conversations_feature",
-        note: target ? "操作员从独立会话模块确认人工接管。" : "操作员从独立会话模块确认解除人工接管。",
+        note: target ? "操作员从独立会话模块标记人工补充。" : "操作员从独立会话模块取消人工补充标记。",
         expectedWechatAccountId: conversation.wechatAccountId,
         expectedConversationId: conversation.id,
         expectedCustomerId: conversation.customerId,
       });
       setConversations((current) => current.map((item) => item.id === conversation.id ? result.conversation : item));
-      setActionNotice(target ? "已开启人工接管，自动处理应保持暂停。" : "已解除人工接管，后续自动处理仍以服务端策略为准。");
+      setActionNotice(target ? "已标记人工补充，智能客服仍按当前策略处理。" : "已取消人工补充标记，后续自动处理仍以服务端策略为准。");
     } catch (error) {
-      setActionError(errorMessage(error, target ? "开启人工接管失败" : "解除人工接管失败"));
+      setActionError(errorMessage(error, target ? "标记人工补充失败" : "取消人工补充失败"));
     } finally {
       setManualLockBusy(false);
     }

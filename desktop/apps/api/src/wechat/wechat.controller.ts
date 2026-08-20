@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Post, Query, Res, UseGuards } from "@nestjs/common";
+import { FastifyReply } from "fastify";
 import { WechatDispatchService } from "./wechat-dispatch.service";
 import { ExpectedIdentityPayload } from "../shared/identity-expectation";
 import { appConfig } from "../shared/app-config";
@@ -8,6 +9,7 @@ import {
   TrustedOperator,
 } from "../operator-access/operator-access.guard";
 import { TrustedOperatorPrincipal } from "../operator-access/operator-access.types";
+import { applySafeLocalFileHeaders } from "../storage/local-file-response";
 
 function resolvedSendAdapterName(adapter?: string) {
   return String(adapter || appConfig.wechatSendAdapter || "dry_run").trim();
@@ -159,6 +161,26 @@ export class WechatController {
   getSendAdapter(@Query("adapter") adapter?: string) {
     assertEnterpriseWechatOnlySendAdapter(adapter);
     return this.wechat.getSendAdapter(adapter);
+  }
+
+  @Get("conversations/:id/messages/:messageId/attachments/:attachmentId")
+  @RequireOperatorCapability("view_console")
+  @UseGuards(OperatorAccessGuard)
+  async readConversationTimelineAttachment(
+    @Param("id") id: string,
+    @Param("messageId") messageId: string,
+    @Param("attachmentId") attachmentId: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("customerId") customerId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const file = await this.wechat.readConversationTimelineAttachment(
+      { wechatAccountId, conversationId: id, customerId },
+      messageId,
+      attachmentId,
+    );
+    applySafeLocalFileHeaders(reply, file);
+    return reply.send(file.stream);
   }
 
   @Post("conversations/:id/reply-suggestion")
@@ -325,7 +347,7 @@ export class WechatController {
   }
 
   @Post("send-tasks/:id/execute-manual-reply")
-  @RequireOperatorCapability("approve_send")
+  @RequireOperatorCapability("reply_conversations")
   @UseGuards(OperatorAccessGuard)
   executeManualReply(@Param("id") id: string, @Body() payload: ExpectedIdentityPayload = {}) {
     return this.wechat.executeManualReplyNow(id, payload || {});

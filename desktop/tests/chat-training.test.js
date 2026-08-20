@@ -31,6 +31,25 @@ test("classifies scene by weighted keyword hits", () => {
   assert.equal(result.scores[0].agentKey, "gift_design");
 });
 
+test("classifies card redesign with box size as gift design", () => {
+  const result = classifyScene("再设计一下这个卡片，盒子是 15*15*6的");
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.scene, "礼盒设计");
+  assert.ok(result.matchedKeywords.includes("卡片"));
+  assert.ok(result.matchedKeywords.includes("盒子是"));
+  assert.ok(result.matchedKeywords.includes("再设计"));
+});
+
+test("classifies greeting-card square purple requirement update as gift design", () => {
+  const result = classifyScene("尺寸是盒子的尺寸，图片里面是方形的贺卡，也就是1：1的尺寸，主题颜色是紫色");
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.scene, "礼盒设计");
+  assert.ok(result.matchedKeywords.includes("盒子的尺寸"));
+  assert.ok(result.matchedKeywords.includes("方形的贺卡"));
+  assert.ok(result.matchedKeywords.includes("1：1"));
+  assert.ok(result.matchedKeywords.includes("主题颜色"));
+});
+
 test("explains weak and ambiguous scene classification for imported chat samples", () => {
   const weak = evaluateSceneClassification({
     scene: "pre_sales",

@@ -16,6 +16,8 @@ const ANSWER_FIRST_INTENTS = new Set([
   "logo_customization",
   "sample",
   "packaging_adjustment",
+  "greeting_card_requirements",
+  "greeting_card_revision",
   "price_explanation",
 ]);
 
@@ -56,8 +58,11 @@ function buildAgentReplyDraft(route = {}, context = {}) {
   const completeGiftDesignRequest = route.agentKey === "gift_design"
     && route.action === "auto_agent"
     && !(route.missingFields || []).length;
+  const completeGiftDesignDirectAllowed = completeGiftDesignRequest
+    && ["packaging_adjustment", "greeting_card_requirements", "greeting_card_revision"].includes(directCandidate?.intent)
+    && /卡片|贺卡|祝福卡|感谢卡|心意卡|盒子|1\s*[:：]\s*1|正方形|方形|紫色|花/.test(String(route.text || ""));
   const directAnswer = directCandidate
-    && !completeGiftDesignRequest
+    && (!completeGiftDesignRequest || completeGiftDesignDirectAllowed)
     && (!hasApprovedHumanReply || ANSWER_FIRST_INTENTS.has(directCandidate.intent))
     ? directCandidate
     : null;
@@ -218,7 +223,6 @@ function wantedSkillNames(route) {
   }
   if (route.agentKey === "logistics_exception") names.add("物流安抚");
   if (route.agentKey === "after_sales") names.add("售后方案");
-  if (route.agentKey === "size_recommendation") names.add("参数追问");
   if (route.action === "collect_info") names.add("需求澄清");
   if ((route.missingFields || []).includes("scene_clarification")) names.add("场景澄清");
   if (route.action === "manual_review") names.add("防乱回复");
@@ -433,7 +437,6 @@ function extractKeywords(text) {
     "换货",
     "补发",
     "投诉",
-    "尺码",
     "伴手礼",
     "开业",
     "商务",
@@ -545,10 +548,6 @@ function composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRe
     return exemplar || "收到，我先帮您核对订单和问题凭证。确认具体情况后，会给您一个明确的处理方案；涉及退款、补发或争议的部分会先转人工确认。";
   }
 
-  if (route.agentKey === "size_recommendation") {
-    return "可以，我先根据您的身高、体重、版型偏好和商品尺码规则来判断。信息不全的话我会先补问关键参数，再给建议。";
-  }
-
   return "收到，我先按您这个情况整理关键信息，再给您一个明确的下一步处理方式。";
 }
 
@@ -658,7 +657,41 @@ function buildDirectCustomerAnswer(route = {}) {
       text: "可以先确认样品，不过样品更适合数量较多、意向明确的订单。您把看中的款发我，我先核样品和费用。",
     };
   }
-  if (agentKey !== "logistics_exception" && /包装|礼盒|盒子/.test(text) && /换|调整|改|合适|尺寸|装得下/.test(text)) {
+  if (
+    agentKey !== "logistics_exception"
+    && /卡片|贺卡|祝福卡|感谢卡|心意卡/.test(text)
+    && /(?:不要(?:这个)?花|不要花|去掉花|无花)/i.test(text)
+  ) {
+    return {
+      intent: "greeting_card_revision",
+      text: "收到，这版不要花。我会去掉花朵元素，保留当前贺卡方向，重新按客户要求出无花版本给您确认。",
+    };
+  }
+  if (
+    agentKey !== "logistics_exception"
+    && /卡片|贺卡|祝福卡|感谢卡|心意卡/.test(text)
+    && /(?:盒子(?:的)?尺寸|尺寸是(?:盒子|包装|礼盒)|1\s*[:：]\s*1|正方形|方形|主题(?:色|颜色)|紫色)/i.test(text)
+  ) {
+    const parts = [];
+    if (/(?:盒子(?:的)?尺寸|尺寸是(?:盒子|包装|礼盒))/i.test(text)) parts.push("盒子尺寸只作为包装适配参考");
+    if (/(?:1\s*[:：]\s*1|正方形|方形)/i.test(text)) parts.push("贺卡按 1:1 正方形处理");
+    if (/(?:主题(?:色|颜色)|紫色)/i.test(text)) parts.push("主题色用紫色");
+    return {
+      intent: "greeting_card_requirements",
+      text: `明白，${parts.length ? parts.join("；") : "我会按您补充的要求调整贺卡"}。我会直接按这个要求生成贺卡版本给您确认。`,
+    };
+  }
+  if (
+    agentKey !== "logistics_exception"
+    && /卡片|贺卡|祝福卡|感谢卡|心意卡/.test(text)
+    && /再设计|重新设计|重做|调整|改|适配|盒子|尺寸/.test(text)
+  ) {
+    return {
+      intent: "packaging_adjustment",
+      text: "收到，卡片可以重新调整。我会按您给的盒子尺寸做适配；如果需要保留原图细节，我会以原图和原文为准，不乱改。",
+    };
+  }
+  if (agentKey !== "logistics_exception" && /包装|礼盒|盒子|卡片|贺卡/.test(text) && /换|调整|改|合适|尺寸|装得下|再设计|重新设计|重做|适配/.test(text)) {
     return {
       intent: "packaging_adjustment",
       text: "包装可以调整，但要按产品尺寸试装，避免盒子不合适。您把想保留的产品和包装要求发我，我按尺寸核。",

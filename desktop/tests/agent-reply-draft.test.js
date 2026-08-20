@@ -111,6 +111,47 @@ test("uses agent skills to enhance gift design reply draft", () => {
   assert.match(draft.suggestedReply, /不乱换商品/);
 });
 
+test("answers card redesign with box size before generic gift design copy", () => {
+  const draft = buildAgentReplyDraft(
+    {
+      text: "再设计一下这个卡片，盒子是 15*15*6的",
+      agentKey: "gift_design",
+      action: "auto_agent",
+      missingFields: [],
+      riskFlags: [],
+      manualRequired: false,
+    },
+    { skills: [], knowledgeEntries: [] },
+  );
+
+  assert.equal(draft.replyDraft.directAnswer.applied, true);
+  assert.equal(draft.replyDraft.directAnswer.intent, "packaging_adjustment");
+  assert.match(draft.suggestedReply, /卡片可以重新调整/);
+  assert.match(draft.suggestedReply, /盒子尺寸/);
+  assert.match(draft.suggestedReply, /不乱改/);
+});
+
+test("answers greeting-card ratio and color requirements before generic gift design copy", () => {
+  const draft = buildAgentReplyDraft(
+    {
+      text: "尺寸是盒子的尺寸，图片里面是方形的贺卡，也就是1：1的尺寸，主题颜色是紫色",
+      agentKey: "gift_design",
+      action: "auto_agent",
+      missingFields: [],
+      riskFlags: [],
+      manualRequired: false,
+    },
+    { skills: [], knowledgeEntries: [] },
+  );
+
+  assert.equal(draft.replyDraft.directAnswer.applied, true);
+  assert.equal(draft.replyDraft.directAnswer.intent, "greeting_card_requirements");
+  assert.match(draft.suggestedReply, /盒子尺寸只作为包装适配参考/);
+  assert.match(draft.suggestedReply, /贺卡按 1:1 正方形处理/);
+  assert.match(draft.suggestedReply, /主题色用紫色/);
+  assert.doesNotMatch(draft.suggestedReply, /预算|数量|用途/);
+});
+
 test("keeps high value route on manual handoff", () => {
   const draft = buildAgentReplyDraft(
     {

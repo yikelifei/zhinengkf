@@ -20,6 +20,7 @@ const SENSITIVE_PATTERNS = [
 
 function evaluateAgentRoute(input = {}, options = {}) {
   const text = String(input.text || "");
+  const clarificationContext = input.clarificationContext || options.clarificationContext;
   const priorSalesContext = input.salesContext || options.salesContext || {};
   const basicQuestion = classifyBasicCustomerServiceQuestion(text);
   const classifiedScene = basicQuestion
@@ -33,7 +34,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
     ? null
     : resolveSceneClarification(
         text,
-        input.clarificationContext || options.clarificationContext,
+        clarificationContext,
         classifiedScene,
       );
   const followupResolution = basicQuestion || clarificationResolution
@@ -49,7 +50,18 @@ function evaluateAgentRoute(input = {}, options = {}) {
     : followupResolution
       ? buildResolvedFollowupDecision(followupResolution)
       : buildSceneDecision(scene);
-  const sceneClarification = clarificationResolution || followupResolution ? null : buildSceneClarification(sceneDecision);
+  const priorClarificationAttempt = clarificationContext?.sceneClarification?.required
+    ? Math.max(1, Number(clarificationContext.sceneClarification.attempt || 1))
+    : 0;
+  const clarificationExhausted = Boolean(
+    !clarificationResolution
+    && !followupResolution
+    && clarificationContext?.sceneClarification?.required
+    && priorClarificationAttempt >= 2,
+  );
+  const sceneClarification = clarificationResolution || followupResolution || clarificationExhausted
+    ? null
+    : buildSceneClarification(sceneDecision, { attempt: priorClarificationAttempt + 1 });
   const parsedBudget = shouldParseBudgetForRoute(text, scene.agentKey) ? parseBudget(text) : null;
   const currentUsageScene = extractSalesUsageScene(text);
   const currentStylePreference = extractSalesStylePreference(text);
@@ -80,7 +92,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
   const highValue = isHighValueBudget(budget, Number(options.highValueAmountCny || 10000));
   const riskFlags = detectRiskFlags(text);
   const missing = basicQuestion ? [] : detectMissingFields(text, scene.agentKey, budget);
-  if (!basicQuestion && (sceneDecision.status === "ambiguous" || sceneDecision.status === "weak")) {
+  if (!basicQuestion && ["ambiguous", "weak", "unmatched"].includes(sceneDecision.status)) {
     missing.unshift("scene_clarification");
   }
 
@@ -91,12 +103,14 @@ function evaluateAgentRoute(input = {}, options = {}) {
     agentKey: scene.agentKey,
     sceneDecision,
     basicQuestion,
+    clarificationExhausted,
   });
   const sceneAudit = buildSceneAudit({
     scene,
     sceneDecision,
     sceneClarification,
     clarificationResolution,
+    clarificationExhausted,
     followupResolution,
     sceneMemory: scene.sceneMemory || null,
     budget,
@@ -130,6 +144,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
     sceneDecision,
     sceneClarification,
     clarificationResolution,
+    clarificationExhausted,
     followupResolution,
     sceneMemory: scene.sceneMemory || null,
     sceneAudit,
@@ -142,7 +157,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
     routingPolicy,
     manualRequired: action === "manual_review",
     confidence: calculateConfidence(scene, budget, missing, riskFlags),
-    suggestedReply: basicQuestion?.answer || buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }),
+    suggestedReply: basicQuestion?.answer || buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags, text }),
   };
 }
 
@@ -387,7 +402,6 @@ const SCENE_META = {
   order_payment: { scene: "下单支付", label: "下单支付/发票地址" },
   logistics_exception: { scene: "物流异常", label: "物流发货/签收异常" },
   after_sales: { scene: "售后安抚", label: "售后退款/破损补发" },
-  size_recommendation: { scene: "尺码推荐", label: "尺码推荐" },
   pre_sales: { scene: "售前转化", label: "售前咨询/商品推荐" },
   general: { scene: "未分类", label: "人工确认" },
 };
@@ -407,11 +421,28 @@ function normalizeClarificationText(value) {
 }
 
 const SCENE_RESOLUTION_ALIASES = {
-  gift_design: weightedAliases(["设计图", "效果图", "出图", "看图", "图片", "摆拍", "礼盒", "搭配", "包装", "logo"]),
+  gift_design: weightedAliases([
+    "设计图",
+    "效果图",
+    "出图",
+    "看图",
+    "图片",
+    "摆拍",
+    "礼盒",
+    "搭配",
+    "包装",
+    "logo",
+    "卡片",
+    "贺卡",
+    "盒子尺寸",
+    "盒子是",
+    "再设计",
+    "重新设计",
+    "重设计",
+  ]),
   order_payment: weightedAliases(["订单", "付款", "支付", "发票", "开票", "地址", "改地址", "收货地址", "下单", "定金", "尾款"]),
   logistics_exception: weightedAliases(["物流", "快递", "发货", "到货", "签收", "派送", "催件", "单号", "没收到"]),
   after_sales: weightedAliases(["售后", "退款", "退货", "换货", "破损", "坏了", "补发", "质量", "少件", "漏发", "赔偿"]),
-  size_recommendation: weightedAliases(["尺码", "码数", "身高", "体重", "穿多大", "合身", "偏大", "偏小"]),
   pre_sales: weightedAliases(["售前咨询", "商品咨询", "售前", "推荐", "商品", "价格", "优惠", "怎么买", "活动", "有货", "多少钱", "介绍", "对比"]),
 };
 
@@ -730,8 +761,9 @@ function buildResolvedFollowupDecision(resolution) {
   };
 }
 
-function buildSceneClarification(sceneDecision) {
+function buildSceneClarification(sceneDecision, config = {}) {
   if (!sceneDecision || sceneDecision.status === "clear") return null;
+  const attempt = Math.max(1, Number(config.attempt || 1));
   const options = [sceneDecision.topScene, sceneDecision.secondaryScene]
     .filter(Boolean)
     .filter((item, index, list) => list.findIndex((other) => other.agentKey === item.agentKey) === index)
@@ -743,12 +775,23 @@ function buildSceneClarification(sceneDecision) {
       label: sceneOptionLabel(item.agentKey, item.scene),
     }));
 
+  if (attempt > 1) {
+    return {
+      required: true,
+      type: "describe_scene_retry",
+      question: "没关系，您直接用一句话描述现在遇到的具体情况；有订单号、图片或参考图也可以一起发来。",
+      options,
+      attempt,
+    };
+  }
+
   if (sceneDecision.status === "ambiguous" && options.length >= 2) {
     return {
       required: true,
       type: "choose_scene",
       question: `这条消息同时像「${options[0].label}」和「${options[1].label}」。为避免回错，我先确认一下：您现在最想先处理哪一件？`,
       options,
+      attempt,
     };
   }
 
@@ -758,6 +801,7 @@ function buildSceneClarification(sceneDecision) {
       type: "confirm_scene",
       question: `我先确认一下，您是想让我先处理「${options[0].label}」这个方向吗？如果是订单、售后、物流或设计图，也可以直接告诉我重点。`,
       options,
+      attempt,
     };
   }
 
@@ -766,6 +810,7 @@ function buildSceneClarification(sceneDecision) {
     type: "describe_scene",
     question: "我先确认一下，您现在主要想处理哪类问题：商品咨询、设计效果图、订单付款、物流还是售后？",
     options,
+    attempt,
   };
 }
 
@@ -775,7 +820,6 @@ function sceneOptionLabel(agentKey, scene) {
     order_payment: "下单支付/发票地址",
     logistics_exception: "物流发货/签收异常",
     after_sales: "售后退款/破损补发",
-    size_recommendation: "尺码推荐",
     pre_sales: "售前咨询/商品推荐",
     general: "人工确认",
   };
@@ -887,6 +931,12 @@ function detectMissingFields(text, agentKey, budget) {
     }
   }
   if (agentKey === "gift_design") {
+    if (isStandaloneCreativeMaterialRequest(text)) {
+      if (!isCreativeMaterialRequirementUpdate(text) && /logo|素材|参考图|图片|原图|品牌/i.test(text) && !/\[图片\]|已发|上传|附件/.test(text)) {
+        missing.push("customer_assets");
+      }
+      return missing;
+    }
     if (!budget?.perUnitAmount && !budget?.totalAmount) missing.push("budget");
     if (!budget?.quantity) missing.push("quantity");
     if (/logo|素材|参考图|图片|品牌/i.test(text) && !/\[图片\]|已发|上传|附件/.test(text)) {
@@ -897,10 +947,6 @@ function detectMissingFields(text, agentKey, budget) {
   if (agentKey === "logistics_exception" && !/订单|单号|快递号|手机号|尾号/.test(text)) {
     missing.push("order_or_tracking");
   }
-  if (agentKey === "size_recommendation") {
-    if (!/身高|\d{2,3}\s*cm|厘米/.test(text)) missing.push("height");
-    if (!/体重|\d{2,3}\s*(斤|kg|公斤)/i.test(text)) missing.push("weight");
-  }
   if (agentKey === "after_sales" && !/订单|图片|视频|破损|凭证|单号|照片/.test(text)) {
     missing.push("order_or_evidence");
   }
@@ -910,7 +956,38 @@ function detectMissingFields(text, agentKey, budget) {
   return missing;
 }
 
-function decideAction({ highValue, riskFlags, missing, agentKey, sceneDecision, basicQuestion }) {
+function isStandaloneCreativeMaterialRequest(text) {
+  const value = String(text || "");
+  if (!/(?:贺卡|祝福卡|感谢卡|心意卡|卡片|吊牌|挂牌|挂签|腰封|围条|海报)/i.test(value)) return false;
+  if (/(?:礼盒效果图|搭品|搭配效果图|组合礼盒|套装效果|商品|产品|伴手礼).{0,12}(?:效果图|设计|入镜|展示)|(?:效果图|设计).{0,12}(?:礼盒|搭品|搭配|商品|产品|伴手礼)/i.test(value)) {
+    return false;
+  }
+  if (isCreativeMaterialRequirementUpdate(value)) return true;
+  return /(?:做|设计|生成|出|制作|要|需要|想要|想做|来|改|调整|再设计|重新设计|重做)/i.test(value);
+}
+
+function isCreativeMaterialRequirementUpdate(text) {
+  const value = String(text || "");
+  const material = /(?:贺卡|祝福卡|感谢卡|心意卡|卡片)/i.test(value);
+  if (!material) return false;
+  return /(?:盒子(?:的)?尺寸|尺寸是(?:盒子|包装|礼盒)|1\s*[:：]\s*1|正方形|方形|主题(?:色|颜色)|紫色|不要(?:这个)?花|不要花|去掉花|无花)/i.test(value);
+}
+
+function buildCreativeMaterialResolutionReply(text) {
+  const value = String(text || "");
+  if (!isCreativeMaterialRequirementUpdate(value)) return "";
+  if (/(?:不要(?:这个)?花|不要花|去掉花|无花)/i.test(value)) {
+    return "收到，这版不要花。我会去掉花朵元素，保留当前贺卡方向，重新按客户要求出无花版本给您确认。";
+  }
+  const parts = [];
+  if (/(?:盒子(?:的)?尺寸|尺寸是(?:盒子|包装|礼盒))/i.test(value)) parts.push("盒子尺寸只作为包装适配参考");
+  if (/(?:1\s*[:：]\s*1|正方形|方形)/i.test(value)) parts.push("贺卡按 1:1 正方形处理");
+  if (/(?:主题(?:色|颜色)|紫色)/i.test(value)) parts.push("主题色用紫色");
+  const summary = parts.length ? parts.join("；") : "我会按您补充的要求调整贺卡";
+  return `明白，${summary}。我会直接按这个要求生成贺卡版本给您确认。`;
+}
+
+function decideAction({ highValue, riskFlags, missing, agentKey, sceneDecision, basicQuestion, clarificationExhausted }) {
   if (riskFlags.length) return "manual_review";
   if (basicQuestion) return "auto_agent";
   // A high total value must still block design, quoting, payment and order actions.
@@ -921,12 +998,13 @@ function decideAction({ highValue, riskFlags, missing, agentKey, sceneDecision, 
   // the scene is already clear and no clarification is pending. Otherwise the
   // deterministic acknowledgement path must run before any model assistance.
   if (highValue && (sceneDecision?.status !== "clear" || missing.length)) return "manual_review";
+  if (clarificationExhausted) return "manual_review";
   if (sceneDecision?.status === "ambiguous") {
     const keys = [sceneDecision.topScene?.agentKey, sceneDecision.secondaryScene?.agentKey].filter(Boolean);
     if (keys.includes("after_sales") || keys.includes("order_payment")) return "manual_review";
     return "collect_info";
   }
-  if (agentKey === "general") return "manual_review";
+  if (agentKey === "general") return "collect_info";
   if (missing.length) return "collect_info";
   return "auto_agent";
 }
@@ -941,7 +1019,7 @@ function calculateConfidence(scene, budget, missing, riskFlags) {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags }) {
+function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFlags, text }) {
   if (action === "manual_review") {
     if (highValue) return "这个需求金额比较重要，我先帮您把预算、数量、用途和素材整理清楚，再交给专人确认方案和报价，避免后面反复改。";
     if (riskFlags.length) return "您这个情况我先认真记录下来，避免处理不准确。我这边马上转人工帮您跟进，后续给您明确处理方案。";
@@ -954,6 +1032,16 @@ function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFl
   }
 
   if (scene.agentKey === "gift_design") {
+    if (isStandaloneCreativeMaterialRequest(text)) {
+      const materialReply = buildCreativeMaterialResolutionReply(text);
+      if (materialReply) return materialReply;
+      if (/卡片|贺卡|祝福卡|感谢卡|心意卡/.test(String(text || ""))) {
+        return /盒子|尺寸/.test(String(text || ""))
+          ? "收到，卡片可以重新调整。我会按您给的盒子尺寸做适配；如果需要保留原图细节，我会以原图和原文为准，不乱改。"
+          : "收到，卡片设计可以做。我会按您给的方向出 4 版图给您挑；如果有固定文案或原图细节，我会以原文和原图为准。";
+      }
+      return "收到，这个物料设计可以做。我会按您给的方向出 4 版图给您挑；如果有固定文案或参考图，我会以原文和素材为准。";
+    }
     const budgetText = budget?.perUnitAmount ? `按每份 ${budget.perUnitAmount} 元` : "按您的预算";
     return `${budgetText}可以做。我先帮您搭一套礼盒组合，再整理 4 张真实产品摆拍效果图给您挑。同时我会核对 Logo、参考图、用途和礼盒搭配，确保效果图不乱换商品。`;
   }
@@ -968,10 +1056,6 @@ function buildSuggestedReply({ scene, budget, missing, action, highValue, riskFl
 
   if (scene.agentKey === "after_sales") {
     return "收到，我先帮您核对订单和问题凭证。确认具体情况后，会给您明确的处理方案；涉及退款、补发或争议的部分会先转人工确认。";
-  }
-
-  if (scene.agentKey === "size_recommendation") {
-    return "可以，我先根据您的身高、体重、版型偏好和商品尺码规则来判断。信息不全的话我会先补问关键参数，再给建议。";
   }
 
   return "收到，我先按您这个情况整理关键信息，再给您一个明确的下一步处理方式。";
@@ -1069,7 +1153,7 @@ function buildRoutingPolicy({
   const missingFields = [...new Set(missing || [])];
   const lane = routingPolicyLane({ highValue, riskFlags, missingFields, action, sceneDecision });
   const manualRequired = action === "manual_review";
-  const canQueueAutoReply = action === "auto_agent" && !manualRequired;
+  const canQueueAutoReply = ["auto_agent", "collect_info"].includes(action) && !manualRequired;
   const canAskClarification = action === "collect_info" && missingFields.length > 0 && !manualRequired;
   const valueTier = highValue ? "high" : "standard";
   return {
@@ -1182,8 +1266,6 @@ function fieldLabel(field) {
     customer_assets: "Logo 或参考图",
     usage_scene: "用途场景",
     order_or_tracking: "订单号或快递单号",
-    height: "身高",
-    weight: "体重",
     order_or_evidence: "订单信息或问题凭证",
     order_or_payment_info: "订单或付款信息",
     scene_clarification: "要处理的重点",

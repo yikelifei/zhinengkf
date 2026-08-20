@@ -1,13 +1,46 @@
 "use strict";
 
 const ZHENXI_CUSTOMER_IMAGE_COUNT = 4;
+const ZHENXI_CUSTOMER_COPY_COUNT = 4;
 const ZHENXI_COPY_MODULES = Object.freeze(["poster_copy", "xiaohongshu", "detail_page", "video_script"]);
 const CUSTOMER_CREATIVE_DELIVERABLES = Object.freeze({
-  bundle_effect: Object.freeze({ label: "搭品效果图", capability: "伴手礼搭品效果图", needsCatalog: true, needsCopy: false, needsSize: false }),
-  poster: Object.freeze({ label: "活动海报", capability: "活动海报设计", needsCatalog: false, needsCopy: true, needsSize: true }),
-  greeting_card: Object.freeze({ label: "贺卡", capability: "贺卡设计", needsCatalog: false, needsCopy: true, needsSize: true }),
-  hang_tag: Object.freeze({ label: "吊牌", capability: "吊牌设计", needsCatalog: false, needsCopy: true, needsSize: true }),
-  belly_band: Object.freeze({ label: "腰封", capability: "腰封设计", needsCatalog: false, needsCopy: true, needsSize: true }),
+  bundle_effect: Object.freeze({ label: "搭品效果图", capability: "伴手礼搭品效果图", needsCatalog: true, experimental: true }),
+  poster: Object.freeze({
+    label: "活动海报",
+    capability: "活动海报设计",
+    needsCatalog: false,
+    category: "poster",
+    templateGroupKey: "poster",
+    cardType: "海报自定义模板",
+    defaultCanvasSize: "2480x3508",
+  }),
+  greeting_card: Object.freeze({
+    label: "贺卡",
+    capability: "贺卡设计",
+    needsCatalog: false,
+    category: "card",
+    templateGroupKey: "card",
+    cardType: "贺卡自定义模板",
+    defaultCanvasSize: "1063x1535",
+  }),
+  hang_tag: Object.freeze({
+    label: "吊牌",
+    capability: "吊牌设计",
+    needsCatalog: false,
+    category: "packaging",
+    templateGroupKey: "hangtag",
+    cardType: "吊牌自定义模板",
+    defaultCanvasSize: "650x1063",
+  }),
+  belly_band: Object.freeze({
+    label: "腰封",
+    capability: "腰封设计",
+    needsCatalog: false,
+    category: "packaging",
+    templateGroupKey: "waistband",
+    cardType: "腰封自定义模板",
+    defaultCanvasSize: "950x2800",
+  }),
 });
 
 const IMAGE_REQUEST_PATTERN = /(?:设计稿|设计图|效果图|海报图|海报设计|主图|封面图|配图|出图|生成(?:一组|几张|图片|图)|做图|图片设计|视觉稿|详情页图|小红书封面|小红书配图)/i;
@@ -16,7 +49,6 @@ const TEXT_ONLY_REQUEST_PATTERN = /(?:(?:只|仅)(?:需(?:要)?|要|用|给我|�
 const NEGATED_IMAGE_REQUEST_PATTERN = /(?:不要|不用|无需|不需要|别|暂时不要|先不要|不)\s*(?:先|再)?\s*(?:给我)?\s*(?:做|生成|出|制作|提供|发)?\s*(?:任何|这些|这类)?\s*(?:设计稿|设计图|效果图|海报图|主图|封面图|配图|图片|图|视觉稿)/gi;
 const REFERENCE_DEPENDENT_PATTERN = /(?:logo|标志|商标|产品|商品|实物|包装|人物|人像|参考图|原图|素材|照着|按照.{0,8}图|保留.{0,12}(?:外观|文字|品牌|logo)|换背景|改图|修图|抠图|去背)/i;
 const CREATIVE_REQUEST_PATTERN = /(?:做|设计|生成|出|制作|要|需要|想要|想做|来)(?:一|个|张|套|版|几张|一下|份|些)?/i;
-const PRODUCT_VISUAL_CONTEXT_PATTERN = /(?:伴手礼|礼盒|礼品|产品|商品|实物|包装|套装|搭品|搭配)/i;
 const GRAPHIC_ONLY_PATTERN = /(?:纯文字|文字氛围|只(?:包含|保留|放|要)(?:指定|这句|以下)?文案|不(?:要|用|展示|放)(?:任何)?(?:产品|商品|礼品|礼盒|实物|包装)|不放实物|纯背景|只做背景)/i;
 const REAL_PRODUCT_VISUAL_PATTERN = /(?:(?:展示|放上|带上|使用|加入|呈现).{0,10}(?:产品|商品|礼品|伴手礼|礼盒|实物|包装)|(?:产品|商品|礼品|伴手礼|礼盒|实物|包装).{0,10}(?:展示|入镜|放进|放上|带上))/i;
 
@@ -142,8 +174,15 @@ function planCustomerCreativeRequest(input) {
     ? `customer-creative:${input.requestContextId || stablePlanSeed(input.text, requestedDeliverables)}`
     : String(previous?.planId || `customer-creative:${input.requestContextId || stablePlanSeed(input.text, requestedDeliverables)}`);
   const physicalSize = detectPhysicalSize(input.text) || String(previous?.physicalSize || "");
+  const packageBoxSize = detectPackageBoxSize(input.text) || String(previous?.packageBoxSize || "");
   const pixelSize = detectImageSize(input.text) || String(previous?.size || "");
-  const ratio = detectImageRatio(input.text, pixelSize) || ratioFromPhysicalSize(physicalSize) || String(previous?.ratio || "");
+  const detectedRatio = detectImageRatio(input.text, pixelSize) || ratioFromPhysicalSize(physicalSize);
+  const orientation = detectMaterialOrientation(input.text, pixelSize, physicalSize, detectedRatio)
+    || String(previous?.orientation || "")
+    || "vertical";
+  const ratio = orientation === "square"
+    ? "1:1"
+    : detectedRatio || String(previous?.ratio || "");
   const copyText = extractRequestedCopy(input.text, {
     acceptWholeText: Boolean(previous?.missingFields?.includes("copy_text")) && !input.explicitDeliverables.length,
   }) || String(previous?.copyText || "");
@@ -151,20 +190,16 @@ function planCustomerCreativeRequest(input) {
   const noLogo = explicitlyNoLogo(input.text) || exactCopyOnly || previous?.logoMode === "none";
   const selectedAssetIds = creativeAssetIds(input.availableAssets, input.currentAssetIds, previous);
   const logoProvided = !noLogo && selectedAssetIds.length > 0;
-  const logoMode = noLogo ? "none" : logoProvided ? "provided" : "pending";
+  const logoMode = logoProvided ? "provided" : "none";
   const bundleReady = Boolean(input.bundleRecommendation?.items?.length);
   const visualContentMode = detectVisualContentMode(input.text)
     || String(previous?.visualContentMode || "")
-    || (!requestedDeliverables.includes("poster") ? "" : PRODUCT_VISUAL_CONTEXT_PATTERN.test(input.text) ? "" : "graphic_only");
+    || "graphic_only";
 
   const deliverables = requestedDeliverables.map((key) => {
     const definition = CUSTOMER_CREATIVE_DELIVERABLES[key];
     const missingFields = [];
     if (definition.needsCatalog && !bundleReady) missingFields.push("bundle_selection");
-    if (definition.needsCopy && !copyText) missingFields.push("copy_text");
-    if (definition.needsCopy && logoMode === "pending") missingFields.push("logo_decision");
-    if (definition.needsSize && !physicalSize && !pixelSize) missingFields.push("finished_size");
-    if (key === "poster" && !visualContentMode) missingFields.push("visual_content_mode");
     if (
       key === "poster"
       && visualContentMode === "real_product"
@@ -191,8 +226,10 @@ function planCustomerCreativeRequest(input) {
     visualContentMode,
     exactCopyOnly,
     physicalSize,
+    packageBoxSize,
     size: pixelSize,
     ratio,
+    orientation,
     assetIds: selectedAssetIds,
     toolIntents: {
       catalog: deliverables.some((item) => item.needsCatalog) || visualContentMode === "real_product",
@@ -238,6 +275,7 @@ function buildCreativeDesignRequest(input) {
       capability: deliverable.capability,
       planId: input.planId,
       outputCount: ZHENXI_CUSTOMER_IMAGE_COUNT,
+      copyCount: 0,
       prompt: "根据商品库已确认的真实商品、包装尺寸和客户预算生成伴手礼搭品效果图。",
       assetIds: [],
       referenceRequired: true,
@@ -248,11 +286,17 @@ function buildCreativeDesignRequest(input) {
       ratio: "",
     };
   }
+  const definition = CUSTOMER_CREATIVE_DELIVERABLES[deliverable.key];
+  const canvasSize = input.size || materialCanvasSize(definition.defaultCanvasSize, input.orientation);
   const description = [
     `为客户制作${deliverable.label}设计效果图。`,
+    `必须使用臻希 AI 物料设计中的“${definition.cardType}”。`,
+    `构图方向：${materialOrientationLabel(input.orientation)}；画布尺寸：${canvasSize}。`,
     input.copyText ? `必须原样使用客户文案：${input.copyText}` : "",
+    !input.copyText ? "客户未指定成品文案，请先根据客户主题生成适合该物料的简洁中文文案，再用于图片设计。" : "",
     input.logoMode === "provided" ? "必须使用客户提供的 Logo 素材，不得重绘、改字或虚构品牌。" : "客户明确不放 Logo，不得自行添加品牌标识。",
     input.physicalSize ? `成品尺寸：${input.physicalSize}。` : "",
+    input.packageBoxSize ? `客户给出的配套盒子尺寸：${input.packageBoxSize}；这是包装适配约束，不是${deliverable.label}成品尺寸。` : "",
     input.visualContentMode === "graphic_only"
       ? "只做平面视觉，不展示或虚构任何商品、礼盒、包装和实物。"
       : input.visualContentMode === "real_product"
@@ -271,23 +315,30 @@ function buildCreativeDesignRequest(input) {
     planId: input.planId,
     prompt: description,
     outputCount: ZHENXI_CUSTOMER_IMAGE_COUNT,
+    copyCount: ZHENXI_CUSTOMER_COPY_COUNT,
     referenceRequired: input.logoMode === "provided" || input.visualContentMode === "real_product",
     missingReference: false,
     assetIds: input.logoMode === "provided" ? input.assetIds : [],
     copyText: input.copyText,
     logoMode: input.logoMode,
     physicalSize: input.physicalSize,
+    packageBoxSize: input.packageBoxSize,
     visualContentMode: input.visualContentMode,
     exactCopyOnly: input.exactCopyOnly,
     forbidInventedProducts: input.visualContentMode !== "real_product",
     size: input.size,
     ratio: input.ratio,
+    canvasSize,
+    orientation: input.orientation,
+    category: definition.category,
+    templateGroupKey: definition.templateGroupKey,
+    cardType: definition.cardType,
     transparent: false,
   };
 }
 
 function detectCreativeDeliverables(text) {
-  if (!text || !CREATIVE_REQUEST_PATTERN.test(text)) return [];
+  if (!text || !(CREATIVE_REQUEST_PATTERN.test(text) || isCreativeDeliverableRequirementUpdate(text))) return [];
   const candidates = [
     ["bundle_effect", /(?:搭品|搭配(?:商品|礼品|产品|礼盒)?|组合礼盒|配礼盒|套装效果|礼盒效果图|搭配效果图)/i],
     ["poster", /海报(?!文案)/i],
@@ -298,6 +349,12 @@ function detectCreativeDeliverables(text) {
   return candidates
     .filter(([key, pattern]) => pattern.test(text) && !deliverableNegated(text, key))
     .map(([key]) => key);
+}
+
+function isCreativeDeliverableRequirementUpdate(text) {
+  const value = String(text || "");
+  if (!/(?:贺卡|祝福卡|感谢卡|心意卡|卡片)/i.test(value)) return false;
+  return /(?:盒子(?:的)?尺寸|尺寸是(?:盒子|包装|礼盒)|1\s*[:：]\s*1|正方形|方形|主题(?:色|颜色)|紫色|不要(?:这个)?花|不要花|去掉花|无花)/i.test(value);
 }
 
 function deliverableNegated(text, key) {
@@ -344,7 +401,7 @@ function creativeClarificationReply(deliverables, missingFields) {
 
 function creativeReadyReply(deliverables) {
   const labels = deliverables.map((item) => item.label).join("和");
-  return `资料齐了，我现在按您的要求做${labels}，每项出 4 版，做好直接发您挑。`;
+  return `收到，我现在按您的要求做${labels}：先生成 4 条文案方案，再生成对应的 4 张设计图，做好直接发您挑。`;
 }
 
 function creativeAssetIds(assets, currentAssetIds, previous) {
@@ -396,6 +453,54 @@ function detectPhysicalSize(text) {
   const match = /(?:成品|展开|尺寸|大小)?\s*(\d{1,4}(?:\.\d+)?)\s*[x×*]\s*(\d{1,4}(?:\.\d+)?)\s*(mm|cm|毫米|厘米)/i.exec(String(text || ""));
   if (!match) return "";
   return `${match[1]}×${match[2]}${normalizePhysicalUnit(match[3])}`;
+}
+
+function detectPackageBoxSize(text) {
+  const match = /(?:盒子|礼盒|包装)(?:尺寸|大小|是|为|约|规格)?\s*(\d{1,4}(?:\.\d+)?)\s*[x×*]\s*(\d{1,4}(?:\.\d+)?)\s*[x×*]\s*(\d{1,4}(?:\.\d+)?)(?:\s*(mm|cm|毫米|厘米))?/i.exec(String(text || ""));
+  if (!match) return "";
+  const unit = match[4] ? normalizePhysicalUnit(match[4]) : "（未注明单位）";
+  return `${match[1]}×${match[2]}×${match[3]}${unit}`;
+}
+
+function detectMaterialOrientation(text, pixelSize = "", physicalSize = "", ratio = "") {
+  const value = String(text || "");
+  const dimensions = parseDimensions(pixelSize) || parseDimensions(physicalSize);
+  if (
+    /(?:正方形|方形(?:贺卡|卡片|款式|版式|构图|画幅)?|方版|正方款)/i.test(value)
+    || isSquareRatio(ratio)
+    || (dimensions && dimensions.width === dimensions.height)
+  ) return "square";
+  if (/(?:横版|横向|横构图|横着|横幅)/i.test(value)) return "horizontal";
+  if (/(?:竖版|竖向|竖构图|竖着)/i.test(value)) return "vertical";
+  if (!dimensions) return "";
+  return dimensions.width > dimensions.height ? "horizontal" : "vertical";
+}
+
+function materialCanvasSize(defaultCanvasSize, orientation) {
+  const dimensions = parseDimensions(defaultCanvasSize);
+  if (!dimensions) return String(defaultCanvasSize || "");
+  if (orientation === "square") return "1:1";
+  return orientation === "horizontal"
+    ? `${dimensions.height}x${dimensions.width}`
+    : `${dimensions.width}x${dimensions.height}`;
+}
+
+function materialOrientationLabel(orientation) {
+  if (orientation === "square") return "正方形（1:1）";
+  return orientation === "horizontal" ? "横向" : "竖向";
+}
+
+function isSquareRatio(value) {
+  const match = /^(\d{1,2})\s*[:：]\s*(\d{1,2})$/.exec(String(value || "").trim());
+  return Boolean(match && Number(match[1]) > 0 && Number(match[1]) === Number(match[2]));
+}
+
+function parseDimensions(value) {
+  const match = /(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/i.exec(String(value || ""));
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : null;
 }
 
 function ratioFromPhysicalSize(size) {
@@ -508,6 +613,7 @@ function normalizeList(value) {
 module.exports = {
   CUSTOMER_CREATIVE_DELIVERABLES,
   ZHENXI_COPY_MODULES,
+  ZHENXI_CUSTOMER_COPY_COUNT,
   ZHENXI_CUSTOMER_IMAGE_COUNT,
   detectCreativeDeliverables,
   planZhenxiCustomerRequest,

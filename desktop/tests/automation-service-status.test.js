@@ -171,6 +171,7 @@ test("manual automation run forwards selected conversation identity to each side
   }
   const expectedCallOrder = [
     "scanTimeouts",
+    "scanSendOperations",
     "processSafeSendQueue",
     "runCustomerToolAutomation",
     ...(isProcessLowValueSendQueueEnabled() ? ["processSafeSendQueue"] : []),
@@ -179,7 +180,6 @@ test("manual automation run forwards selected conversation identity to each side
     "scanLowValueAutoOrderDrafts",
     "scanLowValueOrderConfirmations",
     "scanLowValueOrderFollowups",
-    "scanSendOperations",
   ];
   if (isProcessLowValueSendQueueEnabled()) expectedCallOrder.push("processSafeSendQueue");
   assert.deepEqual(
@@ -190,10 +190,10 @@ test("manual automation run forwards selected conversation identity to each side
     includeCustomerTools: false,
   });
   if (isProcessLowValueSendQueueEnabled()) {
-    assert.equal(calls[1][1].inboundReplyOnly, true);
-    assert.equal(calls[1][1].automationOnly, true);
-    assert.equal(calls[3][1].customerToolOnly, true);
-    assert.equal(calls[3][1].automationOnly, true);
+    const inboundQueueCall = calls.find(([step, payload]) => step === "processSafeSendQueue" && payload.inboundReplyOnly === true);
+    const customerToolQueueCall = calls.find(([step, payload]) => step === "processSafeSendQueue" && payload.customerToolOnly === true);
+    assert.equal(inboundQueueCall[1].automationOnly, true);
+    assert.equal(customerToolQueueCall[1].automationOnly, true);
     assert.equal(calls.at(-1)[1].inboundReplyOnly, undefined);
   }
 });
@@ -797,11 +797,13 @@ test("catalog readiness blockers still allow isolated inbound replies and custom
   assert.equal(run.reason, "automation_readiness_blocked");
   assert.equal(run.skipSummary.total, 1);
   assert.equal(run.skipSummary.reasons[0].reason, "automation_readiness_blocked");
-  assert.equal(run.steps.length, isProcessLowValueSendQueueEnabled() ? 4 : 3);
+  assert.equal(run.steps.length, isProcessLowValueSendQueueEnabled() ? 5 : 4);
   assert.equal(run.steps[0].step, "scanTimeouts");
   assert.equal(run.steps[0].status, "completed");
-  assert.equal(run.steps[1].step, "processInboundReplyQueue");
+  assert.equal(run.steps[1].step, "scanSendOperations");
   assert.equal(run.steps[1].status, "completed");
+  assert.equal(run.steps[2].step, "processInboundReplyQueue");
+  assert.equal(run.steps[2].status, "completed");
   assert.equal(sendQueueCalls.length, isProcessLowValueSendQueueEnabled() ? 2 : 1);
   assert.equal(sendQueueCalls[0].automationOnly, true);
   assert.equal(sendQueueCalls[0].inboundReplyOnly, true);

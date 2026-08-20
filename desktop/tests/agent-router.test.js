@@ -84,9 +84,42 @@ test("asks for missing info before gift design automation", () => {
   assert.equal(result.action, "collect_info");
   assert.equal(result.routingPolicy.lane, "info_collection");
   assert.equal(result.routingPolicy.canAskClarification, true);
-  assert.equal(result.routingPolicy.canQueueAutoReply, false);
+  assert.equal(result.routingPolicy.canQueueAutoReply, true);
   assert.equal(result.missingFields.includes("budget"), true);
   assert.equal(result.missingFields.includes("quantity"), true);
+});
+
+test("routes card redesign with box size to gift design agent", () => {
+  const result = evaluateAgentRoute({
+    text: "再设计一下这个卡片，盒子是 15*15*6的",
+  });
+
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.scene, "礼盒设计");
+  assert.equal(result.sceneDecision.status, "clear");
+  assert.equal(result.action, "auto_agent");
+  assert.equal(result.routingPolicy.canQueueAutoReply, true);
+  assert.equal(result.missingFields.includes("scene_clarification"), false);
+  assert.ok(result.matchedKeywords.includes("卡片"));
+  assert.ok(result.matchedKeywords.includes("盒子是"));
+  assert.ok(result.matchedKeywords.includes("再设计"));
+  assert.match(result.suggestedReply, /卡片可以重新调整/);
+  assert.match(result.suggestedReply, /盒子尺寸/);
+  assert.match(result.suggestedReply, /不乱改/);
+});
+
+test("routes greeting-card requirement update directly without asking gift box fields", () => {
+  const result = evaluateAgentRoute({
+    text: "尺寸是盒子的尺寸，图片里面是方形的贺卡，也就是1：1的尺寸，主题颜色是紫色",
+  });
+
+  assert.equal(result.agentKey, "gift_design");
+  assert.equal(result.action, "auto_agent");
+  assert.deepEqual(result.missingFields, []);
+  assert.match(result.suggestedReply, /盒子尺寸只作为包装适配参考/);
+  assert.match(result.suggestedReply, /贺卡按 1:1 正方形处理/);
+  assert.match(result.suggestedReply, /主题色用紫色/);
+  assert.doesNotMatch(result.suggestedReply, /预算|数量|用途/);
 });
 
 test("routes high-value request to manual review", () => {
@@ -177,11 +210,36 @@ test("asks for clarification when only weak scene signal is detected", () => {
   assert.equal(result.action, "collect_info");
   assert.equal(result.routingPolicy.lane, "scene_clarification");
   assert.equal(result.routingPolicy.canAskClarification, true);
-  assert.equal(result.routingPolicy.canQueueAutoReply, false);
+  assert.equal(result.routingPolicy.canQueueAutoReply, true);
   assert.equal(result.routingPolicy.safeguards.includes("ask_before_answering_uncertain_scene"), true);
   assert.equal(result.missingFields.includes("scene_clarification"), true);
   assert.equal(result.sceneClarification.type, "confirm_scene");
   assert.match(result.sceneClarification.question, /售前咨询/);
+});
+
+test("low-risk unmatched messages clarify twice before manual review", () => {
+  const first = evaluateAgentRoute({ text: "天梯奖" });
+  assert.equal(first.agentKey, "general");
+  assert.equal(first.sceneDecision.status, "unmatched");
+  assert.equal(first.action, "collect_info");
+  assert.equal(first.routingPolicy.lane, "scene_clarification");
+  assert.equal(first.routingPolicy.canAskClarification, true);
+  assert.equal(first.routingPolicy.canQueueAutoReply, true);
+  assert.equal(first.sceneClarification.attempt, 1);
+  assert.match(first.sceneClarification.question, /商品咨询/);
+
+  const second = evaluateAgentRoute({ text: "就是这个", clarificationContext: first });
+  assert.equal(second.action, "collect_info");
+  assert.equal(second.sceneClarification.attempt, 2);
+  assert.equal(second.sceneClarification.type, "describe_scene_retry");
+  assert.notEqual(second.sceneClarification.question, first.sceneClarification.question);
+  assert.match(second.sceneClarification.question, /一句话描述/);
+
+  const third = evaluateAgentRoute({ text: "还是这个", clarificationContext: second });
+  assert.equal(third.clarificationExhausted, true);
+  assert.equal(third.sceneClarification, null);
+  assert.equal(third.action, "manual_review");
+  assert.equal(third.routingPolicy.manualRequired, true);
 });
 
 test("uses route correction memory for repeated scene routing", () => {
@@ -677,13 +735,14 @@ test("routes logistics exception with tracking info to logistics agent", () => {
   assert.equal(result.missingFields.includes("order_or_tracking"), false);
 });
 
-test("routes size request to size recommendation agent", () => {
+test("does not create a standalone size recommendation lane", () => {
   const result = evaluateAgentRoute({
     text: "我身高165cm，体重50kg，这件衣服尺码怎么选",
   });
 
-  assert.equal(result.agentKey, "size_recommendation");
-  assert.equal(result.action, "auto_agent");
+  assert.equal(result.agentKey, "general");
+  assert.equal(result.action, "collect_info");
+  assert.equal(result.sceneDecision.status, "unmatched");
 });
 
 test("routes sensitive after-sales complaint to manual review", () => {
