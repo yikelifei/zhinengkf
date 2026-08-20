@@ -1337,9 +1337,16 @@ export class WechatDispatchService {
     ) {
       throw new NotFoundException("conversation attachment not found");
     }
-    const storageRoot = await fs.promises.realpath(path.resolve(appConfig.localStorageRoot));
-    const inboundRoot = await fs.promises.realpath(path.join(storageRoot, "wechat-work", "inbound"));
-    const canonicalPath = await fs.promises.realpath(path.resolve(localPath));
+    let storageRoot: string;
+    let inboundRoot: string;
+    let canonicalPath: string;
+    try {
+      storageRoot = await fs.promises.realpath(path.resolve(appConfig.localStorageRoot));
+      inboundRoot = await fs.promises.realpath(path.join(storageRoot, "wechat-work", "inbound"));
+      canonicalPath = await fs.promises.realpath(path.resolve(localPath));
+    } catch {
+      throw new NotFoundException("conversation attachment not found");
+    }
     const relativeToStorage = path.relative(storageRoot, canonicalPath);
     const relativeToInbound = path.relative(inboundRoot, canonicalPath);
     if (
@@ -1352,7 +1359,12 @@ export class WechatDispatchService {
     ) {
       throw new NotFoundException("conversation attachment not found");
     }
-    const stat = await fs.promises.stat(canonicalPath);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(canonicalPath);
+    } catch {
+      throw new NotFoundException("conversation attachment not found");
+    }
     const maximum = maxWechatWorkInboundMediaBytes(kind as "image" | "voice" | "video" | "file");
     if (!stat.isFile() || stat.size <= 0 || stat.size > maximum) {
       throw new NotFoundException("conversation attachment not found");
@@ -4694,6 +4706,7 @@ export class WechatDispatchService {
     const bridgeOutboxBroken: any[] = [];
     const bridgeDispatchExpired: any[] = [];
     const wechatWorkDeliveryUnknown: any[] = [];
+    const wechatWorkFailedRecovered: any[] = [];
     const staleQueued: any[] = [];
     const alerted: any[] = [];
     for (const task of tasks) {
@@ -4701,6 +4714,22 @@ export class WechatDispatchService {
         const pendingAttempt = await this.persistence.getLatestSendAttempt(task.id, { status: "started" });
         if (!pendingAttempt) continue;
         if (pendingAttempt.adapter === "wechat_work_kf") {
+          const recoveredFailure = await this.recoverKnownWechatWorkStartedFailurePrisma(task, pendingAttempt, now);
+          if (recoveredFailure) {
+            wechatWorkFailedRecovered.push(recoveredFailure);
+            alerted.push(recoveredFailure);
+            await this.notifications.create(
+              "error",
+              "企业微信发送失败",
+              recoveredFailure.errorMessage || "企业微信已返回确定性发送失败，任务已释放且不会自动重试。",
+              {
+                sendTaskId: recoveredFailure.id,
+                wechatAccountId: recoveredFailure.wechatAccountId,
+                conversationId: recoveredFailure.conversationId,
+              },
+            );
+            continue;
+          }
           if (!isOlderThan(
             pendingAttempt.startedAt || pendingAttempt.createdAt,
             now,
@@ -4824,10 +4853,20 @@ export class WechatDispatchService {
       bridgeOutboxBroken: bridgeOutboxBroken.length,
       bridgeDispatchExpired: bridgeDispatchExpired.length,
       wechatWorkDeliveryUnknown: wechatWorkDeliveryUnknown.length,
+      wechatWorkFailedRecovered: wechatWorkFailedRecovered.length,
       autoRetriedLowValue: 0,
       staleQueued: staleQueued.length,
       alerted: alerted.length,
-      tasks: { bridgeTimedOut, bridgeOutboxBroken, bridgeDispatchExpired, wechatWorkDeliveryUnknown, autoRetriedLowValue: [], staleQueued, alerted },
+      tasks: {
+        bridgeTimedOut,
+        bridgeOutboxBroken,
+        bridgeDispatchExpired,
+        wechatWorkDeliveryUnknown,
+        wechatWorkFailedRecovered,
+        autoRetriedLowValue: [],
+        staleQueued,
+        alerted,
+      },
     };
   }
 
@@ -7010,6 +7049,14 @@ export class WechatDispatchService {
       : resolution === "abandoned_unknown"
         ? "cancelled"
         : "failed";
+    // WechatSendAttempt intentionally has no `cancelled` enum value. A manually
+    // abandoned unknown delivery is terminal and retry-blocked at the attempt
+    // level, while the parent task records the operator-facing cancellation.
+    const attemptStatus = resolution === "confirmed_sent"
+      ? "sent"
+      : resolution === "abandoned_unknown"
+        ? "blocked"
+        : "failed";
     const manualDeliveryResolution = {
       resolution,
       reason,
@@ -7032,7 +7079,7 @@ export class WechatDispatchService {
       expectedTaskUpdatedAt: task.updatedAt,
       expectedAttemptStatus: attempt.status,
       attemptPatch: {
-        status: taskStatus,
+        status: attemptStatus,
         errorMessage: resolution === "confirmed_sent" ? "" : reason,
         completedAt: now,
         metadata: {
@@ -9326,6 +9373,62 @@ export class WechatDispatchService {
       automaticRetryBlocked: true,
     });
     return updatedTask;
+  }
+
+  private async recoverKnownWechatWorkStartedFailurePrisma(task: any, pendingAttempt: any, now: Date) {
+    const failure = describeKnownWechatWorkStartedFailure(pendingAttempt);
+    if (!failure) return null;
+    const recoveredAt = now.toISOString();
+    const completed = await this.persistence.completeAttemptAndTask({
+      taskId: task.id,
+      attemptId: pendingAttempt.id,
+      expectedTaskStatus: "sending",
+      expectedTaskUpdatedAt: task.updatedAt,
+      expectedAttemptStatus: "started",
+      attemptPatch: {
+        status: "failed",
+        errorMessage: failure.errorMessage,
+        completedAt: pendingAttempt.completedAt || recoveredAt,
+        metadata: {
+          ...(isPlainObject(pendingAttempt.metadata) ? pendingAttempt.metadata : {}),
+          bridgeState: "api_failed_recovered",
+          deliveryState: "failed",
+          failureStage: failure.failureStage,
+          automaticRetryBlocked: true,
+          manualReviewRequired: false,
+          recoveredAt,
+        },
+      },
+      taskPatch: {
+        status: "failed",
+        sentAt: null,
+        errorMessage: failure.errorMessage,
+        guardSnapshot: {
+          ...(isPlainObject(task.guardSnapshot) ? task.guardSnapshot : {}),
+          status: "failed",
+          deliveryState: "failed",
+          wechatWorkDeliveryState: "failed",
+          automaticRetryBlocked: true,
+          manualReviewRequired: false,
+          wechatWorkStartedFailureRecoveredAt: recoveredAt,
+          wechatWorkFailureStage: failure.failureStage,
+          opsAlertedStatus: "failed",
+          opsAlertedAt: recoveredAt,
+        },
+      },
+    });
+    if (!completed) return null;
+    await this.persistence.recordWechatWorkAudit({
+      action: "send_api_failed_recovered",
+      status: "failed",
+      sendTaskId: task.id,
+      sendAttemptId: pendingAttempt.id,
+      errorMessage: failure.errorMessage,
+      deliveryState: "failed",
+      failureStage: failure.failureStage,
+      automaticRetryBlocked: true,
+    }).catch(() => null);
+    return completed.task;
   }
 
   private requireExactSendTaskIdentity(task: any, payload: ExpectedIdentityPayload) {
